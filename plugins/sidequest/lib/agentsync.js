@@ -74,6 +74,61 @@ function workflowRecipe(category, resolved) {
   }
   return recipe;
 }
+const READ_ONLY_BOARD_TOOLS = [
+  "mcp__plugin_sidequest_board__list",
+  "mcp__plugin_sidequest_board__pulse",
+  "mcp__plugin_sidequest_board__changes",
+  "mcp__plugin_sidequest_board__story",
+  "mcp__plugin_sidequest_board__story_contract",
+  "mcp__plugin_sidequest_board__story_log",
+  "mcp__plugin_sidequest_board__ready",
+  "mcp__plugin_sidequest_board__add",
+  "mcp__plugin_sidequest_board__update",
+  "mcp__plugin_sidequest_board__remove",
+  "mcp__plugin_sidequest_board__archive",
+  "mcp__plugin_sidequest_board__unarchive",
+  "mcp__plugin_sidequest_board__claim",
+  "mcp__plugin_sidequest_board__checkpoint",
+  "mcp__plugin_sidequest_board__sweepClaims",
+  "mcp__plugin_sidequest_board__next",
+  "mcp__plugin_sidequest_board__done",
+  "mcp__plugin_sidequest_board__groomClose",
+  "mcp__plugin_sidequest_board__release",
+  "mcp__plugin_sidequest_board__verdict",
+  "mcp__plugin_sidequest_board__scopeRequest",
+  "mcp__plugin_sidequest_board__commit",
+  "mcp__plugin_sidequest_board__submit",
+  "mcp__plugin_sidequest_board__integrate",
+  "mcp__plugin_sidequest_board__comment",
+  "mcp__plugin_sidequest_board__plan",
+  "mcp__plugin_sidequest_board__comments",
+  "mcp__plugin_sidequest_board__link",
+  "mcp__plugin_sidequest_board__unlink",
+  "mcp__plugin_sidequest_board__assign",
+  "mcp__plugin_sidequest_board__dispatch",
+  "mcp__plugin_sidequest_board__profile_list",
+  "mcp__plugin_sidequest_board__profile_get",
+  "mcp__plugin_sidequest_board__profile_create",
+  "mcp__plugin_sidequest_board__profile_edit",
+  "mcp__plugin_sidequest_board__profile_retire",
+  "mcp__plugin_sidequest_board__profile_use",
+  "mcp__plugin_sidequest_board__profile_repoint",
+  "mcp__plugin_sidequest_board__profile_promote",
+  "mcp__plugin_sidequest_board__new_board_profile",
+  "mcp__plugin_sidequest_board__route_recipe",
+  "mcp__plugin_sidequest_board__category_list",
+  "mcp__plugin_sidequest_board__category_add",
+  "mcp__plugin_sidequest_board__category_edit",
+  "mcp__plugin_sidequest_board__category_detach",
+  "mcp__plugin_sidequest_board__category_relink",
+  "mcp__plugin_sidequest_board__global_fallback",
+  "mcp__plugin_sidequest_board__category_rm",
+  "mcp__plugin_sidequest_board__board_config",
+  "mcp__plugin_sidequest_board__models",
+  "mcp__plugin_sidequest_board__projects",
+  "mcp__plugin_sidequest_board__archive_board",
+  "mcp__plugin_sidequest_board__unarchive_board"
+];
 const READ_ONLY_TOOLS = [
   "Read",
   "Glob",
@@ -83,7 +138,7 @@ const READ_ONLY_TOOLS = [
   "Bash",
   "ToolSearch",
   "SendMessage",
-  "mcp__*"
+  ...READ_ONLY_BOARD_TOOLS
 ];
 const EXECUTOR_SKILLS = ["sidequest:verify-discipline"];
 function resolveReadOnlyTools(readOnlyDeniedTools) {
@@ -874,6 +929,7 @@ module.exports = {
   EXECUTOR_CHECKPOINT_TOOL_ROUNDS,
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
+  READ_ONLY_BOARD_TOOLS,
   READ_ONLY_TOOLS,
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,

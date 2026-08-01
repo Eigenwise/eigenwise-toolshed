@@ -368,12 +368,15 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
 
 test('read-only stable executors expose only the approved tool allowlist', () => {
   const dir = tmpDir();
+  const expectedTools = agentsync.READ_ONLY_TOOLS.join(', ');
   agentsync.syncExecAgents(null, { dir });
 
   for (const file of ['sidequest-exec-dispatch-readonly-high.md', 'sidequest-exec-readonly-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /^tools: Read, Glob, Grep, WebSearch, WebFetch, Bash, ToolSearch, SendMessage, mcp__\*$/m);
+    assert.match(body, new RegExp(`^tools: ${expectedTools}$`, 'm'));
     assert.doesNotMatch(body, /^tools:.*\b(?:Edit|Write|NotebookEdit)\b/m);
+    assert.doesNotMatch(body, /^tools:.*mcp__\*$/m);
+    assert.ok(agentsync.READ_ONLY_BOARD_TOOLS.every((tool: string) => body.includes(tool)));
     assert.match(body, /Read-only role/);
     assert.match(body, /Do not modify the repository working tree/);
     assert.match(body, /Bash is for inspection, tests, and verification, not edits/);
@@ -388,9 +391,20 @@ test('read-only stable executors expose only the approved tool allowlist', () =>
   }
 });
 
+test('read-only executor grants every registered board MCP tool by exact name', () => {
+  const board = require('../lib/mcp.js');
+  const actual = board.TOOLS
+    .filter(({ name }: { name: string }) => !['native_agent', 'native_agent_cleanup'].includes(name))
+    .map(({ name }: { name: string }) => `mcp__plugin_sidequest_board__${name}`)
+    .sort();
+
+  assert.deepStrictEqual([...agentsync.READ_ONLY_BOARD_TOOLS].sort(), actual);
+});
+
 test('read-only executor denylists remove configured MCP tools without changing other grants', () => {
   const body = agentsync.renderReadOnlyDispatchAgent('high', ['mcp__notion__search']);
-  assert.match(body, /^tools: Read, Glob, Grep, WebSearch, WebFetch, Bash, ToolSearch, SendMessage, mcp__\*$/m);
+  assert.match(body, new RegExp(`^tools: ${agentsync.READ_ONLY_TOOLS.join(', ')}$`, 'm'));
+  assert.doesNotMatch(body, /^tools:.*mcp__\*$/m);
   assert.match(body, /^disallowedTools: mcp__notion__search$/m);
   assert.match(agentsync.renderReadOnlyClaudeAgent('high', ['mcp__plugin_svelte_svelte__*']), /^disallowedTools: mcp__plugin_svelte_svelte__\*$/m);
   assert.notEqual(
