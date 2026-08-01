@@ -9,6 +9,7 @@ const test = require('node:test');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const DEFAULT_BASE_URL = 'http://127.0.0.1:9';
+const COMPAT_BASE_URL = 'http://api.anthropic.com';
 
 function fixture(t) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-'));
@@ -47,6 +48,10 @@ function wiringConfig(home) {
   return path.join(home, '.claude', 'model-gateway', 'wiring.json');
 }
 
+function projectRegistry(home) {
+  return path.join(home, '.claude', 'model-gateway', 'wired-projects.json');
+}
+
 test('env --mode global wires user settings', (t) => {
   const { home, project } = fixture(t);
 
@@ -61,6 +66,68 @@ test('env --mode local wires project settings', (t) => {
   assert.equal(run(home, project, ['env', '--mode', 'local']).code, 0);
   const settings = JSON.parse(fs.readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
+});
+
+test('project wiring registry records writes and prunes missing or unowned settings', (t) => {
+  const { home, project } = fixture(t);
+  const otherProject = path.join(path.dirname(project), 'other-project');
+  fs.mkdirSync(otherProject);
+
+  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
+  assert.equal(run(home, otherProject, ['env', '--write-project']).code, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project, otherProject]);
+
+  fs.rmSync(path.join(project, '.claude', 'settings.local.json'));
+  writeJson(path.join(otherProject, '.claude', 'settings.local.json'), { env: { ANTHROPIC_BASE_URL: 'http://user-owned.example' } });
+  assert.equal(run(home, project, ['env', '--mode', 'global']).code, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
+});
+
+test('global mode adopts and reports conflicting current project wiring without changing it', (t) => {
+  const { home, project } = fixture(t);
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  writeJson(localFile, { env: { ANTHROPIC_BASE_URL: COMPAT_BASE_URL, UNRELATED: 'keep-me' } });
+  const before = fs.readFileSync(localFile, 'utf8');
+
+  const result = run(home, project, ['env', '--mode', 'global']);
+
+  assert.equal(result.code, 0);
+  assert.match(result.output, /1 recorded project-local wiring entry overrides the new global URL/);
+  assert.match(result.output, new RegExp(localFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.output, /--reconcile/);
+  assert.equal(fs.readFileSync(localFile, 'utf8'), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
+});
+
+test('global mode reconciliation removes only plugin-owned project env entries', (t) => {
+  const { home, project } = fixture(t);
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
+  const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
+  local.env.ANTHROPIC_BASE_URL = COMPAT_BASE_URL;
+  local.env.UNRELATED = 'keep-me';
+  writeJson(localFile, local);
+
+  const result = run(home, project, ['env', '--mode', 'global', '--reconcile']);
+
+  assert.equal(result.code, 0);
+  assert.match(result.output, /removed model-gateway-owned wiring from 1 project/);
+  assert.deepEqual(JSON.parse(fs.readFileSync(localFile, 'utf8')), { env: { UNRELATED: 'keep-me' } });
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
+});
+
+test('global mode reconciliation leaves agreeing project wiring alone', (t) => {
+  const { home, project } = fixture(t);
+  const localFile = path.join(project, '.claude', 'settings.local.json');
+  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
+  const before = fs.readFileSync(localFile, 'utf8');
+
+  const result = run(home, project, ['env', '--mode', 'global', '--reconcile']);
+
+  assert.equal(result.code, 0);
+  assert.doesNotMatch(result.output, /recorded project-local wiring .* overrides/);
+  assert.equal(fs.readFileSync(localFile, 'utf8'), before);
+  assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
 });
 
 test('doctor fails when its active global user settings are unwired', (t) => {

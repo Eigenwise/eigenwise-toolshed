@@ -123,9 +123,10 @@ const USAGE = `usage: model-gateway.js <command>
   catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
-  env [--show-mode | --write-user | --write-project | --remove] [--mode local|global]
+  env [--show-mode | --write-user | --write-project | --remove] [--mode local|global] [--reconcile]
                    print the Claude Code env block, inspect/select wiring mode, or merge/remove it
-                   (local writes go to .claude/settings.local.json)
+                   (local writes go to .claude/settings.local.json; --reconcile confirms cleanup
+                   of conflicting recorded project-local wiring)
   doctor           full health check
   remote-control <enable|disable|doctor>
                    manage the opt-in hosts-file compatibility mode
@@ -158,8 +159,8 @@ const {
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, hasWiringMode, isWired, migrateLegacyProjectSettings,
-  readSettingsForWrite, selectedWiringScope, settingsPath, wiredMode, wiringMode, wiringModeDefaultNotice,
-  writeSettings, writeWiringMode,
+  readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, selectedWiringScope,
+  settingsPath, wiredMode, wiringMode, wiringModeDefaultNotice, writeSettings, writeWiringMode,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -617,6 +618,9 @@ async function envCommand() {
   const modeIndex = args.indexOf('--mode');
   const requestedMode = modeIndex === -1 ? null : args[modeIndex + 1];
   if (flag('--mode') && !['local', 'global'].includes(requestedMode)) die('env --mode must be local or global', 2);
+  const reconcile = flag('--reconcile');
+  if (reconcile && requestedMode !== 'global') die('env --reconcile requires --mode global', 2);
+  if (requestedMode === 'global') recordProjectWiring();
   if (requestedMode) writeWiringMode(requestedMode);
 
   const remove = flag('--remove');
@@ -633,7 +637,21 @@ async function envCommand() {
   if (scope === 'project') writeWiringMode('local');
   if (scope === 'user' && !remove) writeWiringMode('global');
   if (!remove) await refreshDetectedPins({ force: true });
-  writeEnv(scope, remove);
+  const writeMode = requestedMode === 'global' ? (await resolveIntendedMode()).mode : 'default';
+  writeEnv(scope, remove, { mode: writeMode });
+  if (requestedMode === 'global' && !remove) {
+    const targetBaseUrl = readSettingsForWrite(settingsPath('user')).env?.ANTHROPIC_BASE_URL;
+    const result = reconcileRegisteredProjectWirings(targetBaseUrl, { confirm: reconcile });
+    if (result.conflicting.length) {
+      log(`${result.conflicting.length} recorded project-local wiring ${result.conflicting.length === 1 ? 'entry overrides' : 'entries override'} the new global URL:`);
+      for (const wiring of result.conflicting) log(`  ${wiring.file}`);
+      if (reconcile) {
+        log(`removed model-gateway-owned wiring from ${result.reconciled.length} project${result.reconciled.length === 1 ? '' : 's'}`);
+      } else {
+        log('project files were not changed. To confirm cleanup, invoke env --mode global --reconcile for the model-gateway-owned entries shown above.');
+      }
+    }
+  }
 }
 
 // mode only matters when writing (not removing); quiet suppresses this
@@ -643,7 +661,10 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   const migration = scope === 'project' ? migrateLegacyProjectSettings() : null;
   const effectiveMode = migration?.mode || mode;
   const file = settingsPath(scope);
-  if (remove && !fs.existsSync(file)) return { changed: false, file };
+  if (remove && !fs.existsSync(file)) {
+    if (scope === 'project') recordProjectWiring();
+    return { changed: false, file };
+  }
   const settings = readSettingsForWrite(file);
   const original = JSON.stringify(settings);
   settings.env = settings.env || {};
@@ -660,11 +681,15 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
     }
     cleanLegacyGatewayModelCache();
   }
-  if (remove && JSON.stringify(settings) === original) return { changed: false, file };
+  if (remove && JSON.stringify(settings) === original) {
+    if (scope === 'project') recordProjectWiring();
+    return { changed: false, file };
+  }
   writeSettings(file, settings);
   const verified = readSettingsForWrite(file);
   const expected = remove ? undefined : envBlockFor(effectiveMode).ANTHROPIC_BASE_URL;
   if (verified.env?.ANTHROPIC_BASE_URL !== expected) throw new Error(`Could not verify gateway settings in ${file}`);
+  if (scope === 'project') recordProjectWiring();
   if (quiet) return { changed: true, file };
   log(`${remove ? 'removed from' : 'written to'} ${file}`);
   if (!remove) {

@@ -10,6 +10,7 @@ const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
 const LOGS = path.join(STATE, 'logs');
 const BIN_DIR = path.join(STATE, 'bin');
 const WIRING_CONFIG_PATH = path.join(STATE, 'wiring.json');
+const PROJECT_WIRING_REGISTRY_PATH = path.join(STATE, 'wired-projects.json');
 const SHIM_FAILURE_PATH = path.join(STATE, 'shim-supervisor-failure.txt');
 const CODEX_UPSTREAM_BLOCK_PATH = path.join(STATE, 'codex-upstream-blocked.json');
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
@@ -87,6 +88,6 @@ module.exports = {
   LEGACY_ENV_BLOCK, LIST_DISPATCH_MODEL, LOGS, MIN_PROXY_VERSION, PIN_ALIASES, PIN_CACHE_PATH,
   PIN_CACHE_TTL_MS, PIN_OVERRIDE_PATH, PIN_PROBE_TIMEOUT_MS, PLUGIN_VERSION, PREFIX, PROXY_BIN,
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH,
-  ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, STATE,
+  PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, STATE,
   STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, mkdirs,
 };
