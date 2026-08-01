@@ -223,19 +223,17 @@ function autoApprovedPluginTestScope(ticket?: any, requested?: any, additions?: 
   return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
 }
 
-function createScopeRequestMarker(ticket?: any, request?: any, worktree?: any) {
+function createScopeRequestMarker(slug?: any, ticket?: any, request?: any, worktree?: any) {
   const dispatch = dispatchState(ticket);
-  if (!dispatch || dispatch.sharedTree !== false) return { ok: true, markerWorktree: null };
+  if (!dispatch || dispatch.sharedTree !== false) return { ok: true };
   const supplied = String(worktree || '').trim();
   if (!supplied) return { ok: false, reason: 'worktree_required' };
   try {
     const root = commitScope.repoRoot(supplied);
     const linked = commitScope.linkedWorktree(root);
     if (!linked.ok || !linked.linked) return { ok: false, reason: 'worktree_isolation' };
-    const marker = path.join(root, '.sidequest', scopeRequestMarkerFile(ticket));
-    const relativeMarker = path.relative(root, marker).replace(/\\/g, '/');
-    fs.mkdirSync(path.dirname(marker), { recursive: true });
-    fs.writeFileSync(marker, JSON.stringify({
+    fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
+    fs.writeFileSync(assetPath(slug, ticket.id, scopeRequestMarkerFile(ticket)), JSON.stringify({
       ref: ticket.ref,
       by: request.by,
       files: request.files,
@@ -243,19 +241,14 @@ function createScopeRequestMarker(ticket?: any, request?: any, worktree?: any) {
       covered: request.covered,
       at: request.at,
     }) + '\n');
-    try {
-      execFileSync('git', ['add', '--intent-to-add', '--force', '--', relativeMarker], { cwd: root, windowsHide: true, stdio: 'ignore' });
-    } catch (_) {
-      fs.unlinkSync(marker);
-      return { ok: false, reason: 'worktree_unavailable' };
-    }
-    return { ok: true, markerWorktree: root };
+    return { ok: true };
   } catch (_) {
     return { ok: false, reason: 'worktree_unavailable' };
   }
 }
 
-function clearScopeRequestMarker(ticket?: any) {
+function clearScopeRequestMarker(slug?: any, ticket?: any) {
+  try { fs.unlinkSync(assetPath(slug, ticket.id, scopeRequestMarkerFile(ticket))); } catch (_) {}
   const worktree = String(ticket?.scopeRequest?.markerWorktree || '').trim();
   if (!worktree) return;
   const marker = path.join(worktree, '.sidequest', scopeRequestMarkerFile(ticket));
@@ -371,9 +364,9 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     }
     const command = scopeExpansionCommand(t, requested);
     const request = { by, files: additions, requested, covered, at: now };
-    const marker = createScopeRequestMarker(t, request, opts.worktree);
+    const marker = createScopeRequestMarker(slug, t, request, opts.worktree);
     if (!marker.ok) return { ok: false, reason: marker.reason, ticket: t };
-    t.scopeRequest = Object.assign(request, marker.markerWorktree ? { markerWorktree: marker.markerWorktree } : {});
+    t.scopeRequest = request;
     const dispatch = dispatchState(t);
     if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
     if (!Array.isArray(t.comments)) t.comments = [];
@@ -414,7 +407,7 @@ function denyScopeRequest(slug?: any, idOrRef?: any, by?: any, reason?: any, opt
       covered: normalizeFiles(request.covered),
       at: now,
     };
-    clearScopeRequestMarker(t);
+    clearScopeRequestMarker(slug, t);
     const dispatch = dispatchState(t);
     const resumed = reopenScopePausedDispatch(t, now);
     t.scopeRequest = null;
@@ -697,7 +690,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
       t.files = approvedFiles || boundedFiles(patch.files);
       const request = t.scopeRequest;
       if (request && Array.isArray(request.files) && request.files.every((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
-        clearScopeRequestMarker(t);
+        clearScopeRequestMarker(slug, t);
         const dispatch = dispatchState(t);
         const resumed = reopenScopePausedDispatch(t);
         t.scopeRequest = null;

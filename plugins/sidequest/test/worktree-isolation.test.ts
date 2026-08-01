@@ -257,8 +257,9 @@ test('an isolated scope pause preserves its worktree through denial', () => {
       verify: 'scope denial preserves the live checkpoint',
     }).checkpoint;
     assert.equal(store.requestScope(slug, ticket.ref, 'scope-denial-worker', ['new.js'], { worktree: linked }).ok, true);
-    const marker = path.join(linked, '.sidequest', `scope-request-${ticket.id}.json`);
+    const marker = store.assetPath(slug, ticket.id, `scope-request-${ticket.id}.json`);
     assert.ok(fs.existsSync(marker));
+    assert.doesNotMatch(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
 
     assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
     const denied = store.denyScopeRequest(slug, ticket.ref, 'isolation-orchestrator', 'The requested file belongs to another ticket.');
@@ -290,9 +291,9 @@ test('an isolated scope pause preserves its worktree through approval', () => {
     fs.appendFileSync(path.join(linked, 'README.md'), 'uncommitted executor work\n');
     const requested = store.requestScope(slug, ticket.ref, 'scope-marker-worker', ['new.js'], { worktree: linked });
     assert.equal(requested.ok, true);
-    const marker = path.join(linked, '.sidequest', `scope-request-${ticket.id}.json`);
+    const marker = store.assetPath(slug, ticket.id, `scope-request-${ticket.id}.json`);
     assert.ok(fs.existsSync(marker));
-    assert.match(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
+    assert.doesNotMatch(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
 
     assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
     const paused = store.getTicket(slug, ticket.ref);
