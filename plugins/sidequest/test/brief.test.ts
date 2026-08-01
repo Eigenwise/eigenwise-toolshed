@@ -45,6 +45,14 @@ const BRIEF_KEYS = [
 
 const READY_BRIEF_KEYS = [...BRIEF_KEYS, 'files', 'contracts'].sort();
 
+function assertMcpListRow(ticket: any) {
+  assert.equal(ticket.description, undefined);
+  for (const value of Object.values(ticket)) {
+    assert.notEqual(value, null);
+    assert.ok(!Array.isArray(value) || value.length > 0);
+  }
+}
+
 // Seed once: one ticket with a fat body + a comment, one plain.
 let refA: any;
 let refDone: any;
@@ -114,25 +122,23 @@ test('CLI: ready --json --brief returns compact tickets + ref waves', () => {
   }
 });
 
-test('MCP: list/ready with brief:true return the compact shape', async () => {
+test('MCP list trims empty fields and ready returns summary rows', async () => {
   const list = await callTool('list', {});
-  for (const t of list.tickets) {
-    assert.deepStrictEqual(Object.keys(t).sort(), BRIEF_KEYS);
-  }
+  for (const ticket of list.tickets) assertMcpListRow(ticket);
   const ready = await callTool('ready', { brief: true });
-  for (const t of ready.tickets) {
-    assert.deepStrictEqual(Object.keys(t).sort(), READY_BRIEF_KEYS);
+  for (const ticket of ready.tickets) {
+    assert.deepStrictEqual(Object.keys(ticket).sort(), ['ref', 'title']);
   }
   for (const wave of ready.waves) {
     for (const r of wave) assert.match(String(r), /^SQ-\d+$/, 'brief waves are refs');
   }
 });
 
-test('MCP: ready defaults compact; brief:false keeps ref waves with full tickets', async () => {
+test('MCP ready defaults to summary rows and full opt-in keeps ref waves', async () => {
   const brief = await callTool('ready', {});
-  for (const ticket of brief.tickets) assert.deepStrictEqual(Object.keys(ticket).sort(), READY_BRIEF_KEYS);
+  for (const ticket of brief.tickets) assert.deepStrictEqual(Object.keys(ticket).sort(), ['ref', 'title']);
 
-  const full = await callTool('ready', { brief: false });
+  const full = await callTool('ready', { full: true });
   for (const wave of full.waves) {
     for (const r of wave) {
       assert.strictEqual(typeof r, 'string', 'non-brief waves must also be refs, not ticket objects');
@@ -142,9 +148,9 @@ test('MCP: ready defaults compact; brief:false keeps ref waves with full tickets
   assert.ok(full.tickets.some((t?: any) => typeof t.description === 'string'), 'full tickets still ride in tickets');
 });
 
-test('MCP: list defaults compact and detail:true returns full tickets', async () => {
+test('MCP list defaults compact and detail:true returns full tickets', async () => {
   const list = await callTool('list', {});
-  for (const ticket of list.tickets) assert.deepStrictEqual(Object.keys(ticket).sort(), BRIEF_KEYS);
+  for (const ticket of list.tickets) assertMcpListRow(ticket);
   const full = await callTool('list', { detail: true });
   const a = full.tickets.find((t?: any) => t.ref === refA);
   assert.ok(a.description.includes('long developer-to-developer'), 'detail:true keeps full bodies');
