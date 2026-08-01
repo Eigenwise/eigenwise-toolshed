@@ -10,8 +10,8 @@
 *Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
 
 A self-maintaining **codebase map** for Claude Code: small Markdown docs under
-`.claude/.codebase-info/` that describe how your project is built, injected into context at the start
-of each session so Claude starts already knowing the layout instead of grepping around blind.
+`.claude/.codebase-info/` that describe how your project is built. The map is injected at session start
+and into matching work subagents, so Claude starts already knowing the layout instead of grepping around blind.
 
 You install one plugin, run one skill, and get a map generated from your actual code: a compact
 `INDEX.md` hub plus the detailed docs your project warrants. A bundled `SessionStart` hook puts that
@@ -66,7 +66,7 @@ skills that build and maintain the map for you:
   `map-codebase` skill).
 - **Keeps it current** as the code changes, adding and pruning docs as the project grows (the
   `update-codebase-map` skill).
-- **Loads it at the start of each session** through its bundled `SessionStart` hook, and periodically
+- **Loads it at the start of each session** through its bundled `SessionStart` hook, injects the same map into matching work subagents through `SubagentStart`, and periodically
   reminds Claude through its `UserPromptSubmit` hook, so you do not need live-rules installed at all.
 
 So the choice is about reuse. For one repo where you will maintain the docs yourself, use live-rules
@@ -119,7 +119,8 @@ noticed without trusting stale state.
 ## Auto-loading
 
 A bundled, Node-based `SessionStart` hook runs `hooks/inject-context.js` and injects the compact
-`INDEX.md` once on startup, resume, clear, and compaction. Its per-session hash ledger also records the
+`INDEX.md` once on startup, resume, clear, and compaction. Matching `SubagentStart` work agents receive
+that same map, so executors do not have to rediscover it by hand. Its per-session hash ledger also records the
 focused documents currently represented by that index, so an unchanged prompt adds no map context.
 
 `UserPromptSubmit` only emits a bounded instruction when a map file's live hash changes, naming exactly
