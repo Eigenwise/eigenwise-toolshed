@@ -50,11 +50,29 @@ function managedHostsBlock(eol = '\n') {
   return [HOSTS_BLOCK_START, HOSTS_BLOCK_LINE, HOSTS_BLOCK_END].join(eol) + eol;
 }
 
+function adoptUnmarkedHostsEntry(text, eol) {
+  let start = 0;
+  while (start < text.length) {
+    const newline = /\r?\n/.exec(text.slice(start));
+    const end = newline ? start + newline.index : text.length;
+    const rawLine = text.slice(start, end);
+    if (parseHostsCompatEntry(rawLine)) {
+      const after = text.slice(newline ? end + newline[0].length : end);
+      return text.slice(0, start) + HOSTS_BLOCK_START + eol + rawLine + eol + HOSTS_BLOCK_END + eol + after;
+    }
+    if (!newline) break;
+    start = end + newline[0].length;
+  }
+  return null;
+}
+
 function addManagedHostsBlock(text) {
   const parsed = parseHostsCompatBlock(text);
   if (parsed.state === 'valid') return { text, changed: false };
   if (parsed.state !== 'absent') throw new Error(`plugin-marked hosts block is ${parsed.state}; run remote-control doctor and repair it manually`);
   const eol = text.includes('\r\n') ? '\r\n' : '\n';
+  const adopted = adoptUnmarkedHostsEntry(text, eol);
+  if (adopted) return { text: adopted, changed: true };
   const separator = text && !text.endsWith('\n') ? eol : '';
   return { text: text + separator + managedHostsBlock(eol), changed: true };
 }
@@ -123,8 +141,11 @@ async function remoteControlCommand() {
   const detected = text == null ? null : parseHostsCompatEntry(text);
 
   if (action === 'doctor') {
+    const blockState = parsed.state === 'absent' && detected
+      ? 'absent (unmarked loopback mapping present, enable will adopt it)'
+      : parsed.state;
     log(`hosts file: ${file}`);
-    log(`plugin block: ${parsed.state}`);
+    log(`plugin block: ${blockState}`);
     log(`loopback mapping: ${detected ? detected.line : 'not present'}`);
     log(`conflicting mappings: ${conflicts.length ? conflicts.join(' | ') : 'none'}`);
     log(`elevated write: ${hostsWriteStatus(file)}`);
@@ -151,9 +172,13 @@ async function remoteControlCommand() {
 
   log(`${action === 'enable' ? 'Enable' : 'Disable'} Remote Control compatibility by ${action === 'enable' ? 'adding' : 'removing'} only this block:`);
   log(action === 'enable' ? managedHostsBlock(text.includes('\r\n') ? '\r\n' : '\n').trim() : parsed.block);
-  log(`This needs elevation. ${elevatedHostsInstructions(action === 'enable' ? 'add' : 'remove')}`);
-  log('Do you want to make this hosts-file change now? Re-run with --confirm only after the user answers yes.');
-  if (!flag('--confirm')) return;
+  if (!flag('--confirm')) {
+    if (hostsWriteStatus(file) !== 'available') {
+      log(`This needs elevation. ${elevatedHostsInstructions(action === 'enable' ? 'add' : 'remove')}`);
+    }
+    log('Do you want to make this hosts-file change now? Re-run with --confirm only after the user answers yes.');
+    return;
+  }
 
   const backup = `${file}.model-gateway-${new Date().toISOString().replace(/[:.]/g, '-')}.bak`;
   try {
@@ -162,6 +187,7 @@ async function remoteControlCommand() {
   } catch (writeError) {
     die(`could not write ${file}: ${writeError.code || writeError.message}. Backup ${backup} may exist. ${elevatedHostsInstructions('edit')}`);
   }
+  log(`updated hosts file: ${file}`);
   log(`backup: ${backup}`);
   const result = await startAll();
   if (!result.ok) die(`hosts file changed, but gateway reconciliation failed: ${result.reason}`);

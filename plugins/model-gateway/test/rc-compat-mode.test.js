@@ -12,6 +12,7 @@ const test = require('node:test');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gw = require(CLI);
+const remoteControl = require('../lib/remote-control.js');
 const { createHostsBypassResolver } = require('../lib/request-worker.js');
 
 function freePort() {
@@ -161,6 +162,73 @@ test('managed hosts transforms reject partial blocks and doctor finds non-loopba
     gw.findConflictingHostsMappings('203.0.113.4 api.anthropic.com\n127.0.0.1 api.anthropic.com\n'),
     ['203.0.113.4 api.anthropic.com'],
   );
+});
+
+test('remote-control enable adopts unmarked loopback mappings and distinguishes confirmed writes', async (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-'));
+  const hostsFile = path.join(dir, 'hosts');
+  const previousHostsFile = process.env.CODEX_GATEWAY_HOSTS_FILE;
+  t.after(() => {
+    if (previousHostsFile === undefined) delete process.env.CODEX_GATEWAY_HOSTS_FILE;
+    else process.env.CODEX_GATEWAY_HOSTS_FILE = previousHostsFile;
+    fs.rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  process.env.CODEX_GATEWAY_HOSTS_FILE = hostsFile;
+
+  const output = [];
+  let startCalls = 0;
+  function configure(args) {
+    remoteControl.configureRemoteControl({
+      args,
+      flag: (value) => args.includes(value),
+      log: (message) => output.push(message),
+      die: (message) => { throw new Error(message); },
+      doctor: async () => {},
+      fetchShimHealth: async () => ({ ok: true, models: 1, compat: { port80Bound: true } }),
+      startAll: async () => {
+        startCalls += 1;
+        return { ok: true };
+      },
+      syncCompatMode: async () => {},
+    });
+  }
+
+  const original = '127.0.0.1 localhost\n  127.0.0.1\tapi.anthropic.com  # keep this\n';
+  fs.writeFileSync(hostsFile, original);
+  const adopted = gw.addManagedHostsBlock(original);
+  assert.equal(adopted.changed, true);
+  assert.match(adopted.text, /# >>> model-gateway RC compatibility >>>\n  127\.0\.0\.1\tapi\.anthropic\.com  # keep this\n# <<< model-gateway RC compatibility <<</);
+  assert.equal((adopted.text.match(/api\.anthropic\.com/g) || []).length, 1);
+  assert.equal(gw.addManagedHostsBlock(gw.managedHostsBlock()).changed, false);
+  assert.throws(() => gw.addManagedHostsBlock('# >>> model-gateway RC compatibility >>>\n127.0.0.1 localhost\n# <<< model-gateway RC compatibility <<<\n'), /invalid/);
+
+  configure(['doctor']);
+  await remoteControl.remoteControlCommand();
+  assert.match(output.join('\n'), /plugin block: absent \(unmarked loopback mapping present, enable will adopt it\)/);
+
+  output.length = 0;
+  configure(['enable']);
+  await remoteControl.remoteControlCommand();
+  assert.match(output.join('\n'), /Do you want to make this hosts-file change/);
+
+  output.length = 0;
+  configure(['enable', '--confirm']);
+  await remoteControl.remoteControlCommand();
+  const enabled = fs.readFileSync(hostsFile, 'utf8');
+  assert.equal((enabled.match(/api\.anthropic\.com/g) || []).length, 1);
+  assert.match(enabled, /# >>> model-gateway RC compatibility >>>/);
+  assert.match(enabled, /# <<< model-gateway RC compatibility <<</);
+  assert.match(output.join('\n'), /updated hosts file:/);
+  assert.doesNotMatch(output.join('\n'), /Do you want to make this hosts-file change|Notepad as Administrator/);
+  assert.equal(startCalls, 1);
+
+  fs.writeFileSync(hostsFile, gw.managedHostsBlock());
+  output.length = 0;
+  configure(['enable', '--confirm']);
+  await remoteControl.remoteControlCommand();
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), gw.managedHostsBlock());
+  assert.equal(startCalls, 1);
+  assert.match(output.join('\n'), /already enabled/);
 });
 
 // ------------------------------------------------------- detectHostsCompat
