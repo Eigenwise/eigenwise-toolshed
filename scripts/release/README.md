@@ -25,6 +25,17 @@ that exact `main` commit and creates one GitHub Release with generated notes. It
 trigger. It never runs `cut.mjs`, changes a version, or pushes `main`; cuts stay local and human-run
 under the publish lock.
 
+Before any publication, acquire the Sidequest lock and keep it until the atomic push completes:
+
+```bash
+sidequest publish lock --by <who>
+# run cut.mjs, review its plan and checks, then run its printed git push --atomic command
+sidequest publish unlock --by <who>
+```
+
+The pre-push guard on `main` enforces the lock. If a cut fails before its final push, unlock after
+recording the failure so another window can retry.
+
 ## The shape of a window
 
 Integration puts verified work on `dev` and writes a fragment. Nothing is published: no version
