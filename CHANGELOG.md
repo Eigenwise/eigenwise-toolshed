@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.316.0 (2026-08-01)
+
+### sidequest 3.50.8 → 3.50.9
+
+#### Fixes
+
+- Extract the ticket lifecycle and submission store domains behind the unchanged facade (SQ-1165) [`9f29eb9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/9f29eb9)
+
 ## v3.315.0 (2026-08-01)
 
 ### sidequest 3.50.7 → 3.50.8
