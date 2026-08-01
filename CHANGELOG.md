@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.319.0 (2026-08-01)
+
+### sidequest 3.50.11 → 3.50.12
+
+#### Fixes
+
+- Extract the ticket-warning factory and project store domains behind the unchanged facade (SQ-1174) [`2d5241b`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2d5241b)
+
 ## v3.318.0 (2026-08-01)
 
 ### sidequest 3.50.10 → 3.50.11
