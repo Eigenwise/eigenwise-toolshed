@@ -1,6 +1,7 @@
 'use strict';
 
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 const AGENT_TEAMS_ENV = 'CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS';
@@ -13,8 +14,11 @@ function projectSettingsPath(projectDir) {
   return path.join(path.resolve(projectDir), '.claude', 'settings.local.json');
 }
 
-function readProjectSettings(projectDir) {
-  const settingsPath = projectSettingsPath(projectDir);
+function userSettingsPath() {
+  return path.join(os.homedir(), '.claude', 'settings.json');
+}
+
+function readSettings(settingsPath) {
   try {
     return JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
   } catch (error) {
@@ -23,12 +27,19 @@ function readProjectSettings(projectDir) {
   }
 }
 
-function writeProjectSettings(projectDir, settings) {
-  const settingsPath = projectSettingsPath(projectDir);
+function writeSettings(settingsPath, settings) {
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true, mode: 0o700 });
   fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
   try { fs.chmodSync(path.dirname(settingsPath), 0o700); fs.chmodSync(settingsPath, 0o600); } catch {}
   return settingsPath;
+}
+
+function readProjectSettings(projectDir) {
+  return readSettings(projectSettingsPath(projectDir));
+}
+
+function writeProjectSettings(projectDir, settings) {
+  return writeSettings(projectSettingsPath(projectDir), settings);
 }
 
 function mergeProjectEnvironment(settings, environment) {
@@ -53,21 +64,38 @@ function clampAutoCompactWindow(window) {
   return Math.min(AUTO_COMPACT_WINDOW_MAX, Math.max(AUTO_COMPACT_WINDOW_MIN, Math.trunc(window)));
 }
 
-function configureSidequestCompaction(projectDir, { autoCompactWindow, policy }) {
+function configureSidequestCompaction(projectDir, {
+  autoCompactWindow,
+  policy,
+  removeProjectAutoCompactWindow = false,
+  globalSettingsPath = userSettingsPath(),
+}) {
   if (!SIDEQUEST_COMPACTION_POLICIES.has(policy)) {
     throw new TypeError(`Sidequest compaction policy must be one of: ${[...SIDEQUEST_COMPACTION_POLICIES].join(', ')}`);
   }
 
-  const before = readProjectSettings(projectDir);
-  const settings = structuredClone(before);
-  if (autoCompactWindow == null) delete settings.autoCompactWindow;
-  else settings.autoCompactWindow = clampAutoCompactWindow(autoCompactWindow);
+  const globalBefore = readSettings(globalSettingsPath);
+  const globalSettings = structuredClone(globalBefore);
+  if (autoCompactWindow == null) delete globalSettings.autoCompactWindow;
+  else globalSettings.autoCompactWindow = clampAutoCompactWindow(autoCompactWindow);
 
-  const configured = mergeProjectEnvironment(settings, { [SIDEQUEST_COMPACTION_POLICY_ENV]: policy });
-  const changed = JSON.stringify(before) !== JSON.stringify(configured);
-  const settingsPath = projectSettingsPath(projectDir);
-  if (changed) writeProjectSettings(projectDir, configured);
-  return { changed, settings: configured, settingsPath };
+  const projectBefore = readProjectSettings(projectDir);
+  const projectSettings = mergeProjectEnvironment(projectBefore, { [SIDEQUEST_COMPACTION_POLICY_ENV]: policy });
+  if (removeProjectAutoCompactWindow) delete projectSettings.autoCompactWindow;
+
+  const globalChanged = JSON.stringify(globalBefore) !== JSON.stringify(globalSettings);
+  const projectChanged = JSON.stringify(projectBefore) !== JSON.stringify(projectSettings);
+  if (globalChanged) writeSettings(globalSettingsPath, globalSettings);
+  if (projectChanged) writeProjectSettings(projectDir, projectSettings);
+  return {
+    changed: globalChanged || projectChanged,
+    globalChanged,
+    globalSettings,
+    globalSettingsPath,
+    projectChanged,
+    projectSettings,
+    projectSettingsPath: projectSettingsPath(projectDir),
+  };
 }
 
 function agentTeamsWarning(projectDir) {
@@ -88,5 +116,6 @@ module.exports = {
   mergeProjectEnvironment,
   projectSettingsPath,
   readProjectSettings,
+  userSettingsPath,
   writeProjectSettings,
 };

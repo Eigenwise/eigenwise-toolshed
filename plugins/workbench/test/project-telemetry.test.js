@@ -128,11 +128,18 @@ test('warns only when a project environment masks agent teams', (t) => {
   assert.equal(agentTeamsWarning(projectDir), null);
 });
 
-test('configures Sidequest compaction without replacing project settings', (t) => {
-  const { projectDir } = temporaryProject(t);
-  const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify({
+test('configures a global compaction window without replacing either settings file', (t) => {
+  const { directory, projectDir } = temporaryProject(t);
+  const globalSettingsPath = path.join(directory, 'user-settings', '.claude', 'settings.json');
+  const projectSettingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(globalSettingsPath), { recursive: true });
+  fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
+  fs.writeFileSync(globalSettingsPath, JSON.stringify({
+    env: { KEEP_GLOBAL_ENV: 'yes' },
+    enabledPlugins: { workbench: true },
+    marketplaces: { eigenwise: { source: 'github' } },
+  }));
+  fs.writeFileSync(projectSettingsPath, JSON.stringify({
     unknownSetting: { preserved: true },
     env: {
       CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
@@ -143,18 +150,25 @@ test('configures Sidequest compaction without replacing project settings', (t) =
   const first = configureSidequestCompaction(projectDir, {
     autoCompactWindow: 350_000,
     policy: 'pin',
+    globalSettingsPath,
   });
   const second = configureSidequestCompaction(projectDir, {
     autoCompactWindow: 350_000,
     policy: 'pin',
+    globalSettingsPath,
   });
-  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  const globalSettings = JSON.parse(fs.readFileSync(globalSettingsPath, 'utf8'));
+  const projectSettings = JSON.parse(fs.readFileSync(projectSettingsPath, 'utf8'));
 
   assert.equal(first.changed, true);
   assert.equal(second.changed, false);
-  assert.deepEqual(settings.unknownSetting, { preserved: true });
-  assert.equal(settings.autoCompactWindow, 350_000);
-  assert.deepEqual(settings.env, {
+  assert.equal(globalSettings.autoCompactWindow, 350_000);
+  assert.deepEqual(globalSettings.env, { KEEP_GLOBAL_ENV: 'yes' });
+  assert.deepEqual(globalSettings.enabledPlugins, { workbench: true });
+  assert.deepEqual(globalSettings.marketplaces, { eigenwise: { source: 'github' } });
+  assert.deepEqual(projectSettings.unknownSetting, { preserved: true });
+  assert.equal(Object.hasOwn(projectSettings, 'autoCompactWindow'), false);
+  assert.deepEqual(projectSettings.env, {
     CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1',
     OTEL_EXPORTER_OTLP_ENDPOINT: 'http://127.0.0.1:4318',
     SIDEQUEST_COMPACTION_POLICY: 'pin',
@@ -167,22 +181,33 @@ test('clamps custom compaction windows to Claude Code limits', () => {
   assert.throws(() => clampAutoCompactWindow('350000'), /finite number/);
 });
 
-test('leaving the compaction window at default removes only that setting', (t) => {
-  const { projectDir } = temporaryProject(t);
-  const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
-  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
-  fs.writeFileSync(settingsPath, JSON.stringify({
+test('leaving the compaction window at default removes it globally and can remove a legacy project override', (t) => {
+  const { directory, projectDir } = temporaryProject(t);
+  const globalSettingsPath = path.join(directory, 'user-settings', '.claude', 'settings.json');
+  const projectSettingsPath = path.join(projectDir, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(globalSettingsPath), { recursive: true });
+  fs.mkdirSync(path.dirname(projectSettingsPath), { recursive: true });
+  fs.writeFileSync(globalSettingsPath, JSON.stringify({ autoCompactWindow: 250_000, marketplaces: { kept: true } }));
+  fs.writeFileSync(projectSettingsPath, JSON.stringify({
     autoCompactWindow: 250_000,
     unknownSetting: true,
     env: { KEEP_ME: 'yes' },
   }));
 
-  configureSidequestCompaction(projectDir, { autoCompactWindow: null, policy: 'off' });
-  const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  configureSidequestCompaction(projectDir, {
+    autoCompactWindow: null,
+    policy: 'off',
+    removeProjectAutoCompactWindow: true,
+    globalSettingsPath,
+  });
+  const globalSettings = JSON.parse(fs.readFileSync(globalSettingsPath, 'utf8'));
+  const projectSettings = JSON.parse(fs.readFileSync(projectSettingsPath, 'utf8'));
 
-  assert.equal(Object.hasOwn(settings, 'autoCompactWindow'), false);
-  assert.equal(settings.unknownSetting, true);
-  assert.deepEqual(settings.env, {
+  assert.equal(Object.hasOwn(globalSettings, 'autoCompactWindow'), false);
+  assert.deepEqual(globalSettings.marketplaces, { kept: true });
+  assert.equal(Object.hasOwn(projectSettings, 'autoCompactWindow'), false);
+  assert.equal(projectSettings.unknownSetting, true);
+  assert.deepEqual(projectSettings.env, {
     KEEP_ME: 'yes',
     SIDEQUEST_COMPACTION_POLICY: 'off',
   });
