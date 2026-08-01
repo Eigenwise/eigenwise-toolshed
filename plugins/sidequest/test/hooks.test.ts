@@ -1526,10 +1526,10 @@ test('session-start: shows the live investigation workforce within its cap', () 
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
     const workforce = ctx.slice(start);
     assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `${source || 'startup'} workforce is ${Buffer.byteLength(workforce)} bytes`);
-    for (const id of ['codebase-exploration', 'debugging', 'spike-investigation', 'research']) {
+    for (const id of ['codebase-exploration', 'debugging', 'spike-investigation', 'source-lookup', 'evidence-research']) {
       assert.match(workforce, new RegExp(`${id} — .+ \\(.+·.+\\)`), id);
     }
-    assert.match(workforce, /visual-review — (?:.+ )?\(.+·.+\)/, 'visual-review');
+    assert.match(workforce, /visual-evaluation — (?:.+ )?\(.+·.+\)/, 'visual-evaluation');
   }
 });
 

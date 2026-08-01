@@ -2,7 +2,7 @@
   {
     "id": "codebase-exploration",
     "name": "Codebase exploration",
-    "description": "Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.",
+    "description": "Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so medium code reasoning is sufficient. The deliverable is a grounded map of existing code, not an implementation or design recommendation.",
     "route": {
       "model": "codex-gpt-5-6-luna",
       "effort": "medium"
@@ -18,7 +18,7 @@
   {
     "id": "debugging",
     "name": "Debugging",
-    "description": "Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. The first job is to reproduce and narrow the hypothesis space. Use testing instead when the intended behavior is already known and only verification is needed — the two share a verification step but start from opposite certainty about the cause. \"Why is this slow\" belongs here; \"does approach X make it faster\" is spike-investigation.",
+    "description": "Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. Selecting and eliminating competing hypotheses requires high-capability reasoning. Use behavior-verification when the intended behavior is already known and only verification is needed. \"Why is this slow\" belongs here; \"does approach X make it faster\" is spike-investigation.",
     "route": {
       "model": "opus",
       "effort": "high"
@@ -34,7 +34,7 @@
   {
     "id": "experiment",
     "name": "Experiment",
-    "description": "Use ONLY when the verdict is a human's judgement and no offline metric has been shown to reproduce it. If a test can decide, it is coding or debugging.",
+    "description": "Use ONLY when the verdict is a human's judgement and no offline metric has been shown to reproduce it. Comparing candidates against an irreducibly subjective oracle requires high-capability judgement. If a test can decide, it is coding or debugging.",
     "route": {
       "model": "opus",
       "effort": "high"
@@ -49,22 +49,25 @@
     "enabled": true
   },
   {
-    "id": "docs-writing",
-    "name": "Documentation writing",
-    "description": "Write or edit prose from supplied facts and a clear audience, without needing to investigate technical truth beyond the provided context. Use `research` when sources must be found or checked.",
+    "id": "implementation-explanation",
+    "name": "Implementation-grounded explanation",
+    "description": "Explain established technical behavior for a named audience when the implementation already supplies the factual boundary. Known code bounds both facts and structure, so medium code-and-language capability is sufficient.",
     "route": {
       "model": "codex-gpt-5-6-luna",
       "effort": "medium"
     },
-    "fallback": null,
-    "contract": "Preserve the requested voice and scope; do not invent facts.",
+    "fallback": {
+      "model": "sonnet",
+      "effort": "medium"
+    },
+    "contract": "Verify every behavioral claim against the supplied implementation, preserve the requested voice and scope, and do not invent APIs or guarantees.",
     "artifactRoots": [],
     "enabled": true
   },
   {
     "id": "general",
     "name": "General fallback",
-    "description": "Required and undeletable fallback. Use only when no more specific category fits or the request is too underspecified to classify safely. Reclassify after the first concrete evidence appears.",
+    "description": "Required and undeletable fallback. Use only when no more specific capability fits or the request is too underspecified to classify safely. This route performs bounded triage, so medium reasoning is sufficient. Reclassify after the first concrete evidence appears.",
     "route": {
       "model": "codex-gpt-5-6-luna",
       "effort": "medium"
@@ -91,18 +94,29 @@
     "enabled": true
   },
   {
-    "id": "research",
-    "name": "Research",
-    "description": "External research from web sources, at any depth: a bounded lookup with a few sources up to a substantial multi-source question needing fan-out searching and fact-checking. Scale depth to the question. Use spike-investigation when the unknown is answerable by building or running something in this repo or system.",
+    "id": "source-lookup",
+    "name": "Source lookup",
+    "description": "Resolve a bounded external documentation or factual question with a small authoritative source set. The narrow search surface and concrete answer make medium research capability sufficient. Use evidence-research when claims must be reconciled across sources.",
     "route": {
-      "model": "codex-gpt-5-6-luna",
-      "effort": "medium"
-    },
-    "fallback": {
       "model": "sonnet",
       "effort": "medium"
     },
-    "contract": "Prefer primary sources and cross-check material claims; deliver a concise cited synthesis. For a bounded lookup, invoke the saved `web-research` Workflow with the ticket question as `args`. For a substantial question, fan out searches across angles and adversarially verify key claims against independent sources. No repository edits.",
+    "fallback": null,
+    "contract": "Prefer primary sources, cite each material claim, stop when the bounded question is answered, and make no project edits.",
+    "artifactRoots": [],
+    "readonly": true,
+    "enabled": true
+  },
+  {
+    "id": "evidence-research",
+    "name": "Evidence research",
+    "description": "Investigate a substantial external question through fan-out searching, independent verification, or reconciliation of conflicting sources. The breadth and conflict resolution require high research capability. Use spike-investigation when the unknown is answerable by building or running something in this repo or system.",
+    "route": {
+      "model": "sonnet",
+      "effort": "high"
+    },
+    "fallback": null,
+    "contract": "Fan out across distinct source angles, prefer primary sources, verify key claims independently, state remaining uncertainty, and make no repository edits.",
     "artifactRoots": [],
     "readonly": true,
     "enabled": true
@@ -110,7 +124,7 @@
   {
     "id": "review-audit",
     "name": "Review or audit",
-    "description": "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review: threat-model the change and hunt injection, authz, secrets exposure, and unsafe-input issues when the ticket calls for it.",
+    "description": "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. Adversarially checking interactions and tracing concrete impact requires high code-review capability. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review when the ticket calls for it.",
     "route": {
       "model": "codex-gpt-5-6-terra",
       "effort": "high"
@@ -127,7 +141,7 @@
   {
     "id": "spike-investigation",
     "name": "Spike or investigation",
-    "description": "Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system (\"does approach X actually work/perform here\"); if it's answerable by reading external sources — docs, tool behavior, comparative research — use research instead. Also covers direction-setting design: a system boundary, migration, or cross-cutting technical direction where several valid approaches have material tradeoffs and the deliverable is a decision framework and recommendation rather than implementation.",
+    "description": "Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. Comparing viable approaches under material uncertainty requires high technical reasoning. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system; use source-lookup or evidence-research for external-source questions.",
     "route": {
       "model": "opus",
       "effort": "high"
@@ -174,22 +188,22 @@
     "enabled": true
   },
   {
-    "id": "testing",
-    "name": "Testing and verification",
-    "description": "Add, run, repair, or interpret a focused test or verification flow where the intended behavior is already known. Use `debugging` when the cause of a failing result is unknown.",
+    "id": "behavior-verification",
+    "name": "Behavior verification",
+    "description": "Add, run, repair, or interpret a focused verification flow where the intended behavior and deciding signal are already known. Those fixed constraints make medium execution-and-test reasoning sufficient. Use debugging when the cause of a failing result is unknown.",
     "route": {
       "model": "codex-gpt-5-6-luna",
-      "effort": "high"
+      "effort": "medium"
     },
     "fallback": null,
-    "contract": "Exercise the named behavior and report the observed result faithfully.",
+    "contract": "Exercise the named behavior with the narrowest reliable check and report the observed result faithfully.",
     "artifactRoots": [],
     "enabled": true
   },
   {
-    "id": "ui-frontend",
-    "name": "UI and frontend work",
-    "description": "Build or substantially reshape a user-facing interface where visual hierarchy, interaction design, and implementation must work together. Includes charts, graphs, dashboards, and any data visualization, in any medium (HTML, SVG, plotting libraries, notebooks). Use `coding.easy` for a purely mechanical UI tweak.",
+    "id": "interaction-design-implementation",
+    "name": "Interaction design and implementation",
+    "description": "Build or substantially reshape a user-facing interface where visual hierarchy, interaction design, and implementation must work together. Coordinating those concerns and judging rendered results requires high frontend capability. Includes charts, dashboards, and other data visualization. Use coding.easy for a purely mechanical UI tweak.",
     "route": {
       "model": "codex-gpt-5-6-terra",
       "effort": "high"
@@ -198,14 +212,14 @@
       "model": "sonnet",
       "effort": "high"
     },
-    "contract": "Match the product's visual language and validate the rendered flow, not only source code. For charts and data visualizations, read the dataviz skill's references before writing chart code, follow its palette/form/accessibility rules, and verify the RENDERED output.",
+    "contract": "Match the product's visual language and validate the rendered flow, not only source code. For charts and data visualizations, read the dataviz skill's references before writing chart code, follow its palette, form, and accessibility rules, and verify the rendered output.",
     "artifactRoots": [],
     "enabled": true
   },
   {
-    "id": "visual-review",
-    "name": "Visual review",
-    "description": "Fresh-eyes review of a RENDERED interface — a dashboard, web UI, TUI, or report — judged visually through browser screenshots (Playwright) as a first-time user would see it: confusing representations, misleading labels or units, naming defects, dead panels, layout and flow problems. Belongs here: \"review this dashboard's UX\", \"does this page make sense\", screenshot-driven design critique. Does not belong here: reviewing code or diffs (review-audit), building or fixing UI (ui-frontend/coding), or anything whose evidence is source files rather than pixels.",
+    "id": "visual-evaluation",
+    "name": "Visual evaluation",
+    "description": "Judge a rendered interface through browser screenshots as a first-time user would see it, finding confusing representations, misleading labels, dead panels, and layout or flow problems. Visual judgement needs a multimodal model, while the bounded review-only deliverable keeps effort at medium. Source-code evidence belongs in review-audit.",
     "route": {
       "model": "opus",
       "effort": "medium"
@@ -214,7 +228,7 @@
       "model": "codex-gpt-5-6-terra",
       "effort": "medium"
     },
-    "contract": "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliverable is a prioritized findings comment on the ticket — worst problems first, each naming the exact panel/element and what a user would misunderstand.",
+    "contract": "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliver a prioritized findings comment on the ticket, worst problems first, with each finding naming the exact element and what a user would misunderstand.",
     "artifactRoots": [],
     "readonly": true,
     "enabled": true

@@ -128,11 +128,12 @@ test('schema v7 migrates a v3 category table into a profile', () => {
   database.close();
 });
 
-test('schema v5 migration refreshes only an uncustomized codebase-exploration category', () => {
+test('schema v4 through v6 migration refreshes only uncustomized codebase exploration and preserves artifact roots', () => {
   const oldText = {
     description: 'Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.',
     contract: 'Read before concluding; cite files and symbols, with no edits.',
   };
+  const newDescription = 'Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so medium code reasoning is sufficient. The deliverable is a grounded map of existing code, not an implementation or design recommendation.';
   for (const customized of [false, true]) {
     const homeRoot = makeHome();
     const dbPath = path.join(homeRoot, 'sidequest.db');
@@ -149,10 +150,12 @@ test('schema v5 migration refreshes only an uncustomized codebase-exploration ca
 
     const database = db.openDb(homeRoot);
     assert.equal(db.getRow(database, 'meta', 'schema_version'), 7);
-    const category = db.getRow<{ contract: string; artifactRoots?: string[] }>(database, 'categories', 'codebase-exploration');
+    const category = db.getRow<{ description: string; contract: string; artifactRoots?: string[] }>(database, 'categories', 'codebase-exploration');
     if (customized) {
+      assert.equal(category?.description, oldText.description);
       assert.equal(category?.contract, 'My hand-tuned contract.');
     } else {
+      assert.equal(category?.description, newDescription);
       assert.notEqual(category?.contract, oldText.contract);
       assert.match(category?.contract ?? '', /under \.claude\/\.codebase-info/);
       assert.deepEqual(category?.artifactRoots, ['.claude/.codebase-info']);

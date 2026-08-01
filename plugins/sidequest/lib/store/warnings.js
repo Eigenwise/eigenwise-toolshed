@@ -397,7 +397,7 @@ ${ticket?.description || ""}`.matchAll(/`([^`\r\n]+)`/g);
     const outside = externalDeclaredFiles(declaredFiles);
     return declaredFiles.length > 0 && outside.length === declaredFiles.length && dispatchReadOnly(ticket);
   }
-  const JUDGMENT_TIER_CATEGORIES = ["coding.normal", "coding.hard", "debugging", "plugin-dev", "ui-frontend"];
+  const JUDGMENT_TIER_CATEGORIES = ["coding.normal", "coding.hard", "debugging", "plugin-dev", "interaction-design-implementation"];
   const PRESOLVED_BLOCK_MIN_LINES = 20;
   const PRESOLVED_BLOCK_MIN_CHARS = 1200;
   const EVIDENCE_SHARE = 0.25;
