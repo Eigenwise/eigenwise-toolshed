@@ -10,6 +10,7 @@ const readme = fs.readFileSync(path.join(ROOT, 'README.md'), 'utf8');
 const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
 const store = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'store.ts'), 'utf8');
+const warnings = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'store', 'warnings.ts'), 'utf8');
 const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 
@@ -61,7 +62,7 @@ test('wave guidance maximizes ready work and assesses isolated overlap', () => {
   assert.match(orchestration, /same-file overlap alone is not a conflict/);
   assert.match(orchestration, /same functions, constants, or regions; share a runtime resource; or semantically couple/);
   assert.match(skill, /Dispatch everything whose dependencies are met, always;\n\s+assess same-file overlap in isolated worktrees, never auto-serialize it/);
-  assert.match(store, /parallel is fine in isolated worktrees unless the same symbols\/regions change; assess/);
+  assert.match(warnings, /parallel is fine in isolated worktrees unless the same symbols\/regions change; assess/);
 });
 
 test('dispatch guidance uses stable executors and fresh adoption dispatches', () => {
