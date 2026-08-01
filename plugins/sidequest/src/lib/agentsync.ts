@@ -62,6 +62,7 @@ const ARTIFACT_LIFECYCLE_MARKER = '[sidequest-artifact-mode]';
 const NON_MAX_EFFORTS = ['low', 'medium', 'high', 'xhigh'];
 const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CONTRADICTION_RULE = 'Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction on the ticket immediately. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.';
 
 // Effort-scaled hard caps stamped into every executor definition's `maxTurns`
 // frontmatter — the harness's runaway backstop, not a work budget. Legitimately
@@ -733,7 +734,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     `Description:\n${ticketDescriptionPacket(ticket.description)}`,
     `Category contract:\nCategory: ${category.id || ticket.categoryId || '(Unclassified)'}\nConfigured route: ${category.route?.model || '(No configured route)'} / ${category.route?.effort || '(No configured effort)'}\nDispatch route: ${ticket.model || category.route?.model || '(No route)'} / ${ticket.effort || category.route?.effort || '(No effort)'}\n${category.contract || '(No category-specific executor instructions were recorded.)'}`,
     ...(uncertainty ? [uncertainty] : []),
-    'Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction on the ticket immediately. Do not investigate around it or conclude the base is wrong.',
+    EXECUTOR_CONTRADICTION_RULE,
     ...(findingCheckpoints ? [`Durable finding checkpoints:\n${findingCheckpoints}`] : []),
     `Anchors:\n${ticket.executorAnchors || '(No anchors were recorded.)'}`,
     `Verify command:\n${ticket.executorVerify || '(No exact verify command was recorded.)'}`,
@@ -1128,5 +1129,6 @@ module.exports = {
   syncExecAgents,
   syncExecAgentsIfChanged,
   stableInstallHash,
+  EXECUTOR_CONTRADICTION_RULE,
   defaultAgentsDir,
 };

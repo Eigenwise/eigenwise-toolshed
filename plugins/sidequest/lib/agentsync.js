@@ -18,6 +18,7 @@ const ARTIFACT_LIFECYCLE_MARKER = "[sidequest-artifact-mode]";
 const NON_MAX_EFFORTS = ["low", "medium", "high", "xhigh"];
 const EXEC_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
+const EXECUTOR_CONTRADICTION_RULE = "Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction on the ticket immediately. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.";
 const EXEC_MAX_TURNS = { low: 50, medium: 100, high: 150, xhigh: 200, max: 250 };
 function execMaxTurns(effort) {
   const raw = process.env.SIDEQUEST_EXEC_MAX_TURNS;
@@ -571,7 +572,7 @@ Configured route: ${category.route?.model || "(No configured route)"} / ${catego
 Dispatch route: ${ticket.model || category.route?.model || "(No route)"} / ${ticket.effort || category.route?.effort || "(No effort)"}
 ${category.contract || "(No category-specific executor instructions were recorded.)"}`,
     ...uncertainty ? [uncertainty] : [],
-    "Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction on the ticket immediately. Do not investigate around it or conclude the base is wrong.",
+    EXECUTOR_CONTRADICTION_RULE,
     ...findingCheckpoints ? [`Durable finding checkpoints:
 ${findingCheckpoints}`] : [],
     `Anchors:
@@ -967,5 +968,6 @@ module.exports = {
   syncExecAgents,
   syncExecAgentsIfChanged,
   stableInstallHash,
+  EXECUTOR_CONTRADICTION_RULE,
   defaultAgentsDir
 };
