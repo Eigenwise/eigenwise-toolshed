@@ -27,9 +27,10 @@ Open the dashboard with `/sidequest:board`, `sidequest dashboard`, or a natural-
 
 ## Board model
 
-A board is anchored to a repository path. The CLI walks up to the nearest `.git`; `--project <path-or-slug>` targets another registered board. Tickets have `SQ-n` refs and statuses `todo`, `doing`, and `done`. Stories group related tickets under `US-n` refs. Tickets can also have priority, labels, images, comments, reminders, links, persistent assignees, declared files, contract edges, a category, and a high-stakes flag.
+A board is anchored to a repository path. The CLI walks up to the nearest `.git`; `--project <path-or-slug>` targets another registered board. Tickets have `SQ-n` refs and statuses `todo`, `doing`, and `done`. Stories group related tickets under `US-n` refs. Tickets can also have priority, labels, images, comments, reminders, links, persistent assignees, declared files, contract edges, a category, and a high-stakes flag. Do not recreate a standalone
+Switchboard.
 
-The store is central, so one dashboard can switch among all projects and an **All boards** view. Board display names can change without changing the stable board ID or repository path.
+The store is central, so one dashboard can switch among all projects and an **All boards** view. A loaded MCP server or old session can still write the old store, so restart stale sessions after a migration. Board display names can change without changing the stable board ID or repository path.
 
 ```bash
 sidequest add -t "Safari checkout error" -d "Reproduction and expected behavior" \
@@ -41,7 +42,7 @@ sidequest remind SQ-7 --in 1h
 sidequest assign SQ-7 --to you
 ```
 
-Claims are separate from assignees. A claim says an executor is actively working; it is atomic and must succeed before work starts. An assignee is persistent human or agent ownership and never expires.
+Claims are separate from assignees. A claim says an executor is actively working; it is atomic and must succeed before work starts. An assignee is persistent human or agent ownership and never expires. Routed work uses an exact stable executor identity. Native `Explore` is reserved for read-only reconnaissance. Other generic/custom implementation Agent launches are denied.
 
 ## Categories and routing
 
@@ -89,7 +90,7 @@ Routine reads are brief by default. Use the opt-in full/detail fields when you n
 - `add`, `update`, `remove`, `archive`, `unarchive`
 - `comment`, `comments`, `plan`
 - `link`, `unlink`, `assign`
-- `dispatch`, `native_agent`, `native_agent_cleanup`
+- `dispatch`, executor cleanup tools
 
 ### Lifecycle and delivery tools
 
@@ -97,7 +98,8 @@ Routine reads are brief by default. Use the opt-in full/detail fields when you n
 - `scopeRequest`, `commit`, `submit`, `integrate`, `groomClose`
 - `sweepClaims`
 
-Repository executors normally follow `dispatch → token claim → scoped commit → submit → orchestrator integration`. The orchestrator owns publish, versioning, and pushing. Direct claim/done is reserved for deliberate inline-safe work, non-repository work, or read-only/artifact contracts that explicitly allow it.
+Repository executors normally follow `dispatch → token claim → scoped commit → submit → orchestrator integration`. **Routed repo lifecycle:** dispatch → token claim → scoped commit → submit →
+  orchestrator publish. The orchestrator owns publish, versioning, and pushing. Direct claim/done is reserved for deliberate inline-safe work, non-repository work, or read-only/artifact contracts that explicitly allow it.
 
 ### Routing and board administration tools
 
@@ -113,7 +115,8 @@ The notification bell is a persistent server-side inbox for Claude-originated co
 
 ## Working tickets and parallel waves
 
-A ticket description is the executor's specification. Include exact files, anchors, behavior, edge cases, dependencies, and a runnable verify command. Declare every affected surface with `--file`; directory scopes cover descendants.
+A ticket description is the executor's specification. Include exact files, anchors, behavior, edge cases, dependencies, and a runnable verify command. Declare every affected surface and scope work by affected
+surfaces with `--file`; directory scopes cover descendants.
 
 ```bash
 sidequest ready --json --brief
@@ -128,7 +131,8 @@ Claims are released on observed executor death, then by activity-based backstops
 
 ## Publish lock and delivery
 
-The orchestrator integrates submitted work. Delivery can merge, replay, or apply, configured per board with `board-config --delivery`. Integration rechecks scope and the recorded verify command. A publish lock protects release operations and pushes to the published/default branch.
+The orchestrator integrates submitted work. Delivery can merge, replay, or apply, configured by the board with `board-config --delivery`. Integration rechecks scope and the recorded verify command. A publish lock protects release operations and pushes to the published/default branch. Keep matching versions in both
+  `.claude-plugin/plugin.json` and `.claude-plugin/marketplace.json` when publishing.
 
 ```bash
 sidequest publish lock --by <who>
