@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.311.0 (2026-08-01)
+
+### sidequest 3.50.3 → 3.50.4
+
+#### Fixes
+
+- Extract the notification and worker-registry store domains behind the unchanged facade (SQ-1154) [`5c017c8`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5c017c8)
+
 ## v3.310.0 (2026-08-01)
 
 ### sidequest 3.50.2 → 3.50.3
