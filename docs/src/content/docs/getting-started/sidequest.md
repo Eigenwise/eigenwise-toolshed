@@ -248,6 +248,8 @@ A scoped commit commits its declared paths even when another changed file is out
 
 Fix it with scope, not force. Declare `files` on the ticket up front so an executor isn't inferring scope from its first write, or approve the scope request it filed. Nothing pushes a partial submission through.
 
+If the orchestrator denies a pending scope request, run `sidequest scope-deny <ref> --reason "why"`. The denial records the reason, clears the pending request, and keeps both the executor's claim and the ticket's original declared scope intact. The executor can continue within that original scope. If the denied path is required to finish, release the ticket and carry the denial reason into the release so the orchestrator can route the work correctly. Do not keep re-requesting the same expansion after a denial.
+
 Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put, and so does any worktree whose ticket still holds a live claim: a ticket can reach a final board state while its executor is still working in that tree.
 
 ![Sidequest kanban board](../../../assets/screenshots/sidequest-kanban.png)
