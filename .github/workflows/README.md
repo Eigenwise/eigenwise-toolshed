@@ -12,7 +12,8 @@ manual dispatch as shown below.
 | `release-cut.yml` | Daily schedule, manual dispatch | Reads the marketplace version on `main` and creates the matching notification-only tag and GitHub Release when one is missing. It does not run `cut.mjs` or change versions. |
 | `release.yml` | Tags matching `v*` | Creates a GitHub Release from an existing verified tag, with generated notes. |
 
-The release cut workflow is paused unless `RELEASE_AUTOMATION` is explicitly active. Normal
+`RELEASE_AUTOMATION` gates `release-guard.yml` only. `release-cut.yml` is not gated by it and does
+run on its daily schedule. Normal
 publishing remains a local `scripts/release/cut.mjs` run under the Sidequest publish lock, followed
 by the exact atomic push it prints. The `v*` workflows notify users after a marketplace commit is
 already on `main`; they do not own plugin or marketplace version bumps.
