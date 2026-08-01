@@ -564,12 +564,23 @@ function storyDecisionLogPacket(ticket?: any, slug?: any) {
     : [];
   if (!entries.length) return null;
   const revision = Number(story.logRevision) || Number(entries[entries.length - 1].seq) || 0;
-  const packet = [
-    `## Story decision log (${story.ref}, ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} through #${revision})`,
-    'Findings appended by sibling executors on this story. The contract above outranks these.',
-    ...entries.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
-  ].join('\n');
-  return boundedPacket(packet, STORY_DECISION_LOG_PACKET_MAX_BYTES, '\n\n[Story decision log truncated at 4 KB. Read the live story log before acting.]');
+  const render = (selected: any[], omitted: number) => {
+    const marker = omitted
+      ? `\n\n[Story decision log briefing window omitted ${omitted} earlier ${omitted === 1 ? 'entry' : 'entries'}. Read the full history with sidequest story log ${story.ref} --full before acting.]`
+      : '';
+    return [
+      `## Story decision log (${story.ref}, ${selected.length} recent ${selected.length === 1 ? 'entry' : 'entries'} through #${revision})`,
+      'Findings appended by sibling executors on this story. The contract above outranks these.',
+      ...selected.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
+    ].join('\n') + marker;
+  };
+  const selected: any[] = [];
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const candidate = [entries[index], ...selected];
+    if (byteLength(render(candidate, entries.length - candidate.length)) > STORY_DECISION_LOG_PACKET_MAX_BYTES) break;
+    selected.unshift(entries[index]);
+  }
+  return render(selected, entries.length - selected.length);
 }
 
 function ticketContractsPacket(ticket?: any) {

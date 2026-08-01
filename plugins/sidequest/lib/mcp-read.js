@@ -183,7 +183,7 @@ const tools = [
         const story = store.getStory(slug, args.story);
         if (!story) throw new Error(`story show: no story "${args.story}" in ${meta.name}`);
         const tickets = store.listTickets(slug).filter((ticket) => !ticket.archived && ticket.storyId === story.id);
-        return { project: slug, projectName: meta.name, story, tickets };
+        return { project: slug, projectName: meta.name, story: store.storyReadPayload(story), tickets };
       }
       if (action === "update") {
         const patch = {};
@@ -231,7 +231,7 @@ const tools = [
         entry: { type: "string", description: "Decision log entry, prefixed with DECISION, CONSTRAINT, or DISCOVERY." },
         ref: { type: "string", description: "Claimed member ticket ref for an append." },
         by: { type: "string", description: "Claim owner for an append, or orchestrator to clear." },
-        clear: { type: "boolean", description: "Clear after durable entries are promoted to the execution contract." }
+        clear: { type: "boolean", description: "Archive the current entries; use sidequest story log --full to read their history." }
       },
       required: ["story"]
     },
@@ -253,7 +253,16 @@ const tools = [
         ok: true,
         project: slug,
         projectName: meta.name,
-        story: { ref: story.ref, logBytes: log.bytes, logCapacity: log.capacity, logRevision: log.revision, entries: log.entries }
+        story: {
+          ref: story.ref,
+          logBytes: log.bytes,
+          logCapacity: log.capacity,
+          logRevision: log.revision,
+          entries: log.entries,
+          totalEntries: log.totalEntries,
+          omittedEntries: log.omittedEntries,
+          archivedEntries: log.archivedEntries
+        }
       };
     }
   },

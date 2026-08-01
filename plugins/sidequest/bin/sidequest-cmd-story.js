@@ -67,7 +67,7 @@ async function cmdStory(opts, positional) {
       if (!story) fail(`story show: no story "${idOrRef}" in ${meta.name}`);
       const tickets = store.listTickets(slug).filter((t) => !t.archived && t.storyId === story.id);
       if (opts.json) {
-        process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, story, tickets }, null, 2) + "\n");
+        process.stdout.write(JSON.stringify({ project: slug, projectName: meta.name, story: store.storyReadPayload(story, { full: opts.full }), tickets }, null, 2) + "\n");
         return;
       }
       console.log(`${story.ref}  [${story.color}]  "${story.title}"  — ${meta.name}`);
@@ -115,12 +115,21 @@ async function cmdStory(opts, positional) {
         story = store.appendStoryLogEntry(slug, idOrRef, { entry, ref: opts.ref, by });
       }
       if (!story) fail(`story log: no story "${idOrRef}" in ${meta.name}`);
-      const log = store.storyDecisionLog(story);
+      const log = store.storyDecisionLog(story, { full: opts.full });
       const payload = {
         ok: true,
         project: slug,
         projectName: meta.name,
-        story: { ref: story.ref, logBytes: log.bytes, logCapacity: log.capacity, logRevision: log.revision, entries: log.entries }
+        story: {
+          ref: story.ref,
+          logBytes: log.bytes,
+          logCapacity: log.capacity,
+          logRevision: log.revision,
+          entries: log.entries,
+          totalEntries: log.totalEntries,
+          omittedEntries: log.omittedEntries,
+          archivedEntries: log.archivedEntries
+        }
       };
       if (opts.json) {
         process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
@@ -130,6 +139,7 @@ async function cmdStory(opts, positional) {
       for (const item of log.entries) {
         console.log(`- #${item.seq} ${item.kind} (${item.ref || "orchestrator"}, ${item.by}): ${item.text}`);
       }
+      if (log.omittedEntries) console.log(`  ${log.omittedEntries} history entries omitted; pass --full for the complete history.`);
       return;
     }
     case "update":

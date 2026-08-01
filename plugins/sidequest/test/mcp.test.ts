@@ -371,7 +371,10 @@ test('story_log reads, appends from a claimed member, and clears after promotion
   assert.equal(store.claimTicket(project, ticket.ref, 'log-worker', { direct: true }).ok, true);
 
   const empty = await callTool('story_log', { project, story: story.ref });
-  assert.deepEqual(empty.story, { ref: story.ref, logBytes: 0, logCapacity: 4096, logRevision: 0, entries: [] });
+  assert.equal(empty.story.logBytes, 0);
+  assert.equal(empty.story.logCapacity, 4096);
+  assert.equal(empty.story.logRevision, 0);
+  assert.deepEqual(empty.story.entries, []);
 
   const appended = await callTool('story_log', {
     project, story: story.ref, ref: ticket.ref, by: 'log-worker', entry: 'DISCOVERY: CLI and MCP share the same store API.',
@@ -383,7 +386,11 @@ test('story_log reads, appends from a claimed member, and clears after promotion
   );
 
   const cleared = await callTool('story_log', { project, story: story.ref, clear: true, by: 'orchestrator' });
-  assert.deepEqual(cleared.story, { ref: story.ref, logBytes: 0, logCapacity: 4096, logRevision: 1, entries: [] });
+  assert.equal(cleared.story.logBytes, 0);
+  assert.equal(cleared.story.logCapacity, 4096);
+  assert.equal(cleared.story.logRevision, 1);
+  assert.deepEqual(cleared.story.entries, []);
+  assert.equal(cleared.story.archivedEntries, 1);
   const denied = await callToolRaw('story_log', { project, story: story.ref, clear: true, by: 'log-worker' });
   assert.equal(denied.isError, true);
   assert.match(denied.content[0].text, /clear:true requires by:"orchestrator"/);
