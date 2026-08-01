@@ -6,31 +6,24 @@ const path = require('node:path');
 const { COMPAT_BASE_URL, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
 const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
 
-function hasWiringMode() {
-  try {
-    return ['local', 'global'].includes(JSON.parse(fs.readFileSync(WIRING_CONFIG_PATH, 'utf8')).mode);
-  } catch { return false; }
-}
-
-function wiringMode() {
-  try {
-    return JSON.parse(fs.readFileSync(WIRING_CONFIG_PATH, 'utf8')).mode === 'global' ? 'global' : 'local';
-  } catch { return 'local'; }
-}
-
-function wiringModeDefaultNotice() {
-  return 'wiring mode defaulted to per-project; use /model-gateway:model-gateway to run its env --mode global command to change';
-}
-
-function writeWiringMode(mode) {
-  if (!['local', 'global'].includes(mode)) throw new Error(`Unknown wiring mode: ${mode}`);
-  fs.mkdirSync(STATE, { recursive: true });
-  fs.writeFileSync(WIRING_CONFIG_PATH, JSON.stringify({ mode }, null, 2) + '\n', { mode: 0o600 });
-  return mode;
-}
+// Wiring is global-only. Per-project wiring existed as a mode and was removed:
+// a project-local ANTHROPIC_BASE_URL silently shadows the user-scope one, which
+// made /remote-control unreachable across a dozen projects with no diagnosis.
+// Deliberately shadowing one project is still supported (write the key into that
+// project's settings.local.json by hand); having it be the DEFAULT was the bug.
+const WIRING_SCOPE = 'user';
 
 function selectedWiringScope() {
-  return wiringMode() === 'global' ? 'user' : 'project';
+  return WIRING_SCOPE;
+}
+
+// A leftover {"mode":"local"} from an older install must not silently keep a
+// project wired against the user scope, so retiring the file is part of migrating.
+function retireWiringModeConfig() {
+  try {
+    fs.rmSync(WIRING_CONFIG_PATH);
+    return true;
+  } catch { return false; }
 }
 
 function settingsPath(scope) {
@@ -178,24 +171,17 @@ function migrateLegacyProjectSettings() {
     .map(([key]) => key);
   if (entries.length === 0 && legacyKeys.length === 0) return { migrated: false };
 
+  // Wiring is global, so these keys are stripped rather than relocated into
+  // settings.local.json: a project-scope copy would outrank the user scope and
+  // recreate the silent shadow that per-project wiring was removed for. The
+  // mode is still carried out so the user-scope write preserves compat mode.
   const localFile = settingsPath('project');
-  let nextLocal;
-  if (entries.length > 0) {
-    const local = readSettingsForWrite(localFile);
-    nextLocal = structuredClone(local);
-    nextLocal.env = { ...(nextLocal.env || {}) };
-    for (const [key, value] of entries) {
-      if (!Object.hasOwn(nextLocal.env, key)) nextLocal.env[key] = value;
-    }
-  }
-
   const nextLegacy = structuredClone(legacy);
   nextLegacy.env = { ...(nextLegacy.env || {}) };
   for (const [key] of entries) delete nextLegacy.env[key];
   for (const key of legacyKeys) delete nextLegacy.env[key];
   if (!Object.keys(nextLegacy.env).length) delete nextLegacy.env;
 
-  if (nextLocal) writeSettings(localFile, nextLocal);
   writeSettings(legacyFile, nextLegacy);
   const baseUrl = Object.fromEntries(entries).ANTHROPIC_BASE_URL;
   const mode = baseUrl === COMPAT_BASE_URL ? 'compat' : baseUrl === DEFAULT_BASE_URL ? 'default' : null;
@@ -261,8 +247,8 @@ function wiredMode() {
 
 
 module.exports = {
-  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, hasWiringMode, isWired,
+  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired,
   migrateLegacyProjectSettings, readSettingsForWrite, reconcileRegisteredProjectWirings,
-  recordProjectWiring, registeredProjectWirings, selectedWiringScope, settingsPath, wiredMode,
-  wiringMode, wiringModeDefaultNotice, writeSettings, writeWiringMode,
+  recordProjectWiring, registeredProjectWirings, retireWiringModeConfig, selectedWiringScope,
+  settingsPath, wiredMode, writeSettings,
 };

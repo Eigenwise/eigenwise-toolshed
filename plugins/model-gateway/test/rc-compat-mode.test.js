@@ -277,7 +277,6 @@ test('writeEnv switches only the plugin-owned base URL and leaves unrelated sett
   process.env.USERPROFILE = home;
   process.env.HOME = home;
   const isolatedGateway = loadGatewayWithCurrentHome();
-  isolatedGateway.writeWiringMode('global');
 
   const file = isolatedGateway.settingsPath('user');
   fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -20,7 +20,9 @@ All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" <command>`
 
 ## First-time setup
 
-Before wiring a machine with no saved mode (`env --show-mode` says it defaulted), ask exactly once: **"Global (all projects wired automatically via user settings) or per-project (each project opts in via its private settings.local.json — recommended)?"** Global gives zero-friction coverage everywhere. Per-project keeps personal wiring out of shared repos and makes each opt-in explicit. `env --mode global` persists the answer and writes `~/.claude/settings.json`; `env --mode local` persists it and writes the current project's `.claude/settings.local.json`. Do not ask again once a mode exists. If setup must run without interaction, use local and say `wiring mode defaulted to per-project; run model-gateway env --mode global to change`.
+Wiring is global. `env --write-user` writes `~/.claude/settings.json` and covers every project and every executor worktree. There is no mode to choose and nothing to ask the user: per-project wiring was removed because a project `settings.local.json` silently outranks user settings, which left projects pointing at a stale URL with no visible cause.
+
+To exempt a single project deliberately, put `ANTHROPIC_BASE_URL` in that project's `.claude/settings.local.json` by hand. `doctor` will show it winning as `[effective]`, which is the point: a deliberate override is visible, the old default was not.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
@@ -34,15 +36,11 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup    # finishes the wiring
 ```
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
-needs a real TTY). Local wiring is the default: `env --mode local` writes the current repo's
-`.claude/settings.local.json`, while `env --mode global` writes user settings for every project.
-`/workbench:update-toolshed` wires recorded projects and migrates an older global block. A project
+needs a real TTY). `env --write-user` writes `~/.claude/settings.json` for every project.
+`/workbench:update-toolshed` writes that block and reconciles leftover per-project wiring. A project
 `settings.local.json` `env` block overrides user settings completely, so run `doctor` when a project
-has its own env settings and the Codex rows are missing. To migrate recorded projects after changing
-the saved mode, run `/workbench:update-toolshed --wiring-mode local` or
-`/workbench:update-toolshed --wiring-mode global`. The global switch preserves existing local blocks
-and names them as redundant; it never deletes them. All wiring changes apply to new Claude Code
-sessions, so restart after the write. The Codex rows appear in `/model` labeled "From gateway".
+has its own env settings and the Codex rows are missing: it names the file that actually wins. All
+wiring changes apply to new Claude Code sessions, so restart after the write. The Codex rows appear in `/model` labeled "From gateway".
 
 The winning `ANTHROPIC_BASE_URL` source follows Claude Code's precedence: process environment,
 current-project `.claude/settings.local.json`, project `.claude/settings.json`, then user
@@ -51,7 +49,7 @@ current-project `.claude/settings.local.json`, project `.claude/settings.json`, 
 exact fix. If process environment wins, unset it and start a new session; rewriting settings cannot
 override it.
 
-`env --mode global --reconcile` is confirmation-gated and only valid with `--mode global`. Plain global mode writes user settings, then lists recorded projects whose local URL differs without
+`env --write-user --reconcile` is confirmation-gated. Plain `env --write-user` writes user settings, then lists recorded projects whose local URL differs without
 changing their files. The confirmed command writes to OTHER projects' `.claude/settings.local.json`
 files and removes only Model Gateway-owned keys: its base URL, the three Claude alias pins, and
 static gateway flags whose values equal plugin defaults. It leaves unrelated settings alone, skips
@@ -89,7 +87,7 @@ back, or you kill the session that was about to use it.
   `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
   to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
   pin and whether it is overridden. Overrides live in `~/.claude/model-gateway/pins.json`, outside
-  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-project` (or
+  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-user` (or
   `env --write-user`) and start a new Claude Code session; changing a saved value alone cannot alter
   an open session.
 - Do NOT set a
@@ -103,7 +101,7 @@ back, or you kill the session that was about to use it.
 - **RC-compat and missing Codex rows**: compat mode still serves the complete Codex catalog, but
   Claude Code uses its built-in first-party list when the hostname is `api.anthropic.com`. Pin a
   visible Claude alias to a Codex id, rewire, restart, and choose that visible row, for example:
-  `pin --opus claude-gpt-5.6-terra`, then `env --write-user` (or `env --write-project`). The shim
+  `pin --opus claude-gpt-5.6-terra`, then `env --write-user`. The shim
   routes the pinned `claude-gpt-*` id to Codex. Sidequest dispatch is unaffected because it resolves
   its explicit route marker and never uses picker discovery.
 - Claude models keep working normally at the same time (passthrough path); subagents can mix tiers

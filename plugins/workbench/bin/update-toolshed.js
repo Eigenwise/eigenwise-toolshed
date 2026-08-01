@@ -25,10 +25,7 @@ function parseArgs(argv) {
       options.claude = argv[index + 1];
       index += 1;
     } else if (arg === '--wiring-mode') {
-      const mode = argv[index + 1];
-      if (!['local', 'global'].includes(mode)) throw new Error('--wiring-mode requires local or global');
-      options.wiringMode = mode;
-      index += 1;
+      throw new Error('--wiring-mode was removed: model gateway wiring is global only');
     } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -38,7 +35,7 @@ function parseArgs(argv) {
 }
 
 function usage() {
-  return `Usage: node update-toolshed.js [--check] [--dry-run] [--claude <command>] [--wiring-mode local|global]
+  return `Usage: node update-toolshed.js [--check] [--dry-run] [--claude <command>]
 
 Refreshes the eigenwise-toolshed marketplace, then updates every recorded Toolshed
 plugin install at user, project, and local scope. Project and local installs run from
@@ -50,8 +47,7 @@ their recorded project directory so Claude Code updates the right scope.
                 Migrate the retired codex-gateway install after every Claude Code session is closed
   --confirm-sessions-closed
                 Required with --migrate-model-gateway because migration moves shared gateway state
-  --claude      Claude Code command to run (default: claude)
-  --wiring-mode Switch model gateway wiring and migrate recorded projects`;
+  --claude      Claude Code command to run (default: claude)`;
 }
 
 function registryPath(home = os.homedir()) {
@@ -348,26 +344,14 @@ function gatewayWiringMode(home = os.homedir()) {
   } catch { return 'local'; }
 }
 
-function hasGatewayWiringMode(home = os.homedir()) {
-  try {
-    return ['local', 'global'].includes(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'wiring.json'), 'utf8')).mode);
-  } catch { return false; }
-}
-
-function setGatewayWiringMode(home, mode) {
-  const file = path.join(home, '.claude', 'model-gateway', 'wiring.json');
-  fs.mkdirSync(path.dirname(file), { recursive: true });
-  fs.writeFileSync(file, `${JSON.stringify({ mode }, null, 2)}\n`, { encoding: 'utf8', mode: 0o600 });
-}
-
-function gatewayWiringCommand(instances, scope, projectPath, remove = false) {
+function gatewayWiringCommand(instances, projectPath) {
   const gateway = gatewayCommand(instances, 'env');
   if (!gateway) return null;
   return {
     ...gateway,
-    args: [...gateway.args, scope === 'project' ? '--write-project' : '--write-user', ...(remove ? ['--remove'] : [])],
-    cwd: scope === 'project' ? projectPath : undefined,
-    label: remove ? 'model-gateway remove legacy global wiring' : `model-gateway wire ${scope}${projectPath ? ` (${projectPath})` : ''}`,
+    args: [...gateway.args, '--write-user', '--reconcile'],
+    cwd: projectPath,
+    label: `model-gateway wire global${projectPath ? ` (reconciling ${projectPath})` : ''}`,
   };
 }
 
@@ -376,43 +360,26 @@ function recordedProjects(instances) {
 }
 
 function healGatewayWiring(instances, options, run, report) {
-  const mode = options.wiringMode ?? gatewayWiringMode(options.home);
+  const mode = 'global';
   const projects = recordedProjects(instances);
-  if (mode === 'global') {
-    const command = gatewayWiringCommand(instances, 'user');
-    if (!command) return { mode, results: [], failures: [] };
-    const ok = execute(command, options, run, report);
-    if (ok) {
-      report('Global gateway wiring applies to new Claude Code sessions. Restart open sessions.');
-      if (projects.length > 0) report(`Existing per-project blocks remain in ${projects.length} recorded project(s); they are redundant while global mode is active.`);
-    }
-    return { mode, results: [command], failures: ok ? [] : [command.label] };
-  }
-
-  if (projects.length === 0) {
-    report('Gateway local wiring: no recorded projects found. Legacy global wiring was left in place. Wire a new project with: model-gateway env --write-project');
-    return { mode, results: [], failures: [] };
-  }
-
   const results = [];
   const failures = [];
-  for (const projectPath of projects) {
-    const command = gatewayWiringCommand(instances, 'project', projectPath);
-    if (!command) continue;
+
+  // Recorded projects first, so any stale per-project block is recorded and then
+  // cleared; the final pass covers the case where there are no projects at all.
+  for (const projectPath of [...projects, undefined]) {
+    const command = gatewayWiringCommand(instances, projectPath);
+    if (!command) break;
     results.push(command);
     if (!execute(command, options, run, report)) failures.push(command.label);
   }
+
   if (failures.length > 0) {
-    report('Gateway local wiring kept legacy global settings because one or more recorded projects could not be wired.');
+    report('Gateway wiring did not finish. Per-project ANTHROPIC_BASE_URL blocks may still shadow the global setting; run model-gateway remote-control doctor to see which file wins.');
     return { mode, results, failures };
   }
-
-  const remove = gatewayWiringCommand(instances, 'user', undefined, true);
-  if (remove) {
-    results.push(remove);
-    if (!execute(remove, options, run, report)) failures.push(remove.label);
-  }
-  if (failures.length === 0) report('Gateway local wiring applies to new Claude Code sessions. Restart open sessions.');
+  report('Global gateway wiring applies to new Claude Code sessions. Restart open sessions.');
+  if (projects.length > 0) report(`Reconciled model-gateway-owned wiring across ${projects.length} recorded project(s).`);
   return { mode, results, failures };
 }
 
@@ -525,8 +492,6 @@ function runModelGatewayMigration({ registryFile = registryPath(), home = os.hom
 }
 
 function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
-  const modeWasConfigured = hasGatewayWiringMode(home);
-  if (options.wiringMode && !options.check && !options.dryRun) setGatewayWiringMode(home, options.wiringMode);
   let registry;
   try {
     registry = readRegistry(registryFile);
@@ -563,8 +528,6 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
   report(`Found ${instances.length} Toolshed plugin install(s) from ${marketplaces.length} marketplace(s):`);
   for (const instance of instances) report(`- ${instance.id} ${instance.version ?? 'unknown'} (${instance.scope}${instance.projectPath ? `, ${instance.projectPath}` : ''})`);
   report('Other marketplaces are managed by Claude Code auto-update — not touched.');
-  if (!modeWasConfigured && !options.wiringMode) report('Wiring mode defaulted to per-project; run /workbench:update-toolshed --wiring-mode global to change.');
-  if (options.wiringMode) report(`Wiring mode ${options.dryRun || options.check ? 'would switch' : 'switched'} to ${options.wiringMode}.`);
 
   const failures = [];
   if (!options.check) {
@@ -600,7 +563,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     if (!gatewaySetupOk) failures.push(gateway.label);
   }
 
-  let healedGatewayWiring = { mode: gatewayWiringMode(home), results: [], failures: [] };
+  let healedGatewayWiring = { mode: 'global', results: [], failures: [] };
   if (!options.check && gateway && gatewaySetupOk) {
     healedGatewayWiring = healGatewayWiring(instances, { ...options, home }, run, report);
     failures.push(...healedGatewayWiring.failures);
@@ -658,9 +621,6 @@ module.exports = {
   gatewayCommand,
   gatewayMigrationInstruction,
   gatewayWiringCommand,
-  gatewayWiringMode,
-  hasGatewayWiringMode,
-  setGatewayWiringMode,
   healGatewayWiring,
   healStaleStatuslines,
   healStatusline,

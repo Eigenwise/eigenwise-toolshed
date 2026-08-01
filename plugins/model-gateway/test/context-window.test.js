@@ -701,14 +701,14 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
     },
   }));
 
-  const result = spawnSync(process.execPath, [CLI, 'env', '--write-project'], {
+  const result = spawnSync(process.execPath, [CLI, 'env', '--write-user'], {
     cwd,
     env,
     encoding: 'utf8',
   });
   assert.equal(result.status, 0, result.stderr);
 
-  const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
+  const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   const legacy = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.json'), 'utf8'));
   assert.equal(settings.env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
@@ -722,9 +722,9 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(legacy.env.CLAUDE_CODE_AUTO_COMPACT_WINDOW, undefined);
   assert.equal(legacy.env.USER_SETTING, 'keep-me');
 
-  const removed = spawnSync(process.execPath, [CLI, 'env', '--write-project', '--remove'], { cwd, env, encoding: 'utf8' });
+  const removed = spawnSync(process.execPath, [CLI, 'env', '--write-user', '--remove'], { cwd, env, encoding: 'utf8' });
   assert.equal(removed.status, 0, removed.stderr);
-  const after = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8'));
+  const after = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(after.env?.ANTHROPIC_DEFAULT_FABLE_MODEL, undefined);
   assert.equal(after.env?.CLAUDE_CODE_MAX_OUTPUT_TOKENS, undefined);
   assert.equal(after.env?.ENABLE_TOOL_SEARCH, undefined);
@@ -785,9 +785,9 @@ test('Claude pin overrides persist outside the plugin and are applied by rewirin
       opus: 'claude-opus-4-8[1m]',
     });
 
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
-    const settingsFile = path.join(cwd, '.claude', 'settings.local.json');
+    const settingsFile = path.join(home, '.claude', 'settings.json');
     assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).env.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
 
     const pins = spawnSync(process.execPath, [CLI, 'pin'], { env, encoding: 'utf8' });
@@ -796,7 +796,7 @@ test('Claude pin overrides persist outside the plugin and are applied by rewirin
 
     const cleared = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'default'], { env, encoding: 'utf8' });
     assert.equal(cleared.status, 0, cleared.stderr);
-    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(rewired.status, 0, rewired.stderr);
     const detected = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json'), 'utf8'));
     assert.equal(detected.pins.opus, 'claude-opus-9[1m]');
@@ -816,9 +816,9 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-nocli-project-'));
   const env = { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_CLAUDE_BIN: missingClaude(home) };
   try {
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
-    const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
@@ -826,9 +826,9 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
 
     const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
     assert.equal(override.status, 0, override.stderr);
-    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    const rewired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(rewired.status, 0, rewired.stderr);
-    const afterOverride = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    const afterOverride = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(afterOverride.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
     assert.equal(afterOverride.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   } finally {
@@ -855,9 +855,9 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
   try {
     const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { cwd, env, encoding: 'utf8' });
     assert.equal(override.status, 0, override.stderr);
-    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-project'], { cwd, env, encoding: 'utf8' });
+    const wired = spawnSync(process.execPath, [CLI, 'env', '--write-user'], { cwd, env, encoding: 'utf8' });
     assert.equal(wired.status, 0, wired.stderr);
-    const settings = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-4-8[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-9[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-9[1m]');
@@ -874,13 +874,13 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
       assert.equal(probe.oauth, undefined);
     }
 
-    const mismatched = spawnSync(process.execPath, [CLI, 'env', '--write-project'], {
+    const mismatched = spawnSync(process.execPath, [CLI, 'env', '--write-user'], {
       cwd,
       env: { ...env, FAKE_CLAUDE_FABLE: 'claude-sonnet-99' },
       encoding: 'utf8',
     });
     assert.equal(mismatched.status, 0, mismatched.stderr);
-    const afterMismatch = JSON.parse(fs.readFileSync(path.join(cwd, '.claude', 'settings.local.json'), 'utf8')).env;
+    const afterMismatch = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(afterMismatch.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-9[1m]');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -888,7 +888,7 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
   }
 });
 
-test('doctor describes local settings.local.json wiring', () => {
+test('doctor describes global user settings wiring', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-project-'));
   try {
@@ -897,48 +897,48 @@ test('doctor describes local settings.local.json wiring', () => {
       env: { ...process.env, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /wiring mode: local/);
+    assert.match(result.stdout, /wiring: global ~\/\.claude\/settings\.json/);
     assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
-    assert.match(result.stdout, /project settings\.local\.json: not wired/);
+    assert.match(result.stdout, /user settings\.json: not wired/);
+    assert.doesNotMatch(result.stdout, /wiring mode: local/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
     fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
 
-test('env shows the local default until the user saves a wiring mode', () => {
+test('env with no scope flag explains global wiring and writes nothing', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-mode-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-project-'));
   try {
-    const first = spawnSync(process.execPath, [CLI, 'env', '--show-mode'], {
+    const shown = spawnSync(process.execPath, [CLI, 'env'], {
+      cwd,
       env: { ...process.env, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
     });
-    assert.equal(first.status, 0, first.stderr);
-    assert.match(first.stdout, /wiring mode: local \(defaulted to per-project\)/);
-    assert.match(first.stdout, /wiring mode defaulted to per-project; use \/model-gateway:model-gateway to run its env --mode global command to change/);
+    assert.equal(shown.status, 0, shown.stderr);
+    assert.match(shown.stdout, /Wiring is global/);
+    assert.doesNotMatch(shown.stdout, /defaulted to per-project/);
+    assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
-    const selected = spawnSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
+    // The retired mode config must never come back: a stale one would otherwise
+    // keep an old install pointed at a project file that shadows the user scope.
+    const retired = spawnSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
+      cwd,
       env: { ...process.env, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
     });
-    assert.equal(selected.status, 0, selected.stderr);
-    assert.equal(JSON.parse(fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'wiring.json'), 'utf8')).mode, 'global');
-
-    const later = spawnSync(process.execPath, [CLI, 'env', '--show-mode'], {
-      env: { ...process.env, HOME: home, USERPROFILE: home },
-      encoding: 'utf8',
-    });
-    assert.equal(later.status, 0, later.stderr);
-    assert.match(later.stdout, /wiring mode: global/);
-    assert.doesNotMatch(later.stdout, /defaulted to per-project/);
+    assert.equal(retired.status, 2);
+    assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'wiring.json')), false);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
+    fs.rmSync(cwd, { recursive: true, force: true });
   }
 });
 
 test('SessionStart nudges hand off gateway actions to the runnable skill', () => {
   const source = fs.readFileSync(COMMANDS, 'utf8');
-  assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
+  assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-user command/);
   assert.match(source, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
   assert.doesNotMatch(source, /(?:Run|run):? env --/);
 });

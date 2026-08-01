@@ -62,20 +62,17 @@ test('init-workspace offers Git before writing greenfield workspace artifacts', 
   assert.match(skill, /they declined Git setup, say once that the workspace is uncommitted/);
 });
 
-test('Workbench skills hand off gateway mode commands to the installed gateway skill', () => {
+test('Workbench skills hand off global gateway wiring to the installed gateway skill', () => {
   for (const document of [skill, telemetrySkill]) {
-    assert.match(document, /invoke `\/model-gateway:model-gateway` and use its `env --show-mode` command/);
+    assert.match(document, /invoke `\/model-gateway:model-gateway` and use its `env --write-user` command/);
     assert.match(document, /installed plugin command is not on PATH/);
-    assert.match(document, /through that skill with its `env --mode global` or `env --mode local` command/);
+    assert.match(document, /wiring is global and has no mode to choose, so do not ask about it/);
     assert.doesNotMatch(document, /`codex-gateway env --/);
+    // The mode interview is gone with per-project wiring. Leaving any of it behind
+    // would have a skill ask a question the CLI can no longer answer.
+    assert.doesNotMatch(document, /--show-mode|--mode global|--mode local|--write-project/);
+    assert.doesNotMatch(document, /ask exactly once/);
   }
-  assert.match(skill, /When no mode is saved, ask exactly once:/);
-  assert.match(skill, /Global \(recommended:/);
-  assert.match(skill, /every project and executor worktree automatically/);
-  assert.match(skill, /or per-project \(a private-settings escape hatch/);
-  assert.match(skill, /does not reach executor worktrees/);
-  assert.match(skill, /do not ask again once a mode exists/);
-  assert.match(skill, /wiring mode defaulted to global; use \/model-gateway:model-gateway to run its env --mode local command to use per-project wiring/);
 });
 
 test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {

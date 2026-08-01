@@ -44,6 +44,12 @@ function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2));
 }
 
+// --write-project is gone with local wiring mode; tests that need a shadowing
+// project now create the file directly, the way a stale install would have left it.
+function wireProject(project, baseUrl = DEFAULT_BASE_URL) {
+  writeJson(path.join(project, '.claude', 'settings.local.json'), { env: { ANTHROPIC_BASE_URL: baseUrl } });
+}
+
 function wiringConfig(home) {
   return path.join(home, '.claude', 'model-gateway', 'wiring.json');
 }
@@ -52,20 +58,31 @@ function projectRegistry(home) {
   return path.join(home, '.claude', 'model-gateway', 'wired-projects.json');
 }
 
-test('env --mode global wires user settings', (t) => {
+test('env --write-user wires user settings', (t) => {
   const { home, project } = fixture(t);
 
-  assert.equal(run(home, project, ['env', '--mode', 'global']).code, 0);
+  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
   const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8'));
   assert.equal(settings.env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
 });
 
-test('env --mode local wires project settings', (t) => {
+test('retired per-project wiring flags fail loudly instead of silently wiring a project', (t) => {
   const { home, project } = fixture(t);
 
-  assert.equal(run(home, project, ['env', '--mode', 'local']).code, 0);
-  const settings = JSON.parse(fs.readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
-  assert.equal(settings.env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
+  for (const retired of [['env', '--mode', 'local'], ['env', '--mode', 'global'], ['env', '--write-project'], ['env', '--show-mode']]) {
+    const result = run(home, project, retired);
+    assert.equal(result.code, 2, `${retired.join(' ')} should exit 2`);
+    assert.match(result.output, /wiring is global only/);
+  }
+  assert.equal(fs.existsSync(path.join(project, '.claude', 'settings.local.json')), false);
+});
+
+test('writing user wiring retires a stale local wiring-mode config', (t) => {
+  const { home, project } = fixture(t);
+  writeJson(wiringConfig(home), { mode: 'local' });
+
+  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
+  assert.equal(fs.existsSync(wiringConfig(home)), false);
 });
 
 test('project wiring registry records writes and prunes missing or unowned settings', (t) => {
@@ -73,42 +90,41 @@ test('project wiring registry records writes and prunes missing or unowned setti
   const otherProject = path.join(path.dirname(project), 'other-project');
   fs.mkdirSync(otherProject);
 
-  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
-  assert.equal(run(home, otherProject, ['env', '--write-project']).code, 0);
+  wireProject(project);
+  wireProject(otherProject);
+  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
+  assert.equal(run(home, otherProject, ['env', '--write-user']).code, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project, otherProject]);
 
   fs.rmSync(path.join(project, '.claude', 'settings.local.json'));
   writeJson(path.join(otherProject, '.claude', 'settings.local.json'), { env: { ANTHROPIC_BASE_URL: 'http://user-owned.example' } });
-  assert.equal(run(home, project, ['env', '--mode', 'global']).code, 0);
+  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
 });
 
-test('global mode adopts and reports conflicting current project wiring without changing it', (t) => {
+test('global wiring adopts and reports conflicting current project wiring without changing it', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');
   writeJson(localFile, { env: { ANTHROPIC_BASE_URL: COMPAT_BASE_URL, UNRELATED: 'keep-me' } });
   const before = fs.readFileSync(localFile, 'utf8');
 
-  const result = run(home, project, ['env', '--mode', 'global']);
+  const result = run(home, project, ['env', '--write-user']);
 
   assert.equal(result.code, 0);
-  assert.match(result.output, /1 recorded project-local wiring entry overrides the new global URL/);
+  assert.match(result.output, /1 recorded project-local wiring entry overrides the global URL/);
   assert.match(result.output, new RegExp(localFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(result.output, /--reconcile/);
   assert.equal(fs.readFileSync(localFile, 'utf8'), before);
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
 });
 
-test('global mode reconciliation removes only plugin-owned project env entries', (t) => {
+test('global wiring reconciliation removes only plugin-owned project env entries', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');
-  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
-  const local = JSON.parse(fs.readFileSync(localFile, 'utf8'));
-  local.env.ANTHROPIC_BASE_URL = COMPAT_BASE_URL;
-  local.env.UNRELATED = 'keep-me';
-  writeJson(localFile, local);
+  wireProject(project, COMPAT_BASE_URL);
+  writeJson(localFile, { env: { ANTHROPIC_BASE_URL: COMPAT_BASE_URL, UNRELATED: 'keep-me' } });
 
-  const result = run(home, project, ['env', '--mode', 'global', '--reconcile']);
+  const result = run(home, project, ['env', '--write-user', '--reconcile']);
 
   assert.equal(result.code, 0);
   assert.match(result.output, /removed model-gateway-owned wiring from 1 project/);
@@ -116,13 +132,13 @@ test('global mode reconciliation removes only plugin-owned project env entries',
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
 });
 
-test('global mode reconciliation leaves agreeing project wiring alone', (t) => {
+test('global wiring reconciliation leaves agreeing project wiring alone', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');
-  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
+  wireProject(project);
   const before = fs.readFileSync(localFile, 'utf8');
 
-  const result = run(home, project, ['env', '--mode', 'global', '--reconcile']);
+  const result = run(home, project, ['env', '--write-user', '--reconcile']);
 
   assert.equal(result.code, 0);
   assert.doesNotMatch(result.output, /recorded project-local wiring .* overrides/);
@@ -130,20 +146,18 @@ test('global mode reconciliation leaves agreeing project wiring alone', (t) => {
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
 });
 
-test('doctor fails when its active global user settings are unwired', (t) => {
+test('doctor fails when the global user settings are unwired', (t) => {
   const { home, project } = fixture(t);
-  writeJson(wiringConfig(home), { mode: 'global' });
 
   const result = run(home, project, ['doctor']);
 
   assert.notEqual(result.code, 0);
-  assert.match(result.output, /active user wiring is not configured/);
+  assert.match(result.output, /global wiring is not configured/);
   assert.match(result.output, /env --write-user/);
 });
 
 test('doctor skips a project env block without ANTHROPIC_BASE_URL', (t) => {
   const { home, project } = fixture(t);
-  writeJson(wiringConfig(home), { mode: 'global' });
   writeJson(path.join(home, '.claude', 'settings.json'), { env: { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL } });
   writeJson(path.join(project, '.claude', 'settings.local.json'), { env: { CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS: '1' } });
 
@@ -153,7 +167,7 @@ test('doctor skips a project env block without ANTHROPIC_BASE_URL', (t) => {
   assert.match(result.output, /user settings\.json: wired .*\[effective\] \[selected mode\]/);
 });
 
-test('global mode preserves existing user env values', (t) => {
+test('global wiring preserves existing user env values', (t) => {
   const { home, project } = fixture(t);
   const userSettings = path.join(home, '.claude', 'settings.json');
   writeJson(userSettings, {
@@ -163,7 +177,7 @@ test('global mode preserves existing user env values', (t) => {
     },
   });
 
-  assert.equal(run(home, project, ['env', '--mode', 'global']).code, 0);
+  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
   const settings = JSON.parse(fs.readFileSync(userSettings, 'utf8'));
   assert.equal(settings.env.CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS, '1');
   assert.equal(settings.env.CLAUDE_CODE_USE_POWERSHELL_TOOL, '1');
@@ -267,7 +281,6 @@ test('effectiveBaseUrl is re-exported through commands', (t) => {
 
 test('doctor fails on a selected-mode contradiction and passes when modes agree', (t) => {
   const { home, project } = fixture(t);
-  writeJson(wiringConfig(home), { mode: 'global' });
   const local = path.join(project, '.claude', 'settings.local.json');
   const user = path.join(home, '.claude', 'settings.json');
   writeJson(local, { env: { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL } });

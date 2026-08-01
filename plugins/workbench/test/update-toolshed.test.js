@@ -8,8 +8,6 @@ const test = require('node:test');
 
 const {
   gatewayCommand,
-  gatewayWiringMode,
-  hasGatewayWiringMode,
   installedPlugins,
   marketplacesFor,
   parseArgs,
@@ -205,7 +203,7 @@ test('deferred migration installs model-gateway, moves owned state, verifies it,
       assert.equal(fs.existsSync(path.join(home, '.claude', 'codex-gateway')), false);
       assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'wiring.json')), true);
       assert.deepEqual(calls.map((command) => command.args.at(-1)), [
-        'user', 'setup', 'ensure', 'doctor', '--write-project', '--write-project', '--remove', 'user',
+        'user', 'setup', 'ensure', 'doctor', '--reconcile', '--reconcile', '--reconcile', 'user',
       ]);
       assert.equal(calls.at(-1).args.join(' '), 'plugin uninstall codex-gateway@eigenwise-toolshed --scope user');
     } finally {
@@ -230,38 +228,39 @@ test('deferred migration leaves an already-migrated install alone', () => withRe
   assert.equal(calls.length, 0);
 }));
 
-test('local mode wires recorded projects before removing the legacy global block', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-'));
+test('global wiring reconciles every recorded project, then the user scope', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-global-wiring-'));
   try {
     const calls = [];
     const result = runUpdate({
       home,
       registryFile,
       options: { claude: 'claude', dryRun: false, check: false },
-      run: (command) => {
-        calls.push(command);
-        return { ok: true };
-      },
+      run: (command) => { calls.push(command); return { ok: true }; },
       report: () => {},
     });
 
     const wiring = calls.filter((command) => command.args.includes('env'));
+    // Every call is --write-user --reconcile. The cwd is what differs: running
+    // inside each recorded project is how its shadowing block gets recorded and
+    // then stripped, so a leftover project file cannot outrank the user scope.
     assert.deepEqual(wiring.map((command) => command.args.slice(-2)), [
-      ['env', '--write-project'],
-      ['env', '--write-project'],
-      ['--write-user', '--remove'],
+      ['--write-user', '--reconcile'],
+      ['--write-user', '--reconcile'],
+      ['--write-user', '--reconcile'],
     ]);
-    assert.deepEqual(wiring.slice(0, 2).map((command) => command.cwd), [
+    assert.deepEqual(wiring.map((command) => command.cwd), [
       registry.plugins['sidequest@eigenwise-toolshed'][2].projectPath,
       registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath,
+      undefined,
     ]);
-    assert.equal(result.healedGatewayWiring.mode, 'local');
+    assert.equal(result.healedGatewayWiring.mode, 'global');
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 }));
 
-test('skips stale project installs without blocking local gateway migration', () => {
+test('skips stale project installs without blocking gateway wiring', () => {
   const stalePath = path.join(os.tmpdir(), `toolshed-stale-project-${process.pid}-${Date.now()}`);
   const configured = structuredClone(registry);
   configured.plugins['sidequest@eigenwise-toolshed'].push({
@@ -292,7 +291,7 @@ test('skips stale project installs without blocking local gateway migration', ()
       assert.deepEqual(result.failures, []);
       assert.equal(result.staleInstances.length, 1);
       assert.equal(calls.some((command) => command.cwd === stalePath), false);
-      assert.equal(calls.some((command) => command.args.includes('--remove')), true);
+      assert.equal(calls.some((command) => command.args.includes('--reconcile')), true);
       assert.match(lines.join('\n'), /Skipped 1 stale project install\(s\): directory no longer exists/);
       assert.match(lines.join('\n'), /The plugin registry was left unchanged/);
       assert.doesNotMatch(lines.join('\n'), /Completed with \d+ failure/);
@@ -395,97 +394,23 @@ test('reports invalid plugin registries and leaves them untouched', () => {
   }
 });
 
-test('local mode preserves global wiring when a recorded project fails', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-local-wiring-failure-'));
+test('a failed reconcile warns that project blocks may still shadow the global setting', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-wiring-failure-'));
   try {
-    const calls = [];
     const lines = [];
     const result = runUpdate({
       home,
       registryFile,
       options: { claude: 'claude', dryRun: false, check: false },
-      run: (command) => {
-        calls.push(command);
-        return { ok: !command.args.includes('--write-project') };
-      },
+      run: (command) => ({ ok: !command.args.includes('--reconcile') }),
       report: (line) => lines.push(line),
     });
 
     assert.equal(result.ok, false);
-    assert.ok(result.failures.some((failure) => failure.includes('model-gateway wire project')));
-    assert.match(lines.join('\n'), /Gateway local wiring kept legacy global settings because one or more recorded projects could not be wired/);
-    assert.equal(calls.some((command) => command.args.includes('--remove')), false);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-}));
-
-test('global mode writes only user settings', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-global-wiring-'));
-  try {
-    const config = path.join(home, '.claude', 'model-gateway', 'wiring.json');
-    fs.mkdirSync(path.dirname(config), { recursive: true });
-    fs.writeFileSync(config, JSON.stringify({ mode: 'global' }));
-    assert.equal(gatewayWiringMode(home), 'global');
-    const calls = [];
-    runUpdate({
-      home,
-      registryFile,
-      options: { claude: 'claude', dryRun: false, check: false },
-      run: (command) => {
-        calls.push(command);
-        return { ok: true };
-      },
-      report: () => {},
-    });
-
-    const wiring = calls.filter((command) => command.args.includes('env'));
-    assert.deepEqual(wiring.map((command) => command.args.slice(-1)), [['--write-user']]);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-}));
-
-test('mode switch migrates recorded projects and retains redundant local blocks', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-mode-switch-'));
-  try {
-    const lines = [];
-    const calls = [];
-    const result = runUpdate({
-      home,
-      registryFile,
-      options: { claude: 'claude', dryRun: false, check: false, wiringMode: 'global' },
-      run: (command) => {
-        calls.push(command);
-        return { ok: true };
-      },
-      report: (line) => lines.push(line),
-    });
-
-    assert.equal(hasGatewayWiringMode(home), true);
-    assert.equal(gatewayWiringMode(home), 'global');
-    assert.equal(result.healedGatewayWiring.mode, 'global');
-    assert.deepEqual(calls.filter((command) => command.args.includes('env')).map((command) => command.args.slice(-1)), [['--write-user']]);
-    assert.match(lines.join('\n'), /Existing per-project blocks remain in 2 recorded project\(s\); they are redundant/);
-  } finally {
-    fs.rmSync(home, { recursive: true, force: true });
-  }
-}));
-
-test('headless update defaults an unset wiring mode to per-project with a notice', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-default-mode-'));
-  try {
-    const lines = [];
-    runUpdate({
-      home,
-      registryFile,
-      options: { claude: 'claude', dryRun: false, check: false },
-      run: () => ({ ok: true }),
-      report: (line) => lines.push(line),
-    });
-
-    assert.equal(hasGatewayWiringMode(home), false);
-    assert.match(lines.join('\n'), /Wiring mode defaulted to per-project; run \/workbench:update-toolshed --wiring-mode global to change\./);
+    assert.ok(result.failures.some((failure) => failure.includes('model-gateway wire global')));
+    // Silence here would be the original defect: the user is told wiring
+    // succeeded while a project file still outranks what was written.
+    assert.match(lines.join('\n'), /may still shadow the global setting/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -563,17 +488,11 @@ test('reports version transitions and gateway interruption before setup', () => 
   assert.match(lines.join('\n'), /cannot reliably list commit subjects/);
 }));
 
-test('parses check, dry-run, and wiring-mode options', () => {
+test('parses check and dry-run options and rejects the retired wiring-mode flag', () => {
   assert.deepEqual(parseArgs(['--check', '--dry-run', '--claude', 'claude-dev']), {
     check: true,
     dryRun: true,
     claude: 'claude-dev',
-  });
-  assert.deepEqual(parseArgs(['--wiring-mode', 'global']), {
-    check: false,
-    dryRun: false,
-    claude: 'claude',
-    wiringMode: 'global',
   });
   assert.deepEqual(parseArgs(['--migrate-model-gateway', '--confirm-sessions-closed']), {
     check: false,
@@ -582,5 +501,5 @@ test('parses check, dry-run, and wiring-mode options', () => {
     migrateModelGateway: true,
     confirmSessionsClosed: true,
   });
-  assert.throws(() => parseArgs(['--wiring-mode', 'elsewhere']), /--wiring-mode requires local or global/);
+  assert.throws(() => parseArgs(['--wiring-mode', 'global']), /--wiring-mode was removed: model gateway wiring is global only/);
 });

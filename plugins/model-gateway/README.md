@@ -53,17 +53,16 @@ Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
 ```
 
 **Install it at user scope** (that's the default for `/plugin install`) so its keepalive hook is
-available wherever you work. Gateway wiring is private and defaults to each recorded project's
-`.claude/settings.local.json`, never the team's committed `settings.json`. Run `/update-toolshed`
-to wire recorded projects and migrate an older global gateway block. Projects the updater has not
-recorded stay unwired until you run `node <plugin>/bin/model-gateway.js env --mode local` from
-that project. `env --mode global` writes user-level `~/.claude/settings.json` immediately, while
-`env --mode local` writes this project's `settings.local.json` immediately. A project-level `env`
-block takes precedence over user settings, so `doctor` reports an unwired project block that masks
-global wiring. Settings changes apply to new Claude Code sessions, so restart open sessions after
-wiring.
+available wherever you work. Wiring is global: `node <plugin>/bin/model-gateway.js env --write-user` writes
+`~/.claude/settings.json` once and covers every project and executor worktree. Run `/update-toolshed`
+to write that block and reconcile any leftover per-project wiring. Per-project wiring used to be the
+default and was removed: a project `.claude/settings.local.json` outranks user settings, so a stale
+project block silently overrode the gateway URL with nothing to show for it. To exempt one project on
+purpose, set `ANTHROPIC_BASE_URL` in that project's `settings.local.json` yourself; `doctor` marks
+whichever file actually wins as `[effective]`. Settings changes apply to new Claude Code sessions, so
+restart open sessions after wiring.
 
-`env --mode global --reconcile` is a separate, confirmation-gated cleanup. It lists recorded projects whose local URL differs from the new global URL; without the flag, those other project `.claude/settings.local.json` files stay unchanged. With the flag, it removes only Model Gateway's own wiring keys, skips projects that already agree, and leaves unrelated env and top-level settings alone. It cannot change `process.env.ANTHROPIC_BASE_URL`, and cleanup affects the next session after a restart.
+`env --write-user --reconcile` is a separate, confirmation-gated cleanup. It lists recorded projects whose local URL differs from the global URL; without the flag, those other project `.claude/settings.local.json` files stay unchanged. With the flag, it removes only Model Gateway's own wiring keys, skips projects that already agree, and leaves unrelated env and top-level settings alone. It cannot change `process.env.ANTHROPIC_BASE_URL`, and cleanup affects the next session after a restart.
 
 On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
 and offers to finish the job. `setup` downloads claude-code-proxy and starts the gateway; then run
@@ -77,7 +76,7 @@ Prefer doing it by hand? Same thing:
 node <plugin>/bin/model-gateway.js setup   # download + start; prompts for login if needed
 node <plugin>/bin/model-gateway.js login   # ChatGPT sign-in in your browser (if asked)
 node <plugin>/bin/model-gateway.js setup   # finishes setup after sign-in
-node <plugin>/bin/model-gateway.js env --write-project  # writes this project's settings.local.json
+node <plugin>/bin/model-gateway.js env --write-user     # writes ~/.claude/settings.json
 ```
 
 ### Verify the install
@@ -90,7 +89,7 @@ node <plugin>/bin/model-gateway.js models
 ```
 
 `doctor` should show the proxy binary, a successful Codex auth status, both local ports, a written
-catalog, the active wiring mode, and local `.claude/settings.local.json` wiring (or global user
+catalog, the global `~/.claude/settings.json` wiring and any project file shadowing it (or global user
 settings if selected). `models` should return `claude-gpt-*` rows. Then
 open `/model` and select a row labeled `From gateway`. If the rows are missing, check that Claude
 Code is v2.1.129 or newer, restart once more, and run `models` to confirm the shim has a catalog.
@@ -109,7 +108,7 @@ release and is the upgrade path.
 | `models` | Show exactly what the shim advertises to the picker |
 | `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
 | `pin [--opus\|--sonnet\|--fable <model\|default>]` | Show or persist the native Claude alias pins |
-| `env [--write-user\|--write-project\|--remove] [--mode local\|global] [--reconcile]` | Write private local or global wiring, persist that mode, or confirmation-gated cleanup of plugin-owned keys in other recorded projects (reconcile requires global) |
+| `env [--write-user\|--remove] [--reconcile]` | Write or remove global `~/.claude/settings.json` wiring; `--reconcile` is a confirmation-gated cleanup of plugin-owned keys in other recorded projects |
 | `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
 | `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
 
@@ -263,7 +262,7 @@ note for the routing side.
   auto-detection. `pin --opus default` clears that alias back to the detected default. `pin` prints
   the effective values and marks overrides, and `doctor` does the same. Overrides persist in
   `~/.claude/model-gateway/pins.json`, outside the plugin cache. After a pin change or a Claude CLI
-  upgrade, run `env --write-project` (or `env --write-user`) and start a new Claude Code session.
+  upgrade, run `env --write-user` and start a new Claude Code session.
   Until both happen, the existing wiring and open sessions keep their previous pin.
   Do NOT set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too.
   Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in

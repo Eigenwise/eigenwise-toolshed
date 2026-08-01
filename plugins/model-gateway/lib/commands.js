@@ -123,9 +123,9 @@ const USAGE = `usage: model-gateway.js <command>
   catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
-  env [--show-mode | --write-user | --write-project | --remove] [--mode local|global] [--reconcile]
-                   print the Claude Code env block, inspect/select wiring mode, or merge/remove it
-                   (local writes go to .claude/settings.local.json; --reconcile confirms cleanup
+  env [--write-user | --remove] [--reconcile]
+                   print the Claude Code env block, or merge/remove global wiring
+                   (writes go to ~/.claude/settings.json; --reconcile confirms cleanup
                    of conflicting recorded project-local wiring)
   doctor           full health check
   remote-control <enable|disable|doctor>
@@ -158,9 +158,9 @@ const {
 } = require('./process-supervision.js');
 
 const {
-  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, hasWiringMode, isWired, migrateLegacyProjectSettings,
+  cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
   readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, selectedWiringScope,
-  settingsPath, wiredMode, wiringMode, wiringModeDefaultNotice, writeSettings, writeWiringMode,
+  retireWiringModeConfig, settingsPath, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -594,7 +594,7 @@ function pinCommand() {
   }
   writePinOverrides(overrides);
   log(`saved Claude alias pins to ${PIN_OVERRIDE_PATH}`);
-  log('Rewire with env --write-project (or env --write-user), then start a new Claude Code session for the change to apply.');
+  log('Rewire with env --write-user, then start a new Claude Code session for the change to apply.');
 }
 
 async function syncEffectivePins() {
@@ -608,57 +608,48 @@ async function syncEffectivePins() {
 }
 
 async function envCommand() {
-  if (flag('--show-mode')) {
-    const configured = hasWiringMode();
-    log(`wiring mode: ${wiringMode()}${configured ? '' : ' (defaulted to per-project)'}`);
-    if (!configured) log(wiringModeDefaultNotice());
-    return;
+  for (const retired of ['--mode', '--show-mode', '--write-project']) {
+    if (flag(retired)) {
+      die(`env ${retired} was removed: wiring is global only. Use env --write-user, or env --remove to unwire.`, 2);
+    }
   }
 
-  const modeIndex = args.indexOf('--mode');
-  const requestedMode = modeIndex === -1 ? null : args[modeIndex + 1];
-  if (flag('--mode') && !['local', 'global'].includes(requestedMode)) die('env --mode must be local or global', 2);
   const reconcile = flag('--reconcile');
-  if (reconcile && requestedMode !== 'global') die('env --reconcile requires --mode global', 2);
-  if (requestedMode === 'global') recordProjectWiring();
-  if (requestedMode) writeWiringMode(requestedMode);
-
   const remove = flag('--remove');
-  const scope = flag('--write-project') ? 'project' : flag('--write-user') ? 'user' : requestedMode === 'local' ? 'project' : requestedMode === 'global' ? 'user' : null;
-  if (!scope) {
-    log('add this to the "env" block of this project\'s .claude/settings.local.json:');
+  if (!flag('--write-user') && !remove) {
+    log('add this to the "env" block of your ~/.claude/settings.json:');
     log(JSON.stringify({ env: envBlockFor('default') }, null, 2));
-    log('\nor use /model-gateway:model-gateway to run its env --write-project command (this repo), or its env --write-user command (global mode)');
-    log(`\n${hasWiringMode() ? `${wiringMode() === 'local' ? 'Local' : 'Global'} wiring is the selected mode.` : wiringModeDefaultNotice()}. It applies to new Claude Code sessions after restart.`);
+    log('\nor use /model-gateway:model-gateway to run its env --write-user command');
+    log('\nWiring is global: one ~/.claude/settings.json block covers every project. It applies to new Claude Code sessions after restart.');
     log('RC-compatibility mode (restores /remote-control) is opt-in and automatic once you add the');
     log('hosts entry yourself; see the RC-compatibility mode section of the README.');
     return;
   }
-  if (scope === 'project') writeWiringMode('local');
-  if (scope === 'user' && !remove) writeWiringMode('global');
+
+  recordProjectWiring();
   if (!remove) await refreshDetectedPins({ force: true });
-  const writeMode = requestedMode === 'global' ? (await resolveIntendedMode()).mode : 'default';
-  writeEnv(scope, remove, { mode: writeMode });
-  if (requestedMode === 'global' && !remove) {
-    const targetBaseUrl = readSettingsForWrite(settingsPath('user')).env?.ANTHROPIC_BASE_URL;
-    const result = reconcileRegisteredProjectWirings(targetBaseUrl, { confirm: reconcile });
-    if (result.conflicting.length) {
-      log(`${result.conflicting.length} recorded project-local wiring ${result.conflicting.length === 1 ? 'entry overrides' : 'entries override'} the new global URL:`);
-      for (const wiring of result.conflicting) log(`  ${wiring.file}`);
-      if (reconcile) {
-        log(`removed model-gateway-owned wiring from ${result.reconciled.length} project${result.reconciled.length === 1 ? '' : 's'}`);
-      } else {
-        log('project files were not changed. To confirm cleanup, invoke env --mode global --reconcile for the model-gateway-owned entries shown above.');
-      }
-    }
-  }
+  writeEnv('user', remove, { mode: remove ? 'default' : (await resolveIntendedMode()).mode });
+  retireWiringModeConfig();
+  if (remove) return;
+
+  // A project-local ANTHROPIC_BASE_URL outranks the user scope we just wrote, so
+  // reporting success without naming the shadows would repeat the original defect.
+  const targetBaseUrl = readSettingsForWrite(settingsPath('user')).env?.ANTHROPIC_BASE_URL;
+  const result = reconcileRegisteredProjectWirings(targetBaseUrl, { confirm: reconcile });
+  if (!result.conflicting.length) return;
+  log(`${result.conflicting.length} recorded project-local wiring ${result.conflicting.length === 1 ? 'entry overrides' : 'entries override'} the global URL:`);
+  for (const wiring of result.conflicting) log(`  ${wiring.file}`);
+  if (reconcile) log(`removed model-gateway-owned wiring from ${result.reconciled.length} project${result.reconciled.length === 1 ? '' : 's'}`);
+  else log('project files were not changed. To confirm cleanup, invoke env --write-user --reconcile for the model-gateway-owned entries shown above.');
 }
 
 // mode only matters when writing (not removing); quiet suppresses this
 // function's own logging so a caller doing an automatic mode switch can print
 // its own single, more specific line instead.
 function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
-  const migration = scope === 'project' ? migrateLegacyProjectSettings() : null;
+  // Runs for the user scope too: a committed project settings.json carrying
+  // gateway keys outranks ~/.claude/settings.json and would shadow this write.
+  const migration = remove ? null : migrateLegacyProjectSettings();
   const effectiveMode = migration?.mode || mode;
   const file = settingsPath(scope);
   if (remove && !fs.existsSync(file)) {
@@ -749,7 +740,6 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   for (const [alias, pin] of Object.entries(effectivePins())) {
     log(`Claude ${alias} pin: ${pin.value}${pin.override ? ` (overridden; shipped default: ${pin.default})` : ' (default)'}`);
   }
-  const activeMode = wiringMode();
   const activeScope = selectedWiringScope();
   const effective = effectiveBaseUrl();
   const wiring = new Map();
@@ -761,8 +751,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     user: 'user settings.json',
   };
   const scopeFor = { 'project-local': 'project', user: 'user' };
-  log(`wiring mode: ${activeMode} (${activeMode === 'local' ? 'per-project .claude/settings.local.json' : 'global ~/.claude/settings.json'})`);
-  if (!hasWiringMode()) log(wiringModeDefaultNotice());
+  log('wiring: global ~/.claude/settings.json (one block covers every project)');
   for (const source of ['env', 'project-local', 'project-shared', 'user']) {
     const scope = scopeFor[source];
     const file = source === 'env' ? null : settingsPath(source === 'project-local' ? 'project' : source);
@@ -780,22 +769,24 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   const effectiveWired = ourBaseUrls().includes(effective.value);
   const effectiveScope = scopeFor[effective.source] || activeScope;
   if (!effectiveWired) {
-    const command = effectiveScope === 'project' ? 'env --write-project' : 'env --write-user';
-    console.error(`model-gateway: ERROR: active ${effectiveScope} wiring is not configured. Run /model-gateway:model-gateway, then use its ${command} command and restart Claude Code.`);
+    console.error('model-gateway: ERROR: global wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-user command and restart Claude Code.');
     process.exitCode = 1;
   }
-  const selectedSource = activeScope === 'project' ? 'project-local' : 'user';
-  const selected = wiring.get(selectedSource);
+  const selected = wiring.get('user');
   const effectiveMode = modeFor(effective.value);
   if (effectiveMode && selected.mode && effectiveMode !== selected.mode) {
     const effectiveLocation = effective.file || 'process env ANTHROPIC_BASE_URL';
-    console.error(`model-gateway: ERROR: effective ${effectiveLocation} uses ${effectiveMode} mode, but shadowed ${selected.file} uses ${selected.mode} mode. Run /model-gateway:model-gateway, then use its env --write-${activeScope} command and restart Claude Code.`);
+    // A project-local shadow is not fixed by rewriting the user scope, so the
+    // remediation has to name the file that actually wins.
+    const fix = effective.source === 'user'
+      ? 'Run /model-gateway:model-gateway, then use its env --write-user command'
+      : `Remove ANTHROPIC_BASE_URL from ${effectiveLocation}, or use /model-gateway:model-gateway to run its env --write-user --reconcile command and clear recorded project wiring`;
+    console.error(`model-gateway: ERROR: effective ${effectiveLocation} uses ${effectiveMode} mode, but shadowed ${selected.file} uses ${selected.mode} mode. ${fix}, then restart Claude Code.`);
     process.exitCode = 1;
   }
-  if (activeMode === 'local') log('Local wiring applies to new Claude Code sessions. Use /model-gateway:model-gateway to run its env --write-project command in a new project.');
   const scope = installScope();
   if (scope === 'project-only') {
-    log('install scope: PROJECT-ONLY — local wiring is supported for this project.');
+    log('install scope: PROJECT-ONLY — the shim is not kept alive for other projects; reinstall at user scope.');
   } else if (scope === 'user') {
     log('install scope: user (correct)');
   }
@@ -1705,13 +1696,12 @@ const commands = {
     }
     warnIfProxyOutdated();
     if (!wired) {
-      if (!hasWiringMode()) log(wiringModeDefaultNotice());
       log(readiness.checks.codexAuth
-        ? 'model-gateway is running but Claude Code is not wired to it. Run /model-gateway:model-gateway, then use its env --write-project command to write this project\'s .claude/settings.local.json, then restart.'
+        ? 'model-gateway is running but Claude Code is not wired to it. Run /model-gateway:model-gateway, then use its env --write-user command to write ~/.claude/settings.json, then restart.'
         : 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.');
     } else {
-      if (installScope() === 'project-only' && wiringMode() === 'global') {
-        log('model-gateway is installed PROJECT-ONLY with global wiring. Other projects route through a shim this hook will not keep alive. Use local wiring, or reinstall at user scope.');
+      if (installScope() === 'project-only') {
+        log('model-gateway is installed PROJECT-ONLY, but wiring is global. Other projects route through a shim this hook will not keep alive. Reinstall at user scope.');
       }
       await syncCompatMode();
       await syncEffectivePins();
@@ -1748,10 +1738,6 @@ module.exports = {
   ourBaseUrls,
   wiredMode,
   writeEnv,
-  writeWiringMode,
-  wiringMode,
-  hasWiringMode,
-  wiringModeDefaultNotice,
   migrateLegacyProjectSettings,
   effectiveBaseUrl,
   settingsPath,
