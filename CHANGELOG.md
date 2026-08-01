@@ -8,6 +8,25 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.320.0 (2026-08-01)
+
+### model-gateway 0.44.2 → 0.44.3
+
+#### Fixes
+
+- Report effective gateway wiring precedence in doctor (SQ-1181)
+- Adopt unmarked Remote Control loopback hosts mappings (SQ-1182)
+- Cover the RC-compatibility catalog path (SQ-1183)
+- Reconcile recorded project wiring when switching global (SQ-1184)
+- Fix the Node 22 custom-lookup contract and a bodyless-request crash in the hosts-bypass path (SQ-1185)
+
+### sidequest 3.50.12 → 3.50.13
+
+#### Fixes
+
+- Point the feature skill at the real orchestration reference and test that the path resolves (SQ-1187)
+- Grant read-only executors concrete Sidequest board MCP tools (SQ-1188)
+
 ## v3.319.0 (2026-08-01)
 
 ### sidequest 3.50.11 → 3.50.12
