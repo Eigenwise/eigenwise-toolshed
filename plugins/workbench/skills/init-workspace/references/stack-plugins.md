@@ -86,8 +86,62 @@ plugins merely because a stack is technically present.
 
 ### Not a codebase
 
-Use `live-rules`, and offer `sidequest` if the user wants content tracking. Skip `codebase-mapper`,
-language servers, and development plugins.
+A not-a-codebase project is a first-class init-workspace path, not a leftover bucket for projects that
+failed stack detection. Treat its files, recurring work, and information structure as the stack. Start
+with `live-rules` and `sidequest`, then choose the rest from the project's actual shape.
+
+#### Obsidian vault
+
+Look for `.obsidian/`, `[[wikilinks]]`, and Templater-style frontmatter or templates. Use `live-rules`
+for note voice, frontmatter, and link rules, and `sidequest` when the vault has recurring research or
+writing work to track. Skip `codebase-mapper` for a pure vault because there is no code architecture
+to map. Skip language servers and development plugins unless maintenance scripts are a meaningful,
+separately scoped part of the work. The workspace should produce note-type guidance, a map of the
+vault's folder and link conventions, and rules for keeping templates and indexes consistent.
+
+#### Docs site
+
+Look for Astro or Starlight config, `mkdocs.yml`, `docusaurus.config.*`, a docs build, or a content
+source tree with package or CI files. Use `live-rules` for prose, frontmatter, links, and release
+checks, and `sidequest` for planned documentation work. A docs site with a build is a codebase, so
+use `codebase-mapper` and the matching code or frontend plugins when its source warrants them. The
+workspace should produce a codebase map plus a docs information map covering content types, navigation,
+build commands, and published output.
+
+#### Wiki or note collection
+
+Look for Markdown or plain-text notes arranged by topic, without an application build or a strict
+publishing pipeline. Use `live-rules` for note structure, links, source quality, and terminology, and
+`sidequest` for editorial or research queues. Skip `codebase-mapper` because a pure collection has no
+software architecture, and skip language servers and development plugins. The workspace should produce
+an index of topic and note conventions, note-type templates where useful, and maintenance rules for
+links, references, and conflicting claims.
+
+#### Content repo
+
+Look for articles, posts, media metadata, editorial folders, publishing scripts, or a CMS export. Use
+`live-rules` for voice, frontmatter, review status, and publication checks, and `sidequest` for the
+editorial backlog. Use `codebase-mapper` only when the repo has a real build or application layer; a
+content-only repo does not need it. The workspace should produce a content taxonomy, publishing and
+review workflow notes, and rules for assets, dates, links, and generated files.
+
+#### Research corpus
+
+Look for source PDFs or scans, datasets, citations, bibliographies, lab notes, or a folder structure
+organized around questions and evidence. Use `live-rules` for citation, uncertainty, provenance, and
+note conventions, and `sidequest` for research queues and synthesis work. Skip `codebase-mapper` for a
+pure corpus, and skip development plugins unless a real software component needs them. The workspace
+should produce a source and evidence index, research-note structure, and rules for dating claims,
+recording uncertainty, and linking conclusions back to primary material.
+
+#### Maintenance scripts
+
+A vault, content repo, or research corpus may still contain Python or shell maintenance scripts. Treat
+those scripts as real code inside a not-a-codebase project. A coding-capable category and stack rules
+are justified when the scripts are recurring work, but scope them to the script paths and their tests.
+Do not turn the whole project into a code project or add a full language stack just because one helper
+exists. Keep the main workspace shape focused on notes, content, or evidence, then add the script
+commands, dependencies, and maintenance checks that people actually run.
 
 ## Official LSP plugins and binary preflight
 
@@ -133,9 +187,9 @@ create an ad hoc local marketplace during workspace initialization.
 
 The plan's `settingsMerge` can carry settings that the plugin CLI does not own:
 
-- **`$schema`** — `"https://json.schemastore.org/claude-code-settings.json"` for editor validation.
-- **`hooks`** — project hooks the user already wants. `init-workspace` itself adds no project hooks.
-- **`enableAllProjectMcpServers`** and **`enabledMcpjsonServers`** — only for project-owned MCP
+- **`$schema`**: `"https://json.schemastore.org/claude-code-settings.json"` for editor validation.
+- **`hooks`**: project hooks the user already wants. `init-workspace` itself adds no project hooks.
+- **`enableAllProjectMcpServers`** and **`enabledMcpjsonServers`**: only for project-owned MCP
   servers the user selected.
 
 Keep `permissions` in `settings.local.json` (per-user and gitignored), not in the team-shared plan.
