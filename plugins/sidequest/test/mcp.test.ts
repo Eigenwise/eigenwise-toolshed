@@ -78,7 +78,9 @@ seedCatalog([
 ]);
 function committedRepo(prefix?: any) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
-  execFileSync('git', ['init', '--quiet'], { cwd: root, windowsHide: true });
+  // Pin the branch: integrationTarget resolves "main", and release suites run with
+  // GIT_CONFIG_NOSYSTEM=1, so the ambient init.defaultBranch is not there to supply it.
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: root, windowsHide: true });
   execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: root, windowsHide: true });
   return root;
 }
