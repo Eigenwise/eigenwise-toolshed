@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.331.0 (2026-08-01)
+
+### sidequest 3.53.2 → 3.54.0
+
+#### Features
+
+- A dispatch that dies now records why, not just that it stopped (SQ-1234) [`040acf7`](https://github.com/Eigenwise/eigenwise-toolshed/commit/040acf76)
+  A terminal dispatch recorded only that it ended. Whether the executor ran out of quota, blew the context window, lost auth, or hit a dead backend all looked identical afterwards, so nothing downstream could react to the difference. Dispatches now classify the failure into a shape and persist it, and each attempt is kept with its route, executor, and outcome so the history survives past the current one.
+
 ## v3.330.0 (2026-08-01)
 
 ### sidequest 3.53.1 → 3.53.2
