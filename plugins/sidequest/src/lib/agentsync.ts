@@ -171,6 +171,7 @@ const READ_ONLY_BOARD_TOOLS = [
   'mcp__plugin_sidequest_board__release',
   'mcp__plugin_sidequest_board__verdict',
   'mcp__plugin_sidequest_board__scopeRequest',
+  'mcp__plugin_sidequest_board__scopeDeny',
   'mcp__plugin_sidequest_board__commit',
   'mcp__plugin_sidequest_board__submit',
   'mcp__plugin_sidequest_board__integrate',
