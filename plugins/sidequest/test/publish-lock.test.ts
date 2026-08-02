@@ -5,7 +5,9 @@ const assert = require('node:assert');
 const os = require('node:os');
 const path = require('node:path');
 const fs = require('node:fs');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawnSync } = require('node:child_process');
+
+const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 
 const publish = require('../lib/publish.js');
 
@@ -87,6 +89,30 @@ test('a publish lock only authorizes its owning session', async () => {
   await publish.acquirePublishLock(repo, { by: 'orch-a', sessionId: 'session-a', transient: true });
   assert.strictEqual(publish.publishLockOwnedBySession(repo, 'session-a'), true);
   assert.strictEqual(publish.publishLockOwnedBySession(repo, 'session-b'), false);
+});
+
+test('integrate names both sessions when a matching worker has a stale lock session', async () => {
+  const repo = tempRepo();
+  const lock = await publish.acquirePublishLock(repo, {
+    by: 'orch-a',
+    sessionId: 'holder-session-123456',
+    transient: true,
+  });
+  const result = spawnSync(process.execPath, [BIN, 'integrate', 'SQ-1', '--by', 'orch-a'], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: Object.assign({}, process.env, {
+      SIDEQUEST_HOME: fs.mkdtempSync(path.join(os.tmpdir(), 'sq-publish-lock-cli-')),
+      CLAUDE_PROJECT_DIR: repo,
+      CLAUDE_CODE_SESSION_ID: 'caller-session-654321',
+    }),
+  });
+
+  assert.strictEqual(result.status, 1, result.stderr + result.stdout);
+  assert.match(result.stderr, /publish lock session holder-s\.\.\. does not match this session caller-s\.\.\./);
+  assert.match(result.stderr, /re-acquire the lock from this session \(publish lock --by orch-a\)/);
+  await publish.releasePublishLock(repo, { by: 'orch-a', force: true });
+  assert.ok(!fs.existsSync(lock.file));
 });
 
 test('TTL expiry, dead non-transient pids, and corrupt records read as stale and are reclaimed', async () => {
