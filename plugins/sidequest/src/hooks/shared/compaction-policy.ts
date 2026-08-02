@@ -43,23 +43,18 @@ function boardState(cwd: string): string {
   return doing.length ? boundedInstruction(doing.map(ticketLine)) : '';
 }
 
-// A summary that records "I stopped because context was low" is replayed as a USER-role
-// message, so the next turn reads its own exhaustion as an instruction from the user and
-// stops again, tighter each time. Measured ratcheting across 27 compactions of one session
-// on 2026-08-02. The summary is written here, so this is where it gets broken. It is
-// board-independent on purpose: it still goes out when the board cannot be read.
-const CONTINUITY = 'Do not record low context, compaction, or summarization as a decision, a stopping '
-  + 'point, or a reason to wait for the user. Summarization is how this session continues. Record '
-  + 'unfinished work as in-progress, never as a handoff.';
-
+// This hook pins board state and nothing else. A "keep working, this is not a stopping
+// point" instruction lived here briefly in 4.1.0 and was reverted: summaries canonizing
+// "I stopped because context was low" is a Claude Code behavior, and countering it with
+// prompt text was unmeasured and could as easily make context more salient than less.
+// See SQ-1276 for the transcript evidence if that is ever worth revisiting.
 export function compactionPolicyOutput(input: Record<string, unknown>): string {
   if (input.hook_event_name !== 'PreCompact' || input.trigger !== 'auto') return '';
   if (policy() === 'off') return '';
-  let board = '';
   try {
-    board = boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
+    return boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
   } catch (error) {
     console.error(`sidequest: compaction policy could not read board state: ${String(error)}`);
+    return '';
   }
-  return board ? `${CONTINUITY}\n${board}` : CONTINUITY;
 }
