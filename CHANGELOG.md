@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.345.0 (2026-08-02)
+
+### sidequest 4.4.2 → 4.4.3
+
+#### Fixes
+
+- submit refuses a verify string integration would later reject (SQ-1286) [`11845b2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/11845b25)
+  The verify shape check ran only at integration time, reading the submission's copy. An executor could submit a green run with an unrunnable verify string, and by the time integrate refused it the executor was gone and editing the ticket's verify field had no effect. submit now applies the same predicate, so the executor is told while it can still resubmit.
+
 ## v3.344.0 (2026-08-02)
 
 ### sidequest 4.4.1 → 4.4.2
