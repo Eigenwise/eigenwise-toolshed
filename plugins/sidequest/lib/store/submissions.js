@@ -468,6 +468,10 @@ ${verify.outputTail}` : null
           message: `submit: refused ${t.ref}; scope approval remains pending. Approve or deny the request before submitting.`
         };
       }
+      const validationError = verifyCommandError(verify);
+      if (validationError) {
+        return { ok: false, reason: "invalid_verify", ticket: t, message: validationError };
+      }
       const readiness = submissionReadiness({ unscopedPaths: opts.unscopedPaths });
       if (!readiness.ok) {
         return {

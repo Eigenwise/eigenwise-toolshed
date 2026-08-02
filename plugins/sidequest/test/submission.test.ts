@@ -187,6 +187,47 @@ test('an invalid commit hash is rejected before anything is written', () => {
   assert.ok(store.getTicket(slug, t.ref).claim, 'the claim survives a rejected submit');
 });
 
+test('submit rejects invalid verify commands without releasing the claim or pin', () => {
+  const t = addTicket('invalid submit verify');
+  const by = 'verify-worker';
+  const pinnedCommit = git(['rev-parse', 'origin/main']);
+  pin(t, pinnedCommit);
+  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+
+  const refused = store.submitTicket(slug, t.ref, by, {
+    commit: pinnedCommit,
+    verify: 'GIT_TERMINAL_PROMPT=0; cd plugins/sidequest && npx tsx --test test/*.test.ts',
+  });
+
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'invalid_verify');
+  assert.match(refused.message, /Verify must be a runnable command such as `cd <repo-relative-dir> && <command>`/);
+  assert.match(refused.message, /manual: <what you checked>/);
+  assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
+  assert.strictEqual(git(['rev-parse', `refs/sidequest/${t.ref}`]), pinnedCommit);
+});
+
+test('submit accepts runnable and manual verify commands', () => {
+  const runnable = addTicket('runnable submit verify');
+  const manual = addTicket('manual submit verify');
+  assert.strictEqual(store.claimTicket(slug, runnable.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, manual.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+
+  const runnableResult = store.submitTicket(slug, runnable.ref, 'worker-a', {
+    commit: COMMIT,
+    verify: 'cd plugins/sidequest && npm run test:full',
+  });
+  const manualResult = store.submitTicket(slug, manual.ref, 'worker-b', {
+    commit: COMMIT,
+    verify: 'manual: submission tests passed',
+  });
+
+  assert.strictEqual(runnableResult.ok, true);
+  assert.strictEqual(manualResult.ok, true);
+  assert.strictEqual(store.getTicket(slug, runnable.ref).submission.verify, 'cd plugins/sidequest && npm run test:full');
+  assert.strictEqual(store.getTicket(slug, manual.ref).submission.verify, 'manual: submission tests passed');
+});
+
 test('SQ-971: rejected range submission is quarantined and clean rebase resubmits', async () => {
   cleanBranch();
   const t = addTicket('rejected range preservation', { files: ['lib/rebased.js'] });
