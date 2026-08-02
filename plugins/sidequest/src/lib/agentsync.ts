@@ -190,7 +190,7 @@ function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
-function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
+function renderExecAgent({ name, effort, maxTurnsEffort = effort, modelId, marker, extraNote, ticketBrief, tools, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(', ')}\n` : '';
   const disallowedToolsLine = Array.isArray(disallowedTools) && disallowedTools.length ? `disallowedTools: ${disallowedTools.join(', ')}\n` : '';
@@ -199,7 +199,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{NAME}}').join(String(name))
     .split('{{EFFORT}}').join(String(effort))
     .split('{{MODEL_FRONTMATTER}}').join(modelId ? `\nmodel: ${modelId}` : '')
-    .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(effort))))
+    .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(maxTurnsEffort))))
     .split('{{CHECKPOINT_TOOL_ROUNDS}}').join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS))
     .split('permissionMode: bypassPermissions').join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`)
     .split('{{MARKER}}').join(marker || '')
@@ -216,23 +216,21 @@ function dispatchNote() {
   return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 
-// The dispatch defs are effort-collapsed, but the shared template speaks of a fixed
-// effort. Rendered at `max` so maxTurns takes the largest backstop (any effort may ride
-// the marker), then the fixed-effort prose is pointed at the marker. The frontmatter
-// `effort: max` stays: the schema wants a valid level, and the gateway overwrites it on
-// every dispatch request, so it can never reach a model.
+// The dispatch defs use a safe frontmatter effort for internal non-marker calls, while
+// retaining the max-tier backstop because dispatched tickets may run at any effort.
 function collapseEffortProse(body: string): string {
   return body
-    .split('Executes one or more sidequest tickets at max reasoning effort.')
+    .split('Executes one or more sidequest tickets at high reasoning effort.')
     .join('Executes one or more sidequest tickets at the reasoning effort set by the dispatch route marker.')
-    .split('running at **max** reasoning effort')
+    .split('running at **high** reasoning effort')
     .join('running at the reasoning effort your dispatch route marker sets');
 }
 
 function renderDispatchAgent(_effort?: any) {
   return collapseEffortProse(renderExecAgent({
     name: stableDispatchName(),
-    effort: 'max',
+    effort: 'high',
+    maxTurnsEffort: 'max',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: dispatchNote(),
@@ -243,7 +241,8 @@ function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
-    effort: 'max',
+    effort: 'high',
+    maxTurnsEffort: 'max',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
