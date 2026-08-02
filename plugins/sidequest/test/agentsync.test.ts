@@ -382,12 +382,12 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
     const result = agentsync.syncExecAgents(null, { dir });
     assert.equal(result.written, 12);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
-    // One collapsed dispatch def; effort rides the route marker. The frontmatter pins
-    // max so maxTurns takes the largest backstop, and the gateway overwrites the effort
-    // on every dispatch request.
+    // One collapsed dispatch def. A safe frontmatter effort allows internal non-marker
+    // calls, while maxTurns preserves the largest backstop.
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
     assert.match(dispatch, /^model: claude-codex-auto$/m);
-    assert.match(dispatch, /^effort: max$/m);
+    assert.match(dispatch, /^effort: high$/m);
+    assert.match(dispatch, /^maxTurns: 250$/m);
     assert.match(dispatch, /reasoning effort set by the dispatch route marker/);
     for (const effort of EFFORTS) {
       const builtin = fs.readFileSync(path.join(dir, `sidequest-exec-${effort}.md`), 'utf8');
@@ -522,6 +522,18 @@ test('sync prunes legacy per-combo codex executors in favor of the shared dispat
   assert.ok(result.removed >= 1);
   assert.ok(!fs.existsSync(legacy));
   assert.ok(readDir(dir).includes('sidequest-exec-dispatch.md'));
+});
+
+
+test('dispatch executors use a safe frontmatter effort with a max-tier turn cap', () => {
+  for (const body of [
+    agentsync.renderDispatchAgent(),
+    agentsync.renderReadOnlyDispatchAgent(),
+  ]) {
+    assert.match(body, /^effort: high$/m);
+    assert.doesNotMatch(body, /^effort: max$/m);
+    assert.match(body, /^maxTurns: 250$/m);
+  }
 });
 
 

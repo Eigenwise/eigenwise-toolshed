@@ -98,7 +98,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
 function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
-function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
+function renderExecAgent({ name, effort, maxTurnsEffort = effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(", ")}
 ` : "";
@@ -108,7 +108,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
 ${skills.map((skill) => `  - ${skill}`).join("\n")}
 ` : "";
   return template.split("{{NAME}}").join(String(name)).split("{{EFFORT}}").join(String(effort)).split("{{MODEL_FRONTMATTER}}").join(modelId ? `
-model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(effort)))).split("{{CHECKPOINT_TOOL_ROUNDS}}").join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS)).split("permissionMode: bypassPermissions").join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
+model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(maxTurnsEffort)))).split("{{CHECKPOINT_TOOL_ROUNDS}}").join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS)).split("permissionMode: bypassPermissions").join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
 
 ${ticketBrief2}` : ""}`);
 }
@@ -118,12 +118,13 @@ function dispatchNote() {
 _This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 function collapseEffortProse(body) {
-  return body.split("Executes one or more sidequest tickets at max reasoning effort.").join("Executes one or more sidequest tickets at the reasoning effort set by the dispatch route marker.").split("running at **max** reasoning effort").join("running at the reasoning effort your dispatch route marker sets");
+  return body.split("Executes one or more sidequest tickets at high reasoning effort.").join("Executes one or more sidequest tickets at the reasoning effort set by the dispatch route marker.").split("running at **high** reasoning effort").join("running at the reasoning effort your dispatch route marker sets");
 }
 function renderDispatchAgent(_effort) {
   return collapseEffortProse(renderExecAgent({
     name: stableDispatchName(),
-    effort: "max",
+    effort: "high",
+    maxTurnsEffort: "max",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: dispatchNote()
@@ -133,7 +134,8 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
-    effort: "max",
+    effort: "high",
+    maxTurnsEffort: "max",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
