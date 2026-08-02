@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.339.0 (2026-08-02)
+
+### sidequest 4.1.1 → 4.1.2
+
+#### Fixes
+
+- Revert the PreCompact continuity injection (SQ-1277) [`5193da0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/5193da01)
+  Countering a Claude Code summarization behavior with unmeasured prompt text was the wrong fix. The Stop-hook wording fix and the closed coverage gap both stay.
+
 ## v3.338.0 (2026-08-02)
 
 ### sidequest 4.1.0 → 4.1.1
