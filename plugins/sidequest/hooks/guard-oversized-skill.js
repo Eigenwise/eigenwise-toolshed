@@ -70,7 +70,7 @@ var SKILL_DIRECTORY_ENV = ["CLAUDE_BUNDLED_SKILLS_DIR", "CLAUDE_CODE_BUNDLED_SKI
 var SKILL_PATH_FIELDS = ["skill_path", "skillPath", "path"];
 function isDispatchedExecutor(input) {
   const agentType = stringField(input, "agent_type", "agentType");
-  return /^sidequest-exec-dispatch(?:-readonly)?-(?:low|medium|high|xhigh|max)$/.test(agentType);
+  return /^sidequest-exec-dispatch(?:-readonly)?(?:-(?:low|medium|high|xhigh|max))?$/.test(agentType);
 }
 function skillName(input) {
   if (!isRecord(input.tool_input)) return null;

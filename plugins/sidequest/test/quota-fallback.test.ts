@@ -226,7 +226,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
     });
     assert.equal(mcpDispatch.token, cliDispatch.token);
     assert.equal(mcpDispatch.recovery.model, 'codex-gpt-5-6-sol');
-    assert.equal(mcpDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-max');
+    assert.equal(mcpDispatch.spawn.subagent_type, 'sidequest-exec-dispatch');
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, mcpRuntimeSessionId);
   } finally {
     if (previousMcpRuntimeSessionId == null) delete process.env.CLAUDE_CODE_SESSION_ID;

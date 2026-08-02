@@ -35,7 +35,7 @@ test('resolveExec is keyed directly by concrete model and effort', () => {
     runsModel: 'opus', apiModel: 'opus', runsLabel: 'Claude Opus', dispatch: 'native-agent',
   });
   const codex = store.resolveExec('codex-gpt-test', 'xhigh');
-  assert.equal(codex.agent, 'sidequest-exec-dispatch-xhigh');
+  assert.equal(codex.agent, 'sidequest-exec-dispatch');
   assert.equal(codex.model, null);
   assert.equal(codex.spawnId, 'claude-test');
   assert.equal(codex.dispatchModel, 'test');

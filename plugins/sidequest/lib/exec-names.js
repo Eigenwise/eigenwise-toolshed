@@ -20,10 +20,12 @@ var exec_names_exports = {};
 __export(exec_names_exports, {
   AGENT_NAME_MAX_LENGTH: () => AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX: () => CLAUDE_PREFIX,
+  DISPATCH_NAME: () => DISPATCH_NAME,
   DISPATCH_PREFIX: () => DISPATCH_PREFIX,
   EFFORTS: () => EFFORTS,
   LEGACY_TICKET_PREFIX: () => LEGACY_TICKET_PREFIX,
   READ_ONLY_CLAUDE_PREFIX: () => READ_ONLY_CLAUDE_PREFIX,
+  READ_ONLY_DISPATCH_NAME: () => READ_ONLY_DISPATCH_NAME,
   READ_ONLY_DISPATCH_PREFIX: () => READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX: () => TICKET_PREFIX,
   classify: () => classify,
@@ -114,20 +116,24 @@ function dispatchLaunchName(ref, title, sequence) {
   if (name.length > budget) name = name.slice(0, budget).replace(/-+$/, "");
   return `${name}${suffix}`;
 }
+const DISPATCH_NAME = "sidequest-exec-dispatch";
+const READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";
 function stableClaudeName(effort) {
   return `${CLAUDE_PREFIX}${effort}`;
 }
-function stableDispatchName(effort) {
-  return `${DISPATCH_PREFIX}${effort}`;
+function stableDispatchName(_effort) {
+  return DISPATCH_NAME;
 }
 function stableReadOnlyClaudeName(effort) {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
-function stableReadOnlyDispatchName(effort) {
-  return `${READ_ONLY_DISPATCH_PREFIX}${effort}`;
+function stableReadOnlyDispatchName(_effort) {
+  return READ_ONLY_DISPATCH_NAME;
 }
 function classify(name) {
   if (typeof name !== "string" || !name) return { kind: "unknown", effort: null };
+  if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
+  if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
     const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
     if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
@@ -156,10 +162,12 @@ function classify(name) {
 0 && (module.exports = {
   AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX,
+  DISPATCH_NAME,
   DISPATCH_PREFIX,
   EFFORTS,
   LEGACY_TICKET_PREFIX,
   READ_ONLY_CLAUDE_PREFIX,
+  READ_ONLY_DISPATCH_NAME,
   READ_ONLY_DISPATCH_PREFIX,
   TICKET_PREFIX,
   classify,

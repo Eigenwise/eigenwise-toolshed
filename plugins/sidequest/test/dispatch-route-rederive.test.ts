@@ -122,7 +122,7 @@ test('same-provider fallback is prepared with its reason and re-derives when the
   assert.notEqual(recovered.token, degraded.token);
   assert.deepEqual(recovered.ticket.dispatch.route, { model: 'codex-gpt-recovered', effort: 'medium', marker: 'gpt-recovered' });
   assert.equal(recovered.ticket.dispatch.fallbackReason, undefined);
-  assert.equal(recovered.ticket.dispatchExecutor, 'sidequest-exec-dispatch-medium');
+  assert.equal(recovered.ticket.dispatchExecutor, 'sidequest-exec-dispatch');
   assert.equal(recovered.ticket.dispatch.supersededTokens.length, 1);
 });
 

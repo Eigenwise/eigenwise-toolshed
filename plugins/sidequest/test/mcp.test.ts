@@ -1574,11 +1574,11 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   const instant = await callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session', full: true });
   assert.equal(instant.mode, 'instant');
   assert.deepEqual(instant.exec, {
-    agent: 'sidequest-exec-dispatch-high', model: null, backend: 'codex',
+    agent: 'sidequest-exec-dispatch', model: null, backend: 'codex',
     runsModel: 'codex-gpt-5-6-terra', apiModel: 'claude-gpt-5.6-terra',
     runsLabel: 'Terra', dispatch: 'native-agent',
   });
-  assert.equal(instant.agent, 'sidequest-exec-dispatch-high');
+  assert.equal(instant.agent, 'sidequest-exec-dispatch');
   assert.equal(instant.spawn.description, '[model=Terra effort=high] instant dispatch');
   assert.equal(instant.spawn.name, `${addedInstant.ref.toLowerCase()}-instant-dispatch`);
   assert.equal(instant.spawn.model, undefined);
@@ -1742,7 +1742,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
     const native = await callHandler('native_agent', { ref: added.ref, prompt: 'Implement exactly this ticket.' });
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
-    assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch-high');
+    assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch');
     assert.strictEqual(native.spawn.description, '[model=Terra effort=high] prompt context');
     assert.strictEqual(native.spawn.name, `${added.ref.toLowerCase()}-prompt-context`);
     assert.strictEqual(native.spawn.model, undefined);
@@ -2653,7 +2653,7 @@ test('claim guard refusal names the Codex-backed executor for a concrete route',
     const res = await callTool('claim', { ref: added.ref, by: 'mcp-w-guard', effort: wrong });
     assert.strictEqual(res.ok, false);
     assert.strictEqual(res.reason, 'effort_mismatch');
-    assert.match(res.message, new RegExp(`sidequest-exec-dispatch-${store.getTicket(added.project, added.ref).effort}`));
+    assert.match(res.message, /spawn sidequest-exec-dispatch./);
   } finally {
     clearCatalog();
   }

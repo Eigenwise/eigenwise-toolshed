@@ -112,31 +112,34 @@ model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(
 
 ${ticketBrief2}` : ""}`);
 }
-function dispatchNote(effort) {
+function dispatchNote() {
   return `
 
-_This agent is the shared Sidequest executor for every Codex-backed route at \`${effort}\` effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, whose effort mirrors this def frontmatter for gateway-side audit, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models: one spawn carries exactly one route marker. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
+_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
-function renderDispatchAgent(effort) {
-  return renderExecAgent({
-    name: stableDispatchName(effort),
-    effort,
+function collapseEffortProse(body) {
+  return body.split("Executes one or more sidequest tickets at max reasoning effort.").join("Executes one or more sidequest tickets at the reasoning effort set by the dispatch route marker.").split("running at **max** reasoning effort").join("running at the reasoning effort your dispatch route marker sets");
+}
+function renderDispatchAgent(_effort) {
+  return collapseEffortProse(renderExecAgent({
+    name: stableDispatchName(),
+    effort: "max",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: dispatchNote(effort)
-  });
+    extraNote: dispatchNote()
+  }));
 }
-function renderReadOnlyDispatchAgent(effort, readOnlyDeniedTools) {
+function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return renderExecAgent({
-    name: stableReadOnlyDispatchName(effort),
-    effort,
+  return collapseEffortProse(renderExecAgent({
+    name: stableReadOnlyDispatchName(),
+    effort: "max",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: `${dispatchNote(effort)}${readOnlyNote()}`,
+    extraNote: `${dispatchNote()}${readOnlyNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools
-  });
+  }));
 }
 function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
@@ -819,14 +822,14 @@ function syncExecAgents(_prefs, opts) {
   const dir = opts.dir || defaultAgentsDir();
   const readOnlyDeniedTools = opts.readOnlyDeniedTools;
   const wanted = /* @__PURE__ */ new Map();
+  wanted.set(`${stableDispatchName()}.md`, renderDispatchAgent());
+  wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
-    wanted.set(`${stableDispatchName(effort)}.md`, renderDispatchAgent(effort));
     wanted.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
       name: stableClaudeName(effort),
       effort,
       marker: MARKER
     }));
-    wanted.set(`${stableReadOnlyDispatchName(effort)}.md`, renderReadOnlyDispatchAgent(effort, readOnlyDeniedTools));
     wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
   }
   let existing = [];

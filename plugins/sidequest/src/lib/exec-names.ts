@@ -80,25 +80,43 @@ export function dispatchLaunchName(ref: unknown, title?: unknown, sequence?: unk
   return `${name}${suffix}`;
 }
 
+// Codex dispatch executors are effort-collapsed: the gateway resolves BOTH model and
+// effort from the [sidequest-route model=... effort=...] marker in the briefing and
+// overwrites the request's output_config.effort, so a per-effort definition ladder on
+// this side carried five copies of dead frontmatter (verified on the wire 2026-08-02:
+// a def pinned to effort low produced effort=xhigh when the marker said so). Claude
+// executors keep the per-effort ladder because the Agent tool has no effort parameter,
+// leaving frontmatter as the only carrier.
+export const DISPATCH_NAME = 'sidequest-exec-dispatch';
+export const READ_ONLY_DISPATCH_NAME = 'sidequest-exec-dispatch-readonly';
+
 export function stableClaudeName(effort: Effort): string {
   return `${CLAUDE_PREFIX}${effort}`;
 }
 
-export function stableDispatchName(effort: Effort): string {
-  return `${DISPATCH_PREFIX}${effort}`;
+export function stableDispatchName(_effort?: Effort): string {
+  return DISPATCH_NAME;
 }
 
 export function stableReadOnlyClaudeName(effort: Effort): string {
   return `${READ_ONLY_CLAUDE_PREFIX}${effort}`;
 }
 
-export function stableReadOnlyDispatchName(effort: Effort): string {
-  return `${READ_ONLY_DISPATCH_PREFIX}${effort}`;
+export function stableReadOnlyDispatchName(_effort?: Effort): string {
+  return READ_ONLY_DISPATCH_NAME;
 }
 
 export function classify(name: unknown): ExecutorClassification {
   if (typeof name !== 'string' || !name) return { kind: 'unknown', effort: null };
 
+  // The collapsed names carry no effort; the dispatch marker does. Checked before the
+  // prefix rules because READ_ONLY_DISPATCH_NAME is a proper prefix-collision with
+  // DISPATCH_PREFIX ('...dispatch-readonly' starts with '...dispatch-').
+  if (name === READ_ONLY_DISPATCH_NAME) return { kind: 'read_only_codex_dispatch', effort: null };
+  if (name === DISPATCH_NAME) return { kind: 'codex_dispatch', effort: null };
+
+  // Pre-collapse records still name per-effort executors; classifying them keeps old
+  // dispatch records readable so the board can heal by redispatch instead of erroring.
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
     const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
     if (isEffort(effort)) return { kind: 'read_only_codex_dispatch', effort };

@@ -14,11 +14,15 @@
  * A registered agent file with a `model: <full-id>` frontmatter pin genuinely
  * runs through codex-gateway when spawned with the Agent `model` parameter
  * omitted. Passing an Agent `model` value overrides the pin, so Codex routes
- * advertise `model: null`. Codex routes share ONE executor per effort
- * (sidequest-exec-dispatch-<effort>.md, pinned to the virtual claude-codex-auto):
- * the real model rides each dispatch briefing as a [sidequest-route model=...]
- * marker the codex-gateway shim resolves per request (SQ-347/SQ-348). The def
- * set is therefore fixed — route edits never write or register agent files.
+ * advertise `model: null`. Codex routes share TWO executors total
+ * (sidequest-exec-dispatch.md and sidequest-exec-dispatch-readonly.md, pinned
+ * to the virtual claude-codex-auto): the real model AND effort ride each
+ * dispatch briefing as a [sidequest-route model=... effort=...] marker the
+ * codex-gateway shim resolves per request (SQ-347/SQ-348), overwriting
+ * output_config.effort, so per-effort dispatch defs carried dead frontmatter.
+ * The Claude ladder stays per-effort: the Agent tool has no effort parameter,
+ * leaving frontmatter as the only carrier. The def set is therefore fixed —
+ * route edits never write or register agent files.
  *
  * syncExecAgents() renders through scripts/_exec-template.md via
  * renderExecAgent() below, so the ticket-execution protocol body stays in one
@@ -203,36 +207,49 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
     .split('{{TICKET_BRIEF}}').join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief ? `\n\n${ticketBrief}` : ''}`);
 }
 
-// Appended to every shared dispatch executor's body. Effort is set via Claude
-// Code's frontmatter, which the shim forwards to the Codex backend's
-// reasoning.effort; the model is NOT in the def — the shim resolves it from the
-// briefing's route marker, so the note bans writing that marker anywhere else
-// (the gateway takes the last occurrence in the conversation).
-function dispatchNote(effort?: any) {
-  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at \`${effort}\` effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, whose effort mirrors this def frontmatter for gateway-side audit, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models: one spawn carries exactly one route marker. The \`effort\` frontmatter above is forwarded to the model's reasoning effort._`;
+// Appended to the two shared dispatch executors' bodies. Model AND effort ride the
+// briefing's route marker: the codex-gateway shim resolves both per request and
+// overwrites output_config.effort, so this definition's own effort frontmatter is inert
+// on this path. The note bans writing marker-shaped text anywhere else (the gateway
+// takes the last occurrence in the conversation).
+function dispatchNote() {
+  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 
-function renderDispatchAgent(effort?: any) {
-  return renderExecAgent({
-    name: stableDispatchName(effort),
-    effort,
+// The dispatch defs are effort-collapsed, but the shared template speaks of a fixed
+// effort. Rendered at `max` so maxTurns takes the largest backstop (any effort may ride
+// the marker), then the fixed-effort prose is pointed at the marker. The frontmatter
+// `effort: max` stays: the schema wants a valid level, and the gateway overwrites it on
+// every dispatch request, so it can never reach a model.
+function collapseEffortProse(body: string): string {
+  return body
+    .split('Executes one or more sidequest tickets at max reasoning effort.')
+    .join('Executes one or more sidequest tickets at the reasoning effort set by the dispatch route marker.')
+    .split('running at **max** reasoning effort')
+    .join('running at the reasoning effort your dispatch route marker sets');
+}
+
+function renderDispatchAgent(_effort?: any) {
+  return collapseEffortProse(renderExecAgent({
+    name: stableDispatchName(),
+    effort: 'max',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: dispatchNote(effort),
-  });
+    extraNote: dispatchNote(),
+  }));
 }
 
-function renderReadOnlyDispatchAgent(effort?: any, readOnlyDeniedTools?: any) {
+function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return renderExecAgent({
-    name: stableReadOnlyDispatchName(effort),
-    effort,
+  return collapseEffortProse(renderExecAgent({
+    name: stableReadOnlyDispatchName(),
+    effort: 'max',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
-    extraNote: `${dispatchNote(effort)}${readOnlyNote()}`,
+    extraNote: `${dispatchNote()}${readOnlyNote()}`,
     tools: readOnlyTools.tools,
     disallowedTools: readOnlyTools.disallowedTools,
-  });
+  }));
 }
 
 function renderReadOnlyClaudeAgent(effort?: any, readOnlyDeniedTools?: any) {
@@ -990,14 +1007,17 @@ function syncExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
   const dir = opts.dir || defaultAgentsDir();
   const readOnlyDeniedTools = opts.readOnlyDeniedTools;
   const wanted = new Map();
+  // Two Codex executors cover every model x every effort: both ride the dispatch
+  // marker. The Claude ladder stays per-effort because frontmatter is the only effort
+  // carrier on that path.
+  wanted.set(`${stableDispatchName()}.md`, renderDispatchAgent());
+  wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(undefined, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
-    wanted.set(`${stableDispatchName(effort)}.md`, renderDispatchAgent(effort));
     wanted.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
       name: stableClaudeName(effort),
       effort,
       marker: MARKER,
     }));
-    wanted.set(`${stableReadOnlyDispatchName(effort)}.md`, renderReadOnlyDispatchAgent(effort, readOnlyDeniedTools));
     wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
   }
 

@@ -214,7 +214,7 @@ test('pre-tool hook: oversized bundled skills are denied for dispatched executor
   const payload = {
     tool_name: 'Skill',
     tool_input: { skill: 'claude-api' },
-    agent_type: 'sidequest-exec-dispatch-high',
+    agent_type: 'sidequest-exec-dispatch',
   };
 
   const blocked = runHookOutput(GUARD_OVERSIZED_SKILL, payload);
@@ -360,7 +360,7 @@ test('pre-tool hook: executor helpers allow mechanical sweeps with parent-tree s
   for (const subagent_type of ['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']) {
     const out = runHookOutput(FORCE_BYPASS, {
       agent_id: `native-task@${subagent_type}`,
-      agent_type: 'sidequest-exec-dispatch-high',
+      agent_type: 'sidequest-exec-dispatch',
       tool_name: 'Agent',
       tool_input: {
         subagent_type,
@@ -386,7 +386,7 @@ test('pre-tool hook: helper session transcript hits are self-reference', () => {
   const transcriptPath = path.join(os.tmpdir(), 'sq-current-session.jsonl');
   const out = runHookOutput(FORCE_BYPASS, {
     agent_id: 'evidence-helper',
-    agent_type: 'sidequest-exec-dispatch-high',
+    agent_type: 'sidequest-exec-dispatch',
     transcript_path: transcriptPath,
     tool_name: 'Agent',
     tool_input: { subagent_type: 'Explore', model: 'haiku', prompt: 'Find quoted evidence.' },
@@ -403,7 +403,7 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
   for (const subagent_type of ['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']) {
     const review = runHookOutput(FORCE_BYPASS, {
       agent_id: `review-helper-${subagent_type}`,
-      agent_type: 'sidequest-exec-dispatch-high',
+      agent_type: 'sidequest-exec-dispatch',
       tool_name: 'Agent',
       tool_input: {
         subagent_type,
@@ -421,7 +421,7 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
   for (const prompt of ['Audits the ticket-scoped storage API.', 'Reviews the ticket-scoped storage API.']) {
     const review = runHookOutput(FORCE_BYPASS, {
       agent_id: `plural-review-helper-${prompt[0]}`,
-      agent_type: 'sidequest-exec-dispatch-high',
+      agent_type: 'sidequest-exec-dispatch',
       tool_name: 'Agent',
       tool_input: { subagent_type: 'Explore', model: 'haiku', prompt },
     });
@@ -431,7 +431,7 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
 
   const reviewDescription = runHookOutput(FORCE_BYPASS, {
     agent_id: 'review-description-helper',
-    agent_type: 'sidequest-exec-dispatch-high',
+    agent_type: 'sidequest-exec-dispatch',
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'general-purpose',
@@ -445,7 +445,7 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
 
   const defaulted = runHookOutput(FORCE_BYPASS, {
     agent_id: 'defaulted-helper',
-    agent_type: 'sidequest-exec-dispatch-high',
+    agent_type: 'sidequest-exec-dispatch',
     tool_name: 'Agent',
     tool_input: { subagent_type: 'Explore', prompt: 'Read the parent diff.' },
   });
@@ -462,7 +462,7 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
   assert.equal(chained.hookSpecificOutput.updatedInput.run_in_background, true);
 
   const mainThread = runHookOutput(FORCE_BYPASS, {
-    agent_type: 'sidequest-exec-dispatch-high',
+    agent_type: 'sidequest-exec-dispatch',
     tool_name: 'Agent',
     tool_input: { subagent_type: 'general-purpose', prompt: 'Quick lookup.' },
   });
@@ -542,7 +542,7 @@ test('pre-tool hook keeps builtin models and strips a stable dispatch executor m
   const dispatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
-      subagent_type: 'sidequest-exec-dispatch-high', model: 'fable', name: 'sq210-dispatch',
+      subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq210-dispatch',
       prompt: 'work SQ-210\n[sidequest-route model=codex-gpt-5-6-terra effort=high]',
     },
   });
@@ -583,7 +583,7 @@ test('pre-tool hook: malformed input fails soft', () => {
 test('task-output guard: blocks Sidequest native task identities and dispatched names', () => {
   const reason = 'native Agent results arrive automatically. Use pulse <ref> / changes --since for liveness. Use TaskStop only after terminal board evidence.';
   const direct = runHookOutput(GUARD_TASK_OUTPUT, {
-    tool_name: 'TaskOutput', tool_input: { task_id: 'sidequest-exec-dispatch-high@session-abc' },
+    tool_name: 'TaskOutput', tool_input: { task_id: 'sidequest-exec-dispatch@session-abc' },
   });
   assert.equal(direct.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(direct.hookSpecificOutput.permissionDecisionReason, new RegExp(reason.replace(/[<>]/g, '\\$&')));
@@ -619,7 +619,7 @@ test('task-output guard: executor identity variants bypass the main-thread guard
     { agent_id: 'executor' }, { agentId: 'executor' }, { agent_type: 'sidequest-exec-high' }, { agentType: 'sidequest-exec-high' },
   ]) {
     assert.strictEqual(runHookOutput(GUARD_TASK_OUTPUT, {
-      tool_name: 'TaskOutput', ...identity, tool_input: { task_id: 'sidequest-exec-dispatch-high@session-abc' },
+      tool_name: 'TaskOutput', ...identity, tool_input: { task_id: 'sidequest-exec-dispatch@session-abc' },
     }), null);
   }
 });
@@ -863,7 +863,7 @@ test('pre-tool hook: stable dispatch executor strips model even when a ref resol
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
-      subagent_type: 'sidequest-exec-dispatch-high', model: 'fable', name: 'w-dispatch',
+      subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'w-dispatch',
       prompt: `work ${t.ref} --project "${slug}"\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
     },
   });
@@ -891,7 +891,7 @@ function runForceBypassWithEnv(toolInput?: any, envOverrides?: any) {
 
 test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a dispatch executor spawn', () => {
   const out = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', name: 'sq-env-codex', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'sq-env-codex', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }
   );
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
@@ -910,7 +910,7 @@ test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a builtin executor sp
 
 test('pre-tool hook: an unset CLAUDE_CODE_SUBAGENT_MODEL leaves the spawn alone', () => {
   const out = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
+    { subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: '' }
   );
   assert.ok(!out.hookSpecificOutput.permissionDecision, 'no override -> no deny');
@@ -1643,14 +1643,14 @@ test('session-start: provisions the shared dispatch executor and prunes legacy p
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session sync');
-  assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch-high.md')), 'reachable Codex route must provision the shared dispatch executor');
+  assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch.md')), 'reachable Codex route must provision the shared dispatch executor');
 });
 
 test('session-start: category-route sync ignores retired prefs data', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-unreadable-'));
   const agents = path.join(home, 'agents');
   fs.mkdirSync(agents, { recursive: true });
-  const codexFile = path.join(agents, 'sidequest-exec-dispatch-high.md');
+  const codexFile = path.join(agents, 'sidequest-exec-dispatch.md');
   writeCategory(home, {
     id: 'hooks-codex',
     name: 'Hooks Codex',
@@ -2139,13 +2139,13 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
   const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-5-6-sol', 'high');
   const proseSibling = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.ok(!proseSibling.hookSpecificOutput.permissionDecision, 'a prose sibling ref must not create a mixed batch');
   assert.equal(proseSibling.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
   const mixed = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
@@ -2154,14 +2154,17 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /Split the batch/);
   assert.doesNotMatch(mixed.hookSpecificOutput.permissionDecisionReason, /fresh dispatch briefing/);
   const same = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');
   assert.equal(same.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
 });
 
-test('pre-tool hook: dispatch executor rejects a route marker with different effort', () => {
+// The collapsed executor name carries no effort, so name-vs-marker auditing only
+// applies to legacy per-effort executors; on the collapsed def the marker owns effort
+// and the prepared-spawn comparison audits it against the board.
+test('pre-tool hook: legacy per-effort executor still rejects a route marker with different effort', () => {
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
@@ -2171,6 +2174,17 @@ test('pre-tool hook: dispatch executor rejects a route marker with different eff
   });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /executor effort "high" does not match route marker effort "medium"/);
+});
+
+test('pre-tool hook: the collapsed dispatch executor accepts any marker effort', () => {
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-collapsed',
+      prompt: 'work SQ-377\n[sidequest-route model=codex-gpt-5-6-terra effort=medium]',
+    },
+  });
+  assert.notEqual(out?.hookSpecificOutput?.permissionDecision, 'deny');
 });
 
 test('pre-tool hook: prepared codex dispatch accepts the gateway-form route marker (SQ-753)', () => {
@@ -2258,7 +2272,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
     tool_name: 'Agent',
     tool_input: {
       ...base,
-      subagent_type: 'sidequest-exec-dispatch-high',
+      subagent_type: 'sidequest-exec-dispatch',
       prompt: `${prompt}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
     },
   });
@@ -2270,7 +2284,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
     tool_name: 'Agent',
     tool_input: {
       ...base,
-      subagent_type: 'sidequest-exec-dispatch-high',
+      subagent_type: 'sidequest-exec-dispatch',
       prompt: `[sidequest-route model=sonnet effort=high]\nFIRST action: run \`node "sidequest-launcher.js" brief ${ticket.ref} --token ${prepared.token} --project "${projectPath}"\``,
     },
   });
@@ -2349,9 +2363,9 @@ test('readonly category executors pass spawn correction, start binding, and stop
   try {
     const cases = [
       ['codebase-exploration', 'sonnet', 'low', 'sidequest-exec-readonly-low'],
-      ['research', 'codex-gpt-5-6-sol', 'medium', 'sidequest-exec-dispatch-readonly-medium'],
+      ['research', 'codex-gpt-5-6-sol', 'medium', 'sidequest-exec-dispatch-readonly'],
       ['review-audit', 'sonnet', 'high', 'sidequest-exec-readonly-high'],
-      ['spike-investigation', 'codex-gpt-5-6-sol', 'xhigh', 'sidequest-exec-dispatch-readonly-xhigh'],
+      ['spike-investigation', 'codex-gpt-5-6-sol', 'xhigh', 'sidequest-exec-dispatch-readonly'],
     ] as const;
     const projectPath = store.readMeta(slug).path;
 
@@ -2420,7 +2434,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     tool_name: 'Agent',
     tool_input: {
       subagent_type: prepared.ticket.dispatchExecutor,
-      name: 'sidequest-exec-dispatch-high',
+      name: 'sidequest-exec-dispatch',
       description: prepared.ticket.dispatch.description,
       prompt: `Work ${prepared.ticket.ref} --project "${projectPath}" --token ${prepared.token}`,
     },
@@ -2519,7 +2533,7 @@ test('subagent-stop: legacy ticket executors without identity stay silent', () =
 test('pre-tool hook: dispatch executor requires a canonical route marker and legacy executors cannot launch', () => {
   const missingMarker = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
-    tool_input: { subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
+    tool_input: { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
   });
   assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
   assert.equal(

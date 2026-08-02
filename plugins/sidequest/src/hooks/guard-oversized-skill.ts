@@ -10,7 +10,7 @@ const SKILL_PATH_FIELDS = ['skill_path', 'skillPath', 'path'];
 
 function isDispatchedExecutor(input: HookInput): boolean {
   const agentType = stringField(input, 'agent_type', 'agentType');
-  return /^sidequest-exec-dispatch(?:-readonly)?-(?:low|medium|high|xhigh|max)$/.test(agentType);
+  return /^sidequest-exec-dispatch(?:-readonly)?(?:-(?:low|medium|high|xhigh|max))?$/.test(agentType);
 }
 
 function skillName(input: HookInput): string | null {

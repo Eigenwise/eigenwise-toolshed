@@ -28,9 +28,9 @@ const {
   dispatchLaunchName(ref: unknown, title?: unknown, sequence?: unknown): string;
   isEffort(value: unknown): boolean;
   stableClaudeName(effort: string): string;
-  stableDispatchName(effort: string): string;
+  stableDispatchName(effort?: string): string;
   stableReadOnlyClaudeName(effort: string): string;
-  stableReadOnlyDispatchName(effort: string): string;
+  stableReadOnlyDispatchName(effort?: string): string;
   titleSlug(title: unknown): string;
 };
 
@@ -39,18 +39,25 @@ const NATIVE_AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
 
 test('builders produce the current public stable names', () => {
   assert.strictEqual(stableClaudeName('high'), 'sidequest-exec-high');
-  assert.strictEqual(stableDispatchName('high'), 'sidequest-exec-dispatch-high');
-  assert.strictEqual(stableDispatchName('xhigh'), 'sidequest-exec-dispatch-xhigh');
+  // The dispatch builders are effort-collapsed: model and effort ride the route marker.
+  assert.strictEqual(stableDispatchName('high'), 'sidequest-exec-dispatch');
+  assert.strictEqual(stableDispatchName('xhigh'), 'sidequest-exec-dispatch');
+  assert.strictEqual(stableDispatchName(), 'sidequest-exec-dispatch');
   assert.strictEqual(stableReadOnlyClaudeName('high'), 'sidequest-exec-readonly-high');
-  assert.strictEqual(stableReadOnlyDispatchName('high'), 'sidequest-exec-dispatch-readonly-high');
+  assert.strictEqual(stableReadOnlyDispatchName('high'), 'sidequest-exec-dispatch-readonly');
 });
 
-test('every stable kind round-trips through classify with its effort', () => {
+test('every stable kind round-trips through classify', () => {
   for (const effort of EFFORTS) {
     assert.deepStrictEqual(classify(stableClaudeName(effort)), { kind: 'claude_builtin', effort });
-    assert.deepStrictEqual(classify(stableDispatchName(effort)), { kind: 'codex_dispatch', effort });
     assert.deepStrictEqual(classify(stableReadOnlyClaudeName(effort)), { kind: 'read_only_claude_builtin', effort });
-    assert.deepStrictEqual(classify(stableReadOnlyDispatchName(effort)), { kind: 'read_only_codex_dispatch', effort });
+    // Collapsed dispatch names carry no effort; the marker does.
+    assert.deepStrictEqual(classify(stableDispatchName(effort)), { kind: 'codex_dispatch', effort: null });
+    assert.deepStrictEqual(classify(stableReadOnlyDispatchName(effort)), { kind: 'read_only_codex_dispatch', effort: null });
+    // Pre-collapse per-effort names must STILL classify, so old dispatch records stay
+    // readable and heal by redispatch instead of erroring.
+    assert.deepStrictEqual(classify(`sidequest-exec-dispatch-${effort}`), { kind: 'codex_dispatch', effort });
+    assert.deepStrictEqual(classify(`sidequest-exec-dispatch-readonly-${effort}`), { kind: 'read_only_codex_dispatch', effort });
   }
 });
 

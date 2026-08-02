@@ -19,12 +19,16 @@ const SOL = { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'G
 const PROJECT_ONLY = { slug: 'codex-gpt-5-6-project-only', id: 'claude-gpt-5.6-project-only[1m]', label: 'GPT-5.6 Project Only' };
 
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
-const STABLE_EXECUTORS = EFFORTS.flatMap((effort) => [
-  `sidequest-exec-dispatch-${effort}.md`,
-  `sidequest-exec-${effort}.md`,
-  `sidequest-exec-dispatch-readonly-${effort}.md`,
-  `sidequest-exec-readonly-${effort}.md`,
-]).sort();
+// Codex dispatch executors are effort-collapsed: model AND effort ride the route
+// marker, so the stable set is 2 shared dispatch defs plus the per-effort Claude ladder.
+const STABLE_EXECUTORS = [
+  'sidequest-exec-dispatch.md',
+  'sidequest-exec-dispatch-readonly.md',
+  ...EFFORTS.flatMap((effort) => [
+    `sidequest-exec-${effort}.md`,
+    `sidequest-exec-readonly-${effort}.md`,
+  ]),
+].sort();
 
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function git(dir: string, args: string[]) { return spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }); }
@@ -351,7 +355,7 @@ test('spawn descriptions are bounded and lead with the resolved route', () => {
 
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
   const dir = tmpDir();
-  const generationTwo = path.join(dir, 'sidequest-exec-dispatch-high.md');
+  const generationTwo = path.join(dir, 'sidequest-exec-dispatch.md');
   const legacy = path.join(dir, 'sidequest-exec-codex-gpt-5-6-terra-high.md');
   fs.writeFileSync(generationTwo, `generation two\n${agentsync.MARKER}\n`);
   fs.writeFileSync(legacy, `legacy\n${agentsync.LEGACY_MARKER}\n`);
@@ -376,14 +380,18 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   try {
     assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
     const result = agentsync.syncExecAgents(null, { dir });
-    assert.equal(result.written, 20);
+    assert.equal(result.written, 12);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
+    // One collapsed dispatch def; effort rides the route marker. The frontmatter pins
+    // max so maxTurns takes the largest backstop, and the gateway overwrites the effort
+    // on every dispatch request.
+    const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
+    assert.match(dispatch, /^model: claude-codex-auto$/m);
+    assert.match(dispatch, /^effort: max$/m);
+    assert.match(dispatch, /reasoning effort set by the dispatch route marker/);
     for (const effort of EFFORTS) {
-      const dispatch = fs.readFileSync(path.join(dir, `sidequest-exec-dispatch-${effort}.md`), 'utf8');
       const builtin = fs.readFileSync(path.join(dir, `sidequest-exec-${effort}.md`), 'utf8');
-      assert.match(dispatch, /^model: claude-codex-auto$/m);
       assert.doesNotMatch(builtin, /^model:/m);
-      assert.match(dispatch, new RegExp(`^effort: ${effort}$`, 'm'));
       assert.match(builtin, new RegExp(`^effort: ${effort}$`, 'm'));
     }
   } finally {
@@ -399,7 +407,7 @@ test('read-only stable executors deny the writers and grant everything else', ()
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
 
-  for (const file of ['sidequest-exec-dispatch-readonly-high.md', 'sidequest-exec-readonly-high.md']) {
+  for (const file of ['sidequest-exec-dispatch-readonly.md', 'sidequest-exec-readonly-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     // No allow list at all: anything not denied is available, including tools that do
     // not exist yet.
@@ -419,7 +427,7 @@ test('read-only stable executors deny the writers and grant everything else', ()
     assert.doesNotMatch(body, /tools cannot change files/i);
   }
 
-  for (const file of ['sidequest-exec-dispatch-high.md', 'sidequest-exec-high.md']) {
+  for (const file of ['sidequest-exec-dispatch.md', 'sidequest-exec-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     assert.doesNotMatch(body, /^tools:/m);
     assert.doesNotMatch(body, /^disallowedTools:/m);
@@ -454,9 +462,9 @@ test('stable executors preload verify discipline and the install hash tracks the
   agentsync.syncExecAgents(null, { dir });
 
   for (const file of [
-    'sidequest-exec-dispatch-high.md',
+    'sidequest-exec-dispatch.md',
     'sidequest-exec-high.md',
-    'sidequest-exec-dispatch-readonly-high.md',
+    'sidequest-exec-dispatch-readonly.md',
     'sidequest-exec-readonly-high.md',
   ]) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
@@ -499,7 +507,7 @@ test('sync prunes legacy per-combo codex executors in favor of the shared dispat
   const result = agentsync.syncExecAgents(null, { dir });
   assert.ok(result.removed >= 1);
   assert.ok(!fs.existsSync(legacy));
-  assert.ok(readDir(dir).includes('sidequest-exec-dispatch-high.md'));
+  assert.ok(readDir(dir).includes('sidequest-exec-dispatch.md'));
 });
 
 
@@ -509,9 +517,9 @@ test('sync writes route-independent generated executors', () => {
   configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.equal(result.written, 20);
+  assert.equal(result.written, 12);
   assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
-  const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch-high.md'), 'utf8');
+  const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
   assert.match(body, /resolves the real Codex model/);
   assert.match(body, /NEVER write, quote, or echo such a line/);
@@ -563,7 +571,7 @@ test('sync is idempotent and never overwrites an unmarked collision', () => {
   const store = require('../lib/store.js');
   configure(store, 'sync-idempotent', { model: TERRA.slug, effort: 'medium' });
   const dir = tmpDir();
-  const filePath = path.join(dir, 'sidequest-exec-dispatch-medium.md');
+  const filePath = path.join(dir, 'sidequest-exec-dispatch.md');
   fs.writeFileSync(filePath, 'hand-authored\n');
   agentsync.syncExecAgents(null, { dir });
   assert.equal(fs.readFileSync(filePath, 'utf8'), 'hand-authored\n');
@@ -579,7 +587,7 @@ test('unchanged install hash skips the full executor ladder comparison', () => {
   const dir = tmpDir();
   const first = agentsync.syncExecAgentsIfChanged(null, { dir });
   assert.equal(first.skipped, false);
-  assert.equal(first.written, 20);
+  assert.equal(first.written, 12);
   const second = agentsync.syncExecAgentsIfChanged(null, { dir });
   assert.deepStrictEqual(second, {
     written: 0,
@@ -610,7 +618,7 @@ test('dispatch intent controls worktree isolation regardless of declared files',
   assert.equal(agentsync.ticketIsolation({ files: [] }, true), null);
 
   const created = agentsync.createNativeAgent({
-    ref: 'SQ-396', agentType: 'sidequest-exec-dispatch-high', runtime: 'codex-gpt-5-6-terra',
+    ref: 'SQ-396', agentType: 'sidequest-exec-dispatch', runtime: 'codex-gpt-5-6-terra',
     effort: 'high', isolation: 'worktree',
   }, { dir: tmpDir(), waitMs: 0 });
   assert.equal(created.spawn.isolation, 'worktree');
@@ -666,7 +674,7 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   const ticket = {
     id: 'briefing-assets', ref: 'SQ-334', title: 'Instant dispatch',
     description: 'First paragraph.\n\n- markdown keeps its **exact** shape\n- blank lines stay blank\n\nUnicode survives: 測試 🧪',
-    model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-dispatch-high',
+    model: TERRA.slug, effort: 'high', dispatchExecutor: 'sidequest-exec-dispatch',
     executorAnchors: 'lib/store.js prepareDispatch', executorVerify: 'node --test plugins/sidequest/test/agentsync.test.js',
     files: ['plugins/sidequest/src/lib/agentsync.ts', 'docs/briefing notes.md'],
     labels: ['dispatch', 'unicode'], priority: 'urgent', storyId: 'US-99', status: 'todo',
@@ -702,7 +710,7 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /Dispatch route: codex-gpt-5-6-terra \/ high/);
   assert.match(briefing, /mcp__plugin_sidequest_board__claim\(\{/);
   assert.ok(briefing.includes('ref: "SQ-334"'));
-  assert.ok(briefing.includes('executor: "sidequest-exec-dispatch-high"'));
+  assert.ok(briefing.includes('executor: "sidequest-exec-dispatch"'));
   assert.ok(briefing.includes('effort: "high"'));
   assert.ok(briefing.includes(`project: ${JSON.stringify('C:\\dev\\fixture')}`));
   assert.ok(briefing.includes('token: "instant-token-334"'));
