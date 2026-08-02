@@ -8,6 +8,43 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.335.0 (2026-08-02)
+
+### model-gateway 0.46.3 → 0.46.4
+
+#### Fixes
+
+- Observability is its own plugin, and skill-retro is now playbook (SQ-1270) [`110e82d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/110e82db5ff54644fef14c3f0f8dd779b79581bf)
+  Workbench keeps setup, updates, and health. Telemetry, the statusline, and the Collector move to the new user-scoped observability plugin. skill-retro becomes playbook and gains fan-out, verify-discipline, and pick-model. Reinstall skill-retro@eigenwise-toolshed as playbook@eigenwise-toolshed.
+
+### observability 0.1.0 → 0.2.0
+
+#### Features
+
+- Observability is its own plugin, and skill-retro is now playbook (SQ-1270) [`110e82d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/110e82db5ff54644fef14c3f0f8dd779b79581bf)
+  Workbench keeps setup, updates, and health. Telemetry, the statusline, and the Collector move to the new user-scoped observability plugin. skill-retro becomes playbook and gains fan-out, verify-discipline, and pick-model. Reinstall skill-retro@eigenwise-toolshed as playbook@eigenwise-toolshed.
+
+### playbook 0.3.2 → 0.4.0
+
+#### Features
+
+- Observability is its own plugin, and skill-retro is now playbook (SQ-1270) [`110e82d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/110e82db5ff54644fef14c3f0f8dd779b79581bf)
+  Workbench keeps setup, updates, and health. Telemetry, the statusline, and the Collector move to the new user-scoped observability plugin. skill-retro becomes playbook and gains fan-out, verify-discipline, and pick-model. Reinstall skill-retro@eigenwise-toolshed as playbook@eigenwise-toolshed.
+
+### sidequest 3.56.0 → 3.56.1
+
+#### Fixes
+
+- Observability is its own plugin, and skill-retro is now playbook (SQ-1270) [`110e82d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/110e82db5ff54644fef14c3f0f8dd779b79581bf)
+  Workbench keeps setup, updates, and health. Telemetry, the statusline, and the Collector move to the new user-scoped observability plugin. skill-retro becomes playbook and gains fan-out, verify-discipline, and pick-model. Reinstall skill-retro@eigenwise-toolshed as playbook@eigenwise-toolshed.
+
+### workbench 0.76.1 → 0.77.0
+
+#### Features
+
+- Observability is its own plugin, and skill-retro is now playbook (SQ-1270) [`110e82d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/110e82db5ff54644fef14c3f0f8dd779b79581bf)
+  Workbench keeps setup, updates, and health. Telemetry, the statusline, and the Collector move to the new user-scoped observability plugin. skill-retro becomes playbook and gains fan-out, verify-discipline, and pick-model. Reinstall skill-retro@eigenwise-toolshed as playbook@eigenwise-toolshed.
+
 ## v3.334.0 (2026-08-02)
 
 ### sidequest 3.55.0 → 3.56.0
