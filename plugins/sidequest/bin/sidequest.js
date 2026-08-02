@@ -3,10 +3,11 @@
 const store = require("../lib/store");
 const { fail } = require("./sidequest-cmd-shared");
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require("./sidequest-cmd-server");
-const { cmdAdd, cmdList, cmdChanges, cmdUpdate, cmdRm } = require("./sidequest-cmd-tickets");
-const { cmdDone, cmdGroomClose, cmdPublish } = require("./sidequest-cmd-close");
-const { cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
-const { cmdTempCleanup, cmdBoardConfig, cmdProjects, cmdArchiveBoard, cmdUnarchiveBoard } = require("./sidequest-cmd-board");
+const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./sidequest-cmd-tickets");
+const { cmdProfile, cmdCategory, cmdGlobalFallback } = require("./sidequest-cmd-configuration");
+const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeDeny, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
+const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
+const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
 const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "read-only-denied-tool", "produces", "changes", "consumes"]);
 const ALIASES = {
@@ -335,6 +336,9 @@ async function main() {
     case "ls":
       await cmdList(opts);
       break;
+    case "pulse":
+      await cmdPulse(opts, positional);
+      break;
     case "changes":
       await cmdChanges(opts);
       break;
@@ -348,6 +352,46 @@ async function main() {
     case "delete":
       await cmdRm(opts, positional);
       break;
+    case "profile":
+    case "profiles":
+      await cmdProfile(opts, positional);
+      break;
+    case "category":
+    case "categories":
+      await cmdCategory(opts, positional);
+      break;
+    case "global-fallback":
+    case "global_fallback":
+      await cmdGlobalFallback(opts);
+      break;
+    case "claim":
+    case "take":
+      await cmdClaim(opts, positional);
+      break;
+    case "checkpoint":
+      await cmdCheckpoint(opts, positional);
+      break;
+    case "claims":
+      if (positional[0] !== "sweep") fail("claims: expected `sidequest claims sweep`");
+      await cmdSweepClaims(opts);
+      break;
+    case "worktrees":
+      await cmdWorktrees(opts, positional);
+      break;
+    case "recover-shared":
+      await cmdRecoverShared(opts);
+      break;
+    case "next":
+    case "grab":
+      await cmdNext(opts);
+      break;
+    case "reconcile":
+      await cmdReconcile(opts);
+      break;
+    case "work":
+    case "drain":
+      await cmdWork(opts);
+      break;
     case "groom-close":
       await cmdGroomClose(opts, positional);
       break;
@@ -356,8 +400,32 @@ async function main() {
     case "finish":
       await cmdDone(opts, positional);
       break;
+    case "scope-request":
+    case "scope_request":
+      await cmdScopeRequest(opts, positional);
+      break;
+    case "scope-deny":
+    case "scope_deny":
+      await cmdScopeDeny(opts, positional);
+      break;
+    case "commit":
+      await cmdCommit(opts, positional);
+      break;
+    case "submit":
+      await cmdSubmit(opts, positional);
+      break;
+    case "integrate":
+      await cmdIntegrate(opts, positional);
+      break;
     case "publish":
       await cmdPublish(opts, positional);
+      break;
+    case "verdict":
+      await cmdVerdict(opts, positional);
+      break;
+    case "release":
+    case "unclaim":
+      await cmdRelease(opts, positional);
       break;
     case "assign":
       await cmdAssign(opts, positional, false);
@@ -383,6 +451,9 @@ async function main() {
     case "unlink":
       await cmdUnlink(opts, positional);
       break;
+    case "ready":
+      await cmdReady(opts);
+      break;
     case "archive":
       await cmdArchive(opts, positional);
       break;
@@ -390,11 +461,27 @@ async function main() {
     case "restore":
       await cmdUnarchive(opts, positional);
       break;
+    case "dispatch":
+      await cmdDispatch(opts, positional);
+      break;
+    case "briefing":
+      await cmdBriefing(opts, positional);
+      break;
     case "temp":
       await cmdTempCleanup(opts, positional);
       break;
     case "cleanup-temp":
       await cmdTempCleanup(opts, positional);
+      break;
+    case "native-agent":
+    case "native_agent":
+      await cmdNativeAgent(opts, positional);
+      break;
+    case "models":
+      await cmdModels(opts, positional);
+      break;
+    case "route":
+      await cmdRoute(opts, positional);
       break;
     case "board-config":
     case "board_config":
@@ -404,6 +491,9 @@ async function main() {
     case "boards":
       await cmdProjects(opts);
       break;
+    case "routing":
+      await cmdRouting(opts, positional);
+      break;
     case "archive-board":
     case "archive_board":
       await cmdArchiveBoard(opts, positional);
@@ -412,6 +502,9 @@ async function main() {
     case "unarchive_board":
     case "restore-board":
       await cmdUnarchiveBoard(opts, positional);
+      break;
+    case "merge":
+      await cmdMerge(opts, positional);
       break;
     case "dashboard":
     case "open":

@@ -83,6 +83,65 @@ async function cmdStory(opts, positional) {
       }
       return;
     }
+    case "contract": {
+      if (!idOrRef) fail("story contract: pass a story ref, e.g. sidequest story contract US-1 [--body-file path]");
+      const body = await bodyFromOpts(opts, "story contract");
+      const story = body === void 0 ? store.getStory(slug, idOrRef) : store.updateStory(slug, idOrRef, { executionContract: body });
+      if (!story) fail(`story contract: no story "${idOrRef}" in ${meta.name}`);
+      if (opts.json) {
+        process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, story }, null, 2) + "\n");
+        return;
+      }
+      if (body === void 0) {
+        console.log(`${story.ref} execution contract revision ${story.contractRevision || 0}`);
+        console.log(story.executionContract || "(no execution contract set)");
+        return;
+      }
+      console.log(`✓ ${story.ref} execution contract revision ${story.contractRevision || 0} — ${meta.name}`);
+      return;
+    }
+    case "log": {
+      if (!idOrRef) fail("story log: pass a story ref, e.g. sidequest story log US-1 [--body-file path]");
+      const entry = await bodyFromOpts(opts, "story log");
+      if (opts.clear && entry !== void 0) fail("story log: pass an entry or --clear, not both");
+      const by = workerId(opts);
+      let story;
+      if (opts.clear) {
+        if (by !== "orchestrator") fail("story log: --clear requires --by orchestrator");
+        story = store.clearStoryLog(slug, idOrRef);
+      } else if (entry === void 0) {
+        story = store.getStory(slug, idOrRef);
+      } else {
+        story = store.appendStoryLogEntry(slug, idOrRef, { entry, ref: opts.ref, by });
+      }
+      if (!story) fail(`story log: no story "${idOrRef}" in ${meta.name}`);
+      const log = store.storyDecisionLog(story, { full: opts.full });
+      const payload = {
+        ok: true,
+        project: slug,
+        projectName: meta.name,
+        story: {
+          ref: story.ref,
+          logBytes: log.bytes,
+          logCapacity: log.capacity,
+          logRevision: log.revision,
+          entries: log.entries,
+          totalEntries: log.totalEntries,
+          omittedEntries: log.omittedEntries,
+          archivedEntries: log.archivedEntries
+        }
+      };
+      if (opts.json) {
+        process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
+        return;
+      }
+      console.log(`${story.ref} decision log revision ${log.revision} (${log.entries.length} entries)`);
+      for (const item of log.entries) {
+        console.log(`- #${item.seq} ${item.kind} (${item.ref || "orchestrator"}, ${item.by}): ${item.text}`);
+      }
+      if (log.omittedEntries) console.log(`  ${log.omittedEntries} history entries omitted; pass --full for the complete history.`);
+      return;
+    }
     case "update":
     case "edit":
     case "set": {

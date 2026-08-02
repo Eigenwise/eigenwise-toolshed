@@ -5,6 +5,7 @@ const { tools: readTools } = require("./mcp-read");
 const { tools: ticketTools } = require("./mcp-tickets");
 const { tools: lifecycleTools } = require("./mcp-lifecycle");
 const { tools: collaborationTools } = require("./mcp-collaboration");
+const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 function serverVersion() {
@@ -18,7 +19,8 @@ const TOOLS = [
   ...readTools,
   ...ticketTools,
   ...lifecycleTools,
-  ...collaborationTools
+  ...collaborationTools,
+  ...routingTools
 ];
 const MCP_CLI_ONLY_TOOLS = /* @__PURE__ */ new Set([
   "native_agent",

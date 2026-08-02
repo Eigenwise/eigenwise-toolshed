@@ -5,60 +5,77 @@ const assert = require('node:assert');
 const fs = require('fs');
 const path = require('path');
 
-const skillRoot = path.join(__dirname, '..', 'skills', 'sidequest');
-const skill = fs.readFileSync(path.join(skillRoot, 'SKILL.md'), 'utf8');
-const boardFeatures = fs.readFileSync(path.join(skillRoot, 'references', 'board-features.md'), 'utf8');
+const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'SKILL.md'), 'utf8');
+const routingGuide = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'routing-guide.md'), 'utf8');
+const orchestration = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
+const ticketAuthoring = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
+const checkpointing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 'references', 'orchestrator-checkpointing.md'), 'utf8');
 
-// SKILL.md loads every session, so its size is a budget like the hook byte
-// budgets: detail belongs in references/ that load on demand.
+// SKILL.md loads into the orchestrator (the priciest model) every session, so
+// its size is a budget like the hook byte budgets: detail belongs in
+// references/ that load on demand. Raise this only with a deliberate decision.
 test('SKILL.md stays inside its session-load byte budget', () => {
   assert.ok(Buffer.byteLength(skill, 'utf8') <= 17600,
     `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 17600 — move detail into references/`);
 });
 
-// The two behaviors the board depends on, and the reason it still exists.
-test('the skill tells the agent to capture asides without asking', () => {
-  assert.match(skill, /file it and keep going/i);
-  assert.match(skill, /File it without asking/);
-  assert.match(skill, /dies with the context window/);
+test('checkpointing reference documents model limits and narrow decision triggers', () => {
+  assert.match(checkpointing, /optional `SessionStart` input field/);
+  assert.match(checkpointing, /`UserPromptSubmit` does not receive a model field/);
+  assert.match(checkpointing, /`CLAUDE_CODE_SUBAGENT_MODEL` chooses a subagent model/);
+  assert.match(checkpointing, /State your read and proceed by default/);
+  assert.match(checkpointing, /expensive to reverse/);
+  assert.match(checkpointing, /Changing a route assignment or config value that can be corrected/);
+  assert.match(checkpointing, /routine ticket/);
 });
 
-test('the skill forbids picking work off the board unprompted', () => {
-  assert.match(skill, /Do not pick work off the board on your own/);
-  assert.match(skill, /Work a ticket when the user asks for that\s+ticket/);
-  assert.match(skill, /Suggest, then wait/);
+test('workflow routing guidance uses the live recipe wiring surface', () => {
+  assert.match(skill, /call `route_recipe` or `sidequest route <category> --json`/);
+  assert.match(skill, /wire only `recipe\.agent\.model` and `recipe\.agent\.promptPrefix \+ prompt`/);
+  assert.match(skill, /Do not manually translate route, gateway, virtual-model, marker, or effort fields/);
+  assert.match(routingGuide, /Fetch it when the workflow starts/);
+  assert.match(routingGuide, /Never persist a recipe across route edits/);
+  assert.match(routingGuide, /exactly one gateway marker, unchanged/);
+  assert.match(routingGuide, /Codex effort rides only in that marker/);
+  assert.match(routingGuide, /Claude workflow effort follows the session/);
+  assert.match(routingGuide, /`route` is display and provenance data/);
+  assert.match(routingGuide, /`agent` is the caller wiring surface/);
+  assert.match(routingGuide, /authentication failure remains a spawn-time error/);
 });
 
-// The strip removed dispatch and routing. A skill that still describes them
-// would send the agent looking for commands that no longer exist.
-test('the skill carries no orchestration vocabulary', () => {
-  // One sentence names what is gone, on purpose; everything else must be clean.
-  const disclaimer = /There is no dispatch, no routing, no executors, no claims\./;
-  assert.match(skill, /It tracks work\. It does not run it\./);
-  assert.match(skill, disclaimer);
-  const body = skill.replace(disclaimer, '');
-  for (const dead of [
-    /dispatch/i, /executor/i, /\brouting\b/i, /\broute\b/i, /categor/i, /complexity/i,
-    /solo-fit/i, /fan-out/i, /\bwave\b/i, /\bclaim/i, /TaskOutput/i, /\bsubmit\b/i, /\bpulse\b/i,
-  ]) {
-    assert.doesNotMatch(body, dead, `SKILL.md still mentions ${dead}`);
-  }
+test('sidequest guidance makes changes the polling read and bans TaskOutput', () => {
+  assert.match(skill, /Agents report automatically/);
+  assert.match(skill, /Never use `TaskOutput`/);
+  assert.match(skill, /THE polling read: `changes --since`/);
+  assert.match(skill, /`pulse <ref>` for liveness/);
+  assert.match(skill, /`TaskStop` only after terminal evidence/);
 });
 
-test('the skill documents only commands the CLI still has', () => {
-  const cli = fs.readFileSync(path.join(__dirname, '..', 'src', 'bin', 'sidequest.ts'), 'utf8');
-  for (const command of ['add', 'list', 'update', 'comment', 'done', 'link', 'archive', 'rm', 'dashboard']) {
-    assert.match(skill, new RegExp(`sidequest ${command}\\b`), `SKILL.md should document ${command}`);
-    assert.match(cli, new RegExp(`case '${command}'`), `CLI should still dispatch ${command}`);
-  }
+test('ticket authoring uses directory scope for cross-cutting plugin changes', () => {
+  assert.match(skill, /references\/ticket-authoring\.md/);
+  assert.match(ticketAuthoring, /cross-cutting change inside one plugin/);
+  assert.match(ticketAuthoring, /`src\/lib`, `test`, and, where relevant, `hooks` directories/);
+  assert.match(ticketAuthoring, /file-granular scope for surgical work/);
+  assert.match(ticketAuthoring, /src\/lib\/store\.ts/);
+  assert.match(ticketAuthoring, /category-defaults\.json/,);
+  assert.match(ticketAuthoring, /mcp-tool-descriptors\.json/);
+  assert.match(ticketAuthoring, /cli-goldens\.json/);
+  assert.match(ticketAuthoring, /generated `hooks\/\*\.js`/);
+  assert.match(ticketAuthoring, /materialized profiles need a seed catch-up/);
 });
 
-test('reference files the skill points at exist and stay orchestration-free', () => {
-  for (const name of ['board-features.md', 'external-trackers.md']) {
-    assert.match(skill, new RegExp(`references/${name.replace('.', '\\.')}`));
-    assert.ok(fs.existsSync(path.join(skillRoot, 'references', name)), `${name} is missing`);
-  }
-  const listed = fs.readdirSync(path.join(skillRoot, 'references')).sort();
-  assert.deepEqual(listed, ['board-features.md', 'external-trackers.md']);
-  assert.doesNotMatch(boardFeatures, /execution contract|story log/);
+test('sidequest guidance bans proxy waiters for executors', () => {
+  assert.match(skill, /Never proxy-wait/);
+  assert.match(orchestration, /No proxy waiters/);
+  // The ban must name the side channels and preserve legitimate readiness watches.
+  assert.match(orchestration, /Bash, PowerShell,\s+`Monitor`, or cron/);
+  assert.match(orchestration, /one-shot readiness watch/);
+});
+
+test('sidequest guidance right-sizes ticket decomposition', () => {
+  assert.match(skill, /solo-fit gate/);
+  assert.match(orchestration, /Solo-fit gate before decomposition/);
+  assert.match(orchestration, /Skip an audit wave when the done-oracle is deterministic/);
+  assert.match(orchestration, /Integrate and verify by wave/);
+  assert.match(orchestration, /full suite once for the combined wave/);
 });

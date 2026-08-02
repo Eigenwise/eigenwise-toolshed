@@ -42,3 +42,36 @@ test('comment body-file stores a 5,481-character handoff whole', () => {
   const stored = cliJson(['comments', ref, '--json']).comments.at(-1);
   assert.strictEqual(stored.body, body);
 });
+
+test('done reads --body-file into its closing comment before completing', () => {
+  const ref = ticket('done body-file fixture');
+  cliJson(['claim', ref, '--by', 'body-file-worker', '--direct', '--reason', 'The body-file fixture needs a local direct claim.', '--json']);
+  const body = `Shipped abc1234 (all checks passed).\n${'x'.repeat(4100)}`;
+  const done = cliJson(['done', ref, '--by', 'body-file-worker', '--body-file', bodyFile('done.md', body), '--json']);
+  assert.strictEqual(done.ticket.status, 'done');
+  assert.match(done.advisory, /body stored in full \(4\.0 KB\); default reads excerpt bodies past 1200 chars/);
+
+  const stored = cliJson(['comments', ref, '--json']).comments.at(-1);
+  assert.strictEqual(stored.body, body);
+  assert.strictEqual(stored.by, 'body-file-worker');
+});
+
+test('done retry after a lost response returns the existing completion without duplicating its comment', () => {
+  const ref = ticket('done idempotency retry fixture');
+  const by = 'done-retry-worker';
+  const body = 'Verified `node --test` after the completion retry.';
+  cliJson(['claim', ref, '--by', by, '--direct', '--reason', 'The completion retry fixture needs a local direct claim.', '--json']);
+
+  const first = cliJson(['done', ref, '--by', by, '--body-file', bodyFile('done-retry.md', body), '--json']);
+  const retry = cliJson(['done', ref, '--by', by, '--body-file', bodyFile('done-retry.md', body), '--json']);
+  assert.strictEqual(first.idempotent, undefined);
+  assert.strictEqual(retry.ok, true);
+  assert.strictEqual(retry.idempotent, true);
+
+  const comments = cliJson(['comments', ref, '--json']).comments;
+  assert.strictEqual(comments.filter((comment?: any) => comment.body === body && comment.by === by).length, 1);
+
+  cliJson(['comment', ref, '--by', by, '--body-file', bodyFile('later-comment.md', body), '--json']);
+  const laterComments = cliJson(['comments', ref, '--json']).comments;
+  assert.strictEqual(laterComments.filter((comment?: any) => comment.body === body && comment.by === by).length, 2);
+});

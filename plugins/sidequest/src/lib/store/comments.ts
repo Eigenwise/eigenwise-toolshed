@@ -6,6 +6,8 @@ function createComments(dependencies: any) {
     getTicket,
     putTicket,
     queueEventNotification,
+    recordClaimVerification,
+    touchClaimActivity,
     withTicketLock,
   } = dependencies;
 
@@ -78,6 +80,8 @@ function addComment(slug?: any, idOrRef?: any, fields?: any) {
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment(prepared);
     t.comments.push(comment);
+    recordClaimVerification(t, comment);
+    touchClaimActivity(t, comment.by, comment.at);
     t.lastEventType = 'comment';
     t.lastEventSource = comment.source;
     t.updatedAt = comment.at;

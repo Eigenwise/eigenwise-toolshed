@@ -70,4 +70,72 @@ async function claimDuringWriteContention(ref?: any, index?: any) {
   ]);
 }
 
+test('concurrent CLI writers keep sequential refs and claim exactly once', async () => {
+  const initialized = await runCli(['list', '--json']);
+  assert.strictEqual(initialized.status, 0, `board initialization failed\\n${initialized.stderr}\\n${initialized.stdout}`);
+
+  const added = await Promise.all(Array.from({ length: WORKER_COUNT }, (_?: any, index?: any) => addTicket(index)));
+
+  assert.strictEqual(added.length, WORKER_COUNT);
+  assert.ok(added.every((entry?: any) => entry.ok === true), 'every add must report ok:true');
+
+  const listed = await runCli(['list', '--json']);
+  assert.strictEqual(listed.status, 0, `list failed\n${listed.stderr}\n${listed.stdout}`);
+  const board = parseJson(listed, 'list');
+  assert.strictEqual(board.tickets.length, WORKER_COUNT, 'parallel adds must not lose tickets');
+
+  const refs = board.tickets.map((ticket?: any) => ticket.ref);
+  assert.strictEqual(new Set(refs).size, WORKER_COUNT, 'parallel adds must not duplicate refs');
+  assert.deepStrictEqual(
+    refs.map((ref?: any) => Number.parseInt(ref.replace(/^SQ-/, ''), 10)).sort((a?: any, b?: any) => a - b),
+    Array.from({ length: WORKER_COUNT }, (_?: any, index?: any) => index + 1),
+    'parallel refs must be sequential',
+  );
+
+  const claims = await Promise.all([claimTicket('SQ-1', 'claim-race-a'), claimTicket('SQ-1', 'claim-race-b')]);
+  const winners = claims.filter(({ payload }: any) => payload.ok === true);
+  const losers = claims.filter(({ payload }: any) => payload.ok !== true);
+  assert.strictEqual(winners.length, 1, 'exactly one concurrent claimant must win');
+  assert.strictEqual(losers.length, 1, 'exactly one concurrent claimant must lose');
+  assert.strictEqual(losers[0]!.payload.reason, 'claimed', 'loser must receive the not-claimable result');
+});
+
+test('concurrent CLI claim loser waits for a contended winner commit', async () => {
+  for (let index = 0; index < 4; index += 1) {
+    const target = await addTicket(`claim contention target ${index}`);
+    const claims = await claimDuringWriteContention(target.ticket.ref, index);
+    const winners = claims.filter(({ payload }: any) => payload.ok === true);
+    const losers = claims.filter(({ payload }: any) => payload.ok !== true);
+    assert.strictEqual(winners.length, 1, `round ${index} must have one claim winner`);
+    assert.strictEqual(losers.length, 1, `round ${index} must have one claim loser`);
+    assert.strictEqual(losers[0]!.payload.reason, 'claimed', `round ${index} loser must wait for the winner result`);
+  }
+});
+
+test('concurrent done retries share one terminal comment', async () => {
+  const target = await addTicket('done race target');
+  const ref = target.ticket.ref;
+  const by = 'done-race-worker';
+  const body = 'Concurrent close evidence: `node --test` passed.';
+  const claimed = await claimTicket(ref, by);
+  assert.strictEqual(claimed.payload.ok, true);
+
+  const calls = await Promise.all([
+    runCli(['done', ref, '--by', by, '--body', body, '--json']),
+    runCli(['done', ref, '--by', by, '--body', body, '--json']),
+  ]);
+  assert.ok(
+    calls.every((result?: any) => result.status === 0),
+    `done race failed:\n${calls.map((result?: any, index?: any) => `call ${index}: status=${result.status} signal=${result.signal || 'none'}\nstdout=${result.stdout}\nstderr=${result.stderr}`).join('\n')}`,
+  );
+  const completions = calls.map((result?: any, index?: any) => parseJson(result, `done race ${index}`));
+  assert.strictEqual(completions.filter((result?: any) => result.idempotent === true).length, 1);
+  assert.strictEqual(completions.filter((result?: any) => result.idempotent !== true).length, 1);
+
+  const commentsResult = await runCli(['comments', ref, '--json']);
+  assert.strictEqual(commentsResult.status, 0, commentsResult.stderr);
+  const comments = parseJson(commentsResult, 'done race comments').comments;
+  assert.strictEqual(comments.filter((comment?: any) => comment.body === body && comment.by === by).length, 1);
+});
+
 export {};

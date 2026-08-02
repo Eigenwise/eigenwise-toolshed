@@ -149,6 +149,21 @@ test('findProject: a name shared by two registered boards is ambiguous and deman
  *  CLI wiring — bin/sidequest.js resolveProject() end to end
  * ------------------------------------------------------------------ */
 
+test('CLI: --project on list/claim never creates a namespace for an unknown name', () => {
+  const before = projectSlugsOnDisk();
+
+  const listRes = runCli(['list', '--project', 'no-such-board-xyz']);
+  assert.notStrictEqual(listRes.status, 0, 'list with an unknown --project must fail');
+  assert.match(listRes.stderr, /does not match any registered board/i);
+
+  const claimRes = runCli(['claim', 'SQ-1', '--by', 'tester', '--project', 'no-such-board-xyz']);
+  assert.notStrictEqual(claimRes.status, 0, 'claim with an unknown --project must fail');
+  assert.match(claimRes.stderr, /does not match any registered board/i);
+
+  const after = projectSlugsOnDisk();
+  assert.deepStrictEqual(after, before, 'an unknown --project must never create a phantom board directory');
+});
+
 test('CLI: unknown-name error lists the known project names', () => {
   const projAbs = path.join(FAKE_ROOT, 'known-lister');
   cliJson(['add', '-t', 'seed ticket', '--complexity', '1', '--why', 'seed a real board so the error has something to list'], { cwd: projAbs });
@@ -156,6 +171,36 @@ test('CLI: unknown-name error lists the known project names', () => {
   const res = runCli(['list', '--project', 'nope-not-registered']);
   assert.notStrictEqual(res.status, 0);
   assert.match(res.stderr, /known-lister/);
+});
+
+test('CLI: name resolves to the right board (with real tickets), case-insensitively, through list/claim/release', () => {
+  const projAbs = path.join(FAKE_ROOT, 'RoundTrip-Project');
+  const added = cliJson(
+    ['add', '-t', 'round trip ticket', '--complexity', '2', '--why', 'ticket used to prove --project name resolution round-trips cleanly', '--label', 'direct-ok'],
+    { cwd: projAbs }
+  );
+  const ref = added.ticket.ref;
+  const realSlug = added.project;
+
+  // list --project by exact display name.
+  const listByName = cliJson(['list', '--project', 'RoundTrip-Project']);
+  assert.strictEqual(listByName.project, realSlug);
+  assert.ok(listByName.tickets.some((t?: any) => t.ref === ref), 'the real ticket must be visible via name-resolved --project');
+
+  // list --project by a different case.
+  const listByCase = cliJson(['list', '--project', 'roundtrip-project']);
+  assert.strictEqual(listByCase.project, realSlug);
+
+  // claim/release round-trip through the name form.
+  const claim = cliJson(['claim', ref, '--by', 'sq86-test-worker', '--direct', '--reason', 'The resolution fixture requires a local direct claim.', '--project', 'ROUNDTRIP-PROJECT']);
+  assert.strictEqual(claim.ok, true);
+  assert.strictEqual(claim.project, realSlug);
+  assert.strictEqual(claim.ticket.status, 'doing');
+
+  const release = cliJson(['release', ref, '--by', 'sq86-test-worker', '--project', 'RoundTrip-Project', '--status', 'todo']);
+  assert.strictEqual(release.ok, true);
+  assert.strictEqual(release.ticket.status, 'todo');
+  assert.strictEqual(release.ticket.claim, null);
 });
 
 test('CLI: a duplicate display name errors demanding the path form, and the path form resolves cleanly', () => {

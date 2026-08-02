@@ -1,6 +1,6 @@
 'use strict';
 
-function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, readMeta, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
+function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }: any) {
 function defaultProjectName(absPath?: any) {
   return path.basename(path.resolve(absPath)) || 'project';
 }
@@ -249,6 +249,10 @@ function normalizeBoardName(value?: any) {
 function boardConfig(slug?: any) {
   const meta = readMeta(slug);
   if (!meta) return null;
+  const selected = projectRoutingProfile(slug);
+  if (!selected) throw new Error(`Project "${slug}" does not have a routing profile.`);
+  const layer = getProjectCategories(slug);
+  const byKind = Object.fromEntries(['ADD', 'OVERRIDE', 'DETACH', 'DISABLE'].map((kind?: any) => [kind, layer.rows.filter((row?: any) => row.kind === kind).length]));
   return {
     name: meta.name,
     alwaysInScope: Array.isArray(meta.alwaysInScope) ? normalizeAlwaysInScope(meta.alwaysInScope) : defaultAlwaysInScope(meta.path),
@@ -261,7 +265,19 @@ function boardConfig(slug?: any) {
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
     autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
-    warnings: [],
+    profile: {
+      id: selected.profile.id,
+      name: selected.profile.name,
+      revision: selected.profile.revision,
+      entryCount: routingProfileEntries(selected.profile.id).length,
+    },
+    overrides: {
+      count: layer.rows.length,
+      byKind,
+      foreignBaseCount: layer.rows.filter((row?: any) => row.baseProfileId && row.baseProfileId !== selected.profile.id).length,
+      items: layer.rows,
+    },
+    warnings: [...selected.warnings, ...layer.warnings],
   };
 }
 

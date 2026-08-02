@@ -189,10 +189,10 @@ async function compactionSuggestion(input) {
       growth ? `Transcript growth: ${byteLabel(growth)}.` : ""
     ].filter(Boolean).join(" ");
     return [
-      "sidequest: compaction checkpoint, not a stopping point. Keep working; summarization is how a long session continues.",
+      "sidequest: compaction is safe at this boundary.",
       accumulated,
-      "Safe to lose: closed-ticket screenshots, CI output, superseded tool results.",
-      "Keep: open ticket specs and board decisions. Run /compact whenever it suits."
+      "Safe to lose: completed-ticket screenshots, CI output, superseded dispatch chatter.",
+      "Keep: open ticket specs, board decisions, and pending submission details. Run /compact when ready."
     ].join("\n");
   } catch (_) {
     return null;

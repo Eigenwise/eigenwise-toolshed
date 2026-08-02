@@ -30,11 +30,51 @@ function run(payload: unknown, env: Record<string, string> = {}) {
 function createDoing(title: string): { ticket: any; story: any } {
   const story = store.createStory(slug, { title: 'Compaction policy story' });
   const ticket = store.createTicket(slug, { title, storyId: story.ref, source: 'test' });
-  // Claims went with the orchestration strip; a tracker moves status directly, and
-  // updateTicket returns the updated ticket rather than an {ok} result.
-  assert.equal(store.updateTicket(slug, ticket.ref, { status: 'doing' }).status, 'doing');
+  assert.equal(store.claimTicket(slug, ticket.ref, 'policy-executor').ok, true);
   return { ticket, story };
 }
+
+test('PreCompact pinning preserves active board identifiers within its prompt budget', () => {
+  const { ticket, story } = createDoing('Keep this active ticket intact');
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pinning-shape' });
+
+  assert.equal(result.status, 0);
+  assert.equal(result.stderr, '');
+  assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
+  assert.match(result.stdout, /^Preserve verbatim in the summary:/);
+  assert.match(result.stdout, new RegExp(ticket.ref));
+  assert.match(result.stdout, /Keep this active ticket intact/);
+  assert.match(result.stdout, /policy-executor/);
+  assert.match(result.stdout, new RegExp(story.ref));
+  assert.match(result.stdout, /Compaction policy story/);
+});
+
+test('PreCompact pinning stays within the prompt budget for crowded boards', () => {
+  for (let index = 0; index < 12; index += 1) createDoing(`Crowded active ticket ${index}: ${'detail '.repeat(60)}`);
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pinning-budget' });
+
+  assert.equal(result.status, 0);
+  assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
+  assert.match(result.stdout, /^Preserve verbatim in the summary:/);
+});
+
+test('PreCompact veto emits bounded JSON before falling back to pinning', () => {
+  const { ticket } = createDoing('Veto while this claim is fresh');
+  const payload = { hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'bounded-veto' };
+  for (let attempt = 1; attempt <= 2; attempt += 1) {
+    const result = run(payload, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
+    assert.equal(result.status, 0);
+    assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
+    const output = JSON.parse(result.stdout);
+    assert.deepEqual(output.decision, 'block');
+    assert.match(output.reason, new RegExp(ticket.ref));
+  }
+
+  const delayed = run(payload, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
+  assert.equal(delayed.status, 0);
+  assert.match(delayed.stdout, /^Preserve verbatim in the summary:/);
+  assert.ok(!delayed.stdout.includes('"decision":"block"'));
+});
 
 test('PreCompact ignores manual compaction', () => {
   const result = run({ hook_event_name: 'PreCompact', trigger: 'manual', cwd: boardPath, session_id: 'manual-compaction' }, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
@@ -54,34 +94,6 @@ test('PreCompact off stays silent and a board read failure stays non-blocking', 
   assert.equal(unavailable.status, 0);
   assert.equal(unavailable.stdout, '');
   assert.match(unavailable.stderr, /could not read board state/);
-});
-
-// 4.1.0 briefly injected a "not a stopping point" instruction here and 4.1.2 reverted it:
-// countering a Claude Code summarization behavior with prompt text was unmeasured. This
-// pins the hook to board state only, so it does not creep back without a decision.
-test('PreCompact pins board state and nothing else', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'shared', 'compaction-policy.ts'), 'utf8');
-  const body = source.replace(/^\/\/.*$/gm, '');
-  assert.doesNotMatch(body, /Summarization is how this session continues|never as a handoff/);
-});
-
-test('the Stop-hook suggestion never reads as permission to finish', () => {
-  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'shared', 'compaction.ts'), 'utf8');
-  assert.match(source, /compaction checkpoint, not a stopping point/);
-  assert.match(source, /Keep working; summarization is how a long session continues/);
-  // The strip removed dispatch and submissions; the message outlived them.
-  for (const dead of [/dispatch chatter/, /pending submission/]) {
-    assert.doesNotMatch(source, dead, 'compaction message still carries orchestration vocabulary');
-  }
-});
-
-// The strip left createDoing orphaned, so nothing covered the pin path it exists for.
-test('PreCompact pins doing tickets into the summary', () => {
-  const { ticket } = createDoing('Pinned through compaction');
-  const out = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pin' }).stdout;
-  assert.match(out, /Preserve verbatim in the summary:/);
-  assert.ok(out.includes(ticket.ref), `expected ${ticket.ref} in the pin block`);
-  assert.ok(out.includes('Pinned through compaction'), 'expected the ticket title in the pin block');
 });
 
 test('PreCompact registers without a matcher', () => {

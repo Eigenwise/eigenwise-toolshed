@@ -2,6 +2,7 @@
 function createStories(dependencies) {
   const {
     autoStoryColor,
+    claimReclaimable,
     crypto,
     database,
     deleteCachedRow,
@@ -156,7 +157,7 @@ function createStories(dependencies) {
       if (requestedRef) {
         const ticket = getTicket(slug, requestedRef);
         ticketRef = ticket ? ticket.ref : requestedRef;
-        if (!ticket || ticket.storyId !== story.id) {
+        if (!ticket || ticket.storyId !== story.id || !ticket.claim || ticket.claim.by !== by || claimReclaimable(ticket)) {
           throw new Error(storyLogClaimRefusal(story, ticketRef, by));
         }
       }
@@ -205,7 +206,7 @@ function createStories(dependencies) {
   function markStoryContractDrift(slug, story, fromRevision, changedAt) {
     const toRevision = Number(story && story.contractRevision) || 0;
     for (const ticket of listTickets(slug)) {
-      if (ticket.storyId !== story.id) continue;
+      if (ticket.storyId !== story.id || !ticket.claim || !ticket.claim.by || claimReclaimable(ticket)) continue;
       ticket.storyContractDrift = {
         storyRef: story.ref,
         fromRevision: Number(fromRevision) || 0,
