@@ -527,16 +527,28 @@ async function cmdSubmit(opts, positional) {
     reportClaimFailure("submit", idOrRef, res, meta);
   }
 }
+function abbreviatedSessionId(value) {
+  const id = String(value || "").trim();
+  return id.length > 8 ? `${id.slice(0, 8)}...` : id;
+}
+function publishLockRefusal(holder, by, runtimeSessionId) {
+  const lockSessionId = String(holder?.sessionId || "").trim();
+  const callerSessionId = String(runtimeSessionId || "").trim();
+  if (holder?.by === by && lockSessionId && callerSessionId && lockSessionId !== callerSessionId) {
+    return `integrate: publish lock session ${abbreviatedSessionId(lockSessionId)} does not match this session ${abbreviatedSessionId(callerSessionId)}; re-acquire the lock from this session (publish lock --by ${by}).`;
+  }
+  return `integrate: publish lock is held by ${holder?.by || lockSessionId || "another session"}; acquire or re-acquire it before delivery.`;
+}
 async function cmdIntegrate(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("integrate: pass a ticket id or ref, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.");
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const publish = require("../lib/publish");
+  const runtimeSessionId = sessionId(opts);
   const lock = await publish.publishLockStatus(meta.path);
-  if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionId(opts))) {
-    const holder = lock.holder || {};
-    fail(`integrate: publish lock is held by ${holder.by || holder.sessionId || "another session"}; acquire or re-acquire it before delivery.`);
+  if (lock.locked && !publish.publishLockOwnedBySession(meta.path, runtimeSessionId)) {
+    fail(publishLockRefusal(lock.holder, by, runtimeSessionId));
   }
   let target;
   try {
