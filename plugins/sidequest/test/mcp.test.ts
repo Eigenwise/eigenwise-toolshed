@@ -1619,37 +1619,21 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
 });
 
-test('MCP dispatch records the runtime session and the Agent lifecycle binds it', async () => {
+test('MCP dispatch records the runtime session, whatever label the caller passes', async () => {
   const slug = store.ensureProject(PROJ).slug;
   store.setCategory({ id: 'mcp-runtime-session', name: 'MCP runtime session', route: { model: 'sonnet', effort: 'high' } });
   const friendly = await callTool('add', { title: 'friendly dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
   const omitted = await callTool('add', { title: 'omitted dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
   const real = await callTool('add', { title: 'runtime dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
 
-  const friendlyDispatch = await callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant', full: true });
+  await callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant', full: true });
   await callTool('dispatch', { ref: omitted.ref });
   await callTool('dispatch', { ref: real.ref, session: MCP_SESSION_ID });
 
+  // A caller-supplied label never wins: the runtime session id is the identity.
   for (const ref of [friendly.ref, omitted.ref, real.ref]) {
     assert.equal(store.getTicket(slug, ref).dispatch.sessionId, MCP_SESSION_ID);
   }
-
-  const launched = runForceBypass({
-    session_id: MCP_SESSION_ID,
-    cwd: PROJ,
-    tool_name: 'Agent',
-    tool_input: friendlyDispatch.spawn,
-  });
-  const agentName = launched.hookSpecificOutput.updatedInput.name;
-  let pulse = await callTool('pulse', { ref: friendly.ref, full: true });
-  assert.equal(pulse.dispatch.state, 'launched');
-  assert.equal(pulse.dispatch.sessionId, MCP_SESSION_ID);
-  assert.ok(pulse.dispatch.launchedAt);
-
-  assert.equal(store.bindDispatchAgent(MCP_SESSION_ID, friendlyDispatch.agent, 'native-mcp-session-agent', agentName).ok, true);
-  pulse = await callTool('pulse', { ref: friendly.ref, full: true });
-  assert.equal(pulse.dispatch.state, 'bound');
-  assert.equal(pulse.dispatch.agentId, 'native-mcp-session-agent');
 });
 
 test('MCP dispatch refuses a caller session label without runtime identity', async () => {

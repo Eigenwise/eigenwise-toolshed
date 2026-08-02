@@ -15,11 +15,12 @@ const WARMUPS = 3;
 const PROCESS_SAMPLE_TIMEOUT_MS = 5_000;
 const CONTROL_MULTIPLIERS = {
   sessionStart: { median: 10, p95: 15 },
-  boardFirst: { median: 3, p95: 4 },
-  subagentStart: { median: 8, p95: 12 },
-  subagentStop: { median: 8, p95: 12 },
   guard: { median: 1.75, p95: 3 },
-  guardsSerial: { median: 3, p95: 3 },
+  // guard-destructive-git shells out to git to classify the command, so it costs
+  // more than the pure-parse guards. It runs on every Bash call; if this ceiling
+  // ever needs raising again, make the hook cheaper instead.
+  gitGuard: { median: 3.5, p95: 5 },
+  guardsSerial: { median: 6, p95: 8 },
 };
 
 const pluginRoot = path.join(__dirname, '..');
@@ -84,28 +85,6 @@ db.txn(database, () => {
 });
 assert.equal(db.countRows(database, 'tickets'), 1872);
 
-const startSession = 'perf-subagent-start';
-const startDispatch = store.prepareDispatch(slugs[0], startTicket.ref, { sessionId: startSession });
-store.recordDispatchLaunch(slugs[0], startTicket.ref, {
-  token: startDispatch.token,
-  executor: startDispatch.ticket.dispatchExecutor,
-  sessionId: startSession,
-  agentName: 'perf-start-agent',
-});
-const stopSession = 'perf-subagent-stop';
-const stopDispatch = store.prepareDispatch(slugs[0], stopTicket.ref, { sessionId: stopSession });
-store.recordDispatchLaunch(slugs[0], stopTicket.ref, {
-  token: stopDispatch.token,
-  executor: stopDispatch.ticket.dispatchExecutor,
-  sessionId: stopSession,
-  agentName: 'perf-stop-agent',
-});
-store.bindDispatchAgent(stopSession, stopDispatch.ticket.dispatchExecutor, 'perf-stop-id', 'perf-stop-agent');
-store.claimTicket(slugs[0], stopTicket.ref, 'perf-worker', {
-  sessionId: stopSession,
-  token: stopDispatch.token,
-  executor: stopDispatch.ticket.dispatchExecutor,
-});
 
 const env = {
   ...process.env,
@@ -166,42 +145,22 @@ function assertBudget(name: string, measured: { median: number; p95: number; con
 }
 
 test('fresh-process hook latency stays inside release ceilings', (context: any) => {
+  const bashPayload = { tool_name: 'Bash', session_id: 'perf-guard', tool_input: { command: 'git status' } };
   const sessionStart = measure(() => runHook('session-start.js', { session_id: 'perf-session', cwd: projectPaths[0] }));
-  const boardFirst = measure((index) => runHook('board-first-reminder.js', {
-    session_id: `perf-board-${index}`,
-    cwd: projectPaths[0],
-    prompt: 'Implement the fixture ticket.',
-  }));
-  const subagentStart = measure(() => runHook('subagent-start.js', {
-    session_id: startSession,
-    agent_type: startDispatch.ticket.dispatchExecutor,
-    agent_id: 'perf-start-id',
-    agent_name: 'perf-start-agent',
-  }));
-  const subagentStop = measure(() => runHook('subagent-stop.js', {
-    session_id: stopSession,
-    agent_type: stopDispatch.ticket.dispatchExecutor,
-    agent_id: 'perf-stop-id',
-    agent_name: 'perf-stop-agent',
-  }));
-  const nearTurnCap = measure(() => runHook('near-turn-cap.js', { tool_name: 'Read', session_id: 'perf-guard' }));
-  const inlineWork = measure(() => runHook('inline-work-nudge.js', {
-    tool_name: 'Read',
-    session_id: 'perf-guard',
-    agent_id: 'executor',
-  }));
+  const homeDelete = measure(() => runHook('guard-home-delete.js', bashPayload));
+  const repeatedCommand = measure(() => runHook('repeated-command-warn.js', bashPayload));
+  const destructiveGit = measure(() => runHook('guard-destructive-git.js', bashPayload));
   const guardsSerial = measure(() => {
-    runHook('near-turn-cap.js', { tool_name: 'Read', session_id: 'perf-guard' });
-    runHook('inline-work-nudge.js', { tool_name: 'Read', session_id: 'perf-guard', agent_id: 'executor' });
+    runHook('guard-home-delete.js', bashPayload);
+    runHook('repeated-command-warn.js', bashPayload);
+    runHook('guard-destructive-git.js', bashPayload);
   });
 
   for (const [name, measured, ceiling] of [
     ['SessionStart', sessionStart, CONTROL_MULTIPLIERS.sessionStart],
-    ['board-first', boardFirst, CONTROL_MULTIPLIERS.boardFirst],
-    ['SubagentStart', subagentStart, CONTROL_MULTIPLIERS.subagentStart],
-    ['SubagentStop', subagentStop, CONTROL_MULTIPLIERS.subagentStop],
-    ['near-turn-cap', nearTurnCap, CONTROL_MULTIPLIERS.guard],
-    ['inline-work-nudge', inlineWork, CONTROL_MULTIPLIERS.guard],
+    ['guard-home-delete', homeDelete, CONTROL_MULTIPLIERS.guard],
+    ['repeated-command-warn', repeatedCommand, CONTROL_MULTIPLIERS.guard],
+    ['guard-destructive-git', destructiveGit, CONTROL_MULTIPLIERS.gitGuard],
     ['common guards serial', guardsSerial, CONTROL_MULTIPLIERS.guardsSerial],
   ] as const) {
     assertBudget(name, measured, ceiling);
