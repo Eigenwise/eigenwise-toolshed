@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.338.0 (2026-08-02)
+
+### sidequest 4.1.0 → 4.1.1
+
+#### Fixes
+
+- Repair the MCP tools the orchestration strip broke (SQ-1272) [`0bf43ab`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0bf43ab6)
+  done, plan and groomClose all threw on first call because their handlers still reached for deleted lib modules through an untyped require(); plan is removed, the other two repaired, and a surface test now exercises every advertised tool.
+
 ## v3.337.0 (2026-08-02)
 
 ### sidequest 4.0.0 → 4.1.0
