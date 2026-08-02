@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.341.0 (2026-08-02)
+
+### sidequest 4.2.0 → 4.3.0
+
+#### Features
+
+- Express read-only executors as a deny list (SQ-1279) [`085c5ac`](https://github.com/Eigenwise/eigenwise-toolshed/commit/085c5ac6)
+  The allow list named all 54 board tools to exclude three writers, hid every later-added tool, and blocked Playwright from visual-review. Injected frontmatter 7,616 -> 2,188 tokens.
+
 ## v3.340.0 (2026-08-02)
 
 ### sidequest 4.1.2 → 4.2.0
