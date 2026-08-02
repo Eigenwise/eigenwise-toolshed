@@ -29,12 +29,13 @@ Eigenwise Toolshed is a Claude Code plugin marketplace. Start with these four st
    /workbench:init-workspace
    ```
 
-Step 4 installs and configures the other Toolshed plugins for that project. You do not need to install six plugins by hand.
+Step 4 installs and configures the other Toolshed plugins for that project. You do not need to install them by hand.
 
 Use these scopes when you install or configure plugins:
 
 - Workbench is user-scoped because you want the workspace manager in every project.
 - Model Gateway is required and user-scoped because its wiring is global.
+- Observability is user-scoped because its observer is one process per machine.
 - Every other plugin is project-scoped so its configuration travels with the repository.
 
 Claude Code only loads a plugin at the reload boundary, so run `/reload-plugins` after installing or updating one.
@@ -51,4 +52,4 @@ It walks through project-side configuration, then writes the `.claude/` files th
 
 Install `codebase-mapper` when you want a maintained map of the codebase, and `live-rules` when rules should be injected as prompts and edits happen. Live Rules stores new rules as individual Markdown files; after changing one, its `add-rule` or `manage-rules` skill runs the plugin-owned sync command to regenerate the hash manifest. When Sidequest is also installed and ready for bounded map artifacts, codebase-mapper tracks existing-project mapping there and leaves the generated map in the working tree for review.
 
-For local usage data, opt in separately with `/workbench:enable-project-telemetry`. See [observability](./observability/) before enabling it.
+For local usage data, install the Observability plugin and opt in separately with `/observability:enable-project-telemetry`. See [observability](./observability/) before enabling it.

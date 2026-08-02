@@ -36,11 +36,12 @@ This README is a signpost. The guides are over there.
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | The one user-scope install for workspace setup, Toolshed updates, health checks, retrospectives, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, `/workbench-doctor`, and `/retro`. |
+| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | The one user-scope install, and the front door to the rest of the shed: workspace setup, Toolshed updates, health checks, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, and `/workbench-doctor`. |
+| [**observability**](https://eigenwise.github.io/eigenwise-toolshed/observability/) | Local, metadata-only telemetry: a loopback observer writing to SQLite on your machine, an optional statusline for live context and usage, and an OpenTelemetry Collector that can forward redacted signals to Grafana. Off until you opt a repository in. |
 | [**model-gateway**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) | Puts ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker through a local gateway. |
 | [**sidequest**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
 | [**codebase-mapper**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
-| [**skill-retro**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/skill-retro/) | Mines recent Claude Code transcripts for repeated work and routes each finding to a durable fix. |
+| [**playbook**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/playbook/) | Practice skills for fanning out across parallel agents and verifying without burning the clock, plus retros that mine your transcripts for work you keep redoing. |
 | [**live-rules**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 
 *More tools will move into the shed over time.*
@@ -69,7 +70,7 @@ Workbench is the workspace manager, so install it once at user scope and use it 
 |--------------|------------|
 | **Workbench: user** | It manages every workspace. A second project-scoped copy loads its hooks twice, and `init-workspace` requires the user-scope install. |
 | **Model Gateway: user, required** | Its wiring is global-only and writes `~/.claude/settings.json`. Its keepalive hook must be live in every project and every executor worktree. There is no project-scoped wiring anymore. |
-| **Everything else: project** | Sidequest, codebase-mapper, live-rules, and skill-retro keep their config with the repo. `init-workspace` installs them for you. |
+| **Everything else: project** | Sidequest, codebase-mapper, live-rules, and playbook keep their config with the repo. `init-workspace` installs them for you. |
 
 <details>
 <summary>Installing by hand instead</summary>
@@ -80,7 +81,7 @@ Workbench is the workspace manager, so install it once at user scope and use it 
 /plugin install model-gateway@eigenwise-toolshed --scope user
 /plugin install sidequest@eigenwise-toolshed
 /plugin install codebase-mapper@eigenwise-toolshed
-/plugin install skill-retro@eigenwise-toolshed
+/plugin install playbook@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
 ```
 

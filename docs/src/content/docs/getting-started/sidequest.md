@@ -151,7 +151,7 @@ Sidequest hooks cover prompt reminders, tool preflight, failed-agent quota recov
 
 The CLI includes ticket, story, profile, category, routing, readiness, claim, checkpoint, dispatch, native-agent, commit, submit, integrate, done, release, grooming, verdict, scope-request, reconciliation, comments, plans, links, assignments, reminders, archive, board, dashboard, and server commands. Operational commands include `claims sweep`, `worktrees sweep`, `recover-shared`, and `publish lock|unlock|status|queue`.
 
-The main settings are `SIDEQUEST_HOME` (central SQLite store), `SIDEQUEST_AGENTS_DIR` (executor directory), `SIDEQUEST_PORT` (dashboard port), `SIDEQUEST_CLAIM_IDLE_MIN` and `SIDEQUEST_CLAIM_ABANDON_MIN` (activity backstops), legacy `SIDEQUEST_CLAIM_TTL_MIN`, `SIDEQUEST_NUDGE`, and `SIDEQUEST_COMPACTION_POLICY`. When Workbench observability is enabled, Sidequest sends lifecycle metadata only, never ticket text, comments, prompts, attachments, tokens, credentials, or errors.
+The main settings are `SIDEQUEST_HOME` (central SQLite store), `SIDEQUEST_AGENTS_DIR` (executor directory), `SIDEQUEST_PORT` (dashboard port), `SIDEQUEST_CLAIM_IDLE_MIN` and `SIDEQUEST_CLAIM_ABANDON_MIN` (activity backstops), legacy `SIDEQUEST_CLAIM_TTL_MIN`, `SIDEQUEST_NUDGE`, and `SIDEQUEST_COMPACTION_POLICY`. When the Observability plugin is enabled, Sidequest sends lifecycle metadata only, never ticket text, comments, prompts, attachments, tokens, credentials, or errors.
 
 ## Work a ticket
 

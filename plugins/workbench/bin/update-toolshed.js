@@ -5,9 +5,9 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
-const { ensureStatuslineShim, statuslineCommand } = require('./setup-observability.js');
 
 const GATEWAY_MARKETPLACE = 'eigenwise-toolshed';
+const OBSERVABILITY_PLUGIN = 'observability@eigenwise-toolshed';
 const LEGACY_GATEWAY_PLUGIN = `codex-gateway@${GATEWAY_MARKETPLACE}`;
 const MODEL_GATEWAY_PLUGIN = `model-gateway@${GATEWAY_MARKETPLACE}`;
 const UPDATE_SCOPES = new Set(['user', 'project', 'local']);
@@ -160,8 +160,30 @@ function healStatuslineFile(filePath, fallbackStatusLine, command, dryRun) {
   return { filePath, ...result };
 }
 
+// The statusline belongs to the observability plugin. Resolve its setup module from
+// the install registry rather than importing it, so Workbench keeps working for the
+// people who never installed observability.
+function observabilitySetup(home) {
+  const registryPath = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+  let registry;
+  try { registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')); } catch { return null; }
+  const installs = registry?.plugins?.[OBSERVABILITY_PLUGIN];
+  if (!Array.isArray(installs)) return null;
+  for (const install of installs) {
+    if (!install?.installPath) continue;
+    const script = path.join(install.installPath, 'bin', 'setup-observability.js');
+    if (fs.existsSync(script)) {
+      try { return require(script); } catch { return null; }
+    }
+  }
+  return null;
+}
+
 function healStaleStatuslines(instances, options = {}) {
   const home = options.home || os.homedir();
+  const setup = options.observabilitySetup || observabilitySetup(home);
+  if (!setup) return [];
+  const { ensureStatuslineShim, statuslineCommand } = setup;
   const command = statuslineCommand(home);
   const userSettingsPath = path.join(home, '.claude', 'settings.json');
   const user = healStatuslineFile(userSettingsPath, null, command, options.dryRun);

@@ -20,6 +20,12 @@ The gateway rows are named after the model they run, with the `claude-` prefix C
 
 The Codex path depends on `claude-code-proxy` on purpose, because OpenAI gates non-Codex clients by request fingerprint. Grok does not use the proxy.
 
+### Choosing between the models
+
+The [Playbook](./playbook/) plugin's `/playbook:pick-model` skill describes what each reachable
+model is good at, including the Codex and Grok models this gateway adds, so a model gets suggested
+with a stated reason rather than picked by habit.
+
 ### Codex readiness and recovery
 
 The gateway exposes one Codex readiness contract that `ensure`, `doctor`, and Sidequest read. `GET /healthz` includes a `codexReadiness` object, and the model catalog includes the same readiness projection under its top-level `codexReadiness` field. Both expose `ready`, `state`, `message`, `checks`, and `upstreamBlocked`. The CLI `doctor` command prints the same state as `Codex readiness: <state>` and includes the recovery message when it is not ready.
@@ -63,11 +69,13 @@ The gateway uses one supervisor and reports both installed and serving versions.
 
 ### Add Grok subscription models
 
-Install the official Grok CLI and run `grok` once to sign in with your SuperGrok subscription. Model Gateway reads that CLI login from `~/.grok/auth.json`, refreshes it when needed, and adds `claude-grok-*` rows such as `claude-grok-4.5`, `claude-grok-build`, and `claude-grok-4.1-fast` to `/model`. No xAI API key is needed. If `doctor` reports Grok auth missing or refresh fails, run `grok` and log in again. Update the Grok CLI if it reports an outdated version header.
+Install the official Grok CLI and run `grok` once to sign in with your SuperGrok subscription. Model Gateway reads that CLI login from `~/.grok/auth.json`, refreshes it when needed, and adds `claude-grok-*` rows to `/model`. No xAI API key is needed. If `doctor` reports Grok auth missing or refresh fails, run `grok` and log in again. Update the Grok CLI if it reports an outdated version header.
+
+Which Grok models are actually served comes from the CLI's own model cache (`~/.grok/models_cache.json`), which is authoritative over the ids listed here or in the plugin's built-in list. As of August 2026 the cache serves `grok-4.5` alone, and `grok-build` is that same model running inside xAI's agentic coding harness rather than separate weights. xAI retires `grok-4.1-fast` on 2026-08-15, after which the id stops resolving.
 
 A Sidequest-routed agent keeps its resolved Codex route through compaction. A child agent can inherit that route only when Claude Code supplies same-session parent lineage; unrelated markerless agents stay rejected. Route logs label these requests `dispatch-inherited` with the parent agent ID and never include prompt content.
 
-Model Gateway records each session's largest forwarded request body locally. Workbench shows that real request-body peak in its status line and warns at 24MB of the 32MB limit. It no longer estimates size from the Claude Code transcript, so old compactions and transcript length cannot trigger a false warning.
+Model Gateway records each session's largest forwarded request body locally. The Observability plugin shows that real request-body peak in its status line and warns at 24MB of the 32MB limit. It no longer estimates size from the Claude Code transcript, so old compactions and transcript length cannot trigger a false warning.
 
 `Request too large (max 32MB)` normally means the raw HTTP body hit Claude Code's byte limit. Model Gateway also returns HTTP 413 to ask Claude Code to compact a Codex context before its model limit. Read the error details: `Prompt is too long for the Codex context window; compact and retry. (<actual> tokens > <trigger> tokens)` identifies the token-based gateway signal. It is separate from the 32MB body cap, so reduce the task's context or start a fresh, tighter-scoped agent instead of removing parent-session attachments.
 

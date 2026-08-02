@@ -42,7 +42,9 @@ any Toolshed plugins. Split the project setup at its reload boundary:
 
 Read `references/stack-plugins.md` before the plugin picker and `references/rule-templates.md` before
 Phase 1; read `references/self-improvement.md` and `references/structure-notes.md` when you reach those
-steps. The `enable-project-telemetry` skill owns telemetry mechanics and verification.
+steps. The Observability plugin's `enable-project-telemetry` skill owns telemetry mechanics, setup, and
+verification, including its own reference doc and command paths. This skill never runs observability
+commands directly, because they live under a different plugin root.
 
 ## Before Phase 0 — Toolshed setup
 
@@ -75,10 +77,11 @@ token totals; tool-call names and counts; plus model, session, agent, and activi
 prompt or response text, code or file contents, tool inputs or results, credentials, or environment values. This
 helps you inspect local usage and cost without exposing project content."**
 
-- **Yes:** hand off to `/workbench:enable-project-telemetry`; it owns consent confirmation, setup, and
-  verification. After it finishes, stop. Tell the user to restart Claude Code because its OTEL settings only
-  apply to a new session, then re-run `/workbench:init-workspace`. Do not assess the project or ask the
-  plugin question first.
+- **Yes:** install the Observability plugin at user scope if it is not already installed
+  (`/plugin install observability@eigenwise-toolshed --scope user`, then one reload), and hand off to
+  `/observability:enable-project-telemetry`; it owns consent confirmation, setup, and verification. After it
+  finishes, stop. Tell the user to restart Claude Code because its OTEL settings only apply to a new session,
+  then re-run `/workbench:init-workspace`. Do not assess the project or ask the plugin question first.
 - **No:** continue immediately to the project-intent question. Do not ask again during this run.
 
 A telemetry restart also satisfies a pending plugin reload boundary. On re-entry, detect the completed
@@ -423,14 +426,10 @@ Now the plugins are live. First run `claude plugin list --json` and confirm ever
 installed, enabled, and at its requested scope. Then do the work that needed them and verify each piece
 empirically — this is the part that separates "wrote some files" from "set up a working workspace."
 
-1. **Telemetry.** When the project opted in, run:
-
-   ```sh
-   node "${CLAUDE_PLUGIN_ROOT}/bin/verify-project-telemetry.js" --project "<absolute-current-project-dir>"
-   ```
-
+1. **Telemetry.** When the project opted in, invoke `/observability:enable-project-telemetry` and let it
+   re-verify. It owns the verification command, which lives under its own plugin root.
    `found` verifies telemetry. With a healthy observer, `not-found` means **configured, pending first export**.
-   Report it as unverified and give the user that exact command to run later. Do not schedule another re-check.
+   Report it as unverified and give the user that skill to run later. Do not schedule another re-check.
 2. **Codebase map** (skip for a not-a-codebase project). Invoke `map-codebase`. For a big repo it
    fans out; with a ready Sidequest it can hand off an existing-code map and resume on the writer's
    completion. Wait for that completion before Phase 4 continues, then confirm
@@ -464,7 +463,7 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 - Give a practical handover using only the tools that were selected and verified. Tell them they can say
   "build/add/implement ..." or run `/sidequest:feature` for feature work when Sidequest is enabled; run
   `/codebase-mapper:update-codebase-map` after structural code changes when a map exists; ask to "add a live
-  rule for ..." or run `/live-rules:add-rule` for a new project rule; and run `/workbench:retro` for a deeper
+  rule for ..." or run `/live-rules:add-rule` for a new project rule; and run `/playbook:retro` for a deeper
   workspace reflection. Also name `/workbench:workbench-doctor` for health checks and
   `/workbench:update-toolshed` for updates. Keep this as a short next-actions list, not another inventory.
 - **Commit reminder.** If the project is a git repo, tell them to commit `.claude/` so the team and

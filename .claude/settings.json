@@ -13,6 +13,6 @@
     "sidequest@eigenwise-toolshed": true,
     "svelte@svelte": true,
     "codebase-mapper@eigenwise-toolshed": true,
-    "skill-retro@eigenwise-toolshed": true
+    "playbook@eigenwise-toolshed": true
   }
 }

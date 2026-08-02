@@ -3,7 +3,7 @@ title: Workbench setup
 description: Set up and maintain a Claude Code workspace with Workbench.
 ---
 
-Workbench handles workspace setup, plugin updates, local health checks, observability setup, and retrospectives. It is the only plugin you install by hand before anything else.
+Workbench handles workspace setup, plugin updates, and local health checks. It is the only plugin you install by hand before anything else, and it is the entry point to the rest of the marketplace. Telemetry and the statusline moved to [Observability](/eigenwise-toolshed/observability/setup/); retrospectives and working practice moved to [Playbook](/eigenwise-toolshed/getting-started/playbook/).
 
 Install it for your user account:
 
@@ -17,7 +17,7 @@ Reload Claude Code after installing. From a project directory, run `/workbench:i
 
 1. Setup starts with telemetry consent before it inspects the project.
 2. It enables Claude Code agent teams in that project's `.claude/settings.local.json`, preserving any existing project environment keys.
-3. If you opt in, Workbench configures and verifies local telemetry, then stops so you can restart Claude Code and run `/workbench:init-workspace` again; the completed telemetry setup is remembered on re-entry.
+3. If you opt in, it installs the Observability plugin, configures and verifies local telemetry, then stops so you can restart Claude Code and run `/workbench:init-workspace` again; the completed telemetry setup is remembered on re-entry. See [Observability setup](/eigenwise-toolshed/observability/setup/) for what that plugin does.
 4. If you decline, it asks what the project is for, then shows a recommendation-bearing plugin picker built from the current Toolshed marketplace catalog.
 5. With Sidequest selected, it also asks you to confirm a routing profile and whether dispatched executors should use isolated git worktrees (the default) or always share the checkout. Shared checkout is for outputs that must appear there or projects where parallel worktrees have caused trouble, and the chosen setting is saved to the board config.
 6. It assesses the project, interviews you about the setup, installs the selected plugins, and writes the `.claude/` configuration, including live rules.
@@ -39,17 +39,15 @@ Workbench writes the policy to the project's `.claude/settings.local.json` and p
 
 At session start, Workbench can tell you when the loaded Workbench version is behind the installed version. Run `/reload-plugins` to pick up the installed version, or restart Claude Code if reload does not work. It can also report Toolshed updates available from its cached marketplace data. That cached signal is not a live network check: run `/update-toolshed`, then `/reload-plugins` to refresh the plugins and load them in the current session.
 
-## Hook lifecycle and observability details
+## Hooks and bundled commands
 
-Workbench hooks are fail-open and short-lived. `SessionStart` runs freshness, billing-path, and metadata observation checks; `SessionEnd`, `Stop`, `SubagentStart`, and `SubagentStop` record lifecycle metadata. `UserPromptSubmit` checks plugin freshness, `PreToolUse` records tool metadata and runs the request-body high-water preflight for `Agent` and `Task`, and `PostToolUse` records completion metadata. The hooks never store prompts, responses, code, tool inputs or results, credentials, or environment values.
+Workbench hooks are fail-open and short-lived. `SessionStart` runs the freshness and billing-path checks; `UserPromptSubmit` checks plugin freshness. Workbench records nothing itself. The lifecycle observation hooks belong to the [Observability](/eigenwise-toolshed/observability/setup/) plugin, and installing that plugin is what turns them on.
 
-The bundled commands live under the plugin's `bin/` directory. `update-toolshed --check` is read-only, `install-workspace-plugins --check` inventories a plan, `project-telemetry` enables or disables a repository, `verify-project-telemetry --audit` explains missing attribution, `setup-observability --check` inspects sinks and ports, `install-otel-collector` writes a Collector config, `workbench-observer` runs the canonical observer, `token-usage-report` reads the local SQLite report, and `workbench-statusline` provides the optional statusline shim. The observer and Collector are managed locally by a detached ensure worker, which adopts healthy listeners, heals managed version drift, and stays a no-op without consent.
+The bundled commands live under the plugin's `bin/` directory: `update-toolshed --check` is read-only, and `install-workspace-plugins --check` inventories a plan without mutating anything.
 
-Supported telemetry sinks are `grafana-lgtm`, `otlp`, `posthog`, and `none`. SQLite remains the source of truth. Grafana and generic OTLP receive redacted signals through the Collector; PostHog emits content-free events and requires an explicit HTTPS regional host, `phc_` key, and remote-egress consent; `none` keeps local SQLite and reports only. Remote OTLP also requires HTTPS. The request high-water guard reads the gateway's real per-session peak and warns near the 32 MB body limit before an executor starts.
+`/workbench:workbench-doctor` is the read-only health check. It covers updater state, session freshness, Sidequest board mappings, and agent-teams masking, and it adds observer, collector, registry, and statusline checks when the Observability plugin is installed.
 
-## Observability stack
-
-The statusline shim is installed by the setup flow when selected. It reports the current context and usage path while the observer records metadata counts. Use `/workbench:workbench-doctor` when the dashboard is empty or the statusline says the local service is unavailable.
+## Updates
 
 Use `/workbench:update-toolshed` to refresh installed Toolshed plugins and the gateway proxy. It leaves third-party marketplaces and plugins alone, then tells you which affected Toolshed sessions to reload.
 

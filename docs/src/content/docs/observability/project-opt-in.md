@@ -3,10 +3,10 @@ title: Per-project opt-in
 description: Enable local telemetry only for the projects where it helps.
 ---
 
-Telemetry is off until a project opts in. From anywhere inside that project, run:
+Telemetry is off until a project opts in. Install the [Observability plugin](../setup/) first, then from anywhere inside that project, run:
 
 ```text
-/workbench:enable-project-telemetry
+/observability:enable-project-telemetry
 ```
 
 The skill asks for consent before changing anything. It writes only the repository's private project settings, then prepares the loopback observer and Collector, records the project in the local registry, and checks whether metrics arrive. Model Gateway wiring is global: one `env --write-user` block reaches every project and executor worktree. The registry lets the global dashboard group data by project without copying project files anywhere.

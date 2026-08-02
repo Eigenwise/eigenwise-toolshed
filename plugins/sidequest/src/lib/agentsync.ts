@@ -208,7 +208,7 @@ const READ_ONLY_BOARD_TOOLS = [
 const READ_ONLY_TOOLS = [
   'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'ToolSearch', 'SendMessage', ...READ_ONLY_BOARD_TOOLS,
 ];
-const EXECUTOR_SKILLS = ['sidequest:verify-discipline'];
+const EXECUTOR_SKILLS = ['playbook:verify-discipline'];
 
 function resolveReadOnlyTools(readOnlyDeniedTools?: any) {
   return {

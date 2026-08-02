@@ -20,10 +20,22 @@ Then run the same read-only session health audit used at startup:
 node -e "const { audit } = require(process.env.CLAUDE_PLUGIN_ROOT + '/hooks/session-start-freshness.js'); const result = audit(); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings }, null, 2));"
 ```
 
-Then read the consent/config record and report the managed observability health. This command is read-only and uses the configured ports/container:
+## Observability, when that plugin is installed
+
+Telemetry lives in the separate Observability plugin. Its files are under a different plugin root, so resolve
+that root first and skip this whole section when the plugin is absent:
 
 ```sh
-node "${CLAUDE_PLUGIN_ROOT}/lib/observability/ensure.js" --health
+node -e "const fs=require('node:fs'),os=require('node:os'),path=require('node:path');const reg=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.claude','plugins','installed_plugins.json'),'utf8'));const installs=reg?.plugins?.['observability@eigenwise-toolshed']||[];const hit=installs.map(i=>i?.installPath).filter(Boolean).find(p=>fs.existsSync(path.join(p,'bin','setup-observability.js')));console.log(hit||'');"
+```
+
+An empty result means observability is not installed. Say so in one line and move on. Otherwise use that path
+as `<OBS_ROOT>` in the commands below.
+
+Read the consent/config record and report the managed observability health. This command is read-only and uses the configured ports/container:
+
+```sh
+node "<OBS_ROOT>/lib/observability/ensure.js" --health
 ```
 
 If it reports `configured: false`, observability was never consented to and needs no repair. If it reports `enabled: false`, say it is deliberately disabled. For an enabled record, report observer health, Collector listening state, selected sink, configured ports, and dashboard/Docker state. Treat a listening observer with a failed `/health` response as unhealthy, and a configured dashboard without Docker as optional/unavailable rather than a pipeline failure.
@@ -34,7 +46,7 @@ directory the session started in. A project with observer events and no native s
 half-wired, and its dashboard reads empty rather than broken. This command is read-only:
 
 ```sh
-node "${CLAUDE_PLUGIN_ROOT}/bin/verify-project-telemetry.js" --audit --project "<absolute-current-project-dir>"
+node "<OBS_ROOT>/bin/verify-project-telemetry.js" --audit --project "<absolute-current-project-dir>"
 ```
 
 Report every `UNWIRED` session directory by name, every `half-wired:` line, and the printed `fix:` command
@@ -42,21 +54,23 @@ verbatim, adding that each affected session has to restart before its metrics ap
 means Grafana was unreachable or unconfigured, so say the check could not run instead of calling it healthy. A
 `not opted in:` line is a hint, not a fault: those project names never opted in.
 
-Then check whether a project-level `env` block masks the global agent-teams setting. This is read-only and prints nothing when the project has no `env` block or already enables teams:
+Then run the local report too:
+
+```sh
+node "<OBS_ROOT>/bin/token-usage-report.js" --format json
+```
+
+From the JSON report, call out outbox queue depth/capacity, drops, schema drops, telemetry conflicts, sessions missing `SessionEnd`, and the newest event/source. The SessionStart ensure hook repairs stopped managed processes on the next startup/resume; if immediate repair is requested, rerun `/observability:enable-project-telemetry` and keep the current observability choices.
+
+## Agent teams
+
+Check whether a project-level `env` block masks the global agent-teams setting. This is read-only and prints nothing when the project has no `env` block or already enables teams:
 
 ```sh
 node -e "const { agentTeamsWarning } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/project-settings.js'); const warning = agentTeamsWarning(process.cwd()); if (warning) console.log(warning);"
 ```
 
 If it prints a warning, report it with the one-line remedy verbatim. Do not fix it from the doctor.
-
-Then run the local report too:
-
-```sh
-node "${CLAUDE_PLUGIN_ROOT}/bin/token-usage-report.js" --format json
-```
-
-From the JSON report, call out outbox queue depth/capacity, drops, schema drops, telemetry conflicts, sessions missing `SessionEnd`, and the newest event/source. The SessionStart ensure hook repairs stopped managed processes on the next startup/resume; if immediate repair is requested, rerun `/init-workspace` and keep the current observability choices.
 
 Report all results together. Explain each concrete problem and give the smallest next step. This skill does
 not update, install, uninstall, reload, or edit anything. If freshness is proven stale, tell the user to run

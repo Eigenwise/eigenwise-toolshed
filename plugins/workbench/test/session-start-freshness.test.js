@@ -409,3 +409,14 @@ test('limits update notices to one plugin', () => {
 
   assert.equal(output.systemMessage, 'Toolshed update available (cached): alpha 1.0.0 → 1.1.0 — /update-toolshed, then /reload-plugins.');
 });
+
+test('hooks.json registers the freshness hooks and nothing observability owns', () => {
+  const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
+  const commandsFor = (event) => (hooks[event] || []).flatMap((group) => group.hooks.map((h) => h.command)).join(' ');
+  assert.ok(commandsFor('SessionStart').includes('session-start-freshness.js'));
+  assert.ok(commandsFor('SessionStart').includes('billing-path-check.js'));
+  assert.ok(commandsFor('UserPromptSubmit').includes('user-prompt-freshness.js'));
+  const all = Object.keys(hooks).map(commandsFor).join(' ');
+  assert.ok(!all.includes('observability'), 'observability hooks belong to the observability plugin');
+  assert.ok(!all.includes('request-body-preflight'), 'the request-body preflight belongs to the observability plugin');
+});

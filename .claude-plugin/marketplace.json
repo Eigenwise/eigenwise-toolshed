@@ -10,7 +10,7 @@
     {
       "name": "workbench",
       "source": "./plugins/workbench",
-      "description": "Set up and maintain a Claude Code workspace: initialize project-side configuration, check and update Toolshed plugins, diagnose local health, and run retrospectives.",
+      "description": "Set up and maintain a Claude Code workspace, and the front door to the rest of the Toolshed: initialize project-side configuration, install and update plugins, diagnose local health, and wire up local observability.",
       "version": "0.76.1",
       "author": {
         "name": "Eigenwise"
@@ -24,7 +24,30 @@
         "setup",
         "maintenance",
         "health",
-        "retro"
+        "observability"
+      ]
+    },
+    {
+      "name": "observability",
+      "source": "./plugins/observability",
+      "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Prompts, responses, code, tool inputs and results, credentials, and environment values are never stored. Every sink beyond local SQLite is opt-in.",
+      "version": "0.1.0",
+      "author": {
+        "name": "Eigenwise"
+      },
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/observability",
+      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+      "license": "MIT",
+      "category": "productivity",
+      "keywords": [
+        "observability",
+        "telemetry",
+        "opentelemetry",
+        "grafana",
+        "statusline",
+        "metrics",
+        "tokens",
+        "cost"
       ]
     },
     {
@@ -98,25 +121,26 @@
       ]
     },
     {
-      "name": "skill-retro",
-      "source": "./plugins/skill-retro",
-      "description": "Mines recent Claude Code transcripts, including subagent transcripts, for work that keeps getting redone, then routes each finding to the cheapest durable fix: a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or a ticket. Sessions run to tens of megabytes, so a bundled miner streams them and emits bounded aggregates instead of loading transcripts into context.",
+      "name": "playbook",
+      "source": "./plugins/playbook",
+      "description": "How to work with Claude Code, and how to notice what should become permanent. Ships practice skills for running parallel agents in worktrees, suggesting the right model for a task, and verifying without burning the clock, a session retro, and a transcript miner that finds work you keep redoing and routes each finding to the cheapest durable fix: a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or a ticket. Sessions run to tens of megabytes, so the miner streams them and emits bounded aggregates instead of loading transcripts into context.",
       "version": "0.3.2",
       "author": {
         "name": "Eigenwise"
       },
-      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/skill-retro",
+      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/playbook",
       "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
       "license": "MIT",
       "category": "productivity",
       "keywords": [
+        "practice",
         "retrospective",
+        "subagents",
+        "worktrees",
+        "parallel",
         "transcripts",
         "self-improvement",
-        "skills",
-        "automation",
-        "subagents",
-        "observability"
+        "skills"
       ]
     },
     {

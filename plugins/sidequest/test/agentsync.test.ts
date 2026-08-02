@@ -450,7 +450,7 @@ test('stable executors preload verify discipline and the install hash tracks the
     'sidequest-exec-readonly-high.md',
   ]) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /^skills:\n  - sidequest:verify-discipline$/m);
+    assert.match(body, /^skills:\n  - playbook:verify-discipline$/m);
   }
 
   assert.notEqual(

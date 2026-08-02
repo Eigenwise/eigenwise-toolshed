@@ -27,7 +27,7 @@ Plugin test suites import this helper with a relative path. Current consumers in
 
 - `plugins/model-gateway/test/windows-hide.test.js`
 - `plugins/sidequest/test/windows-hide.test.ts`
-- `plugins/skill-retro/test/verify.test.js`
+- `plugins/playbook/test/verify.test.js`
 - `plugins/workbench/test/windows-hide.test.js`
 
 It exists to keep the Windows process-visibility policy in one test utility. It is not part of any plugin's

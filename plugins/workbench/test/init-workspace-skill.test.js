@@ -9,8 +9,6 @@ const root = path.join(__dirname, '..');
 const skill = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'SKILL.md'), 'utf8');
 const catalog = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'stack-plugins.md'), 'utf8');
 const readme = fs.readFileSync(path.join(root, 'README.md'), 'utf8');
-const telemetrySkill = fs.readFileSync(path.join(root, 'skills', 'enable-project-telemetry', 'SKILL.md'), 'utf8');
-const observability = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'observability.md'), 'utf8');
 const ruleTemplates = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'rule-templates.md'), 'utf8');
 const selfImprovement = fs.readFileSync(path.join(root, 'skills', 'init-workspace', 'references', 'self-improvement.md'), 'utf8');
 const doctorSkill = fs.readFileSync(path.join(root, 'skills', 'workbench-doctor', 'SKILL.md'), 'utf8');
@@ -83,7 +81,7 @@ test('init-workspace offers Git before writing greenfield workspace artifacts', 
 });
 
 test('Workbench skills hand off global gateway wiring to the installed gateway skill', () => {
-  for (const document of [skill, telemetrySkill]) {
+  for (const document of [skill]) {
     assert.match(document, /invoke\s+`\/model-gateway:model-gateway` and use its `env --write-user` command/);
     assert.match(document, /installed plugin command\s+is not on PATH/);
     assert.doesNotMatch(document, /`codex-gateway env --/);
@@ -93,7 +91,6 @@ test('Workbench skills hand off global gateway wiring to the installed gateway s
     assert.doesNotMatch(document, /ask exactly once/);
   }
   assert.match(skill, /wiring is global-only, so there is no per-project gateway\s+choice to make/);
-  assert.match(telemetrySkill, /wiring is global and has no mode to choose, so do not ask about it/);
 });
 
 test('init-workspace starts with telemetry consent, project intent, then the live plugin picker', () => {
@@ -129,10 +126,10 @@ test('init-workspace rechecks pending telemetry once in Phase 4', () => {
   assert.ok(phaseFour >= 0 && telemetryCheck > phaseFour);
   assert.match(skill, /A healthy-observer `not-found` means telemetry is\n\*\*configured, pending first export\*\*, never verified/);
   assert.match(skill, /schedules exactly one re-check in Phase 4 after real session usage exists/);
-  assert.match(skill, /verify-project-telemetry\.js" --project "<absolute-current-project-dir>"/);
-  assert.match(skill, /Report it as unverified and give the user that exact command to run later/);
+  assert.match(skill, /invoke `\/observability:enable-project-telemetry` and let it\n   re-verify/);
+  assert.match(skill, /Report it as unverified and give the user that skill to run later/);
   assert.match(skill, /Do not schedule another re-check/);
-  assert.strictEqual((skill.match(/verify-project-telemetry\.js/g) || []).length, 1);
+  assert.strictEqual((skill.match(/verify-project-telemetry\.js/g) || []).length, 0);
 });
 
 test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', () => {
@@ -181,14 +178,6 @@ test('Workbench README describes the install-one-plugin bootstrap', () => {
   assert.match(readme, /one bootstrap entrypoint/);
   assert.match(readme, /installs the selected plugins at project scope by default/);
   assert.match(readme, /verifies every selected plugin works/);
-});
-
-test('observability retention guidance matches the store', () => {
-  for (const document of [readme, observability]) {
-    assert.match(document, /stays until (?:you|the user) deletes? it/);
-    assert.doesNotMatch(document, /retained for 30 days|retained for 365 days|under 24 hours|age-prune/);
-  }
-  assert.match(observability, /--delete-data/);
 });
 
 test('init-workspace proposes a routing profile from repository signals', () => {

@@ -142,7 +142,7 @@ const READ_ONLY_TOOLS = [
   "SendMessage",
   ...READ_ONLY_BOARD_TOOLS
 ];
-const EXECUTOR_SKILLS = ["sidequest:verify-discipline"];
+const EXECUTOR_SKILLS = ["playbook:verify-discipline"];
 function resolveReadOnlyTools(readOnlyDeniedTools) {
   return {
     tools: READ_ONLY_TOOLS,

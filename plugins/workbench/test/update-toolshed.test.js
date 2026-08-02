@@ -422,11 +422,9 @@ test('heals stale Workbench status line pins after updating', () => {
     const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const settingsFile = path.join(home, '.claude', 'settings.json');
     fs.mkdirSync(path.dirname(registryFile), { recursive: true });
-    const workbenchCache = path.join(home, 'cache', 'workbench', '0.30.0');
-    fs.mkdirSync(path.join(workbenchCache, 'bin'), { recursive: true });
-    fs.writeFileSync(path.join(workbenchCache, 'bin', 'workbench-statusline.js'), 'module.exports = { main() {} };');
+    const observabilityRoot = path.resolve(__dirname, '..', '..', 'observability');
     const configuredRegistry = structuredClone(registry);
-    configuredRegistry.plugins['workbench@eigenwise-toolshed'] = [{ scope: 'user', version: '0.30.0', installPath: workbenchCache }];
+    configuredRegistry.plugins['observability@eigenwise-toolshed'] = [{ scope: 'user', version: '0.30.0', installPath: observabilityRoot }];
     fs.writeFileSync(registryFile, JSON.stringify(configuredRegistry));
     fs.writeFileSync(settingsFile, JSON.stringify({
       statusLine: { type: 'command', command: 'node "C:/Users/example/.claude/plugins/cache/eigenwise-toolshed/workbench/0.20.0/bin/workbench-statusline.js"' },
@@ -502,4 +500,30 @@ test('parses check and dry-run options and rejects the retired wiring-mode flag'
     confirmSessionsClosed: true,
   });
   assert.throws(() => parseArgs(['--wiring-mode', 'global']), /--wiring-mode was removed: model gateway wiring is global only/);
+});
+
+test('skips statusline healing when the observability plugin is not installed', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-no-observability-'));
+  try {
+    const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+    const settingsFile = path.join(home, '.claude', 'settings.json');
+    fs.mkdirSync(path.dirname(registryFile), { recursive: true });
+    fs.writeFileSync(registryFile, JSON.stringify(registry));
+    const stale = 'node "C:/Users/example/.claude/plugins/cache/eigenwise-toolshed/workbench/0.20.0/bin/workbench-statusline.js"';
+    fs.writeFileSync(settingsFile, JSON.stringify({ statusLine: { type: 'command', command: stale } }));
+
+    const result = runUpdate({
+      home,
+      registryFile,
+      options: { claude: 'claude', dryRun: false, check: false },
+      run: () => ({ ok: true }),
+      report: () => {},
+    });
+
+    assert.deepEqual(result.healedStatuslines, []);
+    assert.equal(JSON.parse(fs.readFileSync(settingsFile, 'utf8')).statusLine.command, stale);
+    assert.ok(!fs.existsSync(path.join(home, '.claude', 'workbench-statusline.js')));
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
 });

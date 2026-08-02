@@ -1,15 +1,10 @@
 {
-  "description": "workbench: report local freshness health, block proven stale prompts, and capture metadata-only lifecycle observations",
+  "description": "workbench: report local freshness health and block proven stale prompts",
   "hooks": {
     "SessionStart": [
       {
         "matcher": "startup|resume",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/lib/observability/ensure.js\" --launch",
-            "timeout": 1
-          },
           {
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-freshness.js\"",
@@ -21,26 +16,6 @@
             "timeout": 5
           }
         ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
       }
     ],
     "UserPromptSubmit": [
@@ -50,82 +25,6 @@
             "type": "command",
             "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js\"",
             "timeout": 2
-          }
-        ]
-      },
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "PreToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
-      },
-      {
-        "matcher": "Agent|Task",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/request-body-preflight.js\"",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "*",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "Stop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "SubagentStart": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
-          }
-        ]
-      }
-    ],
-    "SubagentStop": [
-      {
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/observability.js\"",
-            "timeout": 3
           }
         ]
       }
