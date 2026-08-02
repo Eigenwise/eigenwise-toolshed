@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.343.0 (2026-08-02)
+
+### codebase-mapper 2.12.1 → 2.12.2
+
+#### Fixes
+
+- Subagents never update the codebase map (SQ-1259) [`2e6ee7a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2e6ee7a4)
+  The mapper's SubagentStart hook was injecting the main session's update-the-map instruction into executors; subagents now get an explicit prohibition and hand-back, and the executor template carries the same rule.
+
+### sidequest 4.4.0 → 4.4.1
+
+#### Fixes
+
+- Subagents never update the codebase map (SQ-1259) [`2e6ee7a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2e6ee7a4)
+  The mapper's SubagentStart hook was injecting the main session's update-the-map instruction into executors; subagents now get an explicit prohibition and hand-back, and the executor template carries the same rule.
+
 ## v3.342.0 (2026-08-02)
 
 ### sidequest 4.3.0 → 4.4.0
