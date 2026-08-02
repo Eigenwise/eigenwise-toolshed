@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.337.0 (2026-08-02)
+
+### sidequest 4.0.0 → 4.1.0
+
+#### Features
+
+- Stop compaction summaries reading as a stop signal (SQ-1276) [`4895997`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4895997a)
+  PreCompact always emits a continuity instruction so a summary cannot record context pressure as a decision or handoff; the Stop-hook suggestion now says checkpoint, not stopping point.
+
 ## v3.336.0 (2026-08-02)
 
 ### sidequest 3.56.1 → 4.0.0
