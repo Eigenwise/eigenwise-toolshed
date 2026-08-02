@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.336.0 (2026-08-02)
+
+### sidequest 3.56.1 → 4.0.0
+
+#### Breaking changes
+
+- Sidequest orchestration is removed; the board is a tracker (SQ-1271) [`a1306b2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/a1306b219af661aac0d8658cc0b011d019947870)
+  Dispatch, routing, categories, executors, claims, submissions, scope enforcement, and worktree management are gone. 25,682 source lines to 10,107; 55 MCP tools to 16; 13 hook events to 5. The board still captures, tracks, links, and closes tickets, and Claude no longer picks work off it unprompted. Fan-out and model-selection guidance moved to the playbook plugin. Staying on orchestration means staying on 3.335.0.
+
+### workbench 0.77.0 → 0.78.0
+
+#### Features
+
+- Sidequest orchestration is removed; the board is a tracker (SQ-1271) [`a1306b2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/a1306b219af661aac0d8658cc0b011d019947870)
+  Dispatch, routing, categories, executors, claims, submissions, scope enforcement, and worktree management are gone. 25,682 source lines to 10,107; 55 MCP tools to 16; 13 hook events to 5. The board still captures, tracks, links, and closes tickets, and Claude no longer picks work off it unprompted. Fan-out and model-selection guidance moved to the playbook plugin. Staying on orchestration means staying on 3.335.0.
+
 ## v3.335.0 (2026-08-02)
 
 ### model-gateway 0.46.3 → 0.46.4
