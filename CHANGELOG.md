@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.342.0 (2026-08-02)
+
+### sidequest 4.3.0 → 4.4.0
+
+#### Features
+
+- Collapse the Codex dispatch executors to two (SQ-1281) [`f451be4`](https://github.com/Eigenwise/eigenwise-toolshed/commit/f451be4b)
+  Model and effort both ride the dispatch route marker, so the per-effort Codex defs carried dead frontmatter. 12 definitions and 1,280 injected tokens, from 27 and 8,402. Legacy names still classify so old dispatch records heal by redispatch.
+
 ## v3.341.0 (2026-08-02)
 
 ### sidequest 4.2.0 → 4.3.0
