@@ -1,6 +1,3 @@
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
 import { runtimeModule } from './paths.js';
 
 const MAX_INSTRUCTION_BYTES = 1500;
@@ -9,43 +6,10 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   listTickets: (slug: string) => any[];
-  getStory: (slug: string, id: string) => any;
-  worktreeGcTickets: () => Array<{ project?: string; ref?: string; claimLive?: boolean }>;
 }
 
-interface CounterState {
-  blocks: number;
-}
-
-function policy(): 'off' | 'pin' | 'veto' {
-  const value = String(process.env.SIDEQUEST_COMPACTION_POLICY || '').trim().toLowerCase();
-  if (value === 'off') return 'off';
-  return value === 'veto' ? 'veto' : 'pin';
-}
-
-function stateFile(sessionId: string): string {
-  const home = String(process.env.SIDEQUEST_HOME || '').trim() || path.join(os.homedir(), '.claude', 'sidequest');
-  return path.join(home, 'compaction-policy', `${encodeURIComponent(sessionId)}.json`);
-}
-
-function readCounter(sessionId: string): CounterState {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(stateFile(sessionId), 'utf8')) as CounterState;
-    return { blocks: Number.isInteger(parsed.blocks) && parsed.blocks > 0 ? parsed.blocks : 0 };
-  } catch (_) {
-    return { blocks: 0 };
-  }
-}
-
-function writeCounter(sessionId: string, blocks: number): void {
-  if (!sessionId) return;
-  try {
-    const file = stateFile(sessionId);
-    fs.mkdirSync(path.dirname(file), { recursive: true });
-    fs.writeFileSync(file, JSON.stringify({ blocks }));
-  } catch (error) {
-    console.error(`sidequest: could not persist compaction veto counter: ${String(error)}`);
-  }
+function policy(): 'off' | 'pin' {
+  return String(process.env.SIDEQUEST_COMPACTION_POLICY || '').trim().toLowerCase() === 'off' ? 'off' : 'pin';
 }
 
 function compactText(value: unknown, limit: number): string {
@@ -54,14 +18,7 @@ function compactText(value: unknown, limit: number): string {
 }
 
 function ticketLine(ticket: any): string {
-  const claim = ticket?.claim || {};
-  const dispatch = ticket?.dispatch || {};
-  const details = claim.by ? [
-    `claim ${compactText(claim.by, 100)}`,
-    dispatch.executor || ticket?.dispatchExecutor ? `executor ${compactText(dispatch.executor || ticket.dispatchExecutor, 100)}` : '',
-    dispatch.token || ticket?.dispatchToken ? `dispatch token ${compactText(dispatch.token || ticket.dispatchToken, 160)}` : '',
-  ].filter(Boolean).join('; ') : '';
-  return `- ${compactText(ticket?.ref, 40)} — ${compactText(ticket?.title, 220)}${details ? ` (${details})` : ''}`;
+  return `- ${compactText(ticket?.ref, 40)} — ${compactText(ticket?.title, 220)}`;
 }
 
 function boundedInstruction(lines: string[]): string {
@@ -78,57 +35,19 @@ function boundedInstruction(lines: string[]): string {
   return kept.length > 1 ? kept.join('\n') : '';
 }
 
-async function boardState(cwd: string): Promise<{ instruction: string; unsafeReason: string } | null> {
+function boardState(cwd: string): string {
   const store = require(runtimeModule('store')) as Store;
   const found = store.findProject(store.nearestRepoRoot(cwd));
-  if (!found.ok || !found.slug || !found.meta?.path) return null;
-
-  const tickets = store.listTickets(found.slug);
-  const liveRefs = new Set(store.worktreeGcTickets()
-    .filter((ticket) => ticket.project === found.slug && ticket.claimLive && ticket.ref)
-    .map((ticket) => String(ticket.ref)));
-  const doing = tickets.filter((ticket) => ticket?.status === 'doing');
-  const fresh = doing.filter((ticket) => liveRefs.has(String(ticket.ref)));
-  const publish = require(runtimeModule('publish')) as { publishLockStatus: (repoPath: string) => Promise<{ locked?: boolean; holder?: any }> };
-  const lock = await publish.publishLockStatus(found.meta.path);
-  const storyIds = [...new Set(doing.map((ticket) => String(ticket?.storyId || '')).filter(Boolean))];
-  const stories = storyIds.map((id) => store.getStory(found.slug!, id)).filter(Boolean);
-  const lines = [
-    ...doing.map(ticketLine),
-    ...(lock.locked ? [`Publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || JSON.stringify(lock.holder || 'held'), 260)}`] : []),
-    ...stories.map((story) => `Active story: ${compactText(story.ref, 40)} — ${compactText(story.title, 220)}`),
-  ];
-  if (!lines.length) return null;
-  const freshRefs = compactText(fresh.map((ticket) => String(ticket.ref)).join(', '), 300);
-  const unsafe = [
-    fresh.length ? `fresh claims: ${freshRefs}` : '',
-    lock.locked ? `publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || 'held', 180)}` : '',
-  ].filter(Boolean).join('; ');
-  return { instruction: boundedInstruction(lines), unsafeReason: unsafe };
+  if (!found.ok || !found.slug) return '';
+  const doing = store.listTickets(found.slug).filter((ticket) => ticket?.status === 'doing');
+  return doing.length ? boundedInstruction(doing.map(ticketLine)) : '';
 }
 
-export async function compactionPolicyOutput(input: Record<string, unknown>): Promise<string> {
+export function compactionPolicyOutput(input: Record<string, unknown>): string {
   if (input.hook_event_name !== 'PreCompact' || input.trigger !== 'auto') return '';
-  const mode = policy();
-  if (mode === 'off') return '';
-  const sessionId = String(input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || '').trim();
+  if (policy() === 'off') return '';
   try {
-    const state = await boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
-    if (!state) {
-      writeCounter(sessionId, 0);
-      return '';
-    }
-    if (mode !== 'veto' || !state.unsafeReason) {
-      writeCounter(sessionId, 0);
-      return state.instruction;
-    }
-    const counter = readCounter(sessionId);
-    if (counter.blocks >= 2) {
-      writeCounter(sessionId, 0);
-      return state.instruction;
-    }
-    writeCounter(sessionId, counter.blocks + 1);
-    return JSON.stringify({ decision: 'block', reason: `sidequest compaction delayed: ${state.unsafeReason}` });
+    return boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
   } catch (error) {
     console.error(`sidequest: compaction policy could not read board state: ${String(error)}`);
     return '';

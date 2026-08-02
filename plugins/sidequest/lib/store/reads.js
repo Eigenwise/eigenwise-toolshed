@@ -1,24 +1,12 @@
 "use strict";
 function createReads(dependencies) {
   const {
-    checkpointProjection,
-    claimIdleMs,
-    claimReclaimable,
-    classifierCategories,
-    contractMetadata,
     countTickets,
     database,
     db,
     openBlockers,
     openBlockersFromIndex,
-    oracleProjection,
-    pendingSubmission,
-    queryTickets,
-    readyTickets,
-    readyWaveDependencies,
-    readyWaves,
-    routeDescriptor,
-    submissionReadiness
+    queryTickets
   } = dependencies;
   function briefTicket(slug, t, opts) {
     opts = opts || {};
@@ -31,23 +19,9 @@ function createReads(dependencies) {
       title: t.title,
       status: t.status,
       priority: t.priority,
-      complexity: t.complexity || null,
-      categoryId: t.categoryId || t.category && t.category.id || null,
-      categoryName: t.category && t.category.name || null,
-      route: routeDescriptor(t.model, t.effort),
-      effort: t.effort || null,
-      readonlyOverride: t.readonlyOverride === false ? false : null,
-      direct: t.directClaim || null,
-      ...opts.includeScope ? {
-        files: Array.isArray(t.files) ? t.files : [],
-        contracts: contractMetadata(t)
-      } : {},
-      claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: claimReclaimable(t) } : null,
+      ...opts.includeScope ? { files: Array.isArray(t.files) ? t.files : [] } : {},
       blockedBy,
-      comments: Array.isArray(t.comments) ? t.comments.length : 0,
-      checkpoint: checkpointProjection(t),
-      ...oracleProjection(t) ? { oracle: oracleProjection(t) } : {},
-      submission: pendingSubmission(t) ? { commit: t.submission.commit, at: t.submission.at, readiness: submissionReadiness(t.submission) } : null
+      comments: Array.isArray(t.comments) ? t.comments.length : 0
     };
   }
   function decodeListCursor(cursor) {
@@ -106,30 +80,17 @@ function createReads(dependencies) {
         tickets: tickets2,
         total,
         returned,
-        nextCursor: nextOffset < total ? String(nextOffset) : null,
-        claimIdleMs: claimIdleMs(),
-        categories: classifierCategories({ project })
+        nextCursor: nextOffset < total ? String(nextOffset) : null
       };
     }
     let tickets = queryTickets(project, filter);
     if (opts.brief) tickets = tickets.map((ticket) => briefTicket(project, ticket, { index }));
     const page = pageTickets(tickets, paging);
-    page.claimIdleMs = claimIdleMs();
-    page.categories = classifierCategories({ project });
     return page;
-  }
-  function readyPayload(slug, opts) {
-    opts = opts || {};
-    let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
-    const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave) => wave.map((t) => t.ref));
-    const waveDependencies = readyWaveDependencies(slug, { model: opts.model, category: opts.category });
-    if (opts.brief) tickets = tickets.map((t) => briefTicket(slug, t, { blockedBy: [], includeScope: true }));
-    return { tickets, waves, waveDependencies, claimIdleMs: claimIdleMs(), categories: classifierCategories({ project: slug }) };
   }
   return {
     briefTicket,
-    listPayload,
-    readyPayload
+    listPayload
   };
 }
 module.exports = { createReads };

@@ -1,24 +1,7 @@
 'use strict';
 
 function createPulse(dependencies: any) {
-  const {
-    boardConfig,
-    checkpointProjection,
-    claimPulse,
-    claimReleaseVerdict,
-    claimVerification,
-    dispatchState,
-    execFileSync,
-    getTicket,
-    listTickets,
-    normalizeRoute,
-    oracleProjection,
-    pulseDispatchState,
-    readMeta,
-    storyContractDriftWarnings,
-    storyDecisionLogWarnings,
-    submissionProjection,
-  } = dependencies;
+  const { listTickets } = dependencies;
 
   function boundedExcerpt(value?: any, maxChars = 1200) {
     const text = String(value || '');
@@ -77,86 +60,6 @@ function createPulse(dependencies: any) {
     };
   }
 
-  function gitPulse(projectPath?: any, files?: any) {
-    if (!projectPath || !Array.isArray(files) || !files.length) return null;
-    try {
-      const git = (args?: any) => execFileSync('git', args, {
-        cwd: projectPath,
-        encoding: 'utf8',
-        stdio: ['ignore', 'pipe', 'ignore'],
-        windowsHide: true,
-      }).trim();
-      if (git(['rev-parse', '--is-inside-work-tree']) !== 'true') return null;
-      const commit = git(['log', '-1', '--format=%H%x1f%s%x1f%cI', '--', ...files]);
-      const [hash, subject, at] = commit ? commit.split('\x1f') : [];
-      const changed = git(['status', '--porcelain', '--', ...files]);
-      return { commit: hash ? { hash, subject, at } : null, dirty: Boolean(changed) };
-    } catch (_: any) {
-      return null;
-    }
-  }
-
-  function claimActivityPulse(ticket?: any, git?: any) {
-    const claim = ticket && ticket.claim;
-    if (!claim || !claim.by || claimReleaseVerdict(ticket)) return { working: false, lastActivityAt: null };
-    const activity = [claim.at];
-    for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
-      if (comment && comment.by === claim.by) activity.push(comment.at);
-    }
-    if (git && git.commit && git.commit.at) activity.push(git.commit.at);
-    const timestamps = activity
-      .filter((at?: any) => Number.isFinite(Date.parse(at)))
-      .sort((a?: any, b?: any) => Date.parse(b) - Date.parse(a));
-    return { working: true, lastActivityAt: timestamps[0] || null };
-  }
-
-  function pulsePayload(slug?: any, idOrRef?: any) {
-    const ticket = getTicket(slug, idOrRef);
-    if (!ticket) return null;
-    const meta = readMeta(slug);
-    const git = gitPulse(meta && meta.path, ticket.files);
-    const activity = claimActivityPulse(ticket, git);
-    const dispatch = dispatchState(ticket);
-    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
-    return {
-      ref: ticket.ref,
-      title: ticket.title,
-      status: ticket.status,
-      direct: ticket.directClaim || null,
-      claim: claimPulse(ticket, Date.now()),
-      working: activity.working,
-      lastActivityAt: activity.lastActivityAt,
-      comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
-      lastComment: lastCommentPulse(ticket),
-      dispatchExecutor: ticket.dispatchExecutor || null,
-      dispatch: dispatch ? {
-        state: pulseDispatchState(dispatch),
-        sessionId: dispatch.sessionId || null,
-        tokenPrefix: dispatch.tokenPrefix || null,
-        executor: dispatch.executor || null,
-        route: normalizeRoute(dispatch.route),
-        recovery: dispatch.recovery || null,
-        attempts: Array.isArray(dispatch.attempts) ? dispatch.attempts : [],
-        agentId: dispatch.agentId || null,
-        agentName: dispatch.agentName || null,
-        preparedAt: dispatch.preparedAt || null,
-        launchedAt: dispatch.launchedAt || null,
-        boundAt: dispatch.boundAt || null,
-        claimedAt: dispatch.claimedAt || null,
-        terminalAt: dispatch.terminalAt || null,
-        terminalSource: dispatch.terminalSource || null,
-        outcome: dispatch.outcome || null,
-        failureShape: dispatch.failureShape || null,
-      } : null,
-      checkpoint: checkpointProjection(ticket),
-      ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
-      ...(warnings.length ? { warnings } : {}),
-      submission: submissionProjection(ticket.submission),
-      delivery: boardConfig(slug)?.delivery || 'merge',
-      git,
-    };
-  }
-
   function changesPayload(slug?: any, since?: any) {
     const serverTime = new Date().toISOString();
     const nowMs = Date.parse(serverTime);
@@ -166,14 +69,12 @@ function createPulse(dependencies: any) {
     if (!Number.isFinite(afterMs)) throw new Error('changes: --since must be an ISO timestamp.');
     const changedAt = (ticket?: any) => {
       const updatedMs = Date.parse(ticket.updatedAt);
-      const expiresMs = Date.parse(ticket.checkpoint && ticket.checkpoint.expiresAt);
-      return Number.isFinite(expiresMs) && expiresMs <= nowMs ? Math.max(updatedMs, expiresMs) : updatedMs;
+      return updatedMs;
     };
     const tickets = listTickets(slug)
       .filter((ticket?: any) => changedAt(ticket) > afterMs)
       .sort((a?: any, b?: any) => changedAt(a) - changedAt(b))
       .map((ticket?: any) => {
-        const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
         return {
           ref: ticket.ref,
           title: ticket.title,
@@ -181,10 +82,6 @@ function createPulse(dependencies: any) {
           lastEventType: ticket.lastEventType || null,
           lastEventSource: ticket.lastEventSource || null,
           lastComment: latestCommentExcerpt(ticket),
-          claim: claimPulse(ticket, nowMs),
-          checkpoint: checkpointProjection(ticket, nowMs),
-          ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
-          ...(warnings.length ? { warnings } : {}),
           updatedAt: ticket.updatedAt,
         };
       });
@@ -195,7 +92,6 @@ function createPulse(dependencies: any) {
     boundedExcerpt,
     changesPayload,
     commentHistory,
-    pulsePayload,
   };
 }
 

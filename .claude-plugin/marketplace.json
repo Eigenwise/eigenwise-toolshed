@@ -76,7 +76,7 @@
     {
       "name": "sidequest",
       "source": "./plugins/sidequest",
-      "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
+      "description": "A local Kanban board for the side jobs that appear mid-task. You mention a bug while Claude is doing something else, it files a ticket, and the idea outlives the context window. It tracks work; it does not run it: no dispatch, no routing, no executors. A live, self-hosted dashboard spans every project you work in, and everything stays on your machine.",
       "version": "3.56.1",
       "author": {
         "name": "Eigenwise"
@@ -93,7 +93,6 @@
         "issues",
         "todo",
         "dashboard",
-        "hooks",
         "capture"
       ]
     },

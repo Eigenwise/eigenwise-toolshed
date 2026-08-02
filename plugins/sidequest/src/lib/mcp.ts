@@ -28,7 +28,6 @@ const { tools: readTools } = require('./mcp-read');
 const { tools: ticketTools } = require('./mcp-tickets');
 const { tools: lifecycleTools } = require('./mcp-lifecycle');
 const { tools: collaborationTools } = require('./mcp-collaboration');
-const { tools: routingTools } = require('./mcp-routing');
 
 type ToolDefinition = {
   name: string;
@@ -55,7 +54,6 @@ const TOOLS: ToolDefinition[] = [
   ...ticketTools,
   ...lifecycleTools,
   ...collaborationTools,
-  ...routingTools,
 ];
 
 

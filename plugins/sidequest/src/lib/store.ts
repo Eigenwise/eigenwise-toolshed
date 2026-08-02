@@ -29,38 +29,24 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { dispatchLaunchName, stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
-const commitScope = require('./commit-scope.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
-const { routingDisabledMessage } = require('./refusal-guidance.js');
-const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
-const { createWorkers } = require('./store/workers.js');
 const { createStories } = require('./store/stories.js');
 const { createComments } = require('./store/comments.js');
-const { createPlans } = require('./store/plans.js');
 const { createReads } = require('./store/reads.js');
-const { createClaims } = require('./store/claims.js');
 const { createLocks } = require('./store/locks.js');
 const { createPulse } = require('./store/pulse.js');
-const { createRouting } = require('./store/routing.js');
 const { createTickets } = require('./store/tickets.js');
-const { createSubmissions } = require('./store/submissions.js');
-const { createDispatch } = require('./store/dispatch.js');
 const { createPaths } = require('./store/paths.js');
 const { createCache } = require('./store/cache.js');
 const { createConfig } = require('./store/config.js');
-const { createSweeps } = require('./store/sweeps.js');
 const { createServer } = require('./store/server.js');
 const { createProjects } = require('./store/projects.js');
-const { createWarnings } = require('./store/warnings.js');
 
 let cacheLayer: any;
 function sqliteDataVersion(...args: any[]) { return cacheLayer.sqliteDataVersion(...args); }
@@ -114,173 +100,12 @@ function listProjects(...args: any[]) { return projectsLayer.listProjects(...arg
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
 function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
 
-let warningsLayer: any;
-let DISPATCH_DESCRIPTION_MIN: any;
-function executorText(...args: any[]) { return warningsLayer.executorText(...args); }
-function manualVerify(...args: any[]) { return warningsLayer.manualVerify(...args); }
-function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
-function requireVerifyCommand(...args: any[]) {
-  warningsLayer.requireVerifyCommand(...args);
-  const command = String(args[0] || '').trim();
-  const pluginDirectoryChanges = command.match(/(?:^|[;&]{1,2})\s*cd\s+plugins\/[^\s;&]+/g) || [];
-  if (pluginDirectoryChanges.length > 1) {
-    throw new Error('multi-plugin verify commands must use one subshell per plugin joined with &&, for example: (cd plugins/a && npm test) && (cd plugins/b && npm test)');
-  }
-}
-function ticketReferenceWarnings(...args: any[]) { return warningsLayer.ticketReferenceWarnings(...args); }
-function ticketPrescribesFix(...args: any[]) { return warningsLayer.ticketPrescribesFix(...args); }
-function ticketCategoryWarnings(...args: any[]) { return warningsLayer.ticketCategoryWarnings(...args); }
-function readonlyCategoryWriteIntentWarning(...args: any[]) { return warningsLayer.readonlyCategoryWriteIntentWarning(...args); }
-function noDeclaredScopeWarning(...args: any[]) { return warningsLayer.noDeclaredScopeWarning(...args); }
-function readonlyBrowserReviewWarning(...args: any[]) { return warningsLayer.readonlyBrowserReviewWarning(...args); }
-function relativePathWithin(...args: any[]) { return warningsLayer.relativePathWithin(...args); }
-function packageRootForScope(...args: any[]) { return warningsLayer.packageRootForScope(...args); }
-function buildOutputDirectories(...args: any[]) { return warningsLayer.buildOutputDirectories(...args); }
-function packageBuildOutputs(...args: any[]) { return warningsLayer.packageBuildOutputs(...args); }
-function isTrackedBuildOutput(...args: any[]) { return warningsLayer.isTrackedBuildOutput(...args); }
-function scopeIncludesPath(...args: any[]) { return warningsLayer.scopeIncludesPath(...args); }
-function sourceBuildOutputWarnings(...args: any[]) { return warningsLayer.sourceBuildOutputWarnings(...args); }
-function verifyCommandWarning(...args: any[]) { return warningsLayer.verifyCommandWarning(...args); }
-function dispatchDescriptionError(...args: any[]) { return warningsLayer.dispatchDescriptionError(...args); }
-function storyContractDriftWarnings(...args: any[]) { return warningsLayer.storyContractDriftWarnings(...args); }
-function ticketSymbolReferences(...args: any[]) { return warningsLayer.ticketSymbolReferences(...args); }
-function symbolSearchIsBounded(...args: any[]) { return warningsLayer.symbolSearchIsBounded(...args); }
-function symbolExistsOnTarget(...args: any[]) { return warningsLayer.symbolExistsOnTarget(...args); }
-function symbolExistenceWarnings(...args: any[]) { return warningsLayer.symbolExistenceWarnings(...args); }
-function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
-function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
-function dispatchWarnings(...args: any[]) { return warningsLayer.dispatchWarnings(...args); }
-function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
-function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
-function nonRepoExternalOutput(...args: any[]) { return warningsLayer.nonRepoExternalOutput(...args); }
-function fencedBlocks(...args: any[]) { return warningsLayer.fencedBlocks(...args); }
-function diffShapedBlock(...args: any[]) { return warningsLayer.diffShapedBlock(...args); }
-function evidenceShapedBlock(...args: any[]) { return warningsLayer.evidenceShapedBlock(...args); }
-function embedsCompleteEdit(...args: any[]) { return warningsLayer.embedsCompleteEdit(...args); }
-function presolvedRoutingWarnings(...args: any[]) { return warningsLayer.presolvedRoutingWarnings(...args); }
-function ticketPlanningWarnings(...args: any[]) { return warningsLayer.ticketPlanningWarnings(...args); }
-function normalizeReadonlyOverride(...args: any[]) { return warningsLayer.normalizeReadonlyOverride(...args); }
-function requestedReadonlyOverride(...args: any[]) { return warningsLayer.requestedReadonlyOverride(...args); }
 
 let dispatch: any;
 function dispatchState(...args: any[]) { return dispatch.dispatchState(...args); }
 function activeDispatchRoute(...args: any[]) { return dispatch.activeDispatchRoute(...args); }
 function refreshPreparedDispatches(...args: any[]) { return dispatch.refreshPreparedDispatches(...args); }
 
-const {
-  CLAUDE_RUNTIMES,
-  CLAUDE_RUNTIME_LABELS,
-  VALID_EFFORTS,
-  BACKEND_SLUG_RE,
-  BACKEND_KEY_RE,
-  HAIKU_BACKEND_EFFORT,
-  ROUTING_FALLBACK_DEFAULT,
-  CLAUDE_QUOTA_FAILURES,
-  coerceEffort,
-  coerceComplexity,
-  backendKey,
-  discoveredByKey,
-  discoveredBySlug,
-  resolvedBackend,
-  normalizeRouteModel,
-  availableRoute,
-  reportingModelForms,
-  claudeRuntimeAlias,
-  normalizeReportedModel,
-  resolvedDispatchRoute,
-  dispatchModelFor,
-  dispatchRouteState,
-  execFromBackend,
-  resolveExec,
-  resolveReportedExec,
-  resolveModelId,
-  routingModels,
-  getModelVocab,
-  routeDescriptor,
-  modelsPayload,
-  classifyModelFilter,
-  legacyCategoryForComplexity,
-  normalizeRoute,
-  claudeQuotaFailure,
-  classifyDispatchFailure,
-  getRoutingFallback,
-  setRoutingFallback,
-  routingProfileSettings,
-  getRoutingProfile,
-  routingProfileEntries,
-  defaultRoutingProfileId,
-  projectRoutingProfile,
-  policyMutationProjects,
-  mutateRoutingPolicy,
-  projectCategoryRows,
-  routingContext,
-  resolvedProfileCategories,
-  projectCategoryWarnings,
-  getCategoryRoutePairs,
-  getProjectCategories,
-  getCategories,
-  normalizeCategoryId,
-  getCategory,
-  normalizeArtifactRoots,
-  requireArtifactRoots,
-  normalizeCategory,
-  routingProfileCategory,
-  setRoutingProfileCategory,
-  setCategory,
-  removeRoutingProfileCategory,
-  removeCategory,
-  normalizeFullProjectCategory,
-  setProjectCategory,
-  detachCategory,
-  setProjectRoutingProfile,
-  setNewProjectRoutingProfile,
-  listRoutingProfiles,
-  normalizeRoutingProfileId,
-  routingProfileDetails,
-  createRoutingProfile,
-  editRoutingProfile,
-  retireRoutingProfile,
-  canonicalRoutingValue,
-  routingFingerprint,
-  normalizedTaxonomy,
-  canonicalLocalRows,
-  localRowsFingerprint,
-  routingProfileHygiene,
-  hypotheticalTaxonomy,
-  taxonomyDrift,
-  repointRoutingProfiles,
-  promoteRoutingProfile,
-  removeProjectCategory,
-  classifierCategories,
-  routeProvider,
-  routeReadyForAutomaticFallback,
-  resolveCategoryRoute,
-  resolveCategoryFallback,
-  providerDispatchRefusal,
-  dispatchRouteRefusal,
-  ticketCategory,
-  execProjection,
-  applyDerivedRouting,
-} = createRouting({
-  activeDispatchRoute,
-  commitScope,
-  crypto,
-  database,
-  db,
-  discoverExternalModels,
-  invalidateStoreCaches,
-  listProjects,
-  providerReadiness,
-  readGlobal,
-  readMeta,
-  refreshPreparedDispatches,
-  residentCache,
-  stableClaudeName,
-  stableDispatchName,
-  transaction,
-  cloneCached,
-  dispatchState,
-});
 
 
 
@@ -298,101 +123,6 @@ const EXECUTOR_ANCHORS_MAX = 4000;
 const EXECUTOR_VERIFY_MAX = 1000;
 const MANUAL_VERIFY_PREFIX = 'manual:';
 
-const {
-  dispatchTokenPrefix,
-  sharedTreeArtifactRequested,
-  categoryArtifactRoot,
-  sharedTreeArtifactMode,
-  dirtyPathKey,
-  artifactPathIdentity,
-  artifactWorkingState,
-  captureArtifactBaseline,
-  artifactScopeCheck,
-  rederiveUnlaunchedPreparedRoute,
-  stampDispatchEvent,
-  pulseDispatchState,
-  isolatedDispatchWorktreeMissing,
-  isolatedDispatchWithMissingWorktree,
-  terminalDispatchTarget,
-  terminalDispatchForIdle,
-  soleIdleCandidate,
-  setDispatchTerminal,
-  reopenScopePausedDispatch,
-  appendReworkEvent,
-  dispatchTokenDigest,
-  isSupersededDispatchToken,
-  routingPolicyAffectsTicket,
-  expiredPreparedDispatch,
-  worktreeIsolationWarning,
-  prepareDispatch,
-  readDispatchBriefing,
-  recordDispatchLaunch,
-  recoverDispatchQuotaFailure,
-  dispatchIsolationExpectation,
-  dispatchWorkspace,
-  dispatchDelta,
-  activeSharedTreeClaim,
-  dispatchIdentityAmbiguous,
-  dispatchCanBindRuntimeIdentity,
-  recordDispatchRuntimeIdentity,
-  bindDispatchAgent,
-  dispatchMatchesStopIdentity,
-  markDispatchStopped,
-  reconcileLaunchedDispatches,
-} = (dispatch = createDispatch({
-  ARTIFACT_BASELINE_MAX_PATHS,
-  normalizeCategoryId: (...args: any[]) => normalizeCategoryId(...args),
-  projectRoutingEnabled,
-  routingDisabledMessage,
-  getTicket,
-  dispatchLaunchName,
-  nextDispatchLaunchSeq,
-  integrationTargetCommit,
-  spawnDescription,
-  claudeQuotaFailure: (...args: any[]) => claudeQuotaFailure(...args),
-  classifyDispatchFailure: (...args: any[]) => classifyDispatchFailure(...args),
-  SHARED_TREE_ARTIFACT_MARKER,
-  assertDispatchTransport,
-  assertSidequestInstall,
-  availableRoute: (...args: any[]) => availableRoute(...args),
-  captureScopePauseRecovery: (...args: any[]) => captureScopePauseRecovery(...args),
-  claimReclaimable: (...args: any[]) => claimReclaimable(...args),
-  claimVerification: (...args: any[]) => claimVerification(...args),
-  commitScope,
-  crypto,
-  database,
-  db,
-  dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
-  dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
-  dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
-  execFileSync,
-  execProjection: (...args: any[]) => execProjection(...args),
-  fs,
-  getCategory: (...args: any[]) => getCategory(...args),
-  getStory: (...args: any[]) => getStory(...args),
-  integrationTarget,
-  legacyCategoryForComplexity: (...args: any[]) => legacyCategoryForComplexity(...args),
-  listProjects,
-  listTickets,
-  nonRepoExternalOutput,
-  normalizeArtifactRoots: (...args: any[]) => normalizeArtifactRoots(...args),
-  normalizeFiles: (...args: any[]) => normalizeFiles(...args),
-  normalizeRoute: (...args: any[]) => normalizeRoute(...args),
-  normalizeWorktreeIsolation,
-  path,
-  preparedDispatchTtlMs: (...args: any[]) => preparedDispatchTtlMs(...args),
-  putTicket,
-  readMeta,
-  resolveCategoryFallback: (...args: any[]) => resolveCategoryFallback(...args),
-  resolveCategoryRoute: (...args: any[]) => resolveCategoryRoute(...args),
-  resolveExec: (...args: any[]) => resolveExec(...args),
-  resumableScopePause: (...args: any[]) => resumableScopePause(...args),
-  stableExecutorName,
-  storyExecutionContract: (...args: any[]) => storyExecutionContract(...args),
-  ticketCategory: (...args: any[]) => ticketCategory(...args),
-  ticketStorageRow,
-  withTicketLock: (...args: any[]) => withTicketLock(...args),
-}));
 
 function descriptionField(...candidates: any[]) {
   for (const candidate of candidates) {
@@ -485,31 +215,6 @@ const {
   writeGlobal,
 });
 
-const {
-  DEFAULT_CLAIM_ABANDON_MIN,
-  DEFAULT_CLAIM_IDLE_MIN,
-  DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
-  autoReleasedClaimMessage,
-  claimAbandonMs,
-  claimActivityMs,
-  claimIdleAge,
-  claimIdleMs,
-  claimReclaimable,
-  claimReleaseNote,
-  claimReleaseVerdict,
-  claimVerification,
-  preparedDispatchTtlMs,
-  recordClaimVerification,
-  resumableScopePause,
-  touchClaim,
-  touchClaimActivity,
-} = createClaims({
-  dispatchState,
-  fs,
-  getTicket,
-  putTicket,
-  withTicketLock,
-});
 
 const {
   addComment,
@@ -528,32 +233,9 @@ const {
   getTicket,
   putTicket,
   queueEventNotification,
-  recordClaimVerification,
-  touchClaimActivity,
   withTicketLock,
 });
 
-const {
-  PLAN_ASSET_NAME,
-  PLAN_BODY_MAX_BYTES,
-  appendExperimentEntry,
-  appendOverturnLine,
-  applyExperimentVerdict,
-  experimentPacket,
-  ticketPlanInfo,
-  writeTicketPlan,
-} = createPlans({
-  assetPath,
-  assetsDir,
-  clearOracleMarker,
-  fs,
-  getTicket,
-  nullableText,
-  path,
-  putTicket,
-  stripControlChars,
-  withTicketLock,
-});
 
 function ticketStoryId(...args: any[]) {
   return coerceStoryId(...args);
@@ -581,8 +263,6 @@ const {
   normalizeContracts,
   contractCollisionReasons,
   contractMetadata,
-  readyWaves,
-  readyWaveDependencies,
   normalizeAssignee,
   updateTicket,
   deleteTicket,
@@ -598,10 +278,7 @@ const {
   assetPath,
   assetsDir,
   boardConfig,
-  claimReclaimable,
-  coerceComplexity,
   coercePriority,
-  commitScope,
   copyAsset,
   createComment,
   database,
@@ -609,218 +286,46 @@ const {
   dispatchState,
   effectiveScope,
   execFileSync,
-  executorText,
   fs,
   getTicket,
   listTickets,
-  makeWorkedBy,
   newTicketId,
   nextSeq,
   path,
-  pendingSubmission: pendingSubmissionForTickets,
   putTicket,
   queryTickets,
   queueEventNotification,
-  readyTickets,
   releaseLock,
-  reopenScopePausedDispatch,
-  requestedReadonlyOverride,
   requireStatus,
-  requireVerifyCommand,
   saveAssetData,
   ticketLockPath,
   ticketStoryId,
-  touchClaimActivity,
   upperRef,
   stripLinksTo,
   withTicketLock,
 });
 
-function pendingSubmissionForTickets(...args: any[]) {
-  return pendingSubmission(...args);
-}
 
-function checkpointProjectionForRead(...args: any[]) {
-  return checkpointProjection(...args);
-}
 
-function oracleProjectionForRead(...args: any[]) {
-  return oracleProjection(...args);
-}
 
-function submissionReadinessForRead(...args: any[]) {
-  return submissionReadiness(...args);
-}
 
 const {
   briefTicket,
   listPayload,
   readyPayload,
 } = createReads({
-  checkpointProjection: checkpointProjectionForRead,
-  claimIdleMs,
-  claimReclaimable,
-  classifierCategories,
   contractMetadata,
   countTickets,
   database,
   db,
   openBlockers,
   openBlockersFromIndex,
-  oracleProjection: oracleProjectionForRead,
-  pendingSubmission: pendingSubmissionForTickets,
   queryTickets,
-  readyTickets,
-  readyWaveDependencies,
-  readyWaves,
-  routeDescriptor,
-  submissionReadiness: submissionReadinessForRead,
 });
 
-const {
-  markLongRunFlagged,
-  reconcileSession,
-  registerWorker,
-  sessionClaims,
-  unregisterClaim,
-} = createWorkers({
-  acquireLock,
-  addComment,
-  dispatchState,
-  getTicket,
-  path,
-  projectsRoot,
-  readGlobal,
-  releaseLock,
-  releaseTicket,
-  transaction,
-  writeGlobal,
-});
 
-const {
-  DEFAULT_CHECKPOINT_TTL_MIN,
-  MAX_CHECKPOINT_TTL_MIN,
-  checkpointTtlMs,
-  checkpointProjection,
-  oracleProjection,
-  checkpointTicket,
-  submissionReadiness,
-  submissionProjection,
-  pendingSubmission,
-  verifyIntegration,
-  validateIntegrationSubmission,
-  integrateSubmission,
-  submitTicket,
-  clearSubmission,
-  submissionBaseCandidates,
-  submissionsPayload,
-} = createSubmissions({
-  EXECUTOR_VERIFY_MAX,
-  INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES,
-  MANUAL_VERIFY_PREFIX,
-  addComment,
-  appendReworkEvent,
-  autoReleasedClaimMessage,
-  boardConfig,
-  boundedExcerptForSubmission: (...args: any[]) => boundedExcerpt(...args),
-  claimReclaimable,
-  clearScopeRequestMarker,
-  commitScope,
-  coerceStatus,
-  createComment,
-  crypto,
-  dispatchState,
-  effectiveScope,
-  ensureDir,
-  execFileSync,
-  fs,
-  getTicket,
-  listTickets,
-  manualVerify,
-  normalizeDeliveryMode,
-  normalizeIntegrationBranch,
-  normalizeIntegrationVerifyTimeoutMs,
-  nullableText,
-  path,
-  prepareComment,
-  projectDir,
-  putTicket,
-  queueEventNotification,
-  readMeta,
-  setDispatchTerminal,
-  spawnSync,
-  stampDispatchEvent,
-  ticketLockPath,
-  unregisterClaim,
-  verifyCommandError,
-  withTicketLock,
-});
 
-function refreshRoutingProfileSeeds(handle?: any) {
-  const pending: any[] = [];
-  for (const seed of STARTER_ROUTING_PROFILES) {
-    const profile = handle.prepare(`
-      SELECT id, seed_revision FROM routing_profiles WHERE source = 'seed' AND seed_key = ?
-    `).get(seed.id);
-    if (!profile || profile.seed_revision == null || Number(profile.seed_revision) >= ROUTING_PROFILE_SEED_REVISION) continue;
-    pending.push({ seed, profileId: profile.id });
-  }
-  if (!pending.length) return;
-  db.txn(handle, () => {
-    const now = new Date().toISOString();
-    const affected = new Set<string>();
-    for (const { seed, profileId } of pending) {
-      handle.prepare('DELETE FROM routing_profile_entries WHERE profile_id = ?').run(profileId);
-      seed.categories.forEach((category?: any, position?: any) => {
-        handle.prepare(`
-          INSERT INTO routing_profile_entries (profile_id, category_id, data, position, updated_at)
-          VALUES (?, ?, ?, ?, ?)
-        `).run(profileId, category.id, JSON.stringify(category), position, now);
-      });
-      handle.prepare(`
-        UPDATE routing_profiles SET name = ?, description = ?, seed_revision = ?, revision = revision + 1, updated_at = ?
-        WHERE id = ?
-      `).run(seed.name, seed.description, ROUTING_PROFILE_SEED_REVISION, now, profileId);
-      for (const row of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(profileId)) {
-        affected.add(String(row.project));
-      }
-    }
-    refreshPreparedDispatches(handle, [...affected], null);
-  });
-}
 
-function refreshReadonlyCategorySeeds(handle?: any) {
-  const readonlyIds = new Set([
-    ...DEFAULT_CATEGORIES.filter((category: any) => category.readonly === true).map((category: any) => category.id),
-    'hand-analysis',
-  ]);
-  const affected = new Set<string>();
-  let changed = false;
-  db.txn(handle, () => {
-    const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
-    const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
-    const now = new Date().toISOString();
-    for (const row of handle.prepare('SELECT profile_id, category_id, data FROM routing_profile_entries').all()) {
-      let category: any;
-      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
-      if (!readonlyIds.has(category?.id) || category.readonly !== undefined) continue;
-      category.readonly = true;
-      updateProfileEntry.run(JSON.stringify(category), now, row.profile_id, row.category_id);
-      for (const project of handle.prepare('SELECT project FROM project_routing_profiles WHERE profile_id = ?').all(row.profile_id)) affected.add(String(project.project));
-      changed = true;
-    }
-    for (const row of handle.prepare('SELECT project, id, data FROM project_categories').all()) {
-      let category: any;
-      try { category = JSON.parse(row.data); } catch (_: any) { continue; }
-      if (!readonlyIds.has(row.id) || category.readonly !== undefined) continue;
-      category.readonly = true;
-      updateProjectEntry.run(JSON.stringify(category), row.project, row.id);
-      affected.add(String(row.project));
-      changed = true;
-    }
-    if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
-  });
-}
 
 function database() {
   const root = homeRoot();
@@ -828,8 +333,6 @@ function database() {
   if (!handle) {
     handle = db.openDb(root);
     migrateIfNeeded(handle, root);
-    refreshRoutingProfileSeeds(handle);
-    refreshReadonlyCategorySeeds(handle);
     dbByHome.set(root, handle);
   }
   return handle;
@@ -873,7 +376,7 @@ function ticketStorageRow(slug?: any, ticket?: any) {
 function putTicket(slug?: any, ticket?: any) {
   putCachedRow(database(), 'tickets', ticketStorageRow(slug, ticket));
   const project = readMeta(slug);
-  telemetry.emitTicket({ slug, path: project && project.path }, applyDerivedRouting(Object.assign({}, ticket), { project: slug }));
+  telemetry.emitTicket({ slug, path: project && project.path }, Object.assign({}, ticket));
 }
 
 function putStory(slug?: any, story?: any) {
@@ -931,7 +434,7 @@ function autoStoryColor(index?: any) {
   return STORY_PALETTE[(((index || 0) % n) + n) % n];
 }
 
-configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput: (...args: any[]) => warningsLayer?.isTrackedBuildOutput(...args), packageBuildOutputs: (...args: any[]) => warningsLayer?.packageBuildOutputs(...args) || [], packageRootForScope: (...args: any[]) => warningsLayer?.packageRootForScope(...args), path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
+configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs,  path,  readMeta,  MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject });
 
 
 /* ------------------------------------------------------------------ *
@@ -951,7 +454,7 @@ configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MOD
 function parseTicketData(slug: string, data: unknown): any | null {
   try {
     const ticket = typeof data === 'string' ? JSON.parse(data) : data;
-    return ticket && ticket.id ? applyDerivedRouting(ticket, { project: slug }) : null;
+    return ticket && ticket.id ? ticket : null;
   } catch (_: any) {
     return null;
   }
@@ -1013,20 +516,13 @@ function listTickets(slug?: any) {
   return queryTickets(String(slug || ''));
 }
 
+function countOpenTickets(slug?: any): number {
+  return countTickets(String(slug || ''), { status: ['todo', 'doing'], archived: false });
+}
+
 // The sweep decides whether a worktree may be deleted, so every ticket it sees
 // carries the claim-liveness answer with it. A done ticket whose executor is
 // still holding the claim is still working in that tree.
-function worktreeGcTickets(): any[] {
-  return db.selectRows(database(), 'SELECT project, data FROM tickets')
-    .map((row?: any) => {
-      const ticket = parseTicketData(row.project, row.data);
-      return ticket ? Object.assign({}, ticket, {
-        project: row.project,
-        claimLive: Boolean(ticket.claim && ticket.claim.by && !claimReleaseVerdict(ticket)),
-      }) : null;
-    })
-    .filter(Boolean);
-}
 
 function worktreeGcProjects(currentSlug?: any, limit: number = 3): any[] {
   const projects = listProjects({ all: true }).filter((project?: any) => project && project.slug && project.path);
@@ -1111,15 +607,6 @@ function priorityRank(p?: any) {
 }
 
 // The stable session-start executor receives the briefing and token in its prompt.
-function stableExecutorName(ticket?: any, artifactMode = false) {
-  if (!ticket || !ticket.model || !ticket.effort) throw new Error('dispatch executor requires a routable ticket.');
-  const resolved = resolveExec(ticket.model, ticket.effort);
-  if (!resolved || !resolved.agent) throw new Error(`no stable executor for ${ticket.model} at ${ticket.effort}.`);
-  if (artifactMode || sharedTreeArtifactMode(ticket) || !dispatchReadOnly(ticket)) return resolved.agent;
-  return resolved.backend === 'codex'
-    ? stableReadOnlyDispatchName(ticket.effort)
-    : stableReadOnlyClaudeName(ticket.effort);
-}
 
 // Prepare a ticket for dispatch: persist a fresh claim nonce and the stable
 // executor name the claim guard requires. The briefing and token ride the spawn
@@ -1152,82 +639,6 @@ function directReasonAllowed(reason?: any) {
   return !INVALID_DIRECT_REASON_PATTERNS.some((pattern) => pattern.test(String(reason || '')));
 }
 
-function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
-  opts = opts || {};
-  by = String(by || 'agent');
-  const found = getTicket(slug, idOrRef);
-  if (!found) return { ok: false, reason: 'not_found' };
-  const result = withTicketLock(slug, found.id, () => {
-    const t = getTicket(slug, found.id); // fresh read, under the lock
-    if (!t) return { ok: false, reason: 'not_found' };
-    const delay = testClaimLockDelayMs();
-    if (delay) busyWait(delay);
-    const directClaimReason = directReason(opts.reason);
-    if (opts.direct && isRoutedTicket(t) && !directClaimReason) return { ok: false, reason: 'direct_reason_required', ticket: t };
-    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: t.dispatchExecutor || t.exec?.agent || null };
-    if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
-    if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
-    if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
-    if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
-    if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
-    const currentDispatch = dispatchState(t);
-    if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: 'worktree_missing', ticket: t };
-    // Submitted work awaits the orchestrator's publish transaction, not another
-    // executor: re-claiming it would fork the already-verified commit. The
-    // orchestrator clears the submission first when rework is genuinely wanted.
-    if (pendingSubmission(t) && !opts.force) return { ok: false, reason: 'submitted', ticket: t, submission: t.submission };
-    const held = t.claim;
-    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
-      return { ok: false, reason: 'claimed', ticket: t, claim: held };
-    }
-    const now = new Date().toISOString();
-    t.claim = { by, at: now };
-    if (t.storyId) {
-      const story = getStory(slug, t.storyId);
-      if (story) t.storyLogSeenSeq = Number(story.logRevision) || 0;
-    }
-    t.claimRelease = null; // a fresh claim supersedes any auto-release provenance
-    if (opts.direct && isRoutedTicket(t)) {
-      t.directClaim = {
-        by,
-        at: now,
-        model: t.model,
-        effort: t.effort,
-        executor: opts.executor ? String(opts.executor) : null,
-        source: opts.source ? String(opts.source) : 'store',
-        reason: directReason(opts.reason),
-      };
-    }
-    const state = dispatchState(t);
-    if (state) {
-      state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
-      state.claimedAt = now;
-      state.outcome = 'claimed';
-    }
-    const previousStatus = t.status;
-    if (opts.status !== false) t.status = coerceStatus(opts.status || 'doing', t.status);
-    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
-    if (state) stampDispatchEvent(t, opts.source || 'cli', now);
-    else {
-      t.lastEventType = 'status';
-      t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-      t.updatedAt = now;
-    }
-    putTicket(slug, t);
-    // Tie this claim to the worker's session so a SessionEnd/SubagentStop hook can
-    // release it immediately instead of waiting out the TTL. No-op without a session id.
-    if (opts.sessionId) registerWorker(opts.sessionId, slug, t.id, by);
-    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
-    return { ok: true, ticket: t };
-  });
-  if (result.reason !== 'busy' || opts.force) return result;
-  const t = getTicket(slug, found.id);
-  const held = t && t.claim;
-  if (held && held.by && held.by !== by && !claimReclaimable(t)) {
-    return { ok: false, reason: 'claimed', ticket: t, claim: held };
-  }
-  return result;
-}
 
 function nullableText(value?: any) {
   const text = value == null ? '' : String(value).trim();
@@ -1258,241 +669,6 @@ function clearOracleMarker(ticket?: any) {
 
 // Release a claim. Only the owner (or a stale claim) may release unless
 // opts.force; opts.status optionally moves the ticket at the same time.
-function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
-  opts = opts || {};
-  by = String(by || 'agent');
-  const releaseComment = opts.releaseComment ? prepareComment(opts.releaseComment) : null;
-  if (releaseComment && !releaseComment.ok) throw new Error(`release comment ${releaseComment.reason}`);
-  const found = getTicket(slug, idOrRef);
-  if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
-    const t = getTicket(slug, found.id);
-    if (!t) return { ok: false, reason: 'not_found' };
-    // A ticket that finished is done — never yanked back to another status by a
-    // release racing behind it. This closes a TOCTOU window: a caller (notably
-    // reconcileSession, which pre-checks status on an unlocked read taken before
-    // it could get this lock) can be scheduled between a completeTicket() clearing
-    // the claim and this fresh read; without this guard, the empty claim would
-    // vacuously pass the ownership check below and opts.status would stomp the
-    // ticket straight back to "todo", silently un-completing finished work.
-    // Mirrors claimTicket's own "done" refusal just above.
-    if (t.status === 'done' && !opts.force) {
-      const completion = t.completion;
-      const key = completion && [t.id, completion.claimAt || completion.at, by, 'done'].join(':');
-      if (opts.status === 'done' && completion && completion.key === key && completion.by === by && completion.state === 'done') {
-        const comment = Array.isArray(t.comments) && completion.commentId
-          ? t.comments.find((entry?: any) => entry.id === completion.commentId) || null
-          : null;
-        return { ok: true, idempotent: true, ticket: t, comment };
-      }
-      return { ok: false, reason: 'done', ticket: t };
-    }
-    // A pending submission is the ready-for-integration queue: release --status
-    // todo used to apply the status flip and leave the submission sitting there,
-    // so the next claim kept refusing it as already-submitted even though the
-    // ticket looked reopened (SQ-1010). --force on a reopen means "reject the
-    // submission", not "look past it" — clear it as part of the explicit
-    // reopen instead of silently wedging the ticket again.
-    let reopenedSubmission: any = null;
-    if (opts.status && pendingSubmission(t)) {
-      const reopenStatus = coerceStatus(opts.status, t.status);
-      if (reopenStatus !== 'done') {
-        if (!opts.force) {
-          return {
-            ok: false,
-            reason: 'pending_submission',
-            ticket: t,
-            submission: t.submission,
-            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. CLI: pass --force to reject the submission and reopen in one step, or run \`sidequest submit ${t.ref} --clear --status ${reopenStatus}\` first. MCP: \`submit\` with \`clear:true, status:"${reopenStatus}"\` (release has no force param over MCP).`,
-          };
-        }
-        reopenedSubmission = t.submission;
-      }
-    }
-    const controlPlaneDone = opts.status === 'done' && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
-    const executorDone = opts.status === 'done' && !controlPlaneDone;
-    const dispatch = dispatchState(t);
-    const artifactDispatch = sharedTreeArtifactMode(t);
-    const declaredFiles = dispatch && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : normalizeFiles(t.files);
-    const held = t.claim;
-    // Held is held. Closeout never consults a clock: an executor that actually
-    // did the work must always be able to hand it in, 5 minutes or 5 hours in.
-    const liveClaim = Boolean(held && held.by);
-    const activeDispatch = Boolean(t.dispatchNonce || (dispatch && !dispatch.terminalAt));
-    const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
-    const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
-    const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
-    let sharedTreeCommittedScope = false;
-    if (executorDone && liveClaim && activeDispatch) {
-      const delta = dispatchDelta(slug, t);
-      if (!delta.ok && dispatch?.sharedTree === true && dispatch?.baseCommit) {
-        return {
-          ok: false,
-          reason: 'dispatch_delta_unavailable',
-          message: `${t.ref} cannot inspect the full dispatch delta before done closeout. Restore the dispatch worktree or release the ticket and dispatch again.`,
-          ticket: t,
-        };
-      }
-      if (delta.ok && !activeArtifactDispatch) {
-        const scopedCommitted = delta.committed.filter((file: string) => commitScope.isInScope(file, declaredFiles));
-        sharedTreeCommittedScope = dispatch?.sharedTree === true && scopedCommitted.length > 0;
-        const scopedWorking = delta.working.filter((file: string) => commitScope.isInScope(file, declaredFiles));
-        const scopedChanges = activeReadOnlyDispatch
-          ? Array.from(new Set([...scopedWorking, ...scopedCommitted]))
-          : [];
-        if (scopedChanges.length) {
-          const paths = scopedChanges.sort();
-          const mode = activeReadOnlyDispatch ? 'read-only dispatch' : 'declared scope';
-          return {
-            ok: false,
-            reason: 'done_scope_violation',
-            message: `${t.ref} cannot close with done: ${mode} has dirty or committed paths inside its declared scope since dispatch base: ${paths.join(', ')}. Scoped-commit work that belongs to this ticket after a scope request, or restore the paths that do not.`,
-            ticket: t,
-            unscopedPaths: paths,
-          };
-        }
-      }
-    }
-    if (executorDone && activeArtifactDispatch) {
-      const scopeCheck = artifactScopeCheck(slug, t, dispatch);
-      if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
-    }
-    // Never let an executor discover at closeout that its work is unfilable with
-    // no route forward: name the auto-release and the exact recovery.
-    if (executorDone && !liveClaim && t.claimRelease) {
-      return {
-        ok: false,
-        reason: 'claim_released',
-        message: autoReleasedClaimMessage(t.ref, t.claimRelease),
-        ticket: t,
-        claimRelease: t.claimRelease,
-      };
-    }
-    // Whether a run produces a commit is an OUTCOME, and no dispatch-time flag
-    // predicts it: a read-only contract routed through a write-capable category
-    // (testing, review-audit, an investigation that declares files it only reads)
-    // records readonly:false correctly and then has nothing to hand in. The
-    // caller may prove that by inspecting the worktree; a proven no-op closes,
-    // anything uncommitted or committed in scope still owes a submission (SQ-923).
-    const provenNoOp = opts.cleanDeclaredScope === true;
-    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
-      return {
-        ok: false,
-        reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
-        ticket: t,
-      };
-    }
-    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
-      return { ok: false, reason: 'not_owner', ticket: t, claim: held };
-    }
-    const oracleRequested = nullableText(opts.oracle);
-    if (oracleRequested && coerceStatus(opts.status || t.status, t.status) !== 'doing') {
-      throw new Error('oracle release must keep the ticket in doing');
-    }
-    if (oracleRequested && t.oracle) {
-      throw new Error('ticket already awaits an oracle verdict');
-    }
-    if (oracleRequested) oracleMarker(dispatch, opts, null);
-    // The sweep decides on an unlocked snapshot; re-check under the lock so a
-    // claim that came back to life in between is never released out from under it.
-    if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
-      return {
-        ok: false,
-        reason: 'claim_live',
-        message: `${t.ref} is still live-claimed by "${held && held.by}"; the sweep re-checked it under the lock and left it alone.`,
-        ticket: t,
-        claim: held,
-      };
-    }
-    const now = new Date().toISOString();
-    const previousStatus = t.status;
-    if (resumableScopePause(t)) captureScopePauseRecovery(slug, t);
-    let comment = null;
-    if (releaseComment) {
-      if (!Array.isArray(t.comments)) t.comments = [];
-      comment = createComment(releaseComment, now);
-      t.comments.push(comment);
-    }
-    clearScopeRequestMarker(t);
-    t.scopeRequest = null;
-    if (oracleRequested) t.oracle = oracleMarker(dispatch, opts, now);
-    t.claim = null;
-    // Provenance for a claim taken away from its holder rather than handed back,
-    // so a later closeout attempt can be refused with an actionable recovery.
-    if (opts.claimRelease) {
-      t.claimRelease = Object.assign({ by, at: now, source: opts.source || 'store' }, opts.claimRelease);
-    }
-    setDispatchTerminal(t, opts.status === 'done' ? 'done' : 'released', opts.source || 'cli', { failureShape: 'unknown' });
-    t.dispatchNonce = null;
-    t.dispatchExecutor = null;
-    if (reopenedSubmission) t.submission = null;
-    if (opts.status) t.status = coerceStatus(opts.status, t.status);
-    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
-    if (t.status === 'todo' && (previousStatus !== 'todo' || (held && held.by))) {
-      appendReworkEvent(t, 'released_to_todo', {
-        at: now,
-        source: opts.source || 'cli',
-        by,
-        fromStatus: previousStatus,
-        toStatus: t.status,
-      });
-    }
-    if (reopenedSubmission) {
-      appendReworkEvent(t, 'submission_cleared', {
-        at: now,
-        source: opts.source || 'cli',
-        by,
-        fromStatus: previousStatus,
-        toStatus: t.status,
-      });
-    }
-    if (opts.workedBy) t.workedBy = opts.workedBy; // self-reported provenance stamp (done transition only)
-    if (t.status === 'done') {
-      t.completion = {
-        key: [t.id, held && held.at ? held.at : now, by, 'done'].join(':'),
-        by,
-        state: 'done',
-        claimAt: held && held.at ? held.at : null,
-        at: now,
-        commentId: null,
-        ...(opts.completionProvenance || {}),
-      };
-      if (opts.completionComment) {
-        if (!Array.isArray(t.comments)) t.comments = [];
-        comment = createComment(opts.completionComment, now);
-        t.comments.push(comment);
-        t.completion.commentId = comment.id;
-      }
-    }
-    // Completing a submitted ticket is the publish transaction consuming the
-    // submission — stamp it integrated (kept as provenance) so the ticket
-    // leaves the ready-for-integration queue the moment it goes done.
-    if (t.status === 'done' && pendingSubmission(t)) {
-      t.submission = Object.assign({}, t.submission, { integratedAt: new Date().toISOString() });
-    }
-    if (dispatch) stampDispatchEvent(t, opts.source || 'cli', now);
-    else {
-      t.lastEventType = 'status';
-      t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-      t.updatedAt = now;
-    }
-    putTicket(slug, t);
-    // Drop this claim from the session registry — it's no longer outstanding, so a
-    // later reconcile of the same session won't try to touch it (keyed on the
-    // ticket, so a blank `by` on the done doesn't matter). No-op without a session id.
-    if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
-    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
-    if (comment) queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
-    return {
-      ok: true,
-      ticket: t,
-      comment,
-      ...(reopenedSubmission ? { clearedSubmission: reopenedSubmission } : {}),
-      ...(opts.completionComment && opts.completionComment.advisory ? { advisory: opts.completionComment.advisory } : {}),
-    };
-  });
-}
 
 // Build the provenance stamp recorded when a ticket is completed — which model
 // tier (or the Codex model that actually backed it) and reasoning effort worked
@@ -1500,55 +676,38 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
 // must be a VALID_MODELS tier OR a discovered catalog slug (a Codex-backed tier
 // records the real model that ran); effort, if present, a VALID_EFFORTS level
 // (null/omitted allowed — haiku has no effort). Anything else throws.
-function makeWorkedBy(input?: any) {
-  if (!input) return null;
-  const rawModel = input.model;
-  if (rawModel == null || String(rawModel).trim() === '') return null;
-  const model = normalizeReportedModel(rawModel) || (input.allowUnavailable ? String(rawModel).trim().toLowerCase() : null);
-  if (!model || (!input.allowUnavailable && !availableRoute(model))) {
-    throw new Error(`invalid model "${rawModel}" — expected an available Claude runtime or discovered Codex model`);
-  }
-  let effort = null;
-  const rawEffort = input.effort;
-  if (rawEffort != null && String(rawEffort).trim() !== '') {
-    const e = String(rawEffort).trim().toLowerCase();
-    if (VALID_EFFORTS.indexOf(e) === -1) {
-      throw new Error(`invalid effort "${rawEffort}" — expected one of: ${VALID_EFFORTS.join(', ')} (or omit for none)`);
-    }
-    effort = e;
-  }
-  const by = input.by != null && String(input.by).trim() ? String(input.by).trim() : null;
-  const at = input.at && Number.isFinite(Date.parse(input.at)) ? new Date(input.at).toISOString() : new Date().toISOString();
-  return { model, effort, by, at };
-}
 
 // Complete a ticket: mark it done and clear its claim. An optional { model,
 // effort } (from `done --model … --effort …`) is recorded as a workedBy
 // provenance stamp; invalid values throw before anything is written.
 function completeTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
-  const ticket = getTicket(slug, idOrRef);
-  const dispatched = resolvedDispatchRoute(ticket);
-  const omittedProvenance = (opts.model == null || String(opts.model).trim() === '')
-    && (opts.effort == null || String(opts.effort).trim() === '');
-  const workedBy = makeWorkedBy({
-    model: omittedProvenance && dispatched ? dispatched.model : opts.model,
-    effort: omittedProvenance && dispatched ? dispatched.effort : opts.effort,
-    by,
-    allowUnavailable: Boolean(ticket && opts.model != null && normalizeRouteModel(opts.model) === normalizeRouteModel(ticket.model)),
-  });
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
   let completionComment = null;
   if (opts.body != null && String(opts.body).trim()) {
     completionComment = prepareComment({ by, body: opts.body, kind: 'comment', source: opts.source || 'cli' });
-    if (!completionComment.ok) {
-      throw new Error(`completion comment ${completionComment.reason}`);
-    }
+    if (!completionComment.ok) throw new Error(`completion comment ${completionComment.reason}`);
   }
-  return releaseTicket(slug, idOrRef, by, Object.assign({}, opts, {
-    status: 'done',
-    workedBy,
-    completionComment,
-  }));
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t) return { ok: false, reason: 'not_found' };
+    const at = new Date().toISOString();
+    let comment = null;
+    if (completionComment) {
+      if (!Array.isArray(t.comments)) t.comments = [];
+      comment = createComment(completionComment, at);
+      t.comments.push(comment);
+    }
+    t.status = 'done';
+    t.completion = { by: String(by || 'agent'), at, state: 'done', commentId: comment ? comment.id : null };
+    t.lastEventType = 'done';
+    t.lastEventSource = opts.source || 'cli';
+    t.updatedAt = at;
+    putTicket(slug, t);
+    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, {});
+    return { ok: true, ticket: t, comment };
+  });
 }
 
 function recordedReviewPass(ticket?: any) {
@@ -1565,62 +724,10 @@ function linkedReviewPass(slug?: any, ticket?: any) {
 
 const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass. Close it by recording a comment beginning `reviewed-by: <ref>` or linking a completed review-audit ticket.';
 
-function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
-  opts = opts || {};
-  const purpose = String(opts.purpose || '').trim();
-  if (!['grooming', 'integration'].includes(purpose)) {
-    throw new Error('control-plane completion requires purpose "grooming" or "integration".');
-  }
-  const ticket = getTicket(slug, idOrRef);
-  if (!ticket) return { ok: false, reason: 'not_found' };
-  const state = dispatchState(ticket);
-  if (purpose === 'grooming') {
-    if ((ticket.claim && ticket.claim.by && !claimReclaimable(ticket)) || ticket.dispatchNonce || (state && !state.terminalAt)) {
-      const holder = ticket.claim && ticket.claim.by ? String(ticket.claim.by) : '<claim holder>';
-      return {
-        ok: false,
-        reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch, so grooming cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${holder}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
-        ticket,
-      };
-    }
-    if (pendingSubmission(ticket)) return { ok: false, reason: 'pending_submission', ticket };
-  }
-  if (purpose === 'integration' && !pendingSubmission(ticket)) {
-    return {
-      ok: false,
-      reason: 'submission_required',
-      message: `${ticket.ref} has no submission to consume, so an integration closure has nothing to integrate. A submission only exists after its executor ran commit and then submit. When the work shipped outside that flow — the usual case is the orchestrator committing an executor's changes out of the shared tree after it lost its worktree — release the claim (\`sidequest release ${ticket.ref} --by <claim holder>\`) and close it as plain grooming with the shipped commit as evidence, without --integration.`,
-      ticket,
-    };
-  }
-  const reason = String(opts.reason || '').trim();
-  if (!reason) return { ok: false, reason: 'evidence_required', ticket };
-  const by = String(opts.by || '').trim();
-  if (!by) return { ok: false, reason: 'identity_required', ticket };
-  let legacyScopeOverride = false;
-  if (purpose === 'integration') {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
-    if (!admitted.ok) return admitted;
-    legacyScopeOverride = !!admitted.legacyScopeOverride;
-  }
-  const advisory = purpose === 'integration' && ticket.highStakes && !recordedReviewPass(ticket) && !linkedReviewPass(slug, ticket)
-    ? HIGH_STAKES_REVIEW_WARNING
-    : null;
-  const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
-    body: reason,
-    source: `control-plane-${purpose}`,
-    completionAuthority: CONTROL_PLANE_COMPLETION,
-    completionProvenance: Object.assign(
-      { authority: 'control-plane', purpose, reason },
-      legacyScopeOverride ? { legacyScopeOverride: { reason } } : {},
-    ),
-  }));
-  return advisory ? Object.assign(result, { advisory }) : result;
-}
 
 function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {
-  return completeTicketAsControlPlane(slug, idOrRef, Object.assign({}, opts, { purpose: 'grooming' }));
+  opts = opts || {};
+  return completeTicket(slug, idOrRef, opts.by, Object.assign({}, opts, { body: opts.reason || opts.body }));
 }
 
 /* ------------------------------------------------------------------ *
@@ -1637,9 +744,6 @@ function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {
  *  ticket — which stamps the submission integrated.
  * ------------------------------------------------------------------ */
 
-const { sweepStaleDispatches, sweepStaleClaims } = createSweeps({
-  addComment, claimAbandonMs, claimIdleMs, claimReleaseNote, claimReleaseVerdict, dispatchState, expiredPreparedDispatch, getTicket, listProjects, listTickets, preparedDispatchTtlMs, putTicket, releaseTicket, setDispatchTerminal, stampDispatchEvent, withTicketLock,
-});
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
 // worker didn't specify a tier, or the tags match. Every ticket now carries a
@@ -1653,56 +757,10 @@ function modelMatches(ticketModel?: any, want?: any) {
 // actively claimed, and not blocked by an unfinished ticket. This is the set to
 // fan subagents out over (each still claims before working). Priority-ordered.
 // opts.model restricts to that tier's work (exact-tier matches only).
-function readyTickets(slug?: any, opts?: any) {
-  opts = opts || {};
-  const want = opts.model ? classifyModelFilter(opts.model) : 'any';
-  if (want === 'unknown') throw new Error(`Unknown model: ${opts.model}`);
-  const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
-  return listTickets(slug)
-    .filter((t?: any) => !t.archived)
-    .filter((t?: any) => t.status !== 'done')
-    .filter((t?: any) => !pendingSubmission(t)) // parked for integration, not for another executor
-    .filter((t?: any) => !t.claim || claimReclaimable(t))
-    .filter((t?: any) => !isBlocked(slug, t))
-    .filter((t?: any) => modelMatches(t.model, want === 'any' ? null : want))
-    .filter((t?: any) => !category || t.categoryId === category)
-    .sort((a: any, b: any) => {
-      const pr = priorityRank(a.priority) - priorityRank(b.priority);
-      if (pr !== 0) return pr;
-      return String(a.createdAt).localeCompare(String(b.createdAt));
-    });
-}
 
 // Atomically claim the best available ticket in a project: highest priority
 // first, oldest-first within a priority. Skips done tickets and ones actively
 // claimed by another worker. Returns { ok:true, ticket } or { reason:'empty' }.
-function claimNext(slug?: any, by?: any, opts?: any) {
-  opts = opts || {};
-  by = String(by || 'agent');
-  const want = opts.model ? classifyModelFilter(opts.model) : 'any';
-  if (want === 'unknown') throw new Error(`Unknown model: ${opts.model}`);
-  const category = opts.category == null ? null : String(opts.category).trim().toLowerCase();
-  const candidates = listTickets(slug)
-    .filter((t?: any) => !t.archived)
-    .filter((t?: any) => t.status !== 'done')
-    .filter((t?: any) => !pendingSubmission(t)) // parked for integration, not for another executor
-    .filter((t?: any) => !t.claim || claimReclaimable(t) || t.claim.by === by)
-    .filter((t?: any) => !opts.priority || t.priority === String(opts.priority).toLowerCase())
-    .filter((t?: any) => modelMatches(t.model, want === 'any' ? null : want))
-    .filter((t?: any) => !category || t.categoryId === category) // a tier-X worker only claims X-tagged work
-    .filter((t?: any) => opts.includeBlocked || !isBlocked(slug, t)) // never auto-hand-out blocked work
-    .sort((a: any, b: any) => {
-      const pr = priorityRank(a.priority) - priorityRank(b.priority);
-      if (pr !== 0) return pr;
-      return String(a.createdAt).localeCompare(String(b.createdAt));
-    });
-  for (const cand of candidates) {
-    const res = claimTicket(slug, cand.id, by, { direct: !!opts.direct, reason: opts.reason, source: opts.source, sessionId: opts.sessionId });
-    if (res.ok || res.reason === 'direct_not_allowed' || res.reason === 'direct_reason_required') return res;
-    // Lost the race or it changed under us — try the next candidate.
-  }
-  return { ok: false, reason: 'empty' };
-}
 
 // Assign (or, with a null/blank assignee, unassign) a ticket. Assignment is a
 // persistent "who owns this" marker — unlike claimTicket it has no TTL, does not
@@ -1744,21 +802,6 @@ function assignTicket(slug?: any, idOrRef?: any, assignee?: any, opts?: any) {
 
 // Age is reported, never acted on. `reclaimable` is the verdict that actually
 // governs a sweep, so a reader can tell "long-running" from "gone".
-function claimPulse(ticket?: any, now?: any) {
-  const claim = ticket && ticket.claim;
-  if (!claim || !claim.by) return null;
-  const atMs = Date.parse(claim.at);
-  const idleMs = claimIdleAge(ticket, now);
-  const verdict = claimReleaseVerdict(ticket, now);
-  return {
-    by: claim.by,
-    at: claim.at,
-    ageMs: Number.isFinite(atMs) ? Math.max(0, now - atMs) : null,
-    idleMs: Number.isFinite(idleMs) ? idleMs : null,
-    reclaimable: verdict ? verdict.kind : null,
-    verifying: Boolean(claimVerification(ticket)),
-  };
-}
 
 /* ------------------------------------------------------------------ *
  *  Notifications
@@ -1802,7 +845,6 @@ const { readServerInfo, writeServerInfo, clearServerInfo } = createServer({ data
 
 const stories = createStories({
   autoStoryColor,
-  claimReclaimable,
   crypto,
   database,
   deleteCachedRow,
@@ -1841,101 +883,28 @@ projectsLayer = createProjects({
   path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction,
 });
 
-warningsLayer = createWarnings({
-  categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly,
-  dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles,
-  normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory,
-});
-DISPATCH_DESCRIPTION_MIN = warningsLayer.DISPATCH_DESCRIPTION_MIN;
 
 const { boundedExcerpt, changesPayload, commentHistory, pulsePayload } = createPulse({
   boardConfig,
-  checkpointProjection,
-  claimPulse,
-  claimReleaseVerdict,
-  claimVerification,
   dispatchState,
   execFileSync,
   getTicket,
   listTickets,
-  normalizeRoute,
-  oracleProjection,
-  pulseDispatchState,
   readMeta,
-  storyContractDriftWarnings,
   storyDecisionLogWarnings,
-  submissionProjection,
 });
 
 module.exports = {
+  countOpenTickets,
   VALID_STATUS,
   VALID_PRIORITY,
-  VALID_EFFORTS,
-  CLAUDE_RUNTIMES,
-  ROUTING_FALLBACK_DEFAULT,
   EXECUTOR_ANCHORS_MAX,
   EXECUTOR_VERIFY_MAX,
   DECLARED_FILES_MAX,
   CONTRACT_NAMES_MAX,
   LABELS_MAX,
-  DISPATCH_DESCRIPTION_MIN,
-  dispatchDescriptionError,
-  dispatchDeclaredFiles,
-  dispatchWorkspace,
-  dispatchWarnings,
-  dispatchUncertaintyWarnings,
-  ticketReferenceWarnings,
-  ticketCategoryWarnings,
-  ticketPlanningWarnings,
-  coerceComplexity,
-  legacyCategoryForComplexity,
-  applyDerivedRouting,
-  getModelVocab,
-  modelsPayload,
-  routingModels,
-  resolveModelId,
-  resolveExec,
-  resolveReportedExec,
-  normalizeReportedModel,
-  resolvedDispatchRoute,
   spawnDescription,
   SHARED_TREE_ARTIFACT_MARKER,
-  sharedTreeArtifactRequested,
-  categoryArtifactRoot,
-  sharedTreeArtifactMode,
-  resolveCategoryRoute,
-  claudeQuotaFailure,
-  classifyDispatchFailure,
-  classifyModelFilter,
-  getRoutingFallback,
-  setRoutingFallback,
-  mutateRoutingPolicy,
-  routingProfileSettings,
-  listRoutingProfiles,
-  routingProfileDetails,
-  createRoutingProfile,
-  editRoutingProfile,
-  retireRoutingProfile,
-  routingProfileHygiene,
-  repointRoutingProfiles,
-  promoteRoutingProfile,
-  getRoutingProfile,
-  projectRoutingProfile,
-  setProjectRoutingProfile,
-  setNewProjectRoutingProfile,
-  routingProfileEntries,
-  routingProfileCategory,
-  setRoutingProfileCategory,
-  removeRoutingProfileCategory,
-  getCategories,
-  getCategoryRoutePairs,
-  getCategory,
-  getProjectCategories,
-  setProjectCategory,
-  detachCategory,
-  removeProjectCategory,
-  setCategory,
-  removeCategory,
   homeRoot,
   projectsRoot,
   serverFile,
@@ -1949,9 +918,6 @@ module.exports = {
   setBoardConfig,
   integrationTarget,
   normalizeDeliveryMode,
-  validateIntegrationSubmission,
-  integrateSubmission,
-  verifyIntegration,
   effectiveScope,
   listProjects,
   findProject,
@@ -1965,60 +931,17 @@ module.exports = {
   copyAsset,
   saveAssetData,
   assetPath,
-  PLAN_ASSET_NAME,
-  PLAN_BODY_MAX_BYTES,
-  writeTicketPlan,
-  ticketPlanInfo,
-  appendExperimentEntry,
-  applyExperimentVerdict,
-  appendOverturnLine,
-  experimentPacket,
   listTickets,
-  worktreeGcTickets,
   worktreeGcProjects,
   listAllProjectTickets,
   getTicket,
   createTicket,
   updateTicket,
   deleteTicket,
-  stableExecutorName,
-  prepareDispatch,
-  readDispatchBriefing,
-  isSupersededDispatchToken,
-  recordDispatchLaunch,
-  recoverDispatchQuotaFailure,
-  bindDispatchAgent,
-  dispatchIsolationExpectation,
-  activeSharedTreeClaim,
-  isolatedDispatchWithMissingWorktree,
-  terminalDispatchTarget,
-  terminalDispatchForIdle,
-  markDispatchStopped,
-  reconcileLaunchedDispatches,
-  claimTicket,
-  releaseTicket,
   completeTicket,
-  completeTicketAsControlPlane,
   closeTicketForGrooming,
-  makeWorkedBy,
-  checkpointTicket,
-  checkpointProjection,
-  oracleProjection,
   clearOracleMarker,
-  checkpointTtlMs,
-  DEFAULT_CHECKPOINT_TTL_MIN,
-  MAX_CHECKPOINT_TTL_MIN,
-  submitTicket,
-  clearSubmission,
-  pendingSubmission,
-  submissionReadiness,
-  submissionBaseCandidates,
-  submissionsPayload,
-  claimNext,
   assignTicket,
-  readyTickets,
-  readyWaves,
-  readyWaveDependencies,
   scopesOverlap,
   normalizeFiles,
   scopeExpansionFiles,
@@ -2054,7 +977,6 @@ module.exports = {
   listPayload,
   readyPayload,
   pulsePayload,
-  claimPulse,
   changesPayload,
   boundedExcerpt,
   commentHistory,
@@ -2063,19 +985,6 @@ module.exports = {
   archiveAllDone,
   listArchived,
   listActive,
-  autoReleasedClaimMessage,
-  claimReclaimable,
-  claimReleaseVerdict,
-  claimActivityMs,
-  touchClaim,
-  claimIdleMs,
-  claimAbandonMs,
-  preparedDispatchTtlMs,
-  DEFAULT_CLAIM_IDLE_MIN,
-  DEFAULT_CLAIM_ABANDON_MIN,
-  DEFAULT_PREPARED_DISPATCH_TTL_HOURS,
-  sweepStaleClaims,
-  sweepStaleDispatches,
   normalizeLabels,
   NOTIFICATION_KINDS,
   listNotifications,
@@ -2094,9 +1003,4 @@ module.exports = {
   readServerInfo,
   writeServerInfo,
   clearServerInfo,
-  registerWorker,
-  unregisterClaim,
-  markLongRunFlagged,
-  reconcileSession,
-  sessionClaims,
 };

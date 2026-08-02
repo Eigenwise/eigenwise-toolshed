@@ -118,19 +118,6 @@ test('findNewerInstall: repo-source checkout (non-semver dir name) never self-re
   }
 });
 
-test('dashboard serves the committed production dist and removes grade routing', () => {
-  const html = fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'dist', 'index.html'), 'utf8');
-  const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
-  assert.match(html, /assets\//);
-  assert.equal(fs.existsSync(path.join(__dirname, '..', 'dashboard', 'index.html')), false);
-  assert.match(server, /DASHBOARD_DIST/);
-  assert.doesNotMatch(server, /DASHBOARD_HTML/);
-  assert.match(server, /pathname === "\/api\/routing-fallback"/);
-  assert.match(server, /pathname === "\/api\/routing-models"/);
-  assert.match(server, /fallback: body\.fallback/);
-  assert.doesNotMatch(server, /getModelPrefs|routingLadder|setModelPrefs/);
-});
-
 test('findNewerInstall: never throws even with guards disabled', async () => {
   await assert.doesNotReject(() => findNewerInstall());
 });
@@ -184,18 +171,6 @@ test('stable cwd lets a detached child outlive a removed worktree-like cwd', { t
   assert.strictEqual(fs.readFileSync(marker, 'utf8'), 'ready');
 });
 
-test('dashboard exposes routing profiles, board previews, and profile settings', () => {
-  const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
-  const bundle = fs.readdirSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets'))
-    .map((name: string) => fs.readFileSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets', name), 'utf8')).join('\n');
-  assert.match(server, /routing-profiles/);
-  assert.match(server, /routing-profile.*preview/s);
-  assert.match(server, /setProjectRoutingProfile/);
-  assert.match(bundle, /Board routing/);
-  assert.match(bundle, /Profile library/);
-  assert.match(bundle, /Availability fallback/);
-});
-
 test('dashboard exposes board archive routes and guarded project controls', () => {
   const server = fs.readFileSync(path.join(__dirname, '..', 'lib', 'server.js'), 'utf8');
   const bundle = fs.readdirSync(path.join(__dirname, '..', 'dashboard', 'dist', 'assets'))
@@ -207,103 +182,6 @@ test('dashboard exposes board archive routes and guarded project controls', () =
   assert.match(bundle, /Delete board/);
   assert.match(bundle, /Archived boards/);
   assert.match(bundle, /This cannot be undone/);
-});
-
-test('category draft validation accepts only live routes', () => {
-  const draft = validateCategoryDraft({ id: 'poker.analysis', name: 'Poker analysis', description: 'Analyze poker hand histories and related strategy work.', contract: 'Review the supplied hands and explain the result.', route: { model: 'sonnet', effort: 'high' }, fallback: null });
-  assert.equal(draft.id, 'poker.analysis');
-  assert.throws(() => validateCategoryDraft({ ...draft, name: { value: 'not a string' } }), /omitted name/);
-  assert.throws(() => validateCategoryDraft({ ...draft, route: { model: 'missing', effort: 'high' } }), /live catalog/);
-});
-
-test('category draft endpoint handles success, malformed output, missing CLI, and timeout', { concurrency: false }, async (t?: any) => {
-  const started = await start(45000 + Math.floor(Math.random() * 1000));
-  t.after(() => { started.server.close(); setCategoryDraftSpawn(null); setCategoryDraftTimeout(null); });
-  const childFor = (stdout?: any, code?: any) => () => {
-    const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => child.emit('close', null);
-    process.nextTick(() => { if (stdout) child.stdout.emit('data', stdout); child.emit('close', code == null ? 0 : code); });
-    return child;
-  };
-  setCategoryDraftAvailable(true);
-  setCategoryDraftSpawn(childFor(JSON.stringify({ id: 'poker.analysis', name: 'Poker analysis', description: 'Analyze poker hand histories and related strategy work.', contract: 'Review the supplied hands.', route: { model: 'sonnet', effort: 'high' }, fallback: null })));
-  const ok = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'an agent that analyzes poker hand histories' });
-  assert.equal(ok.status, 200); assert.equal(ok.body.draft.id, 'poker.analysis');
-  setCategoryDraftSpawn(childFor('```json\n' + JSON.stringify({ id: 'fenced.category', name: 'Fenced category', description: 'Accept category drafts returned in fenced JSON.', contract: 'Review the draft.', route: { model: 'haiku', effort: 'medium' }, fallback: null }) + '\n```'));
-  const fenced = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
-  assert.equal(fenced.status, 200); assert.equal(fenced.body.draft.id, 'fenced.category');
-  setCategoryDraftSpawn(childFor('not json'));
-  const malformed = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
-  assert.equal(malformed.status, 422);
-  setCategoryDraftAvailable(false);
-  const missing = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
-  assert.equal(missing.status, 503);
-  setCategoryDraftAvailable(true);
-  setCategoryDraftSpawn(() => { const child = new EventEmitter(); child.stdout = new EventEmitter(); child.stderr = new EventEmitter(); child.kill = () => {}; return child; });
-  setCategoryDraftTimeout(10);
-  const timedOut = await requestJson(started.port, 'POST', '/api/categories/draft', { sentence: 'test' });
-  assert.equal(timedOut.status, 422);
-});
-
-
-test('category endpoints project scope preserves global taxonomy and reports local layers', { concurrency: false }, async (t?: any) => {
-  const one = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'one')).slug;
-  const two = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'two')).slug;
-  store.setCategory({ id: 'general', name: 'General', description: '', contract: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
-  store.setCategory({ id: 'coding', name: 'Coding', description: 'Global coding', contract: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
-  const started = await start(44000 + Math.floor(Math.random() * 1000));
-  t.after(() => started.server.close());
-
-  const local = await requestJson(started.port, 'POST', '/api/categories', { project: one, id: 'music', name: 'Music', description: 'Local', contract: '', route: { model: 'opus', effort: 'high' }, fallback: null, enabled: true });
-  assert.strictEqual(local.status, 201);
-  assert.strictEqual(local.body.category.layer.kind, 'ADD');
-  const forked = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { route: { model: 'opus', effort: 'high' } });
-  assert.strictEqual(forked.status, 200);
-  assert.strictEqual(forked.body.category.layer.kind, 'DETACH'); // editing a board category forks it
-  assert.deepStrictEqual(forked.body.category.route, { model: 'opus', effort: 'high' });
-  const disabled = await requestJson(started.port, 'PATCH', `/api/categories/coding?project=${one}`, { disable: true });
-  assert.strictEqual(disabled.status, 200);
-  assert.strictEqual(disabled.body.category.disabled, true);
-  const other = await fetchJson(started.port, `/api/categories?project=${two}`);
-  assert.ok(!other.categories.some((category?: any) => category.id === 'music'));
-  assert.ok(other.categories.some((category?: any) => category.id === 'coding' && !category.disabled));
-  const global = await fetchJson(started.port, '/api/categories?project=all');
-  assert.ok(!global.categories.some((category?: any) => category.id === 'music'));
-  assert.ok(global.categories.some((category?: any) => category.id === 'coding' && !category.disabled));
-  assert.strictEqual((await requestJson(started.port, 'PATCH', `/api/categories/general?project=${one}`, { disable: true })).status, 400);
-  assert.strictEqual((await requestJson(started.port, 'DELETE', `/api/categories/coding?project=${one}`)).status, 200);
-
-  const detached = await requestJson(started.port, 'POST', '/api/categories/coding/detach', { project: one });
-  assert.strictEqual(detached.status, 200);
-  assert.strictEqual(detached.body.category.linkState, 'detached');
-  assert.deepStrictEqual(detached.body.warnings, []); // a forked copy is not a warning
-
-  const relinked = await requestJson(started.port, 'POST', '/api/categories/coding/relink', { project: one });
-  assert.strictEqual(relinked.status, 200);
-  assert.strictEqual(relinked.body.category.linkState, 'linked');
-});
-
-test('routing profile REST exposes profile categories, previews, and board pointers', { concurrency: false }, async (t?: any) => {
-  const project = store.ensureProject(path.join(process.env.SIDEQUEST_HOME, 'profile-rest')).slug;
-  const started = await start(45000 + Math.floor(Math.random() * 1000));
-  t.after(() => started.server.close());
-
-  const listed = await fetchJson(started.port, '/api/routing-profiles');
-  assert.ok(listed.profiles.some((profile?: any) => profile.id === 'coding'));
-  const created = await requestJson(started.port, 'POST', '/api/routing-profiles', { id: 'server-rest-profile', from: 'coding', name: 'Server REST profile' });
-  assert.strictEqual(created.status, 201);
-  const profileCategories = await fetchJson(started.port, '/api/categories?profile=server-rest-profile');
-  assert.strictEqual(profileCategories.profile.id, 'server-rest-profile');
-  const added = await requestJson(started.port, 'POST', '/api/categories', { profile: 'server-rest-profile', id: 'server-rest', name: 'Server REST', description: 'Server endpoint coverage.', contract: '', route: { model: 'sonnet', effort: 'high' }, fallback: null, enabled: true });
-  assert.strictEqual(added.status, 201);
-  const preview = await fetchJson(started.port, `/api/projects/${project}/routing-profile/preview?profile=server-rest-profile`);
-  assert.strictEqual(preview.to.id, 'server-rest-profile');
-  const assigned = await requestJson(started.port, 'PUT', `/api/projects/${project}/routing-profile`, { profileId: 'server-rest-profile' });
-  assert.strictEqual(assigned.status, 200);
-  const pointer = await fetchJson(started.port, `/api/projects/${project}/routing-profile`);
-  assert.strictEqual(pointer.profile.id, 'server-rest-profile');
-  const repoint = await requestJson(started.port, 'POST', '/api/routing-profiles/repoint', { from: 'server-rest-profile', to: 'coding', dryRun: true });
-  assert.strictEqual(repoint.status, 200);
-  assert.ok(repoint.body.result.boards.some((board?: any) => board.project === project));
 });
 
 let stagingId = 0;
@@ -467,19 +345,6 @@ test('dashboard ticket feed retains done tickets', async (t?: any) => {
 
   const payload = await fetchJson(started.port, `/api/tickets?project=${encodeURIComponent(project)}`);
   assert.equal(payload.tickets.some((ticket?: any) => ticket.ref === done.ref && ticket.status === 'done'), true);
-});
-
-test('dashboard ticket feed uses the pulse claim verdict', async (t?: any) => {
-  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-dashboard-claim-verdict'), 'Dashboard claim verdict').slug;
-  const ticket = store.createTicket(project, { title: 'dashboard claim verdict' });
-  assert.equal(store.claimTicket(project, ticket.ref, 'worker', { direct: true, reason: 'test the dashboard claim verdict response' }).ok, true);
-  const started = await start(await availablePort());
-  t.after(() => started.server.close());
-
-  const payload = await fetchJson(started.port, `/api/tickets?project=${encodeURIComponent(project)}`);
-  const claim = payload.tickets.find((item?: any) => item.ref === ticket.ref).claim;
-  assert.equal(claim.reclaimable, null);
-  assert.equal(typeof claim.idleMs, 'number');
 });
 
 test('dashboard self-updates to a newer cached install at the same URL', { timeout: 180000 }, async (t?: any) => {
