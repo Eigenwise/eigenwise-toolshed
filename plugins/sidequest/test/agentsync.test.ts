@@ -392,47 +392,57 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   }
 });
 
-test('read-only stable executors expose only the approved tool allowlist', () => {
+// Read-only is a deny list. An allow list had to name all 54 board tools to leave three
+// writers out, which cost ~570 bytes per definition, hid every tool added later, and
+// silently excluded non-board MCP servers — visual-review could not reach Playwright.
+test('read-only stable executors deny the writers and grant everything else', () => {
   const dir = tmpDir();
-  const expectedTools = agentsync.READ_ONLY_TOOLS.join(', ');
   agentsync.syncExecAgents(null, { dir });
 
   for (const file of ['sidequest-exec-dispatch-readonly-high.md', 'sidequest-exec-readonly-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, new RegExp(`^tools: ${expectedTools}$`, 'm'));
-    assert.doesNotMatch(body, /^tools:.*\b(?:Edit|Write|NotebookEdit)\b/m);
-    assert.doesNotMatch(body, /^tools:.*mcp__\*$/m);
-    assert.ok(agentsync.READ_ONLY_BOARD_TOOLS.every((tool: string) => body.includes(tool)));
+    // No allow list at all: anything not denied is available, including tools that do
+    // not exist yet.
+    assert.doesNotMatch(body, /^tools:/m);
+    const denied = body.match(/^disallowedTools: (.+)$/m);
+    assert.ok(denied, `${file} must carry a disallowedTools line`);
+    for (const writer of ['Edit', 'Write', 'NotebookEdit']) {
+      assert.ok(denied![1].includes(writer), `${file} must deny ${writer}`);
+    }
+    // Playwright and Context7 are read-only work's actual tools; denying them was the
+    // accidental side effect of the old allow list.
+    assert.doesNotMatch(denied![1], /playwright|context7/i);
     assert.match(body, /Read-only role/);
-    assert.match(body, /Do not modify the repository working tree/);
     assert.match(body, /Bash is for inspection, tests, and verification, not edits/);
-    assert.match(body, /session scratchpad/);
-    assert.match(body, /package\.json or node_modules/);
-    assert.doesNotMatch(body, /tools cannot change files/i);
     assert.match(body, /board blocker comment/);
+    // Bash stays, so this is not a write-proof sandbox and must not claim to be.
+    assert.doesNotMatch(body, /tools cannot change files/i);
   }
 
   for (const file of ['sidequest-exec-dispatch-high.md', 'sidequest-exec-high.md']) {
-    assert.doesNotMatch(fs.readFileSync(path.join(dir, file), 'utf8'), /^tools:/m);
+    const body = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.doesNotMatch(body, /^tools:/m);
+    assert.doesNotMatch(body, /^disallowedTools:/m);
   }
 });
 
-test('read-only executor grants every registered board MCP tool by exact name', () => {
-  const board = require('../lib/mcp.js');
-  const actual = board.TOOLS
-    .filter(({ name }: { name: string }) => !['native_agent', 'native_agent_cleanup'].includes(name))
-    .map(({ name }: { name: string }) => `mcp__plugin_sidequest_board__${name}`)
-    .sort();
-
-  assert.deepStrictEqual([...agentsync.READ_ONLY_BOARD_TOOLS].sort(), actual);
+test('a newly registered board tool needs no agentsync change to reach read-only executors', () => {
+  // The old allow list named every board tool, so adding one silently withheld it until
+  // someone updated ten lists. Nothing may name board tools for grant purposes now.
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'lib', 'agentsync.ts'), 'utf8');
+  // A grant list would name all 54. A handful of references is fine: the briefing shows
+  // the executor how to call claim, which is an example, not a grant.
+  const named = new Set(source.match(/mcp__plugin_sidequest_board__[a-zA-Z_]+/g) || []);
+  assert.ok(named.size <= 2,
+    `agentsync names ${named.size} board tools; read-only is a deny list, so it must not enumerate grants: ${[...named].join(', ')}`);
 });
 
-test('read-only executor denylists remove configured MCP tools without changing other grants', () => {
+test('read-only executor denylists add configured MCP tools without dropping the writers', () => {
   const body = agentsync.renderReadOnlyDispatchAgent('high', ['mcp__notion__search']);
-  assert.match(body, new RegExp(`^tools: ${agentsync.READ_ONLY_TOOLS.join(', ')}$`, 'm'));
-  assert.doesNotMatch(body, /^tools:.*mcp__\*$/m);
-  assert.match(body, /^disallowedTools: mcp__notion__search$/m);
-  assert.match(agentsync.renderReadOnlyClaudeAgent('high', ['mcp__plugin_svelte_svelte__*']), /^disallowedTools: mcp__plugin_svelte_svelte__\*$/m);
+  assert.doesNotMatch(body, /^tools:/m);
+  assert.match(body, /^disallowedTools: .*\bEdit\b/m);
+  assert.match(body, /^disallowedTools: .*mcp__notion__search/m);
+  assert.match(agentsync.renderReadOnlyClaudeAgent('high', ['mcp__plugin_svelte_svelte__*']), /^disallowedTools: .*mcp__plugin_svelte_svelte__\*/m);
   assert.notEqual(
     agentsync.stableInstallHash(agentsync.EXECUTOR_SKILLS, ['mcp__notion__search']),
     agentsync.stableInstallHash(agentsync.EXECUTOR_SKILLS, ['mcp__github__create_issue']),

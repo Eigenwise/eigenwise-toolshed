@@ -149,71 +149,36 @@ function workflowRecipe(category?: any, resolved?: any) {
 // file is user-scoped rather than plugin-scoped so Claude Code honors its
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
 // required; `modelId`, `marker`, and `extraNote` are optional.
-const READ_ONLY_BOARD_TOOLS = [
-  'mcp__plugin_sidequest_board__list',
-  'mcp__plugin_sidequest_board__pulse',
-  'mcp__plugin_sidequest_board__changes',
-  'mcp__plugin_sidequest_board__story',
-  'mcp__plugin_sidequest_board__story_contract',
-  'mcp__plugin_sidequest_board__story_log',
-  'mcp__plugin_sidequest_board__ready',
-  'mcp__plugin_sidequest_board__add',
-  'mcp__plugin_sidequest_board__update',
-  'mcp__plugin_sidequest_board__remove',
-  'mcp__plugin_sidequest_board__archive',
-  'mcp__plugin_sidequest_board__unarchive',
-  'mcp__plugin_sidequest_board__claim',
-  'mcp__plugin_sidequest_board__checkpoint',
-  'mcp__plugin_sidequest_board__sweepClaims',
-  'mcp__plugin_sidequest_board__next',
-  'mcp__plugin_sidequest_board__done',
-  'mcp__plugin_sidequest_board__groomClose',
-  'mcp__plugin_sidequest_board__release',
-  'mcp__plugin_sidequest_board__verdict',
-  'mcp__plugin_sidequest_board__scopeRequest',
-  'mcp__plugin_sidequest_board__scopeDeny',
-  'mcp__plugin_sidequest_board__commit',
-  'mcp__plugin_sidequest_board__submit',
-  'mcp__plugin_sidequest_board__integrate',
-  'mcp__plugin_sidequest_board__comment',
-  'mcp__plugin_sidequest_board__plan',
-  'mcp__plugin_sidequest_board__comments',
-  'mcp__plugin_sidequest_board__link',
-  'mcp__plugin_sidequest_board__unlink',
-  'mcp__plugin_sidequest_board__assign',
-  'mcp__plugin_sidequest_board__dispatch',
-  'mcp__plugin_sidequest_board__profile_list',
-  'mcp__plugin_sidequest_board__profile_get',
-  'mcp__plugin_sidequest_board__profile_create',
-  'mcp__plugin_sidequest_board__profile_edit',
-  'mcp__plugin_sidequest_board__profile_retire',
-  'mcp__plugin_sidequest_board__profile_use',
-  'mcp__plugin_sidequest_board__profile_repoint',
-  'mcp__plugin_sidequest_board__profile_promote',
-  'mcp__plugin_sidequest_board__new_board_profile',
-  'mcp__plugin_sidequest_board__route_recipe',
-  'mcp__plugin_sidequest_board__category_list',
-  'mcp__plugin_sidequest_board__category_add',
-  'mcp__plugin_sidequest_board__category_edit',
-  'mcp__plugin_sidequest_board__category_detach',
-  'mcp__plugin_sidequest_board__category_relink',
-  'mcp__plugin_sidequest_board__global_fallback',
-  'mcp__plugin_sidequest_board__category_rm',
-  'mcp__plugin_sidequest_board__board_config',
-  'mcp__plugin_sidequest_board__models',
-  'mcp__plugin_sidequest_board__projects',
-  'mcp__plugin_sidequest_board__archive_board',
-  'mcp__plugin_sidequest_board__unarchive_board',
-];
-const READ_ONLY_TOOLS = [
-  'Read', 'Glob', 'Grep', 'WebSearch', 'WebFetch', 'Bash', 'ToolSearch', 'SendMessage', ...READ_ONLY_BOARD_TOOLS,
-];
 const EXECUTOR_SKILLS = ['playbook:verify-discipline'];
 
+// Read-only is expressed as a DENY list, not an allow list.
+//
+// The allow list this replaces enumerated all 54 board tools plus 8 core ones, so it
+// restricted nothing on the board side; it cost ~570 tokens of injected frontmatter per
+// definition, ten definitions over, purely to leave Edit/Write/NotebookEdit out. It also
+// had two failures nobody chose: any tool added later was invisible until someone updated
+// the list, and every non-board MCP server was silently excluded — which is why
+// visual-review, a read-only category, could not reach Playwright.
+//
+// This is not a write-proof sandbox and should not be described as one. Bash stays,
+// because a reviewer has to be able to run the suite, and Bash can obviously write.
+// Worktree isolation is what actually contains a stray write; on a board with
+// worktreeIsolation:false there is no backstop at all.
+const READ_ONLY_DENIED_TOOLS = [
+  'Edit', 'Write', 'NotebookEdit',
+  // A read-only ticket reports findings; it does not fan out or publish outward. Both
+  // were already excluded by the old allow list, so this keeps behaviour identical.
+  'Agent', 'Artifact',
+  // Drives the user's real, logged-in browser. Playwright is the isolated one and stays
+  // available, per the house rule that UI verification goes through it.
+  'mcp__claude-in-chrome',
+];
+
 function resolveReadOnlyTools(readOnlyDeniedTools?: any) {
+  const extra = Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [];
   return {
-    tools: READ_ONLY_TOOLS,
-    disallowedTools: Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [],
+    tools: null,
+    disallowedTools: [...new Set([...READ_ONLY_DENIED_TOOLS, ...extra])],
   };
 }
 
@@ -1103,8 +1068,7 @@ module.exports = {
   EXECUTOR_CHECKPOINT_TOOL_ROUNDS,
   EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
-  READ_ONLY_BOARD_TOOLS,
-  READ_ONLY_TOOLS,
+  READ_ONLY_DENIED_TOOLS,
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
   execMaxTurns,
