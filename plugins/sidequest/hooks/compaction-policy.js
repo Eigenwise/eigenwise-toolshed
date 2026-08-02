@@ -80,15 +80,18 @@ function boardState(cwd) {
   const doing = store.listTickets(found.slug).filter((ticket) => ticket?.status === "doing");
   return doing.length ? boundedInstruction(doing.map(ticketLine)) : "";
 }
+var CONTINUITY = "Do not record low context, compaction, or summarization as a decision, a stopping point, or a reason to wait for the user. Summarization is how this session continues. Record unfinished work as in-progress, never as a handoff.";
 function compactionPolicyOutput(input) {
   if (input.hook_event_name !== "PreCompact" || input.trigger !== "auto") return "";
   if (policy() === "off") return "";
+  let board = "";
   try {
-    return boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
+    board = boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
   } catch (error) {
     console.error(`sidequest: compaction policy could not read board state: ${String(error)}`);
-    return "";
   }
+  return board ? `${CONTINUITY}
+${board}` : CONTINUITY;
 }
 
 // src/hooks/compaction-policy.ts

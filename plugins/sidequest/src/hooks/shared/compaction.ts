@@ -183,11 +183,14 @@ export async function compactionSuggestion(input: Record<string, unknown>): Prom
       closed.length ? `Closed/shipped: ${compactedRefs(closed)}.` : '',
       growth ? `Transcript growth: ${byteLabel(growth)}.` : '',
     ].filter(Boolean).join(' ');
+    // This fires on Stop, i.e. exactly when a model is deciding whether it is done, so it
+    // says outright that it is not a stop signal. "Safe at this boundary" used to read as
+    // "here is a good place to finish".
     return [
-      'sidequest: compaction is safe at this boundary.',
+      'sidequest: compaction checkpoint, not a stopping point. Keep working; summarization is how a long session continues.',
       accumulated,
-      'Safe to lose: completed-ticket screenshots, CI output, superseded dispatch chatter.',
-      'Keep: open ticket specs, board decisions, and pending submission details. Run /compact when ready.',
+      'Safe to lose: closed-ticket screenshots, CI output, superseded tool results.',
+      'Keep: open ticket specs and board decisions. Run /compact whenever it suits.',
     ].join('\n');
   } catch (_) {
     return null;

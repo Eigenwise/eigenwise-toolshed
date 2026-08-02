@@ -30,7 +30,9 @@ function run(payload: unknown, env: Record<string, string> = {}) {
 function createDoing(title: string): { ticket: any; story: any } {
   const story = store.createStory(slug, { title: 'Compaction policy story' });
   const ticket = store.createTicket(slug, { title, storyId: story.ref, source: 'test' });
-  assert.equal(store.claimTicket(slug, ticket.ref, 'policy-executor').ok, true);
+  // Claims went with the orchestration strip; a tracker moves status directly, and
+  // updateTicket returns the updated ticket rather than an {ok} result.
+  assert.equal(store.updateTicket(slug, ticket.ref, { status: 'doing' }).status, 'doing');
   return { ticket, story };
 }
 
@@ -48,10 +50,43 @@ test('PreCompact off stays silent and a board read failure stays non-blocking', 
   assert.equal(off.status, 0);
   assert.equal(off.stdout, '');
 
+  // The continuity instruction does not depend on the board, so an unreadable board
+  // must not suppress it: that is the case where a session is most likely to drift.
   const unavailable = run(payload, { CLAUDE_PLUGIN_ROOT: path.join(HOME, 'missing-plugin-root') });
   assert.equal(unavailable.status, 0);
-  assert.equal(unavailable.stdout, '');
+  assert.match(unavailable.stdout, /Summarization is how this session continues/);
+  assert.doesNotMatch(unavailable.stdout, /Preserve verbatim/);
   assert.match(unavailable.stderr, /could not read board state/);
+});
+
+// A summarized "I stopped because context was low" comes back as a user-role message and
+// the next turn obeys it. This instruction is the only thing stopping that ratchet.
+test('PreCompact always tells the summary not to record context pressure as a stop', () => {
+  const out = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'continuity' }).stdout;
+  assert.match(out, /Do not record low context, compaction, or summarization as a decision/);
+  assert.match(out, /never as a handoff/);
+});
+
+test('the Stop-hook suggestion never reads as permission to finish', () => {
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'hooks', 'shared', 'compaction.ts'), 'utf8');
+  assert.match(source, /compaction checkpoint, not a stopping point/);
+  assert.match(source, /Keep working; summarization is how a long session continues/);
+  // The strip removed dispatch and submissions; the message outlived them.
+  for (const dead of [/dispatch chatter/, /pending submission/]) {
+    assert.doesNotMatch(source, dead, 'compaction message still carries orchestration vocabulary');
+  }
+});
+
+// The strip left createDoing orphaned, so nothing covered the pin path it exists for.
+test('PreCompact pins doing tickets under the continuity instruction', () => {
+  const { ticket } = createDoing('Pinned through compaction');
+  const out = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pin' }).stdout;
+  assert.match(out, /Summarization is how this session continues/);
+  assert.match(out, /Preserve verbatim in the summary:/);
+  assert.ok(out.includes(ticket.ref), `expected ${ticket.ref} in the pin block`);
+  assert.ok(out.includes('Pinned through compaction'), 'expected the ticket title in the pin block');
+  assert.ok(out.indexOf('Summarization is how') < out.indexOf('Preserve verbatim'),
+    'continuity must lead, so a truncated summary keeps it');
 });
 
 test('PreCompact registers without a matcher', () => {
