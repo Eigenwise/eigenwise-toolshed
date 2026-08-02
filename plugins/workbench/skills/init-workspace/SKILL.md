@@ -137,72 +137,6 @@ Also check what's already there:
   `references/language-detection.md` if you need the signal-file map. This detection seeds the
   interview so you propose rather than interrogate.
 - **Git?** Note whether it's a git repo (affects the commit reminder and the map's state file).
-
-### Pre-enable Sidequest lookup
-
-When this flow needs Sidequest before reload, read `~/.claude/plugins/installed_plugins.json` and select the
-`sidequest@eigenwise-toolshed` entry for the current project (or its user-scope entry). Its `installPath` must
-match `~/.claude/plugins/cache/eigenwise-toolshed/sidequest/<version>` and its final segment must equal the
-entry's `version`; otherwise stop and ask the user to reinstall Sidequest. Invoke
-`node "<installPath>/plugins/sidequest/bin/sidequest.js" profile list`. Never PATH-probe or search the cache.
-
-### Recurring work and capabilities
-
-When Sidequest is selected, build the routing input before proposing any category. Inspect what is actually
-visible: existing skills, the folder taxonomy, file types, maintenance scripts, and the stated project purpose.
-Turn those signals into a short list in this form: **"This project repeatedly needs X, which takes capability
-Y."** Ask the user to confirm or correct the list, and say in the question that the accepted capabilities
-will determine which Sidequest categories the project gets. Record the accepted list in the session/bootstrap
-plan. Derive project-profile categories from this list, never from the starter's existing category set.
-
-### Routing profile
-
-When Sidequest is selected, make one routing choice immediately after the capability step and before the Phase 1
-interview. Infer a starter from plain repo signals: code and build files → `coding`; docs, posts, or
-content → `writing`; source corpora, datasets, or citation-heavy material → `research`; audio, scores,
-or music-production files → `creative-music`. If signals conflict, choose the closest fit and say why.
-
-Use one `AskUserQuestion` that proposes the inferred starter and offers: **Use this profile**, **Choose
-another starter**, or **Make a project profile**. In the question, say that the profile controls which models
-and effort levels future Sidequest work uses. Keep it conversational: do not turn category routing into
-a form or walk through every category. If the user chooses another starter, show the available profiles from
-`sidequest profile list` and let them name one in plain text. Record the accepted profile choice in the
-session/bootstrap plan; if Sidequest was not selected, skip this step.
-
-For **Make a project profile**, derive the final category set from the accepted recurring-work and capability
-list plus the stated project purpose. Consult the closest starter as a reference for category shape and useful
-precedent, never as the category baseline. Removing an inherited category is as normal as adding one. For every
-category in the proposed final set, state why this project needs it and why its model and effort fit that work.
-Remove anything you cannot justify; **"it came with the starter" is not a justification.** Give every derived
-category a non-empty `contract` with standing instructions for its executor, and set its complete policy:
-route, `contract`, `readonly`, and `artifactRoots`. A route without a contract is half-configured. Let the user
-confirm or tweak the complete set in plain language; in that question, say the accepted set becomes this
-project's Sidequest routing policy.
-
-Create `<project>-routing` by cloning the closest starter for the profile plumbing, then reconcile the clone to
-the confirmed final set and select it for the board:
-
-```sh
-sidequest profile create <project>-routing --from <starter> --description "<confirmed purpose>"
-sidequest profile use <project>-routing --project <board>
-```
-
-Apply every profile-category add, edit, or removal with `--profile <project>-routing`, never `--profile
-<starter>`. A starter is shared policy and setup must never mutate it. Do not create a project profile when the
-user accepts or picks a starter. Keep the selected profile and confirmed final category set in the plan; Phase 4
-applies the profile after Sidequest creates or opens the board.
-
-### Executor worktree isolation
-
-When Sidequest is selected, after recording the routing choice and before the Phase 1 interview, ask this
-plain-text question: **"Should dispatched executors use isolated git worktrees here? I recommend keeping
-them on. Choose the shared checkout when the project's outputs need to appear in this working tree, or when
-parallel worktrees have caused problems here."** Keep it conversational rather than turning it into a menu.
-
-Record the accepted choice in the session/bootstrap plan alongside the routing choice. Default to isolated
-worktrees when the user accepts the recommendation or asks for good defaults. Use the shared checkout only
-when they explicitly choose it. If Sidequest was not selected, skip this question.
-
 ## Phase 1 — Interview and selection
 
 Model Gateway is a user-scope plugin and its wiring is global-only, so there is no per-project gateway
@@ -440,13 +374,8 @@ empirically — this is the part that separates "wrote some files" from "set up 
    back to reload/restart.
 4. **codebase-mapper is injecting.** Same check: confirm the `INDEX.md` hub is being injected on the
    prompt. Seeing it in context is the proof the hook fired.
-5. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill), then
-   apply the profile recorded after Phase 0 with `sidequest profile use <profile> --project <board>`. For a
-   new project profile, create it from its recorded starter and apply only its confirmed delta before using
-   it. Then call `board_config` for this board with `worktreeIsolation: true` for isolated worktrees or
-   `worktreeIsolation: false` for the shared checkout, using the choice recorded in the plan. Confirm the
-   returned setting. Report the URL, selected profile, and executor checkout choice, so the user sees the
-   Kanban and its routing policy are live.
+5. **sidequest board.** If selected, bring up the board (`sidequest dashboard`, or ask the board skill)
+   and report the URL, so the user sees the Kanban is live.
 6. **Optional plugins.** Verify each selected extra is usable: an LSP responds and its binary is on
    `PATH`, a named skill resolves, or its documented integration opens. Keep it quick, but verify every
    selected plugin rather than assuming a loaded entry works.
@@ -504,10 +433,7 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
 - [ ] Project intent was asked before the picker; current marketplace catalog plugin picker came third with
       intent-grounded recommendations, before Phase 0
 - [ ] Phase 0 assessment done (new/existing, codebase/not, existing `.claude/` read and merged)
-- [ ] When Sidequest is selected, recurring jobs and required capabilities were confirmed before routing; routing
-      profile and executor checkout choice were recorded in the bootstrap plan
-- [ ] Every derived category is justified by this project's recurring work and by its selected model and effort;
-      every one has a non-empty `contract` and complete `readonly` and `artifactRoots` policy
+- [ ] When Sidequest is selected, the board came up and the URL was reported
 - [ ] Stack and compact project-detail interview complete; LSP binary prerequisites checked
 - [ ] Bootstrap plan created in the session scratchpad; helper check and install both succeeded
 - [ ] CLI-owned `enabledPlugins` left to `claude plugin install`; only non-plugin settings and portable
