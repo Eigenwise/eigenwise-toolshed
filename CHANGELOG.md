@@ -8,6 +8,16 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.344.0 (2026-08-02)
+
+### sidequest 4.4.1 → 4.4.2
+
+#### Fixes
+
+- Publish-lock refusals name the expected and found session ids (SQ-1140) [`c047bc2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/c047bc2a)
+- Dispatch executor defs no longer render effort: max (SQ-1285) [`9b8a888`](https://github.com/Eigenwise/eigenwise-toolshed/commit/9b8a8882)
+  The two collapsed dispatch executor definitions rendered frontmatter `effort: max` so their maxTurns picked up the 250-turn backstop. Only the gateway's marker path rewrites effort, and that path requires the requested model to be `auto`; a request naming a concrete Claude model forwards effort untouched. WebSearch's internal call is such a request, so `max` reached Anthropic and 400'd on a thinking-disabled model. maxTurns is now derived independently of the rendered effort.
+
 ## v3.343.0 (2026-08-02)
 
 ### codebase-mapper 2.12.1 → 2.12.2
