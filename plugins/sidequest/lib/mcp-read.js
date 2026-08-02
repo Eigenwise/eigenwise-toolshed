@@ -109,27 +109,6 @@ const tools = [
     }
   },
   {
-    name: "pulse",
-    description: "Compact liveness read: status, claim, latest comment, dispatch state, git activity.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        project: PROJECT_PROP,
-        ref: { type: "string", description: "Ticket ref or id." },
-        detail: { type: "boolean", description: "Legacy alias for full." },
-        full: { type: "boolean", description: "Include submission, git, and full dispatch lifecycle." }
-      },
-      required: ["ref"]
-    },
-    handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      const pulse = store.pulsePayload(slug, args.ref);
-      if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
-      const payload = args.full || args.detail ? withoutCategories(pulse) : compactPulse(pulse);
-      return Object.assign({ project: slug }, payload);
-    }
-  },
-  {
     name: "changes",
     description: "THE polling read for liveness/progress: compact ticket delta since an ISO timestamp. Omit since for the last 60 minutes. Returns serverTime to use as the next since value.",
     inputSchema: {
@@ -199,92 +178,6 @@ const tools = [
         return { ok: store.deleteStory(slug, args.story), project: slug, story: story || null };
       }
       throw new Error(`story: unknown action "${args.action || ""}". Use add | list | show | update | rm. Run "sidequest help".`);
-    }
-  },
-  {
-    name: "story_contract",
-    description: "Read or set a story execution contract. Set contract once with frozen decisions, invariants, acceptance evidence, and durable artifact links; omit it to read. Contracts are capped at 4096 UTF-8 bytes.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        project: PROJECT_PROP,
-        story: { type: "string", description: "Story ref or id." },
-        contract: { type: "string", description: "Execution contract body. An empty string clears it." }
-      },
-      required: ["story"]
-    },
-    handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      const story = args.contract === void 0 ? store.getStory(slug, args.story) : store.updateStory(slug, args.story, { executionContract: args.contract });
-      if (!story) throw new Error(`story_contract: no story "${args.story}" in ${meta.name}`);
-      return { ok: true, project: slug, projectName: meta.name, story };
-    }
-  },
-  {
-    name: "story_log",
-    description: "Read, append, or clear a story decision log.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        project: PROJECT_PROP,
-        story: { type: "string", description: "Story ref or id." },
-        entry: { type: "string", description: "Decision log entry, prefixed with DECISION, CONSTRAINT, or DISCOVERY." },
-        ref: { type: "string", description: "Claimed member ticket ref for an append." },
-        by: { type: "string", description: "Claim owner for an append, or orchestrator to clear." },
-        clear: { type: "boolean", description: "Archive the current entries; use sidequest story log --full to read their history." }
-      },
-      required: ["story"]
-    },
-    handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      if (args.clear && args.entry !== void 0) throw new Error("story_log: pass an entry or clear:true, not both.");
-      let story;
-      if (args.clear) {
-        if (args.by !== "orchestrator") throw new Error('story_log: clear:true requires by:"orchestrator".');
-        story = store.clearStoryLog(slug, args.story);
-      } else if (args.entry === void 0) {
-        story = store.getStory(slug, args.story);
-      } else {
-        story = store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
-      }
-      if (!story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
-      const log = store.storyDecisionLog(story);
-      return {
-        ok: true,
-        project: slug,
-        projectName: meta.name,
-        story: {
-          ref: story.ref,
-          logBytes: log.bytes,
-          logCapacity: log.capacity,
-          logRevision: log.revision,
-          entries: log.entries,
-          totalEntries: log.totalEntries,
-          omittedEntries: log.omittedEntries,
-          archivedEntries: log.archivedEntries
-        }
-      };
-    }
-  },
-  {
-    name: "ready",
-    description: "Ready tickets in safe waves. Default: count plus ref/title rows; full:true returns ticket records.",
-    inputSchema: {
-      type: "object",
-      properties: {
-        project: PROJECT_PROP,
-        model: MODEL_FILTER_PROP,
-        category: { type: "string", description: "Filter to a category ID." },
-        brief: { type: "boolean" },
-        full: { type: "boolean" }
-      }
-    },
-    handler(args) {
-      const { slug, meta } = resolveProject(args.project);
-      requireKnownModelFilter("ready", args.model);
-      const full = args.full === true || args.brief === false;
-      const payload = store.readyPayload(slug, { model: args.model, category: args.category, brief: !full });
-      return Object.assign({ project: slug, projectName: meta.name }, withoutCategories(full ? payload : readySummary(payload)));
     }
   }
 ];

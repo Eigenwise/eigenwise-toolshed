@@ -34,15 +34,6 @@ function createDoing(title: string): { ticket: any; story: any } {
   return { ticket, story };
 }
 
-test('PreCompact pinning stays within the prompt budget for crowded boards', () => {
-  for (let index = 0; index < 12; index += 1) createDoing(`Crowded active ticket ${index}: ${'detail '.repeat(60)}`);
-  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'pinning-budget' });
-
-  assert.equal(result.status, 0);
-  assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
-  assert.match(result.stdout, /^Preserve verbatim in the summary:/);
-});
-
 test('PreCompact ignores manual compaction', () => {
   const result = run({ hook_event_name: 'PreCompact', trigger: 'manual', cwd: boardPath, session_id: 'manual-compaction' }, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
 

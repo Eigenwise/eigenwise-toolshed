@@ -31,18 +31,6 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
         if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; changed = true; }
         if (changed) db.putRow(handle, 'projects', { slug, data: meta });
       }
-      const pointer = handle.prepare('SELECT project FROM project_routing_profiles WHERE project = ?').get(slug);
-      if (!pointer) {
-        const settings = handle.prepare('SELECT new_project_profile_id FROM routing_profile_settings WHERE singleton = 1').get();
-        if (!settings?.new_project_profile_id) throw new Error('The new-board routing profile is not configured.');
-        db.putRow(handle, 'project_routing_profiles', {
-          project: slug,
-          profile_id: settings.new_project_profile_id,
-          assigned_at: new Date().toISOString(),
-          assigned_by: 'ensure-project',
-        });
-        changed = true;
-      }
     });
     if (changed) invalidateStoreCaches();
     return { slug, dir, meta };

@@ -2,24 +2,12 @@
 
 function createReads(dependencies: any) {
   const {
-    checkpointProjection,
-    claimIdleMs,
-    claimReclaimable,
-    classifierCategories,
-    contractMetadata,
     countTickets,
     database,
     db,
     openBlockers,
     openBlockersFromIndex,
-    oracleProjection,
-    pendingSubmission,
     queryTickets,
-    readyTickets,
-    readyWaveDependencies,
-    readyWaves,
-    routeDescriptor,
-    submissionReadiness,
   } = dependencies;
 
 // A compact projection of a ticket for orchestration reads (`--brief` on the
@@ -42,25 +30,9 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     title: t.title,
     status: t.status,
     priority: t.priority,
-    complexity: t.complexity || null,
-    categoryId: t.categoryId || (t.category && t.category.id) || null,
-    categoryName: t.category && t.category.name || null,
-    route: routeDescriptor(t.model, t.effort),
-    effort: t.effort || null,
-    readonlyOverride: t.readonlyOverride === false ? false : null,
-    direct: t.directClaim || null,
-    ...(opts.includeScope ? {
-      files: Array.isArray(t.files) ? t.files : [],
-      contracts: contractMetadata(t),
-    } : {}),
-    claim: t.claim && t.claim.by ? { by: t.claim.by, at: t.claim.at, stale: claimReclaimable(t) } : null,
+    ...(opts.includeScope ? { files: Array.isArray(t.files) ? t.files : [] } : {}),
     blockedBy,
     comments: Array.isArray(t.comments) ? t.comments.length : 0,
-    checkpoint: checkpointProjection(t),
-    ...(oracleProjection(t) ? { oracle: oracleProjection(t) } : {}),
-    submission: pendingSubmission(t)
-      ? { commit: t.submission.commit, at: t.submission.at, readiness: submissionReadiness(t.submission) }
-      : null,
   };
 }
 
@@ -149,37 +121,18 @@ function listPayload(slug?: any, opts?: any) {
       total,
       returned,
       nextCursor: nextOffset < total ? String(nextOffset) : null,
-      claimIdleMs: claimIdleMs(),
-      categories: classifierCategories({ project }),
     };
   }
 
   let tickets = queryTickets(project, filter);
   if (opts.brief) tickets = tickets.map((ticket?: any) => briefTicket(project, ticket, { index }));
   const page: any = pageTickets(tickets, paging);
-  page.claimIdleMs = claimIdleMs();
-  page.categories = classifierCategories({ project });
   return page;
 }
-
-// Same for the ready read. Waves are ALWAYS arrays of refs (both transports,
-// brief or not) — full tickets ride only in `tickets`, so nothing is
-// serialized twice and the field has one shape. Ready tickets are unblocked by
-// construction, so brief projections skip the blocker lookup outright.
-function readyPayload(slug?: any, opts?: any) {
-  opts = opts || {};
-  let tickets = readyTickets(slug, { model: opts.model, category: opts.category });
-  const waves = readyWaves(slug, { model: opts.model, category: opts.category }).map((wave?: any) => wave.map((t?: any) => t.ref));
-  const waveDependencies = readyWaveDependencies(slug, { model: opts.model, category: opts.category });
-  if (opts.brief) tickets = tickets.map((t?: any) => briefTicket(slug, t, { blockedBy: [], includeScope: true }));
-  return { tickets, waves, waveDependencies, claimIdleMs: claimIdleMs(), categories: classifierCategories({ project: slug }) };
-}
-
 
   return {
     briefTicket,
     listPayload,
-    readyPayload,
   };
 }
 

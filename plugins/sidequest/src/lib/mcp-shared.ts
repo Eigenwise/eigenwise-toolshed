@@ -1,14 +1,8 @@
 const path = require('path');
 const fs = require('fs');
 const store = require('./store');
-const work = require('./work');
-const worktrees = require('./worktrees');
 const agentsync = require('./agentsync');
-const commitScope = require('./commit-scope');
 const publish = require('./publish');
-const execNames = require('./exec-names');
-const { claimRefusalMessage } = require('./refusal-guidance');
-const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight');
 
 type ToolDefinition = {
   name: string;
@@ -70,32 +64,7 @@ function sessionOf(args?: any) {
   return runtimeSessionId() || (args && String(args.session || '').trim()) || null;
 }
 
-function requireDispatchSession() {
-  const sessionId = runtimeSessionId();
-  if (!sessionId) {
-    throw new Error('dispatch: MCP runtime session identity is unavailable. Reload Sidequest in Claude Code and retry; do not pass a session label.');
-  }
-  return sessionId;
-}
 
-function workflowRecipe(slug?: any, categoryId?: any) {
-  const requested = String(categoryId || '').trim();
-  if (!requested) throw new Error('route_recipe: "category" is required.');
-  const category = store.getCategory(requested, { project: slug });
-  if (!category || !category.enabled) {
-    const disabled = store.getCategory(requested, { project: slug, includeDisabled: true })
-      || store.getProjectCategories(slug).rows.some((row: any) => row.kind === 'DISABLE' && row.id === requested.toLowerCase());
-    throw new Error(`route_recipe: category "${requested}" is ${disabled ? 'disabled for this project' : 'unknown'}.`);
-  }
-  const resolved = store.resolveCategoryRoute(category);
-  if (!resolved || !resolved.exec) throw new Error(`route_recipe: category "${category.id}" has no available route.`);
-  const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
-  const selected = store.projectRoutingProfile(slug);
-  return Object.assign({}, recipe, {
-    profile: { id: selected.profile.id, revision: selected.profile.revision },
-    categorySource: { kind: category.origin || 'profile', baseProfileId: category.baseProfileId || null },
-  });
-}
 
 // A worker identity is required for claim/next/done/release — a generic shared
 // value silently defeats the atomic-claim guarantee (two sessions both "claude"
@@ -114,50 +83,7 @@ function requireBy(args?: any, action?: any) {
  *  agent was spawned, so the claim is refused before it mutates anything.
  * ------------------------------------------------------------------ */
 
-function effortDrift(slug?: any, idOrRef?: any, claimedEffort?: any) {
-  if (claimedEffort == null) return null;
-  const t = store.getTicket(slug, idOrRef);
-  if (!t) return null;
-  const derivedEffort = t.effort || (store.CLAUDE_RUNTIMES.includes(t.model) ? 'low' : null);
-  if (!derivedEffort) return null;
-  const claimed = String(claimedEffort).toLowerCase();
-  if (claimed === derivedEffort) return null;
-  const resolved = store.resolveExec(t.model, derivedEffort);
-  const execName = (t.exec && t.exec.agent) || (resolved && resolved.agent) || `sidequest-exec-${derivedEffort}`;
-  return {
-    reason: 'effort_mismatch',
-    ref: t.ref,
-    derivedModel: t.model,
-    derivedEffort,
-    claimedEffort: claimed,
-    message: `${t.ref} resolves to ${t.model}·${derivedEffort}, but ${claimed} was requested. Run sidequest dispatch ${t.ref}, then spawn ${execName}.`,
-  };
-}
 
-function executorDrift(slug?: any, idOrRef?: any, claimedEffort?: any, executorName?: any, token?: any, direct?: any) {
-  if (direct) return null;
-  const effort = effortDrift(slug, idOrRef, claimedEffort);
-  if (effort) return effort;
-  const t = store.getTicket(slug, idOrRef);
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
-    return {
-      reason: 'executor_mismatch', ref: t.ref,
-      derivedModel: t.model, derivedEffort: t.effort,
-      executor: executorName || null, expectedExecutor: t.dispatchExecutor,
-      message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || 'this executor'}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`,
-    };
-  }
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
-  if (!executorName) return null;
-  if (!t || !t.exec || t.exec.backend !== 'codex') return null;
-  if (executorName === t.exec.agent) return null;
-  return {
-    reason: 'executor_mismatch', ref: t.ref,
-    derivedModel: t.model, derivedEffort: t.effort, backend: t.exec.backend,
-    runsLabel: t.exec.runsLabel, executor: executorName, expectedExecutor: t.exec.agent,
-    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Run sidequest dispatch ${t.ref}, then spawn ${t.exec.agent}.`,
-  };
-}
 
 /* ------------------------------------------------------------------ *
  *  Model-argument validation
@@ -167,59 +93,11 @@ function executorDrift(slug?: any, idOrRef?: any, claimedEffort?: any, executorN
  *  actually backed it. Validate by hand and name valid values on a miss.
  * ------------------------------------------------------------------ */
 
-// ready/next: a --model FILTER on a tier. Blank/any/none mean "no filter"; an
-// unrecognized non-empty value is refused instead of silently matching all.
-function requireKnownModelFilter(action?: any, value?: any) {
-  if (value == null) return;
-  const cls = store.classifyModelFilter(value);
-  if (cls === 'unknown') {
-    throw new Error(`${action}: unknown model "${value}" — known: ${store.getModelVocab().models.join(', ')}`);
-  }
-}
 
-function requireKnownModel(action?: any, value?: any, ticket?: any) {
-  if (value == null || !String(value).trim()) return value;
-  const exec = store.resolveReportedExec(value, null);
-  if (!exec) {
-    const expected = store.resolvedDispatchRoute(ticket);
-    const routeHint = expected ? ` — expected for ${ticket.ref}: ${expected.model}` : '';
-    if (ticket && ticket.model === value) return value;
-    throw new Error(`${action}: unknown model "${value}"${routeHint} — known: ${store.getModelVocab().models.join(', ')}`);
-  }
-  return exec.runsModel;
-}
 
 const NO_OP_PATHS_SHOWN = 8;
 
-function pathList(paths?: any) {
-  const all = Array.isArray(paths) ? paths : [];
-  const shown = all.slice(0, NO_OP_PATHS_SHOWN).join(', ');
-  return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
-}
 
-// A write-routed dispatch that produced nothing has no submission to hand in,
-// and no dispatch-time flag could have predicted that: whether a run writes is
-// an OUTCOME. So when the write-path guard refuses a done, go look. The board
-// already knows where this executor works, and a declared scope with nothing
-// uncommitted and nothing committed past the dispatch baseline is a refusal
-// with nothing behind it. Anything else stands (SQ-923).
-function provenNoOpCloseout(slug: any, ticket: any) {
-  const workspace = store.dispatchWorkspace(slug, ticket);
-  if (!workspace) {
-    return { ok: false as const, detail: 'The board cannot locate this dispatch\'s worktree, so it cannot confirm the run wrote nothing.' };
-  }
-  const scope = store.dispatchDeclaredFiles(ticket);
-  const pending = commitScope.scopedWorkPending(workspace.root, scope, { base: workspace.base });
-  if (!pending.ok) {
-    return { ok: false as const, detail: `Could not inspect the declared scope in ${workspace.root}: ${pending.message || pending.reason}.` };
-  }
-  if (!pending.pending) return { ok: true as const, root: workspace.root };
-  const detail = [
-    pending.working.length ? `uncommitted ${pathList(pending.working)}` : null,
-    pending.committed.length ? `committed but not submitted ${pathList(pending.committed)}` : null,
-  ].filter(Boolean).join('; ');
-  return { ok: false as const, detail: `Declared scope in ${workspace.root} is not a no-op: ${detail}.` };
-}
 
 /* ------------------------------------------------------------------ *
  *  Tools
@@ -334,9 +212,6 @@ function compactSchema(schema?: any, propertyMap = false): any {
 // envelope and array indentation are added.
 const LIST_CHAR_BUDGET = 55000;
 
-function closeDispatchExecutor(ticket?: any) {
-  if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
-}
 
 function mutationAck(project?: any, result?: any, changed?: any) {
   const ticket = result.ticket;
@@ -524,63 +399,7 @@ function requiredFinalReport(args?: any, action?: any) {
   return body;
 }
 
-function boundedSubmissionText(value?: any, maxChars = 600) {
-  const text = String(value || '').replace(/\s+/g, ' ').trim();
-  if (text.length <= maxChars) return text;
-  return `${text.slice(0, maxChars - 16)}… [${text.length} chars]`;
-}
 
-function preserveRejectedSubmission(options?: any) {
-  const { slug, ticket, by, root, commit, gitRef, verify, reason, message, remedy } = options;
-  const quarantineRef = `refs/sidequest/${ticket.ref}-rejected`;
-  const validationMessage = boundedSubmissionText(message);
-  const failure = `${reason}${validationMessage ? `: ${validationMessage}` : ''}`;
-  const preserved = commitScope.preserveCommitRef(root, commit, quarantineRef);
-  if (!preserved.ok) {
-    const preservationFailure = `${preserved.reason}${preserved.message ? `: ${boundedSubmissionText(preserved.message)}` : ''}`;
-    return {
-      ok: false,
-      ticket,
-      reason,
-      message: `submit: refused ${ticket.ref}; ${failure}. Could not preserve ${commit} at ${quarantineRef}: ${preservationFailure}. The claim remains active. Remedy: ${remedy}`,
-    };
-  }
-
-  let checkpoint: any;
-  try {
-    checkpoint = store.checkpointTicket(slug, ticket.ref, by, {
-      commit: preserved.commit,
-      worktree: root,
-      verify: verify.slice(0, 4000),
-      ttlMinutes: 24 * 60,
-      kind: 'submission_rejected',
-      gitRef: quarantineRef,
-      failure: { reason, message: validationMessage },
-      commentBody: `Submission validation refused ${ticket.ref}: ${failure}\nPreserved: ${preserved.commit} at ${quarantineRef}\nClaim retained with a recovery checkpoint.\nRemedy: ${remedy}`,
-      source: 'mcp',
-    });
-  } catch (error: any) {
-    checkpoint = { ok: false, reason: 'checkpoint_error', message: (error && error.message) || String(error) };
-  }
-  if (checkpoint && checkpoint.ok) {
-    return {
-      ok: false,
-      ticket: checkpoint.ticket,
-      reason,
-      message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${quarantineRef}; the claim and recovery checkpoint remain active. Remedy: ${remedy}`,
-      preserved: { commit: preserved.commit, gitRef: quarantineRef, checkpoint: checkpoint.checkpoint },
-    };
-  }
-
-  const checkpointFailure = `${checkpoint?.reason || 'checkpoint_failed'}${checkpoint?.message ? `: ${boundedSubmissionText(checkpoint.message)}` : ''}`;
-  return {
-    ok: false,
-    ticket: store.getTicket(slug, ticket.ref) || ticket,
-    reason,
-    message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${quarantineRef}, but the recovery checkpoint failed: ${checkpointFailure}. The claim remains active. Remedy: ${remedy}`,
-    preserved: { commit: preserved.commit, gitRef: quarantineRef },
-  };
-}
 
 function requiredReleaseReason(args?: any) {
   const reason = args && args.reason != null ? String(args.reason).trim() : '';
@@ -590,34 +409,7 @@ function requiredReleaseReason(args?: any) {
   throw new Error('release: "reason" is required — explain why the claim is being released. An oracle ask may stand in as the reason.');
 }
 
-function worktreeRoot(worktree?: any, action?: any) {
-  const supplied = requiredText({ worktree }, 'worktree', action);
-  if (!path.isAbsolute(supplied)) throw new Error(`${action}: "worktree" must be an absolute path.`);
-  let stat;
-  try { stat = fs.statSync(supplied); } catch (_) { throw new Error(`${action}: worktree does not exist: ${supplied}`); }
-  if (!stat.isDirectory()) throw new Error(`${action}: worktree must be a directory: ${supplied}`);
-  let root;
-  try { root = commitScope.repoRoot(supplied); } catch (_) { throw new Error(`${action}: worktree is not inside a git work tree: ${supplied}`); }
-  if (path.resolve(supplied) !== path.resolve(root)) throw new Error(`${action}: worktree must name the git worktree root: ${supplied}`);
-  return root;
-}
 
-function verifyEmbedsWorktreeRoot(verify?: any, root?: any) {
-  if (typeof verify !== 'string' || !verify || !root) return false;
-  const normalize = (value: any) => String(value).replace(/[\\/]+/g, '/').replace(/\/+$/, '');
-  const worktree = normalize(path.resolve(root));
-  const command = normalize(verify);
-  const caseInsensitive = /^[a-z]:\//i.test(worktree);
-  const comparableRoot = caseInsensitive ? worktree.toLowerCase() : worktree;
-  const comparableCommand = caseInsensitive ? command.toLowerCase() : command;
-  let offset = comparableCommand.indexOf(comparableRoot);
-  while (offset !== -1) {
-    const next = comparableCommand.charAt(offset + comparableRoot.length);
-    if (!next || next === '/' || !/[a-z0-9._-]/i.test(next)) return true;
-    offset = comparableCommand.indexOf(comparableRoot, offset + comparableRoot.length);
-  }
-  return false;
-}
 
 function withoutCategories(payload?: any) {
   const { categories, ...trimmed } = payload;
@@ -628,27 +420,12 @@ module.exports = {
   path,
   fs,
   store,
-  work,
-  worktrees,
   agentsync,
-  commitScope,
   publish,
-  execNames,
-  claimRefusalMessage,
-  assertSidequestInstall,
-  assertDispatchTransport,
   resolveProject,
   runtimeSessionId,
   sessionOf,
-  requireDispatchSession,
-  workflowRecipe,
   requireBy,
-  effortDrift,
-  executorDrift,
-  requireKnownModelFilter,
-  requireKnownModel,
-  pathList,
-  provenNoOpCloseout,
   PROJECT_PROP,
   FILES_PROP,
   LABELS_PROP,
@@ -659,7 +436,6 @@ module.exports = {
   validateStoryId,
   compactSchema,
   LIST_CHAR_BUDGET,
-  closeDispatchExecutor,
   mutationAck,
   integrationBranchAck,
   outOfScopeComment,
@@ -678,11 +454,7 @@ module.exports = {
   compactPulse,
   requiredText,
   requiredFinalReport,
-  boundedSubmissionText,
-  preserveRejectedSubmission,
   requiredReleaseReason,
-  worktreeRoot,
-  verifyEmbedsWorktreeRoot,
   withoutCategories,
   CATEGORY_TAXONOMY_WARNING,
   state,

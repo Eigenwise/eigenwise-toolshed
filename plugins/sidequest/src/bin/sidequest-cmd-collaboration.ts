@@ -16,144 +16,11 @@ const { assertSidequestInstall, assertDispatchTransport } = require('../lib/disp
 const { fail, resolveProject, workerId, sessionId, bodyFromOpts } = require('./sidequest-cmd-shared');
 const { modelMark, PRIORITY_MARK } = require('./sidequest-cmd-tickets');
 const { validateModelFilter } = require('./sidequest-cmd-execution');
-async function cmdSweepClaims(opts: any) {
-  const { slug, meta } = await resolveProject(opts);
-  const res = store.sweepStaleClaims({ project: slug, source: opts.source || 'cli' });
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
-    return;
-  }
-  const kinds = res.released.map((entry: any) => entry.kind).filter(Boolean);
-  const detail = kinds.length ? `: ${kinds.join(', ')}` : '';
-  console.log(`✓ swept ${res.released.length} dead claim(s) from ${meta.name}${detail} (idle backstop ${Math.round(res.idleMs / 60000)}m, abandoned ${Math.round(res.abandonMs / 60000)}m)`);
-}
 
-async function cmdWorktrees(opts: any, positional: any) {
-  const action = String(positional[0] || '').toLowerCase();
-  if ((action && action !== 'sweep') || (!action && !opts.sweep)) {
-    fail('worktrees: use `sidequest worktrees sweep` to inspect stale agent worktrees.');
-  }
-  const minAgeHours = opts['min-age-hours'] == null ? 3 : Number(opts['min-age-hours']);
-  if (!Number.isFinite(minAgeHours) || minAgeHours < 0) fail('worktrees sweep: --min-age-hours must be a non-negative number.');
-  const { slug, meta } = await resolveProject(opts);
-  let result;
-  try {
-    result = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
-      execute: !!opts.yes && !opts['dry-run'],
-      currentPath: store.nearestRepoRoot(process.cwd()),
-      integrationTarget: store.integrationTarget(slug),
-      minAgeMs: minAgeHours * 60 * 60 * 1000,
-    });
-  } catch (error: any) {
-    fail(`worktrees: ${(error && error.message) || error}`);
-  }
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, result), null, 2) + '\n');
-    if (result.failures.length) process.exitCode = 1;
-    return;
-  }
-  console.log(`worktrees sweep: ${result.dryRun ? 'dry run' : 'executed'} for ${meta.name} (minimum age ${minAgeHours}h)`);
-  for (const entry of result.entries) {
-    const ticket = entry.ticket ? ` ${entry.ticket}` : '';
-    const ahead = entry.ahead == null ? '?' : entry.ahead;
-    console.log(`  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${entry.clean ? 'clean' : 'dirty'}; ahead ${ahead}; patch-equivalent ${entry.patchEquivalent}; age ${entry.ageMs == null ? '?' : Math.round(entry.ageMs / 60000) + 'm'}]`);
-  }
-  if (result.dryRun) console.log('  pass --yes to remove the planned worktrees.');
-  if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
-  if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
-  for (const failure of result.failures) console.log(`  ERROR ${failure.path || 'prune'}: ${failure.message}`);
-  if (result.failures.length) process.exitCode = 1;
-}
 
-async function cmdRecoverShared(opts: any) {
-  const { meta } = await resolveProject(opts);
-  const repo = path.resolve(meta.path);
-  const stash = String(opts.stash || '').trim();
-  const action = 'git reset --hard && git clean -fd';
-  if (!stash) fail(`recover-shared: refusing recovery action "${action}"; pass --stash <stash@{n}> with the named stash that preserves this checkout.`);
-  if (!opts.yes) fail(`recover-shared: refusing recovery action "${action}"; re-run \`sidequest recover-shared --project "${repo}" --stash ${stash} --yes\` after checking the stash evidence.`);
-  let shared = false;
-  try { shared = (await fs.stat(path.join(repo, '.git'))).isDirectory(); } catch (_) {}
-  if (!shared) fail(`recover-shared: refusing recovery action "${action}"; "${repo}" is not a shared checkout.`);
 
-  const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
-  const statusEntries = git(['status', '--porcelain=v1', '-z']).split('\0').filter(Boolean);
-  const dirty: string[] = [];
-  for (let index = 0; index < statusEntries.length; index += 1) {
-    const entry = statusEntries[index];
-    dirty.push(entry.slice(3));
-    if (/^[RC]/.test(entry.slice(0, 2)) && statusEntries[index + 1]) dirty.push(statusEntries[++index]);
-  }
-  if (!dirty.length) fail(`recover-shared: refusing recovery action "${action}"; the shared checkout is already clean.`);
 
-  const namedStashes = git(['stash', 'list', '--format=%gd']).split(/\r?\n/).filter(Boolean);
-  if (!namedStashes.includes(stash)) fail(`recover-shared: refusing recovery action "${action}"; "${stash}" is not a named stash in "${repo}".`);
-  const object = git(['rev-parse', '--verify', `${stash}^{commit}`]);
-  const preserved = new Set(git(['stash', 'show', '--name-only', '--format=', '--include-untracked', '-z', stash]).split('\0').filter(Boolean));
-  const missing = dirty.filter((file: string) => !preserved.has(file));
-  if (missing.length) fail(`recover-shared: refusing recovery action "${action}"; stash ${stash} (${object}) does not preserve: ${missing.join(', ')}.`);
 
-  execFileSync('git', ['reset', '--hard'], { cwd: repo, windowsHide: true, stdio: 'ignore' });
-  execFileSync('git', ['clean', '-fd'], { cwd: repo, windowsHide: true, stdio: 'ignore' });
-  const remaining = git(['status', '--porcelain']);
-  if (remaining) fail(`recover-shared: ${action} completed, but the checkout remains dirty:\n${remaining}`);
-  console.log(`✓ recovered shared checkout with ${action}`);
-  console.log(`  preserved evidence: stash ${stash} (${object}) covering ${dirty.join(', ')}`);
-}
-
-async function cmdNext(opts: any) {
-  const { slug, meta } = await resolveProject(opts);
-  if (!validateModelFilter('next', opts)) return;
-  const by = workerId(opts);
-  const res = store.claimNext(slug, by, { priority: opts.priority, model: opts.model, category: opts.category, direct: !!opts.direct, reason: opts.reason, source: opts.source || 'cli', sessionId: sessionId(opts) });
-  if (!res.ok && res.reason) res.message = claimRefusalMessage(res.reason, res.ticket && res.ticket.ref || 'next ticket', res.ticket || res.claim);
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
-    if (!res.ok) process.exitCode = 1;
-    return;
-  }
-  if (res.ok) {
-    const t = res.ticket;
-    console.log(`✓ claimed next: ${t.ref} [${t.priority}]  "${t.title}"  as "${by}" — ${meta.name}`);
-    if (t.description) console.log(`  ${t.description}`);
-  } else {
-    process.exitCode = 1;
-    console.log(res.message || `No available tickets to claim in ${meta.name}.`);
-  }
-}
-
-// Routed work must stay inside the current conversation. Use `native-agent` to
-// create the temporary definition, then invoke it through the native Agent tool.
-// A CLI process cannot invoke that tool, so the former `work` drain is disabled.
-async function cmdWork(opts: any) {
-  const { slug } = await resolveProject(opts);
-  const work = require('../lib/work');
-  const ref = opts.ref ? ` for ${opts.ref}` : '';
-  const check = opts.ref ? work.nativeDispatchRequired(slug, opts.ref) : null;
-  const detail = check && check.reason !== 'native_agent_required' ? ` ${check.message}` : '';
-  fail(`work${ref} is disabled: routed work must use \`native-agent\` followed by the current conversation's Agent tool.${detail}`);
-}
-
-// Release every claim a session left behind (moving each ticket back to todo),
-// immediately instead of waiting out the claim TTL. Called by the SessionEnd
-// hook with the ending session's id; safe to run by hand too.
-// Session-scoped by construction (see store.reconcileSession) — it only touches
-// claims the registry attributes to THIS session. No session id -> a clean no-op.
-async function cmdReconcile(opts: any) {
-  const sid = sessionId(opts);
-  const reason = opts.reason || 'worker session ended';
-  const res = store.reconcileSession(sid, { reason, source: opts.source || 'cli' });
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ session: sid }, res), null, 2) + '\n');
-    return;
-  }
-  if (!sid) {
-    console.log('reconcile: no session id (pass --session or set CLAUDE_SESSION_ID) — nothing to do.');
-    return;
-  }
-  if (res.released.length) console.log(`✓ reconciled ${sid}: released ${res.released.join(', ')} back to todo.`);
-  else console.log(`✓ reconciled ${sid}: no outstanding claims to release.`);
-}
 
 // Assign a ticket to someone (defaults to the human "you"), or clear it with
 // `unassign`. Assignment is persistent and separate from an agent claim.
@@ -336,49 +203,6 @@ async function cmdUnlink(opts: any, positional: any) {
   }
 }
 
-// The set to fan subagents out over: unclaimed, unblocked, not-done, not-archived.
-async function cmdReady(opts: any) {
-  const { slug, meta } = await resolveProject(opts);
-  if (!validateModelFilter('ready', opts)) return;
-  // --brief is a JSON shape, so it implies --json rather than silently no-oping.
-  if (opts.json || opts.brief) {
-    const payload = store.readyPayload(slug, { model: opts.model, category: opts.category, brief: opts.brief });
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug, projectName: meta.name }, payload), null, 2) + '\n');
-    return;
-  }
-  const tickets = store.readyTickets(slug, { model: opts.model, category: opts.category });
-  const waves = store.readyWaves(slug, { model: opts.model, category: opts.category });
-  const waveDependencies = store.readyWaveDependencies(slug, { model: opts.model, category: opts.category });
-  if (!tickets.length) {
-    console.log(`Nothing ready to work in ${meta.name}.`);
-    return;
-  }
-  console.log(`${meta.name} — ${tickets.length} ready to work (unclaimed, unblocked):`);
-  const printTicket = (t: any) => {
-    const pr = PRIORITY_MARK[t.priority] ? ` ${PRIORITY_MARK[t.priority]}` : '';
-    const md = modelMark(t);
-    const files = t.files && t.files.length ? `  \u{1F4C1}${t.files.length}` : '';
-    console.log(`    ${t.ref}${pr}  ${t.title}${files}${md}`);
-  };
-  if (waves.length > 1) {
-    waves.forEach((wave: any, i: any) => {
-      console.log(i === 0 ? '\n  Wave 1 — safe to run in parallel:' : `\n  Wave ${i + 1} — after wave ${i}:`);
-      for (const t of wave) printTicket(t);
-      for (const dependency of waveDependencies.filter((entry?: any) => wave.some((ticket?: any) => ticket.ref === entry.after))) {
-        console.log(`      contract edge: ${dependency.reason}`);
-      }
-    });
-  } else {
-    for (const t of tickets) printTicket(t);
-  }
-  if (tickets.length > 1) {
-    if (waves.length > 1) {
-      console.log('\nFan out within a wave: one subagent per ticket — each claim --by <id> → do → done. Wait for a wave to clear before starting the next.');
-    } else {
-      console.log('\nIf these are independent (no shared files), fan out: one subagent per ticket — each claim --by <id> → do → done.');
-    }
-  }
-}
 
 async function cmdArchive(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
@@ -426,4 +250,4 @@ async function cmdUnarchive(opts: any, positional: any) {
 }
 
 
-module.exports = { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
+module.exports = { cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdArchive, cmdUnarchive };

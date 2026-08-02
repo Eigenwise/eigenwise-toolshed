@@ -36,16 +36,6 @@ process.env.SIDEQUEST_AGENTS_DIR = path.join(home, 'agents');
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
 const slugs = projectPaths.map((projectPath: string) => store.ensureProject(projectPath).slug);
-store.setCategory({
-  id: 'perf.fixture',
-  name: 'Performance fixture',
-  description: 'Fixed hook performance fixture.',
-  route: { model: 'sonnet', effort: 'high' },
-  fallback: null,
-  enabled: true,
-});
-const startTicket = store.createTicket(slugs[0], { title: 'Subagent start fixture', category: 'perf.fixture', source: 'test' });
-const stopTicket = store.createTicket(slugs[0], { title: 'Subagent stop fixture', category: 'perf.fixture', source: 'test' });
 const database = db.openDb(home);
 let backgroundId = 0;
 db.txn(database, () => {
@@ -61,7 +51,6 @@ db.txn(database, () => {
         project: slugs[projectIndex],
         title: `Performance ticket ${backgroundId}`,
         description: 'Fixed hook performance fixture.',
-        category: 'perf.fixture',
         status: 'todo',
         archived: false,
         order: index,
@@ -83,7 +72,7 @@ db.txn(database, () => {
     }
   }
 });
-assert.equal(db.countRows(database, 'tickets'), 1872);
+assert.equal(db.countRows(database, 'tickets'), 1870);
 
 
 const env = {
