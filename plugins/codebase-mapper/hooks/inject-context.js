@@ -19,7 +19,7 @@ function projectDir(data) {
   return process.env.CLAUDE_PROJECT_DIR || (typeof data.cwd === 'string' ? data.cwd : '') || process.cwd();
 }
 
-function context(map, source) {
+function context(map, source, forSubagent) {
   const manifestNote = map.state.future
     ? '\nThis map uses a newer schema. Preserve its files and update the plugin before changing its metadata.\n'
     : map.state.stale
@@ -27,10 +27,16 @@ function context(map, source) {
       : map.state.migratable
         ? '\nThis map has no hash manifest yet. Preserve the existing map and add hashes on its next update.\n'
         : '';
+  // A subagent gets the map to READ. The update instruction is main-session only:
+  // parallel subagents on one tree would collide on the map, and a mid-wave update
+  // would describe a state that has not landed on main (SQ-1259, field-hit twice).
+  const maintenance = forSubagent
+    ? 'You are a subagent: NEVER update the codebase map or run update-codebase-map, even if it is reported stale. If your changes make it stale, say so in your final report; the main session refreshes the map once, after all parallel work integrates.\n'
+    : 'After code changes, list modified files, assess whether the map needs an update, and end with either "Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation." or "Documentation check complete. No documentation updates needed because [reason]." Do not ask the user whether to update the map or run this skill. Decide using these criteria, announce the decision with the applicable line, and if updating, proceed immediately without waiting for a reply.\n';
   return '<CODEBASE_MAP>\n' +
     'This repository has a maintained codebase map in .claude/.codebase-info/.\n\n' +
     'Before anything else in your first reply, and before starting the task, output exactly one acknowledgment line: "Codebase map: read <doc(s)>" after actually reading only relevant map document(s) from .claude/.codebase-info/, or "Codebase map: no read needed - <reason>" if the request needs no codebase knowledge. This is mandatory; do not silently skip it. Never re-read a document already read this session unless this hook names it as changed.\n\n' +
-    'After code changes, list modified files, assess whether the map needs an update, and end with either "Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation." or "Documentation check complete. No documentation updates needed because [reason]." Do not ask the user whether to update the map or run this skill. Decide using these criteria, announce the decision with the applicable line, and if updating, proceed immediately without waiting for a reply.\n' +
+    maintenance +
     '</CODEBASE_MAP>\n\n' +
     '=== CODEBASE MAP RE-GROUNDED AFTER SESSIONSTART (' + source + ') ===\n\n' +
     '--- ' + map.index.sourcePath + ' ---\n' + map.index.content.trim() + '\n' + manifestNote;
@@ -66,12 +72,12 @@ function main() {
 
   if (source === 'startup' || source === 'clear') {
     ledger.mark(root, data.session_id, map.documents, true);
-    output(eventName, context(map, source));
+    output(eventName, context(map, source, eventName === 'SubagentStart'));
     return;
   }
 
   if (source === 'compact') {
-    output(eventName, context(map, source));
+    output(eventName, context(map, source, eventName === 'SubagentStart'));
     return;
   }
 

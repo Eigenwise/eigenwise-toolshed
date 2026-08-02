@@ -53,6 +53,26 @@ function text(output) {
   return JSON.parse(output).hookSpecificOutput.additionalContext;
 }
 
+// SQ-1259, field-hit twice: the SubagentStart matcher injects this context into
+// sidequest executors, and the main session's "run update-codebase-map, proceed
+// immediately" line read as an instruction to them. Parallel executors on one tree
+// would collide on the map, and a mid-wave map would describe unlanded state.
+test('a subagent is forbidden to update the map; the main session keeps the instruction', () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const sub = text(hook(startHook, directory, state, {
+    session_id: 'sub', source: 'startup', hook_event_name: 'SubagentStart', agent_type: 'sidequest-exec-dispatch',
+  }));
+  assert.match(sub, /NEVER update the codebase map/);
+  assert.match(sub, /main session refreshes the map once/);
+  assert.doesNotMatch(sub, /Running \/codebase-mapper:update-codebase-map/);
+  assert.match(sub, /Codebase map: read/, 'subagents still read the map');
+
+  const main = text(hook(startHook, directory, state, { session_id: 'main', source: 'startup' }));
+  assert.match(main, /Running \/codebase-mapper:update-codebase-map/);
+  assert.doesNotMatch(main, /NEVER update the codebase map/);
+});
+
 test('unchanged prompts are silent after session grounding', () => {
   const directory = project();
   const state = path.join(directory, 'state');

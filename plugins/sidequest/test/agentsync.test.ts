@@ -400,6 +400,20 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   }
 });
 
+// Field case 2026-08-02: an executor tried to refresh the codebase map mid-wave because
+// the mapper's staleness hook read as an instruction. Parallel executors on one tree
+// would collide on the map, and the result would describe a state not yet on main
+// (SQ-1259). The template forbids it and hands the refresh back to the orchestrator.
+test('every executor is told the codebase map is not its to update', () => {
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+  for (const file of readDir(dir)) {
+    const body = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.match(body, /NEVER update the codebase map/, `${file} lost the map prohibition`);
+    assert.match(body, /Map refresh\s+is the orchestrator's, once, after integration/, `${file} lost the map hand-back`);
+  }
+});
+
 // Read-only is a deny list. An allow list had to name all 54 board tools to leave three
 // writers out, which cost ~570 bytes per definition, hid every tool added later, and
 // silently excluded non-board MCP servers — visual-review could not reach Playwright.
