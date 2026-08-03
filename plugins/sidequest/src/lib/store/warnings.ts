@@ -107,12 +107,11 @@ function noDeclaredScopeWarning(ticket?: any) {
   return 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
 }
 
-const BROWSER_REVIEW_SIGNAL = /\b(?:browser|visual|screenshot|playwright|ui review|e2e)\b/i;
+// `visual-review` predates its rename to `visual-evaluation`; existing boards keep the legacy id.
+const BROWSER_REVIEW_CATEGORIES = new Set(['visual-evaluation', 'visual-review']);
 
 function readonlyBrowserReviewWarning(ticket?: any) {
-  if (!dispatchReadOnly(ticket)) return null;
-  const signal = [ticket?.title, ticket?.description, ticketCategory(ticket)].join('\n');
-  if (!BROWSER_REVIEW_SIGNAL.test(signal)) return null;
+  if (!dispatchReadOnly(ticket) || !BROWSER_REVIEW_CATEGORIES.has(ticketCategory(ticket))) return null;
   return 'Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.';
 }
 
