@@ -20,7 +20,8 @@ var refusal_guidance_exports = {};
 __export(refusal_guidance_exports, {
   CLAIM_REFUSAL_MESSAGES: () => CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage: () => claimRefusalMessage,
-  routingDisabledMessage: () => routingDisabledMessage
+  routingDisabledMessage: () => routingDisabledMessage,
+  scopeRequestNotOwnerMessage: () => scopeRequestNotOwnerMessage
 });
 module.exports = __toCommonJS(refusal_guidance_exports);
 function correctedMcpClaim(ref, ticket = {}, projectPath) {
@@ -54,6 +55,10 @@ const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   not_claimed: (ref) => `${ref} is not claimed by anyone. Run \`sidequest claim ${ref}\` before submitting.`,
   no_submission: (ref) => `${ref} has no submission to clear. Run \`sidequest submissions\` to inspect work awaiting integration.`
 });
+function scopeRequestNotOwnerMessage(ref, claim = {}) {
+  const holder = claim.by || "<claim holder>";
+  return `${ref} is claimed by "${holder}". Only that claim holder can re-run \`scopeRequest\`. Adding every requested path to declared files already approves and clears the pending request, so no re-run is needed after that update.`;
+}
 function claimRefusalMessage(reason, ref, claim = {}, projectPath) {
   const message = CLAIM_REFUSAL_MESSAGES[reason];
   return message ? message(ref, claim, projectPath) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;
@@ -65,5 +70,6 @@ function routingDisabledMessage(ref) {
 0 && (module.exports = {
   CLAIM_REFUSAL_MESSAGES,
   claimRefusalMessage,
-  routingDisabledMessage
+  routingDisabledMessage,
+  scopeRequestNotOwnerMessage
 });

@@ -206,6 +206,19 @@ function createTickets(dependencies) {
     if (!sameFiles(next, pendingScope) && !sameFiles(next, requestedScope)) return null;
     return requestedScope;
   }
+  function clearCoveredScopeRequest(slug, ticket, now) {
+    const request = ticket?.scopeRequest;
+    if (!request || !normalizeFiles(request.files).every((file) => commitScope.isInScope(file, effectiveScope(slug, ticket.files)))) return false;
+    clearScopeRequestMarker(slug, ticket);
+    const dispatch = dispatchState(ticket);
+    const resumed = reopenScopePausedDispatch(ticket, now);
+    ticket.scopeRequest = null;
+    if (dispatch && (!dispatch.terminalAt || resumed)) {
+      dispatch.declaredFiles = ticket.files.slice();
+      delete dispatch.scopeRequest;
+    }
+    return true;
+  }
   function scopeExpansionCommand(ticket, additions) {
     const ref = String(ticket?.ref || "").trim();
     if (!ref) return null;
@@ -355,6 +368,7 @@ function createTickets(dependencies) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       touchClaimActivity(t, by, now);
       if (!additions.length) {
+        clearCoveredScopeRequest(slug, t, now);
         t.updatedAt = now;
         putTicket(slug, t);
         return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
@@ -666,17 +680,7 @@ function createTickets(dependencies) {
         if (scopeRefusal) throw new Error(scopeRefusal);
         const approvedFiles = approvedScopeRequestFiles(t, patch.files);
         t.files = approvedFiles || boundedFiles(patch.files);
-        const request = t.scopeRequest;
-        if (request && Array.isArray(request.files) && request.files.every((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)))) {
-          clearScopeRequestMarker(slug, t);
-          const dispatch = dispatchState(t);
-          const resumed = reopenScopePausedDispatch(t);
-          t.scopeRequest = null;
-          if (dispatch && (!dispatch.terminalAt || resumed)) {
-            dispatch.declaredFiles = t.files.slice();
-            delete dispatch.scopeRequest;
-          }
-        }
+        clearCoveredScopeRequest(slug, t);
       }
       if (patch.contracts !== void 0) t.contracts = boundedContracts(patch.contracts);
       if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;

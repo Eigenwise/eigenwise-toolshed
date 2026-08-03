@@ -1,5 +1,7 @@
 'use strict';
 
+const { scopeRequestNotOwnerMessage } = require('./refusal-guidance');
+
 const {
   path,
   fs,
@@ -347,6 +349,7 @@ const tools: ToolDefinition[] = [
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
       const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
+      if (!res.ok && res.reason === 'not_owner') res.message = scopeRequestNotOwnerMessage(args.ref, res.claim || res.ticket);
       const changed = res.ok && res.scopeRequest !== undefined ? {
         covered: res.covered || [],
         approved: res.approved || [],

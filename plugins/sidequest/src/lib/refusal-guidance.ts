@@ -46,6 +46,11 @@ export const CLAIM_REFUSAL_MESSAGES: Readonly<Record<string, RefusalMessage>> = 
   no_submission: (ref) => `${ref} has no submission to clear. Run \`sidequest submissions\` to inspect work awaiting integration.`,
 });
 
+export function scopeRequestNotOwnerMessage(ref: string, claim: ClaimContext = {}): string {
+  const holder = claim.by || '<claim holder>';
+  return `${ref} is claimed by "${holder}". Only that claim holder can re-run \`scopeRequest\`. Adding every requested path to declared files already approves and clears the pending request, so no re-run is needed after that update.`;
+}
+
 export function claimRefusalMessage(reason: string, ref: string, claim: ClaimContext = {}, projectPath?: string): string {
   const message = CLAIM_REFUSAL_MESSAGES[reason];
   return message ? message(ref, claim, projectPath) : `${ref} could not be claimed because ${reason}. Run \`sidequest pulse ${ref}\` and follow its current status.`;

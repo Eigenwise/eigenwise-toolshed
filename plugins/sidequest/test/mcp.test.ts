@@ -1387,6 +1387,25 @@ test('MCP scopeRequest pauses a claimed executor until the orchestrator expands 
   assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
+test('MCP scopeRequest guides nonholders after an approval update', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-request-guidance-'))).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Scope request approval guidance', files: ['lib'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'the control plane needs an actionable refusal after it approves scope',
+  });
+  const by = 'mcp-scope-guidance-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope guidance fixture requires a local direct claim.' })).ok, true);
+  assert.ok((await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['other/new.js'] })).scopeRequest);
+  await callTool('update', { project, ref: ticket.ref, by: 'scope-approval-orchestrator', files: ['lib', 'other/new.js'] });
+  assert.equal(store.getTicket(project, ticket.ref).scopeRequest, null);
+
+  const nonholder = await callTool('scopeRequest', { project, ref: ticket.ref, by: 'scope-approval-orchestrator', files: ['other/new.js'] });
+  assert.equal(nonholder.ok, false);
+  assert.equal(nonholder.reason, 'not_owner');
+  assert.match(nonholder.message, /Only that claim holder can re-run `scopeRequest`/);
+  assert.match(nonholder.message, /Adding every requested path to declared files already approves and clears the pending request/);
+});
+
 test('MCP scopeRequest infers an isolated executor worktree from its dispatch', async () => {
   const fixture = isolatedDispatch('sq-mcp-scope-isolated-', 'a1262scope', ['src']);
   const requested = await callTool('scopeRequest', {
