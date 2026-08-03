@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.353.0 (2026-08-03)
+
+### observability 0.2.1 → 0.2.2
+
+#### Fixes
+
+- Every Loki panel was empty because the bucket variable shipped an unresolvable auto value (SQ-1302) [`3370661`](https://github.com/Eigenwise/eigenwise-toolshed/commit/33706618)
+  The `bucket` interval variable shipped with Grafana's legacy `$__auto_interval_bucket` auto value, and that string reached Loki verbatim: `not a valid duration string`. The same query with a real range selector returned six models, so the data and the queries were fine the whole time. Nine panels were dead on it, covering gateway routing, context-window growth, cache economics, and hook health, and they failed as "No data" rather than an error, so a broken panel looked exactly like a quiet day. Generation now refuses any dashboard still carrying a `$__auto_interval_*` value, alongside the existing check that every referenced variable is declared.
+
 ## v3.352.0 (2026-08-03)
 
 ### sidequest 4.5.1 → 4.5.2
