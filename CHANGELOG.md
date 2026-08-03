@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.356.0 (2026-08-03)
+
+### sidequest 4.5.4 → 4.5.5
+
+#### Fixes
+
+- Dispatch guard no longer mistakes a --test flag for the test glob (SQ-1308) [`b9fc515`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b9fc5155)
+  The runnability check took the first token after --test as the file pattern, so once fallback suites gained --test-timeout it read the flag as a glob, matched nothing, and refused every ticket carrying the command the resolver itself derives. It now skips flags to find the glob, and the suggested replacement comes from the resolver rather than a second hardcoded copy that could drift.
+
 ## v3.355.0 (2026-08-03)
 
 ### sidequest 4.5.3 → 4.5.4
