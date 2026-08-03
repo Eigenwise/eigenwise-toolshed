@@ -1517,7 +1517,7 @@ test('MCP mixed scope requests keep the full intent and block partial commits', 
   assert.deepEqual(gitAt(worktree, ['show', '--format=', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean).sort(), [docsFile, sourceFile].sort());
 });
 
-test('MCP update rejects a claiming executor scope rewrite but permits no-op and unclaimed updates', async () => {
+test('MCP update makes control-plane scope approval discoverable and guards executor scope rewrites', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-update-'))).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP active claim scope update', files: ['lib/allowed.js'], complexity: 3,
@@ -1526,14 +1526,18 @@ test('MCP update rejects a claiming executor scope rewrite but permits no-op and
   const by = 'mcp-active-scope-worker';
   assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope update fixture requires a local direct claim.' })).ok, true);
 
-  const refused = await callToolRaw('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js', 'foreign/new.js'] });
+  const refused = await callToolRaw('update', { project, ref: ticket.ref, files: ['lib/allowed.js', 'foreign/new.js'] });
   assert.equal(refused.isError, true);
   assert.match(refused.content[0].text, /refusing active-claim scope change for foreign\/new\.js/i);
-  assert.match(refused.content[0].text, /scope-request/i);
+  assert.match(refused.content[0].text, /--by <your-id>/i);
+  assert.doesNotMatch(refused.content[0].text, new RegExp(`--by ${by}`));
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
 
   await callTool('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
+
+  await callTool('update', { project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js', 'foreign/new.js'] });
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'foreign/new.js']);
 
   const unclaimed = store.createTicket(project, {
     title: 'MCP unclaimed scope update', files: ['lib/allowed.js'], complexity: 3,
@@ -1541,6 +1545,12 @@ test('MCP update rejects a claiming executor scope rewrite but permits no-op and
   });
   await callTool('update', { project, ref: unclaimed.ref, files: ['lib/allowed.js', 'foreign/new.js'] });
   assert.deepEqual(store.getTicket(project, unclaimed.ref).files, ['lib/allowed.js', 'foreign/new.js']);
+});
+
+test('MCP update schema exposes scope approval through by', () => {
+  const update = mcp.toolDescriptors().find((descriptor: any) => descriptor.name === 'update');
+  assert.ok(update);
+  assert.match(update.description, /by scopes/i);
 });
 
 test('sweepClaims releases stale claims through MCP', async () => {

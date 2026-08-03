@@ -131,7 +131,7 @@ const tools = [
   },
   {
     name: "update",
-    description: 'Edit a ticket by ref. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. Set storyId to "none" to detach. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update: by scopes. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. The claiming executor must request scope instead. Set storyId to "none" to detach. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: "object",
       properties: {
