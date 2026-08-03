@@ -5,6 +5,8 @@ import { build } from 'esbuild';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
+export const nonBundledBuildDirectories = ['lib', 'bin'];
+
 // Only lib and bin mirror nested sources into output. Hook entry points stay top-level:
 // src/hooks/shared/* are bundled into each hook, and emitting them would flatten distinct
 // nested paths onto colliding basenames in hooks/.
@@ -63,6 +65,7 @@ async function buildHooks() {
   }
 }
 
-await buildNonBundled('lib');
-await buildNonBundled('bin', '#!/usr/bin/env node');
+for (const directory of nonBundledBuildDirectories) {
+  await buildNonBundled(directory, directory === 'bin' ? '#!/usr/bin/env node' : undefined);
+}
 await buildHooks();

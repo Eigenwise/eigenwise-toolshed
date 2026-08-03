@@ -196,21 +196,17 @@ function clearCoveredScopeRequest(slug?: any, ticket?: any, now?: any) {
   const resumed = reopenScopePausedDispatch(ticket, now);
   ticket.scopeRequest = null;
   if (dispatch && (!dispatch.terminalAt || resumed)) {
-    dispatch.declaredFiles = ticket.files.slice();
+    dispatch.declaredFiles = effectiveScope(slug, ticket.files);
     delete dispatch.scopeRequest;
   }
   return true;
 }
 
-// For an isolated run, declared scope IS ticket.files; the dispatch snapshot
-// exists for terminal forensics. Commit enforcement reads the snapshot, so
-// letting the two diverge gates the executor against a set nobody can see or
-// repair. Shared-tree dispatches are excluded on purpose: their authority
-// (artifact mode, artifact root, and the scope encoding it) is pinned at
-// dispatch time precisely so a mid-run ticket edit cannot flip it.
-function syncLiveDispatchScope(ticket?: any) {
+// Isolated snapshots follow effective scope because commit enforcement reads them.
+// Shared-tree authority stays pinned at dispatch so a mid-run edit cannot flip it.
+function syncLiveDispatchScope(slug?: any, ticket?: any) {
   const dispatch = dispatchState(ticket);
-  if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
+  if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = effectiveScope(slug, ticket?.files);
 }
 
 // A control-plane scope edit is itself the ruling on any pending request: the
@@ -404,8 +400,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     if (testDirectories) {
       // Test-only widening is audited here; publish reverify runs it before the integrated-diff review.
       t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));
-      const dispatch = dispatchState(t);
-      if (dispatch && !dispatch.terminalAt) dispatch.declaredFiles = t.files.slice();
+      syncLiveDispatchScope(slug, t);
       if (!Array.isArray(t.comments)) t.comments = [];
       const comment = createComment({
         by: 'board',
@@ -470,7 +465,7 @@ function denyScopeRequest(slug?: any, idOrRef?: any, by?: any, reason?: any, opt
     const resumed = reopenScopePausedDispatch(t, now);
     t.scopeRequest = null;
     if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
-    syncLiveDispatchScope(t);
+    syncLiveDispatchScope(slug, t);
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment({
       by,
@@ -755,7 +750,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
       t.files = approvedFiles || boundedFiles(patch.files);
       const scopeEditAt = new Date().toISOString();
       if (!clearCoveredScopeRequest(slug, t, scopeEditAt)) resolveScopeRequestAgainstUpdate(slug, t, patch, scopeEditAt);
-      syncLiveDispatchScope(t);
+      syncLiveDispatchScope(slug, t);
     }
     if (patch.contracts !== undefined) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;

@@ -75,47 +75,38 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     if (!match) return null;
     return String(pair.to).split("*").map((part, index) => `${part}${index < match.length - 1 ? match[index + 1] : ""}`).join("");
   }
-  function trackedPaths(config, paths) {
-    if (!config || !config.path || !Array.isArray(paths) || !paths.length) return [];
-    try {
-      return execFileSync("git", ["ls-files", "-z", "--", ...paths], {
-        cwd: config.path,
-        encoding: "utf8",
-        windowsHide: true,
-        stdio: "pipe"
-      }).split("\0").filter(Boolean);
-    } catch (_) {
-      return [];
-    }
-  }
   function trackedGeneratedPaths(config, files) {
-    if (!config || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
+    if (!config || !config.path || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
     const candidates = Array.from(new Set(files.flatMap((file) => config.generatedPairs.map((pair) => generatedPathFor(file, pair)).filter(Boolean))));
-    if (!candidates.length) return [];
-    const candidateKeys = new Set(candidates.map((candidate) => process.platform === "win32" ? candidate.toLowerCase() : candidate));
-    return trackedPaths(config, candidates).filter((trackedPath) => candidateKeys.has(process.platform === "win32" ? trackedPath.toLowerCase() : trackedPath));
+    return candidates.filter((candidate) => isTrackedBuildOutput(config.path, path.resolve(config.path, candidate)));
   }
-  function trackedBuildOutputPath(config, output) {
-    if (!config || !config.path || !packageRootForScope || !packageBuildOutputs || !isTrackedBuildOutput) return false;
-    const packageRoot = packageRootForScope(config.path, output);
-    if (!packageRoot) return false;
-    const outputPath = path.resolve(config.path, String(output));
-    return packageBuildOutputs(packageRoot).some((buildOutput) => {
-      const directory = path.resolve(packageRoot, buildOutput.directory);
-      const relative = path.relative(directory, outputPath);
-      return (relative === "" || !relative.startsWith("..") && !path.isAbsolute(relative)) && isTrackedBuildOutput(config.path, directory);
-    });
+  function relativePathWithin(root, target) {
+    const relative = path.relative(String(root), String(target));
+    if (relative === "") return ".";
+    return !relative.startsWith("..") && !path.isAbsolute(relative) ? relative.replace(/\\/g, "/") : null;
   }
-  function trackedSourcePaths(config, files) {
-    if (!config || !Array.isArray(config.generatedPairs) || !config.generatedPairs.length || !Array.isArray(files)) return [];
-    const sources = /* @__PURE__ */ new Set();
-    for (const output of trackedPaths(config, files)) {
-      if (!trackedBuildOutputPath(config, output)) continue;
-      const candidates = new Set(config.generatedPairs.map((pair) => generatedPathFor(output, { from: pair.to, to: pair.from })).filter(Boolean));
-      const [source] = candidates;
-      if (candidates.size === 1 && typeof source === "string") sources.add(source);
+  function derivedGeneratedPairs(config, files) {
+    if (!config || !config.path || !Array.isArray(files)) return [];
+    const pairs = /* @__PURE__ */ new Map();
+    for (const file of files) {
+      const packageRoot = packageRootForScope(config.path, file);
+      if (!packageRoot) continue;
+      const sourcePath = path.resolve(config.path, String(file));
+      const sourceFile = relativePathWithin(config.path, sourcePath);
+      if (!sourceFile) continue;
+      for (const output of packageBuildOutputs(packageRoot)) {
+        const sourceDirectory = String(output.sourceDirectory || "").trim();
+        if (!sourceDirectory) continue;
+        const sourceRoot = path.resolve(packageRoot, "src", sourceDirectory);
+        const outputRelative = relativePathWithin(sourceRoot, sourcePath);
+        if (outputRelative == null || outputRelative !== "." && !outputRelative.endsWith(".ts")) continue;
+        const compiledRelative = outputRelative === "." ? "." : outputRelative.replace(/\.ts$/, ".js");
+        const outputPath = path.resolve(packageRoot, output.directory, compiledRelative);
+        const outputFile = relativePathWithin(config.path, outputPath);
+        if (outputFile) pairs.set(`${sourceFile}\0${outputFile}`, { from: sourceFile, to: outputFile });
+      }
     }
-    return [...sources];
+    return [...pairs.values()];
   }
   function defaultAlwaysInScope(absPath) {
     try {
@@ -299,10 +290,10 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
   function effectiveScope(slug, files) {
     const config = boardConfig(slug);
     const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
-    const paired = trackedGeneratedPaths(generatedConfig, files);
-    const sources = trackedSourcePaths(generatedConfig, files);
-    return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...config && config.alwaysInScope || [], ...paired, ...sources]));
+    const generatedPairs = [...config && config.generatedPairs || [], ...derivedGeneratedPairs(generatedConfig, files)];
+    const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
+    return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...config && config.alwaysInScope || [], ...paired]));
   }
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, trackedSourcePaths, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApprovePluginTests, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApprovePluginTests, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 module.exports = { createConfig };

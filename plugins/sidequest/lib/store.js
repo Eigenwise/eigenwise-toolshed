@@ -503,6 +503,7 @@ const {
   dispatchVerifyCommandError: (...args) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args) => dispatchRouteState(...args),
+  effectiveScope: (...args) => effectiveScope(...args),
   execFileSync,
   execProjection: (...args) => execProjection(...args),
   fs,
@@ -641,7 +642,7 @@ function negativeControlRefusal(ticket, result) {
 function completionTreeCheck(slug, ticket, opts) {
   const state = dispatchState(ticket);
   if (!state || state.readonly === true || state.nonRepoOutput === true) return { ok: true, applicable: false };
-  const declaredFiles = Array.isArray(state.declaredFiles) ? state.declaredFiles : normalizeFiles(ticket?.files);
+  const declaredFiles = Array.isArray(state.declaredFiles) ? state.declaredFiles : effectiveScope(slug, ticket?.files);
   if (!declaredFiles.length) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
