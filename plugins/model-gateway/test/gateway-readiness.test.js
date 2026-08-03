@@ -8,6 +8,7 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
@@ -164,20 +165,12 @@ test('shim health retains an OpenAI rejection until a successful proxied request
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const shimPort = await freePort();
-  const shim = spawn(process.execPath, [CLI, 'serve-worker'], {
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-    },
-    stdio: 'ignore',
+  const { port: shimPort } = await startGateway(t, 'serve-worker', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
   });
-  t.after(() => shim.kill());
-  await waitForHealth(shimPort);
 
   const payload = { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 };
   assert.equal((await request(shimPort, 'POST', '/v1/messages', payload)).status, 429);

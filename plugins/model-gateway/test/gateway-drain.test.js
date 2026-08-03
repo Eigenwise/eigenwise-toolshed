@@ -4,26 +4,16 @@ const assert = require('node:assert/strict');
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
 
 function listen(server) {
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve(server.address().port)));
-}
-
-function freePort() {
-  return new Promise((resolve) => {
-    const probe = net.createServer();
-    probe.listen(0, '127.0.0.1', () => {
-      const { port } = probe.address();
-      probe.close(() => resolve(port));
-    });
-  });
 }
 
 function request(port, method, pathname, body) {
@@ -102,20 +92,12 @@ test('draining shim finishes an in-flight request before it exits', async (t) =>
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const shimPort = await freePort();
-  const child = spawn(process.execPath, [CLI, 'serve-worker'], {
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-    },
-    stdio: 'ignore',
+  const { child, port: shimPort } = await startGateway(t, 'serve-worker', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
   });
-  t.after(() => child.kill());
-  await waitFor(shimPort, 200);
 
   const inFlight = request(shimPort, 'POST', '/v1/messages', {
     model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
@@ -152,20 +134,12 @@ test('supervisor keeps its listener available while a hard-killed worker restart
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
 
-  const shimPort = await freePort();
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      HOME: home,
-      USERPROFILE: home,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-    },
-    stdio: 'ignore',
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
   });
-  t.after(() => child.kill());
-  await waitFor(shimPort, 200);
 
   const requestPromise = request(shimPort, 'POST', '/v1/messages', {
     model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1,
@@ -198,13 +172,12 @@ test('supervisor drains a planned worker restart without refusing connections', 
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const shimPort = await freePort();
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: { ...process.env, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_PROXY_PORT: String(proxyPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
-    stdio: 'ignore',
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
   });
-  t.after(() => child.kill());
-  await waitFor(shimPort, 200);
 
   const inFlight = request(shimPort, 'POST', '/v1/messages', { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 });
   while (!release) await new Promise((resolve) => setTimeout(resolve, 10));
@@ -220,13 +193,11 @@ test('a second supervisor exits when the singleton listener is already owned', a
   const secondHome = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-singleton-'));
   t.after(() => fs.rmSync(firstHome, { recursive: true, force: true }));
   t.after(() => fs.rmSync(secondHome, { recursive: true, force: true }));
-  const shimPort = await freePort();
-  const first = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: { ...process.env, HOME: firstHome, USERPROFILE: firstHome, CODEX_GATEWAY_PORT: String(shimPort), CODEX_GATEWAY_REQUEST_LOG: '0' },
-    stdio: 'ignore',
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+    HOME: firstHome,
+    USERPROFILE: firstHome,
+    CODEX_GATEWAY_REQUEST_LOG: '0',
   });
-  t.after(() => first.kill());
-  await waitFor(shimPort, 200);
 
   const second = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI, 'serve-shim'], {
