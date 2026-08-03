@@ -226,3 +226,45 @@ test('stale map migration locks recover while fresh locks serialize concurrent s
   assert.strictEqual(documents.migrateLegacyMap(directory), true);
   assert.strictEqual(documents.migrateLegacyMap(directory), false);
 });
+
+test('update announcements require the map update skill in the same main-session turn', () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const turn = {
+    hook_event_name: 'Stop',
+    session_id: 'main',
+    prompt_id: 'prompt',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+  const blocked = JSON.parse(hook(startHook, directory, state, turn));
+  assert.strictEqual(blocked.decision, 'block');
+  assert.match(blocked.reason, /invoke Skill/i);
+
+  assert.strictEqual(hook(startHook, directory, state, { ...turn, stop_hook_active: true }), '');
+  assert.strictEqual(hook(startHook, directory, state, {
+    ...turn,
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Skill',
+    tool_input: { skill: 'codebase-mapper:update-codebase-map' },
+  }), '');
+  assert.strictEqual(hook(startHook, directory, state, turn), '');
+  assert.strictEqual(hook(startHook, directory, state, {
+    ...turn,
+    last_assistant_message: 'Documentation check complete. No documentation updates needed because the map still matches the code.',
+  }), '');
+  assert.strictEqual(hook(startHook, directory, state, { ...turn, agent_id: 'subagent' }), '');
+});
+
+test('the stop hook tracks update skill use and preserves the main-session instruction', () => {
+  const main = hooksConfig.hooks.Stop[0];
+  const skill = hooksConfig.hooks.PreToolUse[0];
+  assert.match(main.hooks[0].command, /hooks\/inject-context\.js/);
+  assert.strictEqual(skill.matcher, 'Skill');
+  assert.match(skill.hooks[0].command, /hooks\/inject-context\.js/);
+
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const instruction = text(hook(startHook, directory, state, { session_id: 'main', source: 'startup' }));
+  assert.match(instruction, /That announcement is not the action/);
+  assert.match(instruction, /invoke Skill `codebase-mapper:update-codebase-map` before ending the turn/);
+});
