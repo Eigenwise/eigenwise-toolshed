@@ -184,11 +184,15 @@ Dispatch builds the launch's `spawn.name` from the board, not from a random id: 
 
 A claim says "someone is on this", so nothing else picks the ticket up. It is not a lease, and it never expires on the clock: an executor that has been working for five hours can still commit, submit, checkpoint, and close. That matters because a wall-clock timeout fails in the worst place, near the end of a long run, when the most unsaved work is at stake.
 
+Completion checks the tree too. A ticket with declared write scope is refused if those files have an empty diff since the dispatch base, and the refusal names the declared files. An executor that legitimately changed nothing reports `[sidequest:verify-complete] no-op` instead. Read-only tickets are unaffected, and a missing submission still takes precedence through the existing `submission_required` refusal. `[sidequest:verify-complete]` used to be only a liveness marker for a long verify; it now also has to be true.
+
 ### Claim sweep reference
 
 `sidequest claims sweep` (also run at session start, and available as the `sweepClaims` MCP tool) releases a claim in three cases: its executor was observed to stop while still holding it, it went idle past `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 minutes) with no executor associated, or nothing ever reported the stop and it went idle past `SIDEQUEST_CLAIM_ABANDON_MIN` (default 1440 minutes). Idleness counts from the holder's last board write, so a comment, checkpoint, scope request, or commit keeps a long run safe. `sidequest pulse SQ-3` shows the same verdict as `claim.reclaimable`; when it is null, leave the claim alone.
 
 A released claim takes its dispatch token with it. An executor that comes back to a swept ticket gets a refusal that names the recovery: keep the commit, re-dispatch, re-claim, and hand in the same commit.
+
+Releasing a ticket for a technical blocker requires evidence of the failure. The MCP `release` call takes `kind: "technical_blocker"`, `command`, `exitCode`, and `outputTail`; the CLI uses `--release-kind technical_blocker`, `--command`, `--exit-code`, and `--output-tail`. Both surfaces enforce the same check, and record the evidence on the ticket beside the reason. Scope pauses, contradictions, and deliberate handbacks use `kind: "scope_pause"`, `"contradiction"`, or `"handback"` without blocker evidence.
 
 ### High-stakes tickets
 
