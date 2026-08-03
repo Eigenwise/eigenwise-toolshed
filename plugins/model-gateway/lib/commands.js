@@ -1561,7 +1561,7 @@ function requestHeader(req, name) {
 const { runWorker } = require('./request-worker.js');
 function runShim() {
   mkdirs();
-  const workerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || 20000 + (PUBLIC_SHIM_PORT % 20000));
+  let workerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || (PUBLIC_SHIM_PORT ? 20000 + (PUBLIC_SHIM_PORT % 20000) : 0));
   const timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000;
   const hostsEntry = detectHostsCompat();
   const compatState = { hostsDetected: !!hostsEntry, hostsLine: hostsEntry?.line ?? null, port80Bound: false, reason: null };
@@ -1681,8 +1681,10 @@ function runShim() {
   }
 
   const main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
+    const publicShimPort = main.address().port;
+    if (!workerPort) workerPort = 20000 + (publicShimPort % 20000);
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-    console.log(`model-gateway shim supervisor listening on 127.0.0.1:${PUBLIC_SHIM_PORT}`);
+    console.log(`model-gateway shim supervisor listening on 127.0.0.1:${publicShimPort}`);
     startWorker();
   });
   main.once('error', (error) => {
