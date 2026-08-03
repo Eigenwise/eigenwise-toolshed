@@ -186,6 +186,8 @@ A claim says "someone is on this", so nothing else picks the ticket up. It is no
 
 Completion checks the tree too. A ticket with declared write scope is refused if those files have an empty diff since the dispatch base, and the refusal names the declared files. An executor that legitimately changed nothing reports `[sidequest:verify-complete] no-op` instead. Read-only tickets are unaffected, and a missing submission still takes precedence through the existing `submission_required` refusal. `[sidequest:verify-complete]` used to be only a liveness marker for a long verify; it now also has to be true.
 
+Completion also checks that changed tests exercise changed implementation. When the in-scope diff includes both test-side and non-test-side files, revert the non-test paths to the dispatch base, run the changed tests, and post `[sidequest:negative-control] <command> failed=<n>` with a non-zero failure count before restoring the change. A `failed=0` result is refused. Refactors and coverage-only work can instead post `[sidequest:negative-control] waived <reason>` with a reason of at least 20 characters.
+
 ### Claim sweep reference
 
 `sidequest claims sweep` (also run at session start, and available as the `sweepClaims` MCP tool) releases a claim in three cases: its executor was observed to stop while still holding it, it went idle past `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 minutes) with no executor associated, or nothing ever reported the stop and it went idle past `SIDEQUEST_CLAIM_ABANDON_MIN` (default 1440 minutes). Idleness counts from the holder's last board write, so a comment, checkpoint, scope request, or commit keeps a long run safe. `sidequest pulse SQ-3` shows the same verdict as `claim.reclaimable`; when it is null, leave the claim alone.
@@ -193,6 +195,8 @@ Completion checks the tree too. A ticket with declared write scope is refused if
 A released claim takes its dispatch token with it. An executor that comes back to a swept ticket gets a refusal that names the recovery: keep the commit, re-dispatch, re-claim, and hand in the same commit.
 
 Releasing a ticket for a technical blocker requires evidence of the failure. The MCP `release` call takes `kind: "technical_blocker"`, `command`, `exitCode`, and `outputTail`; the CLI uses `--release-kind technical_blocker`, `--command`, `--exit-code`, and `--output-tail`. Both surfaces enforce the same check, and record the evidence on the ticket beside the reason. Scope pauses, contradictions, and deliberate handbacks use `kind: "scope_pause"`, `"contradiction"`, or `"handback"` without blocker evidence.
+
+A contradiction now needs proof that the named target is absent. Use `--release-kind contradiction` with the verbatim probe in `--command` and its result in `--output-tail`; `--exit-code` is optional because a probe can legitimately exit 0 when it finds nothing. The MCP `release` call uses `kind: "contradiction"`, `command`, and `outputTail` for the same evidence. Scope pauses and deliberate handbacks still need no probe.
 
 ### High-stakes tickets
 
