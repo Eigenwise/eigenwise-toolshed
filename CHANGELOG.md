@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.358.0 (2026-08-03)
+
+### sidequest 4.5.5 → 4.5.6
+
+#### Fixes
+
+- Scope refusals told the orchestrator to act as its own executor (SQ-1309) [`ac738a3`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ac738a35)
+  Refusing a scope change under a live claim pointed the caller at `scope-request --by <claim.by>`, which is the executor's identity, so an orchestrator following the message was impersonating the agent it had dispatched. The advice was not even needed: the guard already lets a caller through when it supplies a `by` of its own, and the orchestrator was only refused because it passed none. One run retried the same call three times and escalated to the CLI, pulling two full usage dumps into context, for something one field would have solved. The refusal now branches: with no `by` it names re-running under your own identity, and the scope-request path stays for the claim holder, where it is correct. The same audit removed a matching instruction to release as another agent.
+- The browser/visual planning warning fired on any ticket whose prose mentioned a browser (SQ-1310) [`e8510ac`](https://github.com/Eigenwise/eigenwise-toolshed/commit/e8510acb)
+  The warning matched `browser|visual|screenshot|playwright|ui review|e2e` against a ticket's title and description, so a readonly ticket earned a "may need a driver script" warning for merely mentioning one of those words. A source-reading audit that said "PHP/frontend can render" got it; so did a stack-reproduction spike whose title contained "403 on click". Neither goes near a browser. The subject being the frontend is not the method being a browser, and prose cannot tell those apart. It now keys on the category that actually means "judged through screenshots", matching both the current `visual-evaluation` id and the legacy `visual-review` one, since boards seeded before the rename still carry the old id and nothing aliases them.
+- Two Windows traps whose errors point away from their own cause (SQ-1311) [`698c50a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/698c50a4)
+  `docker exec -w /app` fails with `Cwd must be an absolute path`, and `/app` is absolute: Git Bash's MSYS2 layer rewrites it before docker sees it, so the error blames the one argument that was correct. `Start-Process -FilePath "npm"` fails with `%1 is not a valid Win32 application`, which reads like a corrupt Node install when the real story is that npm is a `.cmd` shim. Both cost an agent a dead tool call and then send it hunting in the wrong direction. The existing Windows guard only caught `C:\...` paths going into Bash; these are the same hazard from angles it did not cover. Both now warn with the corrected command spelled out, and neither denies, because they are legitimate commands with a platform-specific spelling.
+
 ## v3.357.0 (2026-08-03)
 
 ### model-gateway 0.47.1 → 0.48.0
