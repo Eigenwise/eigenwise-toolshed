@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.366.0 (2026-08-03)
+
+### sidequest 4.12.0 → 4.12.1
+
+#### Fixes
+
+- Briefings teach the foreground-verify closeout (SQ-1324) [`762ffc3`](https://github.com/Eigenwise/eigenwise-toolshed/commit/762ffc33)
+  Three executors in one day stopped mid-verify the same way: they backgrounded the long final suite, their bounded turn ended while waiting, and the claim sat in verify-marker limbo until someone resumed them by hand with the same instruction each time. That instruction is now in every dispatch briefing with a verify command: run the declared verify in the foreground with a timeout sized to the command, kill any earlier backgrounded verify first so two builds never race in one tree, and do the whole closeout (verify-complete marker, negative control, submission, final report) in that same turn. An assertion pins the line so a briefing refactor cannot drop it silently.
+
 ## v3.365.0 (2026-08-03)
 
 ### sidequest 4.11.0 → 4.12.0
