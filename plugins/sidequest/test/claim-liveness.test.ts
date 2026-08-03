@@ -213,6 +213,58 @@ test('a live verification marker protects a claim through a false stop observati
   assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
 });
 
+test('a shared-tree write dispatch refuses an empty verification completion unless it declares a no-op', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'shared-tree completion tree check',
+    description: 'Where: shared-tree completion fixture. Contract: reject a completion claim with no scoped diff. Verify: inspect the refusal.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-tree-check' });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'tree-check-executor', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'mcp',
+    sessionId: 'session-tree-check',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by: 'tree-check-executor',
+    body: '[sidequest:verify-start] npm run test:full',
+    source: 'mcp',
+  }).ok, true);
+
+  const refused = store.addComment(slug, ticket.ref, {
+    by: 'tree-check-executor',
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'empty_declared_scope');
+  assert.match(refused.message, /lib\/fixture\.js/);
+  assert.match(refused.message, /empty diff since dispatch base/);
+
+  const submitRefused = store.submitTicket(slug, ticket.ref, 'tree-check-executor', { commit: COMMIT });
+  assert.equal(submitRefused.ok, false);
+  assert.equal(submitRefused.reason, 'empty_declared_scope');
+
+  const noOp = store.addComment(slug, ticket.ref, {
+    by: 'tree-check-executor',
+    body: '[sidequest:verify-complete] no-op',
+    source: 'mcp',
+  });
+  assert.equal(noOp.ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).claim.verification, undefined);
+
+  const doneRefused = store.completeTicket(slug, ticket.ref, 'tree-check-executor', { body: 'No repository change.' });
+  assert.equal(doneRefused.ok, false);
+  assert.equal(doneRefused.reason, 'submission_required');
+  assert.equal(store.completeTicket(slug, ticket.ref, 'tree-check-executor', {
+    body: 'No repository change.',
+    cleanDeclaredScope: true,
+  }).ok, true);
+});
+
 test('a verification marker still releases after the unobserved-death backstop', () => {
   const ticket = addRouted('verification marker after a crash');
   const session = 'session-verifying-crash';

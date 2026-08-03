@@ -202,7 +202,7 @@ const tools: ToolDefinition[] = [
       const model = requireKnownModel('done', args.model, ticket);
       const opts = { source: 'mcp', model, effort: args.effort, body, sessionId: sessionOf(args) };
       let res = store.completeTicket(slug, args.ref, by, opts);
-      if (!res.ok && res.reason === 'submission_required') {
+      if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
         const noOp = provenNoOpCloseout(slug, res.ticket);
         if (noOp.ok) {
           res = store.completeTicket(slug, args.ref, by, Object.assign({}, opts, {

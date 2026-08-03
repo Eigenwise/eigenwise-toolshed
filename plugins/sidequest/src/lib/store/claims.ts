@@ -2,6 +2,7 @@
 
 function createClaims(dependencies: any) {
   const {
+    completionTreeCheck,
     dispatchState,
     fs,
     getTicket,
@@ -14,6 +15,7 @@ function createClaims(dependencies: any) {
   const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
   const VERIFY_START_COMMENT = '[sidequest:verify-start] ';
   const VERIFY_COMPLETE_COMMENT = '[sidequest:verify-complete]';
+  const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
 
   function preparedDispatchTtlMs() {
     const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
@@ -76,7 +78,15 @@ function createClaims(dependencies: any) {
       const command = text.slice(VERIFY_START_COMMENT.length).trim();
       return command ? { kind: 'start', command } : null;
     }
-    return text === VERIFY_COMPLETE_COMMENT ? { kind: 'complete' } : null;
+    if (text === VERIFY_COMPLETE_COMMENT) return { kind: 'complete', noOp: false };
+    if (text === VERIFY_COMPLETE_NO_OP_COMMENT) return { kind: 'complete', noOp: true };
+    return null;
+  }
+
+  function verificationCompletionCheck(slug?: any, ticket?: any, comment?: any) {
+    const event = verificationComment(comment?.body);
+    if (!event || event.kind !== 'complete') return { ok: true };
+    return completionTreeCheck(slug, ticket, { explicitNoOp: event.noOp });
   }
 
   function recordClaimVerification(ticket?: any, comment?: any) {
@@ -216,6 +226,7 @@ function createClaims(dependencies: any) {
     touchClaim,
     touchClaimActivity,
     verificationComment,
+    verificationCompletionCheck,
   };
 }
 
