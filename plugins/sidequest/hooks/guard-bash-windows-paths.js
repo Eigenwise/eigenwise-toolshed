@@ -50,6 +50,9 @@ function stringField(input, ...names) {
 function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
+function writeContext(hookEventName, additionalContext) {
+  writeJson({ hookSpecificOutput: { hookEventName, additionalContext } });
+}
 function writeDeny(hookEventName, permissionDecisionReason) {
   writeJson({
     hookSpecificOutput: {
@@ -62,6 +65,10 @@ function writeDeny(hookEventName, permissionDecisionReason) {
 
 // src/hooks/guard-bash-windows-paths.ts
 var WINDOWS_PATH = /^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/;
+var CONTAINER_PATH_FLAG = /(?:^|[;&|(]\s*)(?:docker\s+(?:exec|run)|kubectl\s+exec)\b[^\r\n;&|]*?(?:\s(?:-w|-v)\s+|\s--(?:workdir|volume|cwd)(?:=|\s+))(?:"|')?\/(?!\/)[^\s"'`|&;(){}<>]*/im;
+function containerPathIsRewritten(command) {
+  return CONTAINER_PATH_FLAG.test(command);
+}
 function hereDocAt(command, index) {
   let cursor = index + 2;
   const stripTabs = command[cursor] === "-";
@@ -173,6 +180,10 @@ function main() {
   if (!input || stringField(input, "tool_name") !== "Bash") return;
   const toolInput = input.tool_input;
   const command = toolInput !== null && typeof toolInput === "object" && !Array.isArray(toolInput) ? String(toolInput.command || "") : "";
+  if (containerPathIsRewritten(command)) {
+    writeContext("PreToolUse", "sidequest: Git Bash rewrites this POSIX container path before Docker or kubectl sees it. Use `MSYS_NO_PATHCONV=1 docker exec -w /app contractify-docai ...` or spell the container path as `docker exec -w //app contractify-docai ...`.");
+    return;
+  }
   const found = windowsPath(command);
   if (!found) return;
   writeDeny("PreToolUse", found.quoted ? `sidequest: double quotes eat the backslash in this Windows path (${found.token}) - a backslash before $ or a line break is not literal there; single-quote it or write it with forward slashes (C:/Users/...).` : `sidequest: unquoted Windows path in a POSIX shell (${found.token}) - backslashes are eaten and the path collapses into a literal filename in cwd; quote the path or write it with forward slashes (C:/Users/...).`);

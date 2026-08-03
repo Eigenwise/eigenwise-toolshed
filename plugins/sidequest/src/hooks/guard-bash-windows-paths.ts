@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readStdin, stringField } from './shared/input.js';
-import { writeDeny } from './shared/output.js';
+import { writeContext, writeDeny } from './shared/output.js';
 
 type HereDoc = {
   delimiter: string;
@@ -15,6 +15,11 @@ type Finding = {
 };
 
 const WINDOWS_PATH = /^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/;
+const CONTAINER_PATH_FLAG = /(?:^|[;&|(]\s*)(?:docker\s+(?:exec|run)|kubectl\s+exec)\b[^\r\n;&|]*?(?:\s(?:-w|-v)\s+|\s--(?:workdir|volume|cwd)(?:=|\s+))(?:"|')?\/(?!\/)[^\s"'`|&;(){}<>]*/im;
+
+function containerPathIsRewritten(command: string): boolean {
+  return CONTAINER_PATH_FLAG.test(command);
+}
 
 function hereDocAt(command: string, index: number): { hereDoc: HereDoc; end: number } | null {
   let cursor = index + 2;
@@ -149,6 +154,10 @@ function main(): void {
   const command = toolInput !== null && typeof toolInput === 'object' && !Array.isArray(toolInput)
     ? String((toolInput as Record<string, unknown>).command || '')
     : '';
+  if (containerPathIsRewritten(command)) {
+    writeContext('PreToolUse', 'sidequest: Git Bash rewrites this POSIX container path before Docker or kubectl sees it. Use `MSYS_NO_PATHCONV=1 docker exec -w /app contractify-docai ...` or spell the container path as `docker exec -w //app contractify-docai ...`.');
+    return;
+  }
   const found = windowsPath(command);
   if (!found) return;
   writeDeny('PreToolUse', found.quoted
