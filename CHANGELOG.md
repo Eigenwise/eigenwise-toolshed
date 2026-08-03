@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.365.0 (2026-08-03)
+
+### sidequest 4.11.0 → 4.12.0
+
+#### Features
+
+- Worktree invisibility is a pre-dispatch warning and a repeat-failure circuit breaker (SQ-1318) [`6c6ef61`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6c6ef617)
+  A dispatched executor's worktree holds tracked files only, so a ticket whose real work reads gitignored state (a data directory, local fixtures, an env file) dies the same environmental death on every attempt, and it presents as a vague failure rather than a missing-file error. One board burned three dispatches and 125k tokens on a single read-only ticket that way.
+
+  Dispatch now warns up front: path-like tokens from the ticket's files, verify command, and description are tested with `git check-ignore`, and anything ignored AND absent from the tree gets named in a warning with the two remedies (`sharedTree: true`, or run it inline). Ignored-but-present paths like `npm ci`-installed `node_modules` stay silent, because a warning that fires on every JS ticket is noise that trains you to skip warnings. It stays a warning, never a refusal: the detection is heuristic.
+
+  And a third dispatch after two durable terminal no-commit rounds is blocked, with environment visibility named as the leading hypothesis. Only durable terminal outcomes count — a still-claimed record whose stop hook never arrived proves nothing either way. `allowRepeatFailure` (CLI `--allow-repeat-failure`) overrides explicitly, and taking the override is recorded on the ticket.
+
 ## v3.364.0 (2026-08-03)
 
 ### sidequest 4.10.0 → 4.11.0
