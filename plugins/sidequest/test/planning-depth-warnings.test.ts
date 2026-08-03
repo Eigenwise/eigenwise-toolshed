@@ -7,6 +7,7 @@ const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
 const store = require('../lib/store');
+const { resolveSuite } = require('../lib/suite-resolver');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
 const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
@@ -348,6 +349,15 @@ test('dispatch rejects broken npm and node test verifies while add and update on
   const emptyGlob = cliJson(['add', '-t', 'empty test glob', '--category', 'coding.normal', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && node --test "test/missing.test.js"']);
   assert.match(emptyGlob.warnings.join('\n'), /matches no files/);
   assert.match(store.dispatchVerifyCommandError(emptyGlob.ticket, PROJ), /matches no files/);
+
+  const derivedSuite = resolveSuite(PROJ, { name: 'bare-suite', dir: 'plugins/bare-suite' });
+  assert.ok(derivedSuite);
+  const derivedVerify = `cd ${derivedSuite.cwd} && ${derivedSuite.command}`;
+  const derived = cliJson(['add', '-t', 'derived suite verify', '--category', 'coding.normal', '--description', 'Dispatch the resolver-derived command so this description satisfies the executor briefing requirement.', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', derivedVerify]);
+  assert.strictEqual(store.dispatchVerifyCommandError(derived.ticket, PROJ), null);
+  const derivedDispatch = cliResult(['dispatch', derived.ticket.ref]);
+  assert.strictEqual(derivedDispatch.status, 1);
+  assert.doesNotMatch(derivedDispatch.stderr + derivedDispatch.stdout, /dispatch: verify command cannot run/);
 
   const correct = cliJson(['add', '-t', 'working verify', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full']);
   assert.deepStrictEqual(correct.warnings, []);
