@@ -18,7 +18,7 @@ function resolveSuite(repoRoot, plugin) {
   }
   const testDir = path.join(repoRoot, plugin.dir, "test");
   if (existsSync(testDir) && readdirSync(testDir).some((name) => name.endsWith(".test.js"))) {
-    return { plugin: plugin.name, cwd: plugin.dir, setup: null, command: 'node --test "test/*.test.js"' };
+    return { plugin: plugin.name, cwd: plugin.dir, setup: null, command: 'node --test --test-timeout=30000 "test/*.test.js"' };
   }
   return null;
 }
