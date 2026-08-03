@@ -42,13 +42,10 @@
         "name": "bucket",
         "label": "Bucket",
         "type": "interval",
-        "auto": true,
-        "auto_count": 60,
-        "auto_min": "1m",
         "query": "1m,5m,15m,1h,6h,1d",
         "current": {
-          "text": "Auto",
-          "value": "$__auto_interval_bucket"
+          "text": "5m",
+          "value": "5m"
         },
         "hide": 0
       }

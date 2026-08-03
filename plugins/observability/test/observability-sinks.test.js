@@ -320,11 +320,19 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
     );
     const bucket = dashboard.templating.list[0];
     assert.equal(bucket.type, 'interval');
-    assert.equal(bucket.auto, true);
+    assert.equal(bucket.auto, undefined);
     assert.equal(bucket.query, '1m,5m,15m,1h,6h,1d');
-    assert.equal(bucket.current.value, '$__auto_interval_bucket');
+    assert.deepEqual(bucket.current, { text: '5m', value: '5m' });
+    assert.doesNotMatch(JSON.stringify(dashboard), /\$__auto_interval_/);
     assert.deepEqual(undeclaredVariables(dashboard), []);
   }
+  const legacyTemplate = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
+  legacyTemplate.templating.list.find(({ name }) => name === 'bucket').current.value = '$__auto_interval_bucket';
+  assert.throws(
+    () => generatedDashboards([], legacyTemplate),
+    /Dashboard contains obsolete auto interval values: \$__auto_interval_bucket/,
+  );
+
   const projectUnscopedTitles = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
   const regularPanels = global.panels
     .filter(({ title }) => !projectUnscopedTitles.has(title));
