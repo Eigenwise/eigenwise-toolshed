@@ -45,6 +45,7 @@ const TEAMMATE_IDLE = path.join(HOOKS, 'teammate-idle.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
+const GUARD_POWERSHELL_CMD_SHIMS = path.join(HOOKS, 'guard-powershell-cmd-shims.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
@@ -1132,6 +1133,17 @@ function runBashWindowsPathGuard(command?: any, platform = 'win32') {
   return out.trim() ? JSON.parse(out) : null;
 }
 
+function runPowerShellCmdShimGuard(command?: any, platform = 'win32') {
+  const out = execFileSync(process.execPath, [
+    '-e',
+    `Object.defineProperty(process, 'platform', { value: ${JSON.stringify(platform)} }); require(${JSON.stringify(GUARD_POWERSHELL_CMD_SHIMS)});`,
+  ], {
+    input: JSON.stringify({ tool_name: 'PowerShell', tool_input: { command } }),
+    encoding: 'utf8',
+  });
+  return out.trim() ? JSON.parse(out) : null;
+}
+
 test('Bash Windows-path guard: denies an unquoted backslash path', () => {
   const token = 'C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err';
   const out = runBashWindowsPathGuard(`node script.js 2> ${token}`);
@@ -1220,6 +1232,45 @@ test('Bash Windows-path guard: allows forward-slash paths', () => {
 
 test('Bash Windows-path guard: is a no-op outside Windows', () => {
   assert.strictEqual(runBashWindowsPathGuard('node script.js 2> C:\\Users\\kenny\\AppData\\Local\\Temp\\lookup4.err', 'linux'), null);
+});
+
+test('Bash Windows-path guard: warns when Git Bash rewrites a container path', () => {
+  const out = runBashWindowsPathGuard('docker exec -w /app contractify-docai uv run python -c "..."');
+  assert.equal(out.hookSpecificOutput.permissionDecision, undefined);
+  assert.match(out.hookSpecificOutput.additionalContext, /MSYS_NO_PATHCONV=1 docker exec -w \/app/);
+  assert.match(out.hookSpecificOutput.additionalContext, /docker exec -w \/\/app/);
+});
+
+test('Bash Windows-path guard: allows protected container path spellings', () => {
+  for (const command of [
+    'MSYS_NO_PATHCONV=1 docker exec -w /app contractify-docai uv run python -c "..."',
+    'docker exec -w //app contractify-docai uv run python -c "..."',
+  ]) {
+    assert.strictEqual(runBashWindowsPathGuard(command), null, command);
+  }
+});
+
+test('Bash Windows-path guard: warns for Docker volume and kubectl workdir flags', () => {
+  for (const command of [
+    'docker run --volume /app:/workspace image',
+    'kubectl exec pod --workdir /app -- command',
+  ]) {
+    assert.match(runBashWindowsPathGuard(command).hookSpecificOutput.additionalContext, /Git Bash rewrites/);
+  }
+});
+
+test('PowerShell cmd-shim guard: warns with both working Start-Process forms', () => {
+  for (const shim of ['npm', 'npx', 'yarn', 'pnpm']) {
+    const out = runPowerShellCmdShimGuard(`Start-Process -FilePath "${shim}" -ArgumentList "run","dev"`);
+    assert.equal(out.hookSpecificOutput.permissionDecision, undefined);
+    assert.match(out.hookSpecificOutput.additionalContext, new RegExp(`-FilePath "${shim}\\.cmd"`));
+    assert.match(out.hookSpecificOutput.additionalContext, new RegExp(`-FilePath "cmd" -ArgumentList "\\/c","${shim}","run","dev"`));
+  }
+});
+
+test('PowerShell cmd-shim guard: allows an explicit shim and non-Windows platforms', () => {
+  assert.strictEqual(runPowerShellCmdShimGuard('Start-Process -FilePath "npm.cmd" -ArgumentList "run","dev"'), null);
+  assert.strictEqual(runPowerShellCmdShimGuard('Start-Process -FilePath "npm" -ArgumentList "run","dev"', 'linux'), null);
 });
 
 test('home-delete guard: blocks a recursive delete using $home', () => {
