@@ -39,7 +39,9 @@ git(['init']);
 git(['config', 'user.name', 'Sidequest Test']);
 git(['config', 'user.email', 'sidequest-test@example.invalid']);
 fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+fs.mkdirSync(path.join(PROJECT_DIR, 'test'), { recursive: true });
 fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = 1;\n');
+fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), 'module.exports = 1;\n');
 git(['add', '.']);
 git(['commit', '-m', 'base']);
 git(['branch', '-M', 'main']);
@@ -73,6 +75,23 @@ function claimRouted(ticket?: any, by?: any, opts?: any) {
   });
   assert.strictEqual(claimed.ok, true);
   return prepared;
+}
+
+let negativeControlVersion = 3;
+
+function addNegativeControlTicket(title?: any, by = 'negative-control-executor') {
+  const ticket = store.createTicket(slug, {
+    title,
+    description: 'Where: negative-control fixture. Contract: reject a completion whose tests pass against pre-change code. Verify: inspect the refusal.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js', 'test/fixture.test.js'],
+    source: 'cli',
+  });
+  claimRouted(ticket, by);
+  negativeControlVersion += 1;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = ${negativeControlVersion};\n`);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `module.exports = ${negativeControlVersion};\n`);
+  return ticket;
 }
 
 // Rewrite persisted ticket state directly: these scenarios need claims that are
@@ -263,6 +282,114 @@ test('a shared-tree write dispatch refuses an empty verification completion unle
     body: 'No repository change.',
     cleanDeclaredScope: true,
   }).ok, true);
+});
+
+test('a mixed source and test diff needs a claim-holder negative control before completion', () => {
+  const by = 'negative-control-executor';
+  const ticket = addNegativeControlTicket('negative control is required', by);
+
+  const missing = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(missing.ok, false);
+  assert.equal(missing.reason, 'negative_control_required');
+  assert.match(missing.message, /Revert the non-test changes, run the changed tests/);
+
+  const submission = store.submitTicket(slug, ticket.ref, by, { commit: COMMIT });
+  assert.equal(submission.ok, false);
+  assert.equal(submission.reason, 'negative_control_required');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by: 'another-executor',
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).reason, 'negative_control_required');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=0',
+    source: 'mcp',
+  }).ok, true);
+  const zeroFailures = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(zeroFailures.ok, false);
+  assert.equal(zeroFailures.reason, 'negative_control_zero_failures');
+  assert.match(zeroFailures.message, /tests passed against the pre-change code/);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] waived too short',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).reason, 'negative_control_waiver_too_short');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control marker fixture']);
+});
+
+test('a valid negative-control waiver accepts a mixed source and test diff', () => {
+  const by = 'negative-control-waiver-executor';
+  const ticket = addNegativeControlTicket('negative control waiver', by);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] waived This platform cannot safely run the reverted fixture in this environment.',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control waiver fixture']);
+});
+
+test('a source-only scoped diff still completes without a negative control', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'source-only completion',
+    description: 'Where: source-only fixture. Contract: keep negative controls limited to test changes. Verify: inspect completion.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  const by = 'source-only-executor';
+  claimRouted(ticket, by);
+  negativeControlVersion += 1;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = ${negativeControlVersion};\n`);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'source-only negative control fixture']);
 });
 
 test('a verification marker still releases after the unobserved-death backstop', () => {

@@ -16,6 +16,7 @@ function createClaims(dependencies: any) {
   const VERIFY_START_COMMENT = '[sidequest:verify-start] ';
   const VERIFY_COMPLETE_COMMENT = '[sidequest:verify-complete]';
   const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
+  const NEGATIVE_CONTROL_COMMENT = '[sidequest:negative-control] ';
   const RELEASE_KINDS = new Set(['scope_pause', 'contradiction', 'handback']);
 
   function technicalBlockerRelease(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }) {
@@ -118,6 +119,7 @@ function createClaims(dependencies: any) {
     }
     if (text === VERIFY_COMPLETE_COMMENT) return { kind: 'complete', noOp: false };
     if (text === VERIFY_COMPLETE_NO_OP_COMMENT) return { kind: 'complete', noOp: true };
+    if (text.startsWith(NEGATIVE_CONTROL_COMMENT)) return { kind: 'negative-control' };
     return null;
   }
 
@@ -138,6 +140,7 @@ function createClaims(dependencies: any) {
       if (dispatch) delete dispatch.verifyStopAt;
       return;
     }
+    if (event.kind !== 'complete') return;
     if (claimVerification(ticket)) delete claim.verification;
     if (dispatch) delete dispatch.verifyStopAt;
   }

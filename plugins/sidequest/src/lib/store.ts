@@ -487,6 +487,51 @@ const {
   writeGlobal,
 });
 
+function isTestSidePath(file?: any) {
+  const normalized = String(file || '').replace(/\\/g, '/').toLowerCase();
+  return /(^|\/)(?:test|tests|__tests__)(?:\/|$)/.test(normalized)
+    || /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/.test(normalized);
+}
+
+function negativeControlResult(ticket?: any) {
+  const claimHolder = String(ticket?.claim?.by || '').trim();
+  if (!claimHolder) return { kind: 'missing' };
+  const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  for (const comment of comments.slice().reverse()) {
+    if (comment?.by !== claimHolder) continue;
+    const body = String(comment.body || '').trim();
+    const waived = body.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)$/);
+    const waiverReason = waived?.[1]?.trim();
+    if (waiverReason) return waiverReason.length >= 20 ? { kind: 'waived' } : { kind: 'short_waiver' };
+    const failed = body.match(/^\[sidequest:negative-control\]\s+(.+?)\s+failed=(\d+)$/);
+    if (failed) return Number(failed[2]) > 0 ? { kind: 'failed' } : { kind: 'zero_failures' };
+  }
+  return { kind: 'missing' };
+}
+
+function negativeControlRefusal(ticket?: any, result?: any) {
+  const recipe = 'Revert the non-test changes, run the changed tests, post [sidequest:negative-control] <command> failed=<n> with n greater than zero, then restore the change and run the declared verify. If the control cannot run, post [sidequest:negative-control] waived <reason of at least 20 characters>.';
+  if (result.kind === 'zero_failures') {
+    return {
+      ok: false,
+      reason: 'negative_control_zero_failures',
+      message: `${ticket.ref} completion refused: failed=0 means tests passed against the pre-change code and do not test the change. ${recipe}`,
+    };
+  }
+  if (result.kind === 'short_waiver') {
+    return {
+      ok: false,
+      reason: 'negative_control_waiver_too_short',
+      message: `${ticket.ref} completion refused: a negative-control waiver needs a reason of at least 20 characters. ${recipe}`,
+    };
+  }
+  return {
+    ok: false,
+    reason: 'negative_control_required',
+    message: `${ticket.ref} completion refused: changed scoped paths include both test-side and non-test-side files, but the claim holder has not recorded a negative control. ${recipe}`,
+  };
+}
+
 function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (!state || state.readonly === true || state.nonRepoOutput === true) return { ok: true, applicable: false };
@@ -497,13 +542,19 @@ function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
   const changedPaths = Array.from(new Set([...delta.working, ...delta.committed]))
     .filter((file: string) => commitScope.isInScope(file, declaredFiles))
     .sort();
-  if (changedPaths.length || opts?.explicitNoOp === true) return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
-  return {
-    ok: false,
-    reason: 'empty_declared_scope',
-    declaredFiles,
-    message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(', ')}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op; otherwise make and verify the scoped change before completing.`,
-  };
+  if (!changedPaths.length && opts?.explicitNoOp !== true) {
+    return {
+      ok: false,
+      reason: 'empty_declared_scope',
+      declaredFiles,
+      message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(', ')}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op; otherwise make and verify the scoped change before completing.`,
+    };
+  }
+  if (changedPaths.some(isTestSidePath) && changedPaths.some((file: string) => !isTestSidePath(file))) {
+    const negativeControl = negativeControlResult(ticket);
+    if (negativeControl.kind !== 'failed' && negativeControl.kind !== 'waived') return negativeControlRefusal(ticket, negativeControl);
+  }
+  return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
 }
 
 const {
