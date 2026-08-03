@@ -336,7 +336,7 @@ test('dispatch rejects broken npm and node test verifies while add and update on
 
   const npmTest = cliJson(['add', '-t', 'missing npm manifest', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && npm test']);
   assert.match(npmTest.warnings.join('\n'), /npm test.*package\.json/);
-  assert.match(store.dispatchVerifyCommandError(npmTest.ticket, PROJ), /cd plugins\/bare-suite && node --test "test\/\*\.test\.js"/);
+  assert.match(store.dispatchVerifyCommandError(npmTest.ticket, PROJ), /cd plugins\/bare-suite && node --test --test-timeout=\d+ "test\/\*\.test\.js"/);
 
   const missingScript = cliJson(['add', '-t', 'missing npm script', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run missing']);
   assert.match(missingScript.warnings.join('\n'), /npm run missing.*`missing` script/);
