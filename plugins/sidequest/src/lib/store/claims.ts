@@ -17,20 +17,20 @@ function createClaims(dependencies: any) {
   const VERIFY_COMPLETE_COMMENT = '[sidequest:verify-complete]';
   const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
   const NEGATIVE_CONTROL_COMMENT = '[sidequest:negative-control] ';
-  const RELEASE_KINDS = new Set(['scope_pause', 'contradiction', 'handback']);
+  const RELEASE_KINDS = new Set(['scope_pause', 'handback']);
 
   function technicalBlockerRelease(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }) {
     const reason = String(args?.reason || '').trim();
     const oracle = String(args?.oracle || '').trim();
     const releaseKind = String(args?.releaseKind || '').trim();
+    const command = String(args?.command || '').trim();
+    const outputTail = String(args?.outputTail || '').trim();
+    const exitCode = typeof args?.exitCode === 'number'
+      ? args.exitCode
+      : typeof args?.exitCode === 'string' && /^-?\d+$/.test(args.exitCode.trim())
+        ? Number(args.exitCode)
+        : Number.NaN;
     if (releaseKind === 'technical_blocker') {
-      const command = String(args?.command || '').trim();
-      const outputTail = String(args?.outputTail || '').trim();
-      const exitCode = typeof args?.exitCode === 'number'
-        ? args.exitCode
-        : typeof args?.exitCode === 'string' && /^-?\d+$/.test(args.exitCode.trim())
-          ? Number(args.exitCode)
-          : Number.NaN;
       if (!reason || !command || !Number.isInteger(exitCode) || exitCode === 0 || !outputTail) {
         return {
           ok: false,
@@ -38,7 +38,17 @@ function createClaims(dependencies: any) {
           message: 'release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields.',
         };
       }
-      return { ok: true, evidence: { command, exitCode, outputTail } };
+      return { ok: true, evidence: { kind: releaseKind, command, exitCode, outputTail } };
+    }
+    if (releaseKind === 'contradiction') {
+      if (!reason || !command || !outputTail || (args?.exitCode != null && !Number.isInteger(exitCode))) {
+        return {
+          ok: false,
+          reason: 'contradiction_evidence_required',
+          message: 'release: contradiction requires a non-empty reason and command, a non-empty outputTail, and an integer exitCode when supplied. Capture the verbatim probe and its output, then release again with all required fields.',
+        };
+      }
+      return { ok: true, evidence: { kind: releaseKind, command, ...(Number.isInteger(exitCode) ? { exitCode } : {}), outputTail } };
     }
     if (!reason && !oracle && !releaseKind) return { ok: true, evidence: null };
     if (!releaseKind && oracle) return { ok: true, evidence: null };
@@ -46,14 +56,16 @@ function createClaims(dependencies: any) {
     return {
       ok: false,
       reason: 'release_kind_required',
-      message: 'release: choose kind "technical_blocker" for a failed command, or "scope_pause", "contradiction", or "handback" for a non-technical release. Technical blockers also need command, exitCode, and outputTail.',
+      message: 'release: choose kind "technical_blocker" for a failed command, "contradiction" for an absent target with probe evidence, or "scope_pause" or "handback" for another non-technical release. Technical blockers need command, exitCode, and outputTail; contradictions need command and outputTail.',
     };
   }
 
-  function releaseCommentBody(reason?: unknown, evidence?: { command: string; exitCode: number; outputTail: string } | null) {
+  function releaseCommentBody(reason?: unknown, evidence?: { command: string; exitCode?: number; kind: string; outputTail: string } | null) {
     const releaseReason = String(reason || '').trim();
     if (!evidence) return `Released: ${releaseReason}`;
-    return `Released: ${releaseReason}\nTechnical blocker evidence:\nCommand: ${evidence.command}\nExit code: ${evidence.exitCode}\nOutput tail:\n${evidence.outputTail}`;
+    const exitCode = evidence.exitCode == null ? '' : `\nExit code: ${evidence.exitCode}`;
+    const evidenceLabel = evidence.kind === 'contradiction' ? 'Contradiction evidence' : 'Technical blocker evidence';
+    return `Released: ${releaseReason}\n${evidenceLabel}:\nCommand: ${evidence.command}${exitCode}\nOutput tail:\n${evidence.outputTail}`;
   }
 
   function preparedDispatchTtlMs() {
