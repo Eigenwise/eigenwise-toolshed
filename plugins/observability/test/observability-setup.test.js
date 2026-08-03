@@ -189,16 +189,21 @@ test('plans current-user application data and only starts LGTM on request', (t) 
   assert.equal(plan.dataDir, dataDir);
   assert.equal(plan.lgtm, false);
   const calls = [];
-  const lgtm = startLgtm(plan.dataDir, { spawnSync(command, args) {
-    calls.push([command, args]);
-    return args[0] === 'inspect' ? { status: 1, stdout: '' } : { status: 0, stdout: 'container' };
-  } });
+  const registeredProject = { project_id: 'a'.repeat(64), project_name: 'atlas' };
+  const lgtm = startLgtm(plan.dataDir, {
+    config: { observability: { optedInProjects: [registeredProject] } },
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      return args[0] === 'inspect' ? { status: 1, stdout: '' } : { status: 0, stdout: 'container' };
+    },
+  });
   assert.equal(lgtm.image, LGTM_IMAGE);
   const runArgs = calls[1][1];
   assert.deepEqual(runArgs.filter((argument) => argument.startsWith('127.0.0.1:')), ['127.0.0.1:3000:3000', '127.0.0.1:14318:4318']);
   assert.equal(runArgs[runArgs.indexOf('--restart') + 1], 'unless-stopped');
   assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'provisioning')}:/otel-lgtm/grafana/conf/provisioning/dashboards:ro`));
   assert.ok(runArgs.includes(`${path.join(plan.dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
+  assert.ok(fs.existsSync(path.join(plan.dataDir, 'grafana-dashboards', `claude-code-${registeredProject.project_id.slice(0, 16)}.json`)));
   const resumed = [];
   const dashboardMounts = JSON.stringify([{
     Source: path.join(plan.dataDir, 'grafana-dashboards'),
@@ -213,6 +218,10 @@ test('setup mounts generated Grafana dashboards for every opted-in project', asy
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const dataDir = path.join(directory, 'data');
   const projectDir = path.join(directory, 'project');
+  const registeredProjects = [
+    { project_id: 'a'.repeat(64), project_name: 'atlas' },
+    { project_id: 'b'.repeat(64), project_name: 'beacon' },
+  ];
   fs.mkdirSync(projectDir, { recursive: true });
   const calls = [];
 
@@ -220,6 +229,14 @@ test('setup mounts generated Grafana dashboards for every opted-in project', asy
     projectDir,
     dataDir,
     dashboard: true,
+    config: {
+      observability: {
+        dashboard: true,
+        sink: 'grafana-lgtm',
+        projects: [projectDir],
+        optedInProjects: registeredProjects,
+      },
+    },
     dockerAvailable: true,
     claudeVersion: MIN_CLAUDE_VERSION,
     environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
@@ -232,8 +249,47 @@ test('setup mounts generated Grafana dashboards for every opted-in project', asy
     },
   });
 
+  const dashboardDir = path.join(dataDir, 'grafana-dashboards');
   const runArgs = calls.find(([, args]) => args[0] === 'run')[1];
-  assert.ok(runArgs.includes(`${path.join(dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
+  assert.ok(runArgs.includes(`${dashboardDir}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
+  assert.deepEqual(fs.readdirSync(dashboardDir).sort(), [
+    'claude-code-aaaaaaaaaaaaaaaa.json',
+    'claude-code-bbbbbbbbbbbbbbbb.json',
+    'claude-code-usage.json',
+  ]);
+});
+
+test('does not generate project dashboards from configured project paths', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-lgtm-setup-empty-registry-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const dataDir = path.join(directory, 'data');
+  const projectDir = path.join(directory, 'project');
+  fs.mkdirSync(projectDir, { recursive: true });
+
+  await setupObservability({
+    projectDir,
+    dataDir,
+    dashboard: true,
+    config: {
+      observability: {
+        dashboard: true,
+        sink: 'grafana-lgtm',
+        projects: [projectDir],
+        optedInProjects: [],
+      },
+    },
+    dockerAvailable: true,
+    claudeVersion: MIN_CLAUDE_VERSION,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+    applyProjectSettings: false,
+    ensure: async () => ({ enabled: true, started: [] }),
+    spawnSync(command, args) {
+      if (args[0] === 'inspect') return { status: 1, stdout: '' };
+      return { status: 0, stdout: process.version };
+    },
+  });
+
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'grafana-dashboards')), ['claude-code-usage.json']);
 });
 
 test('stores sink selection separately from project settings', async (t) => {

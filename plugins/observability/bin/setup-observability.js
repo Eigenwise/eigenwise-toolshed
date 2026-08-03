@@ -377,8 +377,13 @@ function dockerAvailable(options = {}) {
   return !result.error && result.status === 0;
 }
 
+function configuredOptedInProjects(config) {
+  const projects = config?.observability?.optedInProjects;
+  return Array.isArray(projects) ? projects : [];
+}
+
 function startLgtm(dataDir, options = {}) {
-  const dashboardDir = provisionDashboards(dataDir, options.projects || []);
+  const dashboardDir = provisionDashboards(dataDir, configuredOptedInProjects(options.config));
   return grafanaLgtm.setup({}, { ...options, dataDir, dashboardDir });
 }
 
@@ -545,7 +550,7 @@ async function setupObservability(options = {}) {
   let sinkSetup = null;
   if (config.observability.dashboard) {
     if (available) {
-      const dashboardDir = provisionDashboards(plan.dataDir, config.observability.projects);
+      const dashboardDir = provisionDashboards(plan.dataDir, configuredOptedInProjects(config));
       dashboard = grafanaLgtm.setup(config.observability.sinks[DEFAULT_SINK], {
         ...options,
         dataDir: plan.dataDir,
