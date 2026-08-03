@@ -47,7 +47,7 @@ store.setCategory({
 });
 
 for (const id of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation', 'visual-review']) {
-  store.setCategory({ id, name: id, route: { model: 'sonnet', effort: 'high' }, fallback: null, readonly: true, enabled: true });
+  store.setCategory({ id, name: id, route: { model: 'sonnet', effort: 'high' }, fallback: null, readonly: true, artifactRoots: id === 'codebase-exploration' ? ['.claude/.codebase-info'] : [], enabled: true });
 }
 
 function createFixture(title?: any, category = 'dispatch.lifecycle') {
@@ -345,6 +345,29 @@ test('read-only category classes dispatch through restricted stable executors', 
     source: 'test',
   }).ok, true);
   assert.equal(store.releaseTicket(slug, contradiction.ref, 'contradiction-worker', { source: 'test' }).ok, true);
+
+  const artifactWrite = store.createTicket(slug, {
+    title: 'codebase artifact fixture',
+    category: 'codebase-exploration',
+    files: ['.claude\\.codebase-info\\modules.md'],
+    contracts: { changes: ['.claude/.codebase-info/INDEX.md'] },
+    source: 'test',
+  });
+  const artifactTicket = store.getTicket(slug, artifactWrite.ref);
+  assert.equal(artifactTicket.readonlyOverride, null);
+  assert.doesNotMatch(store.ticketPlanningWarnings(artifactTicket).join('\n'), /Readonly category contradicts declared write intent/);
+  assert.doesNotMatch(store.dispatchWarnings(artifactTicket).join('\n'), /readonly override active|Readonly category contradicts declared write intent/);
+
+  const outsideArtifactRoot = store.createTicket(slug, {
+    title: 'outside codebase artifact fixture',
+    category: 'codebase-exploration',
+    files: ['.claude/.codebase-info/modules.md', 'src/index.ts', '.claude/.codebase-infoXYZ/not-a-map.md'],
+    source: 'test',
+  });
+  const outsideWarning = store.ticketPlanningWarnings(store.getTicket(slug, outsideArtifactRoot.ref)).join('\n');
+  assert.match(outsideWarning, /Readonly category contradicts declared write intent/);
+  assert.match(outsideWarning, /src\/index\.ts/);
+  assert.match(outsideWarning, /\.claude\/\.codebase-infoXYZ\/not-a-map\.md/);
 
   const updatedOverride = createFixture('updated mutable spike fixture', 'spike-investigation');
   assert.equal(store.updateTicket(slug, updatedOverride.ref, { readonly: false, source: 'test' }).readonlyOverride, false);
