@@ -224,10 +224,10 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
   assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'scope_pause', 'contradiction', 'handback'], 'release classifies reasoned handoffs');
   assert.ok(release.inputSchema.properties.command, 'release exposes command evidence for technical blockers and contradictions');
-  assert.match(release.inputSchema.properties.command.description, /technical_blocker and contradiction/);
+  assert.match(release.inputSchema.properties.command.description, /Required for blocker\/contradiction/);
   assert.ok(release.inputSchema.properties.exitCode, 'release exposes optional contradiction and required technical-blocker exit-code evidence');
   assert.ok(release.inputSchema.properties.outputTail, 'release exposes output evidence for technical blockers and contradictions');
-  assert.match(release.inputSchema.properties.outputTail.description, /technical_blocker and contradiction/);
+  assert.match(release.inputSchema.properties.outputTail.description, /Required blocker\/contradiction output/);
   assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);

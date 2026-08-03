@@ -257,7 +257,7 @@ const tools = [
   },
   {
     name: "release",
-    description: "Release a claim; technical_blocker needs failed-command evidence, contradiction needs probe evidence, and an oracle ask keeps the ticket doing for a verdict.",
+    description: "Release a claim; an oracle ask keeps the ticket doing for a verdict.",
     inputSchema: {
       type: "object",
       properties: {
@@ -266,9 +266,9 @@ const tools = [
         by: { type: "string" },
         reason: { type: "string" },
         kind: { type: "string", enum: ["technical_blocker", "scope_pause", "contradiction", "handback"] },
-        command: { type: "string", description: "Verbatim failed command or contradiction probe. Required for technical_blocker and contradiction." },
-        exitCode: { type: "integer", description: "Command exit code. technical_blocker requires a non-zero value; contradiction may omit it or report zero." },
-        outputTail: { type: "string", description: "Actual command output. Required for technical_blocker and contradiction." },
+        command: { type: "string", description: "Required for blocker/contradiction." },
+        exitCode: { type: "integer" },
+        outputTail: { type: "string", description: "Required blocker/contradiction output." },
         oracle: { type: "string" },
         candidate: {},
         deliverable: {},

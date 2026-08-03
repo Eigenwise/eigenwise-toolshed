@@ -99,7 +99,8 @@ async function runTool(tool, args) {
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   add: ["complexity"],
   comments: ["full"],
-  list: ["detail"]
+  list: ["detail"],
+  release: ["command", "outputTail"]
 };
 function toolDescriptors() {
   return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map((tool) => {
