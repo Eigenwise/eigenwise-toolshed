@@ -281,6 +281,10 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         reason: { type: 'string' },
+        kind: { type: 'string', enum: ['technical_blocker', 'scope_pause', 'contradiction', 'handback'] },
+        command: { type: 'string' },
+        exitCode: { type: 'integer' },
+        outputTail: { type: 'string' },
         oracle: { type: 'string' },
         candidate: {},
         deliverable: {},
@@ -294,12 +298,14 @@ const tools: ToolDefinition[] = [
       const by = requireBy(args, 'release');
       const reason = requiredReleaseReason(args);
       const ticket = store.getTicket(slug, args.ref);
+      const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }));
+      if (!evidence.ok) return mutationAck(slug, { ok: false, ticket, reason: evidence.reason, message: evidence.message });
       const res = store.releaseTicket(slug, args.ref, by, {
         status: args.status,
         oracle: args.oracle,
         candidate: args.candidate,
         deliverable: args.deliverable,
-        releaseComment: { by, body: `Released: ${reason}`, kind: 'comment', source: 'mcp' },
+        releaseComment: { by, body: store.releaseCommentBody(reason, evidence.evidence), kind: 'comment', source: 'mcp' },
         source: 'mcp',
         sessionId: sessionOf(args),
       });
