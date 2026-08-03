@@ -8,6 +8,7 @@ const test = require('node:test');
 
 const {
   gatewayCommand,
+  gatewayUpdateCommand,
   installedPlugins,
   marketplacesFor,
   parseArgs,
@@ -66,13 +67,12 @@ test('routes project and local updates through the recorded project directory', 
   assert.equal(user.cwd, undefined);
 });
 
-test('uses the installed model-gateway setup and doctor commands', () => {
+test('uses the stable model-gateway updater for upgrades and the installed command for checks', () => {
   const installs = installedPlugins(registry);
-  const setup = gatewayCommand(installs, 'setup');
+  const update = gatewayUpdateCommand('C:/Users/example');
   const doctor = gatewayCommand(installs, 'doctor');
 
-  assert.equal(setup.args.at(-1), 'setup');
-  assert.equal(setup.args.at(-2), path.join('C:/cache/model-gateway/0.2.0', 'bin', 'model-gateway.js'));
+  assert.deepEqual(update.args, [path.join('C:/Users/example', '.claude', 'model-gateway', 'update.js')]);
   assert.equal(doctor.args.at(-1), 'doctor');
 });
 
@@ -95,7 +95,7 @@ test('dry-run scopes the update plan to Toolshed and does not enumerate third-pa
   assert.doesNotMatch(lines.join('\n'), /another-marketplace|managed-marketplace|other@another-marketplace/);
   assert.match(lines.join('\n'), /Other marketplaces are managed by Claude Code auto-update — not touched\./);
   assert.ok(lines.some((line) => line.includes(`sidequest@eigenwise-toolshed (project, ${registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath})`)));
-  assert.match(lines.join('\n'), /model-gateway setup/);
+  assert.match(lines.join('\n'), /model-gateway update/);
 }));
 
 test('update and check modes touch only Toolshed installs', () => withRegistry(registry, (registryFile) => {
@@ -228,8 +228,8 @@ test('deferred migration leaves an already-migrated install alone', () => withRe
   assert.equal(calls.length, 0);
 }));
 
-test('global wiring reconciles every recorded project, then the user scope', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-global-wiring-'));
+test('leaves gateway wiring to the stable updater', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-gateway-update-'));
   try {
     const calls = [];
     const result = runUpdate({
@@ -240,21 +240,9 @@ test('global wiring reconciles every recorded project, then the user scope', () 
       report: () => {},
     });
 
-    const wiring = calls.filter((command) => command.args.includes('env'));
-    // Every call is --write-user --reconcile. The cwd is what differs: running
-    // inside each recorded project is how its shadowing block gets recorded and
-    // then stripped, so a leftover project file cannot outrank the user scope.
-    assert.deepEqual(wiring.map((command) => command.args.slice(-2)), [
-      ['--write-user', '--reconcile'],
-      ['--write-user', '--reconcile'],
-      ['--write-user', '--reconcile'],
-    ]);
-    assert.deepEqual(wiring.map((command) => command.cwd), [
-      registry.plugins['sidequest@eigenwise-toolshed'][2].projectPath,
-      registry.plugins['sidequest@eigenwise-toolshed'][1].projectPath,
-      undefined,
-    ]);
-    assert.equal(result.healedGatewayWiring.mode, 'global');
+    assert.equal(calls.filter((command) => command.args.includes('env')).length, 0);
+    assert.ok(calls.some((command) => command.args[0] === path.join(home, '.claude', 'model-gateway', 'update.js')));
+    assert.deepEqual(result.healedGatewayWiring, { mode: 'global', results: [], failures: [] });
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -291,7 +279,7 @@ test('skips stale project installs without blocking gateway wiring', () => {
       assert.deepEqual(result.failures, []);
       assert.equal(result.staleInstances.length, 1);
       assert.equal(calls.some((command) => command.cwd === stalePath), false);
-      assert.equal(calls.some((command) => command.args.includes('--reconcile')), true);
+      assert.equal(calls.some((command) => command.args.includes('--reconcile')), false);
       assert.match(lines.join('\n'), /Skipped 1 stale project install\(s\): directory no longer exists/);
       assert.match(lines.join('\n'), /The plugin registry was left unchanged/);
       assert.doesNotMatch(lines.join('\n'), /Completed with \d+ failure/);
@@ -394,23 +382,19 @@ test('reports invalid plugin registries and leaves them untouched', () => {
   }
 });
 
-test('a failed reconcile warns that project blocks may still shadow the global setting', () => withRegistry(registry, (registryFile) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-wiring-failure-'));
+test('reports a stable gateway updater failure', () => withRegistry(registry, (registryFile) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-gateway-update-failure-'));
   try {
-    const lines = [];
     const result = runUpdate({
       home,
       registryFile,
       options: { claude: 'claude', dryRun: false, check: false },
-      run: (command) => ({ ok: !command.args.includes('--reconcile') }),
-      report: (line) => lines.push(line),
+      run: (command) => ({ ok: command.args[0] !== path.join(home, '.claude', 'model-gateway', 'update.js') }),
+      report: () => {},
     });
 
     assert.equal(result.ok, false);
-    assert.ok(result.failures.some((failure) => failure.includes('model-gateway wire global')));
-    // Silence here would be the original defect: the user is told wiring
-    // succeeded while a project file still outranks what was written.
-    assert.match(lines.join('\n'), /may still shadow the global setting/);
+    assert.ok(result.failures.includes('model-gateway update'));
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -459,7 +443,7 @@ test('continues after failures and returns every failed operation', () => withRe
   assert.equal(failed.failures.length, 6);
   assert.match(failed.failures.join('\n'), /eigenwise-toolshed marketplace/);
   assert.doesNotMatch(failed.failures.join('\n'), /another-marketplace|other@another-marketplace/);
-  assert.match(failed.failures.join('\n'), /model-gateway setup/);
+  assert.match(failed.failures.join('\n'), /model-gateway update/);
 }));
 
 test('reports version transitions and gateway interruption before setup', () => withRegistry(registry, (registryFile) => {
@@ -482,7 +466,7 @@ test('reports version transitions and gateway interruption before setup', () => 
   });
 
   assert.match(lines.join('\n'), /model-gateway@eigenwise-toolshed 0\.2\.0 -> 0\.3\.0/);
-  assert.match(lines.join('\n'), /Live Claude Code sessions using Codex stay connected/);
+  assert.match(lines.join('\n'), /stable updater swaps the proxy by rename/);
   assert.match(lines.join('\n'), /cannot reliably list commit subjects/);
 }));
 

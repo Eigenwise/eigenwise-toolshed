@@ -345,6 +345,25 @@ function marketplaceCommand(marketplace, claude) {
   };
 }
 
+function gatewayUpdateCommand(home = os.homedir()) {
+  return {
+    command: process.execPath,
+    args: [path.join(home, '.claude', 'model-gateway', 'update.js')],
+    label: 'model-gateway update',
+  };
+}
+
+function installGatewayUpdateLauncher(instances, home = os.homedir()) {
+  const gateways = activeProjectInstances(instances)
+    .filter((instance) => instance.id === MODEL_GATEWAY_PLUGIN && instance.installPath)
+    .sort((left, right) => String(right.version || '').localeCompare(String(left.version || ''))
+      || String(right.lastUpdated || '').localeCompare(String(left.lastUpdated || '')));
+  const writer = gateways.length > 0 && path.join(gateways[0].installPath, 'hooks', 'registry-writer.js');
+  if (!writer || !fs.existsSync(writer)) return { written: true, skipped: true };
+  const { writeUpdateLauncher } = require(writer);
+  return writeUpdateLauncher({ home });
+}
+
 function gatewayCommand(instances, action) {
   const gateways = activeProjectInstances(instances).filter((instance) => instance.id === MODEL_GATEWAY_PLUGIN && instance.installPath);
   if (gateways.length === 0) return null;
@@ -513,7 +532,7 @@ function runModelGatewayMigration({ registryFile = registryPath(), home = os.hom
   return { ok: true, failures: [] };
 }
 
-function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log }) {
+function runUpdate({ registryFile = registryPath(), home = os.homedir(), options, run = defaultRun, report = console.log, installGatewayLauncher = installGatewayUpdateLauncher }) {
   let registry;
   try {
     registry = readRegistry(registryFile);
@@ -574,26 +593,28 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     report('Check mode reports installed versions only. It cannot determine available version transitions or release notes without refreshing the marketplace.');
   }
 
-  const gatewayAction = options.check ? 'doctor' : 'setup';
-  const gateway = gatewayCommand(instances, gatewayAction);
-  if (gateway && !options.check) {
-    report('Gateway restart warning: this run will restart the gateway worker while its listener stays available. Live Claude Code sessions using Codex stay connected; in-flight requests drain or retry. The authenticated proxy stays running unless its binary changed.');
-  }
+  const gateways = modelGatewayInstances(instances);
+  const gateway = gateways.length > 0 ? (options.check ? gatewayCommand(instances, 'doctor') : gatewayUpdateCommand(home)) : null;
   let gatewaySetupOk = true;
-  if (gateway) {
+  if (gateway && !options.check && !options.dryRun) {
+    const launcher = installGatewayLauncher(instances, home);
+    if (!launcher.written) {
+      gatewaySetupOk = false;
+      failures.push(gateway.label);
+      report(`FAILED: could not install the stable model-gateway updater (${launcher.reason || 'unknown reason'})`);
+    }
+  }
+  if (gateway && !options.check) {
+    report('Gateway update: the stable updater swaps the proxy by rename, keeps the running listener available until restart, and reports the resulting state.');
+  }
+  if (gateway && gatewaySetupOk) {
     gatewaySetupOk = execute(gateway, options, run, report);
     if (!gatewaySetupOk) failures.push(gateway.label);
   }
 
   let healedGatewayWiring = { mode: 'global', results: [], failures: [] };
   if (!options.check && gateway && gatewaySetupOk) {
-    healedGatewayWiring = healGatewayWiring(instances, { ...options, home }, run, report);
-    failures.push(...healedGatewayWiring.failures);
-  }
-
-  if (gateway && !options.dryRun && !options.check && gatewaySetupOk) {
-    const doctor = gatewayCommand(instances, 'doctor');
-    if (doctor && !execute(doctor, options, run, report)) failures.push(doctor.label);
+    report('Gateway wiring is handled by the stable model-gateway updater.');
   }
 
   const healedStatuslines = options.check ? [] : healStaleStatuslines(instances, { home, dryRun: options.dryRun });
@@ -641,6 +662,8 @@ module.exports = {
   LEGACY_GATEWAY_PLUGIN,
   MODEL_GATEWAY_PLUGIN,
   gatewayCommand,
+  gatewayUpdateCommand,
+  installGatewayUpdateLauncher,
   gatewayMigrationInstruction,
   gatewayWiringCommand,
   healGatewayWiring,
