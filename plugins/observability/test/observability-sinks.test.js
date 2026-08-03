@@ -187,16 +187,50 @@ test('Grafana adopts the managed live container and honors configured loopback p
     '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '13000' }],
     '4318/tcp': [{ HostIp: '127.0.0.1', HostPort: '14300' }],
   });
+  const dashboardDir = path.join(os.tmpdir(), 'workbench-grafana-dashboards');
+  const mounts = JSON.stringify([{
+    Source: dashboardDir,
+    Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
+  }]);
   const result = grafana.setup(config, {
+    dashboardDir,
     pluginVersion: '0.19.0',
     spawnSync(command, args) {
       calls.push([command, args]);
-      return { status: 0, stdout: `true|${grafana.IMAGE}|<no value>|${grafana.MANAGED_CONFIG_VERSION}|${bindings}` };
+      return { status: 0, stdout: `true|${grafana.IMAGE}|<no value>|${grafana.MANAGED_CONFIG_VERSION}|${bindings}|${mounts}` };
     },
   });
   assert.equal(result.container, 'workbench-otel-lgtm');
   assert.equal(calls.length, 1);
   assert.throws(() => grafana.runtimeConfig({ container: '../bad' }), /Invalid dashboard container name/);
+});
+
+test('Grafana replaces a container with an outdated dashboard mount', () => {
+  const calls = [];
+  const config = { container: 'workbench-otel-lgtm', grafanaPort: 13000, otlpPort: 14300 };
+  const bindings = JSON.stringify({
+    '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '13000' }],
+    '4318/tcp': [{ HostIp: '127.0.0.1', HostPort: '14300' }],
+  });
+  const dashboardDir = path.join(os.tmpdir(), 'workbench-grafana-dashboards');
+  const mounts = JSON.stringify([{
+    Source: path.join(os.tmpdir(), 'stale-grafana-dashboards'),
+    Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
+  }]);
+
+  grafana.setup(config, {
+    dashboardDir,
+    pluginVersion: '0.19.0',
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      if (args[0] === 'inspect') {
+        return { status: 0, stdout: `true|${grafana.IMAGE}|0.19.0|${grafana.MANAGED_CONFIG_VERSION}|${bindings}|${mounts}` };
+      }
+      return { status: 0, stdout: '' };
+    },
+  });
+
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'rm', 'run']);
 });
 
 test('Grafana replaces a container missing the managed delete configuration', () => {

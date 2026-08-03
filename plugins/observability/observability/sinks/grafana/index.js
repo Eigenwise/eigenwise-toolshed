@@ -59,12 +59,14 @@ function resolve(config = {}) {
 }
 
 function parseInspection(output) {
-  const [running, image, rawVersion, rawConfigVersion, bindingsJson] = String(output || '').trim().split('|', 5);
+  const [running, image, rawVersion, rawConfigVersion, bindingsJson, mountsJson] = String(output || '').trim().split('|', 6);
   let bindings = null;
+  let mounts = null;
   try { bindings = bindingsJson ? JSON.parse(bindingsJson) : null; } catch {}
+  try { mounts = mountsJson ? JSON.parse(mountsJson) : null; } catch {}
   const version = rawVersion && rawVersion !== '<no value>' ? rawVersion : null;
   const configVersion = rawConfigVersion && rawConfigVersion !== '<no value>' ? rawConfigVersion : null;
-  return { running: running === 'true', image: image || null, version, configVersion, bindings };
+  return { running: running === 'true', image: image || null, version, configVersion, bindings, mounts };
 }
 
 function managedConfigVersion(context = {}) {
@@ -75,7 +77,7 @@ function inspect(config = {}, context = {}) {
   const docker = context.docker || 'docker';
   const spawn = context.spawnSync || spawnSync;
   const runtime = runtimeConfig(config);
-  const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{index .Config.Labels "${CONFIG_VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}`;
+  const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{index .Config.Labels "${CONFIG_VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}|{{json .Mounts}}`;
   const result = spawn(docker, ['inspect', '--format', format, runtime.container], { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) return null;
   return parseInspection(result.stdout);
@@ -94,10 +96,19 @@ function bindingMatches(bindings, containerPort, hostPort) {
     && entry.HostIp === LOOPBACK && Number(entry.HostPort) === hostPort);
 }
 
+function dashboardMountMatches(mounts, dashboardDir) {
+  const expectedSource = path.resolve(dashboardDir);
+  const target = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
+  return Array.isArray(mounts) && mounts.some((mount) => mount
+    && mount.Destination === target && typeof mount.Source === 'string'
+    && path.resolve(mount.Source) === expectedSource);
+}
+
 function setup(config = {}, context = {}) {
   const docker = context.docker || 'docker';
   const spawn = context.spawnSync || spawnSync;
   const dataDir = context.dataDir;
+  const dashboardDir = context.dashboardDir || path.join(__dirname, 'dashboards');
   const runtime = runtimeConfig(config);
   const state = inspect(config, context);
   if (state) {
@@ -106,7 +117,8 @@ function setup(config = {}, context = {}) {
       && (!context.pluginVersion || !state.version || state.version === context.pluginVersion)
       && state.configVersion === managedConfigVersion(context)
       && bindingMatches(state.bindings, 3000, runtime.grafanaPort)
-      && bindingMatches(state.bindings, 4318, runtime.otlpPort);
+      && bindingMatches(state.bindings, 4318, runtime.otlpPort)
+      && dashboardMountMatches(state.mounts, dashboardDir);
     if (current && state.running) {
       return { image: IMAGE, dataDir, container: runtime.container, resumed: false };
     }
@@ -127,7 +139,6 @@ function setup(config = {}, context = {}) {
   const dashboardsTarget = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
   const provisioningDir = context.provisioningDir || path.join(__dirname, 'provisioning');
   const managedDir = context.managedDir || path.join(__dirname, 'managed');
-  const dashboardDir = context.dashboardDir || path.join(__dirname, 'dashboards');
   const args = [
     'run', '--detach', '--name', runtime.container, '--restart', 'unless-stopped',
     '--publish', `${LOOPBACK}:${runtime.grafanaPort}:3000`, '--publish', `${LOOPBACK}:${runtime.otlpPort}:4318`,
