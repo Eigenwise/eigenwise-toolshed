@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.351.0 (2026-08-03)
+
+### codebase-mapper 2.12.2 → 2.12.3
+
+#### Fixes
+
+- The map update instruction told the model to end its turn, so the skill never ran (SQ-1295) [`be65277`](https://github.com/Eigenwise/eigenwise-toolshed/commit/be652774)
+  The injected instruction said to "end with" the line announcing that the map update is running. A turn that has ended cannot contain the tool call that was supposed to follow, so sessions closed on "Running /codebase-mapper:update-codebase-map" and the map never got updated. It read as done to anyone skimming, which is how it survived. The announcement now comes before the action and says outright that announcing is not doing, and a Stop hook blocks the turn when the claim was made without the skill actually being invoked. The block skips subagents, skips the "no updates needed" ending, and won't fire twice in a row.
+
 ## v3.350.0 (2026-08-03)
 
 ### observability 0.2.0 → 0.2.1
