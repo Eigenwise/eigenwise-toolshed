@@ -222,6 +222,10 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
+  assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'scope_pause', 'contradiction', 'handback'], 'release classifies reasoned handoffs');
+  assert.ok(release.inputSchema.properties.command, 'release exposes technical-blocker command evidence');
+  assert.ok(release.inputSchema.properties.exitCode, 'release exposes technical-blocker exit-code evidence');
+  assert.ok(release.inputSchema.properties.outputTail, 'release exposes technical-blocker output evidence');
   assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
@@ -409,7 +413,7 @@ test('tools/list keeps schemas compact without losing claim and dispatch discipl
   const total = descriptionBytes(tools);
   assert.ok(total <= 5000, `tool descriptions use ${total} bytes — trim them, don't raise the budget`);
   const payload = JSON.stringify({ tools });
-  assert.ok(payload.length <= 17200, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
+  assert.ok(payload.length <= 17500, `tools/list payload is ${payload.length} bytes — keep new schemas minimal`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
@@ -2097,11 +2101,47 @@ test('MCP done requires a final report and release records its reason', async ()
   const missingReason = await callToolRaw('release', { ref: released.ref, by: 'mcp-release-worker' });
   assert.ok(missingReason.isError, 'release refuses a missing reason');
   assert.match(missingReason.content[0].text, /"reason" is required.*why.*released/i);
-  await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope needs approval.', status: 'todo' });
+  const unclassified = await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope needs approval.', status: 'todo' });
+  assert.equal(unclassified.ok, false, 'release refuses an unclassified reasoned handback');
+  assert.equal(unclassified.reason, 'release_kind_required');
+  await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope needs approval.', kind: 'scope_pause', status: 'todo' });
   const afterRelease = store.getTicket(released.project, released.ref);
   assert.equal(afterRelease.claim, null);
   assert.equal(afterRelease.comments.at(-1).body, 'Released: Scope needs approval.');
   assert.equal(afterRelease.comments.at(-1).by, 'mcp-release-worker');
+});
+
+test('MCP release records technical-blocker evidence and refuses incomplete evidence', async () => {
+  const added = await callTool('add', { title: 'technical blocker evidence', complexity: 2, why: 'exercise evidence required for command-failure handoffs', labels: ['direct-ok'] });
+  await callTool('claim', { ref: added.ref, by: 'mcp-technical-blocker-worker', direct: true, reason: 'The technical blocker fixture needs a direct claim.' });
+
+  const incomplete = await callTool('release', {
+    ref: added.ref,
+    by: 'mcp-technical-blocker-worker',
+    reason: 'The targeted test failed.',
+    kind: 'technical_blocker',
+    command: 'npm run test:files -- test/mcp.test.ts',
+    exitCode: 1,
+    status: 'todo',
+  });
+  assert.equal(incomplete.ok, false, 'technical blockers require an output tail');
+  assert.equal(incomplete.reason, 'technical_blocker_evidence_required');
+  assert.ok(store.getTicket(added.project, added.ref).claim, 'evidence refusal keeps the claim');
+
+  await callTool('release', {
+    ref: added.ref,
+    by: 'mcp-technical-blocker-worker',
+    reason: 'The targeted test failed.',
+    kind: 'technical_blocker',
+    command: 'npm run test:files -- test/mcp.test.ts',
+    exitCode: 1,
+    outputTail: 'not ok 1 - technical blocker fixture',
+    status: 'todo',
+  });
+  const released = store.getTicket(added.project, added.ref);
+  assert.match(released.comments.at(-1).body, /Command: npm run test:files -- test\/mcp\.test\.ts/);
+  assert.match(released.comments.at(-1).body, /Exit code: 1/);
+  assert.match(released.comments.at(-1).body, /not ok 1 - technical blocker fixture/);
 });
 
 test('MCP release records an oracle handoff without a separate reason', async () => {

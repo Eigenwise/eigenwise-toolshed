@@ -195,6 +195,15 @@ async function cmdRelease(opts, positional) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const reason = String(opts.reason || opts.oracle || "").trim();
+  const evidence = store.technicalBlockerRelease({
+    reason,
+    oracle: opts.oracle,
+    releaseKind: opts["release-kind"],
+    command: opts.command,
+    exitCode: opts["exit-code"],
+    outputTail: opts["output-tail"]
+  });
+  if (!evidence.ok) fail(evidence.message);
   const ticket = store.getTicket(slug, idOrRef);
   const res = store.releaseTicket(slug, idOrRef, by, {
     force: !!opts.force,
@@ -202,7 +211,7 @@ async function cmdRelease(opts, positional) {
     oracle: opts.oracle,
     candidate: opts.candidate,
     deliverable: opts.deliverable,
-    ...reason ? { releaseComment: { by, body: `Released: ${reason}`, kind: "comment", source: opts.source || "cli" } } : {},
+    ...reason ? { releaseComment: { by, body: store.releaseCommentBody(reason, evidence.evidence), kind: "comment", source: opts.source || "cli" } } : {},
     source: opts.source || "cli",
     sessionId: sessionId(opts)
   });

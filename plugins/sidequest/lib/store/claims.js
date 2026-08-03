@@ -14,6 +14,43 @@ function createClaims(dependencies) {
   const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
   const VERIFY_COMPLETE_COMMENT = "[sidequest:verify-complete]";
   const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
+  const RELEASE_KINDS = /* @__PURE__ */ new Set(["scope_pause", "contradiction", "handback"]);
+  function technicalBlockerRelease(args) {
+    const reason = String(args?.reason || "").trim();
+    const oracle = String(args?.oracle || "").trim();
+    const releaseKind = String(args?.releaseKind || "").trim();
+    if (releaseKind === "technical_blocker") {
+      const command = String(args?.command || "").trim();
+      const outputTail = String(args?.outputTail || "").trim();
+      const exitCode = typeof args?.exitCode === "number" ? args.exitCode : typeof args?.exitCode === "string" && /^-?\d+$/.test(args.exitCode.trim()) ? Number(args.exitCode) : Number.NaN;
+      if (!reason || !command || !Number.isInteger(exitCode) || exitCode === 0 || !outputTail) {
+        return {
+          ok: false,
+          reason: "technical_blocker_evidence_required",
+          message: "release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields."
+        };
+      }
+      return { ok: true, evidence: { command, exitCode, outputTail } };
+    }
+    if (!reason && !oracle && !releaseKind) return { ok: true, evidence: null };
+    if (!releaseKind && oracle) return { ok: true, evidence: null };
+    if (RELEASE_KINDS.has(releaseKind)) return { ok: true, evidence: null };
+    return {
+      ok: false,
+      reason: "release_kind_required",
+      message: 'release: choose kind "technical_blocker" for a failed command, or "scope_pause", "contradiction", or "handback" for a non-technical release. Technical blockers also need command, exitCode, and outputTail.'
+    };
+  }
+  function releaseCommentBody(reason, evidence) {
+    const releaseReason = String(reason || "").trim();
+    if (!evidence) return `Released: ${releaseReason}`;
+    return `Released: ${releaseReason}
+Technical blocker evidence:
+Command: ${evidence.command}
+Exit code: ${evidence.exitCode}
+Output tail:
+${evidence.outputTail}`;
+  }
   function preparedDispatchTtlMs() {
     const hours = Number(process.env.SIDEQUEST_PREPARED_DISPATCH_TTL_HOURS);
     return (Number.isFinite(hours) && hours > 0 ? hours : DEFAULT_PREPARED_DISPATCH_TTL_HOURS) * 60 * 60 * 1e3;
@@ -202,7 +239,9 @@ function createClaims(dependencies) {
     observedStop,
     preparedDispatchTtlMs,
     recordClaimVerification,
+    releaseCommentBody,
     resumableScopePause,
+    technicalBlockerRelease,
     touchClaim,
     touchClaimActivity,
     verificationComment,
