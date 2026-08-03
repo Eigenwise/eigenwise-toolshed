@@ -236,6 +236,9 @@ function sourceBuildOutputWarnings(...args) {
 function verifyCommandWarning(...args) {
   return warningsLayer.verifyCommandWarning(...args);
 }
+function dispatchVerifyCommandError(...args) {
+  return warningsLayer.dispatchVerifyCommandError(...args);
+}
 function dispatchDescriptionError(...args) {
   return warningsLayer.dispatchDescriptionError(...args);
 }
@@ -497,6 +500,7 @@ const {
   database,
   db,
   dispatchReadOnly: (...args) => dispatchReadOnly(...args),
+  dispatchVerifyCommandError: (...args) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args) => dispatchRouteState(...args),
   execFileSync,
@@ -1776,6 +1780,7 @@ module.exports = {
   LABELS_MAX,
   DISPATCH_DESCRIPTION_MIN,
   dispatchDescriptionError,
+  dispatchVerifyCommandError,
   dispatchDeclaredFiles,
   dispatchWorkspace,
   dispatchWarnings,

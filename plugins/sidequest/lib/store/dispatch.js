@@ -1,6 +1,6 @@
 "use strict";
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
   function dispatchTokenPrefix(token) {
     return token ? String(token).slice(0, 12) : null;
   }
@@ -432,10 +432,12 @@ function createDispatch(dependencies) {
     opts = opts || {};
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
     const projectPath = readMeta(slug)?.path;
-    if (projectPath) assertSidequestInstall(projectPath);
-    assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
     const found = getTicket(slug, idOrRef);
     if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    const verifyError = dispatchVerifyCommandError(found, projectPath);
+    if (verifyError) throw new Error(verifyError);
+    if (projectPath) assertSidequestInstall(projectPath);
+    assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
     return withTicketLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
       if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);

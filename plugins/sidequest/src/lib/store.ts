@@ -141,6 +141,7 @@ function isTrackedBuildOutput(...args: any[]) { return warningsLayer.isTrackedBu
 function scopeIncludesPath(...args: any[]) { return warningsLayer.scopeIncludesPath(...args); }
 function sourceBuildOutputWarnings(...args: any[]) { return warningsLayer.sourceBuildOutputWarnings(...args); }
 function verifyCommandWarning(...args: any[]) { return warningsLayer.verifyCommandWarning(...args); }
+function dispatchVerifyCommandError(...args: any[]) { return warningsLayer.dispatchVerifyCommandError(...args); }
 function dispatchDescriptionError(...args: any[]) { return warningsLayer.dispatchDescriptionError(...args); }
 function storyContractDriftWarnings(...args: any[]) { return warningsLayer.storyContractDriftWarnings(...args); }
 function ticketSymbolReferences(...args: any[]) { return warningsLayer.ticketSymbolReferences(...args); }
@@ -363,6 +364,7 @@ const {
   database,
   db,
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
+  dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
   execFileSync,
@@ -1880,6 +1882,7 @@ module.exports = {
   LABELS_MAX,
   DISPATCH_DESCRIPTION_MIN,
   dispatchDescriptionError,
+  dispatchVerifyCommandError,
   dispatchDeclaredFiles,
   dispatchWorkspace,
   dispatchWarnings,

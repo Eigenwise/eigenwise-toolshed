@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
@@ -487,6 +487,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   // loaded, so a claim-first spawn spec is worthless unless the target
   // project actually has a runnable, board-MCP-capable install (SQ-1017).
   const projectPath = readMeta(slug)?.path;
+  const found = getTicket(slug, idOrRef);
+  if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+  const verifyError = dispatchVerifyCommandError(found, projectPath);
+  if (verifyError) throw new Error(verifyError);
   if (projectPath) assertSidequestInstall(projectPath);
   // Registry install proves a future session; it does not prove THIS
   // invocation's session has the board MCP connected (SQ-1017 correction).
@@ -494,8 +498,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   // are trusted, matching every direct `prepareDispatch` caller that predates
   // this transport concept.
   assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
-  const found = getTicket(slug, idOrRef);
-  if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);

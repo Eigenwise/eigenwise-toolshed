@@ -6,6 +6,7 @@ const os = require('os');
 const path = require('path');
 const fs = require('fs');
 const { spawnSync } = require('child_process');
+const store = require('../lib/store');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
 const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
@@ -322,6 +323,47 @@ test('warns for an unrunnable recorded verify command, not a cd-prefixed one', (
 
   const exact = cliJson(['add', '-t', 'exact verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . && node --test']);
   assert.deepStrictEqual(exact.warnings, []);
+});
+
+test('dispatch rejects broken npm and node test verifies while add and update only warn', () => {
+  const packageDir = path.join(PROJ, 'plugins', 'package-suite');
+  const bareDir = path.join(PROJ, 'plugins', 'bare-suite');
+  fs.mkdirSync(path.join(packageDir, 'test'), { recursive: true });
+  fs.mkdirSync(path.join(bareDir, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(packageDir, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node --test "test/*.test.js"' } }));
+  fs.writeFileSync(path.join(packageDir, 'test', 'suite.test.js'), '');
+  fs.writeFileSync(path.join(bareDir, 'test', 'suite.test.js'), '');
+
+  const npmTest = cliJson(['add', '-t', 'missing npm manifest', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && npm test']);
+  assert.match(npmTest.warnings.join('\n'), /npm test.*package\.json/);
+  assert.match(store.dispatchVerifyCommandError(npmTest.ticket, PROJ), /cd plugins\/bare-suite && node --test "test\/\*\.test\.js"/);
+
+  const missingScript = cliJson(['add', '-t', 'missing npm script', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run missing']);
+  assert.match(missingScript.warnings.join('\n'), /npm run missing.*`missing` script/);
+  assert.match(store.dispatchVerifyCommandError(missingScript.ticket, PROJ), /cd plugins\/package-suite && npm run test:full/);
+
+  const updatedScript = cliJson(['update', missingScript.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
+  assert.match(updatedScript.warnings.join('\n'), /npm run missing.*`missing` script/);
+
+  const emptyGlob = cliJson(['add', '-t', 'empty test glob', '--category', 'coding.normal', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && node --test "test/missing.test.js"']);
+  assert.match(emptyGlob.warnings.join('\n'), /matches no files/);
+  assert.match(store.dispatchVerifyCommandError(emptyGlob.ticket, PROJ), /matches no files/);
+
+  const correct = cliJson(['add', '-t', 'working verify', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full']);
+  assert.deepStrictEqual(correct.warnings, []);
+  assert.strictEqual(store.dispatchVerifyCommandError(correct.ticket, PROJ), null);
+
+  const refusedDispatch = cliResult(['dispatch', npmTest.ticket.ref]);
+  assert.strictEqual(refusedDispatch.status, 1);
+  assert.match(refusedDispatch.stderr + refusedDispatch.stdout, /dispatch: verify command cannot run/);
+
+  const correctDispatch = cliResult(['dispatch', correct.ticket.ref]);
+  assert.strictEqual(correctDispatch.status, 1);
+  assert.doesNotMatch(correctDispatch.stderr + correctDispatch.stdout, /dispatch: verify command cannot run/);
+
+  const manual = cliJson(['add', '-t', 'manual verify survives dispatch', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'manual: Checked the test plan.']);
+  assert.deepStrictEqual(manual.warnings, []);
+  assert.strictEqual(store.dispatchVerifyCommandError(manual.ticket, PROJ), null);
 });
 
 export {};
