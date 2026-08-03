@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.347.0 (2026-08-03)
+
+### sidequest 4.4.3 → 4.5.0
+
+#### Features
+
+- Dispatch refuses a verify command that cannot run (SQ-1288) [`361539d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/361539d7)
+  A ticket whose verify command could never execute used to spawn an executor anyway, which explored, hit ENOENT, and released without doing any work. Dispatch now checks that the command after the cd can actually run (npm script present, test glob matching files) and refuses before spawning, naming the command derived from the tree instead. The resolver is shared with the release cut rather than duplicated. Malformed legacy verify strings stay advisory; only the provably-unrunnable class refuses.
+
 ## v3.346.0 (2026-08-03)
 
 ### model-gateway 0.46.4 → 0.47.0
