@@ -168,6 +168,8 @@ Treat these as review prompts, not permission to fill in missing context. If the
 
 ### Repeated dispatches without a commit
 
+Dispatch also warns before the first attempt: a worktree-isolated dispatch whose ticket names a path that is both gitignored and absent from the tree gets a warning naming the exact paths, because an executor worktree holds tracked files only and work that reads ignored state fails the same way on every retry. Ignored-but-present paths like an installed `node_modules` stay silent.
+
 After two prior terminal dispatches for a ticket finish without a submitted commit, Sidequest blocks another dispatch. The check is a bounded visibility heuristic: it treats environment visibility as the leading hypothesis and points you to check ignored paths, try a shared-tree dispatch, or run the work inline. An active claim whose stop was never observed does not count as proof of a failed round.
 
 The CLI override is explicit:
