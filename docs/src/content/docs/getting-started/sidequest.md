@@ -166,6 +166,18 @@ Dispatch can add a **Flagged uncertainty** section to the executor briefing when
 
 Treat these as review prompts, not permission to fill in missing context. If the briefing or another instruction names a file, symbol, or state that does not exist in the executor's worktree, stop immediately and report the contradiction on the ticket, with the verbatim probe you ran and its output. Do not investigate around it or assume the base is wrong. The orchestrator can correct the ticket or dispatch a fresh executor with an updated brief.
 
+### Repeated dispatches without a commit
+
+After two prior terminal dispatches for a ticket finish without a submitted commit, Sidequest blocks another dispatch. The check is a bounded visibility heuristic: it treats environment visibility as the leading hypothesis and points you to check ignored paths, try a shared-tree dispatch, or run the work inline. An active claim whose stop was never observed does not count as proof of a failed round.
+
+The CLI override is explicit:
+
+```text
+sidequest dispatch SQ-3 --allow-repeat-failure
+```
+
+Through MCP, pass `allowRepeatFailure: true` to `dispatch`. The override is recorded on the new dispatch with its timestamp, source, and count of prior no-commit attempts. Use it only after checking why the executor could not see or commit its declared paths. A shared-tree dispatch can be requested with `sharedTree: true` through MCP (or the CLI's `--shared-tree`), and inline work is another supported remedy.
+
 ### Dispatch needs this session's board MCP, not just an install
 
 A dispatched native Agent inherits the parent Claude Code session's connected MCP snapshot, not a fresh lookup of Claude Code's plugin registry. Installing Sidequest for a project, or reinstalling it mid-session, does not reach a conversation that is already open — a freshly spawned Agent can still come up with zero board tools even though the install itself is fine. Never assume a fresh Agent independently discovers a newly installed MCP server.
