@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.348.0 (2026-08-03)
+
+### sidequest 4.5.0 → 4.5.1
+
+#### Fixes
+
+- Hook latency budgets are absolute, not a ratio to process start (SQ-1290) [`edfc1de`](https://github.com/Eigenwise/eigenwise-toolshed/commit/edfc1de8)
+  The perf test asserted each hook's median against 10x a bare process-start control measured on the same machine. Linux spawns a process in about 23ms and Windows in about 45ms, so the same hook cost passed locally and failed on CI: the faster the hardware, the tighter the budget. Budgets are now absolute wall-clock ceilings, and failures print the measured value, the applied ceiling, and the control.
+
 ## v3.347.0 (2026-08-03)
 
 ### sidequest 4.4.3 → 4.5.0
