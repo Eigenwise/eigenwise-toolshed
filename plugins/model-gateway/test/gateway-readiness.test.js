@@ -27,6 +27,18 @@ function freePort() {
   });
 }
 
+function freePortInRange(firstPort, lastPort) {
+  return new Promise((resolve, reject) => {
+    const tryPort = (port) => {
+      if (port > lastPort) return reject(new Error(`no free port between ${firstPort} and ${lastPort}`));
+      const probe = net.createServer();
+      probe.once('error', () => tryPort(port + 1));
+      probe.listen(port, '127.0.0.1', () => probe.close(() => resolve(port)));
+    };
+    tryPort(firstPort);
+  });
+}
+
 function request(port, method, pathname, body) {
   return new Promise((resolve, reject) => {
     const encoded = body ? Buffer.from(JSON.stringify(body)) : null;
@@ -165,12 +177,19 @@ test('shim health retains an OpenAI rejection until a successful proxied request
   });
   const proxyPort = await listen(proxy);
   t.after(() => proxy.close());
-  const { port: shimPort } = await startGateway(t, 'serve-worker', {
+  const supervisorPort = await freePortInRange(30000, 39999);
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
     HOME: home,
     USERPROFILE: home,
+    CODEX_GATEWAY_PORT: String(supervisorPort),
     CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
     CODEX_GATEWAY_REQUEST_LOG: '0',
   });
+
+  assert.equal(shimPort, supervisorPort);
+  const workerLog = fs.readFileSync(path.join(home, '.claude', 'model-gateway', 'logs', 'shim.log'), 'utf8');
+  const workerPort = Number(workerLog.match(/model-gateway shim listening on 127\.0\.0\.1:(\d+)/)[1]);
+  assert.notEqual(workerPort, supervisorPort);
 
   const payload = { model: 'claude-gpt-5.6-terra', messages: [], max_tokens: 1 };
   assert.equal((await request(shimPort, 'POST', '/v1/messages', payload)).status, 429);

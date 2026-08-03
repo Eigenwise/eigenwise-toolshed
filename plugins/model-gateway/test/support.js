@@ -41,7 +41,8 @@ function startGateway(t, command, environment) {
         HOME: home,
         USERPROFILE: home,
         CODEX_GATEWAY_SOCKET_PATH: socketPath,
-        CODEX_GATEWAY_PORT: '0',
+        CODEX_GATEWAY_PORT: environment.CODEX_GATEWAY_PORT || '0',
+        CODEX_GATEWAY_WORKER_PORT: environment.CODEX_GATEWAY_WORKER_PORT || '0',
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
