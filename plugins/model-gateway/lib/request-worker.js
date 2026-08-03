@@ -2018,6 +2018,7 @@ function runWorker() {
   servers.add(mainServer);
   mainServer.listen(SHIM_PORT, '127.0.0.1', () => {
     const shimPort = mainServer.address().port;
+    process.send?.({ type: 'listening', port: shimPort });
     console.log(`model-gateway shim listening on 127.0.0.1:${shimPort} (proxy :${PROXY_PORT}, anthropic ${ANTHROPIC_UPSTREAM})`);
   });
 

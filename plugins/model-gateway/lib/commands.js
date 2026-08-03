@@ -1561,25 +1561,54 @@ function requestHeader(req, name) {
 const { runWorker } = require('./request-worker.js');
 function runShim() {
   mkdirs();
-  let workerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || (PUBLIC_SHIM_PORT ? 20000 + (PUBLIC_SHIM_PORT % 20000) : 0));
+  const configuredWorkerPort = Number(process.env.CODEX_GATEWAY_WORKER_PORT || 0);
+  const workerPortReportTimeoutMs = 5000;
+  let workerPort = configuredWorkerPort;
   const timeout = Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000;
   const hostsEntry = detectHostsCompat();
   const compatState = { hostsDetected: !!hostsEntry, hostsLine: hostsEntry?.line ?? null, port80Bound: false, reason: null };
   let worker = null;
   let workerScript = CLI_PATH;
+  let workerPortReportTimeout = null;
   let restarting = false;
   let stopped = false;
 
+  function clearWorkerPortReportTimeout() {
+    if (!workerPortReportTimeout) return;
+    clearTimeout(workerPortReportTimeout);
+    workerPortReportTimeout = null;
+  }
+
+  function stopForMissingWorkerPort() {
+    if (stopped || configuredWorkerPort || workerPort) return;
+    stopped = true;
+    console.error(`model-gateway: shim worker did not report its listener port within ${workerPortReportTimeoutMs}ms`);
+    killPid(worker?.pid);
+    main.close(() => process.exit(1));
+  }
+
   function startWorker() {
     if (stopped || (worker && worker.exitCode == null)) return;
+    if (!configuredWorkerPort) {
+      workerPort = 0;
+      workerPortReportTimeout ||= setTimeout(stopForMissingWorkerPort, workerPortReportTimeoutMs);
+    }
     const out = fs.openSync(path.join(LOGS, 'shim.log'), 'a');
     const child = fork(workerScript, ['serve-worker'], {
       stdio: ['ignore', out, out, 'ipc'],
       windowsHide: true,
-      env: { ...process.env, CODEX_GATEWAY_WORKER_PORT: String(workerPort) },
+      env: { ...process.env, CODEX_GATEWAY_WORKER_PORT: String(configuredWorkerPort) },
     });
     fs.closeSync(out);
     worker = child;
+    if (!configuredWorkerPort) {
+      child.once('message', (message) => {
+        const reportedPort = message?.type === 'listening' ? message.port : null;
+        if (worker !== child || !Number.isInteger(reportedPort) || reportedPort < 1 || reportedPort > 65535) return;
+        workerPort = reportedPort;
+        clearWorkerPortReportTimeout();
+      });
+    }
     fs.writeFileSync(pidFile('shim'), String(child.pid));
     child.unref();
     child.once('exit', () => {
@@ -1595,6 +1624,10 @@ function runShim() {
 
   function requestWorker(req, body, retry = 0) {
     return new Promise((resolve, reject) => {
+      if (!workerPort) {
+        if (retry < 80 && !stopped) return setTimeout(() => requestWorker(req, body, retry + 1).then(resolve, reject), 50);
+        return reject(new Error('shim worker did not report a listener port'));
+      }
       const upstream = http.request({
         host: '127.0.0.1', port: workerPort, method: req.method, path: req.url, headers: req.headers,
       }, (response) => resolve(response));
@@ -1682,7 +1715,6 @@ function runShim() {
 
   const main = listen(PUBLIC_SHIM_PORT, '127.0.0.1', () => {
     const publicShimPort = main.address().port;
-    if (!workerPort) workerPort = 20000 + (publicShimPort % 20000);
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     console.log(`model-gateway shim supervisor listening on 127.0.0.1:${publicShimPort}`);
     startWorker();
