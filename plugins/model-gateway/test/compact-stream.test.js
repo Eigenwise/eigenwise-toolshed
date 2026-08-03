@@ -1,12 +1,9 @@
 'use strict';
 
 const assert = require('node:assert/strict');
-const { spawn } = require('node:child_process');
 const http = require('node:http');
-const path = require('node:path');
 const test = require('node:test');
-
-const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
+const { startGateway } = require('./support.js');
 
 const COMPACT_PROMPT = 'You are a helpful AI assistant tasked with summarizing conversations.';
 
@@ -51,36 +48,14 @@ function postStream(port, body, onFirstChunk = null) {
   });
 }
 
-async function waitForShim(port) {
-  const deadline = Date.now() + 5000;
-  while (Date.now() < deadline) {
-    try {
-      const response = await get(port, '/healthz');
-      if (response.status === 200) return;
-    } catch { /* still starting */ }
-    await new Promise((resolve) => setTimeout(resolve, 50));
-  }
-  throw new Error('shim did not start');
-}
-
 async function spawnShim(t, proxyPort, extraEnv = {}) {
-  const probe = http.createServer();
-  const shimPort = await listen(probe);
-  await new Promise((resolve) => probe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS: '0',
-      ...extraEnv,
-    },
-    stdio: 'ignore',
+  const { port } = await startGateway(t, 'serve-shim', {
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+    CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS: '0',
+    ...extraEnv,
   });
-  t.after(() => child.kill());
-  await waitForShim(shimPort);
-  return shimPort;
+  return port;
 }
 
 function frame(type, data) {
