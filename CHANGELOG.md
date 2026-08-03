@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.350.0 (2026-08-03)
+
+### observability 0.2.0 → 0.2.1
+
+#### Fixes
+
+- Grafana setup mounted the template dashboards, so per-project boards never showed (SQ-1294) [`877dbdd`](https://github.com/Eigenwise/eigenwise-toolshed/commit/877dbddb)
+  The container gets created two ways and only `ensure` mounted the generated dashboards. The setup path passed no `dashboardDir`, so it fell back to the plugin's static template folder, which only ever holds `claude-code-usage.json` — one dashboard in Grafana no matter how many projects opted in. It also never self-healed, because the "is this container current?" check looked at image, version labels and port bindings but not the mount, so a bad container survived every later `ensure`. Both paths now provision from the opted-in project registry and pass the generated directory, and a container whose dashboard mount doesn't match gets force-recreated.
+
 ## v3.349.0 (2026-08-03)
 
 ### model-gateway 0.47.0 → 0.47.1
