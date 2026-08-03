@@ -423,9 +423,42 @@ ${ticket?.description || ""}`;
   function dispatchUncertaintyWarnings(ticket, slug) {
     return [...symbolExistenceWarnings(ticket, slug), ...crossTicketStateWarnings(ticket, slug)].map((warning) => `Dispatch warning: ${warning}`);
   }
+  function worktreeVisibilityTokens(ticket) {
+    const tokens = new Set(normalizeFiles(ticket?.files));
+    const text = [ticket?.executorVerify, ticket?.description].filter(Boolean).join("\n");
+    const pathLike = /(?:\.{1,2}[\\/])?(?:[A-Za-z0-9_@.-]+[\\/])+[A-Za-z0-9_@.-]+|(?:[A-Za-z0-9_-]+\.)+[A-Za-z0-9_-]+/g;
+    for (const match of text.matchAll(pathLike)) tokens.add(match[0]);
+    return [...tokens];
+  }
+  function ignoredWorktreePaths(ticket, projectPath) {
+    if (!projectPath || dispatchState(ticket)?.sharedTree !== false) return [];
+    const ignored = /* @__PURE__ */ new Set();
+    for (const token of worktreeVisibilityTokens(ticket)) {
+      const absolute = path.resolve(projectPath, token);
+      const relative = relativePathWithin(projectPath, absolute);
+      if (!relative || relative === "." || fs.existsSync(absolute)) continue;
+      try {
+        execFileSync("git", ["check-ignore", "-q", "--", relative], {
+          cwd: projectPath,
+          windowsHide: true,
+          stdio: "ignore"
+        });
+        ignored.add(relative.replace(/\\/g, "/"));
+      } catch (_) {
+      }
+    }
+    return [...ignored].sort();
+  }
+  function worktreeVisibilityWarning(ticket, projectPath) {
+    const ignored = ignoredWorktreePaths(ticket, projectPath);
+    if (!ignored.length) return null;
+    return `Worktree visibility warning: ignored paths unavailable in a linked worktree: ${ignored.join(", ")}. Use sharedTree: true, or run inline.`;
+  }
   function dispatchWarnings(ticket, slug) {
     const warnings = dispatchUncertaintyWarnings(ticket, slug);
     const projectPath = slug ? readMeta(slug)?.path : null;
+    const visibility = worktreeVisibilityWarning(ticket, projectPath);
+    if (visibility) warnings.push(visibility);
     if (projectPath) {
       const browserReview = readonlyBrowserReviewWarning(ticket);
       if (browserReview) warnings.push(`Dispatch warning: ${browserReview.replace("Planning-depth warning: ", "")}`);
@@ -574,6 +607,6 @@ ${ticket?.description || ""}`;
   function requestedReadonlyOverride(fields) {
     return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, dispatchUncertaintyWarnings, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 module.exports = { createWarnings };

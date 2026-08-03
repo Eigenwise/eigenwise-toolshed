@@ -478,6 +478,55 @@ test('oracle releases retain the round marker in pulse, changes, and brief list 
   assert.equal(store.listPayload(slug, { brief: true, all: true }).tickets.find((entry?: any) => entry.ref === ticket.ref).oracle.summary, expected);
 });
 
+test('worktree dispatch warnings name ignored missing paths without flagging installed dependencies', () => {
+  const ignoredArtifact = 'missing-visibility-artifact/output.json';
+  fs.appendFileSync(path.join(PROJECT, '.git', 'info', 'exclude'), `\nmissing-visibility-artifact/\nnode_modules\n`);
+  fs.mkdirSync(path.join(PROJECT, 'node_modules'), { recursive: true });
+  const missing = store.createTicket(slug, {
+    title: 'ignored worktree visibility fixture',
+    category: 'dispatch.lifecycle',
+    files: [ignoredArtifact],
+    description: 'Where: missing-visibility-artifact/output.json. Contract: inspect generated output. Verify: node --test test/dispatch-lifecycle.test.ts.',
+    source: 'test',
+  });
+  const installed = store.createTicket(slug, {
+    title: 'installed dependency visibility fixture',
+    category: 'dispatch.lifecycle',
+    files: ['node_modules'],
+    description: 'Where: node_modules. Contract: inspect installed dependencies. Verify: node --test test/dispatch-lifecycle.test.ts.',
+    source: 'test',
+  });
+
+  const missingPrepared = store.prepareDispatch(slug, missing.ref, { sessionId: `visibility-missing-${Date.now()}` });
+  const installedPrepared = store.prepareDispatch(slug, installed.ref, { sessionId: `visibility-installed-${Date.now()}` });
+  const missingWarnings = store.dispatchWarnings(missingPrepared.ticket, slug).join('\n');
+  const installedWarnings = store.dispatchWarnings(installedPrepared.ticket, slug).join('\n');
+
+  assert.match(missingWarnings, /missing-visibility-artifact\/output\.json/);
+  assert.match(missingWarnings, /sharedTree: true, or run inline/);
+  assert.doesNotMatch(installedWarnings, /Worktree visibility warning/);
+  assert.equal(store.releaseTicket(slug, missing.ref, 'visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, installed.ref, 'visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
+});
+
+test('dispatch blocks a third terminal no-commit attempt unless explicitly overridden', () => {
+  const ticket = createFixture('repeat no-commit dispatch fixture');
+  for (const number of [1, 2]) {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `repeat-no-commit-${number}-${Date.now()}` });
+    const worker = `repeat-no-commit-worker-${number}`;
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
+  }
+
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /two prior terminal dispatches without a commit.*Environment visibility/);
+  const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
+  assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-no-commit-cleanup', { status: 'todo', source: 'test' }).ok, true);
+});
+
 test('release and submission clear retain structured rework attempts', () => {
   const ticket = createFixture('structured rework fixture');
   const firstSession = `rework-first-${Date.now()}`;
