@@ -603,13 +603,7 @@ function completionTreeCheck(slug, ticket, opts) {
   const declaredFiles = Array.isArray(state.declaredFiles) ? state.declaredFiles : normalizeFiles(ticket?.files);
   if (!declaredFiles.length) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
-  if (!delta.ok) {
-    return {
-      ok: false,
-      reason: "dispatch_delta_unavailable",
-      message: `${ticket.ref} cannot inspect its declared write scope since dispatch base. Declared files: ${declaredFiles.join(", ")}. Restore the dispatch worktree or release and dispatch again.`
-    };
-  }
+  if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
   const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
   if (changedPaths.length || opts?.explicitNoOp === true) return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
   return {

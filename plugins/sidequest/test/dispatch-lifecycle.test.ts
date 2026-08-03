@@ -59,6 +59,12 @@ function createFixture(title?: any, category = 'dispatch.lifecycle') {
   });
 }
 
+function commitFixtureChange() {
+  fs.appendFileSync(path.join(PROJECT, 'tracked.js'), 'module.exports = 1;\n');
+  execFileSync('git', ['add', 'tracked.js'], { cwd: PROJECT });
+  execFileSync('git', ['commit', '--quiet', '-m', 'fixture change'], { cwd: PROJECT });
+}
+
 function runForceBypass(payload?: any) {
   const output = execFileSync(process.execPath, [FORCE_EXEC_BYPASS], {
     input: JSON.stringify(payload),
@@ -214,6 +220,7 @@ test('shared-tree agents bind by name before SubagentStop supplies their id', ()
     token: prepared.token,
     executor,
   }).ok, true);
+  commitFixtureChange();
   assert.equal(store.submitTicket(slug, ticket.ref, by, {
     commit: 'abc1234def5678',
     sessionId,
