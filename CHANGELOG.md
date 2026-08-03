@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.352.0 (2026-08-03)
+
+### sidequest 4.5.1 → 4.5.2
+
+#### Fixes
+
+- The executor skill guard denied on a hardcoded guess, and readonly categories flagged their own artifact roots (SQ-1299) [`5309825`](https://github.com/Eigenwise/eigenwise-toolshed/commit/53098253)
+  Two guards that fired on the wrong evidence.
+
+  The oversized-skill guard summed a skill's entire directory tree against a 256 KiB budget, but skills load progressively, so the number it judged was a worst case that mostly never enters context. Worse, when it could not locate the skill directory it fell back to a hardcoded size and denied on that: an executor was blocked from `claude-api` by a constant, then pulled more than the budget through WebFetch instead. It now measures what actually loads and fails open when it cannot measure.
+
+  Separately, a readonly category warned about write intent even when the ticket's declared scope sat entirely inside that category's own `artifactRoots`. `codebase-exploration` declares `.claude/.codebase-info` as an artifact root and its contract permits exactly that write, so the one flow the feature exists to serve was the flow that needed an override. The check now consults the roots it already declares.
+
 ## v3.351.0 (2026-08-03)
 
 ### codebase-mapper 2.12.2 → 2.12.3
