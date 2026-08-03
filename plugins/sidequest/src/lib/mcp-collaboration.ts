@@ -198,7 +198,7 @@ const tools: ToolDefinition[] = [
         ref: { type: 'string' },
         project: PROJECT_PROP,
         sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
-        allowRepeatFailure: { type: 'boolean', description: 'Override the two prior no-commit dispatch circuit breaker.' },
+        allowRepeatFailure: { type: 'boolean' },
         integrationBranch: { type: 'string' },
         full: { type: 'boolean', description: 'Include token, executor, warnings, and recovery details.' },
       },
