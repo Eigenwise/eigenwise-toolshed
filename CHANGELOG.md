@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.367.0 (2026-08-03)
+
+### sidequest 4.12.1 → 4.13.0
+
+#### Features
+
+- Declared source scope grants its compiled output, derived from the build itself (SQ-1320) [`ab07715`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ab07715b)
+  Sidequest compiles `src/` to tracked output under `lib/` and `bin/`, and every ticket had to declare both sides of that mapping by hand. Forgetting the compiled twin was the single most common scope miss: four incidents in one day, including a scope request naming a compiled path that does not exist because CLI modules land in `bin/`, not `lib/`.
+
+  Declared scope now expands through one resolver: declaring `src/lib/store.ts` grants `lib/store.js`, with the mapping derived from the build script's own exported layout rather than a second hardcoded copy. The dispatch snapshot, commit enforcement, the completion tree check, and every scope-edit path read the same expanded set, so they cannot disagree.
+
+  The expansion is one-directional on purpose. Along the way the executor found that the existing `generatedPairs` machinery quietly granted sources from declared generated output, the exact backwards grant that lets someone edit compiled files without their source; that inverse path is removed, and declaring `lib/store.js` alone no longer reaches `src/lib/store.ts`.
+
 ## v3.366.0 (2026-08-03)
 
 ### sidequest 4.12.0 → 4.12.1
