@@ -206,7 +206,7 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
-test('pre-tool hook: oversized bundled skills are denied for dispatched executors only', () => {
+test('pre-tool hook: oversized bundled skill entry files are denied for dispatched executors only', () => {
   const skills = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-bundled-skills-'));
   const skill = path.join(skills, 'claude-api');
   fs.mkdirSync(skill);
@@ -217,20 +217,22 @@ test('pre-tool hook: oversized bundled skills are denied for dispatched executor
     agent_type: 'sidequest-exec-dispatch',
   };
 
-  const blocked = runHookOutput(GUARD_OVERSIZED_SKILL, payload);
+  assert.equal(runHookOutput(GUARD_OVERSIZED_SKILL, payload), null);
+
+  const blocked = runHookOutput(GUARD_OVERSIZED_SKILL, payload, { SIDEQUEST_BUNDLED_SKILLS_DIR: skills });
   assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /claude-api/);
   assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /targeted Read/);
-  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /research ticket/);
+  assert.doesNotMatch(blocked.hookSpecificOutput.permissionDecisionReason, /research ticket/);
 
-  const futureSkill = path.join(skills, 'reference-monolith');
-  fs.mkdirSync(futureSkill);
-  fs.writeFileSync(path.join(futureSkill, 'SKILL.md'), Buffer.alloc(256 * 1024 + 1));
-  const future = runHookOutput(GUARD_OVERSIZED_SKILL, {
+  const referenceSkill = path.join(skills, 'reference-monolith');
+  fs.mkdirSync(referenceSkill);
+  fs.writeFileSync(path.join(referenceSkill, 'SKILL.md'), 'Read the reference when needed.');
+  fs.writeFileSync(path.join(referenceSkill, 'reference.md'), Buffer.alloc(256 * 1024 + 1));
+  assert.equal(runHookOutput(GUARD_OVERSIZED_SKILL, {
     ...payload,
     tool_input: { skill: 'reference-monolith' },
-  }, { SIDEQUEST_BUNDLED_SKILLS_DIR: skills });
-  assert.equal(future.hookSpecificOutput.permissionDecision, 'deny');
+  }, { SIDEQUEST_BUNDLED_SKILLS_DIR: skills }), null);
 
   assert.equal(runHookOutput(GUARD_OVERSIZED_SKILL, {
     tool_name: 'Skill',

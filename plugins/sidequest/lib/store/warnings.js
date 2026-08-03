@@ -104,12 +104,17 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     if (ticketCategory(ticket) !== "coding.hard" || !ticketPrescribesFix(ticket && ticket.description)) return [];
     return ["coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category."];
   }
+  function readonlyWriteIntentPaths(ticket) {
+    return [...normalizeFiles(ticket.files), ...normalizeContracts(ticket.contracts).changes];
+  }
   function readonlyCategoryWriteIntentWarning(ticket) {
     if (!categoryReadOnly(ticket)) return null;
-    const writesFiles = normalizeFiles(ticket.files).length > 0;
-    const writesContracts = (normalizeContracts(ticket.contracts).changes || []).length > 0;
-    if (!writesFiles && !writesContracts) return null;
-    return "Readonly category contradicts declared write intent (files or changes). Resolve the category or set an explicit readonly override before dispatch.";
+    const paths = readonlyWriteIntentPaths(ticket);
+    if (!paths.length) return null;
+    const artifactRoots = ticket?.category?.artifactRoots || [];
+    const outside = paths.filter((scope) => !commitScope.isInScope(scope, artifactRoots));
+    if (!outside.length) return null;
+    return `Readonly category contradicts declared write intent outside its artifact roots: ${outside.join(", ")}. Resolve the category or set an explicit readonly override before dispatch.`;
   }
   function noDeclaredScopeWarning(ticket) {
     if (dispatchReadOnly(ticket)) return null;

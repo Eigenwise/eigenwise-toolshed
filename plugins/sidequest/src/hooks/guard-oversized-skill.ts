@@ -3,8 +3,7 @@ import path from 'node:path';
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
 
-const MAX_BUNDLED_SKILL_BYTES = 256 * 1024;
-const KNOWN_BUNDLED_SKILL_BYTES = new Map([['claude-api', 932 * 1024]]);
+const MAX_ENTRY_SKILL_BYTES = 256 * 1024;
 const SKILL_DIRECTORY_ENV = ['CLAUDE_BUNDLED_SKILLS_DIR', 'CLAUDE_CODE_BUNDLED_SKILLS_DIR', 'SIDEQUEST_BUNDLED_SKILLS_DIR'];
 const SKILL_PATH_FIELDS = ['skill_path', 'skillPath', 'path'];
 
@@ -36,24 +35,8 @@ function configuredSkillDirectory(toolInput: Record<string, unknown>, name: stri
   return null;
 }
 
-function directoryBytes(directory: string, limit: number): number {
-  let total = 0;
-  const pending = [directory];
-  while (pending.length) {
-    const current = pending.pop();
-    if (!current) continue;
-    for (const entry of fs.readdirSync(current, { withFileTypes: true })) {
-      const entryPath = path.join(current, entry.name);
-      if (entry.isDirectory()) {
-        pending.push(entryPath);
-        continue;
-      }
-      if (!entry.isFile()) continue;
-      total += fs.statSync(entryPath).size;
-      if (total > limit) return total;
-    }
-  }
-  return total;
+function entryFileBytes(directory: string): number {
+  return fs.statSync(path.join(directory, 'SKILL.md')).size;
 }
 
 function main(): void {
@@ -62,9 +45,10 @@ function main(): void {
   const name = skillName(input);
   if (!name || !isRecord(input.tool_input)) return;
   const directory = configuredSkillDirectory(input.tool_input, name);
-  const bytes = directory ? directoryBytes(directory, MAX_BUNDLED_SKILL_BYTES) : KNOWN_BUNDLED_SKILL_BYTES.get(name) || 0;
-  if (bytes <= MAX_BUNDLED_SKILL_BYTES) return;
-  writeDeny('PreToolUse', `sidequest: ${name} exceeds the ${MAX_BUNDLED_SKILL_BYTES}-byte executor skill budget. Loading it can overflow this executor's context. Use a targeted Read for the directly needed material, or file a research ticket.`);
+  if (!directory) return;
+  const bytes = entryFileBytes(directory);
+  if (bytes <= MAX_ENTRY_SKILL_BYTES) return;
+  writeDeny('PreToolUse', `sidequest: ${name} exceeds the ${MAX_ENTRY_SKILL_BYTES}-byte executor skill budget. Loading it can overflow this executor's context. Use a targeted Read for the directly needed material.`);
 }
 
 try {
