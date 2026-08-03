@@ -100,7 +100,7 @@ const HELP_COMMANDS: any = {
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
   integrate: 'sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--skip-verify] [--override-legacy-scope] [--json]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
-  release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind scope_pause|contradiction|handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
+  release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind scope_pause|handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
   'scope-request': 'sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]',
   'scope-deny': 'sidequest scope-deny <id|SQ-n> --reason "why" [--by who]',
@@ -183,7 +183,7 @@ Working the board safely (multi-agent):
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration] [--override-legacy-scope]   control-plane closure; --integration consumes a submitted ticket after publish, and the override permits only legacy submissions without a scope snapshot
-  sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind scope_pause|contradiction|handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
+  sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind scope_pause|handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged

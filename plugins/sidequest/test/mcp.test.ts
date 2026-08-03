@@ -223,9 +223,11 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
   assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'scope_pause', 'contradiction', 'handback'], 'release classifies reasoned handoffs');
-  assert.ok(release.inputSchema.properties.command, 'release exposes technical-blocker command evidence');
-  assert.ok(release.inputSchema.properties.exitCode, 'release exposes technical-blocker exit-code evidence');
-  assert.ok(release.inputSchema.properties.outputTail, 'release exposes technical-blocker output evidence');
+  assert.ok(release.inputSchema.properties.command, 'release exposes command evidence for technical blockers and contradictions');
+  assert.match(release.inputSchema.properties.command.description, /Required for blocker\/contradiction/);
+  assert.ok(release.inputSchema.properties.exitCode, 'release exposes optional contradiction and required technical-blocker exit-code evidence');
+  assert.ok(release.inputSchema.properties.outputTail, 'release exposes output evidence for technical blockers and contradictions');
+  assert.match(release.inputSchema.properties.outputTail.description, /Required blocker\/contradiction output/);
   assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
@@ -2142,6 +2144,39 @@ test('MCP release records technical-blocker evidence and refuses incomplete evid
   assert.match(released.comments.at(-1).body, /Command: npm run test:files -- test\/mcp\.test\.ts/);
   assert.match(released.comments.at(-1).body, /Exit code: 1/);
   assert.match(released.comments.at(-1).body, /not ok 1 - technical blocker fixture/);
+});
+
+test('MCP release records contradiction probe evidence and accepts a zero exit code', async () => {
+  const added = await callTool('add', { title: 'contradiction evidence', complexity: 2, why: 'exercise probe evidence required for contradiction handoffs', labels: ['direct-ok'] });
+  await callTool('claim', { ref: added.ref, by: 'mcp-contradiction-worker', direct: true, reason: 'The contradiction fixture needs a direct claim.' });
+
+  const incomplete = await callTool('release', {
+    ref: added.ref,
+    by: 'mcp-contradiction-worker',
+    reason: 'The named target is absent.',
+    kind: 'contradiction',
+    command: 'rg -n "named target" plugins/sidequest/src',
+    status: 'todo',
+  });
+  assert.equal(incomplete.ok, false, 'contradictions require actual probe output');
+  assert.equal(incomplete.reason, 'contradiction_evidence_required');
+  assert.ok(store.getTicket(added.project, added.ref).claim, 'evidence refusal keeps the claim');
+
+  await callTool('release', {
+    ref: added.ref,
+    by: 'mcp-contradiction-worker',
+    reason: 'The named target is absent.',
+    kind: 'contradiction',
+    command: 'rg -n "named target" plugins/sidequest/src',
+    exitCode: 0,
+    outputTail: 'no matches',
+    status: 'todo',
+  });
+  const released = store.getTicket(added.project, added.ref);
+  assert.match(released.comments.at(-1).body, /Contradiction evidence/);
+  assert.match(released.comments.at(-1).body, /Command: rg -n "named target" plugins\/sidequest\/src/);
+  assert.match(released.comments.at(-1).body, /Exit code: 0/);
+  assert.match(released.comments.at(-1).body, /no matches/);
 });
 
 test('MCP release records an oracle handoff without a separate reason', async () => {

@@ -117,6 +117,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, string[]> = {
   add: ['complexity'],
   comments: ['full'],
   list: ['detail'],
+  release: ['command', 'outputTail'],
 };
 
 function toolDescriptors() {
