@@ -8,6 +8,7 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { renderCollectorYaml } = require('./install-otel-collector.js');
 const grafanaLgtm = require('../observability/sinks/grafana/index.js');
+const { provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
 const {
   DEFAULT_SINK,
   SINK_IDS,
@@ -377,7 +378,8 @@ function dockerAvailable(options = {}) {
 }
 
 function startLgtm(dataDir, options = {}) {
-  return grafanaLgtm.setup({}, { ...options, dataDir });
+  const dashboardDir = provisionDashboards(dataDir, options.projects || []);
+  return grafanaLgtm.setup({}, { ...options, dataDir, dashboardDir });
 }
 
 function setupPlan(options = {}) {
@@ -543,9 +545,11 @@ async function setupObservability(options = {}) {
   let sinkSetup = null;
   if (config.observability.dashboard) {
     if (available) {
+      const dashboardDir = provisionDashboards(plan.dataDir, config.observability.projects);
       dashboard = grafanaLgtm.setup(config.observability.sinks[DEFAULT_SINK], {
         ...options,
         dataDir: plan.dataDir,
+        dashboardDir,
         pluginVersion: version,
         forceRecreate: Boolean(config.observability.dashboardVersion
           && config.observability.dashboardVersion !== version),

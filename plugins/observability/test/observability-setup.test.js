@@ -182,9 +182,11 @@ test('downloads the pinned archive with the release checksums manifest and Windo
   assert.equal(path.basename(binary), 'otelcol-contrib.exe');
 });
 
-test('plans current-user application data and only starts LGTM on request', () => {
-  const plan = setupPlan({ projectDir: '.', environment: { LOCALAPPDATA: 'C:/Users/example/AppData/Local' } });
-  assert.match(plan.dataDir, /Eigenwise[\\/]Workbench$/);
+test('plans current-user application data and only starts LGTM on request', (t) => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-lgtm-start-'));
+  t.after(() => fs.rmSync(dataDir, { recursive: true, force: true }));
+  const plan = setupPlan({ dataDir, projectDir: '.' });
+  assert.equal(plan.dataDir, dataDir);
   assert.equal(plan.lgtm, false);
   const calls = [];
   const lgtm = startLgtm(plan.dataDir, { spawnSync(command, args) {
@@ -196,10 +198,42 @@ test('plans current-user application data and only starts LGTM on request', () =
   assert.deepEqual(runArgs.filter((argument) => argument.startsWith('127.0.0.1:')), ['127.0.0.1:3000:3000', '127.0.0.1:14318:4318']);
   assert.equal(runArgs[runArgs.indexOf('--restart') + 1], 'unless-stopped');
   assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'provisioning')}:/otel-lgtm/grafana/conf/provisioning/dashboards:ro`));
-  assert.ok(runArgs.includes(`${path.join(GRAFANA_SINK_DIR, 'dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
+  assert.ok(runArgs.includes(`${path.join(plan.dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   const resumed = [];
-  startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: `true|||${MANAGED_CONFIG_VERSION}|null` }; } });
+  const dashboardMounts = JSON.stringify([{
+    Source: path.join(plan.dataDir, 'grafana-dashboards'),
+    Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
+  }]);
+  startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: `true|||${MANAGED_CONFIG_VERSION}|null|${dashboardMounts}` }; } });
   assert.equal(resumed.length, 1);
+});
+
+test('setup mounts generated Grafana dashboards for every opted-in project', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-lgtm-setup-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const dataDir = path.join(directory, 'data');
+  const projectDir = path.join(directory, 'project');
+  fs.mkdirSync(projectDir, { recursive: true });
+  const calls = [];
+
+  await setupObservability({
+    projectDir,
+    dataDir,
+    dashboard: true,
+    dockerAvailable: true,
+    claudeVersion: MIN_CLAUDE_VERSION,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+    applyProjectSettings: false,
+    ensure: async () => ({ enabled: true, started: [] }),
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      if (args[0] === 'inspect') return { status: 1, stdout: '' };
+      return { status: 0, stdout: process.version };
+    },
+  });
+
+  const runArgs = calls.find(([, args]) => args[0] === 'run')[1];
+  assert.ok(runArgs.includes(`${path.join(dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
 });
 
 test('stores sink selection separately from project settings', async (t) => {
