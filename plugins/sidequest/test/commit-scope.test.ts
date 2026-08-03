@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert';
 import fs from 'node:fs';
@@ -81,15 +82,46 @@ test('configured generated pairs add only tracked outputs to effective scope and
 
   const scope = store.effectiveScope(slug, [source]);
   assert.deepEqual(scope, [source, output]);
-  assert.deepEqual(store.effectiveScope(slug, [output]), [output, source], 'a tracked generated output admits its source');
+  assert.deepEqual(store.effectiveScope(slug, [output]), [output], 'a generated output does not admit its source');
   const outputDirectoryScope = store.effectiveScope(slug, ['plugins/sidequest/lib']);
-  assert.ok(commitScope.isInScope(source, outputDirectoryScope), 'a tracked output directory admits each paired source');
+  assert.equal(commitScope.isInScope(source, outputDirectoryScope), false, 'output scope does not admit paired sources');
   assert.equal(commitScope.isInScope('plugins/sidequest/src/hooks/worker.ts', outputDirectoryScope), false, 'output scope does not admit unrelated sources');
   fs.writeFileSync(path.join(root, source), 'export const worker = false;\n');
   fs.writeFileSync(path.join(root, output), 'exports.worker = false;\n');
   const committed = commitScope.commitScoped(root, 'paired output', scope);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths.sort(), [output, source]);
+});
+
+test('the Sidequest build layout expands tracked source paths without granting sources from output paths', () => {
+  const root = repo();
+  const source = 'plugins/sidequest/src/lib/worker.ts';
+  const output = 'plugins/sidequest/lib/worker.js';
+  for (const file of [source, output]) {
+    fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });
+    fs.writeFileSync(path.join(root, file), 'export const worker = true;\n');
+  }
+  const buildScript = path.join(root, 'plugins', 'sidequest', 'scripts', 'build.mjs');
+  fs.mkdirSync(path.dirname(buildScript), { recursive: true });
+  fs.writeFileSync(buildScript, "export const nonBundledBuildDirectories = ['lib', 'bin'];\n");
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'node scripts/build.mjs' } }));
+  git(root, ['add', '.']);
+  git(root, ['commit', '-m', 'Sidequest build output fixture']);
+
+  const slug = store.ensureProject(root, 'Sidequest build layout').slug;
+  assert.deepEqual(store.effectiveScope(slug, [source]), [source, output]);
+  assert.deepEqual(store.effectiveScope(slug, [output]), [output]);
+  const exploration = store.getCategory('codebase-exploration');
+  store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+  const ticket = store.createTicket(slug, {
+    title: 'build output scope',
+    category: 'codebase-exploration',
+    files: [source],
+    complexity: 2,
+    complexityWhy: 'The dispatch snapshot must include the tracked output.',
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
+  assert.deepEqual(prepared.ticket.dispatch.declaredFiles, [source, output]);
 });
 
 test('ambiguous generated output mappings do not admit a source', () => {

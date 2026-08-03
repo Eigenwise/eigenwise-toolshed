@@ -1,6 +1,6 @@
 "use strict";
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
   function dispatchTokenPrefix(token) {
     return token ? String(token).slice(0, 12) : null;
   }
@@ -529,7 +529,7 @@ function createDispatch(dependencies) {
       const requestedSharedTree = Object.hasOwn(opts, "sharedTree") ? opts.sharedTree === true : Boolean(current && current.sharedTree);
       const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
       let sharedTree = worktreeIsolation ? requestedSharedTree : true;
-      const declaredFiles = normalizeFiles(t.files);
+      const declaredFiles = effectiveScope(slug, t.files);
       const nonRepoOutput = nonRepoExternalOutput(t, declaredFiles);
       const worktreeWarning = !worktreeIsolation && Object.hasOwn(opts, "sharedTree") && requestedSharedTree === false ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null;
       if (worktreeWarning) sharedTree = true;
@@ -682,7 +682,7 @@ function createDispatch(dependencies) {
       t.dispatch = {
         sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
         sharedTree: state.sharedTree === true,
-        declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : normalizeFiles(t.files),
+        declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t.files),
         artifactMode: state.artifactMode === true,
         artifactRoot: state.artifactRoot || null,
         artifactScope: state.artifactScope || null,

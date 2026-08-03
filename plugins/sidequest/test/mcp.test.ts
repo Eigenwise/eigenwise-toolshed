@@ -1339,7 +1339,7 @@ test('MCP scopeRequest never auto-approves plugin source, hooks, or manifests', 
   }
 });
 
-test('MCP scopeRequest admits a source paired to a tracked declared build output', async () => {
+test('MCP scopeRequest keeps declared build output one-way: the source needs approval, the source grants its output', async () => {
   const worktree = createGitWorktree();
   const source = 'plugins/sidequest/src/lib/store/worker.ts';
   const output = 'plugins/sidequest/lib/store/worker.js';
@@ -1352,19 +1352,26 @@ test('MCP scopeRequest admits a source paired to a tracked declared build output
   gitAt(worktree, ['commit', '-m', 'generated scope fixture']);
   const project = store.ensureProject(worktree).slug;
   store.setBoardConfig(project, { generatedPairs: [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }] });
-  const ticket = store.createTicket(project, {
+  const outputOnly = store.createTicket(project, {
     title: 'Generated output scope', files: ['plugins/sidequest/lib'], complexity: 3,
-    labels: ['direct-ok'], complexityWhy: 'the paired TypeScript source must stay editable without an approval round trip',
+    labels: ['direct-ok'], complexityWhy: 'editing generated output without its source is a mistake worth an approval round trip',
   });
   const by = 'mcp-generated-output-scope-worker';
-  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The generated scope fixture requires a local direct claim.' })).ok, true);
+  assert.equal((await callTool('claim', { project, ref: outputOnly.ref, by, direct: true, reason: 'The generated scope fixture requires a local direct claim.' })).ok, true);
 
-  const covered = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: [source] });
-  assert.deepEqual(covered.covered, [source]);
-  assert.equal(covered.scopeRequest, null);
+  const sourceRequest = await callTool('scopeRequest', { project, ref: outputOnly.ref, by, files: [source] });
+  assert.deepEqual(sourceRequest.covered, [], 'declared output must not admit its source without approval');
+  assert.deepEqual(sourceRequest.scopeRequest.files, [source]);
 
-  const unrelated = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['plugins/sidequest/src/bin/worker.ts'] });
-  assert.deepEqual(unrelated.scopeRequest.files, ['plugins/sidequest/src/bin/worker.ts']);
+  const sourceDeclared = store.createTicket(project, {
+    title: 'Declared source grants output', files: [source], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a declared source implies its compiled output without a round trip',
+  });
+  const sourceBy = 'mcp-generated-source-scope-worker';
+  assert.equal((await callTool('claim', { project, ref: sourceDeclared.ref, by: sourceBy, direct: true, reason: 'The generated scope fixture requires a local direct claim.' })).ok, true);
+  const outputCovered = await callTool('scopeRequest', { project, ref: sourceDeclared.ref, by: sourceBy, files: [output] });
+  assert.deepEqual(outputCovered.covered, [output], 'a declared source grants its tracked compiled output');
+  assert.equal(outputCovered.scopeRequest, null);
 });
 
 test('MCP scopeRequest pauses a claimed executor until the orchestrator expands scope', async () => {

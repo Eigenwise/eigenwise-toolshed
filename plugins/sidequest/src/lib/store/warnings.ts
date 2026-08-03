@@ -141,6 +141,9 @@ function buildOutputDirectories(source?: any) {
     outputs.set(value, { directory: value, sourceDirectory: sourceDirectory || current?.sourceDirectory || null });
   };
   const text = String(source || '');
+  for (const directories of text.matchAll(/export\s+const\s+nonBundledBuildDirectories\s*=\s*\[([^\]]*)\]/g)) {
+    for (const directory of (directories[1] || '').matchAll(/["']([^"']+)["']/g)) add(directory[1], directory[1]);
+  }
   for (const match of text.matchAll(/--(?:outdir|out-dir|output-dir)\s*(?:=|\s+)\s*["']?([^"'\s;&]+)/gi)) add(match[1]);
   for (const match of text.matchAll(/(?:outdir|outDir|outputDir)\s*:\s*["']([^"']+)["']/g)) add(match[1]);
   for (const helper of text.matchAll(/(?:async\s+)?function\s+([A-Za-z_$][\w$]*)\s*\(\s*([A-Za-z_$][\w$]*)[^)]*\)\s*\{([\s\S]{0,2000}?)\n\}/g)) {

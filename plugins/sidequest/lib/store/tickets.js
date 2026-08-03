@@ -214,14 +214,14 @@ function createTickets(dependencies) {
     const resumed = reopenScopePausedDispatch(ticket, now);
     ticket.scopeRequest = null;
     if (dispatch && (!dispatch.terminalAt || resumed)) {
-      dispatch.declaredFiles = ticket.files.slice();
+      dispatch.declaredFiles = effectiveScope(slug, ticket.files);
       delete dispatch.scopeRequest;
     }
     return true;
   }
-  function syncLiveDispatchScope(ticket) {
+  function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
-    if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
+    if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = effectiveScope(slug, ticket?.files);
   }
   function resolveScopeRequestAgainstUpdate(slug, ticket, patch, now) {
     const request = ticket?.scopeRequest;
@@ -404,8 +404,7 @@ function createTickets(dependencies) {
       const testDirectories = autoApprovedPluginTestScope(t, requested, additions, slug);
       if (testDirectories) {
         t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));
-        const dispatch2 = dispatchState(t);
-        if (dispatch2 && !dispatch2.terminalAt) dispatch2.declaredFiles = t.files.slice();
+        syncLiveDispatchScope(slug, t);
         if (!Array.isArray(t.comments)) t.comments = [];
         const comment2 = createComment({
           by: "board",
@@ -469,7 +468,7 @@ function createTickets(dependencies) {
       const resumed = reopenScopePausedDispatch(t, now);
       t.scopeRequest = null;
       if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
-      syncLiveDispatchScope(t);
+      syncLiveDispatchScope(slug, t);
       if (!Array.isArray(t.comments)) t.comments = [];
       const comment = createComment({
         by,
@@ -716,7 +715,7 @@ function createTickets(dependencies) {
         t.files = approvedFiles || boundedFiles(patch.files);
         const scopeEditAt = (/* @__PURE__ */ new Date()).toISOString();
         if (!clearCoveredScopeRequest(slug, t, scopeEditAt)) resolveScopeRequestAgainstUpdate(slug, t, patch, scopeEditAt);
-        syncLiveDispatchScope(t);
+        syncLiveDispatchScope(slug, t);
       }
       if (patch.contracts !== void 0) t.contracts = boundedContracts(patch.contracts);
       if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
