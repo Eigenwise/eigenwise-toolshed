@@ -88,6 +88,10 @@ function assertVariablesResolve(dashboard) {
   if (undeclared.length > 0) {
     throw new Error(`Dashboard references undeclared variables: ${undeclared.sort().join(', ')}`);
   }
+  const legacyAutoIntervals = JSON.stringify(dashboard).match(/\$__auto_interval_[A-Za-z0-9_]+/g);
+  if (legacyAutoIntervals) {
+    throw new Error(`Dashboard contains obsolete auto interval values: ${[...new Set(legacyAutoIntervals)].sort().join(', ')}`);
+  }
   return dashboard;
 }
 
