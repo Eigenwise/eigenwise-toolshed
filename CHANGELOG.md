@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.355.0 (2026-08-03)
+
+### sidequest 4.5.3 → 4.5.4
+
+#### Fixes
+
+- Approving a scope request left the executor blocked until it re-ran the check itself (SQ-1304) [`7456d60`](https://github.com/Eigenwise/eigenwise-toolshed/commit/7456d600)
+  Denying a scope request was one orchestrator call. Approving one was an update, a message to the executor, and a re-run by the executor, because adding the requested path to the declared files never cleared the pending request. The orchestrator could not finish its own approval either: `requestScope` refuses anyone but the claim holder, so trying to confirm an approval it had just granted came back `not_owner`, which reads like a denial. Measured on a real run, an executor sat blocked for about seven minutes on a file that had been approved the whole time, and the same round trip happened twice on one ticket. Declared-file updates now resolve a scope request they fully cover, and the refusal names the next legal action instead of only its precondition.
+
 ## v3.354.0 (2026-08-03)
 
 ### sidequest 4.5.2 → 4.5.3
