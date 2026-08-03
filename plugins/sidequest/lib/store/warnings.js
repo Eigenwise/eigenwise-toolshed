@@ -223,6 +223,28 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     }
     return [...warnings];
   }
+  const NODE_TEST_FLAGS_WITH_VALUES = /* @__PURE__ */ new Set([
+    "--test-concurrency",
+    "--test-name-pattern",
+    "--test-reporter",
+    "--test-reporter-destination",
+    "--test-shard",
+    "--test-skip-pattern",
+    "--test-timeout"
+  ]);
+  function nodeTestGlob(command) {
+    const prefix = /^node\s+--test(?:\s|$)/.exec(String(command || ""));
+    if (!prefix) return null;
+    const argumentsText = String(command).slice(prefix[0].length);
+    const tokens = [...argumentsText.matchAll(/(?:["']([^"']*)["']|([^\s;&|]+))/g)].map((match) => match[1] ?? match[2]);
+    for (let index = 0; index < tokens.length; index += 1) {
+      const token = tokens[index];
+      if (token == null) continue;
+      if (!token.startsWith("-")) return token;
+      if (!token.includes("=") && NODE_TEST_FLAGS_WITH_VALUES.has(token)) index += 1;
+    }
+    return null;
+  }
   function verifyCommandIssue(ticket, projectPath) {
     const verify = String(ticket?.executorVerify || "").trim();
     if (!verify || manualVerify(verify)) return null;
@@ -248,10 +270,9 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
       }
       return null;
     }
-    const nodeTest = /^node\s+--test\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
-    if (nodeTest) {
-      const glob = nodeTest[1] || nodeTest[2];
-      if (!fs.globSync(glob, { cwd: directory }).length) return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || "."}.`;
+    const glob = nodeTestGlob(command);
+    if (glob && !fs.globSync(glob, { cwd: directory }).length) {
+      return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || "."}.`;
     }
     return null;
   }
