@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.359.0 (2026-08-03)
+
+### sidequest 4.5.6 → 4.6.0
+
+#### Features
+
+- A completion claim never met the tree, so "verified" survived a byte-identical diff (SQ-1312) [`27e524a`](https://github.com/Eigenwise/eigenwise-toolshed/commit/27e524a0)
+  `[sidequest:verify-complete]` was only ever a liveness marker, there to stop a long verify from being reclaimed. Nothing checked that the command ran, that it passed, or that anything changed. The real diff was computed from git, but only at submission, which shared-tree runs never reach. So an executor could report three corrections applied and post verification complete against a tree byte-identical to before it started, and the first thing to notice would be a human reading the diff. Across two projects in one day that happened five times, with the orchestrator manually checking the tree every time and saying so on the ticket.
+
+  A write-scope ticket whose declared files show an empty diff since its dispatch base is now refused at completion, naming the files and offering `[sidequest:verify-complete] no-op` for the legitimately empty run. Read-only tickets are untouched, since delivering a comment and changing nothing is their whole job. Where a submission is genuinely missing, the existing refusal still wins: it names a more specific next action.
+
 ## v3.358.0 (2026-08-03)
 
 ### sidequest 4.5.5 → 4.5.6
