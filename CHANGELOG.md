@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.346.0 (2026-08-03)
+
+### model-gateway 0.46.4 → 0.47.0
+
+#### Features
+
+- One command updates the gateway, on every platform (SQ-1287) [`6911ac4`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6911ac41)
+  The proxy binary is now swapped by renaming the old one aside rather than copying over it. A running executable cannot be overwritten (EBUSY) or deleted (EPERM) on Windows, and overwriting one on Linux gives ETXTBSY, but renaming works everywhere and the running process keeps serving from the renamed file. The upgrade no longer stops the proxy to swap the file, and a failed swap can restore the previous binary because the canonical path is free by then. A stable launcher means the documented command carries no plugin version and never goes stale.
+
+### workbench 0.78.0 → 0.79.0
+
+#### Features
+
+- One command updates the gateway, on every platform (SQ-1287) [`6911ac4`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6911ac41)
+  The proxy binary is now swapped by renaming the old one aside rather than copying over it. A running executable cannot be overwritten (EBUSY) or deleted (EPERM) on Windows, and overwriting one on Linux gives ETXTBSY, but renaming works everywhere and the running process keeps serving from the renamed file. The upgrade no longer stops the proxy to swap the file, and a failed swap can restore the previous binary because the canonical path is free by then. A stable launcher means the documented command carries no plugin version and never goes stale.
+
 ## v3.345.0 (2026-08-02)
 
 ### sidequest 4.4.2 → 4.4.3

@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.345.0",
+  "version": "3.346.0",
   "plugins": [
     {
       "name": "workbench",
       "source": "./plugins/workbench",
       "description": "Set up and maintain a Claude Code workspace, and the front door to the rest of the Toolshed: initialize project-side configuration, install and update plugins, diagnose local health, and wire up local observability.",
-      "version": "0.78.0",
+      "version": "0.79.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -54,7 +54,7 @@
       "name": "model-gateway",
       "source": "./plugins/model-gateway",
       "description": "Your ChatGPT/Codex and Grok subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, and Grok mid-session like any other model. No API keys.",
-      "version": "0.46.4",
+      "version": "0.47.0",
       "author": {
         "name": "Eigenwise"
       },
