@@ -444,6 +444,27 @@ function expiredPreparedDispatch(state?: any, now?: any) {
   return Number.isFinite(preparedAt) && now - preparedAt > preparedDispatchTtlMs();
 }
 
+function recentNoCommitAttempts(state?: any) {
+  const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
+  const recent: any[] = [];
+  const rounds = new Set<string>();
+  for (let index = attempts.length - 1; index >= 0; index -= 1) {
+    const attempt = attempts[index];
+    if (!attempt?.terminalAt) continue;
+    const round = String(attempt.preparedAt || attempt.tokenPrefix || attempt.terminalAt);
+    if (rounds.has(round)) continue;
+    rounds.add(round);
+    recent.unshift(attempt);
+    if (recent.length === 2) break;
+  }
+  return recent.length === 2 && recent.every((attempt?: any) => attempt.outcome !== 'submitted') ? recent : [];
+}
+
+function repeatNoCommitDispatchError(ticket?: any, state?: any) {
+  if (recentNoCommitAttempts(state).length !== 2) return null;
+  return `prepare dispatch: ${ticket.ref} has two prior terminal dispatches without a commit. Environment visibility is the leading hypothesis. Check ignored paths, dispatch with sharedTree:true, or run inline. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
+}
+
 function worktreeIsolationWarning(slug?: any) {
   const meta = readMeta(slug);
   if (!meta || !meta.path) {
@@ -501,10 +522,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    const current = dispatchState(t);
+    const repeatFailure = repeatNoCommitDispatchError(t, current);
+    if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
     if (t.claim && t.claim.by && !claimReclaimable(t)) {
       throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
     }
-    const current = dispatchState(t);
     rederiveUnlaunchedPreparedRoute(t, slug);
     const policyCategory = getCategory(ticketCategory(t), { project: slug });
     const resolvedPolicy = policyCategory && resolveCategoryRoute(policyCategory);
@@ -618,6 +641,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       launchSeq,
       launchName: dispatchLaunchName(t.ref, t.title, launchSeq),
       route: dispatchRouteState(t.model, t.effort, preparedExec),
+      ...(repeatFailure ? {
+        repeatFailureOverride: {
+          at: now,
+          source: opts.source || opts.transport || 'store',
+          priorAttempts: recentNoCommitAttempts(current).length,
+        },
+      } : {}),
       ...(fallbackReason ? { fallbackReason } : {}),
       storyContract: contract,
       ...(contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {}),

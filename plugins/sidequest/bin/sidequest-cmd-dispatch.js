@@ -29,6 +29,7 @@ async function cmdDispatch(opts, positional) {
     prepared = store.prepareDispatch(slug, idOrRef, {
       sessionId: sessionId2,
       sharedTree: !!opts["shared-tree"],
+      allowRepeatFailure: !!opts["allow-repeat-failure"],
       transport: "cli",
       allowUnverifiedTransport: unverifiedTransport
     });

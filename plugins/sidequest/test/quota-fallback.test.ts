@@ -358,7 +358,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
 
   let bounded = createFixture('bounded attempts');
   for (let index = 0; index < 9; index++) {
-    const prepared = store.prepareDispatch(slug, bounded.ref, { sessionId: `bounded-attempt-${index}` });
+    const prepared = store.prepareDispatch(slug, bounded.ref, { sessionId: `bounded-attempt-${index}`, allowRepeatFailure: true });
     assert.equal(store.recordDispatchLaunch(slug, bounded.ref, {
       sessionId: `bounded-attempt-${index}`,
       token: prepared.token,

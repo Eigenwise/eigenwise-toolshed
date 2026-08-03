@@ -256,7 +256,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   link: 'Relate tickets; inverse automatic.',
   remove: 'Delete a ticket. Claims need force:true.',
   claim: 'Atomically claim a ticket before work. Pass the routed executor and effort; proceed only when ok:true.',
-  dispatch: 'Prepare through the ticket\'s stable route.',
+  dispatch: 'stable route.',
   done: 'Finish with report; stamp actual model and effort.',
   release: 'Release.',
   groomClose: 'Close an integrated submission.',
