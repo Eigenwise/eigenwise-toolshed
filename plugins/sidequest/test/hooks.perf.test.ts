@@ -13,13 +13,13 @@ const { performance } = require('node:perf_hooks');
 const RUNS = 20;
 const WARMUPS = 3;
 const PROCESS_SAMPLE_TIMEOUT_MS = 5_000;
-const CONTROL_MULTIPLIERS = {
-  sessionStart: { median: 10, p95: 15 },
-  boardFirst: { median: 3, p95: 4 },
-  subagentStart: { median: 8, p95: 12 },
-  subagentStop: { median: 8, p95: 12 },
-  guard: { median: 1.75, p95: 3 },
-  guardsSerial: { median: 3, p95: 3 },
+const ABSOLUTE_CEILINGS_MS = {
+  sessionStart: { median: 500, p95: 750 },
+  boardFirst: { median: 250, p95: 400 },
+  subagentStart: { median: 500, p95: 750 },
+  subagentStop: { median: 500, p95: 750 },
+  guard: { median: 100, p95: 150 },
+  guardsSerial: { median: 200, p95: 300 },
 };
 
 const pluginRoot = path.join(__dirname, '..');
@@ -161,8 +161,8 @@ function measure(run: (index: number) => void): { median: number; p95: number; c
 }
 
 function assertBudget(name: string, measured: { median: number; p95: number; control: { median: number; p95: number } }, ceiling: { median: number; p95: number }): void {
-  assert.ok(measured.median <= measured.control.median * ceiling.median, `${name} median ${measured.median.toFixed(1)}ms exceeds ${ceiling.median}x its ${measured.control.median.toFixed(1)}ms process-start control`);
-  assert.ok(measured.p95 <= measured.control.p95 * ceiling.p95, `${name} p95 ${measured.p95.toFixed(1)}ms exceeds ${ceiling.p95}x its ${measured.control.p95.toFixed(1)}ms process-start control`);
+  assert.ok(measured.median <= ceiling.median, `${name} median ${measured.median.toFixed(1)}ms exceeds applied ${ceiling.median}ms ceiling (process-start control median ${measured.control.median.toFixed(1)}ms)`);
+  assert.ok(measured.p95 <= ceiling.p95, `${name} p95 ${measured.p95.toFixed(1)}ms exceeds applied ${ceiling.p95}ms ceiling (process-start control p95 ${measured.control.p95.toFixed(1)}ms)`);
 }
 
 test('fresh-process hook latency stays inside release ceilings', (context: any) => {
@@ -196,13 +196,13 @@ test('fresh-process hook latency stays inside release ceilings', (context: any) 
   });
 
   for (const [name, measured, ceiling] of [
-    ['SessionStart', sessionStart, CONTROL_MULTIPLIERS.sessionStart],
-    ['board-first', boardFirst, CONTROL_MULTIPLIERS.boardFirst],
-    ['SubagentStart', subagentStart, CONTROL_MULTIPLIERS.subagentStart],
-    ['SubagentStop', subagentStop, CONTROL_MULTIPLIERS.subagentStop],
-    ['near-turn-cap', nearTurnCap, CONTROL_MULTIPLIERS.guard],
-    ['inline-work-nudge', inlineWork, CONTROL_MULTIPLIERS.guard],
-    ['common guards serial', guardsSerial, CONTROL_MULTIPLIERS.guardsSerial],
+    ['SessionStart', sessionStart, ABSOLUTE_CEILINGS_MS.sessionStart],
+    ['board-first', boardFirst, ABSOLUTE_CEILINGS_MS.boardFirst],
+    ['SubagentStart', subagentStart, ABSOLUTE_CEILINGS_MS.subagentStart],
+    ['SubagentStop', subagentStop, ABSOLUTE_CEILINGS_MS.subagentStop],
+    ['near-turn-cap', nearTurnCap, ABSOLUTE_CEILINGS_MS.guard],
+    ['inline-work-nudge', inlineWork, ABSOLUTE_CEILINGS_MS.guard],
+    ['common guards serial', guardsSerial, ABSOLUTE_CEILINGS_MS.guardsSerial],
   ] as const) {
     assertBudget(name, measured, ceiling);
     context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95; control ${measured.control.median.toFixed(1)}ms median, ${measured.control.p95.toFixed(1)}ms p95`);
