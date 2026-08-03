@@ -196,6 +196,7 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.match(descriptionPacket![1], /Description truncated at 8 KB/);
   assert.match(briefing, /Comment packet \(newest-first excerpts; read full history only when flagged below\):/);
   assert.match(briefing, new RegExp(ticket.executorVerify));
+  assert.match(briefing, /Verify completion discipline: run the declared verify command in the foreground/);
   assert.match(briefing, /plugins\/sidequest\/src\/lib\/agentsync\.ts/);
   assert.match(briefing, /briefing\.png/);
 });
