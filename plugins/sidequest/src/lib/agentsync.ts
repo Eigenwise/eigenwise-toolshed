@@ -162,7 +162,7 @@ const EXECUTOR_SKILLS = ['playbook:verify-discipline'];
 // definition, ten definitions over, purely to leave Edit/Write/NotebookEdit out. It also
 // had two failures nobody chose: any tool added later was invisible until someone updated
 // the list, and every non-board MCP server was silently excluded — which is why
-// visual-review, a read-only category, could not reach Playwright.
+// visual-evaluation, a read-only category, could not reach Playwright.
 //
 // This is not a write-proof sandbox and should not be described as one. Bash stays,
 // because a reviewer has to be able to run the suite, and Bash can obviously write.

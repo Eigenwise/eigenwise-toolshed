@@ -282,9 +282,16 @@ test('warns when tracked package build output is omitted from source scope', () 
   assert.deepStrictEqual(included.warnings, []);
 });
 
-test('warns only when a readonly ticket signals browser or visual work', () => {
-  const browser = cliJson(['add', '-t', 'visual review', '--category', 'source-lookup', '--description', 'Open the browser and take a screenshot.']);
-  assert.deepStrictEqual(browser.warnings, [READONLY_BROWSER_WARNING]);
+test('warns only for visual-evaluation and legacy visual-review categories', () => {
+  const visualEvaluation = cliJson(['add', '-t', 'rendered flow review', '--category', 'visual-evaluation', '--description', 'Review the rendered flow.']);
+  assert.deepStrictEqual(visualEvaluation.warnings, [READONLY_BROWSER_WARNING]);
+
+  cliJson(['category', 'add', 'visual-review', '--route-model', 'sonnet', '--route-effort', 'high', '--no-fallback', '--readonly', 'true']);
+  const visualReview = cliJson(['add', '-t', 'legacy rendered flow review', '--category', 'visual-review', '--description', 'Review the rendered flow.']);
+  assert.deepStrictEqual(visualReview.warnings, [READONLY_BROWSER_WARNING]);
+
+  const incidental = cliJson(['add', '-t', 'source lookup', '--category', 'source-lookup', '--description', 'Open the browser and take a screenshot.']);
+  assert.deepStrictEqual(incidental.warnings, []);
 
   const ordinary = cliJson(['add', '-t', 'read docs', '--category', 'source-lookup', '--description', 'Read the existing docs.']);
   assert.deepStrictEqual(ordinary.warnings, []);
