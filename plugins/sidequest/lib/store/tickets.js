@@ -221,7 +221,7 @@ function createTickets(dependencies) {
   }
   function syncLiveDispatchScope(ticket) {
     const dispatch = dispatchState(ticket);
-    if (dispatch && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
+    if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
   }
   function resolveScopeRequestAgainstUpdate(slug, ticket, patch, now) {
     const request = ticket?.scopeRequest;

@@ -114,21 +114,22 @@ test('CLI scope-request keeps the claim while update --files approves the additi
   assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
 });
 
-test('CLI update reports a scope request that remains pending after a partial approval', () => {
-  const t = addTicket('partial scope update warning');
+test('CLI update resolves a scope request partially instead of leaving it pending', () => {
+  const t = addTicket('partial scope update resolution');
   const by = 'partial-scope-worker';
   assert.strictEqual(runCli(['claim', t.ref, '--by', by, '--direct', '--reason', 'The scope request fixture requires a local direct claim.']).status, 0);
   assert.strictEqual(runCli(['scope-request', t.ref, '--by', by, '--files', 'lib/new.js,other/new.js']).status, 0);
 
   const partial = runCli(['update', t.ref, '--by', 'scope-approval-orchestrator', '--files', 'lib/fixture.js,lib/new.js']);
   assert.strictEqual(partial.status, 0, partial.stderr + partial.stdout);
-  assert.match(partial.stdout, /Scope request remains pending/);
-  assert.match(partial.stdout, /other\/new\.js/);
-  assert.match(partial.stdout, new RegExp(`sidequest update ${t.ref} --files`));
-  assert.deepStrictEqual(store.getTicket(slug, t.ref).scopeRequest.files, ['lib/new.js', 'other/new.js']);
-
-  assert.strictEqual(runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js,other/new.js']).status, 0);
-  assert.strictEqual(store.getTicket(slug, t.ref).scopeRequest, null);
+  assert.doesNotMatch(partial.stdout, /Scope request remains pending/);
+  const resolved = store.getTicket(slug, t.ref);
+  assert.strictEqual(resolved.scopeRequest, null, 'a control-plane files edit rules on the request');
+  assert.deepStrictEqual(resolved.files, ['lib/fixture.js', 'lib/new.js']);
+  const ruling = resolved.comments.at(-1).body;
+  assert.match(ruling, /granted lib\/new\.js/);
+  assert.match(ruling, /not granted: other\/new\.js/);
+  assert.strictEqual(resolved.claim.by, by, 'the ruling never disturbs the claim');
   assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
 });
 

@@ -202,12 +202,15 @@ function clearCoveredScopeRequest(slug?: any, ticket?: any, now?: any) {
   return true;
 }
 
-// Declared scope IS ticket.files for a live run; the dispatch snapshot exists
-// for terminal forensics. Commit enforcement reads the snapshot, so letting the
-// two diverge gates the executor against a set nobody can see or repair.
+// For an isolated run, declared scope IS ticket.files; the dispatch snapshot
+// exists for terminal forensics. Commit enforcement reads the snapshot, so
+// letting the two diverge gates the executor against a set nobody can see or
+// repair. Shared-tree dispatches are excluded on purpose: their authority
+// (artifact mode, artifact root, and the scope encoding it) is pinned at
+// dispatch time precisely so a mid-run ticket edit cannot flip it.
 function syncLiveDispatchScope(ticket?: any) {
   const dispatch = dispatchState(ticket);
-  if (dispatch && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
+  if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
 }
 
 // A control-plane scope edit is itself the ruling on any pending request: the
