@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.357.0 (2026-08-03)
+
+### model-gateway 0.47.1 → 0.48.0
+
+#### Features
+
+- The shim worker binds its own port and reports it, instead of the supervisor guessing (SQ-1307) [`0e79ad4`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0e79ad46)
+  The worker port was computed as 20000 + (supervisorPort % 20000), which is the identity function for every port in 20000-39999. On Linux, whose default ephemeral range overlaps that band, the worker was told to bind the port the supervisor already held, never started, and hung the suite until the six-hour CI job timeout. Windows never reached it because its dynamic range starts above 49152. No arithmetic fixes this: any computed port is a guess about what is free while the OS allocates from the same space, and a first attempt using supervisorPort + 1 traded the Linux failure for a Windows one. The worker now binds an ephemeral port and reports it to the supervisor over IPC. A missing report is a bounded, named startup failure rather than a silent fallback.
+
 ## v3.356.0 (2026-08-03)
 
 ### sidequest 4.5.4 → 4.5.5
