@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.354.0 (2026-08-03)
+
+### sidequest 4.5.2 → 4.5.3
+
+#### Fixes
+
+- A hanging test now names itself instead of stalling CI (SQ-1303) [`21f0134`](https://github.com/Eigenwise/eigenwise-toolshed/commit/21f0134e)
+  Fallback suites run with node --test --test-timeout=30000, so a test that hangs fails with its own name and location instead of stalling silently. The affected-plugin CI job also gained timeout-minutes: 10; it previously had no timeout at all, so one hung test held the workflow concurrency slot for the GitHub six-hour default and every release queued behind it was evicted. Measured headroom: the slowest legitimate fallback test is 4.5s and the slowest whole suite 18.3s.
+
 ## v3.353.0 (2026-08-03)
 
 ### observability 0.2.1 → 0.2.2
