@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.363.0 (2026-08-03)
+
+### sidequest 4.9.0 → 4.10.0
+
+#### Features
+
+- Scope requests fail open, resolve partially, and never desync the dispatch record (SQ-1321) [`d97b27d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/d97b27d1)
+  Every project running Sidequest was getting stuck on scope. Four incidents on the toolshed board in one day, plus a board where an unbound dispatch (`agentId: null, boundAt: null`) made every scope request fail `worktree_unavailable` for the executor and the orchestrator alike, on a live claim neither could fix.
+
+  Four changes. The scope-request marker is now a best-effort recovery breadcrumb instead of a gate, so a request always files even when the worktree never bound. A files update by a distinct control-plane identity now rules on the pending request: requested paths inside the new scope are granted, the rest refused, with a comment naming both, so correcting one bad path in an otherwise good request no longer strands the run in a state where the request can neither be re-filed nor approved. `dispatch.declaredFiles`, which is what commit enforcement actually reads, now follows every successful files update and every denial, and `pulse` warns when a legacy record still diverges from the ticket. Denial comments state the scope actually in force instead of asserting it "remains unchanged" two lines under a ruling that changed it.
+
 ## v3.362.0 (2026-08-03)
 
 ### sidequest 4.8.0 → 4.9.0
