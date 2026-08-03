@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.349.0 (2026-08-03)
+
+### model-gateway 0.47.0 → 0.47.1
+
+#### Fixes
+
+- Test listeners get real ephemeral ports instead of a shared fixed one (SQ-1292) [`ae349f9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ae349f99)
+  Asking the shim for an ephemeral port did not give you one: the worker port was computed as 20000 + (port % 20000), so a requested port of 0 collapsed to a hardcoded 20000 for every caller. Parallel test files then collided on it, the shim failed to start, and the CI job either failed with EADDRINUSE or hung to the six-hour timeout. The worker port is now derived from the port the OS actually assigned, and both the supervisor and worker log the port they bound rather than the one they asked for.
+
 ## v3.348.0 (2026-08-03)
 
 ### sidequest 4.5.0 → 4.5.1
