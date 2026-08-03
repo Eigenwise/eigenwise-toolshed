@@ -152,7 +152,7 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     };
     const text = String(source || "");
     for (const directories of text.matchAll(/export\s+const\s+nonBundledBuildDirectories\s*=\s*\[([^\]]*)\]/g)) {
-      for (const directory of directories[1].matchAll(/["']([^"']+)["']/g)) add(directory[1], directory[1]);
+      for (const directory of (directories[1] || "").matchAll(/["']([^"']+)["']/g)) add(directory[1], directory[1]);
     }
     for (const match of text.matchAll(/--(?:outdir|out-dir|output-dir)\s*(?:=|\s+)\s*["']?([^"'\s;&]+)/gi)) add(match[1]);
     for (const match of text.matchAll(/(?:outdir|outDir|outputDir)\s*:\s*["']([^"']+)["']/g)) add(match[1]);
