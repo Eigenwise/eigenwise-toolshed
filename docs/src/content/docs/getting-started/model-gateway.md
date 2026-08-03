@@ -14,7 +14,7 @@ Model Gateway must be installed for your user account:
 
 Gateway wiring is global-only. `env --write-user` writes `~/.claude/settings.json`, `--write-project` is retired, and the keepalive hook must be live in every project and every executor worktree. Do not choose a project-scoped wiring mode.
 
-The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. Gateway updates replace the worker behind a listener that stays bound, so open sessions keep their connection while an in-flight request drains or retries. Use `/model-gateway:model-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-gpt-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
+The setup skill installs or updates the proxy, checks authentication, and starts the local gateway. To update an installed gateway, run exactly `node ~/.claude/model-gateway/update.js`. It downloads and verifies the proxy, swaps the executable by rename while the old process keeps serving, restarts it when it can, and reports the resulting state. Use `/model-gateway:model-gateway doctor` when the picker is missing models or the gateway port is unavailable. Once it is healthy, choose a `claude-gpt-*` model with `/model`; regular Claude model ids continue to use the Anthropic API.
 
 The gateway rows are named after the model they run, with the `claude-` prefix Claude Code's discovery requires: `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, `claude-gpt-5.6-luna`, and their `-fast` variants. The older `claude-codex-gpt-*` ids still resolve, so a project that remembers one of them keeps working; the picker only lists the new names.
 
@@ -65,7 +65,7 @@ Optional process overrides cover ports, context and compaction thresholds, strea
 
 ### Upgrade behavior
 
-The gateway uses one supervisor and reports both installed and serving versions. If an old supervisor is still serving a previous plugin version, `doctor` reports `serving-version-mismatch`; run `ensure` to replace it before trusting the model catalog or dispatch route.
+The gateway uses one supervisor and reports both installed and serving versions. If the proxy on disk differs from the process still serving, `ensure` retries the restart on its next run. The stable updater leaves a locked old executable as a `.old-*` file and cleans it up on a later setup or ensure, once the operating system releases it.
 
 ### Add Grok subscription models
 
@@ -88,7 +88,7 @@ The gateway pins Claude's Opus, Sonnet, and Fable aliases to their shipped 1M mo
 ### Troubleshooting
 
 :::caution
-If a Windows upgrade hits a locked executable, the old proxy is retained. Reboot, then run `node <plugin>/bin/model-gateway.js setup`.
+If the operating system still holds an old proxy executable, the stable updater keeps it as a `.old-*` file and tries to remove it on later setup or ensure runs. The new proxy is already installed at the canonical path, so keep using the gateway normally.
 :::
 
 `/compact` on a Codex model used to fail with `websocket_missing_terminal` or "Server error mid-response" while the same conversation compacted fine on a Claude model. The proxy streams over a WebSocket that can only recover from a dropped connection before its first chunk of output, and a compaction turn spends minutes past that point. The gateway now buffers the translated stream for compaction requests only and retries the whole turn on the same model if it ends without a terminal event, so a failed attempt never reaches your session. Normal turns keep streaming live. Set `CODEX_GATEWAY_COMPACT_STREAM_RETRIES` to change the retry count (default 2) or `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0` to turn it off; `/healthz` reports the live settings under `compaction`.

@@ -50,6 +50,7 @@ const SHIM_FAILURE_PATH = path.join(STATE, 'shim-supervisor-failure.txt');
 const CODEX_UPSTREAM_BLOCK_PATH = path.join(STATE, 'codex-upstream-blocked.json');
 const PLUGIN_VERSION = readPluginVersion();
 const PROXY_BIN = path.join(BIN_DIR, WIN ? 'claude-code-proxy.exe' : 'claude-code-proxy');
+const PROXY_SERVING_VERSION_PATH = path.join(STATE, 'proxy-serving-version.txt');
 const PUBLIC_SHIM_PORT = Number(process.env.CODEX_GATEWAY_PORT || 18764);
 const SHIM_PORT = Number(process.env.CODEX_GATEWAY_WORKER_PORT || PUBLIC_SHIM_PORT);
 const PROXY_PORT = Number(process.env.CODEX_GATEWAY_PROXY_PORT || 18765);
@@ -321,8 +322,78 @@ function noteCodexUpstreamRejection(statusCode, headers, body) {
 
 // ------------------------------------------------------------------- setup
 
+function proxyVersion(version) {
+  return Array.isArray(version) ? version.join('.') : null;
+}
+
+function currentProxyVersion(binary = PROXY_BIN) {
+  return proxyVersion(parseSemver((spawnSync(binary, ['--version'], { encoding: 'utf8', windowsHide: true }).stdout || '').trim()));
+}
+
+function oldProxyPath(currentPath, version, now = Date.now()) {
+  return `${currentPath}.old-${version || 'unknown'}-${now}`;
+}
+
+function sweepOldProxyBinaries({ directory = BIN_DIR, basename = path.basename(PROXY_BIN), fsImpl = fs } = {}) {
+  let entries;
+  try { entries = fsImpl.readdirSync(directory); } catch { return; }
+  for (const entry of entries) {
+    if (!String(entry).startsWith(`${basename}.old-`)) continue;
+    try { fsImpl.rmSync(path.join(directory, entry)); } catch {}
+  }
+}
+
+function replaceProxyBinary({ currentPath = PROXY_BIN, stagedPath, currentVersion, fsImpl = fs, now = Date.now() } = {}) {
+  const hadExistingProxy = fsImpl.existsSync(currentPath);
+  const previousPath = hadExistingProxy ? oldProxyPath(currentPath, proxyVersion(currentVersion), now) : null;
+  if (hadExistingProxy) fsImpl.renameSync(currentPath, previousPath);
+  try {
+    fsImpl.renameSync(stagedPath, currentPath);
+  } catch (error) {
+    if (previousPath) fsImpl.renameSync(previousPath, currentPath);
+    throw new Error(`proxy upgrade failed (${error.code || error.message}); original proxy restored.`, { cause: error });
+  }
+  return { hadExistingProxy, previousPath };
+}
+
+function readProxyServingVersion(file = PROXY_SERVING_VERSION_PATH) {
+  try { return fs.readFileSync(file, 'utf8').trim() || null; } catch { return null; }
+}
+
+function writeProxyServingVersion(version, file = PROXY_SERVING_VERSION_PATH) {
+  if (!version) return;
+  fs.writeFileSync(file, `${version}\n`);
+}
+
+async function waitForProxyExit({ listening = portListening, attempts = 7, delay = 100 } = {}) {
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    if (!(await listening(PROXY_PORT))) return true;
+    await new Promise((resolve) => setTimeout(resolve, delay));
+  }
+  return false;
+}
+
+async function restartProxyForVersionChange({ previousVersion, currentVersion = currentProxyVersion(), listening = portListening, stop = stopProcess, start = spawnDetached } = {}) {
+  if (previousVersion) writeProxyServingVersion(previousVersion);
+  if (await listening(PROXY_PORT)) stop('proxy');
+  if (!(await waitForProxyExit({ listening }))) return false;
+  start('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
+  writeProxyServingVersion(currentVersion);
+  return true;
+}
+
+async function restartProxyIfOutdated({ quiet = false } = {}) {
+  const onDisk = currentProxyVersion();
+  const serving = readProxyServingVersion() || onDisk;
+  if (!onDisk || !serving || onDisk === serving) return { restarted: false, onDisk, serving };
+  const restarted = await restartProxyForVersionChange({ previousVersion: serving, currentVersion: onDisk });
+  if (!restarted && !quiet) log(`proxy on disk: ${onDisk}   serving: ${serving}   restarts on next \`ensure\``);
+  return { restarted, onDisk, serving };
+}
+
 async function setup() {
   mkdirs();
+  sweepOldProxyBinaries();
   const arch = process.arch === 'arm64' ? 'arm64' : 'amd64';
   const plat = WIN ? 'windows' : process.platform === 'darwin' ? 'darwin' : 'linux';
   const ext = WIN ? 'zip' : 'tar.gz';
@@ -366,29 +437,11 @@ async function setup() {
   const proxyChanged = !currentVersion || !stagedVersion || currentVersion.join('.') !== stagedVersion.join('.');
 
   if (proxyChanged) {
-    const backupProxy = `${PROXY_BIN}.previous`;
-    const hadExistingProxy = fs.existsSync(PROXY_BIN);
-    if (hadExistingProxy) fs.copyFileSync(PROXY_BIN, backupProxy);
-    log('model-gateway: proxy changed; restarting it after the shim drain. Live sessions will reconnect.');
-    stopProcess('proxy');
-    await new Promise((resolve) => setTimeout(resolve, 700));
-    try {
-      fs.copyFileSync(stagedProxy, PROXY_BIN);
-      if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
-      try { fs.rmSync(backupProxy); } catch { /* absent */ }
-    } catch (error) {
-      if (hadExistingProxy) {
-        try {
-          fs.copyFileSync(backupProxy, PROXY_BIN);
-          if (!WIN) fs.chmodSync(PROXY_BIN, 0o755);
-          spawnDetached('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
-        } catch (restoreError) {
-          throw new Error(`proxy upgrade failed (${error.code || error.message}) and restoring the existing proxy failed (${restoreError.code || restoreError.message})`);
-        }
-        throw new Error(`The existing proxy was restored. Reboot Windows, run \`node "${CLI_PATH}" setup\`, then retry.`);
-      }
-      throw error;
-    }
+    const previousVersion = proxyVersion(currentVersion);
+    const installedVersion = proxyVersion(stagedVersion);
+    replaceProxyBinary({ stagedPath: stagedProxy, currentVersion });
+    const restarted = await restartProxyForVersionChange({ previousVersion, currentVersion: installedVersion });
+    if (!restarted) log(`proxy on disk: ${installedVersion || 'unknown'}   serving: ${previousVersion || 'unknown'}   restarts on next \`ensure\``);
   } else {
     log('model-gateway: proxy unchanged; keeping its authenticated process running.');
   }
@@ -423,9 +476,11 @@ async function setup() {
       writeEnv(current.scope, false, { mode, quiet: true });
       log('already wired; refreshed Claude alias pins. Restart Claude Code and open /model');
     }
+    await statusReport();
     return;
   }
   writeEnv(selectedWiringScope(), false, { mode });
+  await statusReport();
 }
 
 // ------------------------------------------------------- process management
@@ -467,6 +522,7 @@ async function startAll({ quiet = false } = {}) {
   let started = [];
   if (!(await portListening(PROXY_PORT))) {
     spawnDetached('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
+    writeProxyServingVersion(currentProxyVersion());
     started.push('proxy');
   }
   const health = await fetchShimHealth();
@@ -1678,6 +1734,7 @@ const commands = {
   ensure: async () => {
     cleanLegacyEnvSettings();
     cleanLegacyGatewayModelCache();
+    sweepOldProxyBinaries();
     const quiet = flag('--quiet');
     const wired = isWired();
     const initialReadiness = await getCodexReadiness();
@@ -1689,6 +1746,7 @@ const commands = {
       log('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
       process.exit(0);
     }
+    await restartProxyIfOutdated({ quiet });
     const result = await startAll({ quiet });
     if (!result.ok) { console.error('model-gateway: ' + result.reason); process.exit(1); }
     const readiness = await getCodexReadiness();
@@ -1751,6 +1809,11 @@ module.exports = {
   WIRING_CONFIG_PATH,
   parseSemver,
   semverLt,
+  oldProxyPath,
+  replaceProxyBinary,
+  restartProxyForVersionChange,
+  restartProxyIfOutdated,
+  sweepOldProxyBinaries,
   shimNeedsRestart,
   servingShimVersion,
   restartShimIfOutdated,

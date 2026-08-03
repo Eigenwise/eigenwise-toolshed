@@ -49,7 +49,7 @@ The bundled commands live under the plugin's `bin/` directory: `update-toolshed 
 
 ## Updates
 
-Use `/workbench:update-toolshed` to refresh installed Toolshed plugins and the gateway proxy. It leaves third-party marketplaces and plugins alone, then tells you which affected Toolshed sessions to reload.
+Use `/workbench:update-toolshed` to refresh installed Toolshed plugins and the gateway proxy. It leaves third-party marketplaces and plugins alone, then runs `node ~/.claude/model-gateway/update.js` for Model Gateway and surfaces its resulting state before telling you which affected Toolshed sessions to reload.
 
 It removes registry entries for deleted Sidequest agent worktrees, writes a timestamped registry backup first, and reports every removal. Other missing project directories are still skipped and reported without changing the registry.
 
