@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.360.0 (2026-08-03)
+
+### sidequest 4.6.0 → 4.7.0
+
+#### Features
+
+- "I am blocked" carried no burden of proof (SQ-1313) [`30ea7cb`](https://github.com/Eigenwise/eigenwise-toolshed/commit/30ea7cb6)
+  A completion claim eventually meets a verify. A blocker claim met nothing: `release --reason` was free text, so a run could end by asserting a build failure or a hung suite and the board would record the assertion verbatim. Every blocker claimed in one day's work turned out to be false. A plugin reported absent was present, a suite reported hung passed 800 tests in three and a half minutes, and generated-output drift exited clean on the very checkpoint that reported it. Each took under five minutes to disprove, which is the problem: a false blocker is indistinguishable from a real one until someone spends the five minutes, so every release had to be treated as suspect.
+
+  Releases now carry a `kind`, and a `technical_blocker` must supply the failing command, its exit code, and an output tail. A scope pause, a ticket-versus-code contradiction, and a deliberate handback stay a single call with nothing to prove, because those are honest and making them expensive would train executors out of the one behavior that already works. MCP and the CLI share the same predicate, so neither surface can become the lenient one.
+
 ## v3.359.0 (2026-08-03)
 
 ### sidequest 4.5.6 → 4.6.0
