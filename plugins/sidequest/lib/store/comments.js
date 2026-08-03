@@ -7,6 +7,7 @@ function createComments(dependencies) {
     queueEventNotification,
     recordClaimVerification,
     touchClaimActivity,
+    verificationCompletionCheck,
     withTicketLock
   } = dependencies;
   const COMMENT_BODY_MAX = 16e3;
@@ -57,6 +58,8 @@ function createComments(dependencies) {
     return withTicketLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
       if (!t) return { ok: false, reason: "not_found" };
+      const verification = verificationCompletionCheck(slug, t, prepared);
+      if (!verification.ok) return Object.assign({ ticket: t }, verification);
       if (!Array.isArray(t.comments)) t.comments = [];
       const comment = createComment(prepared);
       t.comments.push(comment);

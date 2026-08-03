@@ -597,6 +597,28 @@ const {
   transaction,
   writeGlobal
 });
+function completionTreeCheck(slug, ticket, opts) {
+  const state = dispatchState(ticket);
+  if (!state || state.readonly === true || state.nonRepoOutput === true) return { ok: true, applicable: false };
+  const declaredFiles = Array.isArray(state.declaredFiles) ? state.declaredFiles : normalizeFiles(ticket?.files);
+  if (!declaredFiles.length) return { ok: true, applicable: false };
+  const delta = dispatchDelta(slug, ticket);
+  if (!delta.ok) {
+    return {
+      ok: false,
+      reason: "dispatch_delta_unavailable",
+      message: `${ticket.ref} cannot inspect its declared write scope since dispatch base. Declared files: ${declaredFiles.join(", ")}. Restore the dispatch worktree or release and dispatch again.`
+    };
+  }
+  const changedPaths = Array.from(/* @__PURE__ */ new Set([...delta.working, ...delta.committed])).filter((file) => commitScope.isInScope(file, declaredFiles)).sort();
+  if (changedPaths.length || opts?.explicitNoOp === true) return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
+  return {
+    ok: false,
+    reason: "empty_declared_scope",
+    declaredFiles,
+    message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op; otherwise make and verify the scoped change before completing.`
+  };
+}
 const {
   DEFAULT_CLAIM_ABANDON_MIN,
   DEFAULT_CLAIM_IDLE_MIN,
@@ -612,10 +634,12 @@ const {
   claimVerification,
   preparedDispatchTtlMs,
   recordClaimVerification,
+  verificationCompletionCheck,
   resumableScopePause,
   touchClaim,
   touchClaimActivity
 } = createClaims({
+  completionTreeCheck,
   dispatchState,
   fs,
   getTicket,
@@ -641,6 +665,7 @@ const {
   queueEventNotification,
   recordClaimVerification,
   touchClaimActivity,
+  verificationCompletionCheck,
   withTicketLock
 });
 const {
@@ -827,6 +852,7 @@ const {
   claimReclaimable,
   clearScopeRequestMarker,
   commitScope,
+  completionTreeCheck,
   coerceStatus,
   createComment,
   crypto,
@@ -1327,20 +1353,13 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const activeNonRepoOutput = dispatch2?.nonRepoOutput === true && liveClaim && activeDispatch;
     const activeReadOnlyDispatch = dispatch2?.readonly === true && liveClaim && activeDispatch;
     let sharedTreeCommittedScope = false;
+    let completionDelta = null;
     if (executorDone && liveClaim && activeDispatch) {
-      const delta = dispatchDelta(slug, t);
-      if (!delta.ok && dispatch2?.sharedTree === true && dispatch2?.baseCommit) {
-        return {
-          ok: false,
-          reason: "dispatch_delta_unavailable",
-          message: `${t.ref} cannot inspect the full dispatch delta before done closeout. Restore the dispatch worktree or release the ticket and dispatch again.`,
-          ticket: t
-        };
-      }
-      if (delta.ok && !activeArtifactDispatch) {
-        const scopedCommitted = delta.committed.filter((file) => commitScope.isInScope(file, declaredFiles));
+      completionDelta = dispatchDelta(slug, t);
+      if (completionDelta.ok && !activeArtifactDispatch) {
+        const scopedCommitted = completionDelta.committed.filter((file) => commitScope.isInScope(file, declaredFiles));
         sharedTreeCommittedScope = dispatch2?.sharedTree === true && scopedCommitted.length > 0;
-        const scopedWorking = delta.working.filter((file) => commitScope.isInScope(file, declaredFiles));
+        const scopedWorking = completionDelta.working.filter((file) => commitScope.isInScope(file, declaredFiles));
         const scopedChanges = activeReadOnlyDispatch ? Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted])) : [];
         if (scopedChanges.length) {
           const paths = scopedChanges.sort();
@@ -1376,6 +1395,18 @@ function releaseTicket(slug, idOrRef, by, opts) {
         message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
         ticket: t
       };
+    }
+    if (executorDone && liveClaim && activeDispatch) {
+      const completion = completionTreeCheck(slug, t, { explicitNoOp: opts.cleanDeclaredScope === true });
+      if (!completion.ok) return Object.assign({ ticket: t }, completion);
+      if (!completionDelta?.ok && dispatch2?.sharedTree === true && dispatch2?.baseCommit) {
+        return {
+          ok: false,
+          reason: "dispatch_delta_unavailable",
+          message: `${t.ref} cannot inspect the full dispatch delta before done closeout. Restore the dispatch worktree or release the ticket and dispatch again.`,
+          ticket: t
+        };
+      }
     }
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
