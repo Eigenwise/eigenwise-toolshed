@@ -21,6 +21,12 @@ test('claim refusal guidance always gives an actionable next step', () => {
   }
 });
 
+test('not-owner guidance does not tell callers to use the claim holder identity', () => {
+  const message = claimRefusalMessage('not_owner', 'SQ-42', { by: 'other-worker' });
+  assert.match(message, /ask the claim holder to release/i);
+  assert.doesNotMatch(message, /--by <claim-owner>|--by other-worker/i);
+});
+
 test('dispatch-required guidance names both routed and direct claim paths', () => {
   const message = claimRefusalMessage('dispatch_required', 'SQ-42');
   assert.match(message, /dispatch/i);

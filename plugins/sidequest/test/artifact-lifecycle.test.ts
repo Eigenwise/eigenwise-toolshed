@@ -536,7 +536,7 @@ test('description and files mutations after dispatch do not flip pinned artifact
   };
   assert.throws(
     () => store.updateTicket(slug, ordinary.ref, ordinaryPatch),
-    new RegExp(`${ordinary.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Use \`sidequest scope-request ${ordinary.ref} --file <path> --by ordinary-mutation-worker\` to request approval\\.`),
+    new RegExp(`${ordinary.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Re-run \`sidequest update ${ordinary.ref} --files <paths> --by <your-id>\` using your own control-plane identity`),
   );
   store.updateTicket(slug, ordinary.ref, { ...ordinaryPatch, by: 'control-plane' });
   const mutatedOrdinary = store.getTicket(slug, ordinary.ref);
@@ -553,7 +553,7 @@ test('description and files mutations after dispatch do not flip pinned artifact
   };
   assert.throws(
     () => store.updateTicket(slug, artifact.ref, artifactPatch),
-    new RegExp(`${artifact.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Use \`sidequest scope-request ${artifact.ref} --file <path> --by artifact-mutation-worker\` to request approval\\.`),
+    new RegExp(`${artifact.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Re-run \`sidequest update ${artifact.ref} --files <paths> --by <your-id>\` using your own control-plane identity`),
   );
   store.updateTicket(slug, artifact.ref, { ...artifactPatch, by: 'control-plane' });
   const mutatedArtifact = store.getTicket(slug, artifact.ref);

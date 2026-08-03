@@ -649,7 +649,11 @@ function createTickets(dependencies) {
       ...next.filter((file) => !currentFiles.has(file.toLowerCase())),
       ...current.filter((file) => !nextFiles.has(file.toLowerCase()))
     ];
-    return `${ticket.ref}: refusing active-claim scope change for ${refused.join(", ")}. Use \`sidequest scope-request ${ticket.ref} --file <path> --by ${ticket.claim.by}\` to request approval.`;
+    const refusal = `${ticket.ref}: refusing active-claim scope change for ${refused.join(", ")}.`;
+    if (!caller) {
+      return `${refusal} Re-run \`sidequest update ${ticket.ref} --files <paths> --by <your-id>\` using your own control-plane identity (MCP \`update\` with \`by:"<your-id>"\`).`;
+    }
+    return `${refusal} Use \`sidequest scope-request ${ticket.ref} --file <path> --by ${ticket.claim.by}\` to request approval.`;
   }
   function updateTicket(slug, idOrRef, patch) {
     const found = getTicket(slug, idOrRef);
