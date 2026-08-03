@@ -1,4 +1,5 @@
 "use strict";
+const { resolveSuite } = require("../suite-resolver.js");
 function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
   const DISPATCH_DESCRIPTION_MIN = 80;
   const DISPATCH_DESCRIPTION_GUIDANCE = "the executor's entire brief is this ticket; add a description (Where / Contract / Verify) and a verify command, then dispatch";
@@ -217,16 +218,61 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     }
     return [...warnings];
   }
-  function verifyCommandWarning(ticket, projectPath) {
+  function verifyCommandIssue(ticket, projectPath) {
     const verify = String(ticket?.executorVerify || "").trim();
-    if (!verify) return null;
+    if (!verify || manualVerify(verify)) return null;
     const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
-    if (!match) return "Planning-depth warning: record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.";
+    if (!match) return "record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.";
     const directory = path.resolve(String(projectPath || ""), match[1] || match[2]);
     if (!projectPath || !relativePathWithin(projectPath, directory) || !fs.existsSync(directory)) {
-      return "Planning-depth warning: the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.";
+      return "the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.";
+    }
+    const command = verify.slice(match[0].length).trim();
+    const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? "test" : null;
+    const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
+    const script = npmTest || npmRun && (npmRun[1] || npmRun[2]);
+    if (script) {
+      let scripts;
+      try {
+        scripts = JSON.parse(fs.readFileSync(path.join(directory, "package.json"), "utf8")).scripts;
+      } catch (_) {
+        return `\`${npmTest ? "npm test" : `npm run ${script}`}\` requires ${path.join(relativePathWithin(projectPath, directory) || ".", "package.json").replace(/\\/g, "/")}.`;
+      }
+      if (!scripts || !scripts[script]) {
+        return `\`${npmTest ? "npm test" : `npm run ${script}`}\` requires a \`${script}\` script in ${path.join(relativePathWithin(projectPath, directory) || ".", "package.json").replace(/\\/g, "/")}.`;
+      }
+      return null;
+    }
+    const nodeTest = /^node\s+--test\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
+    if (nodeTest) {
+      const glob = nodeTest[1] || nodeTest[2];
+      if (!fs.globSync(glob, { cwd: directory }).length) return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || "."}.`;
     }
     return null;
+  }
+  function derivedVerifyCommand(ticket, projectPath) {
+    if (!projectPath) return null;
+    const plugins = /* @__PURE__ */ new Set();
+    for (const scope of normalizeFiles(ticket?.files)) {
+      const relative = relativePathWithin(projectPath, path.resolve(projectPath, scope))?.replace(/\\/g, "/");
+      const match = relative && /^plugins\/([^/]+)(?:\/|$)/.exec(relative);
+      if (match) plugins.add(`plugins/${match[1]}`);
+    }
+    if (plugins.size !== 1) return null;
+    const directory = [...plugins][0];
+    return resolveSuite(projectPath, { name: path.basename(directory), dir: directory });
+  }
+  function verifyCommandWarning(ticket, projectPath) {
+    const issue = verifyCommandIssue(ticket, projectPath);
+    return issue ? `Planning-depth warning: ${issue}` : null;
+  }
+  function dispatchVerifyCommandError(ticket, projectPath) {
+    if (manualVerify(ticket?.executorVerify)) return null;
+    const issue = verifyCommandIssue(ticket, projectPath);
+    if (!issue || /^(?:record verify commands|the recorded verify command changes)/.test(issue)) return null;
+    const suite = derivedVerifyCommand(ticket, projectPath);
+    const suggestion = suite ? ` Use \`cd ${suite.cwd} && ${suite.command}\` instead.` : "";
+    return `dispatch: verify command cannot run: ${issue}${suggestion}`;
   }
   function dispatchDescriptionError(ticket) {
     if (!ticket || !ticket.model || !ticket.effort) return null;
@@ -504,6 +550,6 @@ ${ticket?.description || ""}`;
   function requestedReadonlyOverride(fields) {
     return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, dispatchUncertaintyWarnings, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, dispatchUncertaintyWarnings, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 module.exports = { createWarnings };
