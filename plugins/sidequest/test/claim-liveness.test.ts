@@ -512,3 +512,66 @@ test('the idle backstop only applies when no executor is associated', () => {
   backdateClaim(routed.ref, 2 * HOUR);
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a live executor is not idle just because it is quiet');
 });
+
+test('an unbound isolated dispatch can still file a scope request', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'scope request without a bound worktree',
+    description: 'Where: scope fixture. Contract: a scope request is board state and never needs the worktree. Verify: inspect the recorded request.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  const by = 'unbound-scope-executor';
+  claimRouted(ticket, by, { sharedTree: false });
+  assert.strictEqual(store.getTicket(slug, ticket.ref).dispatch.worktree, undefined, 'the fixture dispatch must be unbound');
+
+  const requested = store.requestScope(slug, ticket.ref, by, ['lib/wanted.js']);
+  assert.strictEqual(requested.ok, true, `scope request must not fail on a missing worktree: ${requested.reason || ''}`);
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref).scopeRequest.files, ['lib/wanted.js']);
+});
+
+test('a control-plane files update resolves a pending scope request partially and syncs the dispatch record', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'partial scope resolution',
+    description: 'Where: scope fixture. Contract: a scope edit rules on the pending request and the dispatch snapshot follows it. Verify: inspect files, request, and declaredFiles.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  const by = 'partial-scope-executor';
+  claimRouted(ticket, by, { sharedTree: false });
+
+  assert.strictEqual(store.requestScope(slug, ticket.ref, by, ['lib/wanted.js', 'lib/phantom.js']).ok, true);
+  const updated = store.updateTicket(slug, ticket.ref, { files: ['lib/fixture.js', 'lib/wanted.js'], by: 'orchestrator' });
+  assert.deepStrictEqual(updated.files, ['lib/fixture.js', 'lib/wanted.js']);
+  assert.strictEqual(updated.scopeRequest, null, 'the request is resolved, not left pending');
+  assert.deepStrictEqual(updated.dispatch.declaredFiles, updated.files, 'commit enforcement follows the ruling');
+  const resolution = updated.comments.at(-1).body;
+  assert.match(resolution, /granted lib\/wanted\.js/);
+  assert.match(resolution, /not granted: lib\/phantom\.js/);
+
+  const refiled = store.requestScope(slug, ticket.ref, by, ['lib/wanted.js']);
+  assert.strictEqual(refiled.ok, true, 'a granted path re-requested reports covered instead of dead-ending');
+  assert.strictEqual(refiled.scopeRequest, null);
+});
+
+test('a scope denial states the scope in force and syncs the dispatch record', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'scope denial stays truthful',
+    description: 'Where: scope fixture. Contract: a denial names the live scope and leaves no stale dispatch snapshot. Verify: inspect the denial comment and declaredFiles.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+  const by = 'denied-scope-executor';
+  claimRouted(ticket, by, { sharedTree: false });
+
+  assert.strictEqual(store.requestScope(slug, ticket.ref, by, ['lib/refused.js']).ok, true);
+  const denied = store.denyScopeRequest(slug, ticket.ref, 'orchestrator', 'The requested path belongs to another live ticket.');
+  assert.strictEqual(denied.ok, true);
+  assert.match(denied.comment.body, /Declared scope is now: lib\/fixture\.js/);
+  assert.doesNotMatch(denied.comment.body, /remains unchanged/);
+  const after = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(after.scopeRequest, null);
+  assert.deepStrictEqual(after.dispatch.declaredFiles, ['lib/fixture.js']);
+});

@@ -110,6 +110,22 @@ function createPulse(dependencies: any) {
     return { working: true, lastActivityAt: timestamps[0] || null };
   }
 
+  // Commit enforcement reads the dispatch snapshot, not ticket.files. When the
+  // two differ on a live run the executor is gated against a set the ticket
+  // does not show, so the drift has to be visible in the pulse where the
+  // orchestrator actually looks.
+  function scopeDriftWarnings(ticket?: any) {
+    const dispatch = dispatchState(ticket);
+    if (!dispatch || dispatch.terminalAt || !Array.isArray(dispatch.declaredFiles)) return [];
+    const normalize = (files?: any) => Array.from(new Set((Array.isArray(files) ? files : [])
+      .map((file?: any) => String(file || '').replace(/\\/g, '/').replace(/\/+$/, '').trim().toLowerCase())
+      .filter(Boolean))).sort();
+    const declared = normalize(dispatch.declaredFiles);
+    const ticketFiles = normalize(ticket?.files);
+    if (declared.length === ticketFiles.length && declared.every((file: any, index: number) => file === ticketFiles[index])) return [];
+    return [`Scope drift: this live dispatch enforces ${declared.join(', ') || '(none)'} but the ticket declares ${ticketFiles.join(', ') || '(none)'}. Commits are gated on the dispatch set; re-run update --files to resync.`];
+  }
+
   function pulsePayload(slug?: any, idOrRef?: any) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return null;
@@ -117,7 +133,7 @@ function createPulse(dependencies: any) {
     const git = gitPulse(meta && meta.path, ticket.files);
     const activity = claimActivityPulse(ticket, git);
     const dispatch = dispatchState(ticket);
-    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
+    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(ticket)];
     return {
       ref: ticket.ref,
       title: ticket.title,

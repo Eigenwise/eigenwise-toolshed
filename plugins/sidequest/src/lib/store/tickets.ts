@@ -202,6 +202,46 @@ function clearCoveredScopeRequest(slug?: any, ticket?: any, now?: any) {
   return true;
 }
 
+// Declared scope IS ticket.files for a live run; the dispatch snapshot exists
+// for terminal forensics. Commit enforcement reads the snapshot, so letting the
+// two diverge gates the executor against a set nobody can see or repair.
+function syncLiveDispatchScope(ticket?: any) {
+  const dispatch = dispatchState(ticket);
+  if (dispatch && !dispatch.terminalAt) dispatch.declaredFiles = normalizeFiles(ticket?.files);
+}
+
+// A control-plane scope edit is itself the ruling on any pending request: the
+// requested paths now inside the updated scope are granted, the rest refused.
+// Leaving the request pending after such an edit created an unrecoverable run —
+// it could never be re-filed (already covered) and never approved (nothing
+// pending covers it), while the dispatch snapshot stayed stale.
+function resolveScopeRequestAgainstUpdate(slug?: any, ticket?: any, patch?: any, now?: any) {
+  const request = ticket?.scopeRequest;
+  if (!request) return;
+  const caller = String(patch?.by || '').trim();
+  if (!caller || caller === ticket?.claim?.by) return;
+  const scope = effectiveScope(slug, ticket.files);
+  const requested = normalizeFiles(request.files);
+  const granted = requested.filter((file?: any) => commitScope.isInScope(file, scope));
+  const refused = requested.filter((file?: any) => !commitScope.isInScope(file, scope));
+  clearScopeRequestMarker(slug, ticket);
+  const resumed = reopenScopePausedDispatch(ticket, now);
+  ticket.scopeRequest = null;
+  const dispatch = dispatchState(ticket);
+  if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
+  if (!Array.isArray(ticket.comments)) ticket.comments = [];
+  const grantedText = granted.length ? `granted ${granted.join(', ')}` : 'granted none of the requested paths';
+  const refusedText = refused.length ? `; not granted: ${refused.join(', ')} (outside the updated scope)` : '';
+  const comment = createComment({
+    by: caller,
+    body: `Scope request resolved by scope update: ${grantedText}${refusedText}. Declared scope is now: ${normalizeFiles(ticket.files).join(', ') || '(none)'}.`,
+    kind: 'comment',
+    source: patch?.source || 'cli',
+  }, now);
+  ticket.comments.push(comment);
+  queueEventNotification(slug, ticket, 'comment', comment.source, { commentBody: comment.body });
+}
+
 function scopeExpansionCommand(ticket?: any, additions?: any) {
   const ref = String(ticket?.ref || '').trim();
   if (!ref) return null;
@@ -237,15 +277,19 @@ function autoApprovedPluginTestScope(ticket?: any, requested?: any, additions?: 
   return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
 }
 
+// The marker is a recovery breadcrumb, never a gate. A scope request is pure
+// board state; an unbound dispatch (agentId/boundAt null) or unreachable
+// worktree must not make filing it impossible for executor and orchestrator
+// alike, which is exactly what a fail-closed marker did.
 function createScopeRequestMarker(slug?: any, ticket?: any, request?: any) {
   const dispatch = dispatchState(ticket);
-  if (!dispatch || dispatch.sharedTree !== false) return { ok: true };
+  if (!dispatch || dispatch.sharedTree !== false) return;
   const worktree = String(dispatch.worktree || '').trim();
-  if (!worktree) return { ok: false, reason: 'worktree_unavailable' };
+  if (!worktree) return;
   try {
     const root = commitScope.repoRoot(worktree);
     const linked = commitScope.linkedWorktree(root);
-    if (!linked.ok || !linked.linked) return { ok: false, reason: 'worktree_isolation' };
+    if (!linked.ok || !linked.linked) return;
     fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
     fs.writeFileSync(assetPath(slug, ticket.id, scopeRequestMarkerFile(ticket)), JSON.stringify({
       ref: ticket.ref,
@@ -255,10 +299,7 @@ function createScopeRequestMarker(slug?: any, ticket?: any, request?: any) {
       covered: request.covered,
       at: request.at,
     }) + '\n');
-    return { ok: true };
-  } catch (_) {
-    return { ok: false, reason: 'worktree_unavailable' };
-  }
+  } catch (_) {}
 }
 
 function clearScopeRequestMarker(slug?: any, ticket?: any) {
@@ -379,8 +420,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     }
     const command = scopeExpansionCommand(t, requested);
     const request = { by, files: additions, requested, covered, at: now };
-    const marker = createScopeRequestMarker(slug, t, request);
-    if (!marker.ok) return { ok: false, reason: marker.reason, ticket: t };
+    createScopeRequestMarker(slug, t, request);
     t.scopeRequest = request;
     const dispatch = dispatchState(t);
     if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
@@ -427,10 +467,13 @@ function denyScopeRequest(slug?: any, idOrRef?: any, by?: any, reason?: any, opt
     const resumed = reopenScopePausedDispatch(t, now);
     t.scopeRequest = null;
     if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
+    syncLiveDispatchScope(t);
     if (!Array.isArray(t.comments)) t.comments = [];
     const comment = createComment({
       by,
-      body: `Scope expansion denied: ${reason}. Original declared scope remains unchanged; commit within it or release the ticket if it cannot complete the work.`,
+      // State the scope that is actually in force: a deny can follow a partial
+      // files edit, and "unchanged" then contradicts the ruling above it.
+      body: `Scope expansion denied: ${reason}. Declared scope is now: ${normalizeFiles(t.files).join(', ') || '(none)'}; commit within it or release the ticket if it cannot complete the work.`,
       kind: 'comment',
       source: opts.source || 'cli',
     }, now);
@@ -707,7 +750,9 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
       if (scopeRefusal) throw new Error(scopeRefusal);
       const approvedFiles = approvedScopeRequestFiles(t, patch.files);
       t.files = approvedFiles || boundedFiles(patch.files);
-      clearCoveredScopeRequest(slug, t);
+      const scopeEditAt = new Date().toISOString();
+      if (!clearCoveredScopeRequest(slug, t, scopeEditAt)) resolveScopeRequestAgainstUpdate(slug, t, patch, scopeEditAt);
+      syncLiveDispatchScope(t);
     }
     if (patch.contracts !== undefined) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;

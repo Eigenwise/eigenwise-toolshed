@@ -101,6 +101,15 @@ function createPulse(dependencies) {
     const timestamps = activity.filter((at) => Number.isFinite(Date.parse(at))).sort((a, b) => Date.parse(b) - Date.parse(a));
     return { working: true, lastActivityAt: timestamps[0] || null };
   }
+  function scopeDriftWarnings(ticket) {
+    const dispatch = dispatchState(ticket);
+    if (!dispatch || dispatch.terminalAt || !Array.isArray(dispatch.declaredFiles)) return [];
+    const normalize = (files) => Array.from(new Set((Array.isArray(files) ? files : []).map((file) => String(file || "").replace(/\\/g, "/").replace(/\/+$/, "").trim().toLowerCase()).filter(Boolean))).sort();
+    const declared = normalize(dispatch.declaredFiles);
+    const ticketFiles = normalize(ticket?.files);
+    if (declared.length === ticketFiles.length && declared.every((file, index) => file === ticketFiles[index])) return [];
+    return [`Scope drift: this live dispatch enforces ${declared.join(", ") || "(none)"} but the ticket declares ${ticketFiles.join(", ") || "(none)"}. Commits are gated on the dispatch set; re-run update --files to resync.`];
+  }
   function pulsePayload(slug, idOrRef) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return null;
@@ -108,7 +117,7 @@ function createPulse(dependencies) {
     const git = gitPulse(meta && meta.path, ticket.files);
     const activity = claimActivityPulse(ticket, git);
     const dispatch = dispatchState(ticket);
-    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
+    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(ticket)];
     return {
       ref: ticket.ref,
       title: ticket.title,
