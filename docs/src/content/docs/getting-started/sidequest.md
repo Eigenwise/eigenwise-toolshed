@@ -164,7 +164,7 @@ Dispatch can add a **Flagged uncertainty** section to the executor briefing when
 - **Symbol checks** look for backticked symbol-shaped references from the ticket title and description. If a referenced symbol does not appear on the integration target, the warning says to verify the claim before acting.
 - **Cross-ticket state checks** look for `SQ-<number>` references in the description. If a referenced ticket changed state after this ticket was written, the warning includes the old and new states and says that the claim may be stale.
 
-Treat these as review prompts, not permission to fill in missing context. If the briefing or another instruction names a file, symbol, or state that does not exist in the executor's worktree, stop immediately and report the contradiction on the ticket. Do not investigate around it or assume the base is wrong. The orchestrator can correct the ticket or dispatch a fresh executor with an updated brief.
+Treat these as review prompts, not permission to fill in missing context. If the briefing or another instruction names a file, symbol, or state that does not exist in the executor's worktree, stop immediately and report the contradiction on the ticket, with the verbatim probe you ran and its output. Do not investigate around it or assume the base is wrong. The orchestrator can correct the ticket or dispatch a fresh executor with an updated brief.
 
 ### Dispatch needs this session's board MCP, not just an install
 
@@ -194,7 +194,7 @@ Completion also checks that changed tests exercise changed implementation. When 
 
 A released claim takes its dispatch token with it. An executor that comes back to a swept ticket gets a refusal that names the recovery: keep the commit, re-dispatch, re-claim, and hand in the same commit.
 
-Releasing a ticket for a technical blocker requires evidence of the failure. The MCP `release` call takes `kind: "technical_blocker"`, `command`, `exitCode`, and `outputTail`; the CLI uses `--release-kind technical_blocker`, `--command`, `--exit-code`, and `--output-tail`. Both surfaces enforce the same check, and record the evidence on the ticket beside the reason. Scope pauses, contradictions, and deliberate handbacks use `kind: "scope_pause"`, `"contradiction"`, or `"handback"` without blocker evidence.
+Releasing a ticket for a technical blocker requires evidence of the failure. The MCP `release` call takes `kind: "technical_blocker"`, `command`, `exitCode`, and `outputTail`; the CLI uses `--release-kind technical_blocker`, `--command`, `--exit-code`, and `--output-tail`. Both surfaces enforce the same check, and record the evidence on the ticket beside the reason. Scope pauses and deliberate handbacks use `kind: "scope_pause"` or `"handback"` without blocker evidence.
 
 A contradiction now needs proof that the named target is absent. Use `--release-kind contradiction` with the verbatim probe in `--command` and its result in `--output-tail`; `--exit-code` is optional because a probe can legitimately exit 0 when it finds nothing. The MCP `release` call uses `kind: "contradiction"`, `command`, and `outputTail` for the same evidence. Scope pauses and deliberate handbacks still need no probe.
 
