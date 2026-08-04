@@ -336,9 +336,9 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   }
   function staleWorktreeCwdWarning(cwd) {
     const workingDirectory = String(cwd || "").trim();
-    const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, path.sep);
-    const worktreesPath = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
-    const containsWorktreesPath = process.platform === "win32" ? normalizedDirectory.toLowerCase().includes(worktreesPath.toLowerCase()) : normalizedDirectory.includes(worktreesPath);
+    const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, "/").toLowerCase();
+    const worktreesPath = "/.claude/worktrees/";
+    const containsWorktreesPath = normalizedDirectory.includes(worktreesPath);
     if (!containsWorktreesPath) return null;
     return `Board server cwd ${workingDirectory} is inside .claude${path.sep}worktrees; spawned executors will inherit this stale-worktree cwd.`;
   }

@@ -24,6 +24,8 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const store = require('../lib/store.js');
 
 const { slug } = store.ensureProject(path.join(os.tmpdir(), 'sq-reconcile-fixtures', 'board'));
+const codingNormal = store.getCategory('coding.normal');
+store.setCategory(Object.assign({}, codingNormal, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 
 function addTicket(title?: any) {
   return store.createTicket(slug, { title, complexity: 3, complexityWhy: 'fixture for reconcile tests, single mechanical change', labels: ['direct-ok'], source: 'cli' });

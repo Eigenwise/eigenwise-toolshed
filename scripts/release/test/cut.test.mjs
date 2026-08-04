@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { cut, defaultSuiteRunner } from '../cut.mjs';
+import { assertParentCiPassed, cut, defaultSuiteRunner } from '../cut.mjs';
 import { readValue } from '../lib/jsonedit.mjs';
 import { makeGitRepo } from './realrepo.mjs';
 
@@ -262,6 +262,34 @@ test('a failing suite leaves the release local and says so', async (t) => {
     /release suites failed, nothing was published/,
   );
 
+  assert.deepEqual(context.remoteRefs(), before);
+});
+
+test('a failed parent Test workflow blocks publishing', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  const parent = context.commit('integrate');
+  const before = context.remoteRefs();
+  const failedTestRun = () => ({
+    status: 0,
+    stdout: JSON.stringify([{ headSha: parent, conclusion: 'failure' }]),
+    stderr: '',
+  });
+
+  assert.throws(
+    () => assertParentCiPassed(context.root, parent, failedTestRun),
+    /Test workflow for .* concluded failure; refusing to publish/,
+  );
+  await assert.rejects(
+    () => cut({
+      repoRoot: context.root,
+      push: true,
+      skipTests: true,
+      log: () => {},
+      assertParentCiPassed: (repoRoot, commit) => assertParentCiPassed(repoRoot, commit, failedTestRun),
+    }),
+    /Test workflow for .* concluded failure; refusing to publish/,
+  );
   assert.deepEqual(context.remoteRefs(), before);
 });
 

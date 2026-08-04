@@ -98,6 +98,32 @@ function assertNoStaleTags(git, plan, { remote, checkRemote, force }) {
   );
 }
 
+export function assertParentCiPassed(repoRoot, commit, runner = spawnSync) {
+  const result = runner('gh', [
+    'run', 'list', '--workflow', 'Test', '--commit', commit, '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha',
+  ], {
+    cwd: repoRoot,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  if (result.error) throw new Error(`cannot check Test workflow for ${commit}: ${result.error.message}`);
+  if (result.status !== 0) {
+    const detail = String(result.stderr || '').trim();
+    throw new Error(`cannot check Test workflow for ${commit}${detail ? `: ${detail}` : ''}`);
+  }
+  let runs;
+  try {
+    runs = JSON.parse(result.stdout || '[]');
+  } catch (_) {
+    throw new Error(`cannot read Test workflow status for ${commit}: gh returned invalid JSON`);
+  }
+  const run = Array.isArray(runs) && runs.find((candidate) => candidate?.headSha === commit);
+  if (!run) throw new Error(`no completed Test workflow run found for ${commit}; refusing to publish`);
+  if (run.conclusion !== 'success') {
+    throw new Error(`Test workflow for ${commit} concluded ${run.conclusion || 'without a conclusion'}; refusing to publish`);
+  }
+}
+
 /**
  * The release commit and its tags are the verified artefact. Suites run arbitrary repository code,
  * so nothing they could have done to the local refs is allowed to reach the remote.
@@ -303,6 +329,10 @@ export async function cut(options = {}) {
     );
   }
   assertReleaseIntact(git, plan, commit);
+  if (push) {
+    const assertCiPassed = options.assertParentCiPassed ?? assertParentCiPassed;
+    assertCiPassed(repoRoot, pinned);
+  }
 
   const refspecs = planRefspecs(plan, commit);
   const pushCommand = planPushCommand(plan, { remote, commit });
