@@ -423,8 +423,24 @@ ${ticket?.description || ""}`;
     }
     return warnings;
   }
+  function staleWorktreeCwdWarning(cwd) {
+    const workingDirectory = String(cwd || "").trim();
+    const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, path.sep);
+    const worktreesPath = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+    const containsWorktreesPath = process.platform === "win32" ? normalizedDirectory.toLowerCase().includes(worktreesPath.toLowerCase()) : normalizedDirectory.includes(worktreesPath);
+    if (!containsWorktreesPath) return null;
+    return `Board server cwd ${workingDirectory} is inside .claude${path.sep}worktrees; spawned executors will inherit this stale-worktree cwd.`;
+  }
   function dispatchUncertaintyWarnings(ticket, slug) {
-    return [...symbolExistenceWarnings(ticket, slug), ...crossTicketStateWarnings(ticket, slug)].map((warning) => `Dispatch warning: ${warning}`);
+    const warnings = [
+      ...symbolExistenceWarnings(ticket, slug),
+      ...crossTicketStateWarnings(ticket, slug)
+    ];
+    if (dispatchState(ticket)?.sharedTree === true) {
+      const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd());
+      if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
+    }
+    return warnings.map((warning) => `Dispatch warning: ${warning}`);
   }
   function worktreeVisibilityTokens(ticket) {
     const tokens = new Set(normalizeFiles(ticket?.files));
@@ -610,6 +626,6 @@ ${ticket?.description || ""}`;
   function requestedReadonlyOverride(fields) {
     return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 module.exports = { createWarnings };

@@ -843,6 +843,7 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(linked.includes('Worktree identity: linked worktree'));
   assert.ok(linked.includes(`Path: ${linkedWorktree}`));
   assert.ok(linked.includes(`Git dir: ${path.join(root, '.git', 'worktrees', 'agent-briefing-worker')}`));
+  assert.doesNotMatch(linked, /Working directory binding:/);
 
   const shared = agentsync.renderTicketBriefing(Object.assign({}, base, {
     dispatch: { sharedTree: true },
@@ -850,6 +851,16 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(shared.includes('Worktree identity: shared tree'));
   assert.ok(shared.includes(`Path: ${root}`));
   assert.ok(shared.includes(`Git dir: ${path.join(root, '.git')}`));
+  assert.ok(shared.includes(`Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale leftover worktree under ${root}${path.sep}.claude${path.sep}worktrees${path.sep}.`));
+  assert.ok(shared.includes('Before any git or file operation, `cd "' + root + '"` and confirm `git rev-parse --show-toplevel` prints `' + root + '`.'));
+  assert.match(shared, /If it still differs after cd, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
+});
+
+test('stale worktree cwd warnings accept Windows separators and casing', () => {
+  const store = require('../lib/store.js');
+  const warning = store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed\\.CLAUDE\\WORKTREES\\SQ-538-river-bluffs');
+  assert.match(warning, /spawned executors will inherit this stale-worktree cwd/);
+  assert.equal(store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed'), null);
 });
 
 test('worktree setup appears only in isolated worktree briefings', () => {
