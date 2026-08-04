@@ -81,12 +81,16 @@ helps you inspect local usage and cost without exposing project content."**
   (`/plugin install observability@eigenwise-toolshed --scope user`, then one reload), and hand off to
   `/observability:enable-project-telemetry`; it owns consent confirmation, setup, and verification. After it
   finishes, stop. Tell the user to restart Claude Code because its OTEL settings only apply to a new session,
-  then re-run `/workbench:init-workspace`. Do not assess the project or ask the plugin question first.
+  and to come back with `claude --continue` (or `claude --resume` and pick this session) rather than a fresh
+  `/workbench:init-workspace`. Resuming carries this conversation's answers across the restart; a fresh run
+  starts the skill over and has to recover them from the bootstrap plan. Do not assess the project or ask the
+  plugin question first.
 - **No:** continue immediately to the project-intent question. Do not ask again during this run.
 
-A telemetry restart also satisfies a pending plugin reload boundary. On re-entry, detect the completed
-telemetry setup and continue with the project-intent question, picker, or later phase without repeating
-answered setup questions.
+A telemetry restart also satisfies a pending plugin reload boundary. Re-entry normally arrives as a resumed
+session that still holds the earlier answers; when it arrives as a fresh run instead, read the bootstrap plan
+before asking anything. Either way, detect the completed telemetry setup and continue with the project-intent
+question, picker, or later phase without repeating answered setup questions.
 
 ### Project intent
 
@@ -415,7 +419,8 @@ installed. Otherwise request one reload and wait:
 
 > The selected plugins are installed and the workspace files are ready. Run **`/reload-plugins`**, then
 tell me to continue. If Claude Code refuses because the reload changes MCP or LSP servers, run
-**`/reload-plugins --force`**. Restart Claude Code only if reload still does not load them.
+**`/reload-plugins --force`**. Restart Claude Code only if reload still does not load them, and come back
+with `claude --continue` so this run keeps its answers instead of starting over.
 
 Do not request an earlier or second reload. Do not pretend the plugins are loaded and barrel into
 Phase 4 in the same turn — the whole point is to verify against really-loaded plugins.

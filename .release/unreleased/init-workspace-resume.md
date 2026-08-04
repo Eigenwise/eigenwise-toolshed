@@ -1,0 +1,10 @@
+---
+ref: init-workspace-resume
+title: "init-workspace tells you to resume after a restart, not start over"
+bump: patch
+plugins: [workbench]
+---
+
+Setting up telemetry needs a Claude Code restart, and the skill used to send you back in with a fresh `/workbench:init-workspace`. That works, but it starts the skill over and makes it recover your answers from the bootstrap plan.
+
+It now asks you to come back with `claude --continue` instead, so the run keeps its own answers across the restart. The reload-boundary fallback says the same thing for the same reason.
