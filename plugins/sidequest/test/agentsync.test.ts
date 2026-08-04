@@ -71,68 +71,28 @@ test('briefings surface tracked generated outputs paired into effective scope', 
   assert.match(briefing, /plugins\/sidequest\/hooks\/brief\.js/);
 });
 
-test('dispatch uncertainty warnings check code symbols against the current tree', () => {
+test('dispatch uncertainty does not inspect symbols named in ticket text', () => {
   const root = tmpDir();
   assert.equal(git(root, ['init', '-b', 'main']).status, 0);
   assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
   assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
   fs.mkdirSync(path.join(root, 'src'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'src', 'fixture.ts'), 'const existing_symbol = true;\n');
+  fs.writeFileSync(path.join(root, 'src', 'fixture.ts'), 'const existingSymbol = true;\n');
   assert.equal(git(root, ['add', '.']).status, 0);
   assert.equal(git(root, ['commit', '-m', 'fixture']).status, 0);
 
   const store = require('../lib/store.js');
   const slug = store.ensureProject(root, 'dispatch uncertainty').slug;
-  const missingSymbols = Array.from({ length: 13 }, (_, index) => `missingSymbol${index + 1}()`);
-  const uncertaintyDescription = `Hook field \`agent_id\`, JSON key \`agent_id\`, env \`DISPATCH_TOKEN\`, attribute \`Result.value\`, stdlib \`fractions.Fraction\`, board id \`c_msampch0_3ac24a\`, declared output code symbol \`newOutput\`, and ${missingSymbols.map((symbol) => `code symbol \`${symbol}\``).join(' ')}. The code symbol \`existing_symbol\` is already present.`;
-  const target = store.createTicket(slug, {
-    title: 'Check dispatch uncertainty',
-    description: uncertaintyDescription,
-    files: ['src', 'src/newOutput'],
+  const ticket = store.createTicket(slug, {
+    title: 'Change `missingSymbol()` and `existingSymbol`',
+    description: 'A ticket may mention code-like identifiers and arbitrary backticked text such as `c_msampch0_3ac24a`.',
+    files: ['src'],
   });
-  const referenced = store.createTicket(slug, { title: 'Referenced ticket' });
-  store.updateTicket(slug, target.ref, { description: `${uncertaintyDescription} The code symbol \`existing_symbol\` depends on ${referenced.ref}.` });
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);
-  store.updateTicket(slug, referenced.ref, { status: 'doing' });
 
-  const warnings = store.dispatchUncertaintyWarnings(store.getTicket(slug, target.ref), slug);
-  assert.equal(warnings.filter((warning: string) => warning.includes('current main snapshot')).length, 12);
-  assert.match(warnings.join('\n'), /ticket text includes `missingSymbol1\(\)`, but it was not found in the current main snapshot/);
-  assert.doesNotMatch(warnings.join('\n'), /agent_id|DISPATCH_TOKEN|Result\.value|fractions\.Fraction|c_msampch0_3ac24a|existing_symbol|newOutput/);
-  assert.match(warnings.join('\n'), new RegExp(`${referenced.ref} changed state \\(todo -> doing\\) after this ticket was written`));
-
-  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, target.ref), 'uncertainty-token', slug, root);
-  const uncertaintyPacket = briefing.match(/Flagged uncertainty:\n([\s\S]*?)\n\nExecutor contradiction rule:/);
-  assert.ok(uncertaintyPacket);
-  assert.ok(Buffer.byteLength(`Flagged uncertainty:\n${uncertaintyPacket![1]}`) <= 1024, `uncertainty packet is ${Buffer.byteLength(`Flagged uncertainty:\n${uncertaintyPacket![1]}`)} bytes`);
-  assert.match(uncertaintyPacket![1], /Additional dispatch uncertainty warnings truncated/);
-  assert.match(briefing, /Executor contradiction rule: When an instruction names a file, symbol, or state that does not exist in this worktree, STOP and report the contradiction/);
-  assert.match(briefing, /Scope limits writes, never reads: reading any worktree path is allowed/);
-  assert.match(briefing, /Before reporting, check it and include the checked path or target and result/);
-  assert.ok(Buffer.byteLength(agentsync.EXECUTOR_CONTRADICTION_RULE) <= 512, `contradiction rule is ${Buffer.byteLength(agentsync.EXECUTOR_CONTRADICTION_RULE)} bytes`);
-});
-
-test('dispatch uncertainty uses the current local integration branch over a stale remote ref', () => {
-  const root = tmpDir();
-  const remote = tmpDir();
-  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
-  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
-  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
-  fs.mkdirSync(path.join(root, 'src'), { recursive: true });
-  fs.writeFileSync(path.join(root, 'src', 'fixture.ts'), 'const initial = true;\n');
-  assert.equal(git(root, ['add', '.']).status, 0);
-  assert.equal(git(root, ['commit', '-m', 'initial']).status, 0);
-  assert.equal(git(remote, ['init', '--bare']).status, 0);
-  assert.equal(git(root, ['remote', 'add', 'origin', remote]).status, 0);
-  assert.equal(git(root, ['push', '-u', 'origin', 'main']).status, 0);
-  fs.appendFileSync(path.join(root, 'src', 'fixture.ts'), 'const freshSymbol = true;\n');
-  assert.equal(git(root, ['add', '.']).status, 0);
-  assert.equal(git(root, ['commit', '-m', 'local integration']).status, 0);
-
-  const store = require('../lib/store.js');
-  const slug = store.ensureProject(root, 'stale remote integration').slug;
-  const ticket = store.createTicket(slug, { title: 'Check code symbol `freshSymbol`', files: ['other'] });
-  assert.deepStrictEqual(store.dispatchUncertaintyWarnings(ticket, slug), []);
+  const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
+  assert.deepStrictEqual(warnings, []);
+  const briefing = agentsync.renderTicketBriefing(ticket, 'uncertainty-token', slug, root);
+  assert.doesNotMatch(briefing, /ticket text includes|current main snapshot/);
 });
 
 test('SQ-677: briefing comments preserve the full chronological durable thread byte-for-byte', () => {

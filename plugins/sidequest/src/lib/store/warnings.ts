@@ -318,102 +318,6 @@ function claudeWebSearchUnavailable(ticket?: any) {
   return ['opus', 'sonnet', 'fable'].includes(String(model)) && ['xhigh', 'max'].includes(String(effort));
 }
 
-const DISPATCH_SYMBOL_CHECK_MAX = 12;
-const DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES = 256 * 1024;
-const CODE_SYMBOL_CONTEXT = /\b(?:code\s+)?(?:symbol|function|class|method|export|type|interface|constant|identifier)\s*(?:named|called)?\s*$/i;
-
-function declaredOutputNames(ticket?: any) {
-  return new Set(normalizeFiles(ticket?.files).map((file?: any) => path.basename(String(file).replace(/[\\/]+$/, '')).toLowerCase()));
-}
-
-function checkableCodeSymbol(symbol?: any, prefix?: any) {
-  if (!/^[A-Za-z_$][\w$]*(?:\(\))?$/.test(String(symbol))) return false;
-  const name = String(symbol).replace(/\(\)$/, '');
-  if (/^c_[a-z0-9]+_[a-z0-9]+$/i.test(name) || /^[A-Z][A-Z0-9_]*$/.test(name)) return false;
-  if (String(symbol).endsWith('()') || /^_?[A-Z]/.test(name) || /^[a-z$][A-Za-z0-9$]*[A-Z][\w$]*$/.test(name)) return true;
-  return CODE_SYMBOL_CONTEXT.test(String(prefix));
-}
-
-function ticketSymbolReferences(ticket?: any) {
-  const text = `${ticket?.title || ''}\n${ticket?.description || ''}`;
-  const candidates = text.matchAll(/`([^`\r\n]+)`/g);
-  const declaredOutputs = declaredOutputNames(ticket);
-  const symbols: string[] = [];
-  const seen = new Set<string>();
-  for (const candidate of candidates) {
-    const symbol = String(candidate[1] || '').trim();
-    const key = symbol.toLowerCase();
-    const prefix = text.slice(Math.max(0, Number(candidate.index || 0) - 80), candidate.index);
-    if (symbol.length < 3 || declaredOutputs.has(key) || !checkableCodeSymbol(symbol, prefix) || seen.has(key)) continue;
-    seen.add(key);
-    symbols.push(symbol);
-    if (symbols.length >= DISPATCH_SYMBOL_CHECK_MAX) break;
-  }
-  return symbols;
-}
-
-function symbolSearchIsBounded(projectPath?: any, target?: any) {
-  if (!projectPath || !target) return false;
-  try {
-    execFileSync('git', ['ls-tree', '-r', '--name-only', String(target)], {
-      cwd: projectPath,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: 'pipe',
-      maxBuffer: DISPATCH_SYMBOL_CHECK_MAX_TREE_BYTES,
-    });
-    return true;
-  } catch (_) {
-    return false;
-  }
-}
-
-function symbolExistsOnTarget(projectPath?: any, target?: any, symbol?: any) {
-  const result = spawnSync('git', ['grep', '-F', '-q', '--', String(symbol), String(target)], {
-    cwd: projectPath,
-    windowsHide: true,
-    stdio: 'ignore',
-    timeout: 3000,
-  });
-  if (result.error || result.signal || result.status == null) return null;
-  return result.status === 0;
-}
-
-function currentSymbolTarget(projectPath?: any, target?: any) {
-  const local = `refs/heads/${target.branch}`;
-  try {
-    execFileSync('git', ['rev-parse', '--verify', `${local}^{commit}`], {
-      cwd: projectPath,
-      encoding: 'utf8',
-      windowsHide: true,
-      stdio: 'pipe',
-    });
-    return local;
-  } catch (_) {
-    return target.upstream;
-  }
-}
-
-function symbolExistenceWarnings(ticket?: any, slug?: any) {
-  const projectPath = slug ? readMeta(slug)?.path : null;
-  const symbols = ticketSymbolReferences(ticket);
-  if (!projectPath || !symbols.length) return [];
-  let target: any;
-  try {
-    target = integrationTarget(slug);
-  } catch (_) {
-    return [];
-  }
-  const snapshot = currentSymbolTarget(projectPath, target);
-  if (!symbolSearchIsBounded(projectPath, snapshot)) return [];
-  const warnings: string[] = [];
-  for (const symbol of symbols) {
-    const exists = symbolExistsOnTarget(projectPath, snapshot, symbol);
-    if (exists === false) warnings.push(`ticket text includes \`${symbol}\`, but it was not found in the current ${target.branch} snapshot. Context only: check the relevant path if it affects the task.`);
-  }
-  return warnings;
-}
-
 function crossTicketStateWarnings(ticket?: any, slug?: any) {
   if (!ticket || !slug) return [];
   const writtenAt = Date.parse(ticket.referenceUpdatedAt || ticket.updatedAt);
@@ -446,7 +350,6 @@ function staleWorktreeCwdWarning(cwd?: any) {
 
 function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   const warnings = [
-    ...symbolExistenceWarnings(ticket, slug),
     ...crossTicketStateWarnings(ticket, slug),
   ];
   if (dispatchState(ticket)?.sharedTree === true) {
@@ -666,7 +569,7 @@ function requestedReadonlyOverride(fields?: any) {
 }
 
 
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, ticketSymbolReferences, symbolSearchIsBounded, symbolExistsOnTarget, symbolExistenceWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 
 module.exports = { createWarnings };
