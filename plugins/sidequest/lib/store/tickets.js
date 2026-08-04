@@ -206,15 +206,35 @@ function createTickets(dependencies) {
     if (!sameFiles(next, pendingScope) && !sameFiles(next, requestedScope)) return null;
     return requestedScope;
   }
+  function scopeResolution(slug, ticket, request, state, now, granted, refused, resumed) {
+    const dispatch = dispatchState(ticket);
+    ticket.scopeResolution = {
+      state,
+      by: request?.by || null,
+      requestAt: request?.at || null,
+      requested: normalizeFiles(request?.requested || request?.files),
+      granted: normalizeFiles(granted),
+      refused: normalizeFiles(refused),
+      effectiveScope: effectiveScope(slug, ticket?.files),
+      at: now || (/* @__PURE__ */ new Date()).toISOString(),
+      resume: resumed ? {
+        ticket: ticket.ref,
+        agentName: dispatch?.agentName || dispatch?.agentId || ticket?.claim?.by || "unknown executor"
+      } : null
+    };
+  }
   function clearCoveredScopeRequest(slug, ticket, now) {
     const request = ticket?.scopeRequest;
-    if (!request || !normalizeFiles(request.files).every((file) => commitScope.isInScope(file, effectiveScope(slug, ticket.files)))) return false;
+    const scope = effectiveScope(slug, ticket?.files);
+    const granted = normalizeFiles(request?.requested || request?.files).filter((file) => commitScope.isInScope(file, scope));
+    if (!request || !normalizeFiles(request.files).every((file) => commitScope.isInScope(file, scope))) return false;
     clearScopeRequestMarker(slug, ticket);
     const dispatch = dispatchState(ticket);
     const resumed = reopenScopePausedDispatch(ticket, now);
+    scopeResolution(slug, ticket, request, "granted", now, granted, [], resumed);
     ticket.scopeRequest = null;
     if (dispatch && (!dispatch.terminalAt || resumed)) {
-      dispatch.declaredFiles = effectiveScope(slug, ticket.files);
+      dispatch.declaredFiles = scope;
       delete dispatch.scopeRequest;
     }
     return true;
@@ -234,6 +254,7 @@ function createTickets(dependencies) {
     const refused = requested.filter((file) => !commitScope.isInScope(file, scope));
     clearScopeRequestMarker(slug, ticket);
     const resumed = reopenScopePausedDispatch(ticket, now);
+    scopeResolution(slug, ticket, request, granted.length ? refused.length ? "partial" : "granted" : "denied", now, granted, refused, resumed);
     ticket.scopeRequest = null;
     const dispatch = dispatchState(ticket);
     if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
@@ -421,6 +442,8 @@ function createTickets(dependencies) {
         return { ok: true, ticket: t, covered, approved: testDirectories, autoApproved: true, scopeRequest: null, command: null, comment: comment2 };
       }
       const command = scopeExpansionCommand(t, requested);
+      const previousRequest = t.scopeRequest;
+      if (previousRequest) scopeResolution(slug, t, previousRequest, "superseded", now, [], [], false);
       const request = { by, files: additions, requested, covered, at: now };
       createScopeRequestMarker(slug, t, request);
       t.scopeRequest = request;
@@ -466,6 +489,7 @@ function createTickets(dependencies) {
       clearScopeRequestMarker(slug, t);
       const dispatch = dispatchState(t);
       const resumed = reopenScopePausedDispatch(t, now);
+      scopeResolution(slug, t, request, "denied", now, [], denied.files, resumed);
       t.scopeRequest = null;
       if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
       syncLiveDispatchScope(slug, t);
@@ -485,6 +509,37 @@ function createTickets(dependencies) {
       putTicket(slug, t);
       queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
       return { ok: true, ticket: t, denied, comment };
+    });
+  }
+  function scopeResolutionMatches(resolution, by, requestAt) {
+    if (!resolution || resolution.by !== by) return false;
+    return !requestAt || resolution.requestAt === requestAt;
+  }
+  function waitForScopeResolution(slug, idOrRef, by, requestAt, timeoutMs) {
+    const timeout = Math.min(Math.max(Number(timeoutMs) || 12e4, 1), 18e4);
+    const deadline = Date.now() + timeout;
+    return new Promise((resolve) => {
+      const inspect = () => {
+        const ticket = getTicket(slug, idOrRef);
+        if (!ticket) return resolve({ ok: false, state: "not_found" });
+        const request = ticket.scopeRequest;
+        const resolution = ticket.scopeResolution;
+        if (scopeResolutionMatches(resolution, by, requestAt)) {
+          return resolve({ ok: true, ticket, state: resolution.state, effectiveScope: resolution.effectiveScope, resolution });
+        }
+        if (request && request.by === by && (!requestAt || request.at === requestAt)) {
+          if (Date.now() >= deadline) return resolve({ ok: true, ticket, state: "timeout", effectiveScope: effectiveScope(slug, ticket.files), scopeRequest: request });
+          return setTimeout(inspect, Math.min(50, Math.max(1, deadline - Date.now())));
+        }
+        return resolve({
+          ok: true,
+          ticket,
+          state: "superseded",
+          effectiveScope: effectiveScope(slug, ticket.files),
+          resolution: scopeResolutionMatches(resolution, by) ? resolution : null
+        });
+      };
+      inspect();
     });
   }
   function overlappingScopePaths(filesA, filesB) {
@@ -844,6 +899,6 @@ function createTickets(dependencies) {
   function listActive(slug) {
     return queryTickets(String(slug || ""), { archived: false });
   }
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, denyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, waitForScopeResolution, denyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 module.exports = { createTickets };

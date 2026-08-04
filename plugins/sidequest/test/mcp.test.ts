@@ -1400,6 +1400,65 @@ test('MCP scopeRequest pauses a claimed executor until the orchestrator expands 
   assert.deepEqual(approved.files, ['lib', 'other/new.js']);
 });
 
+test('MCP scopeWait returns grant, partial, denial, and timeout without blocking scope rulings', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-wait-'))).slug;
+  const cases = [
+    { requested: ['grant.js'], files: ['lib', 'grant.js'], state: 'granted' },
+    { requested: ['partial.js', 'denied.js'], files: ['lib', 'partial.js'], state: 'partial' },
+  ];
+  for (const fixture of cases) {
+    const ticket = store.createTicket(project, {
+      title: `MCP scope wait ${fixture.state}`, files: ['lib'], complexity: 3,
+      labels: ['direct-ok'], complexityWhy: 'the waiting caller must receive the ruling without holding the ticket lock',
+    });
+    const by = `mcp-scope-wait-${fixture.state}`;
+    assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope wait fixture requires a local direct claim.' })).ok, true);
+    const request = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: fixture.requested });
+    assert.equal(request.wait.tool, 'scopeWait');
+    assert.match(request.wait.instruction, /Do not end your turn/);
+    const waiting = callTool('scopeWait', { project, ref: ticket.ref, by, requestAt: request.wait.requestAt, timeoutMs: 100 });
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    await callTool('update', { project, ref: ticket.ref, by: `${by}-orchestrator`, files: fixture.files });
+    const resolved = await waiting;
+    assert.equal(resolved.state, fixture.state);
+    assert.deepEqual(resolved.effectiveScope, fixture.files);
+  }
+
+  const denied = store.createTicket(project, {
+    title: 'MCP scope wait denial', files: ['lib'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a denied ruling must reach the waiting executor',
+  });
+  const deniedBy = 'mcp-scope-wait-denial';
+  assert.equal((await callTool('claim', { project, ref: denied.ref, by: deniedBy, direct: true, reason: 'The scope wait fixture requires a local direct claim.' })).ok, true);
+  const deniedRequest = await callTool('scopeRequest', { project, ref: denied.ref, by: deniedBy, files: ['denied.js'] });
+  const denialWait = callTool('scopeWait', { project, ref: denied.ref, by: deniedBy, requestAt: deniedRequest.wait.requestAt, timeoutMs: 100 });
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  await callTool('scopeDeny', { project, ref: denied.ref, by: 'mcp-scope-wait-orchestrator', reason: 'The file belongs to another ticket.' });
+  assert.equal((await denialWait).state, 'denied');
+
+  const timeout = store.createTicket(project, {
+    title: 'MCP scope wait timeout', files: ['lib'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a timeout must preserve the pending request for an explicit checkpoint',
+  });
+  const timeoutBy = 'mcp-scope-wait-timeout';
+  assert.equal((await callTool('claim', { project, ref: timeout.ref, by: timeoutBy, direct: true, reason: 'The scope wait fixture requires a local direct claim.' })).ok, true);
+  const timeoutRequest = await callTool('scopeRequest', { project, ref: timeout.ref, by: timeoutBy, files: ['pending.js'] });
+  const timedOut = await callTool('scopeWait', { project, ref: timeout.ref, by: timeoutBy, requestAt: timeoutRequest.wait.requestAt, timeoutMs: 1 });
+  assert.equal(timedOut.state, 'timeout');
+  assert.deepEqual(store.getTicket(project, timeout.ref).scopeRequest.files, ['pending.js']);
+});
+
+test('scope rulings name stopped executors that need resuming', async () => {
+  const fixture = isolatedDispatch('sq-mcp-scope-resume-', 'scope-resume-agent', ['lib']);
+  await callTool('scopeRequest', { project: fixture.project, ref: fixture.ref, by: fixture.by, files: ['denied.js'] });
+  const executor = store.getTicket(fixture.project, fixture.ref).dispatchExecutor;
+  assert.equal(store.markDispatchStopped('sq923-session-scope-resume-agent', executor, 'scope-resume-agent', 'scope-resume-agent').ok, true);
+  const denied = await callTool('scopeDeny', { project: fixture.project, ref: fixture.ref, by: 'mcp-scope-resume-orchestrator', reason: 'The path is unavailable.' });
+  assert.deepEqual(denied.resume, { ticket: fixture.ref, agentName: 'scope-resume-agent' });
+  assert.match(denied.message, new RegExp(`${fixture.ref} was waiting on scope`));
+  assert.match(denied.message, /scope-resume-agent has stopped\. Resume that executor now/);
+});
+
 test('MCP scopeRequest guides nonholders after an approval update', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-request-guidance-'))).slug;
   const ticket = store.createTicket(project, {

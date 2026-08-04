@@ -340,7 +340,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request scope.',
+    description: 'Request scope. If the response carries a pending request, call scopeWait with its requestAt value; keep your turn open unless scopeWait returns timeout.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -362,6 +362,38 @@ const tools: ToolDefinition[] = [
         autoApproved: !!res.autoApproved,
         scopeRequest: res.scopeRequest,
         command: res.command,
+        wait: res.scopeRequest ? {
+          tool: 'scopeWait',
+          requestAt: res.scopeRequest.at,
+          instruction: 'Call scopeWait now. Do not end your turn while the request is pending. If it times out, checkpoint with a commit and state exactly which ruling is pending.',
+        } : null,
+      } : null;
+      return mutationAck(slug, res, changed);
+    },
+  },
+  {
+    name: 'scopeWait',
+    description: 'Wait, without holding a board lock, for a filed scope request to resolve. Call immediately after scopeRequest returns a pending request. A timeout means checkpoint your current commit and state the pending ruling before ending the turn.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string' },
+        project: PROJECT_PROP,
+        by: { type: 'string' },
+        requestAt: { type: 'string', description: 'The pending scopeRequest.at value returned by scopeRequest.' },
+        timeoutMs: { type: 'integer', minimum: 1, maximum: 180000, description: 'Optional bounded wait, default 120000 milliseconds.' },
+      },
+      required: ['ref', 'by'],
+    },
+    async handler(args) {
+      const { slug } = resolveProject(args.project);
+      const by = requireBy(args, 'scopeWait');
+      const res = await store.waitForScopeResolution(slug, args.ref, by, args.requestAt, args.timeoutMs);
+      const changed = res.ok ? {
+        state: res.state,
+        effectiveScope: res.effectiveScope,
+        resolution: res.resolution || null,
+        ...(res.scopeRequest ? { scopeRequest: res.scopeRequest } : {}),
       } : null;
       return mutationAck(slug, res, changed);
     },
@@ -384,7 +416,11 @@ const tools: ToolDefinition[] = [
       const by = requireBy(args, 'scopeDeny');
       const reason = requiredText(args, 'reason', 'scopeDeny');
       const res = store.denyScopeRequest(slug, args.ref, by, reason, { source: 'mcp' });
-      return mutationAck(slug, res, res.ok ? { denied: res.denied } : null);
+      const changed = res.ok ? {
+        denied: res.denied,
+        ...(res.ticket.scopeResolution?.resume ? { resume: res.ticket.scopeResolution.resume, message: `${res.ticket.ref} was waiting on scope and ${res.ticket.scopeResolution.resume.agentName} has stopped. Resume that executor now.` } : {}),
+      } : null;
+      return mutationAck(slug, res, changed);
     },
   },
   {
