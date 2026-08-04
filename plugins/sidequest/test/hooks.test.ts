@@ -44,6 +44,7 @@ const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
 const TEAMMATE_IDLE = path.join(HOOKS, 'teammate-idle.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
+const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
 const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
 const GUARD_POWERSHELL_CMD_SHIMS = path.join(HOOKS, 'guard-powershell-cmd-shims.js');
 const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
@@ -486,6 +487,14 @@ test('pre-tool hook: helper writes use the bound agent scope in linked worktrees
   assert.match(unbound.hookSpecificOutput.permissionDecisionReason, /No active ticket is bound to acting agent/);
   assert.doesNotMatch(unbound.hookSpecificOutput.permissionDecisionReason, new RegExp(parentTicket.ref));
   assert.doesNotMatch(unbound.hookSpecificOutput.permissionDecisionReason, new RegExp(siblingTicket.ref));
+
+  const scratchpad = path.join(os.tmpdir(), 'claude', `helper-scratchpad-${sqSeq}`, 'temp.js');
+  const scratchpadWrite = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: scratchpad },
+  });
+  assert.equal(scratchpadWrite, null);
 
   const read = runHookOutput(FORCE_BYPASS, {
     ...helper,
@@ -1312,6 +1321,33 @@ test('home-delete guard: allows scratchpad deletion', () => {
 
 test('home-delete guard: allows non-delete PowerShell commands', () => {
   assert.strictEqual(runHomeDeleteGuard('PowerShell', 'Get-ChildItem $HOME'), null);
+});
+
+test('home-delete guard: allows observed non-destructive scratchpad commands', () => {
+  const scratchpad = path.join(os.tmpdir(), 'claude', 'sq-1330');
+  for (const command of [
+    `grep -n "profile" ${path.join(scratchpad, 'verify.log')}`,
+    `cat <<'EOF' > ${path.join(scratchpad, 'script.js')}\nconsole.log('scratchpad');\nEOF`,
+    `rm -f ${path.join(scratchpad, 'script.js')}`,
+    `rm -rf ${path.join(scratchpad, 'cache')}; grep -n "$home" ${path.join(scratchpad, 'verify.log')}`,
+  ]) {
+    assert.strictEqual(runHomeDeleteGuard('Bash', command), null, command);
+  }
+});
+
+test('worktree isolation guard: allows unparseable read and verify-wrapper Bash commands', () => {
+  const filteredVerifyCommand = 'log="$(mktemp "${TMPDIR:-/tmp}/sidequest-verify.XXXXXX.log")"\n(cd plugins/sidequest && npm run test:full) > "$log" 2>&1\nstatus=$?\ngrep -nE "^not ok|^# (fail|pass)" "$log" | head -40';
+  for (const command of [
+    'grep -n "guard" plugins/sidequest/test/hooks.test.ts',
+    filteredVerifyCommand,
+  ]) {
+    assert.strictEqual(runHookOutput(GUARD_WORKTREE_ISOLATION, {
+      tool_name: 'Bash',
+      agent_type: 'sidequest-exec-dispatch',
+      agent_id: 'sq-1330-fixture',
+      tool_input: { command },
+    }), null, command);
+  }
 });
 
 test('home-delete guard: blocks the 2026-07-16 incident command verbatim', () => {

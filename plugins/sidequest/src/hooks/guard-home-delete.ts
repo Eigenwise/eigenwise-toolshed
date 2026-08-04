@@ -4,10 +4,14 @@ import path from 'node:path';
 import { readStdin, stringField } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
 
-function hasRecursiveDelete(command: string): boolean {
-  const deletes = /(?:^|[;&|{}()\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|rd|ri|del|erase)\b/i;
+function deleteArguments(command: string): string[] {
+  const commands = /(?:^|[;&|{}()\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|rd|ri|del|erase)\b([^;&|{}\n]*)/gi;
+  return [...command.matchAll(commands)].map((match) => match[1] || '');
+}
+
+function hasProtectedRecursiveDelete(command: string): boolean {
   const recursive = /(?:--recursive\b|-[a-z]*r[a-z]*\b|-recurse\b|\/s\b)/i;
-  return deletes.test(command) && recursive.test(command);
+  return deleteArguments(command).some((argumentsAfterDelete) => recursive.test(argumentsAfterDelete) && isProtectedPath(argumentsAfterDelete));
 }
 
 function normalizePath(value: string): string {
@@ -35,7 +39,7 @@ function main(): void {
   const command = toolInput !== null && typeof toolInput === 'object' && !Array.isArray(toolInput)
     ? String((toolInput as Record<string, unknown>).command || '')
     : '';
-  if (!hasRecursiveDelete(command) || !isProtectedPath(command)) return;
+  if (!hasProtectedRecursiveDelete(command)) return;
   writeDeny('PreToolUse', 'sidequest: blocked a recursive delete aimed at the user profile or .claude root. Use a specific project or scratchpad path instead.');
 }
 

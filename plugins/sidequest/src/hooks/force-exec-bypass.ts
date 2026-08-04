@@ -1,3 +1,4 @@
+import os from 'node:os';
 import path from 'node:path';
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeDeny, writeJson } from './shared/output.js';
@@ -423,6 +424,15 @@ function inScope(target: string, scope: HelperScope): boolean {
   });
 }
 
+function isScratchpadPath(target: string): boolean {
+  const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
+  const roots = [configuredRoot, path.join(os.tmpdir(), 'claude')].filter((root): root is string => Boolean(root));
+  return roots.some((root) => {
+    const relative = path.relative(path.resolve(root), target);
+    return Boolean(relative) && relative !== '..' && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+  });
+}
+
 function guardHelperWrite(input: HookInput): void {
   const resolution = helperScopes(input);
   if (resolution.status === 'no-active-ticket') return;
@@ -436,7 +446,7 @@ function guardHelperWrite(input: HookInput): void {
     return;
   }
   const scope = resolution.scopes[0]!;
-  if (inScope(target, scope)) return;
+  if (isScratchpadPath(target) || inScope(target, scope)) return;
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     'PreToolUse',
