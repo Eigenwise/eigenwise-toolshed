@@ -394,21 +394,28 @@ function helperScopes(input) {
   const agentId = stringField(input, "agent_id", "agentId");
   const type = stringField(input, "agent_type", "agentType", "subagent_type");
   const sessionId = stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
-  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return [];
+  if (!agentId || !type || !sessionId || isCurrentExecutor(classifyExecutor(type))) return { status: "no-active-ticket", scopes: [] };
   try {
     const store = require(runtimeModule("store"));
-    const matches = [];
+    const activeTickets = [];
     for (const project of store.listProjects({ all: true })) {
       const projectPath = String(store.readMeta(project.slug)?.path || "").trim();
       if (!projectPath) continue;
       for (const ticket of store.listTickets(project.slug)) {
         if (!ticket.claim?.by || ticket.dispatch?.terminalAt || ticket.dispatch?.sessionId !== sessionId || !ticket.ref) continue;
-        matches.push({ ref: ticket.ref, projectPath, files: store.effectiveScope(project.slug, ticket.files) });
+        activeTickets.push({ project: project.slug, projectPath, ticket });
       }
     }
-    return matches;
+    if (!activeTickets.length) return { status: "no-active-ticket", scopes: [] };
+    const ownedTickets = activeTickets.filter(({ ticket }) => ticket.dispatch?.agentId === agentId);
+    if (ownedTickets.length !== 1) return { status: "no-owner", scopes: [] };
+    const owner = ownedTickets[0];
+    return {
+      status: "ok",
+      scopes: [{ ref: owner.ticket.ref, projectPath: owner.projectPath, files: store.effectiveScope(owner.project, owner.ticket.files) }]
+    };
   } catch (_) {
-    return [];
+    return { status: "no-active-ticket", scopes: [] };
   }
 }
 function writeTarget(input) {
@@ -421,7 +428,9 @@ function writeTarget(input) {
 }
 function projectRelative(target, projectPath) {
   const relative = import_node_path2.default.relative(projectPath, target).replace(/\\/g, "/");
-  return !relative || relative === ".." || relative.startsWith("../") || import_node_path2.default.isAbsolute(relative) ? null : relative;
+  if (!relative || relative === ".." || relative.startsWith("../") || import_node_path2.default.isAbsolute(relative)) return null;
+  const worktree = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(relative);
+  return worktree ? worktree[1] || null : relative;
 }
 function inScope(target, scope) {
   const relative = projectRelative(target, scope.projectPath);
@@ -434,16 +443,23 @@ function inScope(target, scope) {
   });
 }
 function guardHelperWrite(input) {
-  const scopes = helperScopes(input);
-  if (!scopes.length) return;
+  const resolution = helperScopes(input);
+  if (resolution.status === "no-active-ticket") return;
   const target = writeTarget(input);
-  if (!target || scopes.some((scope) => inScope(target, scope))) return;
-  const refs = [...new Set(scopes.map((scope) => scope.ref))];
-  const projectScope = scopes.find((scope) => projectRelative(target, scope.projectPath) !== null);
-  const display = projectScope ? projectRelative(target, projectScope.projectPath) : target;
+  if (!target) return;
+  if (resolution.status === "no-owner") {
+    writeDeny(
+      "PreToolUse",
+      `sidequest: refusing helper write to ${target}. No active ticket is bound to acting agent ${stringField(input, "agent_id", "agentId")}; refusing to borrow another ticket's scope.`
+    );
+    return;
+  }
+  const scope = resolution.scopes[0];
+  if (inScope(target, scope)) return;
+  const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     "PreToolUse",
-    `sidequest: refusing helper write to ${display}. It is outside ${refs.join(", ")}'s effective scope. Route this path through the parent executor as a scope request or file a new ticket.`
+    `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Route this path through the parent executor as a scope request or file a new ticket.`
   );
 }
 function main() {
