@@ -9,17 +9,8 @@ const {
   activeInstances,
   compareSemver,
   decide,
-  isAgentGeneratedPrompt,
   isMaintenancePrompt,
-  isToolshedDevProject,
 } = require('../hooks/user-prompt-freshness.js');
-
-const ambientProjectDirectory = process.env.CLAUDE_PROJECT_DIR;
-
-// CLAUDE_PROJECT_DIR is a dev-checkout signal to the hook, so an ambient value from whatever
-// session runs this suite would turn every hard-block assertion below into a reload warning.
-test.before(() => { delete process.env.CLAUDE_PROJECT_DIR; });
-test.after(() => { if (ambientProjectDirectory !== undefined) process.env.CLAUDE_PROJECT_DIR = ambientProjectDirectory; });
 
 function tempDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-freshness-'));
@@ -29,11 +20,8 @@ function registry(installs) {
   return { plugins: { 'workbench@eigenwise-toolshed': installs, 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:\\dev\\other', version: '1.0.0' }], 'other@elsewhere': [{ scope: 'user', version: '0.0.1' }] } };
 }
 
-// A session running an OLDER workbench than the one installed: the only state that hard-blocks.
-// `project` lives under the temp root so it is absolute on the running platform and has no
-// marketplace manifest above it — a Windows-shaped literal is relative on Linux, and resolving it
-// against the suite's cwd walked dev-checkout detection straight into this repo. The per-case
-// warning set and state directory keep warn-once decisions from leaking between tests.
+// A session running an OLDER workbench than the installed copy. Each case gets independent
+// warning state, so the once-per-session behavior cannot leak between tests.
 function reloadPending(directory) {
   const registryFile = path.join(directory, 'installed_plugins.json');
   const pluginRoot = path.join(directory, 'loaded');
@@ -78,13 +66,14 @@ test('installed behind the central marketplace is no longer blocked (regression:
   assert.equal(fetches, 0);
 });
 
-test('loaded workbench older than the installed registry blocks until reload', () => {
+test('loaded workbench older than the installed registry permits the prompt with a reload warning', () => {
   const { pluginRoot, project, options } = reloadPending(tempDirectory());
-  assert.match(decide({ prompt: 'continue', cwd: project }, options), /still loaded workbench 1\.0\.0 while the installed version is 2\.0\.0/);
+  const output = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'session-freshness' }, options));
+  assert.equal(output.decision, undefined);
+  assert.equal(output.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 is installed, but this session loaded 1.0.0. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.');
 
-  // Reloading catches the loaded version up to installed and clears the block.
   fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '2.0.0' }));
-  assert.equal(decide({ prompt: 'continue', cwd: project }, options), '');
+  assert.equal(decide({ prompt: 'continue', cwd: project, session_id: 'session-reloaded' }, options), '');
 });
 
 test('maintenance and reload prompts are always allowed, even inside the reload window', () => {
@@ -111,88 +100,16 @@ test('only exact maintenance prompts bypass the guard', () => {
   for (const prompt of ['please run /update-toolshed', '/update-toolshed; work on this', '/workbench:update-toolshed; work on this', '/workbench:workbench-doctor now', '/reload-plugins and fix it', 'claude plugin update sidequest@eigenwise-toolshed --scope user && rm -rf x', 'I said /plugin update']) assert.equal(isMaintenancePrompt(prompt), false, prompt);
 });
 
-const completeTaskNotification = `<task-notification>
-<task-id>agent-a73d9245832c778d2</task-id>
-<tool-use-id>toolu_01D2s5bnLL6LWzYm1Qf7PsK7</tool-use-id>
-<output-file>C:/Users/kenny/AppData/Local/Temp/claude/agent-result.txt</output-file>
-<status>completed</status>
-<summary>Agent "sidequest-sq-452" completed</summary>
-<note>Result written to the output file.</note>
-<result>Submitted SQ-452.</result>
-<usage>
-  <input-tokens>1032</input-tokens>
-  <output-tokens>418</output-tokens>
-</usage>
-<worktree>
-  <path>C:/dev/eigenwise-public/eigenwise-toolshed/.claude/worktrees/agent-a73d9245832c778d2</path>
-  <branch>agent-a73d9245832c778d2</branch>
-</worktree>
-</task-notification>`;
+test('all prompts pass through and warn only once for the session', () => {
+  const { project, registryFile, options } = reloadPending(tempDirectory());
+  const first = JSON.parse(decide({ prompt: 'keep working', cwd: project, session_id: 'session-warning' }, options));
+  assert.equal(first.decision, undefined);
+  assert.match(first.hookSpecificOutput.additionalContext, /This prompt is proceeding\./);
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '3.0.0' }] } }));
+  assert.equal(decide({ prompt: 'continue', cwd: project, session_id: 'session-warning' }, options), '');
 
-const monitorEventNotification = `<task-notification>
-<task-id>monitor-s7-evals</task-id>
-<summary>Monitor event: "S7 evals and training failures"</summary>
-<event>{"event":"monitor","failures":3}</event>
-If this event is something the user would act on now, send a PushNotification with the relevant details.
-</task-notification>`;
-
-test('agent-generated continuations pass with one reload warning', () => {
-  const { project, options } = reloadPending(tempDirectory());
-  const prompt = '<agent-message>Executor completed.</agent-message>';
-  const first = JSON.parse(decide({ prompt, cwd: project, session_id: 'session-agent' }, options));
-  assert.equal(first.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 installed, session loaded 1.0.0. Reload when convenient.');
-  assert.equal(decide({ prompt, cwd: project, session_id: 'session-agent' }, options), '');
-  assert.equal(isAgentGeneratedPrompt(prompt), true);
-  assert.equal(isAgentGeneratedPrompt('<local-command-caveat>Use the CLI result.</local-command-caveat>'), true);
-  assert.equal(isAgentGeneratedPrompt(completeTaskNotification), true);
-  assert.equal(isAgentGeneratedPrompt(monitorEventNotification), true);
-});
-
-test('task-notification prefixes never hard-block during a reload window', () => {
-  const { project, options } = reloadPending(tempDirectory());
-  const result = JSON.parse(decide({
-    prompt: monitorEventNotification,
-    cwd: project,
-    session_id: 'session-monitor',
-  }, options));
-  assert.equal(result.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 installed, session loaded 1.0.0. Reload when convenient.');
-  assert.equal(decide({
-    prompt: '<task-notification>unrecognized shape',
-    cwd: project,
-    session_id: 'session-monitor',
-  }, options), '');
-  assert.match(decide({
-    prompt: 'quoted <task-notification>unrecognized shape',
-    cwd: project,
-  }, options), /"decision":"block"/);
-});
-
-test('toolshed source checkout warns instead of blocking a human prompt', () => {
-  const directory = tempDirectory();
-  const { options } = reloadPending(directory);
-  const project = path.join(directory, 'toolshed', 'plugins', 'workbench');
-  fs.mkdirSync(project, { recursive: true });
-  fs.mkdirSync(path.join(directory, 'toolshed', '.claude-plugin'), { recursive: true });
-  fs.writeFileSync(path.join(directory, 'toolshed', '.claude-plugin', 'marketplace.json'), JSON.stringify({
-    name: 'eigenwise-toolshed',
-    plugins: [{ name: 'workbench', source: './plugins/workbench' }],
-  }));
-  const result = JSON.parse(decide({ prompt: 'keep working', cwd: project, session_id: 'session-dev' }, options));
-  assert.equal(result.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 installed, session loaded 1.0.0. Reload when convenient.');
-});
-
-test('ordinary human prompts still hard-block during a reload window', () => {
-  const { project, options } = reloadPending(tempDirectory());
-  assert.match(decide({ prompt: 'keep working', cwd: project }, options), /"decision":"block"/);
-});
-
-// This suite runs from plugins/workbench, so a relative cwd resolves inside the toolshed checkout
-// and would find the repo's own marketplace manifest if the walk did not require an absolute path.
-test('a project directory that is not absolute is never a toolshed checkout', () => {
-  const { options } = reloadPending(tempDirectory());
-  const relative = path.join('plugins', 'workbench');
-  assert.equal(isToolshedDevProject({ cwd: relative }, fs), false);
-  assert.match(decide({ prompt: 'keep working', cwd: relative }, options), /"decision":"block"/);
+  const nextSession = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'another-session' }, options));
+  assert.match(nextSession.hookSpecificOutput.additionalContext, /Workbench 3\.0\.0 is installed/);
 });
 
 test('selects user and overlapping project installs, excluding unrelated marketplaces', () => {
