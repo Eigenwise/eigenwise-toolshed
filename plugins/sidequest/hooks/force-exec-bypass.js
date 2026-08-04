@@ -23,6 +23,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/force-exec-bypass.ts
+var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
@@ -442,6 +443,14 @@ function inScope(target, scope) {
     return key === scopeKey || key.startsWith(`${scopeKey}/`);
   });
 }
+function isScratchpadPath(target) {
+  const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
+  const roots = [configuredRoot, import_node_path2.default.join(import_node_os.default.tmpdir(), "claude")].filter((root) => Boolean(root));
+  return roots.some((root) => {
+    const relative = import_node_path2.default.relative(import_node_path2.default.resolve(root), target);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path2.default.sep}`) && !import_node_path2.default.isAbsolute(relative);
+  });
+}
 function guardHelperWrite(input) {
   const resolution = helperScopes(input);
   if (resolution.status === "no-active-ticket") return;
@@ -455,7 +464,7 @@ function guardHelperWrite(input) {
     return;
   }
   const scope = resolution.scopes[0];
-  if (inScope(target, scope)) return;
+  if (isScratchpadPath(target) || inScope(target, scope)) return;
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     "PreToolUse",

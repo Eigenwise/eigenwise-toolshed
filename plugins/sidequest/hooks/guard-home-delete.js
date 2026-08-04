@@ -65,10 +65,13 @@ function writeDeny(hookEventName, permissionDecisionReason) {
 }
 
 // src/hooks/guard-home-delete.ts
-function hasRecursiveDelete(command) {
-  const deletes = /(?:^|[;&|{}()\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|rd|ri|del|erase)\b/i;
+function deleteArguments(command) {
+  const commands = /(?:^|[;&|{}()\n])\s*(?:[\w.-]+\s+)*(?:remove-item|rm|rmdir|rd|ri|del|erase)\b([^;&|{}\n]*)/gi;
+  return [...command.matchAll(commands)].map((match) => match[1] || "");
+}
+function hasProtectedRecursiveDelete(command) {
   const recursive = /(?:--recursive\b|-[a-z]*r[a-z]*\b|-recurse\b|\/s\b)/i;
-  return deletes.test(command) && recursive.test(command);
+  return deleteArguments(command).some((argumentsAfterDelete) => recursive.test(argumentsAfterDelete) && isProtectedPath(argumentsAfterDelete));
 }
 function normalizePath(value) {
   return value.toLowerCase().replace(/[\\/]+$/, "");
@@ -84,7 +87,7 @@ function main() {
   if (!input || !["Bash", "PowerShell"].includes(stringField(input, "tool_name"))) return;
   const toolInput = input.tool_input;
   const command = toolInput !== null && typeof toolInput === "object" && !Array.isArray(toolInput) ? String(toolInput.command || "") : "";
-  if (!hasRecursiveDelete(command) || !isProtectedPath(command)) return;
+  if (!hasProtectedRecursiveDelete(command)) return;
   writeDeny("PreToolUse", "sidequest: blocked a recursive delete aimed at the user profile or .claude root. Use a specific project or scratchpad path instead.");
 }
 try {
