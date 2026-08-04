@@ -166,7 +166,7 @@ function createClaims(dependencies: any) {
   }
 
   function observedStop(dispatch?: any, claim?: any) {
-    if (!dispatch || dispatch.outcome !== 'stopped_claimed' || !dispatch.terminalAt) return false;
+    if (!dispatch || !['died', 'stopped_claimed'].includes(dispatch.outcome) || !dispatch.terminalAt) return false;
     const stoppedMs = Date.parse(dispatch.terminalAt);
     const claimedMs = Date.parse(claim && claim.at);
     if (!Number.isFinite(stoppedMs)) return false;
@@ -198,7 +198,7 @@ function createClaims(dependencies: any) {
       return null;
     }
     if (observedStop(dispatch, claim)) {
-      return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor was observed to stop while still holding the claim' };
+      return { kind: 'observed_stop', idleMs, at: dispatch.terminalAt, reason: 'its executor has a durable died outcome while still holding the claim' };
     }
     const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
     if (!liveAgent && idleMs > claimIdleMs()) {

@@ -1508,7 +1508,14 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (opts.claimRelease) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || 'store' }, opts.claimRelease);
     }
-    setDispatchTerminal(t, opts.status === 'done' ? 'done' : 'released', opts.source || 'cli', { failureShape: 'unknown' });
+    const terminalOutcome = opts.status === 'done'
+      ? 'done'
+      : dispatch?.outcome === 'died' || opts.claimRelease?.kind === 'session_ended'
+        ? 'died'
+        : 'released';
+    if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
+      setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', { failureShape: 'unknown' });
+    }
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
     if (reopenedSubmission) t.submission = null;

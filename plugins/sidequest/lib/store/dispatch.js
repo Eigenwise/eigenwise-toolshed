@@ -914,7 +914,7 @@ function createDispatch(dependencies) {
             return { ok: true, ticket: t, stopped: false, verifying: true };
           }
           if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
-          setDispatchTerminal(t, t.claim && t.claim.by ? t.scopeRequest ? "scope_paused" : "stopped_claimed" : "failed", "subagent-stop");
+          setDispatchTerminal(t, t.claim && t.claim.by ? t.scopeRequest ? "scope_paused" : "died" : "failed", "subagent-stop");
           if (!t.claim || !t.claim.by) {
             t.dispatchNonce = null;
             t.dispatchExecutor = null;

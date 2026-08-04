@@ -5,8 +5,6 @@ function createPulse(dependencies: any) {
     boardConfig,
     checkpointProjection,
     claimPulse,
-    claimReleaseVerdict,
-    claimVerification,
     dispatchState,
     execFileSync,
     getTicket,
@@ -96,18 +94,40 @@ function createPulse(dependencies: any) {
     }
   }
 
-  function claimActivityPulse(ticket?: any, git?: any) {
-    const claim = ticket && ticket.claim;
-    if (!claim || !claim.by || claimReleaseVerdict(ticket)) return { working: false, lastActivityAt: null };
-    const activity = [claim.at];
-    for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
-      if (comment && comment.by === claim.by) activity.push(comment.at);
+  function projectedClaim(ticket?: any, now = Date.now()) {
+    const pulse = claimPulse(ticket, now);
+    if (!pulse) return null;
+    const boardQuietMs = Number.isFinite(pulse.idleMs) ? pulse.idleMs : null;
+    const { idleMs: _idleMs, ...claim } = pulse;
+    return {
+      reclaimable: claim.reclaimable,
+      ...claim,
+      boardQuietMs,
+      boardQuietNote: 'Time since the claim holder last wrote to the board; this is not process liveness.',
+      lastBoardActivityAt: boardQuietMs == null ? null : new Date(now - boardQuietMs).toISOString(),
+    };
+  }
+
+  function dispatchDeath(dispatch?: any) {
+    if (!dispatch) return null;
+    if (dispatch.outcome === 'died' && dispatch.terminalAt) {
+      return { at: dispatch.terminalAt, source: dispatch.terminalSource || null };
     }
-    if (git && git.commit && git.commit.at) activity.push(git.commit.at);
-    const timestamps = activity
-      .filter((at?: any) => Number.isFinite(Date.parse(at)))
-      .sort((a?: any, b?: any) => Date.parse(b) - Date.parse(a));
-    return { working: true, lastActivityAt: timestamps[0] || null };
+    const attempt = (Array.isArray(dispatch.attempts) ? dispatch.attempts : [])
+      .slice().reverse().find((entry: any) => entry?.outcome === 'died' && entry.terminalAt);
+    return attempt ? { at: attempt.terminalAt, source: attempt.terminalSource || null } : null;
+  }
+
+  function livenessPulse(ticket?: any, dispatch?: any, claim?: any, death?: any) {
+    if (death) return { state: 'dead', evidence: `died outcome recorded${death.source ? ` by ${death.source}` : ''}` };
+    if (claim?.reclaimable) return { state: 'dead', evidence: `claim is reclaimable: ${claim.reclaimable}` };
+    if (ticket?.scopeRequest) return { state: 'waiting', evidence: 'scope request pending' };
+    if (claim?.verifying) return { state: 'alive', evidence: 'verification marker is active' };
+    if (claim && dispatch && !dispatch.terminalAt && (dispatch.agentId || dispatch.agentName || dispatch.boundAt)) {
+      return { state: 'unknown', evidence: 'an agent was bound, but Sidequest has no process heartbeat' };
+    }
+    if (claim) return { state: 'unknown', evidence: 'claim held without live-process evidence' };
+    return { state: 'unknown', evidence: 'no active claim or death record' };
   }
 
   // Commit enforcement reads the dispatch snapshot, not ticket.files. When the
@@ -131,17 +151,23 @@ function createPulse(dependencies: any) {
     if (!ticket) return null;
     const meta = readMeta(slug);
     const git = gitPulse(meta && meta.path, ticket.files);
-    const activity = claimActivityPulse(ticket, git);
     const dispatch = dispatchState(ticket);
+    const now = Date.now();
+    const claim = projectedClaim(ticket, now);
+    const died = dispatchDeath(dispatch);
+    const liveness = livenessPulse(ticket, dispatch, claim, died);
     const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(ticket)];
     return {
       ref: ticket.ref,
       title: ticket.title,
+      liveness: liveness.state,
+      livenessEvidence: liveness.evidence,
+      reclaimable: claim?.reclaimable || null,
+      died,
       status: ticket.status,
       direct: ticket.directClaim || null,
-      claim: claimPulse(ticket, Date.now()),
-      working: activity.working,
-      lastActivityAt: activity.lastActivityAt,
+      claim,
+      claimHeld: Boolean(ticket.claim?.by),
       comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
       lastComment: lastCommentPulse(ticket),
       dispatchExecutor: ticket.dispatchExecutor || null,
