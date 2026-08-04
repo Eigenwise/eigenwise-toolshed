@@ -13,7 +13,6 @@ const {
 } = require('./freshness-helpers.js');
 
 const MARKETPLACE = 'eigenwise-toolshed';
-const AUTOMATION_TAG = /^<(?:agent-message|local-command-caveat|task-notification|task-progress|task-result)\b/i;
 const warnedReloads = new Set();
 
 function isMaintenancePrompt(prompt) {
@@ -28,31 +27,10 @@ function isMaintenancePrompt(prompt) {
   return /^claude\s+plugin\s+update\s+[\w.-]+@eigenwise-toolshed(?:\s+--scope\s+(?:user|project|local))?$/i.test(value);
 }
 
-// The ONLY hard block is the reload window: this session loaded an OLDER workbench than the
-// one now installed, so its plugin code (and the sidequest MCP it fronts) can write a stale
-// store shape until /reload-plugins lands. That is the one moment a stale prompt can corrupt
-// shared state, and the user clears it themselves by reloading.
-//
-// "Installed is behind the central marketplace" is deliberately NOT blocked here. Being behind
-// is not a corruption risk (loaded == installed, so no schema mismatch), and hard-blocking on
-// the marketplace version — which advances on every toolshed release — trapped unrelated
-// prompts in unrelated projects every time anything shipped. The advisory "an update is
-// available" nudge lives in the SessionStart freshness hook instead.
-function reloadReason(instances, loadedVersion) {
-  const installed = instances
+function newerInstalledVersion(instances, loadedVersion) {
+  return instances
     .filter((instance) => instance.name === 'workbench')
-    .find((instance) => compareSemver(loadedVersion, instance.version) === -1);
-  return installed
-    ? `Toolshed plugins were updated, but this session still loaded workbench ${loadedVersion} while the installed version is ${installed.version}. Run /reload-plugins or restart Claude Code. If ordinary reload is refused after plugin MCP state changes, retry with /reload-plugins --force, then resubmit this prompt. This prompt was not sent to Claude.`
-    : null;
-}
-
-function isAgentGeneratedPrompt(prompt) {
-  return AUTOMATION_TAG.test(String(prompt || ''));
-}
-
-function blockOutput(reason) {
-  return reason ? JSON.stringify({ decision: 'block', reason }) : '';
+    .find((instance) => compareSemver(loadedVersion, instance.version) === -1)?.version || null;
 }
 
 function warningOutput(message) {
@@ -60,25 +38,25 @@ function warningOutput(message) {
 }
 
 function reloadWarning(installedVersion, loadedVersion) {
-  return `Workbench ${installedVersion} installed, session loaded ${loadedVersion}. Reload when convenient.`;
+  return `Workbench ${installedVersion} is installed, but this session loaded ${loadedVersion}. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.`;
 }
 
-function warningKey(input, installedVersion, loadedVersion) {
-  return `${input?.session_id || ''}\0${input?.cwd || ''}\0${installedVersion}\0${loadedVersion}`;
+function warningKey(input) {
+  return `${input?.session_id || ''}\0workbench`;
 }
 
-function warningStateFile(input, installedVersion, loadedVersion, directory) {
+function warningStateFile(input, directory) {
   if (!input?.session_id) return null;
-  const digest = crypto.createHash('sha256').update(warningKey(input, installedVersion, loadedVersion)).digest('hex');
+  const digest = crypto.createHash('sha256').update(warningKey(input)).digest('hex');
   return path.join(directory, digest);
 }
 
-function warnOnce(input, installedVersion, loadedVersion, options = {}) {
-  const key = warningKey(input, installedVersion, loadedVersion);
+function warnOnce(input, options = {}) {
+  const key = warningKey(input);
   const warned = options.warnedReloads || warnedReloads;
   if (warned.has(key)) return false;
   warned.add(key);
-  const stateFile = warningStateFile(input, installedVersion, loadedVersion, options.warningStateDirectory || path.join(os.tmpdir(), 'eigenwise-toolshed', 'freshness-warnings'));
+  const stateFile = warningStateFile(input, options.warningStateDirectory || path.join(os.tmpdir(), 'eigenwise-toolshed', 'freshness-warnings'));
   if (!stateFile) return true;
   try {
     (options.fileSystem || fs).mkdirSync(path.dirname(stateFile), { recursive: true });
@@ -87,25 +65,6 @@ function warnOnce(input, installedVersion, loadedVersion, options = {}) {
   } catch (error) {
     return error?.code !== 'EEXIST';
   }
-}
-
-// Only an absolute project directory can be walked: path.resolve would otherwise anchor a
-// relative (or foreign-platform) value to whatever cwd the hook happens to run under, and climb
-// into an unrelated toolshed checkout above it.
-function marketplaceRoot(projectDirectory, fileSystem) {
-  if (!projectDirectory || !path.isAbsolute(projectDirectory)) return false;
-  let directory = path.resolve(projectDirectory);
-  while (true) {
-    const manifest = readJson(fileSystem, path.join(directory, '.claude-plugin', 'marketplace.json'));
-    if (manifest?.name === MARKETPLACE && manifest.plugins?.some((plugin) => plugin.name === 'workbench' && plugin.source === './plugins/workbench')) return true;
-    const parent = path.dirname(directory);
-    if (parent === directory) return false;
-    directory = parent;
-  }
-}
-
-function isToolshedDevProject(input, fileSystem) {
-  return marketplaceRoot(process.env.CLAUDE_PROJECT_DIR, fileSystem) || marketplaceRoot(input?.cwd, fileSystem);
 }
 
 function loadedPluginVersion(fileSystem, pluginRoot) {
@@ -118,16 +77,9 @@ function decide(input, options = {}) {
   const registryFile = options.registryFile || path.join(options.home || os.homedir(), '.claude', 'plugins', 'installed_plugins.json');
   const instances = activeInstances(readJson(fileSystem, registryFile) || {}, input?.cwd, MARKETPLACE, options.platform);
   const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT);
-  const reason = reloadReason(instances, loadedVersion);
-  if (!reason) return '';
-  const installedVersion = instances
-    .filter((instance) => instance.name === 'workbench')
-    .find((instance) => compareSemver(loadedVersion, instance.version) === -1)?.version;
-  if ((isAgentGeneratedPrompt(input?.prompt) || isToolshedDevProject(input, fileSystem))
-    && warnOnce(input, installedVersion, loadedVersion, options)) {
-    return warningOutput(reloadWarning(installedVersion, loadedVersion));
-  }
-  return isAgentGeneratedPrompt(input?.prompt) || isToolshedDevProject(input, fileSystem) ? '' : blockOutput(reason);
+  const installedVersion = newerInstalledVersion(instances, loadedVersion);
+  if (!installedVersion) return '';
+  return warnOnce(input, options) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
 }
 
 function main() {
@@ -145,15 +97,12 @@ if (require.main === module) main();
 module.exports = {
   MARKETPLACE,
   activeInstances,
-  blockOutput,
   compareSemver,
   decide,
-  isAgentGeneratedPrompt,
   isMaintenancePrompt,
-  isToolshedDevProject,
   loadedPluginVersion,
+  newerInstalledVersion,
   parseSemver,
-  reloadReason,
   reloadWarning,
   warnOnce,
 };
