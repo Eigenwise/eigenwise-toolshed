@@ -245,18 +245,6 @@ function dispatchDescriptionError(...args) {
 function storyContractDriftWarnings(...args) {
   return warningsLayer.storyContractDriftWarnings(...args);
 }
-function ticketSymbolReferences(...args) {
-  return warningsLayer.ticketSymbolReferences(...args);
-}
-function symbolSearchIsBounded(...args) {
-  return warningsLayer.symbolSearchIsBounded(...args);
-}
-function symbolExistsOnTarget(...args) {
-  return warningsLayer.symbolExistsOnTarget(...args);
-}
-function symbolExistenceWarnings(...args) {
-  return warningsLayer.symbolExistenceWarnings(...args);
-}
 function crossTicketStateWarnings(...args) {
   return warningsLayer.crossTicketStateWarnings(...args);
 }

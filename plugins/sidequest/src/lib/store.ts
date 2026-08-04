@@ -144,10 +144,6 @@ function verifyCommandWarning(...args: any[]) { return warningsLayer.verifyComma
 function dispatchVerifyCommandError(...args: any[]) { return warningsLayer.dispatchVerifyCommandError(...args); }
 function dispatchDescriptionError(...args: any[]) { return warningsLayer.dispatchDescriptionError(...args); }
 function storyContractDriftWarnings(...args: any[]) { return warningsLayer.storyContractDriftWarnings(...args); }
-function ticketSymbolReferences(...args: any[]) { return warningsLayer.ticketSymbolReferences(...args); }
-function symbolSearchIsBounded(...args: any[]) { return warningsLayer.symbolSearchIsBounded(...args); }
-function symbolExistsOnTarget(...args: any[]) { return warningsLayer.symbolExistsOnTarget(...args); }
-function symbolExistenceWarnings(...args: any[]) { return warningsLayer.symbolExistenceWarnings(...args); }
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
 function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
