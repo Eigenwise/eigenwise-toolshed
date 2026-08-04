@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.369.0 (2026-08-04)
+
+### workbench 0.79.0 → 0.80.0
+
+#### Features
+
+- Stale-plugin warnings stop eating your prompt (SQ-1342) [`8db3a54`](https://github.com/Eigenwise/eigenwise-toolshed/commit/8db3a543)
+  When installed Toolshed plugins moved ahead of what a session had loaded, Workbench blocked the prompt: it echoed the text back and told you to reload. That fired seven times across four projects in a week, and one of those prompts carried an attached image, which the echo cannot return. The cost landed entirely on the person retyping.
+
+  The prompt now goes through, carrying one session-scoped warning that the session is running stale plugin code and a reload is worth doing. One warning per session per version change, not per prompt. The blocking path is gone along with the automation and dev exemptions that existed only to soften it.
+
+  Version drift almost never makes the current prompt unsafe to answer, so the advisory had no business being a gate.
+
 ## v3.368.0 (2026-08-04)
 
 ### sidequest 4.13.0 → 4.14.0
