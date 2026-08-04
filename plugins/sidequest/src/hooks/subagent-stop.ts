@@ -195,9 +195,6 @@ function stopVerdict(
     if (ticket?.scopeRequest) {
       return `exec WAITING: ${label} has a pending scope request; approve scope, then resume it from the recovery snapshot`;
     }
-    if (ticket?.claim?.verification) {
-      return `exec WAITING: ${label} has an active verification marker; inspect verify completion before reclaiming it`;
-    }
     return diedVerdict(store, held, ticket);
   }
 

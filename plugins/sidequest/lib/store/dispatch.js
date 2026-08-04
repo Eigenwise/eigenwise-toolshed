@@ -907,12 +907,6 @@ function createDispatch(dependencies) {
           recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
         }
         if (active) {
-          if (claimVerification(t)) {
-            state.verifyStopAt = now;
-            stampDispatchEvent(t, "subagent-stop-during-verify", now);
-            putTicket(match.slug, t);
-            return { ok: true, ticket: t, stopped: false, verifying: true };
-          }
           if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
           setDispatchTerminal(t, t.claim && t.claim.by ? t.scopeRequest ? "scope_paused" : "died" : "failed", "subagent-stop");
           if (!t.claim || !t.claim.by) {

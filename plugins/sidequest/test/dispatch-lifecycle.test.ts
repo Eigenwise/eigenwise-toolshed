@@ -142,7 +142,7 @@ test('batch launch records every prepared ticket and binds the shared native age
     const pulse = store.pulsePayload(slug, ref);
     assert.equal(pulse.dispatch.state, 'bound');
     assert.ok(pulse.dispatch.boundAt);
-    assert.equal(pulse.working, false);
+    assert.equal(pulse.liveness, 'unknown');
   }
 });
 
@@ -283,7 +283,7 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
   assert.equal(dispatch.agentId, agentId);
   assert.ok(dispatch.boundAt);
   assert.equal(dispatch.worktree, path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`));
-  assert.equal(dispatch.outcome, 'stopped_claimed');
+  assert.equal(dispatch.outcome, 'died');
 });
 
 test('read-only category classes dispatch through restricted stable executors', () => {
@@ -425,8 +425,11 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   }).ok, true);
   pulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(pulse.dispatch.state, 'claimed');
-  assert.equal(pulse.working, true);
-  assert.equal(pulse.lastActivityAt, pulse.claim.at);
+  assert.equal(pulse.liveness, 'unknown');
+  assert.match(pulse.livenessEvidence, /no process heartbeat/);
+  assert.equal(pulse.claim.lastBoardActivityAt, pulse.claim.at);
+  assert.equal(typeof pulse.claim.boardQuietMs, 'number');
+  assert.match(pulse.claim.boardQuietNote, /not process liveness/);
   assert.equal(store.changesPayload(slug, since).tickets.find((entry?: any) => entry.ref === ticket.ref).lastEventType, 'dispatch');
 
   store.addComment(slug, ticket.ref, {
@@ -435,7 +438,7 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
     source: 'test',
   });
   pulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(pulse.lastActivityAt, store.getTicket(slug, ticket.ref).comments.at(-1).at);
+  assert.equal(pulse.claim.lastBoardActivityAt, store.getTicket(slug, ticket.ref).comments.at(-1).at);
 
   assert.equal(store.completeTicket(slug, ticket.ref, 'lifecycle-worker', {
     model: 'sonnet',
@@ -525,6 +528,33 @@ test('dispatch blocks a third terminal no-commit attempt unless explicitly overr
   const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
   assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-no-commit-cleanup', { status: 'todo', source: 'test' }).ok, true);
+});
+
+test('dispatch counts died rounds toward the repeat-failure breaker', () => {
+  const ticket = createFixture('repeat died dispatch fixture');
+  for (const number of [1, 2]) {
+    const sessionId = `repeat-died-${number}-${Date.now()}`;
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    const worker = `repeat-died-worker-${number}`;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: worker,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, `repeat-died-agent-${number}`, worker).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    assert.equal(store.markDispatchStopped(sessionId, executor, `repeat-died-agent-${number}`, worker).ok, true);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'died');
+    assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
+  }
+
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /two prior terminal dispatches without a commit/);
 });
 
 test('release and submission clear retain structured rework attempts', () => {

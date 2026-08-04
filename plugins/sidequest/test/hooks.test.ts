@@ -1062,7 +1062,7 @@ test('peer-guard: a scope-paused executor accepts steering only after approval w
 
   assert.equal(
     runHook(SUBAGENT_STOP, stop),
-    `exec paused on ${ticket.ref} scope request; approve scope, then use its recovery snapshot if redispatching`,
+    `exec WAITING: ${ticket.ref} has a pending scope request; approve scope, then resume it from the recovery snapshot`,
   );
   const paused = store.getTicket(slug, ticket.ref);
   assert.equal(paused.dispatch.outcome, 'scope_paused');
@@ -1994,14 +1994,25 @@ function backdateSessionClaims(sessionId?: any, minutesAgo?: any, effort?: any) 
   db.putRow(database, 'globals', { key: 'workers', data: w });
 }
 
-test('subagent-stop: an over-threshold claim reports a dead-claim verdict', () => {
+test('subagent-stop: a stopped claim reports durable death evidence within budget', () => {
   const sess = `sess-long-${++sqSeq}`;
   const t = addTicket('runaway 28-min ticket');
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
+  const stored = store.getTicket(slug, t.ref);
+  stored.dispatch.worktree = 'C:\\dev\\eigenwise-public\\eigenwise-toolshed\\.claude\\worktrees\\agent-a430388dd249c160d';
+  db.putRow(database, 'tickets', {
+    id: stored.id, project: slug, ref: stored.ref, status: stored.status,
+    archived: stored.archived ? 1 : 0, ord: stored.order, claim_by: stored.claim.by, data: stored,
+  });
 
   const ctx = runHookForBudget(SUBAGENT_STOP, stop);
-  assert.strictEqual(ctx, `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`);
+  assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
+  assert.match(ctx, /board quiet since .*; checkpoint none; commit none; comment none/);
+  assert.match(ctx, /worktree C:\\dev\\eigenwise-public\\eigenwise-toolshed\\\.claude\\worktrees\\agent-a430388dd249c160d/);
+  assert.match(ctx, /Next: recover the worktree diff, or release \+ fresh dispatch\.$/);
+  assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
+  assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);
   assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
   assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
 });
@@ -2014,7 +2025,7 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
     const ticket = addEffortTicket(`${effort} stopped claim`, effort);
     const stop = claimStopTicket(ticket, session, `worker-${effort}`);
     const ctx = runHook(SUBAGENT_STOP, stop);
-    assert.match(ctx, new RegExp(`^exec stopped HOLDING ${ticket.ref} claim`));
+    assert.match(ctx, new RegExp(`^exec DIED: ${ticket.ref} at `));
   }
 });
 
@@ -2051,8 +2062,8 @@ test('subagent-stop: a repeated stop repeats the held-claim verdict until releas
   const t = addTicket('over-threshold claim reports every stop');
   const stop = claimStopTicket(t, sess, 'worker-dedupe');
   backdateSessionClaims(sess, 28);
-  const expected = `exec stopped HOLDING ${t.ref} claim (age 28m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`;
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
+  const expected = runHook(SUBAGENT_STOP, stop);
+  assert.match(expected, new RegExp(`^exec DIED: ${t.ref} at `));
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
 });
 
@@ -2061,7 +2072,7 @@ test('subagent-stop: a stopped executor holding a fresh claim gets the dead-clai
   const t = addTicket('quick ticket, just claimed');
   const stop = claimStopTicket(t, sess, 'worker-fresh');
   const ctx = runHook(SUBAGENT_STOP, stop);
-  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim \\(age 1m\\), likely dead: salvage uncommitted work from its worktree, then release \\+ respawn and TaskStop it$`));
+  assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at .*Next: recover the worktree diff, or release \\+ fresh dispatch\\.$`));
 });
 
 test('subagent-stop: a terminal release tells the parent to stop a Monitor-backed executor', () => {
@@ -2071,7 +2082,7 @@ test('subagent-stop: a terminal release tells the parent to stop a Monitor-backe
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
   assert.strictEqual(
     runHook(SUBAGENT_STOP, stop),
-    `exec stopped after terminal release: ${t.ref}; TaskStop this executor so an owned Monitor cannot resume it`
+    `exec FINISHED after terminal release: ${t.ref}; TaskStop this executor so an owned Monitor cannot resume it`
   );
 });
 
@@ -2082,7 +2093,7 @@ test('subagent-stop: a completed executor reports a clean stop from its done com
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-completed', { status: 'todo' }).ok, true);
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
 test('subagent-stop: a completed file ticket without a hash is flagged', () => {
@@ -2092,7 +2103,7 @@ test('subagent-stop: a completed file ticket without a hash is flagged', () => {
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-no-hash', { status: 'todo' }).ok, true);
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec stopped clean: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
 });
 
 test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
@@ -2108,7 +2119,7 @@ test('subagent-stop: a legacy partial submission is not reported ready for integ
   });
   assert.strictEqual(
     runHook(SUBAGENT_STOP, stop),
-    `exec stopped with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths (plugins/model-gateway/bin/model-gateway.js); do not integrate it`
+    `exec FINISHED with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths (plugins/model-gateway/bin/model-gateway.js); do not integrate it`
   );
 });
 
@@ -2119,7 +2130,7 @@ test('subagent-stop: a submitted executor reports READY_FOR_INTEGRATION, not a d
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
   assert.strictEqual(
     runHook(SUBAGENT_STOP, stop),
-    `exec stopped clean: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md), then TaskStop this executor`
+    `exec FINISHED: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md), then TaskStop this executor`
   );
 });
 
@@ -2152,7 +2163,7 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
   });
   const parsed = out.trim() ? JSON.parse(out) : null;
   const ctx = parsed ? parsed.hookSpecificOutput.additionalContext : '';
-  assert.match(ctx, new RegExp(`^exec stopped HOLDING ${t.ref} claim`));
+  assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
 });
 
 // Registered LAST: creates extra fixture categories, which would otherwise grow
@@ -2447,7 +2458,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
         agent_id: agentId,
         agent_name: agentName,
       });
-      assert.match(verdict, new RegExp(`HOLDING ${ticket.ref} claim`));
+      assert.match(verdict, new RegExp(`^exec DIED: ${ticket.ref} at `));
     }
   } finally {
     if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
@@ -2499,8 +2510,8 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     agent_id: 'native-concurrent-1',
     agent_name: names[0],
   });
-  assert.match(firstStop, new RegExp(`HOLDING ${first.ref} claim`));
-  assert.equal(store.getTicket(slug, first.ref).dispatch.outcome, 'stopped_claimed');
+  assert.match(firstStop, new RegExp(`^exec DIED: ${first.ref} at `));
+  assert.equal(store.getTicket(slug, first.ref).dispatch.outcome, 'died');
   assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'claimed');
 
   const secondStop = runHook(SUBAGENT_STOP, {
@@ -2508,9 +2519,9 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     agent_type: preparedSecond.ticket.dispatchExecutor,
     agent_id: 'native-concurrent-2',
   });
-  assert.match(secondStop, new RegExp(`HOLDING ${second.ref} claim`));
-  assert.doesNotMatch(secondStop, new RegExp(`${first.ref}.*(?:release \\+ respawn|TaskStop)`));
-  assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'stopped_claimed');
+  assert.match(secondStop, new RegExp(`^exec DIED: ${second.ref} at `));
+  assert.doesNotMatch(secondStop, new RegExp(`${first.ref}.*(?:release \\+ fresh dispatch|TaskStop)`));
+  assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'died');
 });
 
 test('session start reconciles a reload-lost launch once and leaves it ready to respawn', () => {
@@ -2550,7 +2561,7 @@ test('subagent stop marks a launch that never claimed as failed', () => {
     agent_id: 'native-stop-1',
     agent_name: 'stop-before-claim',
   });
-  assert.match(context, /without ever claiming/);
+  assert.match(context, /DIED before claiming/);
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatch.outcome, 'failed');
   assert.equal(after.dispatchNonce, null);

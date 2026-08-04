@@ -52,6 +52,33 @@ test('reconcileSession releases only the ending session\'s claims, and moves the
   assert.ok(bt.claim && bt.claim.by === 'worker-b', 'B\'s claim is intact');
 });
 
+test('reconcileSession records a durable died dispatch outcome', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'routed session death',
+    description: 'Where: session reconcile fixture. Contract: record an ended routed dispatch. Verify: inspect pulse.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js'],
+    source: 'test',
+  });
+  const sessionId = 'sess-routed-death';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'routed-worker', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  const reconciled = store.reconcileSession(sessionId, { reason: 'session ended', source: 'session-end' });
+  assert.deepStrictEqual(reconciled.released, [ticket.ref]);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.dispatch.outcome, 'died');
+  assert.equal(stored.dispatch.terminalSource, 'session-end');
+  assert.ok(stored.dispatch.terminalAt);
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'dead');
+  assert.equal(pulse.died.at, stored.dispatch.terminalAt);
+});
+
 test('reconcileSession leaves a note comment on each released ticket', () => {
   const a = addTicket('to be auto-released');
   store.claimTicket(slug, a.ref, 'worker-x', { direct: true, reason: 'The reconcile fixture requires a local direct claim.', sessionId: 'sess-note' });
