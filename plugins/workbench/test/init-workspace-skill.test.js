@@ -105,7 +105,8 @@ test('init-workspace starts with telemetry consent, project intent, then the liv
   assert.match(skill, /local Collector to local Grafana/);
   assert.match(skill, /API-equivalent cost; input, output, and cache\ntoken totals; tool-call names and counts; plus model, session, agent, and activity information/);
   assert.match(skill, /never records\nprompt or response text, code or file contents, tool inputs or results, credentials, or environment values/);
-  assert.match(skill, /restart Claude Code.*re-run `\/workbench:init-workspace`/s);
+  assert.match(skill, /restart Claude Code.*`claude --continue`/s);
+  assert.doesNotMatch(skill, /then re-run `\/workbench:init-workspace`/);
   assert.match(skill, /What is this project for, and who is\nit for\? One or two lines is plenty\./);
   assert.match(skill, /Keep the answer in the session\/bootstrap plan/);
   assert.match(skill, /Read the current Toolshed marketplace manifest and\n`references\/stack-plugins\.md`/);
