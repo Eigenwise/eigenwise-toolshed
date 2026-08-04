@@ -8,6 +8,46 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.371.0 (2026-08-04)
+
+### sidequest 4.15.0 → 4.16.0
+
+#### Features
+
+- A dead executor now says so (SQ-1327) [`fbc4e2d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/fbc4e2d3)
+  When a dispatched executor died mid-run, nothing on the board changed. The claim stayed live, `idleMs` counted up, and `pulse` reported `working: true` forever. On one board that meant an executor died right after posting BOOT and sat there for eighteen hours while a paid cloud pod kept billing, and another died before terminating its pod at all. The person watching became the death detector, and that board turned Sidequest off over it.
+
+  A stop that leaves a live claim with no terminal board outcome now records a durable `died` outcome with its timestamp and last activity, from both the SubagentStop path and the SessionEnd reconcile. The orchestrator gets told which ticket died, when it went quiet, and what it left behind, instead of discovering it by hand-inspecting worktrees.
+
+  `pulse` carries a real `liveness` reading rather than an idle counter that everyone misread as one. An active verify reads alive, because a verify-start with no verify-complete is positive evidence of a live process; waiting is reserved for a pending scope request or a steering hold; a stop observed during active verification records died. The repeat-dispatch breaker counts died rounds as the durable terminal outcomes they are.
+
+  Briefings now tell executors to record billable external resources on the ticket as they create them and terminate them before any stop, including error paths, so a dead executor's cloud spend is reapable from the ticket thread.
+
+  This one was written from a live specimen: the session running it crashed with four executors claimed, and every one of them sat at `working: true` with nothing to distinguish four dead processes from four thinking ones.
+- Guards stop refusing work they were never meant to block (SQ-1330) [`0c4f680`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0c4f6805)
+  Two guards were firing on things that were never dangerous.
+
+  The scope guard refused helper writes to the harness's own scratchpad, the directory executors are told to use for temp files. The observed workaround is the whole problem: an executor refused the scratchpad path, then wrote the identical script into the repository working tree two tool calls later. Scratchpad paths are now always writable, and single-file deletes there are allowed.
+
+  The recursive-delete guard, added after a real `$home` wipe, had drifted into matching the user-profile path prefix rather than an actual recursive delete. It blocked a plain `grep -n`, three heredoc writes, and one `rm -f` of a single scratchpad file, deleting nothing in any of them. It now requires both a genuine recursive delete verb and a target resolving to the profile or `.claude` root. The original incident's commands still block, pinned by fixture.
+
+  The third complaint in this batch turned out to be already fixed: the worktree isolation guard no longer intercepts Bash commands at all, so the 220 refusals across 110 executor sessions came from an older build. That one ships as a fixture pinning the current behavior, not a change.
+- Removed a dispatch warning that was wrong 180 times out of 180 (SQ-1335) [`2d29cd1`](https://github.com/Eigenwise/eigenwise-toolshed/commit/2d29cd1e)
+  Dispatch used to warn when a symbol named in a ticket "does not appear on main". On one board it fired about 180 times over seven dispatch rounds and was never once correct. It flagged a Sidequest comment id as a missing code symbol, which by construction can never appear in a repository. Two executors released their tickets over it, and the orchestrator ended up telling every executor in its spawn prompt to ignore the warning, because otherwise each one burned a turn re-verifying a false alarm.
+
+  The check and its supporting machinery are gone, and a test pins them gone.
+
+  A signal that is wrong every time is worse than no signal: it costs a turn per dispatch and it teaches people to ignore the channel that carries the true warnings too. This is the same call as the oversized-skill guard: mechanisms that ask an agent to predict get removed, mechanisms that verify a fact stay.
+
+### workbench 0.80.0 → 0.80.1
+
+#### Fixes
+
+- init-workspace tells you to resume after a restart, not start over (SQ-1346)
+  Setting up telemetry needs a Claude Code restart, and the skill used to send you back in with a fresh `/workbench:init-workspace`. That works, but it starts the skill over and makes it recover your answers from the bootstrap plan.
+
+  It now asks you to come back with `claude --continue` instead, so the run keeps its own answers across the restart. The reload-boundary fallback says the same thing for the same reason.
+
 ## v3.370.0 (2026-08-04)
 
 ### sidequest 4.14.0 → 4.15.0
