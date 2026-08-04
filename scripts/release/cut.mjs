@@ -124,6 +124,9 @@ export function assertParentCiPassed(repoRoot, commit, runner = spawnSync) {
   }
 }
 
+function isGitHubRemote(remoteUrl) {
+  return /(?:^|[@/:])github\.com(?::|\/|$)/i.test(remoteUrl);
+}
 /**
  * The release commit and its tags are the verified artefact. Suites run arbitrary repository code,
  * so nothing they could have done to the local refs is allowed to reach the remote.
@@ -329,7 +332,7 @@ export async function cut(options = {}) {
     );
   }
   assertReleaseIntact(git, plan, commit);
-  if (push) {
+  if (push && (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote)))) {
     const assertCiPassed = options.assertParentCiPassed ?? assertParentCiPassed;
     assertCiPassed(repoRoot, pinned);
   }
