@@ -49,6 +49,8 @@ git(['branch', '-M', 'main']);
 const { slug } = store.ensureProject(PROJECT_DIR);
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+const codingNormal = store.getCategory('coding.normal');
+store.setCategory(Object.assign({}, codingNormal, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
 
