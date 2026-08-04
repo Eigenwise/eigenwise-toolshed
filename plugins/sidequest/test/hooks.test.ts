@@ -445,36 +445,52 @@ test('executor template calls transcript evidence self-reference', () => {
   assert.match(template, /report a visibility block rather than a finding/);
 });
 
-test('pre-tool hook: helper writes inherit the active parent ticket scope', () => {
-  const ticket = addStopTicket('helper scope capability', { files: ['lib/allowed.js'] });
-  const parent = claimStopTicket(ticket, `helper-scope-${++sqSeq}`, 'helper-parent');
+test('pre-tool hook: helper writes use the bound agent scope in linked worktrees', () => {
+  const parentTicket = addStopTicket('helper scope capability', { files: ['lib/allowed.js'] });
+  const sessionId = `helper-scope-${++sqSeq}`;
+  const parent = claimStopTicket(parentTicket, sessionId, 'helper-parent');
+  const siblingTicket = addStopTicket('concurrent helper scope', { files: ['lib/sibling.js'] });
+  claimStopTicket(siblingTicket, sessionId, 'helper-sibling');
+  const worktree = path.join(BOARD_PATH, '.claude', 'worktrees', 'sq-538-river-bluffs');
   const helper = {
-    session_id: parent.session_id,
-    agent_id: `helper-child-${sqSeq}`,
+    ...parent,
     agent_type: 'general-purpose',
-    cwd: BOARD_PATH,
+    cwd: worktree,
   };
   const inside = runHookOutput(FORCE_BYPASS, {
     ...helper,
     tool_name: 'Write',
-    tool_input: { file_path: path.join(BOARD_PATH, 'lib', 'allowed.js') },
+    tool_input: { file_path: path.join(worktree, 'lib', 'allowed.js') },
   });
   assert.equal(inside, null);
 
   const outside = runHookOutput(FORCE_BYPASS, {
     ...helper,
     tool_name: 'Write',
-    tool_input: { file_path: path.join(BOARD_PATH, 'lib', 'outside.js') },
+    tool_input: { file_path: path.join(worktree, 'lib', 'sibling.js') },
   });
+  const reason = outside.hookSpecificOutput.permissionDecisionReason;
   assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /lib[\\/]outside\.js/);
-  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
-  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /scope request or file a new ticket/);
+  assert.match(reason, /lib[\\/]sibling\.js/);
+  assert.match(reason, new RegExp(parentTicket.ref));
+  assert.doesNotMatch(reason, new RegExp(siblingTicket.ref));
+  assert.match(reason, /effective scope/);
+
+  const unbound = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    agent_id: `unbound-helper-${sqSeq}`,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'outside.js') },
+  });
+  assert.equal(unbound.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(unbound.hookSpecificOutput.permissionDecisionReason, /No active ticket is bound to acting agent/);
+  assert.doesNotMatch(unbound.hookSpecificOutput.permissionDecisionReason, new RegExp(parentTicket.ref));
+  assert.doesNotMatch(unbound.hookSpecificOutput.permissionDecisionReason, new RegExp(siblingTicket.ref));
 
   const read = runHookOutput(FORCE_BYPASS, {
     ...helper,
     tool_name: 'Read',
-    tool_input: { file_path: path.join(BOARD_PATH, 'lib', 'outside.js') },
+    tool_input: { file_path: path.join(worktree, 'lib', 'outside.js') },
   });
   assert.equal(read, null);
 });
