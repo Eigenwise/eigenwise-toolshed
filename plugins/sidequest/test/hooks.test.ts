@@ -1999,17 +1999,11 @@ test('subagent-stop: a stopped claim reports durable death evidence within budge
   const t = addTicket('runaway 28-min ticket');
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
-  const stored = store.getTicket(slug, t.ref);
-  stored.dispatch.worktree = 'C:\\dev\\eigenwise-public\\eigenwise-toolshed\\.claude\\worktrees\\agent-a430388dd249c160d';
-  db.putRow(database, 'tickets', {
-    id: stored.id, project: slug, ref: stored.ref, status: stored.status,
-    archived: stored.archived ? 1 : 0, ord: stored.order, claim_by: stored.claim.by, data: stored,
-  });
-
   const ctx = runHookForBudget(SUBAGENT_STOP, stop);
+  const expectedWorktree = path.join(BOARD_PATH, '.claude', 'worktrees', `agent-${stop.agent_id}`);
   assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
   assert.match(ctx, /board quiet since .*; checkpoint none; commit none; comment none/);
-  assert.match(ctx, /worktree C:\\dev\\eigenwise-public\\eigenwise-toolshed\\\.claude\\worktrees\\agent-a430388dd249c160d/);
+  assert.ok(ctx.includes(`worktree ${expectedWorktree}`));
   assert.match(ctx, /Next: recover the worktree diff, or release \+ fresh dispatch\.$/);
   assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
   assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);

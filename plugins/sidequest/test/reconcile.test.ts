@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 /**
  * Tests for the session worker registry + reconcileSession (SQ-153).

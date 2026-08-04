@@ -171,6 +171,9 @@ ${evidence.outputTail}`;
     const idleMs = claimIdleAge(ticket, atMs);
     const dispatch = dispatchState(ticket);
     const verification = claimVerification(ticket);
+    if (observedStop(dispatch, claim)) {
+      return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor has a durable died outcome while still holding the claim" };
+    }
     if (verification) {
       if (idleMs > claimAbandonMs()) {
         return { kind: "abandoned_verifying", idleMs, at: verification.startedAt, reason: "its verification marker never completed past the unobserved-death backstop" };
@@ -182,9 +185,6 @@ ${evidence.outputTail}`;
         return { kind: "missing_worktree", idleMs, at: dispatch.terminalAt, reason: "its stopped executor worktree no longer exists" };
       }
       return null;
-    }
-    if (observedStop(dispatch, claim)) {
-      return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor has a durable died outcome while still holding the claim" };
     }
     const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
     if (!liveAgent && idleMs > claimIdleMs()) {
