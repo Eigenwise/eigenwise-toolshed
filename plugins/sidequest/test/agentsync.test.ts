@@ -432,9 +432,9 @@ test('read-only stable executors deny the writers and grant everything else', ()
     for (const writer of ['Edit', 'Write', 'NotebookEdit']) {
       assert.ok(denied![1].includes(writer), `${file} must deny ${writer}`);
     }
-    // Playwright and Context7 are read-only work's actual tools; denying them was the
+    // Playwright, Context7, and the board are read-only work's actual tools; denying them was the
     // accidental side effect of the old allow list.
-    assert.doesNotMatch(denied![1], /playwright|context7/i);
+    assert.doesNotMatch(denied![1], /playwright|context7|mcp__plugin_sidequest_board__/i);
     assert.match(body, /Read-only role/);
     assert.match(body, /Bash is for inspection, tests, and verification, not edits/);
     assert.match(body, /board blocker comment/);
