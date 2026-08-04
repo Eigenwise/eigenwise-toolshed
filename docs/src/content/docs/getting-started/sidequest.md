@@ -180,6 +180,12 @@ sidequest dispatch SQ-3 --allow-repeat-failure
 
 Through MCP, pass `allowRepeatFailure: true` to `dispatch`. The override is recorded on the new dispatch with its timestamp, source, and count of prior no-commit attempts. Use it only after checking why the executor could not see or commit its declared paths. A shared-tree dispatch can be requested with `sharedTree: true` through MCP (or the CLI's `--shared-tree`), and inline work is another supported remedy.
 
+### Stale worktree cwd warnings
+
+If the board server was launched inside a `.claude/worktrees/` path, dispatch warns that spawned executors will inherit that stale working directory. The warning also appears in the executor briefing's flagged-uncertainty packet. It does not block dispatch, and it only covers sessions started inside a worktree, not a later `EnterWorktree` during the session.
+
+Executors inherit the spawning session's cwd. Shared-tree briefings therefore tell them to bind to the shared checkout before any git or file operation, confirm `git rev-parse --show-toplevel`, and stop to report if the mismatch persists.
+
 ### Dispatch needs this session's board MCP, not just an install
 
 A dispatched native Agent inherits the parent Claude Code session's connected MCP snapshot, not a fresh lookup of Claude Code's plugin registry. Installing Sidequest for a project, or reinstalling it mid-session, does not reach a conversation that is already open — a freshly spawned Agent can still come up with zero board tools even though the install itself is fine. Never assume a fresh Agent independently discovers a newly installed MCP server.
