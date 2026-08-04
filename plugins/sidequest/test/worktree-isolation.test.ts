@@ -208,19 +208,15 @@ test('an executor without a dispatch record cannot write into the shared checkou
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /no active dispatch record/);
 });
 
-// The incident's own shape: an executor that pauses for a scope request is
-// stopped-and-claimed, and its next write happens after a resume. If a stamped
-// terminalAt ended the contract, the guard would go quiet at the one moment the
-// worktree is already gone.
-test('an executor paused mid-ticket still expects its worktree after a resume', () => {
-  const agentId = 'a9paused';
+test('a dead executor still expects its worktree after a resume', () => {
+  const agentId = 'a9dead';
   const { ticket, sessionId, executor } = dispatched(agentId);
-  assert.equal(store.claimTicket(slug, ticket.ref, 'paused-worker', {
+  assert.equal(store.claimTicket(slug, ticket.ref, 'dead-worker', {
     token: ticket.dispatchNonce,
     executor: ticket.dispatchExecutor,
   }).ok, true);
   assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
-  assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'stopped_claimed');
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'died');
 
   const expectation = store.dispatchIsolationExpectation({ agentId, sessionId, executor });
   assert.equal(expectation && expectation.ref, ticket.ref);

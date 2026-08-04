@@ -106,33 +106,50 @@ function commitHash(comment) {
   const match = comment && String(comment.body || "").match(/\b[0-9a-f]{7,40}\b/i);
   return match ? match[0] || null : null;
 }
+function compactText(value, maxLength) {
+  const text = String(value || "").replace(/\s+/g, " ").trim();
+  return text.length <= maxLength ? text : `${text.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
+}
+function diedVerdict(store, claim, ticket) {
+  const label = ticket?.ref || claim.ref || claim.ticketId || "a ticket";
+  const activityMs = ticket ? store.claimActivityMs(ticket) : Date.parse(claim.at || "");
+  const quietSince = Number.isFinite(activityMs) ? new Date(activityMs).toISOString() : "unknown";
+  const checkpoint = ticket?.checkpoint;
+  const checkpointLabel = checkpoint?.id ? compactText(checkpoint.id, 28) : "none";
+  const commit = checkpoint?.commit ? compactText(checkpoint.commit, 12) : "none";
+  const holder = ticket?.claim?.by || claim.by;
+  const comment = (Array.isArray(ticket?.comments) ? ticket.comments : []).slice().reverse().find((entry) => !holder || entry.by === holder);
+  const commentLabel = comment?.body ? `"${compactText(comment.body, 64)}"` : "none";
+  const diedAt = ticket?.dispatch?.terminalAt || (/* @__PURE__ */ new Date()).toISOString();
+  const worktree = ticket?.dispatch?.worktree ? `; worktree ${ticket.dispatch.worktree}` : "";
+  return `exec DIED: ${label} at ${diedAt}; board quiet since ${quietSince}; checkpoint ${checkpointLabel}; commit ${commit}; comment ${commentLabel}${worktree}. Next: recover the worktree diff, or release + fresh dispatch.`;
+}
 function submissionVerdict(store, ticket) {
   const submission = ticket?.submission;
   if (!submission?.commit || submission.integratedAt) return null;
   const readiness = store.submissionReadiness(submission);
   if (!readiness.ok) {
-    return `exec stopped with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(", ")}); do not integrate it`;
+    return `exec FINISHED with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(", ")}); do not integrate it`;
   }
-  return `exec stopped clean: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
+  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
 }
 function terminalDispatchVerdict(store, tickets) {
   for (const ticket of tickets) {
     const submissionVerdictText = submissionVerdict(store, ticket);
     if (submissionVerdictText) return submissionVerdictText;
     if (ticket?.dispatch?.terminalAt && ticket.dispatch.outcome === "released") {
-      return `exec stopped after terminal release: ${ticket.ref}; TaskStop this executor so an owned Monitor cannot resume it`;
+      return `exec FINISHED after terminal release: ${ticket.ref}; TaskStop this executor so an owned Monitor cannot resume it`;
     }
     if (!ticket || ticket.status !== "done") continue;
     const comment = doneComment(ticket);
     if (!comment) continue;
     const hash = commitHash(comment);
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash ? " done WITHOUT commit hash" : ` done${hash ? ` (${hash})` : ""}`;
-    return `exec stopped clean: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
   }
   return null;
 }
 function stopVerdict(store, claims, classification, dispatchStopped, terminalTickets) {
-  const now = Date.now();
   for (const claim of claims) {
     if (!claim || claim.status !== "done") continue;
     const ticket = store.getTicket(claim.slug, claim.ticketId);
@@ -140,7 +157,7 @@ function stopVerdict(store, claims, classification, dispatchStopped, terminalTic
     if (!ticket || !comment) continue;
     const hash = commitHash(comment);
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash ? " done WITHOUT commit hash" : ` done${hash ? ` (${hash})` : ""}`;
-    return `exec stopped clean: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
   }
   for (const claim of claims) {
     if (!claim || claim.held) continue;
@@ -165,13 +182,11 @@ function stopVerdict(store, claims, classification, dispatchStopped, terminalTic
     }
     const label = held.ref || held.ticketId || "a ticket";
     if (ticket?.scopeRequest) {
-      return `exec paused on ${label} scope request; approve scope, then use its recovery snapshot if redispatching`;
+      return `exec WAITING: ${label} has a pending scope request; approve scope, then resume it from the recovery snapshot`;
     }
-    const started = Date.parse(held.at || "");
-    const minutes = Number.isFinite(started) ? Math.max(1, Math.round((now - started) / 6e4)) : 0;
-    return `exec stopped HOLDING ${label} claim (age ${minutes}m), likely dead: salvage uncommitted work from its worktree, then release + respawn and TaskStop it`;
+    return diedVerdict(store, held, ticket);
   }
-  if (dispatchStopped && classification.kind !== "unknown") return "exec stopped without ever claiming, TaskStop it first, then redispatch and spawn the returned spec";
+  if (dispatchStopped && classification.kind !== "unknown") return "exec DIED before claiming; TaskStop it first, then fresh-dispatch and spawn the returned spec";
   return null;
 }
 function clearNearTurnCapCounter(agentId) {

@@ -193,7 +193,7 @@ test('a quiet long-running executor survives the sweep; an observed stop does no
   assert.doesNotMatch(note, /TTL/i, 'the released comment must name the real reason');
 });
 
-test('a live verification marker protects a claim through a false stop observation, then clears for a real stop', () => {
+test('an active verification marker is alive until SubagentStop records death', () => {
   const ticket = addRouted('verification is still running');
   const session = 'session-verifying';
   const prepared = claimRouted(ticket, 'verifying-executor', { sessionId: session });
@@ -203,33 +203,40 @@ test('a live verification marker protects a claim through a false stop observati
     source: 'mcp',
   });
 
-  const stoppedDuringVerify = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
-  assert.equal(stoppedDuringVerify.ok, true);
-  assert.equal(stoppedDuringVerify.stopped, false);
   backdateClaim(ticket.ref, 2 * HOUR);
-
   const verifyingPulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(verifyingPulse.working, true);
+  assert.equal(verifyingPulse.liveness, 'alive');
   assert.equal(verifyingPulse.claim.verifying, true);
   assert.equal(verifyingPulse.claim.reclaimable, null);
-  assert.ok(verifyingPulse.lastActivityAt);
+  assert.ok(verifyingPulse.claim.lastBoardActivityAt);
   const protectedSweep = store.sweepStaleClaims({ project: slug, source: 'test' });
   assert.equal(protectedSweep.released.some((entry?: any) => entry.ref === ticket.ref), false);
 
-  store.addComment(slug, ticket.ref, {
-    by: 'verifying-executor',
-    body: '[sidequest:verify-complete]',
-    source: 'mcp',
-  });
-  const stoppedAfterVerify = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
-  assert.equal(stoppedAfterVerify.ok, true);
-  assert.equal(stoppedAfterVerify.stopped, true);
+  const stoppedDuringVerify = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
+  assert.equal(stoppedDuringVerify.ok, true);
+  assert.equal(stoppedDuringVerify.stopped, true);
   const stoppedPulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(stoppedPulse.working, false);
-  assert.equal(stoppedPulse.claim.verifying, false);
+  assert.equal(stoppedPulse.liveness, 'dead');
+  assert.equal(stoppedPulse.died.source, 'subagent-stop');
   assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
   assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
+});
+
+test('a pending scope request reports waiting before and after the executor stops', () => {
+  const ticket = addRouted('scope request is waiting');
+  const sessionId = 'session-scope-waiting';
+  const prepared = claimRouted(ticket, 'scope-waiting-executor', { sessionId });
+  assert.equal(store.requestScope(slug, ticket.ref, 'scope-waiting-executor', ['lib/extra.js']).ok, true);
+
+  let pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'waiting');
+  assert.match(pulse.livenessEvidence, /scope request pending/);
+  assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, null, null).ok, true);
+  pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'waiting');
+  assert.equal(pulse.died, null);
+  assert.equal(pulse.dispatch.outcome, 'scope_paused');
 });
 
 test('a shared-tree write dispatch refuses an empty verification completion unless it declares a no-op', () => {
@@ -395,13 +402,12 @@ test('a source-only scoped diff still completes without a negative control', () 
 test('a verification marker still releases after the unobserved-death backstop', () => {
   const ticket = addRouted('verification marker after a crash');
   const session = 'session-verifying-crash';
-  const prepared = claimRouted(ticket, 'crashed-verifier', { sessionId: session });
+  claimRouted(ticket, 'crashed-verifier', { sessionId: session });
   store.addComment(slug, ticket.ref, {
     by: 'crashed-verifier',
     body: '[sidequest:verify-start] npm run e2e',
     source: 'mcp',
   });
-  assert.equal(store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null).stopped, false);
   backdateClaim(ticket.ref, 25 * HOUR);
 
   const pulse = store.pulsePayload(slug, ticket.ref);
@@ -448,7 +454,7 @@ test('a missing isolated worktree after stop is reclaimable while a live quiet d
   }).ok, true);
   assert.equal(store.markDispatchStopped(stoppedSession, stoppedPrepared.ticket.dispatchExecutor, stoppedAgent, stoppedAgent).ok, true);
   const stoppedPulse = store.pulsePayload(slug, stopped.ref);
-  assert.equal(stoppedPulse.working, false);
+  assert.equal(stoppedPulse.liveness, 'dead');
   assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
 
   const live = addRouted('quiet live isolated dispatch');
@@ -464,7 +470,7 @@ test('a missing isolated worktree after stop is reclaimable while a live quiet d
   }).ok, true);
   backdateClaim(live.ref, 31 * 24 * HOUR);
   const livePulse = store.pulsePayload(slug, live.ref);
-  assert.equal(livePulse.working, true);
+  assert.equal(livePulse.liveness, 'unknown');
   assert.equal(livePulse.claim.reclaimable, null);
 });
 
