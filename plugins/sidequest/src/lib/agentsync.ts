@@ -613,7 +613,14 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
   const gitDir = sharedTree
     ? path.join(root, '.git')
     : path.join(root, '.git', 'worktrees', path.basename(worktree));
-  return `Worktree identity: ${sharedTree ? 'shared tree' : 'linked worktree'}\nPath: ${worktree}\nGit dir: ${gitDir}`;
+  const identity = `Worktree identity: ${sharedTree ? 'shared tree' : 'linked worktree'}\nPath: ${worktree}\nGit dir: ${gitDir}`;
+  if (!sharedTree) return identity;
+  return [
+    identity,
+    `Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale leftover worktree under ${root}${path.sep}.claude${path.sep}worktrees${path.sep}.`,
+    `Before any git or file operation, \`cd "${root}"\` and confirm \`git rev-parse --show-toplevel\` prints \`${root}\`.`,
+    'If it still differs after cd, stop and report to the orchestrator. Do not release or write anything in the wrong tree.',
+  ].join('\n');
 }
 
 function ticketIsolationContract(ticket?: any, projectPath?: any) {

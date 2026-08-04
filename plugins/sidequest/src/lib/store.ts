@@ -149,6 +149,7 @@ function symbolSearchIsBounded(...args: any[]) { return warningsLayer.symbolSear
 function symbolExistsOnTarget(...args: any[]) { return warningsLayer.symbolExistsOnTarget(...args); }
 function symbolExistenceWarnings(...args: any[]) { return warningsLayer.symbolExistenceWarnings(...args); }
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
+function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
 function dispatchWarnings(...args: any[]) { return warningsLayer.dispatchWarnings(...args); }
 function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
@@ -1968,6 +1969,7 @@ module.exports = {
   dispatchDeclaredFiles,
   dispatchWorkspace,
   dispatchWarnings,
+  staleWorktreeCwdWarning,
   dispatchUncertaintyWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,

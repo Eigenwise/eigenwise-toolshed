@@ -260,6 +260,9 @@ function symbolExistenceWarnings(...args) {
 function crossTicketStateWarnings(...args) {
   return warningsLayer.crossTicketStateWarnings(...args);
 }
+function staleWorktreeCwdWarning(...args) {
+  return warningsLayer.staleWorktreeCwdWarning(...args);
+}
 function dispatchUncertaintyWarnings(...args) {
   return warningsLayer.dispatchUncertaintyWarnings(...args);
 }
@@ -1859,6 +1862,7 @@ module.exports = {
   dispatchDeclaredFiles,
   dispatchWorkspace,
   dispatchWarnings,
+  staleWorktreeCwdWarning,
   dispatchUncertaintyWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,
