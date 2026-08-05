@@ -2,6 +2,7 @@
 const path = require("node:path");
 const os = require("node:os");
 const fs = require("node:fs/promises");
+const nativeFs = require("node:fs");
 const { spawn } = require("node:child_process");
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 function git(cwd, args) {
@@ -26,7 +27,12 @@ function git(cwd, args) {
 }
 function normalize(value) {
   const resolved = path.resolve(String(value));
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  try {
+    const canonical = nativeFs.realpathSync.native(resolved);
+    return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+  } catch {
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
 }
 function parseWorktreeList(output) {
   return output.split(/\r?\n\r?\n/).filter(Boolean).map((block) => {

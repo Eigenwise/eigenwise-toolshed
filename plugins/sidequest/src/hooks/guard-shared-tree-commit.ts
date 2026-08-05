@@ -55,9 +55,18 @@ function sharedCheckout(repo: string): boolean {
   }
 }
 
+function canonicalPath(value: string): string {
+  const resolved = path.resolve(value);
+  try {
+    return fs.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
+
 function samePath(left: string, right: string): boolean {
   const normalize = (value: string) => {
-    const resolved = path.resolve(value);
+    const resolved = canonicalPath(value);
     return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
   };
   return normalize(left) === normalize(right);
