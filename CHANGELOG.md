@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.373.0 (2026-08-05)
+
+### sidequest 4.17.0 → 4.17.1
+
+#### Fixes
+
+- Fix executors being refused every edit on boards using generated definitions (SQ-1351)
+  4.16.0 made the write guard resolve a ticket from the acting agent's bound id and refuse rather than borrow a neighbour's scope. That was right for the case it fixed and wrong for two others, and it blocked a wave on a consumer board within a day.
+
+  A per-ticket generated executor definition spawns under the dispatch's `agentName` as its own subagent type and never binds a runtime id, so matching on `agentId` alone found no owner and refused every write it attempted. Two executors on the same board failed identically, neither having touched a file. Identity now matches the dispatch's recorded name as well as its bound id.
+
+  A helper spawned by an executor has the same problem from the other direction: its id belongs to no dispatch at all. It now inherits the sole active ticket in the session, which is unambiguous by construction. Two or more active tickets still refuse, which is the borrowing case 4.16.0 set out to stop.
+
 ## v3.372.0 (2026-08-04)
 
 ### sidequest 4.16.0 → 4.17.0
