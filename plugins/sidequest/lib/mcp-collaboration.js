@@ -240,7 +240,11 @@ const tools = [
         ...dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {},
         warnings: store.dispatchWarnings(prepared.ticket, slug),
         spawn,
-        guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`
+        guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
+        // The agent list's own model label always reads claude-codex-auto for gateway
+        // routes and cannot be changed (SQ-1350), so a paraphrased description is the
+        // only thing standing between the reader and an unidentifiable running agent.
+        spawnDescriptionNote: `Copy spawn.description byte-for-byte into the Agent call. It leads with "${dispatchState.description.split(" · ")[0]}", which is the only place the real route is visible while this runs.`
       };
     }
   },

@@ -144,7 +144,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That name is what shows
   in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes, and the PreToolUse
   guard rewrites anything else back to it. Pass it through; the same goes for `spawn.description`,
-  which leads with `[model=… effort=…]` so the route stays visible in the agent list mid-run.
+  which leads with `<model>, <effort> ·` so the route stays visible in the agent list mid-run. The trailing model label the harness prints there is always `claude-codex-auto` for gateway routes and cannot be changed, so this description is the only place the real route shows.
   Every Agent launch must be a freshly dispatched Sidequest executor.
 - **The `--by` id is separate and must be genuinely random per session** (not the ticket ref, not a
   fixed label): a second session fanning out over the same board would derive the identical value

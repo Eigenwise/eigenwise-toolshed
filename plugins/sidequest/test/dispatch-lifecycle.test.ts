@@ -704,7 +704,7 @@ test('ordinary, resumed, and reworked launches all carry a readable name and the
   const ordinary = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = ordinary.ticket.dispatchExecutor;
   assert.equal(ordinary.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine`);
-  assert.equal(ordinary.ticket.dispatch.description, `[model=Claude Sonnet effort=high] ${ticket.title}`);
+  assert.equal(ordinary.ticket.dispatch.description, `Claude Sonnet, high · ${ticket.title}`);
 
   // Re-preparing before anything launched keeps the name: no agent wears it yet.
   const resumed = store.prepareDispatch(slug, ticket.ref, { sessionId });

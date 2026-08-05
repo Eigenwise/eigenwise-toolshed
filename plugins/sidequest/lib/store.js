@@ -534,7 +534,7 @@ function spawnDescription(ticket, resolved) {
   const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\s+/g, " ").trim();
   const model = descriptionField(resolved && resolved.runsLabel, resolved && resolved.runsModel, ticket && ticket.model) || "unrouted";
   const effort = descriptionField(ticket && ticket.effort, resolved && resolved.effort) || "unset";
-  const prefix = `[model=${model} effort=${effort}] `;
+  const prefix = `${model}, ${effort} · `;
   const maxTitleLength = Math.max(1, AGENT_DESCRIPTION_MAX_LENGTH - prefix.length);
   return `${prefix}${title.slice(0, maxTitleLength).trimEnd()}`.slice(0, AGENT_DESCRIPTION_MAX_LENGTH);
 }

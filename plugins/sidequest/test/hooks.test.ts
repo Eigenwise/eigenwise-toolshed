@@ -2373,7 +2373,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const projectPath = store.readMeta(slug).path;
   const description = prepared.ticket.dispatch.description;
-  assert.equal(description, `[model=Claude Sonnet effort=high] ${ticket.title}`);
+  assert.equal(description, `Claude Sonnet, high · ${ticket.title}`);
   const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
   const expectedName = `${ticket.ref.toLowerCase()}-correct-prepared`;
   assert.equal(prepared.ticket.dispatch.launchName, expectedName);

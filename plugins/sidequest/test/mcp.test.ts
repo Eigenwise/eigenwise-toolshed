@@ -1676,7 +1676,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
     runsLabel: 'Terra', dispatch: 'native-agent',
   });
   assert.equal(instant.agent, 'sidequest-exec-dispatch');
-  assert.equal(instant.spawn.description, '[model=Terra effort=high] instant dispatch');
+  assert.equal(instant.spawn.description, 'Terra, high · instant dispatch');
   assert.equal(instant.spawn.name, `${addedInstant.ref.toLowerCase()}-instant-dispatch`);
   assert.equal(instant.spawn.model, undefined);
   assert.equal(instant.spawn.subagent_type, instant.agent);
