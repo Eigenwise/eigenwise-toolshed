@@ -8,6 +8,34 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.379.0 (2026-08-05)
+
+### observability 0.2.2 → 0.3.0
+
+#### Features
+
+- Windows CI stops failing on paths that name the same directory twice (SQ-1353)
+  Adding a Windows leg to CI turned up fourteen sidequest failures that pass on a local Windows machine, and they were all one bug. On the hosted runner git reports a temp worktree as `C:/Users/runneradmin/...` while Node keeps the 8.3 alias `C:\Users\RUNNER~1\...`. Those are the same directory, and `path.resolve` says they are not, so integration candidates looked ambiguous and shared-tree claims went unrecognised.
+
+  Existing paths are now canonicalized before comparison, and every resolved drive root counts as protected rather than only the spelling the caller happened to use. This is production behavior, not a test accommodation: a machine whose temp directory carries a short-name alias was getting wrong answers about which checkout held a commit.
+
+  Observability's Windows leg failed separately, on `EPERM` unlinking `otelcol-contrib.exe` while it was still locked. That one is genuinely test cleanup: the fixture now waits for the collector to exit before removing its runtime directory. It still runs a real collector and still proves it converted delta sums.
+
+  None of this was visible from a developer machine. It took running the suite where it actually breaks.
+
+### sidequest 4.20.1 → 4.21.0
+
+#### Features
+
+- Windows CI stops failing on paths that name the same directory twice (SQ-1353)
+  Adding a Windows leg to CI turned up fourteen sidequest failures that pass on a local Windows machine, and they were all one bug. On the hosted runner git reports a temp worktree as `C:/Users/runneradmin/...` while Node keeps the 8.3 alias `C:\Users\RUNNER~1\...`. Those are the same directory, and `path.resolve` says they are not, so integration candidates looked ambiguous and shared-tree claims went unrecognised.
+
+  Existing paths are now canonicalized before comparison, and every resolved drive root counts as protected rather than only the spelling the caller happened to use. This is production behavior, not a test accommodation: a machine whose temp directory carries a short-name alias was getting wrong answers about which checkout held a commit.
+
+  Observability's Windows leg failed separately, on `EPERM` unlinking `otelcol-contrib.exe` while it was still locked. That one is genuinely test cleanup: the fixture now waits for the collector to exit before removing its runtime directory. It still runs a real collector and still proves it converted delta sums.
+
+  None of this was visible from a developer machine. It took running the suite where it actually breaks.
+
 ## v3.378.0 (2026-08-05)
 
 ### sidequest 4.20.0 → 4.20.1
