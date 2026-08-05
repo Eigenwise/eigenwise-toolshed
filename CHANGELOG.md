@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.377.0 (2026-08-05)
+
+### sidequest 4.19.0 → 4.20.0
+
+#### Features
+
+- A steer that arrives after the executor finished is kept, not lost (SQ-1355)
+  Steering an executor that has just closed its ticket used to accomplish nothing. The teammate woke, the idle guard correctly refused to continue a terminal dispatch, and the instruction disappeared. The orchestrator found out by reading a transcript, and whatever it wanted to say had to be retyped somewhere durable.
+
+  The race is unavoidable: the decision to steer is made from state that is already stale, and the executor can finish in between. So the message is now saved rather than merely detected. A `SendMessage` whose recipient resolves to a terminal dispatch writes the text to that ticket as an attributed comment, and the send is refused with the ticket ref, its outcome, and the next legal action: re-dispatch if the work itself has to change.
+
+  Only recipients that resolve to a Sidequest dispatch are touched; ordinary teammate messages and steers to live executors pass through untouched. If the board cannot be read at all, the message is never blocked.
+
+  This is the mirror of the scope-ruling delivery in 4.18.0, and the same principle decides both: the board is what survives, the mailbox is not.
+
 ## v3.376.0 (2026-08-05)
 
 ### sidequest 4.18.1 → 4.19.0
