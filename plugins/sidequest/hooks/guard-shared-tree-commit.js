@@ -118,9 +118,17 @@ function sharedCheckout(repo) {
     return false;
   }
 }
+function canonicalPath(value) {
+  const resolved = import_node_path2.default.resolve(value);
+  try {
+    return import_node_fs2.default.realpathSync.native(resolved);
+  } catch {
+    return resolved;
+  }
+}
 function samePath(left, right) {
   const normalize = (value) => {
-    const resolved = import_node_path2.default.resolve(value);
+    const resolved = canonicalPath(value);
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   };
   return normalize(left) === normalize(right);

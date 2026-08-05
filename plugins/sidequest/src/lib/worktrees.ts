@@ -3,6 +3,7 @@
 const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs/promises');
+const nativeFs = require('node:fs');
 const { spawn } = require('node:child_process');
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
@@ -37,7 +38,12 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
 
 function normalize(value: unknown): string {
   const resolved = path.resolve(String(value));
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  try {
+    const canonical = nativeFs.realpathSync.native(resolved);
+    return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+  } catch {
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
 }
 
 function parseWorktreeList(output: string): any[] {

@@ -81,6 +81,18 @@ function waitFor(check, timeout = 20_000) {
   });
 }
 
+function waitForChildClose(child) {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve();
+  return new Promise((resolve, reject) => {
+    const rejectOnError = (error) => {
+      child.off('close', resolve);
+      reject(error);
+    };
+    child.once('close', resolve);
+    child.once('error', rejectOnError);
+  });
+}
+
 test('the real Collector converts delta sums and forwards gateway usage logs', {
   skip: runRealCollectorTest ? false : 'set WORKBENCH_OTELCOL_CONTRIB to run the Collector transport test',
   timeout: 60_000,
@@ -112,9 +124,11 @@ test('the real Collector converts delta sums and forwards gateway usage logs', {
   });
   const binary = configuredBinary || await downloadCollector({ dataDir: directory });
   const collector = spawn(binary, ['--config', configPath], { stdio: 'ignore' });
-  t.after(() => {
+  const collectorClosed = waitForChildClose(collector);
+  t.after(async () => {
     collector.kill();
-    receiver.close();
+    await collectorClosed;
+    await new Promise((resolve) => receiver.close(resolve));
     fs.rmSync(directory, { recursive: true, force: true });
   });
 

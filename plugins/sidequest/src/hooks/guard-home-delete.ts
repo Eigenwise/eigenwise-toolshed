@@ -28,8 +28,12 @@ function isProtectedPath(command: string): boolean {
     .replace(/["']/g, '')
     .split(/\s+/)
     .filter((target) => target !== '\\' && path.isAbsolute(target))
-    .map((target) => normalizePath(path.resolve(target)))
-    .some((target) => protectedRoots.some((root) => root === target || root.startsWith(`${target}${path.sep}`)));
+    .some((target) => {
+      const resolved = path.resolve(target);
+      if (path.parse(resolved).root === resolved) return true;
+      const normalized = normalizePath(resolved);
+      return protectedRoots.some((root) => root === normalized || root.startsWith(`${normalized}${path.sep}`));
+    });
 }
 
 function main(): void {

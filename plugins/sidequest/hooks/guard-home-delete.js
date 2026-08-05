@@ -80,7 +80,12 @@ function isProtectedPath(command) {
   if (/\$home\b|\$env:userprofile\b|%userprofile%|(?<!\w)~(?=[\\/\s"']|$)/i.test(command)) return true;
   const home = import_node_path.default.resolve(import_node_os.default.homedir());
   const protectedRoots = [home, import_node_path.default.join(home, ".claude"), import_node_path.default.dirname(home), import_node_path.default.parse(home).root].map(normalizePath);
-  return command.replace(/["']/g, "").split(/\s+/).filter((target) => target !== "\\" && import_node_path.default.isAbsolute(target)).map((target) => normalizePath(import_node_path.default.resolve(target))).some((target) => protectedRoots.some((root) => root === target || root.startsWith(`${target}${import_node_path.default.sep}`)));
+  return command.replace(/["']/g, "").split(/\s+/).filter((target) => target !== "\\" && import_node_path.default.isAbsolute(target)).some((target) => {
+    const resolved = import_node_path.default.resolve(target);
+    if (import_node_path.default.parse(resolved).root === resolved) return true;
+    const normalized = normalizePath(resolved);
+    return protectedRoots.some((root) => root === normalized || root.startsWith(`${normalized}${import_node_path.default.sep}`));
+  });
 }
 function main() {
   const input = readStdin();
