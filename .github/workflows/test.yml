@@ -11,6 +11,9 @@ permissions:
 env:
   GIT_TERMINAL_PROMPT: '0'
   GIT_CONFIG_NOSYSTEM: '1'
+  # The null config path is set per job, not here: Windows has no /dev/null, and git
+  # answers "could not lock config file" instead of reading an empty config, which
+  # breaks every fixture that shells out to git.
   GIT_CONFIG_GLOBAL: /dev/null
   GIT_CONFIG_SYSTEM: /dev/null
 
@@ -73,6 +76,17 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}
     steps:
+      # Must precede checkout: it runs `git config --global --add safe.directory`,
+      # and on Windows that cannot write to /dev/null, so git aborts with "could not
+      # lock config file" and every later fixture that shells out to git fails.
+      - name: Point git config at a writable empty file
+        shell: bash
+        run: |
+          temp="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
+          config="$temp/empty-gitconfig"
+          : > "$config"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$config" >> "$GITHUB_ENV"
+          printf 'GIT_CONFIG_SYSTEM=%s\n' "$config" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
