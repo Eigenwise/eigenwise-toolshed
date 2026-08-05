@@ -157,9 +157,9 @@ function normalizeWorktreeIsolation(value?: any) {
   return value;
 }
 
-function normalizeAutoApprovePluginTests(value?: any) {
+function normalizeAutoApproveTestScope(value?: any) {
   if (value == null) return true;
-  if (typeof value !== 'boolean') throw new Error('autoApprovePluginTests must be a boolean.');
+  if (typeof value !== 'boolean') throw new Error('autoApproveTestScope must be a boolean.');
   return value;
 }
 
@@ -252,7 +252,7 @@ function boardConfig(slug?: any) {
     delivery: normalizeDeliveryMode(meta.delivery),
     integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
-    autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
+    autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
     worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
     profile: {
       id: selected.profile.id,
@@ -302,8 +302,8 @@ function setBoardConfig(slug?: any, patch?: any) {
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
     }
-    if (Object.prototype.hasOwnProperty.call(patch, 'autoApprovePluginTests')) {
-      meta.autoApprovePluginTests = normalizeAutoApprovePluginTests(patch.autoApprovePluginTests);
+    if (Object.prototype.hasOwnProperty.call(patch, 'autoApproveTestScope')) {
+      meta.autoApproveTestScope = normalizeAutoApproveTestScope(patch.autoApproveTestScope);
     }
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeSetup')) {
       meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
@@ -322,7 +322,7 @@ function effectiveScope(slug?: any, files?: any) {
 }
 
 
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApprovePluginTests, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApproveTestScope, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 
 module.exports = { createConfig };

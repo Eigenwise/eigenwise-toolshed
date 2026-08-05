@@ -534,7 +534,7 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const isolatedRoot = committedRepo('sq-mcp-worktree-isolation-default-');
   const isolatedProject = store.ensureProject(isolatedRoot, 'SQ default isolation').slug;
   assert.equal((await callTool('board_config', { project: isolatedProject })).worktreeIsolation, true);
-  assert.equal((await callTool('board_config', { project: isolatedProject })).autoApprovePluginTests, true);
+  assert.equal((await callTool('board_config', { project: isolatedProject })).autoApproveTestScope, true);
   const isolatedTicket = store.createTicket(isolatedProject, {
     title: 'default board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/work.ts'],
   });
@@ -556,8 +556,8 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   assert.equal((await callTool('board_config', { project: sharedProject })).worktreeIsolation, false);
   assert.equal(runCli(['board-config', '--project', sharedRoot, '--worktree-isolation', '--json'], sharedRoot).worktreeIsolation, true);
   assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-worktree-isolation', '--json'], sharedRoot).worktreeIsolation, false);
-  assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-auto-approve-plugin-tests', '--json'], sharedRoot).autoApprovePluginTests, false);
-  assert.equal(runCli(['board-config', '--project', sharedRoot, '--auto-approve-plugin-tests', '--json'], sharedRoot).autoApprovePluginTests, true);
+  assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-auto-approve-test-scope', '--json'], sharedRoot).autoApproveTestScope, false);
+  assert.equal(runCli(['board-config', '--project', sharedRoot, '--auto-approve-test-scope', '--json'], sharedRoot).autoApproveTestScope, true);
 
   const sharedTicket = store.createTicket(sharedProject, {
     title: 'scope-less disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
@@ -1337,8 +1337,15 @@ test('MCP submit refuses out-of-scope committed ranges', async () => {
   assert.ok(store.getTicket(project, ticket.ref).claim, 'scope refusal keeps the claim');
 });
 
+function repoWithDirectories(prefix: string, directories: string[]) {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
+  for (const directory of directories) fs.mkdirSync(path.join(root, directory), { recursive: true });
+  return root;
+}
+
 test('MCP scopeRequest auto-approves only test paths under an already-declared plugin root', async () => {
-  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-auto-plugin-tests-'))).slug;
+  const root = repoWithDirectories('sq-mcp-auto-plugin-tests-', ['plugins/sidequest/test', 'plugins/workbench/test']);
+  const project = store.ensureProject(root).slug;
   const ticket = store.createTicket(project, {
     title: 'Auto-approved plugin test scope', files: ['plugins/sidequest/src/lib/store.ts'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'test-only scope can continue without an orchestration round',
@@ -1374,7 +1381,7 @@ test('MCP scopeRequest auto-approves only test paths under an already-declared p
   const pendingCrossPlugin = await callTool('scopeRequest', { project, ref: crossPlugin.ref, by: crossBy, files: ['plugins/workbench/test/fixture.json'] });
   assert.deepEqual(pendingCrossPlugin.scopeRequest.files, ['plugins/workbench/test/fixture.json']);
 
-  assert.equal((await callTool('board_config', { project, autoApprovePluginTests: false })).autoApprovePluginTests, false);
+  assert.equal((await callTool('board_config', { project, autoApproveTestScope: false })).autoApproveTestScope, false);
   const disabled = store.createTicket(project, {
     title: 'Disabled plugin test scope', files: ['plugins/sidequest/src/lib/store.ts'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'the board flag preserves the normal approval flow',
@@ -1385,8 +1392,37 @@ test('MCP scopeRequest auto-approves only test paths under an already-declared p
   assert.deepEqual(pendingDisabled.scopeRequest.files, ['plugins/sidequest/test/golden.json']);
 });
 
+// A flat repo is the common case outside this marketplace, and it is where the
+// policy kept failing to fire: the ticket declares source, needs to register a
+// new suite in tests/, and the run stops on a directory nobody thought to name.
+test('MCP scopeRequest auto-approves the repo-root test directory a declared source file reaches', async () => {
+  const root = repoWithDirectories('sq-mcp-auto-flat-tests-', ['src', 'tests']);
+  const project = store.ensureProject(root).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Keyboard projection', files: ['src/keyboard.cpp'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a flat repo keeps its tests beside its source',
+  });
+  const by = 'mcp-auto-flat-tests-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+
+  const approved = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['tests/main.cpp', 'tests/keyboard/spread.cpp'] });
+  assert.equal(approved.autoApproved, true);
+  assert.deepEqual(approved.approved, ['tests']);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['src/keyboard.cpp', 'tests']);
+
+  const undeclared = store.createTicket(project, {
+    title: 'Undeclared test root', files: ['src/keyboard.cpp'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a directory that is not a test root still needs a ruling',
+  });
+  const undeclaredBy = 'mcp-auto-flat-undeclared-worker';
+  assert.equal((await callTool('claim', { project, ref: undeclared.ref, by: undeclaredBy, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+  const pending = await callTool('scopeRequest', { project, ref: undeclared.ref, by: undeclaredBy, files: ['benchmarks/keyboard.cpp'] });
+  assert.equal(pending.autoApproved, false);
+  assert.deepEqual(pending.scopeRequest.files, ['benchmarks/keyboard.cpp']);
+});
+
 test('MCP scopeRequest never auto-approves plugin source, hooks, or manifests', async () => {
-  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-plugin-test-boundaries-'))).slug;
+  const project = store.ensureProject(repoWithDirectories('sq-mcp-plugin-test-boundaries-', ['plugins/sidequest/test'])).slug;
   for (const [index, file] of ['plugins/sidequest/src/new.ts', 'plugins/sidequest/hooks/new.js', 'plugins/sidequest/.claude-plugin/plugin.json'].entries()) {
     const ticket = store.createTicket(project, {
       title: `Plugin test boundary ${index}`, files: ['plugins/sidequest/src/lib/store.ts'], complexity: 3,

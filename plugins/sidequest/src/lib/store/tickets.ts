@@ -6,7 +6,7 @@ function createTickets(dependencies: any) {
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
     database, deleteCachedRow, dispatchState, effectiveScope, execFileSync, executorText, fs,
     getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, path, pendingSubmission, putTicket,
-    queryTickets, queueEventNotification, readyTickets, releaseLock, reopenScopePausedDispatch,
+    queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock, reopenScopePausedDispatch,
     requestedReadonlyOverride, requireStatus, requireVerifyCommand, saveAssetData, stripLinksTo,
     ticketLockPath, ticketStoryId, touchClaimActivity, upperRef, withTicketLock,
   } = dependencies;
@@ -280,22 +280,58 @@ function scopeRequestMarkerFile(ticket?: any) {
   return `scope-request-${String(ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.json`;
 }
 
-function pluginRoot(file?: any) {
-  const match = /^plugins\/([^/]+)(?:\/|$)/i.exec(String(file || '').replace(/\\/g, '/'));
-  return match ? `plugins/${match[1]}` : null;
+const TEST_DIRECTORY_NAMES = ['test', 'tests', 'spec', 'specs', '__tests__'];
+
+function repoRelative(file?: any) {
+  return String(file || '').replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
 }
 
-function pluginTestDirectory(file?: any) {
-  const match = /^(plugins\/[^/]+)\/test(?:\/|$)/i.exec(String(file || '').replace(/\\/g, '/'));
-  return match ? `${match[1]}/test` : null;
+// The test directories a ticket may widen into without asking: the ones sitting
+// beside a file it already declares, anywhere from that file's own folder up to
+// the repo root. A ticket that owns plugins/x/src/y.ts reaches plugins/x/test,
+// and one that owns src/synth.cpp reaches the repo's tests/ — but neither
+// reaches the other's.
+function reachableTestRoots(ticket?: any, slug?: any) {
+  const repo = readMeta(slug)?.path;
+  if (!repo) return [];
+  const roots = new Map<string, string>();
+  for (const declared of normalizeFiles(ticket?.files)) {
+    const segments = repoRelative(declared).split('/').filter(Boolean);
+    segments.pop();
+    for (let depth = segments.length; depth >= 0; depth--) {
+      const parent = segments.slice(0, depth);
+      for (const name of TEST_DIRECTORY_NAMES) {
+        const candidate = [...parent, name].join('/');
+        if (roots.has(candidate.toLowerCase())) continue;
+        try {
+          if (fs.statSync(path.join(repo, ...parent, name)).isDirectory()) roots.set(candidate.toLowerCase(), candidate);
+        } catch (_) { /* not a test root here */ }
+      }
+    }
+  }
+  return [...roots.values()];
 }
 
-function autoApprovedPluginTestScope(ticket?: any, requested?: any, additions?: any, slug?: any) {
-  if (!boardConfig(slug)?.autoApprovePluginTests) return null;
-  const declaredRoots = new Set((ticket?.files || []).map(pluginRoot).filter(Boolean).map((root: any) => root.toLowerCase()));
-  const requestedTestDirectories = normalizeFiles(requested).map(pluginTestDirectory);
-  if (!requestedTestDirectories.length || requestedTestDirectories.some((directory?: any) => !directory || !declaredRoots.has(pluginRoot(directory)!.toLowerCase()))) return null;
-  return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
+function enclosingTestRoot(file?: any, roots?: any) {
+  const target = repoRelative(file).toLowerCase();
+  return (roots || []).find((root: string) => {
+    const prefix = root.toLowerCase();
+    return target === prefix || target.startsWith(`${prefix}/`);
+  }) || null;
+}
+
+// Asking a ticket to name every test file it will touch before the work starts
+// is a prediction, and it kept being wrong: the executor stops mid-run, the
+// orchestrator wakes to rule on `tests/`, and the round trip buys nothing a
+// commit-time check does not already catch. Widening into a test directory the
+// ticket already reaches is audited, not gated.
+function autoApprovedTestScope(ticket?: any, requested?: any, additions?: any, slug?: any) {
+  if (!boardConfig(slug)?.autoApproveTestScope) return null;
+  const roots = reachableTestRoots(ticket, slug);
+  if (!roots.length) return null;
+  const requestedRoots = normalizeFiles(requested).map((file?: any) => enclosingTestRoot(file, roots));
+  if (!requestedRoots.length || requestedRoots.some((root?: any) => !root)) return null;
+  return normalizeFiles(normalizeFiles(additions).map((file?: any) => enclosingTestRoot(file, roots)).filter(Boolean));
 }
 
 // The marker is a recovery breadcrumb, never a gate. A scope request is pure
@@ -418,7 +454,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       putTicket(slug, t);
       return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
     }
-    const testDirectories = autoApprovedPluginTestScope(t, requested, additions, slug);
+    const testDirectories = autoApprovedTestScope(t, requested, additions, slug);
     if (testDirectories) {
       // Test-only widening is audited here; publish reverify runs it before the integrated-diff review.
       t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));

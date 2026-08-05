@@ -96,8 +96,8 @@ function normalizeIntegrationBranch(...args) {
 function normalizeWorktreeIsolation(...args) {
   return configLayer.normalizeWorktreeIsolation(...args);
 }
-function normalizeAutoApprovePluginTests(...args) {
-  return configLayer.normalizeAutoApprovePluginTests(...args);
+function normalizeAutoApproveTestScope(...args) {
+  return configLayer.normalizeAutoApproveTestScope(...args);
 }
 function normalizeWorktreeSetup(...args) {
   return configLayer.normalizeWorktreeSetup(...args);
@@ -790,6 +790,7 @@ const {
   putTicket,
   queryTickets,
   queueEventNotification,
+  readMeta,
   readyTickets,
   releaseLock,
   reopenScopePausedDispatch,

@@ -85,7 +85,7 @@ function normalizeDeliveryMode(...args: any[]) { return configLayer.normalizeDel
 function normalizeIntegrationMode(...args: any[]) { return configLayer.normalizeIntegrationMode(...args); }
 function normalizeIntegrationBranch(...args: any[]) { return configLayer.normalizeIntegrationBranch(...args); }
 function normalizeWorktreeIsolation(...args: any[]) { return configLayer.normalizeWorktreeIsolation(...args); }
-function normalizeAutoApprovePluginTests(...args: any[]) { return configLayer.normalizeAutoApprovePluginTests(...args); }
+function normalizeAutoApproveTestScope(...args: any[]) { return configLayer.normalizeAutoApproveTestScope(...args); }
 function normalizeWorktreeSetup(...args: any[]) { return configLayer.normalizeWorktreeSetup(...args); }
 function normalizeIntegrationVerifyTimeoutMs(...args: any[]) { return configLayer.normalizeIntegrationVerifyTimeoutMs(...args); }
 function hasOriginRemote(...args: any[]) { return configLayer.hasOriginRemote(...args); }
@@ -700,6 +700,7 @@ const {
   putTicket,
   queryTickets,
   queueEventNotification,
+  readMeta,
   readyTickets,
   releaseLock,
   reopenScopePausedDispatch,

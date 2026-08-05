@@ -241,11 +241,11 @@ sidequest board-config --integration-mode auto|local|remote
 sidequest board-config --integration-branch feat/client-work
 sidequest board-config --delivery replay
 sidequest board-config --no-worktree-isolation
-sidequest board-config --no-auto-approve-plugin-tests
+sidequest board-config --no-auto-approve-test-scope
 sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
 ```
 
-Plugin test scope requests under `plugins/<plugin>/test/**` are auto-approved by default. Pass `--no-auto-approve-plugin-tests` to disable that policy. The MCP equivalent is `board_config` with `autoApprovePluginTests: false`.
+A scope request is auto-approved when every requested path sits in a test directory the ticket already reaches: any existing `test/`, `tests/`, `spec/`, `specs/`, or `__tests__/` beside a file the ticket declares, or beside any of its parents up to the repo root. So a ticket owning `plugins/x/src/thing.ts` widens into `plugins/x/test/**` on its own, and one owning `src/synth.cpp` widens into the repo's `tests/**`, but neither reaches the other's. The widening is recorded as a board comment and reviewed at publish. Pass `--no-auto-approve-test-scope` to turn it off. The MCP equivalent is `board_config` with `autoApproveTestScope: false`.
 
 `integrationBranch` defaults to `main`. Set it to the branch your board actually integrates, such as `feat/client-work`; submissions and worktree cleanup then use that branch as their baseline. In local mode it must exist locally. In remote mode `origin/<branch>` must exist locally, so fetch it first. Sidequest refuses a missing configured branch and tells you to create, fetch, or reconfigure it rather than silently falling back to `main`.
 

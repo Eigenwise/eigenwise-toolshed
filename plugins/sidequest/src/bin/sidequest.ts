@@ -48,12 +48,12 @@ function parseArgs(argv: any) {
         opts['worktree-isolation'] = false;
         continue;
       }
-      if (key === 'no-auto-approve-plugin-tests') {
-        opts['auto-approve-plugin-tests'] = false;
+      if (key === 'no-auto-approve-test-scope') {
+        opts['auto-approve-test-scope'] = false;
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'skip-verify', 'contract-waiver', 'full', 'worktree-isolation', 'auto-approve-plugin-tests', 'high-stakes', 'unverified-transport', 'allow-repeat-failure']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'skip-verify', 'contract-waiver', 'full', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -122,7 +122,7 @@ const HELP_COMMANDS: any = {
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
   models: 'sidequest models [--project <path-or-slug>] [--full] [--json]',
   route: 'sidequest route <category> [--project <path-or-slug>] --json',
-  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup "command"] [--json]',
+  'board-config': 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--json]',
   projects: 'sidequest projects [--archived] [--json]',
   routing: 'sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]',
   'archive-board': 'sidequest archive-board <board-ref> [--json]',
@@ -282,7 +282,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-plugin-tests|--no-auto-approve-plugin-tests] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then

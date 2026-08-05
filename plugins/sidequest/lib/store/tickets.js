@@ -30,6 +30,7 @@ function createTickets(dependencies) {
     putTicket,
     queryTickets,
     queueEventNotification,
+    readMeta,
     readyTickets,
     releaseLock,
     reopenScopePausedDispatch,
@@ -284,20 +285,45 @@ function createTickets(dependencies) {
   function scopeRequestMarkerFile(ticket) {
     return `scope-request-${String(ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.json`;
   }
-  function pluginRoot(file) {
-    const match = /^plugins\/([^/]+)(?:\/|$)/i.exec(String(file || "").replace(/\\/g, "/"));
-    return match ? `plugins/${match[1]}` : null;
+  const TEST_DIRECTORY_NAMES = ["test", "tests", "spec", "specs", "__tests__"];
+  function repoRelative(file) {
+    return String(file || "").replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
   }
-  function pluginTestDirectory(file) {
-    const match = /^(plugins\/[^/]+)\/test(?:\/|$)/i.exec(String(file || "").replace(/\\/g, "/"));
-    return match ? `${match[1]}/test` : null;
+  function reachableTestRoots(ticket, slug) {
+    const repo = readMeta(slug)?.path;
+    if (!repo) return [];
+    const roots = /* @__PURE__ */ new Map();
+    for (const declared of normalizeFiles(ticket?.files)) {
+      const segments = repoRelative(declared).split("/").filter(Boolean);
+      segments.pop();
+      for (let depth = segments.length; depth >= 0; depth--) {
+        const parent = segments.slice(0, depth);
+        for (const name of TEST_DIRECTORY_NAMES) {
+          const candidate = [...parent, name].join("/");
+          if (roots.has(candidate.toLowerCase())) continue;
+          try {
+            if (fs.statSync(path.join(repo, ...parent, name)).isDirectory()) roots.set(candidate.toLowerCase(), candidate);
+          } catch (_) {
+          }
+        }
+      }
+    }
+    return [...roots.values()];
   }
-  function autoApprovedPluginTestScope(ticket, requested, additions, slug) {
-    if (!boardConfig(slug)?.autoApprovePluginTests) return null;
-    const declaredRoots = new Set((ticket?.files || []).map(pluginRoot).filter(Boolean).map((root) => root.toLowerCase()));
-    const requestedTestDirectories = normalizeFiles(requested).map(pluginTestDirectory);
-    if (!requestedTestDirectories.length || requestedTestDirectories.some((directory) => !directory || !declaredRoots.has(pluginRoot(directory).toLowerCase()))) return null;
-    return normalizeFiles(normalizeFiles(additions).map(pluginTestDirectory).filter(Boolean));
+  function enclosingTestRoot(file, roots) {
+    const target = repoRelative(file).toLowerCase();
+    return (roots || []).find((root) => {
+      const prefix = root.toLowerCase();
+      return target === prefix || target.startsWith(`${prefix}/`);
+    }) || null;
+  }
+  function autoApprovedTestScope(ticket, requested, additions, slug) {
+    if (!boardConfig(slug)?.autoApproveTestScope) return null;
+    const roots = reachableTestRoots(ticket, slug);
+    if (!roots.length) return null;
+    const requestedRoots = normalizeFiles(requested).map((file) => enclosingTestRoot(file, roots));
+    if (!requestedRoots.length || requestedRoots.some((root) => !root)) return null;
+    return normalizeFiles(normalizeFiles(additions).map((file) => enclosingTestRoot(file, roots)).filter(Boolean));
   }
   function createScopeRequestMarker(slug, ticket, request) {
     const dispatch = dispatchState(ticket);
@@ -422,7 +448,7 @@ function createTickets(dependencies) {
         putTicket(slug, t);
         return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
       }
-      const testDirectories = autoApprovedPluginTestScope(t, requested, additions, slug);
+      const testDirectories = autoApprovedTestScope(t, requested, additions, slug);
       if (testDirectories) {
         t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));
         syncLiveDispatchScope(slug, t);

@@ -141,9 +141,9 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     if (typeof value !== "boolean") throw new Error("worktreeIsolation must be a boolean.");
     return value;
   }
-  function normalizeAutoApprovePluginTests(value) {
+  function normalizeAutoApproveTestScope(value) {
     if (value == null) return true;
-    if (typeof value !== "boolean") throw new Error("autoApprovePluginTests must be a boolean.");
+    if (typeof value !== "boolean") throw new Error("autoApproveTestScope must be a boolean.");
     return value;
   }
   function normalizeWorktreeSetup(value) {
@@ -228,7 +228,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       delivery: normalizeDeliveryMode(meta.delivery),
       integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
       worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
-      autoApprovePluginTests: normalizeAutoApprovePluginTests(meta.autoApprovePluginTests),
+      autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
       worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
       profile: {
         id: selected.profile.id,
@@ -277,8 +277,8 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       if (Object.prototype.hasOwnProperty.call(patch, "worktreeIsolation")) {
         meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
       }
-      if (Object.prototype.hasOwnProperty.call(patch, "autoApprovePluginTests")) {
-        meta.autoApprovePluginTests = normalizeAutoApprovePluginTests(patch.autoApprovePluginTests);
+      if (Object.prototype.hasOwnProperty.call(patch, "autoApproveTestScope")) {
+        meta.autoApproveTestScope = normalizeAutoApproveTestScope(patch.autoApproveTestScope);
       }
       if (Object.prototype.hasOwnProperty.call(patch, "worktreeSetup")) {
         meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
@@ -294,6 +294,6 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
     return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...config && config.alwaysInScope || [], ...paired]));
   }
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApprovePluginTests, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApproveTestScope, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 module.exports = { createConfig };

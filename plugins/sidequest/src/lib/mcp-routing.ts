@@ -394,7 +394,7 @@ const tools: ToolDefinition[] = [
         delivery: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true.' },
-        autoApprovePluginTests: { type: 'boolean' },
+        autoApproveTestScope: { type: 'boolean', description: 'Widen scope into a test directory the ticket already reaches without a ruling (default true).' },
         worktreeSetup: { type: ['string', 'null'], description: 'One-line isolated-worktree setup; null clears it.' },
       },
     },
@@ -410,7 +410,7 @@ const tools: ToolDefinition[] = [
       if (args.delivery != null) patch.delivery = args.delivery;
       if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
-      if (args.autoApprovePluginTests !== undefined) patch.autoApprovePluginTests = args.autoApprovePluginTests;
+      if (args.autoApproveTestScope !== undefined) patch.autoApproveTestScope = args.autoApproveTestScope;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length
         ? store.setBoardConfig(slug, patch)
