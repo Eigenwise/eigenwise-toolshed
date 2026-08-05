@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.384.0 (2026-08-05)
+
+### sidequest 4.22.1 → 4.23.0
+
+#### Features
+
+- Shared-tree submissions stop gating on inherited working-tree dirt (SQ-1367)
+  A shared tree is the user's own checkout, so it can already hold work that has nothing to do with the run. The submit gate treated every dirty path as the executor's: on contractify a screenshot the user had dropped in the repo root blocked a verified submission, the executor filed a scope request nobody could usefully rule on, the request timed out, and it released SQ-95 to todo with commit 8f5c22d9 still sitting there. The orchestrator's steering then arrived after the release and had to be recorded instead of applied.
+
+  Every shared-tree dispatch now records what was already dirty at launch, with the same content-aware identity the artifact baseline uses. At submit, a reported out-of-scope path is exempt when its content is unchanged since that snapshot, and the exempted paths are recorded on the submission as `inheritedPaths`. Touching an inherited path puts it straight back under the gate, so this exempts what an executor found, never what it wrote. An unrecordable baseline means no exemption rather than a refused dispatch.
+
 ## v3.383.0 (2026-08-05)
 
 ### sidequest 4.22.0 → 4.22.1
