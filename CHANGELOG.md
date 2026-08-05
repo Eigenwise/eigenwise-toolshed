@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.375.0 (2026-08-05)
+
+### sidequest 4.18.0 → 4.18.1
+
+#### Fixes
+
+- The running-agent line reads like a sentence instead of a debug tag (SQ-1352)
+  A dispatched executor used to render as `sidequest-exec-dispatch([model=GPT-5.6 Terra effort=high] docai: emit dossiers_list blocks) claude-codex-auto`. It now reads `GPT-5.6 Terra, high · docai: emit dossiers_list blocks`.
+
+  The trailing `claude-codex-auto` stays, and it is worth knowing why. That label is the Agent-call model resolved locally before launch; no provider response updates it, so for anything routed through the gateway it can only ever show the virtual id we dispatch with. Making it show the real backend would mean going back to one agent definition per model and effort combination, which was removed for good reason: the route marker overwrites their pinned effort anyway, leaving thousands of injected tokens per session describing configuration nothing reads.
+
+  So the description is the only place the real route appears while a run is in flight, which makes a paraphrased one genuinely costly. The dispatch result now says so and tells the caller to copy `spawn.description` byte-for-byte.
+
 ## v3.374.0 (2026-08-05)
 
 ### sidequest 4.17.1 → 4.18.0
