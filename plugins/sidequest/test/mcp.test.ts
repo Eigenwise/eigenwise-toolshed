@@ -1778,7 +1778,7 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
     subagent_type: 'sidequest-exec-xhigh',
     name: `${added.ref.toLowerCase()}-complete-instant-spawn`,
     mode: 'bypassPermissions',
-    description: '[model=Claude Fable effort=xhigh] complete instant spawn',
+    description: 'Claude Fable, xhigh · complete instant spawn',
     isolation: 'worktree',
     model: 'fable',
   });
@@ -1840,7 +1840,7 @@ test('native_agent carries ticket anchors and verify command through its stable 
     assert.strictEqual(native.fallback, true);
     assert.strictEqual(native.file, null);
     assert.strictEqual(native.spawn.subagent_type, 'sidequest-exec-dispatch');
-    assert.strictEqual(native.spawn.description, '[model=Terra effort=high] prompt context');
+    assert.strictEqual(native.spawn.description, 'Terra, high · prompt context');
     assert.strictEqual(native.spawn.name, `${added.ref.toLowerCase()}-prompt-context`);
     assert.strictEqual(native.spawn.model, undefined);
     assert.match(native.prompt, /Authoritative ticket contract \(the task prompt may add logistics only; do not narrow this scope\):/);
@@ -1861,7 +1861,7 @@ test('native_agent returns a complete Claude worktree spawn spec', async () => {
     subagent_type: 'sidequest-exec-xhigh',
     name: added.ref.toLowerCase() + '-complete-native-spawn',
     mode: 'bypassPermissions',
-    description: '[model=Claude Fable effort=xhigh] complete native spawn',
+    description: 'Claude Fable, xhigh · complete native spawn',
     isolation: 'worktree',
     model: 'fable',
     prompt: native.prompt,
