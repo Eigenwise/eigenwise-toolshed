@@ -53,6 +53,16 @@ function pin(ticket?: any, commit?: any) {
 const { slug } = store.ensureProject(PROJECT_DIR);
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+// Dispatch fixtures route through a Claude model on purpose: the default routes
+// are Codex, and CI has no model gateway to confirm readiness against.
+store.setCategory({
+  id: 'submission.fixture',
+  name: 'Submission fixture',
+  description: 'Fixed submission lifecycle fixture.',
+  route: { model: 'sonnet', effort: 'medium' },
+  fallback: null,
+  enabled: true,
+});
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
 
@@ -1139,7 +1149,7 @@ test('SQ-1367: a shared-tree submission is not gated on paths that were already 
   const stray = path.join(PROJECT_DIR, 'before-neutral-rework.jpeg');
   fs.writeFileSync(stray, 'the user\'s own screenshot\n');
 
-  const t = addTicket('inherited dirt', { files: ['lib/inherited.js'] });
+  const t = addTicket('inherited dirt', { files: ['lib/inherited.js'], category: 'submission.fixture' });
   const prepared = store.prepareDispatch(slug, t.ref, { sessionId: 'inherited-dirt', sharedTree: true });
   assert.ok(
     store.getTicket(slug, t.ref).dispatch.dirtyBaseline.some((entry: any) => entry.path === 'before-neutral-rework.jpeg'),
@@ -1164,7 +1174,7 @@ test('SQ-1367: a shared-tree submission is not gated on paths that were already 
 
   // Touching an inherited path puts it back under the gate: the exemption is
   // content-aware, not a permanent pass for the path.
-  const reworked = addTicket('inherited dirt, then touched', { files: ['lib/reworked.js'] });
+  const reworked = addTicket('inherited dirt, then touched', { files: ['lib/reworked.js'], category: 'submission.fixture' });
   const second = store.prepareDispatch(slug, reworked.ref, { sessionId: 'inherited-touch', sharedTree: true });
   assert.strictEqual(store.claimTicket(slug, reworked.ref, 'touch-worker', {
     token: second.token, executor: second.ticket.dispatchExecutor, sessionId: 'inherited-touch',
