@@ -82,11 +82,13 @@ jobs:
       - name: Point git config at a writable empty file
         shell: bash
         run: |
-          temp="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
-          config="$temp/empty-gitconfig"
-          : > "$config"
-          printf 'GIT_CONFIG_GLOBAL=%s\n' "$config" >> "$GITHUB_ENV"
-          printf 'GIT_CONFIG_SYSTEM=%s\n' "$config" >> "$GITHUB_ENV"
+          # Create through the shell's own view of the path, but export the native
+          # one: checkout shells out to git.exe, which cannot resolve /d/a/_temp/...
+          posix="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
+          : > "$posix/empty-gitconfig"
+          native="$(printf '%s' "$RUNNER_TEMP" | tr '\\' '/')"
+          printf 'GIT_CONFIG_GLOBAL=%s/empty-gitconfig\n' "$native" >> "$GITHUB_ENV"
+          printf 'GIT_CONFIG_SYSTEM=%s/empty-gitconfig\n' "$native" >> "$GITHUB_ENV"
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
