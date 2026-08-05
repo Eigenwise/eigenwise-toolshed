@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 /**
  * Tests for the ready-for-integration submission lifecycle (SQ-398).
@@ -1129,6 +1130,56 @@ test('CLI: a remote-less board auto-selects local integration and records a main
   assert.strictEqual(submission.integrationMode, 'local');
   assert.strictEqual(submission.upstream, 'main');
   assert.strictEqual(submission.base, git(['rev-parse', 'main']));
+});
+
+// A shared tree is the user's own checkout and can already be dirty with work
+// that has nothing to do with the run. Gating a verified submission on those
+// paths costs a scope round trip nobody can rule on usefully (contractify SQ-95).
+test('SQ-1367: a shared-tree submission is not gated on paths that were already dirty at dispatch', () => {
+  const stray = path.join(PROJECT_DIR, 'before-neutral-rework.jpeg');
+  fs.writeFileSync(stray, 'the user\'s own screenshot\n');
+
+  const t = addTicket('inherited dirt', { files: ['lib/inherited.js'] });
+  const prepared = store.prepareDispatch(slug, t.ref, { sessionId: 'inherited-dirt', sharedTree: true });
+  assert.ok(
+    store.getTicket(slug, t.ref).dispatch.dirtyBaseline.some((entry: any) => entry.path === 'before-neutral-rework.jpeg'),
+    'the dispatch records what was already dirty in the shared tree',
+  );
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'inherited-worker', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: 'inherited-dirt',
+  }).ok, true);
+
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'inherited.js'), 'scoped work\n');
+  git(['add', 'lib/inherited.js']);
+  git(['commit', '-m', 'scoped work beside inherited dirt']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+
+  const unscopedPaths = ['before-neutral-rework.jpeg'];
+  const submitted = store.submitTicket(slug, t.ref, 'inherited-worker', { commit, unscopedPaths });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  assert.deepStrictEqual(submitted.ticket.submission.unscopedPaths, []);
+  assert.deepStrictEqual(submitted.ticket.submission.inheritedPaths, unscopedPaths);
+
+  // Touching an inherited path puts it back under the gate: the exemption is
+  // content-aware, not a permanent pass for the path.
+  const reworked = addTicket('inherited dirt, then touched', { files: ['lib/reworked.js'] });
+  const second = store.prepareDispatch(slug, reworked.ref, { sessionId: 'inherited-touch', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, reworked.ref, 'touch-worker', {
+    token: second.token, executor: second.ticket.dispatchExecutor, sessionId: 'inherited-touch',
+  }).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reworked.js'), 'more scoped work\n');
+  git(['add', 'lib/reworked.js']);
+  git(['commit', '-m', 'more scoped work']);
+  const reworkedCommit = git(['rev-parse', 'HEAD']);
+  pin(reworked, reworkedCommit);
+  fs.writeFileSync(stray, 'an executor overwrote it\n');
+  const refused = store.submitTicket(slug, reworked.ref, 'touch-worker', { commit: reworkedCommit, unscopedPaths });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'unscoped_paths');
+  assert.match(refused.message, /before-neutral-rework\.jpeg/);
+  fs.rmSync(stray);
 });
 
 export {};

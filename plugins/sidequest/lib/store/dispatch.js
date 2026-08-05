@@ -85,6 +85,13 @@ function createDispatch(dependencies) {
       return { path: entry.file, identity };
     }).sort((left, right) => left.path.localeCompare(right.path));
   }
+  function captureDirtyBaseline(slug) {
+    try {
+      return artifactWorkingState(slug);
+    } catch (_) {
+      return null;
+    }
+  }
   function captureArtifactBaseline(slug, scope) {
     const meta = readMeta(slug);
     if (!meta || !meta.path) throw new Error("prepare dispatch: shared-tree artifact mode requires a board project path.");
@@ -562,6 +569,7 @@ function createDispatch(dependencies) {
         artifactRoot,
         artifactScope,
         ...artifactMode ? { artifactDirtyBaseline } : {},
+        ...sharedTree ? { dirtyBaseline: artifactDirtyBaseline || captureDirtyBaseline(slug) } : {},
         tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
         executor: t.dispatchExecutor,
         description: spawnDescription(t, preparedExec),

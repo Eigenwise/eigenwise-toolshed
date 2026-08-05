@@ -107,6 +107,20 @@ function artifactWorkingState(slug?: any) {
     .sort((left, right) => left.path.localeCompare(right.path));
 }
 
+// A shared tree is the user's own checkout, so it can already hold work that has
+// nothing to do with this run: a stray screenshot, a half-finished edit. Recording
+// what was dirty before launch lets the submit gate separate the paths an executor
+// touched from the ones it inherited, instead of blocking on someone else's file
+// (contractify SQ-95, 2026-08-05). Unrecordable means no exemption, never a refused
+// dispatch.
+function captureDirtyBaseline(slug?: any) {
+  try {
+    return artifactWorkingState(slug);
+  } catch (_) {
+    return null;
+  }
+}
+
 function captureArtifactBaseline(slug?: any, scope?: any) {
   const meta = readMeta(slug);
   if (!meta || !meta.path) throw new Error('prepare dispatch: shared-tree artifact mode requires a board project path.');
@@ -635,6 +649,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       artifactRoot,
       artifactScope,
       ...(artifactMode ? { artifactDirtyBaseline } : {}),
+      ...(sharedTree ? { dirtyBaseline: artifactDirtyBaseline || captureDirtyBaseline(slug) } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, preparedExec),

@@ -1,6 +1,6 @@
 "use strict";
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, autoReleasedClaimMessage, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -138,6 +138,24 @@ Expires: ${checkpoint.expiresAt}`;
   }
   function submissionUnscopedPaths(paths) {
     return Array.from(new Set((Array.isArray(paths) ? paths : []).map((value) => String(value || "").trim().replace(/\\/g, "/")).filter(Boolean)));
+  }
+  function inheritedDirtyPaths(slug, ticket) {
+    const baseline = dispatchState(ticket)?.dirtyBaseline;
+    const inherited = /* @__PURE__ */ new Map();
+    if (!Array.isArray(baseline) || !baseline.length) return inherited;
+    let current;
+    try {
+      current = artifactWorkingState(slug);
+    } catch (_) {
+      return inherited;
+    }
+    const identities = new Map(current.map((entry) => [dirtyPathKey(entry.path), entry.identity]));
+    for (const entry of baseline) {
+      if (!entry || typeof entry.path !== "string" || typeof entry.identity !== "string") continue;
+      const key = dirtyPathKey(entry.path);
+      if (identities.get(key) === entry.identity) inherited.set(key, entry.path);
+    }
+    return inherited;
   }
   function submissionReadiness(submission) {
     const unscopedPaths = submissionUnscopedPaths(submission?.unscopedPaths);
@@ -474,7 +492,11 @@ ${verify.outputTail}` : null
       if (validationError) {
         return { ok: false, reason: "invalid_verify", ticket: t, message: validationError };
       }
-      const readiness = submissionReadiness({ unscopedPaths: opts.unscopedPaths });
+      const inherited = inheritedDirtyPaths(slug, t);
+      const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
+      const gatedPaths = reportedPaths.filter((file) => !inherited.has(dirtyPathKey(file)));
+      const inheritedPaths = reportedPaths.filter((file) => inherited.has(dirtyPathKey(file)));
+      const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
       if (!readiness.ok) {
         return {
           ok: false,
@@ -500,7 +522,8 @@ ${verify.outputTail}` : null
         verify,
         worktree,
         admittedScope: effectiveScope(slug, t.files),
-        unscopedPaths: submissionUnscopedPaths(opts.unscopedPaths),
+        unscopedPaths: gatedPaths,
+        ...inheritedPaths.length ? { inheritedPaths } : {},
         integratedAt: null
       }, range || {});
       const dispatch = dispatchState(t);
