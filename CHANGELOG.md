@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.376.0 (2026-08-05)
+
+### sidequest 4.18.1 → 4.19.0
+
+#### Features
+
+- pulse shows the scope in force (SQ-1354)
+  After granting scope, the obvious next question is whether the grant actually landed. `pulse` could not answer it: an orchestrator watching a wave had to shell out to `sidequest show <ref> --json` and filter the result through a python one-liner to read a ticket's files.
+
+  `pulse` now carries a `scope` block: the file set commits are actually gated on, any pending request with the paths it asks for, and the last ruling with what it granted and refused. It is in the default compact read, not behind `detail`, because that is where the question gets asked. The declared list rides along only when it differs from what is enforced, which is exactly the case the existing scope-drift warning fires on.
+
 ## v3.375.0 (2026-08-05)
 
 ### sidequest 4.18.0 → 4.18.1
