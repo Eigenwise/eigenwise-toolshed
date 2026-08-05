@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.383.0 (2026-08-05)
+
+### sidequest 4.22.0 → 4.22.1
+
+#### Fixes
+
+- Hook perf ceilings calibrate to the machine running them (SQ-1366)
+  The hook latency budgets were absolute wall-clock numbers set on one Windows box, so on a hosted runner they measured the runner. SubagentStart came in at 1088ms p95 against a 750ms ceiling with nothing wrong in the hooks, and the same test had passed on the commit before it.
+
+  Each measurement already timed a bare `node -e ''` alongside the hook and never used it. That control is now the calibration: the budget stretches by however much slower process startup is than the 40ms reference. The tail assertion moved to twice the median budget, because a p95 over 20 samples is the second-slowest run and one descheduled process owns it. A hook that starts doing real work moves its median, which is where the signal was all along.
+
 ## v3.382.0 (2026-08-05)
 
 ### sidequest 4.21.2 → 4.22.0
