@@ -439,6 +439,72 @@ test('pre-tool hook: executor helpers reject review work and model defaults', ()
   assert.match(mainThread.hookSpecificOutput.permissionDecisionReason, /generic Agent, not a Sidequest ticket executor/);
 });
 
+test('pre-tool hook: a generated per-ticket executor definition owns its ticket by name', () => {
+  // A per-ticket definition spawns under the dispatch's agentName as its subagent_type, and
+  // its runtime id never binds, so matching on agentId alone refused every edit it made
+  // (contractify, 2026-08-05: two executors blocked identically, wave stalled).
+  const ticket = addStopTicket('generated definition scope', { files: ['lib/allowed.js'] });
+  const sessionId = `generated-definition-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const agentName = `asq-${ticket.id}-generated-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'generated-definition-claim', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const worktree = path.join(BOARD_PATH, '.claude', 'worktrees', `agent-${agentName}`);
+  const acting = { session_id: sessionId, agent_type: agentName, agent_id: agentName, cwd: worktree };
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'allowed.js') },
+  }), null);
+
+  const outside = runHookOutput(FORCE_BYPASS, {
+    ...acting,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'elsewhere.js') },
+  });
+  assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+});
+
+test('pre-tool hook: an unbound helper inherits the sole active ticket', () => {
+  // The helper's own id never binds to a dispatch. With exactly one active ticket in the
+  // session there is nothing to borrow from, so refusing it only blocked legitimate work.
+  const ticket = addStopTicket('sole active helper scope', { files: ['lib/allowed.js'] });
+  const sessionId = `sole-active-helper-${++sqSeq}`;
+  const parent = claimStopTicket(ticket, sessionId, 'sole-active-parent');
+  const worktree = path.join(BOARD_PATH, '.claude', 'worktrees', 'sq-sole-active');
+  const helper = {
+    ...parent,
+    agent_type: 'general-purpose',
+    agent_id: `unbound-helper-${++sqSeq}`,
+    cwd: worktree,
+  };
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'allowed.js') },
+  }), null);
+
+  const outside = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'elsewhere.js') },
+  });
+  assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+});
+
 test('executor template calls transcript evidence self-reference', () => {
   const template = fs.readFileSync(path.join(__dirname, '..', 'scripts', '_exec-template.md'), 'utf8');
   assert.match(template, /Evidence work that needs session, transcript, or task-output searching is not helper work/);

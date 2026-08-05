@@ -37,6 +37,7 @@ interface Ticket {
   dispatchNonce?: string;
   dispatch?: {
     agentId?: string;
+    agentName?: string;
     description?: string;
     launchName?: string;
     launchSeq?: number;
@@ -385,9 +386,18 @@ function helperScopes(input: HookInput): HelperScopeResolution {
       }
     }
     if (!activeTickets.length) return { status: 'no-active-ticket', scopes: [] };
-    const ownedTickets = activeTickets.filter(({ ticket }) => ticket.dispatch?.agentId === agentId);
-    if (ownedTickets.length !== 1) return { status: 'no-owner', scopes: [] };
-    const owner = ownedTickets[0]!;
+    // A per-ticket generated executor definition carries the dispatch's agentName as its
+    // type, and its runtime id never binds, so identity has to match either field. A true
+    // helper spawned by an executor matches neither; it inherits the sole active ticket,
+    // which is unambiguous by construction. Two or more still refuse rather than borrow.
+    const ownedTickets = activeTickets.filter(({ ticket }) => {
+      const dispatch = ticket.dispatch;
+      return dispatch?.agentId === agentId
+        || (dispatch?.agentName && (dispatch.agentName === agentId || dispatch.agentName === type));
+    });
+    const owners = ownedTickets.length ? ownedTickets : activeTickets;
+    if (owners.length !== 1) return { status: 'no-owner', scopes: [] };
+    const owner = owners[0]!;
     return {
       status: 'ok',
       scopes: [{ ref: owner.ticket.ref!, projectPath: owner.projectPath, files: store.effectiveScope(owner.project, owner.ticket.files) }],

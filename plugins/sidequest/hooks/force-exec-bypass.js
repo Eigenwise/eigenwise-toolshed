@@ -408,9 +408,13 @@ function helperScopes(input) {
       }
     }
     if (!activeTickets.length) return { status: "no-active-ticket", scopes: [] };
-    const ownedTickets = activeTickets.filter(({ ticket }) => ticket.dispatch?.agentId === agentId);
-    if (ownedTickets.length !== 1) return { status: "no-owner", scopes: [] };
-    const owner = ownedTickets[0];
+    const ownedTickets = activeTickets.filter(({ ticket }) => {
+      const dispatch = ticket.dispatch;
+      return dispatch?.agentId === agentId || dispatch?.agentName && (dispatch.agentName === agentId || dispatch.agentName === type);
+    });
+    const owners = ownedTickets.length ? ownedTickets : activeTickets;
+    if (owners.length !== 1) return { status: "no-owner", scopes: [] };
+    const owner = owners[0];
     return {
       status: "ok",
       scopes: [{ ref: owner.ticket.ref, projectPath: owner.projectPath, files: store.effectiveScope(owner.project, owner.ticket.files) }]
