@@ -92,7 +92,7 @@ const tools = [
   },
   {
     name: "comments",
-    description: "Read ticket comments before work; full history is chronological. Past 10 comments, oldest bodies are omitted unless full:true. Follow nextCursor when paging.",
+    description: "Read comments before work; history is chronological. Past 10 comments, oldest bodies are omitted unless full:true. Follow nextCursor when paging.",
     inputSchema: {
       type: "object",
       properties: {

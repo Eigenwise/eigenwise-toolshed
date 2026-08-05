@@ -893,9 +893,9 @@ test('briefings reject compensating workarounds when the root cause is out of sc
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-1138', title: 'Scope wall', model: 'opus', effort: 'high', category: {},
   }, 'scope-wall-token');
-  assert.match(briefing, /After filing a request, call `scopeWait` with the returned `requestAt`/);
-  assert.match(briefing, /If the wait times out, checkpoint with a commit and state exactly which scope ruling is pending/);
-  assert.match(briefing, /When the root cause is outside declared scope, request that scope and wait for `scopeWait`/);
+  assert.match(briefing, /Always call `scopeRequest` with `wait: true`/);
+  assert.match(briefing, /checkpoint with a commit and state exactly which scope ruling is pending/);
+  assert.match(briefing, /When the root cause is outside declared scope, request that scope and wait/);
   assert.match(briefing, /record the root-cause finding on the ticket and stop/);
   assert.match(briefing, /Never ship a compensating or downstream workaround inside scope instead/);
   assert.match(briefing, /verified workaround is not a substitute for the root fix/);

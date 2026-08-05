@@ -162,7 +162,7 @@ const tools = [
   },
   {
     name: "category_list",
-    description: "List project taxonomy; compact descriptions are explicit excerpts. Follow nextCursor; full:true is complete.",
+    description: "List project taxonomy; compact descriptions are excerpts. Follow nextCursor; full:true is complete.",
     inputSchema: {
       type: "object",
       properties: {

@@ -340,7 +340,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request scope. If the response carries a pending request, call scopeWait with its requestAt value; keep your turn open unless scopeWait returns timeout.',
+    description: 'Request scope. A pending request blocks here until it is ruled on.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -348,52 +348,38 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         files: { type: 'array', items: { type: 'string' }, minItems: 1 },
+        wait: { type: 'boolean' },
+        timeoutMs: { type: 'integer' },
       },
       required: ['ref', 'by', 'files'],
     },
-    handler(args) {
+    async handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
       const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
       if (!res.ok && res.reason === 'not_owner') res.message = scopeRequestNotOwnerMessage(args.ref, res.claim || res.ticket);
+      // wait:true delivers the ruling on this same call. Executors that had to make a
+      // second call to collect it simply stopped instead, three times in one session
+      // (SQ-1348), so the briefing tells them to always pass it.
+      const ruling = res.ok && res.scopeRequest && args.wait === true
+        ? await store.waitForScopeResolution(slug, args.ref, by, res.scopeRequest.at, args.timeoutMs)
+        : null;
       const changed = res.ok && res.scopeRequest !== undefined ? {
         covered: res.covered || [],
         approved: res.approved || [],
         autoApproved: !!res.autoApproved,
         scopeRequest: res.scopeRequest,
         command: res.command,
-        wait: res.scopeRequest ? {
-          tool: 'scopeWait',
-          requestAt: res.scopeRequest.at,
-          instruction: 'Call scopeWait now. Do not end your turn while the request is pending. If it times out, checkpoint with a commit and state exactly which ruling is pending.',
-        } : null,
-      } : null;
-      return mutationAck(slug, res, changed);
-    },
-  },
-  {
-    name: 'scopeWait',
-    description: 'Wait, without holding a board lock, for a filed scope request to resolve. Call immediately after scopeRequest returns a pending request. A timeout means checkpoint your current commit and state the pending ruling before ending the turn.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string' },
-        project: PROJECT_PROP,
-        by: { type: 'string' },
-        requestAt: { type: 'string', description: 'The pending scopeRequest.at value returned by scopeRequest.' },
-        timeoutMs: { type: 'integer', minimum: 1, maximum: 180000, description: 'Optional bounded wait, default 120000 milliseconds.' },
-      },
-      required: ['ref', 'by'],
-    },
-    async handler(args) {
-      const { slug } = resolveProject(args.project);
-      const by = requireBy(args, 'scopeWait');
-      const res = await store.waitForScopeResolution(slug, args.ref, by, args.requestAt, args.timeoutMs);
-      const changed = res.ok ? {
-        state: res.state,
-        effectiveScope: res.effectiveScope,
-        resolution: res.resolution || null,
-        ...(res.scopeRequest ? { scopeRequest: res.scopeRequest } : {}),
+        ...(ruling ? {
+          state: ruling.state,
+          effectiveScope: ruling.effectiveScope,
+          resolution: ruling.resolution || null,
+          ...(ruling.state === 'timeout' ? {
+            instruction: 'No ruling yet. Checkpoint with a commit and state exactly which scope ruling is pending.',
+          } : {}),
+        } : res.ok && res.scopeRequest ? {
+          instruction: 'Pending. Re-send this request with wait:true to receive the ruling on that call instead of ending your turn.',
+        } : {}),
       } : null;
       return mutationAck(slug, res, changed);
     },
