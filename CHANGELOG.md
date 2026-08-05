@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.380.0 (2026-08-05)
+
+### sidequest 4.21.0 → 4.21.1
+
+#### Fixes
+
+- Every worktree path comparison agrees on what a directory is called (SQ-1362)
+  4.21.0 canonicalized worktree paths where the integration-advance code compares them, which fixed one family of failures and left the rest: commit and submit still refused an aliased worktree, and the sweeps still failed to recognise their own candidates. A directory reached by two spellings was still two directories to most of the code.
+
+  The comparisons now run through one shared canonicalization instead of `path.resolve`, including the commit worktree-root check, which is the one that produced `worktree must name the git worktree root: C:\Users\RUNNER~1\...` while pointing at exactly the directory git had just named.
+
+  The part worth keeping is the test. It builds a real 8.3 alias in the temp directory and drives a commit through it, so this class now fails on any machine instead of only on a hosted runner. It caught the incomplete fix immediately: the first round passed its own focused tests and still failed this one.
+
 ## v3.379.0 (2026-08-05)
 
 ### observability 0.2.2 → 0.3.0
