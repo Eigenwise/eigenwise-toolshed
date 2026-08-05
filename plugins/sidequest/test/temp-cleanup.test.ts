@@ -15,6 +15,10 @@ function sandbox() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-sandbox-'));
 }
 
+function canonical(value: string): string {
+  try { return fs.realpathSync.native(value); } catch (_) { return path.resolve(value); }
+}
+
 function windowsShortPath(pathname: string) {
   if (process.platform !== 'win32') return pathname;
   return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${pathname}") do @echo %~sI`], {
@@ -92,7 +96,9 @@ test('cleanup records classification failures and continues scanning', () => {
   Object.defineProperty(fs, 'lstatSync', {
     configurable: true,
     value: (candidate: fs.PathLike, options?: any) => {
-      if (path.resolve(String(candidate)) === path.resolve(badRoot) && ++badRootChecks === 2) {
+      // cleanup now hands lstat canonical paths, so a resolve-only comparison never
+      // matches when an ancestor of the temp root carries an 8.3 alias.
+      if (canonical(String(candidate)) === canonical(badRoot) && ++badRootChecks === 2) {
         const error = new Error(`ENOENT: no such file or directory, lstat '${badRoot}'`);
         (error as NodeJS.ErrnoException).code = 'ENOENT';
         throw error;

@@ -61,7 +61,7 @@ function makeOld(worktree: any) {
 }
 
 function entryFor(result: any, worktree: any) {
-  return result.entries.find((entry: any) => path.resolve(entry.path) === path.resolve(worktree));
+  return result.entries.find((entry: any) => worktrees.canonicalPath(entry.path) === worktrees.canonicalPath(worktree));
 }
 
 function branchExists(branch: any) {
@@ -155,7 +155,7 @@ test('worktree sweep accepts an 8.3 alias in the repository root', { skip: proce
 
     const result = await worktrees.sweep(alias, [], { execute: true, minAgeMs: 0, upstream: 'origin/main' });
 
-    assert.ok(result.removed.some((entry: string) => path.resolve(entry) === path.resolve(worktree)));
+    assert.ok(result.removed.some((entry: string) => worktrees.canonicalPath(entry) === worktrees.canonicalPath(worktree)));
     assert.ok(!fs.existsSync(worktree));
   } finally {
     if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
@@ -199,8 +199,8 @@ test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees'
 
   const applied = cliJson(['worktrees', 'sweep', '--yes', '--json']);
   assert.deepEqual(
-    applied.removed.map((entry: any) => path.resolve(entry)).sort(),
-    [path.resolve(equivalentOld), path.resolve(dirtyOld)].sort()
+    applied.removed.map((entry: any) => worktrees.canonicalPath(entry)).sort(),
+    [worktrees.canonicalPath(equivalentOld), worktrees.canonicalPath(dirtyOld)].sort()
   );
   assert.deepEqual(applied.deletedBranches.sort(), [branchName('equivalent-old'), branchName('dirty-old')].sort());
   assert.equal(applied.counts.removedWorktrees, 2);
@@ -255,7 +255,7 @@ test('groom-close integration sweeps the dispatched worktree immediately', () =>
 
   const closed = cliJson(['groom-close', ticket.ref, '--by', 'integrator', '--integration', '--reason', `Integrated ${commit} into main.`, '--json']);
   assert.equal(closed.ok, true);
-  assert.deepEqual(closed.worktreeSweep.removed.map((entry: string) => path.resolve(entry)), [path.resolve(worktree)]);
+  assert.deepEqual(closed.worktreeSweep.removed.map((entry: string) => worktrees.canonicalPath(entry)), [worktrees.canonicalPath(worktree)]);
   assert.ok(!fs.existsSync(worktree));
   assert.ok(!branchExists(branchName(agentId)));
 });
