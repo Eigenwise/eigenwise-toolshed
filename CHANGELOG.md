@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.382.0 (2026-08-05)
+
+### sidequest 4.21.2 → 4.22.0
+
+#### Features
+
+- Test-scope auto-approval works in any repo layout (SQ-1365)
+  Test-scope auto-approval now works in any repo layout. The detector was hardcoded to this marketplace's `plugins/<name>/test` shape, so every other project fell through to a full scope ruling: the executor stopped mid-run, the orchestrator woke up to approve `tests/`, and the round trip bought nothing that the commit-time scope check does not already catch. Terge_VST hit it three times in one session.
+
+  A scope request is now auto-approved when every requested path sits in a test directory the ticket already reaches: an existing `test/`, `tests/`, `spec/`, `specs/`, or `__tests__/` beside a file the ticket declares, or beside any of its parents up to the repo root. A ticket owning `plugins/x/src/thing.ts` widens into `plugins/x/test/**`; one owning `src/synth.cpp` widens into the repo's `tests/**`; neither reaches the other's. The widening is recorded as a board comment and still reviewed at publish.
+
+  The board flag is renamed `autoApproveTestScope` (`--no-auto-approve-test-scope`), and boards that explicitly set the old `autoApprovePluginTests` keep their setting.
+
 ## v3.381.0 (2026-08-05)
 
 ### sidequest 4.21.1 → 4.21.2
