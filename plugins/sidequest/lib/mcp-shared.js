@@ -501,7 +501,9 @@ function worktreeRoot(worktree, action) {
   } catch (_) {
     throw new Error(`${action}: worktree is not inside a git work tree: ${supplied}`);
   }
-  if (path.resolve(supplied) !== path.resolve(root)) throw new Error(`${action}: worktree must name the git worktree root: ${supplied}`);
+  if (worktrees.canonicalPath(supplied) !== worktrees.canonicalPath(root)) {
+    throw new Error(`${action}: worktree must name the git worktree root: ${supplied}`);
+  }
   return root;
 }
 function verifyEmbedsWorktreeRoot(verify, root) {

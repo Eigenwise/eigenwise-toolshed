@@ -615,7 +615,12 @@ function worktreeRoot(worktree?: any, action?: any) {
   if (!stat.isDirectory()) throw new Error(`${action}: worktree must be a directory: ${supplied}`);
   let root;
   try { root = commitScope.repoRoot(supplied); } catch (_) { throw new Error(`${action}: worktree is not inside a git work tree: ${supplied}`); }
-  if (path.resolve(supplied) !== path.resolve(root)) throw new Error(`${action}: worktree must name the git worktree root: ${supplied}`);
+  // git answers with the canonical spelling while a caller may hold an 8.3 alias of
+  // the same directory (C:\Users\RUNNER~1\... on the hosted Windows runner), so both
+  // sides have to be canonicalized or the two names for one directory disagree.
+  if (worktrees.canonicalPath(supplied) !== worktrees.canonicalPath(root)) {
+    throw new Error(`${action}: worktree must name the git worktree root: ${supplied}`);
+  }
   return root;
 }
 
