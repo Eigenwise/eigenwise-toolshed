@@ -66,6 +66,8 @@ interface Store {
   listTickets: (slug: string) => Ticket[];
   readMeta: (slug: string) => { path?: string } | null;
   effectiveScope: (slug: string, files: unknown) => string[];
+  terminalDispatchTarget: (agentName: string) => { slug: string; ref: string; outcome: string } | null;
+  addComment: (slug: string, ref: string, fields: { by: string; body: string }) => { ok: boolean } | null;
 }
 
 interface HelperScope {
@@ -464,10 +466,42 @@ function guardHelperWrite(input: HookInput): void {
   );
 }
 
+// A steer aimed at an executor that already finished is dropped on the floor: the
+// teammate wakes, the idle guard ends it, and the instruction is gone. The sender is
+// the only party holding the text, so this is the one place it can be saved.
+function guardLateSteer(input: HookInput): void {
+  const toolInput = toolInputOf(input);
+  const recipient = String(toolInput?.to || '').trim();
+  const message = toolInput?.message;
+  if (!recipient || typeof message !== 'string' || !message.trim()) return;
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const terminal = store.terminalDispatchTarget(recipient);
+    if (!terminal) return;
+    const sender = stringField(input, 'agent_id', 'agentId') || 'orchestrator';
+    const recorded = store.addComment(terminal.slug, terminal.ref, {
+      by: sender,
+      body: `Late steer to ${recipient}, which had already finished (${terminal.outcome}). Recorded here so it is not lost:\n\n${message.trim()}`,
+    });
+    writeDeny(
+      'PreToolUse',
+      `sidequest: ${terminal.ref} is already ${terminal.outcome} and ${recipient} has ended, so this steer would be dropped. ${recorded?.ok
+        ? 'It is now a comment on the ticket.'
+        : 'Record it on the ticket yourself.'} Re-dispatch ${terminal.ref} if the work itself must change.`,
+    );
+  } catch (_) {
+    /* never block a message because the board was unreadable */
+  }
+}
+
 function main(): void {
   const input = readStdin();
   if (!input) return;
   const toolName = stringField(input, 'tool_name');
+  if (toolName === 'SendMessage') {
+    guardLateSteer(input);
+    return;
+  }
   if (WRITE_TOOLS.has(toolName)) {
     guardHelperWrite(input);
     return;

@@ -505,6 +505,50 @@ test('pre-tool hook: an unbound helper inherits the sole active ticket', () => {
   assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
 });
 
+test('pre-tool hook: a steer to a finished executor is recorded on the ticket, not dropped', () => {
+  // contractify SQ-84, 2026-08-05: the steer arrived after closure, the idle guard
+  // ended the teammate, and the instruction vanished. The sender holds the only copy.
+  const ticket = addStopTicket('late steer capture', { files: ['lib/allowed.js'] });
+  const sessionId = `late-steer-${++sqSeq}`;
+  const acting = claimStopTicket(ticket, sessionId, 'late-steer-worker');
+  assert.equal(store.markDispatchStopped(sessionId, acting.agent_type, acting.agent_id, acting.agent_name).ok, true);
+
+  const denied = runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_id: 'orchestrator-late-steer',
+    tool_name: 'SendMessage',
+    tool_input: { to: acting.agent_name, message: 'Prefer type filters over content search.' },
+  });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  const reason = denied.hookSpecificOutput.permissionDecisionReason;
+  assert.match(reason, new RegExp(ticket.ref));
+  assert.match(reason, /now a comment on the ticket/);
+  assert.match(reason, /Re-dispatch/);
+
+  const bodies = store.getTicket(slug, ticket.ref).comments.map((comment: any) => comment.body);
+  assert.ok(bodies.some((body: string) => /Late steer/.test(body) && /Prefer type filters over content search\./.test(body)), bodies.join(' | '));
+});
+
+test('pre-tool hook: a steer to a live executor is untouched', () => {
+  const ticket = addStopTicket('live steer passthrough', { files: ['lib/allowed.js'] });
+  const sessionId = `live-steer-${++sqSeq}`;
+  const acting = claimStopTicket(ticket, sessionId, 'live-steer-worker');
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_id: 'orchestrator-live-steer',
+    tool_name: 'SendMessage',
+    tool_input: { to: acting.agent_name, message: 'Check the fixture before you commit.' },
+  }), null);
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    session_id: sessionId,
+    agent_id: 'orchestrator-live-steer',
+    tool_name: 'SendMessage',
+    tool_input: { to: 'some-unrelated-teammate', message: 'Ping.' },
+  }), null);
+});
+
 test('executor template calls transcript evidence self-reference', () => {
   const template = fs.readFileSync(path.join(__dirname, '..', 'scripts', '_exec-template.md'), 'utf8');
   assert.match(template, /Evidence work that needs session, transcript, or task-output searching is not helper work/);

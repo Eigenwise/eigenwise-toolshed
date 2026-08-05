@@ -475,10 +475,37 @@ function guardHelperWrite(input) {
     `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Route this path through the parent executor as a scope request or file a new ticket.`
   );
 }
+function guardLateSteer(input) {
+  const toolInput = toolInputOf(input);
+  const recipient = String(toolInput?.to || "").trim();
+  const message = toolInput?.message;
+  if (!recipient || typeof message !== "string" || !message.trim()) return;
+  try {
+    const store = require(runtimeModule("store"));
+    const terminal = store.terminalDispatchTarget(recipient);
+    if (!terminal) return;
+    const sender = stringField(input, "agent_id", "agentId") || "orchestrator";
+    const recorded = store.addComment(terminal.slug, terminal.ref, {
+      by: sender,
+      body: `Late steer to ${recipient}, which had already finished (${terminal.outcome}). Recorded here so it is not lost:
+
+${message.trim()}`
+    });
+    writeDeny(
+      "PreToolUse",
+      `sidequest: ${terminal.ref} is already ${terminal.outcome} and ${recipient} has ended, so this steer would be dropped. ${recorded?.ok ? "It is now a comment on the ticket." : "Record it on the ticket yourself."} Re-dispatch ${terminal.ref} if the work itself must change.`
+    );
+  } catch (_) {
+  }
+}
 function main() {
   const input = readStdin();
   if (!input) return;
   const toolName = stringField(input, "tool_name");
+  if (toolName === "SendMessage") {
+    guardLateSteer(input);
+    return;
+  }
   if (WRITE_TOOLS.has(toolName)) {
     guardHelperWrite(input);
     return;
