@@ -1,7 +1,13 @@
 "use strict";
 function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction }) {
   function ensureProject(absPath, name) {
-    const resolved = path.resolve(absPath);
+    const supplied = path.resolve(absPath);
+    let canonical = supplied;
+    try {
+      canonical = fs.realpathSync.native(supplied);
+    } catch (_) {
+    }
+    const resolved = canonical !== supplied && readMeta(slugify(supplied)) ? supplied : canonical;
     const slug = slugify(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));

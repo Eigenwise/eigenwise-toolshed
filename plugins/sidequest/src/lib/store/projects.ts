@@ -2,7 +2,14 @@
 
 function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction }: any) {
   function ensureProject(absPath?: any, name?: any) {
-    const resolved = path.resolve(absPath);
+    // Register under the canonical spelling so a later lookup through a different name
+    // for the same directory finds it — git reports the canonical path while a caller
+    // may hold an 8.3 alias. An existing registration under the caller's own spelling
+    // wins, so boards registered before this keep their slug instead of duplicating.
+    const supplied = path.resolve(absPath);
+    let canonical = supplied;
+    try { canonical = fs.realpathSync.native(supplied); } catch (_) { /* may not exist yet */ }
+    const resolved = canonical !== supplied && readMeta(slugify(supplied)) ? supplied : canonical;
     const slug = slugify(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));
