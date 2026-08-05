@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.381.0 (2026-08-05)
+
+### sidequest 4.21.1 → 4.21.2
+
+#### Fixes
+
+- Temp cleanup recognises its own directories when an ancestor is aliased (SQ-1363)
+  The worktree sweep and the temp-root cleanup were the last Windows CI failures, and they had a different shape from the earlier path bugs: the leaf directory matched fine, but an ANCESTOR of the temp root carried an 8.3 alias. Canonicalizing the path being examined was not enough when the root it was compared against was spelled the other way, so cleanup skipped roots it owned and the sweep failed to recognise its own candidates.
+
+  Both now compare through the same canonicalization, and both carry a test that builds a real alias locally rather than relying on a hosted runner to expose it.
+
 ## v3.380.0 (2026-08-05)
 
 ### sidequest 4.21.0 → 4.21.1
