@@ -445,6 +445,10 @@ test('pre-tool hook: a generated per-ticket executor definition owns its ticket 
   // (contractify, 2026-08-05: two executors blocked identically, wave stalled).
   const ticket = addStopTicket('generated definition scope', { files: ['lib/allowed.js'] });
   const sessionId = `generated-definition-${++sqSeq}`;
+  // A second live ticket in the same session is what makes this bite: with only one,
+  // the sole-active-ticket fallback masks a failed identity match (contractify ran
+  // SQ-64 and SQ-85 concurrently).
+  claimStopTicket(addStopTicket('concurrent generated sibling', { files: ['lib/sibling.js'] }), sessionId, 'generated-sibling');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const agentName = `asq-${ticket.id}-generated-${sqSeq}`;
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
@@ -459,7 +463,9 @@ test('pre-tool hook: a generated per-ticket executor definition owns its ticket 
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   const worktree = path.join(BOARD_PATH, '.claude', 'worktrees', `agent-${agentName}`);
-  const acting = { session_id: sessionId, agent_type: agentName, agent_id: agentName, cwd: worktree };
+  // The runtime name is DERIVED from the launch name: "a" + name + "-" + hash.
+  const runtimeName = `a${agentName}-207bbcf0be435ec2`;
+  const acting = { session_id: sessionId, agent_type: runtimeName, agent_id: runtimeName, cwd: worktree };
 
   assert.equal(runHookOutput(FORCE_BYPASS, {
     ...acting,

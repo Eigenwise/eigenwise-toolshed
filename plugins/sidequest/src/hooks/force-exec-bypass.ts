@@ -388,14 +388,21 @@ function helperScopes(input: HookInput): HelperScopeResolution {
       }
     }
     if (!activeTickets.length) return { status: 'no-active-ticket', scopes: [] };
-    // A per-ticket generated executor definition carries the dispatch's agentName as its
-    // type, and its runtime id never binds, so identity has to match either field. A true
-    // helper spawned by an executor matches neither; it inherits the sole active ticket,
-    // which is unambiguous by construction. Two or more still refuse rather than borrow.
+    // A per-ticket generated executor definition runs under a name DERIVED from the
+    // dispatch's launch name — "a" + launch name + "-" + hash — and its runtime id
+    // never binds, so exact equality against agentName never matches it (contractify
+    // SQ-85, 2026-08-05: three dispatches refused, zero lines written). A true helper
+    // spawned by an executor matches nothing; it inherits the sole active ticket, which
+    // is unambiguous by construction. Two or more still refuse rather than borrow.
+    const derivedFrom = (candidate: string, agentName: string): boolean =>
+      candidate === agentName
+      || candidate.startsWith(`${agentName}-`)
+      || candidate.startsWith(`a${agentName}-`);
     const ownedTickets = activeTickets.filter(({ ticket }) => {
       const dispatch = ticket.dispatch;
-      return dispatch?.agentId === agentId
-        || (dispatch?.agentName && (dispatch.agentName === agentId || dispatch.agentName === type));
+      if (dispatch?.agentId && dispatch.agentId === agentId) return true;
+      const agentName = dispatch?.agentName;
+      return Boolean(agentName && (derivedFrom(agentId, agentName) || derivedFrom(type, agentName)));
     });
     const owners = ownedTickets.length ? ownedTickets : activeTickets;
     if (owners.length !== 1) return { status: 'no-owner', scopes: [] };

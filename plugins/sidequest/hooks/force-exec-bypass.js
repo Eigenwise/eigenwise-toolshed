@@ -408,9 +408,12 @@ function helperScopes(input) {
       }
     }
     if (!activeTickets.length) return { status: "no-active-ticket", scopes: [] };
+    const derivedFrom = (candidate, agentName) => candidate === agentName || candidate.startsWith(`${agentName}-`) || candidate.startsWith(`a${agentName}-`);
     const ownedTickets = activeTickets.filter(({ ticket }) => {
       const dispatch = ticket.dispatch;
-      return dispatch?.agentId === agentId || dispatch?.agentName && (dispatch.agentName === agentId || dispatch.agentName === type);
+      if (dispatch?.agentId && dispatch.agentId === agentId) return true;
+      const agentName = dispatch?.agentName;
+      return Boolean(agentName && (derivedFrom(agentId, agentName) || derivedFrom(type, agentName)));
     });
     const owners = ownedTickets.length ? ownedTickets : activeTickets;
     if (owners.length !== 1) return { status: "no-owner", scopes: [] };
