@@ -1,13 +1,15 @@
 "use strict";
 function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction }) {
-  function ensureProject(absPath, name) {
-    const supplied = path.resolve(absPath);
-    let canonical = supplied;
+  function canonicalize(absPath) {
+    const resolved = path.resolve(absPath);
     try {
-      canonical = fs.realpathSync.native(supplied);
+      return fs.realpathSync.native(resolved);
     } catch (_) {
+      return resolved;
     }
-    const resolved = canonical !== supplied && readMeta(slugify(supplied)) ? supplied : canonical;
+  }
+  function ensureProject(absPath, name) {
+    const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));
@@ -228,17 +230,9 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     const arg = String(ref == null ? "" : ref).trim();
     if (!arg) return { ok: false, reason: "not_found", known: listProjects({ all: true }).map((project) => project.name) };
     if (path.isAbsolute(arg)) {
-      const resolvedPath = path.resolve(arg);
-      let canonicalPath = resolvedPath;
-      try {
-        canonicalPath = fs.realpathSync.native(resolvedPath);
-      } catch (_) {
-      }
-      for (const candidate of canonicalPath === resolvedPath ? [resolvedPath] : [resolvedPath, canonicalPath]) {
-        const slug = slugify(candidate);
-        const meta = readMeta(slug);
-        if (meta && normalizeForHash(meta.path) === normalizeForHash(candidate)) return { ok: true, slug, meta };
-      }
+      const slug = slugify(arg);
+      const meta = readMeta(slug);
+      if (meta && normalizeForHash(meta.path) === normalizeForHash(arg)) return { ok: true, slug, meta };
     } else {
       const meta = readMeta(arg);
       if (meta) return { ok: true, slug: arg, meta };
@@ -260,11 +254,9 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
         matches: byName.map((project) => ({ slug: project.slug, name: project.meta.name || project.slug, path: project.meta.path || "" }))
       };
     }
-    if (!path.isAbsolute(arg)) {
-      const wantedPath = normalizeForHash(path.resolve(arg));
-      const byPath = projects.find((project) => project.meta.path && normalizeForHash(path.resolve(project.meta.path)) === wantedPath);
-      if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
-    }
+    const wantedPath = normalizeForHash(canonicalize(arg));
+    const byPath = projects.find((project) => project.meta.path && normalizeForHash(canonicalize(project.meta.path)) === wantedPath);
+    if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
     return { ok: false, reason: "not_found", known: projects.map((project) => project.meta.name || project.slug) };
   }
   function seqOfRef(ref) {

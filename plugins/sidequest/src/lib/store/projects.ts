@@ -1,15 +1,16 @@
 'use strict';
 
 function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction }: any) {
+  // A directory can be spelled several ways on Windows — an 8.3 alias, a junction —
+  // and each spelling hashes to its own slug. Callers hold whichever spelling they
+  // were handed, so lookups compare canonically rather than by the stored spelling.
+  function canonicalize(absPath?: any) {
+    const resolved = path.resolve(absPath);
+    try { return fs.realpathSync.native(resolved); } catch (_) { return resolved; }
+  }
+
   function ensureProject(absPath?: any, name?: any) {
-    // Register under the canonical spelling so a later lookup through a different name
-    // for the same directory finds it — git reports the canonical path while a caller
-    // may hold an 8.3 alias. An existing registration under the caller's own spelling
-    // wins, so boards registered before this keep their slug instead of duplicating.
-    const supplied = path.resolve(absPath);
-    let canonical = supplied;
-    try { canonical = fs.realpathSync.native(supplied); } catch (_) { /* may not exist yet */ }
-    const resolved = canonical !== supplied && readMeta(slugify(supplied)) ? supplied : canonical;
+    const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));
@@ -227,17 +228,9 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     if (!arg) return { ok: false, reason: 'not_found', known: listProjects({ all: true }).map((project?: any) => project.name) };
 
     if (path.isAbsolute(arg)) {
-      // The slug is derived from the path's spelling, so a project registered under one
-      // spelling is invisible to a caller holding another name for the same directory —
-      // an 8.3 alias, or a junction. Try the canonical spelling as well before giving up.
-      const resolvedPath = path.resolve(arg);
-      let canonicalPath = resolvedPath;
-      try { canonicalPath = fs.realpathSync.native(resolvedPath); } catch (_) { /* may not exist yet */ }
-      for (const candidate of canonicalPath === resolvedPath ? [resolvedPath] : [resolvedPath, canonicalPath]) {
-        const slug = slugify(candidate);
-        const meta = readMeta(slug);
-        if (meta && normalizeForHash(meta.path) === normalizeForHash(candidate)) return { ok: true, slug, meta };
-      }
+      const slug = slugify(arg);
+      const meta = readMeta(slug);
+      if (meta && normalizeForHash(meta.path) === normalizeForHash(arg)) return { ok: true, slug, meta };
     } else {
       const meta = readMeta(arg);
       if (meta) return { ok: true, slug: arg, meta };
@@ -260,11 +253,9 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
       };
     }
 
-    if (!path.isAbsolute(arg)) {
-      const wantedPath = normalizeForHash(path.resolve(arg));
-      const byPath = projects.find((project?: any) => project.meta.path && normalizeForHash(path.resolve(project.meta.path)) === wantedPath);
-      if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
-    }
+    const wantedPath = normalizeForHash(canonicalize(arg));
+    const byPath = projects.find((project?: any) => project.meta.path && normalizeForHash(canonicalize(project.meta.path)) === wantedPath);
+    if (byPath) return { ok: true, slug: byPath.slug, meta: byPath.meta };
 
     return { ok: false, reason: 'not_found', known: projects.map((project?: any) => project.meta.name || project.slug) };
   }

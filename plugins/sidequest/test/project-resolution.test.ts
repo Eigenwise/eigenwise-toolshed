@@ -27,7 +27,7 @@ const assert = require('node:assert');
 const os = require('os');
 const path = require('path');
 const fs = require('fs');
-const { spawnSync } = require('child_process');
+const { execFileSync, spawnSync } = require('child_process');
 
 // Point the store at a throwaway home so this suite never touches the real
 // ~/.claude/sidequest data (same pattern as ladder.test.js).
@@ -83,6 +83,26 @@ test('findProject: unknown reference never creates anything', () => {
   assert.ok(Array.isArray(res.known));
   const after = projectSlugsOnDisk();
   assert.deepStrictEqual(after, before, 'an unknown --project must never register a board');
+});
+
+// A board registered through one spelling of its directory has to be findable
+// through every other spelling of it, because callers do not choose the one
+// they hold: git reports the canonical path while the shell may hand over an
+// 8.3 alias. Missing here means the caller silently gets board defaults.
+test('findProject: an 8.3-aliased registration resolves through its canonical path', { skip: process.platform !== 'win32' }, (context: any) => {
+  const canonical = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), 'sq-alias-board-'));
+  const alias = execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${canonical}") do @echo %~sI`], {
+    encoding: 'utf8', windowsHide: true, shell: true,
+  }).trim();
+  if (alias.toLowerCase() === canonical.toLowerCase()) {
+    context.skip('8.3 aliases are unavailable on this volume');
+    return;
+  }
+
+  const registered = store.ensureProject(alias, 'alias-registered-board');
+  const found = store.findProject(canonical);
+  assert.strictEqual(found.ok, true, 'the canonical path must find the aliased registration');
+  assert.strictEqual(found.slug, registered.slug);
 });
 
 test('findProject: exact name, case-insensitive name, and path all resolve to the same registered board', () => {
