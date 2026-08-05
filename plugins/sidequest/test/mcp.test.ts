@@ -161,6 +161,13 @@ function createGitWorktree() {
   return worktree;
 }
 
+function windowsShortPath(pathname: string) {
+  if (process.platform !== 'win32') return pathname;
+  return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${pathname}") do @echo %~sI`], {
+    encoding: 'utf8', windowsHide: true, shell: true,
+  }).trim();
+}
+
 function createLinkedWorktree(primary?: any) {
   const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-linked-worktree-'));
   const linked = path.join(parent, 'linked');
@@ -1115,6 +1122,35 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree, body: 'Malformed submission evidence' });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP commit and submit accept an 8.3 worktree alias', { skip: process.platform !== 'win32' }, async (context: any) => {
+  const worktree = createGitWorktree();
+  const alias = windowsShortPath(worktree);
+  if (alias.toLowerCase() === worktree.toLowerCase()) {
+    context.skip('8.3 aliases are unavailable on this volume');
+    return;
+  }
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'MCP 8.3 worktree alias', files: ['lib/allowed.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise canonical worktree root matching',
+  });
+  const by = 'mcp-8dot3-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The 8.3 alias fixture requires a local direct claim.' })).ok, true);
+
+  fs.mkdirSync(path.join(worktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'lib', 'allowed.js'), 'allowed\n');
+  gitAt(worktree, ['add', 'lib/allowed.js']);
+  const committed = await callTool('commit', {
+    project, ref: ticket.ref, by, message: 'MCP 8.3 alias commit', worktree: alias,
+  });
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+  const submitted = await callTool('submit', {
+    project, ref: ticket.ref, by, commit: committed.commit, worktree: alias,
+    body: 'MCP 8.3 alias submission evidence',
+  });
+  assert.equal(submitted.ok, true);
 });
 
 test('MCP commit refuses an isolated dispatch in the primary worktree but permits linked and shared trees', async () => {

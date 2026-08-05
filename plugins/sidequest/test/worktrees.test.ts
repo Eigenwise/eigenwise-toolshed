@@ -36,6 +36,13 @@ function agentWorktree(name: any) {
   return dir;
 }
 
+function windowsShortPath(pathname: string) {
+  if (process.platform !== 'win32') return pathname;
+  return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${pathname}") do @echo %~sI`], {
+    encoding: 'utf8', windowsHide: true, shell: true,
+  }).trim();
+}
+
 function makeCommit(worktree: any, filename: any) {
   fs.writeFileSync(path.join(worktree, filename), `${filename}\n`);
   git(['add', filename], worktree);
@@ -117,6 +124,23 @@ function submitFixture(ticket: any, worktree: string, commit: string, project: s
 }
 
 void slug;
+
+test('worktree sweep matches a submitted 8.3 alias', { skip: process.platform !== 'win32' }, async (context: any) => {
+  const worktree = agentWorktree('8dot3-alias');
+  try {
+    const alias = windowsShortPath(worktree);
+    if (alias.toLowerCase() === worktree.toLowerCase()) {
+      context.skip('8.3 aliases are unavailable on this volume');
+      return;
+    }
+    const result = await worktrees.classifyWorktree(PROJECT, [{
+      ref: 'SQ-8DOT3', status: 'doing', submission: { worktree: alias },
+    }], { worktree }, path.join(PROJECT, 'current'), 0, 'origin/main');
+    assert.equal(result.reason, 'active_ticket');
+  } finally {
+    git(['worktree', 'remove', worktree]);
+  }
+});
 
 test('worktree sweep caps orphan branch candidates', async () => {
   const branches = ['worktree-agent-000-cap-a', 'worktree-agent-000-cap-b', 'worktree-agent-000-cap-c'];

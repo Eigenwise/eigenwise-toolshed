@@ -25,11 +25,20 @@ function git(cwd, args) {
     });
   });
 }
-function normalize(value) {
+function canonicalPath(value) {
   const resolved = path.resolve(String(value));
+  const missingSegments = [];
+  let existingAncestor = resolved;
+  while (!nativeFs.existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+    if (parent === existingAncestor) break;
+    missingSegments.unshift(path.basename(existingAncestor));
+    existingAncestor = parent;
+  }
   try {
-    const canonical = nativeFs.realpathSync.native(resolved);
-    return process.platform === "win32" ? canonical.toLowerCase() : canonical;
+    const canonical = nativeFs.realpathSync.native(existingAncestor);
+    const completed = path.join(canonical, ...missingSegments);
+    return process.platform === "win32" ? completed.toLowerCase() : completed;
   } catch {
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   }
@@ -45,13 +54,13 @@ function parseWorktreeList(output) {
   }).filter((entry) => entry.worktree);
 }
 function isAgentWorktree(repo, worktree) {
-  const parent = path.join(repo, ".claude", "worktrees");
-  const relative = path.relative(parent, worktree);
+  const parent = canonicalPath(path.join(repo, ".claude", "worktrees"));
+  const relative = path.relative(parent, canonicalPath(worktree));
   return relative && !relative.startsWith("..") && !path.isAbsolute(relative) && !relative.includes(path.sep) && path.basename(relative).startsWith("agent-");
 }
 function ticketForWorktree(tickets, entry) {
-  const worktree = normalize(entry.worktree);
-  const submitted = tickets.find((ticket) => ticket.submission && ticket.submission.worktree && normalize(ticket.submission.worktree) === worktree);
+  const worktree = canonicalPath(entry.worktree);
+  const submitted = tickets.find((ticket) => ticket.submission && ticket.submission.worktree && canonicalPath(ticket.submission.worktree) === worktree);
   if (submitted) return submitted;
   const agentId = String(path.basename(entry.worktree)).replace(/^agent-/, "");
   const dispatched = tickets.find((ticket) => String(ticket.dispatch?.agentId || "") === agentId);
@@ -129,7 +138,7 @@ function skippedEntry(entry, ticket, reason, current) {
 }
 async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream) {
   const ticket = ticketForWorktree(tickets, entry);
-  const current = normalize(entry.worktree) === normalize(currentPath);
+  const current = canonicalPath(entry.worktree) === canonicalPath(currentPath);
   if (current) return skippedEntry(entry, ticket, "current_worktree", true);
   if (entry.locked) return skippedEntry(entry, ticket, "locked", false);
   if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
@@ -183,7 +192,7 @@ async function orphanDirectories(repo, registered) {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(parent, entry.name));
-    return Promise.all(directories.filter((directory) => !registered.has(normalize(directory))).map(async (directory) => {
+    return Promise.all(directories.filter((directory) => !registered.has(canonicalPath(directory))).map(async (directory) => {
       try {
         await fs.lstat(path.join(directory, ".git"));
         return null;
@@ -328,13 +337,13 @@ function advanceOutcome(fields) {
 async function integrationCandidates(repo, options, branchHead, submissionCommit) {
   const listed = await git(repo, ["worktree", "list", "--porcelain"]);
   if (!listed.ok) throw new Error(listed.stderr || "could not list git worktrees");
-  const executorWorktree = options.submissionWorktree ? normalize(options.submissionWorktree) : null;
+  const executorWorktree = options.submissionWorktree ? canonicalPath(options.submissionWorktree) : null;
   const heads = /* @__PURE__ */ new Map();
   for (const entry of parseWorktreeList(listed.stdout)) {
     const commit = String(entry.head || "").trim();
     if (!/^[0-9a-f]{40}$/.test(commit) || commit === branchHead) continue;
     if (isAgentWorktree(repo, entry.worktree)) continue;
-    if (executorWorktree && normalize(entry.worktree) === executorWorktree) continue;
+    if (executorWorktree && canonicalPath(entry.worktree) === executorWorktree) continue;
     if (!heads.has(commit)) heads.set(commit, entry.worktree);
   }
   return Promise.all([...heads].map(async ([commit, worktree]) => {
@@ -517,7 +526,7 @@ async function sweep(repo, tickets, options = {}) {
   const listed = await git(repo, ["worktree", "list", "--porcelain"]);
   if (!listed.ok) throw new Error(listed.stderr || "could not list git worktrees");
   const worktreeList = parseWorktreeList(listed.stdout);
-  const registered = new Set(worktreeList.map((entry) => normalize(entry.worktree)));
+  const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
   const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
   const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
   const allCandidates = [...candidates, ...orphanCandidates];
@@ -590,4 +599,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, parseWorktreeList, isAgentWorktree, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, classifyWorktree, advanceIntegrationBranch, sweep };
