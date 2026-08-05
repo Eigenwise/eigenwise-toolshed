@@ -76,8 +76,8 @@ test('cleanup removes old roots, keeps recent roots, and reports reparse points'
 
   assert.equal(report.removed, 1);
   assert.ok(report.removedEntries >= 2);
-  assert.ok(report.skippedRecent.includes(recentRoot));
-  assert.ok(report.skippedUnsafe.includes(link));
+  assert.ok(report.skippedRecent.some((entry: string) => canonical(entry) === canonical(recentRoot)));
+  assert.ok(report.skippedUnsafe.some((entry: string) => canonical(entry) === canonical(link)));
   assert.equal(fs.existsSync(oldRoot), false);
   assert.equal(fs.existsSync(recentRoot), true);
   assert.equal(fs.existsSync(target), true);
@@ -112,8 +112,8 @@ test('cleanup records classification failures and continues scanning', () => {
 
     assert.equal(fs.existsSync(goodRoot), false);
     assert.equal(fs.existsSync(badRoot), true);
-    assert.ok(report.skippedUnsafe.includes(badRoot));
-    assert.ok(report.failed.some((failure) => failure.path === badRoot && failure.error.includes('ENOENT')));
+    assert.ok(report.skippedUnsafe.some((entry: string) => canonical(entry) === canonical(badRoot)));
+    assert.ok(report.failed.some((failure) => canonical(failure.path) === canonical(badRoot) && failure.error.includes('ENOENT')));
   } finally {
     Object.defineProperty(fs, 'lstatSync', originalLstatDescriptor!);
   }

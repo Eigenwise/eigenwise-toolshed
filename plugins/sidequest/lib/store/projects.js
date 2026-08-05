@@ -223,9 +223,16 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     if (!arg) return { ok: false, reason: "not_found", known: listProjects({ all: true }).map((project) => project.name) };
     if (path.isAbsolute(arg)) {
       const resolvedPath = path.resolve(arg);
-      const slug = slugify(resolvedPath);
-      const meta = readMeta(slug);
-      if (meta && normalizeForHash(meta.path) === normalizeForHash(resolvedPath)) return { ok: true, slug, meta };
+      let canonicalPath = resolvedPath;
+      try {
+        canonicalPath = fs.realpathSync.native(resolvedPath);
+      } catch (_) {
+      }
+      for (const candidate of canonicalPath === resolvedPath ? [resolvedPath] : [resolvedPath, canonicalPath]) {
+        const slug = slugify(candidate);
+        const meta = readMeta(slug);
+        if (meta && normalizeForHash(meta.path) === normalizeForHash(candidate)) return { ok: true, slug, meta };
+      }
     } else {
       const meta = readMeta(arg);
       if (meta) return { ok: true, slug: arg, meta };

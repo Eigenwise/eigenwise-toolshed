@@ -220,10 +220,17 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     if (!arg) return { ok: false, reason: 'not_found', known: listProjects({ all: true }).map((project?: any) => project.name) };
 
     if (path.isAbsolute(arg)) {
+      // The slug is derived from the path's spelling, so a project registered under one
+      // spelling is invisible to a caller holding another name for the same directory —
+      // an 8.3 alias, or a junction. Try the canonical spelling as well before giving up.
       const resolvedPath = path.resolve(arg);
-      const slug = slugify(resolvedPath);
-      const meta = readMeta(slug);
-      if (meta && normalizeForHash(meta.path) === normalizeForHash(resolvedPath)) return { ok: true, slug, meta };
+      let canonicalPath = resolvedPath;
+      try { canonicalPath = fs.realpathSync.native(resolvedPath); } catch (_) { /* may not exist yet */ }
+      for (const candidate of canonicalPath === resolvedPath ? [resolvedPath] : [resolvedPath, canonicalPath]) {
+        const slug = slugify(candidate);
+        const meta = readMeta(slug);
+        if (meta && normalizeForHash(meta.path) === normalizeForHash(candidate)) return { ok: true, slug, meta };
+      }
     } else {
       const meta = readMeta(arg);
       if (meta) return { ok: true, slug: arg, meta };
