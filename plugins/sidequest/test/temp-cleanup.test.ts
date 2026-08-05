@@ -1,5 +1,6 @@
 import './_temp-cleanup.js';
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -14,6 +15,13 @@ function sandbox() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-sandbox-'));
 }
 
+function windowsShortPath(pathname: string) {
+  if (process.platform !== 'win32') return pathname;
+  return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${pathname}") do @echo %~sI`], {
+    encoding: 'utf8', windowsHide: true, shell: true,
+  }).trim();
+}
+
 function aged(root: string, name: string) {
   const directory = path.join(root, name);
   fs.mkdirSync(directory, { recursive: true });
@@ -25,6 +33,23 @@ function aged(root: string, name: string) {
 test('cleanup fixtures reject hardcoded Windows paths', () => {
   const source = fs.readFileSync(__filename, 'utf8');
   assert.doesNotMatch(source, /['"`](?:[A-Za-z]:[\\/]|\\\\)/);
+});
+
+test('cleanup accepts an 8.3 alias in a temp-root ancestor', { skip: process.platform !== 'win32' }, (context) => {
+  const parent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cleanup-alias-parent-'));
+  const root = path.join(parent, 'root');
+  fs.mkdirSync(root);
+  const aliasParent = windowsShortPath(parent);
+  if (aliasParent.toLowerCase() === parent.toLowerCase()) {
+    context.skip('8.3 aliases are unavailable on this volume');
+    return;
+  }
+  const oldRoot = aged(root, 'sq-cleanup-old');
+
+  const report = cleanupTempRoots({ root: path.join(aliasParent, path.basename(root)) });
+
+  assert.equal(report.removed, 1);
+  assert.equal(fs.existsSync(oldRoot), false);
 });
 
 test('cleanup removes old roots, keeps recent roots, and reports reparse points', () => {

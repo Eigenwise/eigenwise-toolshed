@@ -142,6 +142,26 @@ test('worktree sweep matches a submitted 8.3 alias', { skip: process.platform !=
   }
 });
 
+test('worktree sweep accepts an 8.3 alias in the repository root', { skip: process.platform !== 'win32' }, async (context: any) => {
+  const worktree = agentWorktree('8dot3-sweep');
+  try {
+    const alias = windowsShortPath(PROJECT);
+    if (alias.toLowerCase() === PROJECT.toLowerCase()) {
+      context.skip('8.3 aliases are unavailable on this volume');
+      return;
+    }
+    integrate(makeCommit(worktree, '8dot3-sweep.txt'));
+    makeOld(worktree);
+
+    const result = await worktrees.sweep(alias, [], { execute: true, minAgeMs: 0, upstream: 'origin/main' });
+
+    assert.ok(result.removed.some((entry: string) => path.resolve(entry) === path.resolve(worktree)));
+    assert.ok(!fs.existsSync(worktree));
+  } finally {
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+  }
+});
+
 test('worktree sweep caps orphan branch candidates', async () => {
   const branches = ['worktree-agent-000-cap-a', 'worktree-agent-000-cap-b', 'worktree-agent-000-cap-c'];
   for (const branch of branches) git(['branch', branch]);

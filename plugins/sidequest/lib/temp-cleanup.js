@@ -48,7 +48,8 @@ function isReparsePoint(candidate, stats) {
   const info = stats || import_node_fs.default.lstatSync(candidate);
   if (info.isSymbolicLink()) return true;
   if (process.platform !== "win32") return false;
-  return !samePath(realPath(candidate), import_node_path.default.resolve(candidate));
+  const resolved = import_node_path.default.resolve(candidate);
+  return !samePath(realPath(resolved), import_node_path.default.join(realPath(import_node_path.default.dirname(resolved)), import_node_path.default.basename(resolved)));
 }
 function containsReparsePoint(candidate) {
   const stats = import_node_fs.default.lstatSync(candidate);

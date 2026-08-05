@@ -37,7 +37,8 @@ function isReparsePoint(candidate: string, stats?: fs.Stats) {
   const info = stats || fs.lstatSync(candidate);
   if (info.isSymbolicLink()) return true;
   if (process.platform !== 'win32') return false;
-  return !samePath(realPath(candidate), path.resolve(candidate));
+  const resolved = path.resolve(candidate);
+  return !samePath(realPath(resolved), path.join(realPath(path.dirname(resolved)), path.basename(resolved)));
 }
 
 function containsReparsePoint(candidate: string): boolean {
