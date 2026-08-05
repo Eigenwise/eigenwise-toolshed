@@ -146,6 +146,22 @@ function createPulse(dependencies: any) {
     return [`Scope drift: this live dispatch enforces ${declared.join(', ') || '(none)'} but the ticket declares ${ticketFiles.join(', ') || '(none)'}. Commits are gated on the dispatch set; re-run update --files to resync.`];
   }
 
+  // Whether a scope approval actually landed is the question pulse gets asked after
+  // every ruling, and without this an orchestrator has to shell out to the CLI and
+  // filter JSON to answer it (Terge_VST, 2026-08-05). `enforced` is what commits are
+  // gated on; it differs from `declared` exactly when scopeDriftWarnings fires.
+  function scopePulse(ticket?: any) {
+    const dispatch = dispatchState(ticket);
+    const request = ticket?.scopeRequest;
+    const resolution = ticket?.scopeResolution;
+    return {
+      declared: Array.isArray(ticket?.files) ? ticket.files : [],
+      enforced: dispatch && !dispatch.terminalAt && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : null,
+      request: request ? { by: request.by || null, at: request.at || null, files: request.files || [] } : null,
+      lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null,
+    };
+  }
+
   function pulsePayload(slug?: any, idOrRef?: any) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return null;
@@ -191,6 +207,7 @@ function createPulse(dependencies: any) {
         failureShape: dispatch.failureShape || null,
       } : null,
       checkpoint: checkpointProjection(ticket),
+      scope: scopePulse(ticket),
       ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
       ...(warnings.length ? { warnings } : {}),
       submission: submissionProjection(ticket.submission),

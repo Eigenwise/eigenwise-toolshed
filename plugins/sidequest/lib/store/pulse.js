@@ -129,6 +129,17 @@ function createPulse(dependencies) {
     if (declared.length === ticketFiles.length && declared.every((file, index) => file === ticketFiles[index])) return [];
     return [`Scope drift: this live dispatch enforces ${declared.join(", ") || "(none)"} but the ticket declares ${ticketFiles.join(", ") || "(none)"}. Commits are gated on the dispatch set; re-run update --files to resync.`];
   }
+  function scopePulse(ticket) {
+    const dispatch = dispatchState(ticket);
+    const request = ticket?.scopeRequest;
+    const resolution = ticket?.scopeResolution;
+    return {
+      declared: Array.isArray(ticket?.files) ? ticket.files : [],
+      enforced: dispatch && !dispatch.terminalAt && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : null,
+      request: request ? { by: request.by || null, at: request.at || null, files: request.files || [] } : null,
+      lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null
+    };
+  }
   function pulsePayload(slug, idOrRef) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return null;
@@ -174,6 +185,7 @@ function createPulse(dependencies) {
         failureShape: dispatch.failureShape || null
       } : null,
       checkpoint: checkpointProjection(ticket),
+      scope: scopePulse(ticket),
       ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
       ...warnings.length ? { warnings } : {},
       submission: submissionProjection(ticket.submission),

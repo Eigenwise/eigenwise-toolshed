@@ -571,6 +571,31 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
 });
 
 
+test('pulse shows the scope in force so an approval can be verified without the CLI', async () => {
+  // Terge_VST, 2026-08-05: with no scope in pulse, the orchestrator shelled out to
+  // `sidequest.js show <ref> --json` piped through python just to confirm a grant landed.
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-pulse-scope-'))).slug;
+  const ticket = store.createTicket(project, {
+    title: 'scope visible in pulse', files: ['lib/a.js'], complexity: 2,
+    labels: ['direct-ok'], complexityWhy: 'the scope in force must be readable straight from pulse',
+  });
+  const by = 'pulse-scope-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The pulse scope fixture requires a local direct claim.' })).ok, true);
+  await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['lib/b.js'] });
+
+  const pending = await callTool('pulse', { project, ref: ticket.ref });
+  assert.deepEqual(pending.scope.files, ['lib/a.js']);
+  assert.deepEqual(pending.scope.request.files, ['lib/b.js']);
+  assert.equal(pending.scope.lastRuling, undefined);
+
+  await callTool('update', { project, ref: ticket.ref, by: 'pulse-scope-orchestrator', files: ['lib/a.js', 'lib/b.js'] });
+  const ruled = await callTool('pulse', { project, ref: ticket.ref });
+  assert.deepEqual(ruled.scope.files, ['lib/a.js', 'lib/b.js']);
+  assert.equal(ruled.scope.request, undefined);
+  assert.equal(ruled.scope.lastRuling.state, 'granted');
+  assert.deepEqual(ruled.scope.lastRuling.granted, ['lib/b.js']);
+});
+
 test('write acks and pulse stay lean: no body echoes, no lifecycle noise by default', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lean-shapes'), 'SQ lean shapes').slug;
   const ticket = store.createTicket(project, {

@@ -507,6 +507,23 @@ function compactPulse(pulse?: any) {
       agentName: pulse.dispatch.agentName,
       outcome: pulse.dispatch.outcome,
     },
+    ...(pulse.scope ? { scope: compactScope(pulse.scope) } : {}),
+  };
+}
+
+// "Did my approval land" is the question asked right after every ruling, so the
+// scope in force belongs in the default read. Only the enforced set is carried
+// when it already matches the declared one, which is the ordinary case.
+function compactScope(scope?: any) {
+  const enforced = Array.isArray(scope?.enforced) ? scope.enforced : null;
+  const declared = Array.isArray(scope?.declared) ? scope.declared : [];
+  const same = enforced && enforced.length === declared.length
+    && enforced.every((file: any, index: number) => file === declared[index]);
+  return {
+    files: enforced || declared,
+    ...(enforced && !same ? { declared } : {}),
+    ...(scope?.request ? { request: scope.request } : {}),
+    ...(scope?.lastRuling ? { lastRuling: scope.lastRuling } : {}),
   };
 }
 

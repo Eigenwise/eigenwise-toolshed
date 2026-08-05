@@ -394,7 +394,19 @@ function compactPulse(pulse) {
       executor: pulse.dispatch.executor,
       agentName: pulse.dispatch.agentName,
       outcome: pulse.dispatch.outcome
-    }
+    },
+    ...pulse.scope ? { scope: compactScope(pulse.scope) } : {}
+  };
+}
+function compactScope(scope) {
+  const enforced = Array.isArray(scope?.enforced) ? scope.enforced : null;
+  const declared = Array.isArray(scope?.declared) ? scope.declared : [];
+  const same = enforced && enforced.length === declared.length && enforced.every((file, index) => file === declared[index]);
+  return {
+    files: enforced || declared,
+    ...enforced && !same ? { declared } : {},
+    ...scope?.request ? { request: scope.request } : {},
+    ...scope?.lastRuling ? { lastRuling: scope.lastRuling } : {}
   };
 }
 function requiredText(args, key, action) {
