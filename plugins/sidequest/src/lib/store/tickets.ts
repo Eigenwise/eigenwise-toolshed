@@ -425,6 +425,7 @@ function createScopeRequestMarker(slug?: any, ticket?: any, request?: any) {
       files: request.files,
       requested: request.requested,
       covered: request.covered,
+      retention: request.retention || null,
       at: request.at,
     }) + '\n');
   } catch (_) {}
@@ -443,6 +444,42 @@ function clearScopeRequestMarker(slug?: any, ticket?: any) {
 
 function scopePauseRecoveryAsset(ticket?: any) {
   return `scope-pause-${String(ticket?.id || 'ticket').replace(/[^a-z0-9_-]/gi, '_')}.patch`;
+}
+
+// Claude Code removes a clean isolated worktree when its executor stops. A
+// marker commit keeps an early scope pause recoverable without committing work.
+function retainCleanScopePauseWorktree(ticket?: any) {
+  const dispatch = dispatchState(ticket);
+  const worktree = String(dispatch?.worktree || '').trim();
+  if (dispatch?.sharedTree !== false || !worktree || !fs.existsSync(worktree)) return null;
+  try {
+    const root = commitScope.repoRoot(worktree);
+    const linked = commitScope.linkedWorktree(root);
+    if (!linked.ok || !linked.linked) return null;
+    const status = execFileSync('git', ['status', '--porcelain'], {
+      cwd: root,
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim();
+    if (status) return null;
+    execFileSync('git', [
+      '-c', 'user.name=Sidequest',
+      '-c', 'user.email=sidequest@local',
+      'commit', '--allow-empty', '--no-gpg-sign',
+      '-m', `sidequest: retain ${ticket.ref} scope pause`,
+    ], {
+      cwd: root,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    return { worktree: root, commit: execFileSync('git', ['rev-parse', 'HEAD'], {
+      cwd: root,
+      encoding: 'utf8',
+      windowsHide: true,
+    }).trim() };
+  } catch (_) {
+    return null;
+  }
 }
 
 function noIndexDiff(worktree?: any, relativePath?: any) {
@@ -575,7 +612,8 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const pendingAdditions = additions.filter((file?: any) => !globApproved.includes(file));
     const command = scopeExpansionCommand(t, pendingAdditions);
     if (previousRequest) scopeResolution(slug, t, previousRequest, 'superseded', now, [], [], false);
-    const request = { by, files: pendingAdditions, requested, covered, at: now };
+    const retention = retainCleanScopePauseWorktree(t);
+    const request = { by, files: pendingAdditions, requested, covered, at: now, ...(retention ? { retention } : {}) };
     createScopeRequestMarker(slug, t, request);
     t.scopeRequest = request;
     const dispatch = dispatchState(t);
