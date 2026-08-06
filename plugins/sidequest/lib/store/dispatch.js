@@ -447,6 +447,10 @@ function createDispatch(dependencies) {
     if (worktreeFailures) {
       return `prepare dispatch: ${ticket.ref} has two isolated no-commit dispatches (${recordedAttempts}) that failed to find the app or service. Check for repository bind mounts or unavailable paths, then set worktreeIsolation:false or dispatch with sharedTree:true. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
     }
+    const repeatedContradictions = attempts.every((attempt) => attempt.release?.kind === "contradiction");
+    if (repeatedContradictions) {
+      return `prepare dispatch: ${ticket.ref} has two contradiction releases (${recordedAttempts}). The ticket premise is likely wrong, not the executor environment. Measure the claim, then rewrite the ticket before dispatching again; pass allowRepeatFailure:true only when a repeat is intentional.`;
+    }
     return `prepare dispatch: ${ticket.ref} has two prior terminal no-commit dispatches (${recordedAttempts}). Review the recorded release reasons, correct the ticket when they show a contradiction, then dispatch with allowRepeatFailure:true when a repeat is intentional.`;
   }
   function worktreeIsolationWarning(slug) {
