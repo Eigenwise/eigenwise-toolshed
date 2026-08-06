@@ -19,6 +19,7 @@ const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this d
 const BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output lib. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
 const HOOK_BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output hooks. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
 const READONLY_BROWSER_WARNING = 'Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.';
+const QUANTITATIVE_PREMISE_WARNING = 'Planning-depth warning: this coding ticket relies on a quantitative or behavioral claim without measurement evidence. Include the command, output, and where it ran, or link the measurement ticket; otherwise file measurement work before the fix.';
 
 function cliJson(args?: any) {
   return cliJsonAt(PROJ, args);
@@ -272,6 +273,32 @@ const CRASH_LOG_BLOCK = [
 ].join('\n');
 
 const PRESOLVED_WARNING = 'Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier.';
+
+test('quantitative premise warnings require evidence without nagging measurement work', () => {
+  const unevidenced = cliJson([
+    'add', '-t', 'lower an unmeasured threshold', '--category', 'coding.normal',
+    '--description', 'The river folding threshold is 100 and causes a retry rate.',
+    '--file', 'quantitative-fixtures/src/threshold.ts', '--verify', 'manual: Measure the retry rate after the fix.',
+  ]);
+  assert.deepStrictEqual(unevidenced.warnings, [QUANTITATIVE_PREMISE_WARNING]);
+  assert.deepStrictEqual(store.dispatchWarnings(unevidenced.ticket), [
+    `Dispatch warning: ${QUANTITATIVE_PREMISE_WARNING.replace('Planning-depth warning: ', '')}`,
+  ]);
+
+  const measurement = cliJson(['add', '-t', 'measure river folding', '--category', 'source-lookup', '--description', 'Measure the retry rate before selecting a threshold.']);
+  const cited = cliJson([
+    'add', '-t', 'lower a measured threshold', '--category', 'coding.normal',
+    '--description', `Measured in ${measurement.ticket.ref}: \`node scripts/measure-river.js\` on CI produced a 75% retry rate.`,
+    '--file', 'quantitative-fixtures/src/measured-threshold.ts',
+  ]);
+  assert.deepStrictEqual(cited.warnings, []);
+
+  const readonly = cliJson([
+    'add', '-t', 'measure river folding again', '--category', 'source-lookup',
+    '--description', 'The threshold is too high and causes a 75% retry rate.',
+  ]);
+  assert.deepStrictEqual(readonly.warnings, []);
+});
 
 test('a judgment-tier ticket carrying a complete edit warns on add and update', () => {
   const added = cliJson([

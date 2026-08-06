@@ -155,6 +155,18 @@ function ticketCategoryWarnings(ticket?: any) {
   return ['coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.'];
 }
 
+const QUANTITATIVE_CLAIM = /(?:\b(?:rate|threshold|count|percentage|frequency|ratio|quota|limit|capacity|latency|duration)\b[\s\S]{0,100}\b(?:too\s+(?:high|low)|higher|lower|above|below|over|under|increas(?:e|es|ing|ed)|decreas(?:e|es|ing|ed)|drop(?:s|ped|ping)?|ris(?:e|es|ing|en)|(?:is|are|was|were|at)\s+\d+(?:\.\d+)?)|\b\d+(?:\.\d+)?\s*(?:%|percent|milliseconds?|ms|seconds?|minutes?|hours?|days?|times|x)\b)/i;
+const LINKED_MEASUREMENT = /(?:\b(?:measured|measurement|benchmark(?:ed)?|probe|reproduced|observed)\b[\s\S]{0,160}\bSQ-\d+\b|\bSQ-\d+\b[\s\S]{0,160}\b(?:measured|measurement|benchmark(?:ed)?|probe|reproduced|observed)\b)/i;
+const INLINE_MEASUREMENT = /\b(?:measurement|benchmark|probe|command)\b[\s\S]{0,200}\b(?:output|result|ran|run|produced|showed|shows|recorded)\b/i;
+
+function quantitativePremiseWarning(ticket?: any) {
+  const categoryId = String(ticketCategory(ticket) || '');
+  if (!/^(?:coding(?:\.|$)|debugging$|behavior-verification$|plugin-dev$|interaction-design-implementation$)/.test(categoryId)) return null;
+  const description = String(ticket?.description || '');
+  if (!QUANTITATIVE_CLAIM.test(description) || LINKED_MEASUREMENT.test(description) || INLINE_MEASUREMENT.test(description)) return null;
+  return 'Planning-depth warning: this coding ticket relies on a quantitative or behavioral claim without measurement evidence. Include the command, output, and where it ran, or link the measurement ticket; otherwise file measurement work before the fix.';
+}
+
 function readonlyWriteIntentPaths(ticket?: any) {
   return [...normalizeFiles(ticket.files), ...normalizeContracts(ticket.contracts).changes];
 }
@@ -544,6 +556,8 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   }
   const contradiction = readonlyCategoryWriteIntentWarning(ticket);
   if (contradiction) warnings.push(`Dispatch warning: ${contradiction}`);
+  const quantitativePremise = quantitativePremiseWarning(ticket);
+  if (quantitativePremise) warnings.push(`Dispatch warning: ${quantitativePremise.replace('Planning-depth warning: ', '')}`);
   const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
   if (worktreeWarning) warnings.push(worktreeWarning);
   const categoryId = ticket && (ticket.categoryId || (ticket.category && ticket.category.id));
@@ -673,6 +687,8 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
     }
   }
   warnings.push(...presolvedRoutingWarnings(ticket));
+  const quantitativePremise = quantitativePremiseWarning(ticket);
+  if (quantitativePremise) warnings.push(quantitativePremise);
   const contradiction = readonlyCategoryWriteIntentWarning(ticket);
   if (contradiction) warnings.push(contradiction);
   const noScope = noDeclaredScopeWarning(ticket);
@@ -701,7 +717,7 @@ function requestedReadonlyOverride(fields?: any) {
 }
 
 
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 
 module.exports = { createWarnings };
