@@ -8,6 +8,28 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.404.0 (2026-08-06)
+
+### sidequest 4.38.0 → 4.39.0
+
+#### Features
+
+- The feature skill is now the user-story skill (SQ-1402)
+  `/sidequest:feature` is now `/sidequest:user-story`. The skill files a story and
+  its backlog, and it drives more than features: subsystems, redesigns, refactors,
+  multi-part bug work. Naming it after what it produces matches the board's own
+  `US-n` vocabulary. The old name is gone, with no alias.
+
+### workbench 0.81.1 → 0.82.0
+
+#### Features
+
+- The feature skill is now the user-story skill (SQ-1402)
+  `/sidequest:feature` is now `/sidequest:user-story`. The skill files a story and
+  its backlog, and it drives more than features: subsystems, redesigns, refactors,
+  multi-part bug work. Naming it after what it produces matches the board's own
+  `US-n` vocabulary. The old name is gone, with no alias.
+
 ## v3.403.0 (2026-08-06)
 
 ### codebase-mapper 2.14.0 → 2.14.1
