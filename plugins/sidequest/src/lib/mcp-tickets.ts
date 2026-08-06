@@ -92,6 +92,7 @@ const tools: ToolDefinition[] = [
         complexity: { type: 'integer', minimum: 1, maximum: 10, description: 'Legacy score. Requires why (min 20 chars).' },
         why: { type: 'string', description: 'Motivation for the complexity score (min 20 chars).' },
         category: { type: 'string', description: 'Enabled category id from category_list.' },
+        unclassified: { type: 'boolean', description: 'Deliberately defer classification until an update before dispatch.' },
       },
       required: ['title'],
     },

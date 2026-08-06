@@ -54,7 +54,8 @@ function coerceStoryId(slug?: any, val?: any) {
 
 const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
 const STORY_DECISION_LOG_BRIEFING_MAX_BYTES = 4 * 1024;
-const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 280;
+const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 16000;
+const STORY_LOG_ENTRY_ADVISORY_BYTES = 4 * 1024;
 const STORY_LOG_KINDS = new Set(['DECISION', 'CONSTRAINT', 'DISCOVERY']);
 
 function normalizeStoryExecutionContract(value?: any) {
@@ -97,6 +98,13 @@ function normalizeStoryLogEntry(value?: any) {
     throw new Error(`story log entry text exceeds the ${STORY_LOG_ENTRY_TEXT_MAX_BYTES}-byte limit.`);
   }
   return { kind, text };
+}
+
+function storyLogEntryAdvisory(value?: any) {
+  const { text } = normalizeStoryLogEntry(value);
+  const bytes = Buffer.byteLength(text, 'utf8');
+  if (bytes <= STORY_LOG_ENTRY_ADVISORY_BYTES) return null;
+  return `entry stored in full (${(bytes / 1024).toFixed(1)} KB); briefings include only the newest entries within 4 KB.`;
 }
 
 function normalizeStoredStoryLogEntries(entries?: any) {
@@ -214,7 +222,7 @@ function appendStoryLogEntry(slug?: any, storyRef?: any, value?: any) {
   });
 }
 
-function clearStoryLog(slug?: any, storyRef?: any) {
+function rotateStoryLog(slug?: any, storyRef?: any) {
   return transaction(() => {
     const story = getStory(slug, storyRef);
     if (!story) return null;
@@ -332,15 +340,17 @@ function deleteStory(slug?: any, idOrRef?: any) {
   return {
     STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
     STORY_EXECUTION_CONTRACT_MAX_BYTES,
+    STORY_LOG_ENTRY_ADVISORY_BYTES,
     STORY_LOG_ENTRY_TEXT_MAX_BYTES,
     appendStoryLogEntry,
-    clearStoryLog,
     coerceStoryId,
     createStory,
     deleteStory,
     getStory,
     listStories,
     normalizeStoryLogEntry,
+    rotateStoryLog,
+    storyLogEntryAdvisory,
     storyDecisionLog,
     storyDecisionLogWarnings,
     storyExecutionContract,

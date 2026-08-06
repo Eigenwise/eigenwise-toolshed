@@ -90,7 +90,22 @@ async function enqueueMutation(board, operation) {
     if (mutationTails.get(board) === tail) mutationTails.delete(board);
   }
 }
+function validateToolArguments(tool, args) {
+  if (!args || typeof args !== "object" || Array.isArray(args)) {
+    throw new Error(`${tool.name}: arguments must be an object.`);
+  }
+  const allowed = new Set(Object.keys(tool.inputSchema.properties || {}));
+  if (tool.name === "dispatch") allowed.add("session");
+  const unknown = Object.keys(args).filter((key) => !allowed.has(key));
+  if (!unknown.length) return;
+  const quoted = unknown.map((key) => `"${key}"`).join(", ");
+  if (tool.name === "link") {
+    throw new Error(`link: unexpected parameter${unknown.length === 1 ? "" : "s"} ${quoted}. Use from/verb/to. Valid verbs: blocks, depends-on, related.`);
+  }
+  throw new Error(`${tool.name}: unexpected parameter${unknown.length === 1 ? "" : "s"} ${quoted}.`);
+}
 async function runTool(tool, args) {
+  validateToolArguments(tool, args);
   if (!toolMutates(tool.name, args)) return await tool.handler(args);
   const board = mutationQueueKey(tool.name, args);
   return enqueueMutation(board, () => tool.handler(args));

@@ -88,6 +88,7 @@ const tools: ToolDefinition[] = [
       type: 'object',
       properties: {
         project: PROJECT_PROP,
+        ref: { type: 'string', description: 'Return this one ticket in full.' },
         status: { type: 'string', enum: ['todo', 'doing', 'done'] },
         archived: { type: 'boolean' },
         detail: { type: 'boolean', description: 'Audit only: full bodies and comment threads. Orchestration uses default brief rows; liveness uses changes/pulse.' },
@@ -98,6 +99,11 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      if (args.ref !== undefined) {
+        const ticket = store.getTicket(slug, args.ref);
+        if (!ticket) throw new Error(`list: no ticket "${args.ref}" in ${meta.name}`);
+        return { project: slug, projectName: meta.name, ticket };
+      }
       // MCP board reads are routine orchestration reads, so omit completed work
       // and ticket bodies unless the caller explicitly asks for either.
       const status = args.status == null && !args.all ? ['todo', 'doing'] : args.status;
@@ -234,7 +240,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'story_log',
-    description: 'Read, append, or clear a story decision log.',
+    description: 'Read, append, or rotate a story decision log.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -243,21 +249,23 @@ const tools: ToolDefinition[] = [
         entry: { type: 'string', description: 'Decision log entry, prefixed with DECISION, CONSTRAINT, or DISCOVERY.' },
         ref: { type: 'string', description: 'Claimed member ticket ref for an append.' },
         by: { type: 'string', description: 'Claim owner for an append, or orchestrator to clear.' },
-        clear: { type: 'boolean', description: 'Archive the current entries; use sidequest story log --full to read their history.' },
+        rotate: { type: 'boolean', description: 'Archive current entries before starting a new log.' },
       },
       required: ['story'],
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      if (args.clear && args.entry !== undefined) throw new Error('story_log: pass an entry or clear:true, not both.');
+      if (args.rotate && args.entry !== undefined) throw new Error('story_log: pass an entry or rotate:true, not both.');
       let story;
-      if (args.clear) {
-        if (args.by !== 'orchestrator') throw new Error('story_log: clear:true requires by:"orchestrator".');
-        story = store.clearStoryLog(slug, args.story);
+      let advisory = null;
+      if (args.rotate) {
+        if (args.by !== 'orchestrator') throw new Error('story_log: rotate:true requires by:"orchestrator".');
+        story = store.rotateStoryLog(slug, args.story);
       } else if (args.entry === undefined) {
         story = store.getStory(slug, args.story);
       } else {
         story = store.appendStoryLogEntry(slug, args.story, { entry: args.entry, ref: args.ref, by: args.by });
+        advisory = store.storyLogEntryAdvisory(args.entry);
       }
       if (!story) throw new Error(`story_log: no story "${args.story}" in ${meta.name}`);
       const log = store.storyDecisionLog(story);
@@ -275,6 +283,7 @@ const tools: ToolDefinition[] = [
           omittedEntries: log.omittedEntries,
           archivedEntries: log.archivedEntries,
         },
+        ...(advisory ? { advisory } : {}),
       };
     },
   },

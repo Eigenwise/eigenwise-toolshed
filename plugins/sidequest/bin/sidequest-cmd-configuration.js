@@ -42,10 +42,10 @@ async function cmdProfile(opts, positional) {
     for (const profile of profiles) console.log(`${profile.id}  ${profile.name}  r${profile.revision}  (${profile.entryCount} categories)${profile.retiredAt ? "  retired" : ""}`);
     return;
   }
-  if (action === "show") {
-    if (!id) fail("profile show: pass a profile id.");
+  if (action === "show" || action === "get") {
+    if (!id) fail(`profile ${action}: pass a profile id.`);
     const profile = store.routingProfileDetails(id);
-    if (!profile) fail(`profile show: no profile "${id}".`);
+    if (!profile) fail(`profile ${action}: no profile "${id}".`);
     if (opts.json) return print({ profile });
     console.log(`${profile.id}  ${profile.name}  r${profile.revision}`);
     if (profile.description) console.log(profile.description);
@@ -111,7 +111,7 @@ async function cmdProfile(opts, positional) {
     console.log(`New boards use ${profile.id}  ${profile.name}`);
     return;
   }
-  fail(`profile: unknown action "${action}". Use hygiene | list | show | create | edit | retire | use | repoint | promote | new-board.`);
+  fail(`profile: unknown action "${action}". Use hygiene | list | show | get | create | edit | retire | use | repoint | promote | new-board.`);
 }
 async function cmdCategory(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();

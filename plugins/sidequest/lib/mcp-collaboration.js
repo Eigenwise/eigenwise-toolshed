@@ -145,7 +145,12 @@ const tools = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const res = store.linkTickets(slug, args.from, args.verb, args.to);
-      if (!res.ok) throw new Error(`link: ${res.reason}`);
+      if (!res.ok) {
+        if (res.reason === "bad_type") {
+          throw new Error(`link: invalid verb "${args.verb}". Valid verbs: blocks, depends-on, related. Use from/verb/to.`);
+        }
+        throw new Error(`link: ${res.reason}`);
+      }
       return { ok: true, project: slug, from: res.from.ref, to: res.to.ref, type: res.type };
     }
   },

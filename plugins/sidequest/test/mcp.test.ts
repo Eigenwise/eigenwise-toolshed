@@ -379,7 +379,7 @@ test('story contracts are bounded, revisioned, and warn claimed members about dr
   assert.match(changes.tickets.find((entry: any) => entry.ref === ticket.ref).warnings.join('\n'), /execution contract changed/);
 });
 
-test('story_log reads, appends from a claimed member, and clears after promotion', async () => {
+test('story_log reads, appends from a claimed member, and rotates after promotion', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-log-'))).slug;
   const story = store.createStory(project, { title: 'Decision log packet' });
   const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
@@ -400,15 +400,15 @@ test('story_log reads, appends from a claimed member, and clears after promotion
     { ref: ticket.ref, by: 'log-worker', kind: 'DISCOVERY', text: 'CLI and MCP share the same store API.' },
   );
 
-  const cleared = await callTool('story_log', { project, story: story.ref, clear: true, by: 'orchestrator' });
-  assert.equal(cleared.story.logBytes, 0);
-  assert.equal(cleared.story.logCapacity, 4096);
-  assert.equal(cleared.story.logRevision, 1);
-  assert.deepEqual(cleared.story.entries, []);
-  assert.equal(cleared.story.archivedEntries, 1);
-  const denied = await callToolRaw('story_log', { project, story: story.ref, clear: true, by: 'log-worker' });
+  const rotated = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
+  assert.equal(rotated.story.logBytes, 0);
+  assert.equal(rotated.story.logCapacity, 4096);
+  assert.equal(rotated.story.logRevision, 1);
+  assert.deepEqual(rotated.story.entries, []);
+  assert.equal(rotated.story.archivedEntries, 1);
+  const denied = await callToolRaw('story_log', { project, story: story.ref, rotate: true, by: 'log-worker' });
   assert.equal(denied.isError, true);
-  assert.match(denied.content[0].text, /clear:true requires by:"orchestrator"/);
+  assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
 });
 
 test('tools/list keeps schemas compact without losing claim and dispatch discipline', async () => {
@@ -2821,10 +2821,10 @@ test('read-only calls can finish out of order while retaining their JSON-RPC ids
   const tool = mcp.TOOLS.find((candidate: any) => candidate.name === 'list');
   const original = tool.handler;
   const releases: Array<() => void> = [];
-  tool.handler = (args: any) => new Promise((resolve) => releases.push(() => resolve({ marker: args.marker })));
+  tool.handler = (args: any) => new Promise((resolve) => releases.push(() => resolve({ marker: args.ref })));
   try {
-    const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9101, method: 'tools/call', params: { name: 'list', arguments: { marker: 'first' } } });
-    const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9102, method: 'tools/call', params: { name: 'list', arguments: { marker: 'second' } } });
+    const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9101, method: 'tools/call', params: { name: 'list', arguments: { ref: 'first' } } });
+    const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9102, method: 'tools/call', params: { name: 'list', arguments: { ref: 'second' } } });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(releases.length, 2);
     releases[1]!();
@@ -2845,13 +2845,13 @@ test('mutations queue FIFO per board without blocking another board', async () =
   const started: string[] = [];
   const releases = new Map<string, () => void>();
   tool.handler = (args: any) => new Promise((resolve) => {
-    started.push(args.marker);
-    releases.set(args.marker, () => resolve({ marker: args.marker }));
+    started.push(args.ref);
+    releases.set(args.ref, () => resolve({ marker: args.ref }));
   });
-  const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, marker: 'first' } } });
-  const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, marker: 'second' } } });
+  const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'first' } } });
+  const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'second' } } });
   const otherProject = store.ensureProject(path.join(FIXTURE_ROOT, 'other-board')).slug;
-  const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, marker: 'other' } } });
+  const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, ref: 'other' } } });
   try {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(started, ['first', 'other']);

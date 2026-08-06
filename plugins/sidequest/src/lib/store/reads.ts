@@ -123,6 +123,11 @@ function pageTickets(tickets?: any, opts?: any) {
 // live here and nowhere else.
 const DEFAULT_LIST_PAGE_LIMIT = 40;
 
+function ticketReadShape(ticket?: any) {
+  if (!ticket || ticket.executorVerify === undefined) return ticket;
+  return Object.assign({}, ticket, { verify: ticket.executorVerify });
+}
+
 function listPayload(slug?: any, opts?: any) {
   opts = opts || {};
   const project = String(slug || '');
@@ -142,6 +147,7 @@ function listPayload(slug?: any, opts?: any) {
     const offset = Math.min(decodeListCursor(paging.cursor), total);
     let tickets = queryTickets(project, { ...filter, limit: paging.limit, offset });
     if (opts.brief) tickets = tickets.map((ticket?: any) => briefTicket(project, ticket, { index }));
+    else tickets = tickets.map(ticketReadShape);
     const returned = tickets.length;
     const nextOffset = offset + returned;
     return {
@@ -156,6 +162,7 @@ function listPayload(slug?: any, opts?: any) {
 
   let tickets = queryTickets(project, filter);
   if (opts.brief) tickets = tickets.map((ticket?: any) => briefTicket(project, ticket, { index }));
+  else tickets = tickets.map(ticketReadShape);
   const page: any = pageTickets(tickets, paging);
   page.claimIdleMs = claimIdleMs();
   page.categories = classifierCategories({ project });
