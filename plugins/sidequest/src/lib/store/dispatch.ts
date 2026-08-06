@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
@@ -721,6 +721,15 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
     putTicket(slug, t);
     return { ok: true, ticket: t };
   });
+}
+
+function terminalAgentFailure(error?: any) {
+  const classified = classifyDispatchFailure(error);
+  if (classified === 'context_overflow') return classified;
+  const normalized = String(error || '').toLowerCase();
+  if (/\bmax(?:imum)?[_ -]?(?:output[_ -]?)?tokens?\b/.test(normalized)) return 'max_tokens';
+  if (/\b(?:agent|subagent)\b.*\b(?:terminated|stopped|died|crashed|fatal)\b|\b(?:terminated|stopped|died|crashed|fatal)\b.*\b(?:agent|subagent)\b/.test(normalized)) return 'agent_terminal';
+  return null;
 }
 
 function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
