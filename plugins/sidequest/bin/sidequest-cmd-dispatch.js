@@ -104,16 +104,17 @@ async function cmdNativeAgent(opts, positional) {
   }
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`native-agent: no ticket "${idOrRef}".`);
-  if (!ticket.model || !ticket.effort) fail(`native-agent: ${ticket.ref} has no routable model and effort.`);
-  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  const route = store.resolveTicketRoute(ticket, ticket.category);
+  if (!route || !route.exec) fail(`native-agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
+  const resolved = route.exec;
   const sessionId2 = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
   const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!opts["shared-tree"];
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
-    agentType: resolved.agent || `sidequest-exec-${ticket.effort || "low"}`,
+    agentType: resolved.agent || `sidequest-exec-${route.effort || "low"}`,
     spawnModel: resolved.model,
-    effort: ticket.effort,
+    effort: route.effort,
     runtime: resolved.runsModel,
     launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
     description: agentsync.spawnDescription(ticket, resolved),

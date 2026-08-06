@@ -2090,6 +2090,39 @@ test('native_agent carries ticket anchors and verify command through its stable 
   }
 });
 
+test('native_agent applies explicit ticket route override refusals before spawning', async () => {
+  seedCatalog([
+    { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' },
+    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol', label: 'Sol' },
+  ]);
+  try {
+    const slug = store.ensureProject(PROJ).slug;
+    store.setCategory({ id: 'native-route-override-codex', name: 'Native route override Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+    store.setCategory({ id: 'native-route-override-claude', name: 'Native route override Claude', route: { model: 'sonnet', effort: 'high' } });
+    const crossing = store.createTicket(slug, {
+      title: 'Refuse provider crossing through MCP native agent',
+      category: 'native-route-override-claude',
+      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    });
+    const sameProvider = store.createTicket(slug, {
+      title: 'Allow same provider through MCP native agent',
+      category: 'native-route-override-codex',
+      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    });
+
+    await assert.rejects(
+      () => callHandler('native_agent', { ref: crossing.ref, prompt: 'Implement the ticket.' }),
+      /route override "codex-gpt-5-6-sol" crosses providers from category "native-route-override-claude" and was refused/,
+    );
+
+    const native = await callHandler('native_agent', { ref: sameProvider.ref, prompt: 'Implement the ticket.' });
+    assert.equal(native.effort, 'high');
+    assert.equal(native.spawn.subagent_type, 'sidequest-exec-dispatch');
+  } finally {
+    clearCatalog();
+  }
+});
+
 test('native_agent returns a complete Claude worktree spawn spec', async () => {
   store.setCategory({ id: 'native-fable', name: 'Native Fable', route: { model: 'fable', effort: 'xhigh' } });
   const added = await callTool('add', { title: 'complete native spawn', category: 'native-fable', files: ['plugins/sidequest'] });

@@ -7,6 +7,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const sidequestHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-ticket-route-override-home-'));
 const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-ticket-route-override-project-'));
@@ -70,6 +71,54 @@ test('an unavailable ticket route override refuses instead of falling back', () 
     /route override model "codex-unavailable" isn't currently available; explicit route overrides never fall back/,
   );
   assert.equal(store.getTicket(slug, ticket.ref).dispatchNonce, null);
+});
+
+function nativeAgent(ticket: any) {
+  return spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'native-agent', ticket.ref, '--project', project, '--unverified-transport', '--json'], {
+    encoding: 'utf8',
+    env: process.env,
+  });
+}
+
+test('native-agent applies explicit route override refusals before spawning', () => {
+  store.setCategory({
+    id: 'ticket.override.claude',
+    name: 'Ticket override Claude',
+    route: { model: 'sonnet', effort: 'medium' },
+    enabled: true,
+  });
+  const crossing = store.createTicket(slug, {
+    title: 'Refuse provider-crossing native agent route',
+    category: 'ticket.override.claude',
+    route: { model: 'codex-sol', effort: 'high' },
+    source: 'test',
+  });
+  const unavailable = store.createTicket(slug, {
+    title: 'Refuse unavailable native agent route',
+    category: 'ticket.override',
+    route: { model: 'codex-unavailable', effort: 'high' },
+    source: 'test',
+  });
+  const sameProvider = store.createTicket(slug, {
+    title: 'Allow same provider native agent route',
+    category: 'ticket.override',
+    route: { model: 'codex-sol', effort: 'high' },
+    source: 'test',
+  });
+
+  const crossingResult = nativeAgent(crossing);
+  assert.notEqual(crossingResult.status, 0);
+  assert.match(crossingResult.stderr, /route override "codex-sol" crosses providers from category "ticket\.override\.claude" and was refused/);
+
+  const unavailableResult = nativeAgent(unavailable);
+  assert.notEqual(unavailableResult.status, 0);
+  assert.match(unavailableResult.stderr, /route override model "codex-unavailable" isn't currently available; explicit route overrides never fall back/);
+
+  const sameProviderResult = nativeAgent(sameProvider);
+  assert.equal(sameProviderResult.status, 0, sameProviderResult.stderr);
+  const spawned = JSON.parse(sameProviderResult.stdout);
+  assert.equal(spawned.effort, 'high');
+  assert.equal(spawned.spawn.subagent_type, 'sidequest-exec-dispatch');
 });
 
 export {};
