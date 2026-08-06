@@ -238,6 +238,44 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   assert.match(hooks.hooks.PostToolUseFailure[0].hooks[0].command, /quota-fallback\.js/);
 });
 
+test('PostToolUseFailure records observed terminal executor failures without releasing transient errors', () => {
+  const transient = createFixture('transient Agent failure');
+  const transientLaunch = launch(transient, 'transient-agent-failure');
+  assert.equal(store.claimTicket(slug, transient.ref, 'transient-worker', {
+    token: transientLaunch.prepared.token,
+    executor: transientLaunch.prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(runHook(QUOTA_FALLBACK, {
+    session_id: 'transient-agent-failure',
+    cwd: PROJECT,
+    tool_name: 'Agent',
+    tool_input: transientLaunch.toolInput,
+    error: 'Agent request timed out while the connection was unavailable',
+  }), null);
+  assert.equal(store.getTicket(slug, transient.ref).dispatch.outcome, 'claimed');
+  assert.equal(store.pulsePayload(slug, transient.ref).claim.reclaimable, null);
+
+  const terminal = createFixture('terminal Agent failure');
+  const terminalLaunch = launch(terminal, 'terminal-agent-failure');
+  assert.equal(store.claimTicket(slug, terminal.ref, 'terminal-worker', {
+    token: terminalLaunch.prepared.token,
+    executor: terminalLaunch.prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const output = runHook(QUOTA_FALLBACK, {
+    session_id: 'terminal-agent-failure',
+    cwd: PROJECT,
+    tool_name: 'Agent',
+    tool_input: terminalLaunch.toolInput,
+    error: 'Prompt is too long',
+  });
+  const current = store.getTicket(slug, terminal.ref);
+  assert.match(output.hookSpecificOutput.additionalContext, /observed terminal failure/);
+  assert.equal(current.dispatch.outcome, 'died');
+  assert.equal(current.dispatch.failureShape, 'context_overflow');
+  assert.equal(current.dispatch.terminalSource, 'agent-terminal-failure');
+  assert.equal(store.pulsePayload(slug, terminal.ref).claim.reclaimable, 'observed_stop');
+});
+
 test('every seeded Opus category recovers to its explicit Codex fallback without replacing local overrides', () => {
   const expected = new Map([
     ['debugging', {
@@ -309,6 +347,8 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
 
 test('dispatch failures have closed shapes and terminal attempts stay bounded', () => {
   assert.equal(store.classifyDispatchFailure('Prompt is too long'), 'context_overflow');
+  assert.equal(store.classifyDispatchFailure('Agent stopped after max_tokens'), 'max_tokens');
+  assert.equal(store.classifyDispatchFailure('Subagent terminated unexpectedly'), 'agent_terminal');
   assert.equal(store.classifyDispatchFailure('Request too large (max 32MB)'), 'context_overflow');
   assert.equal(store.classifyDispatchFailure('gateway not serving'), 'provider_unavailable');
   assert.equal(store.classifyDispatchFailure('not authenticated'), 'auth_failure');

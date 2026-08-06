@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
@@ -723,6 +723,33 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
+  const failureShape = terminalAgentFailure(opts.error);
+  if (!failureShape) return { ok: false, reason: 'unrecognized_failure' };
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const t = getTicket(slug, found.id);
+    if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+      return { ok: false, reason: 'not_prepared' };
+    }
+    const state = dispatchState(t);
+    if (!state || !['launched', 'claimed'].includes(state.outcome) || state.terminalAt) {
+      return { ok: false, reason: 'not_launched' };
+    }
+    const now = new Date().toISOString();
+    if (t.scopeRequest) captureScopePauseRecovery(slug, t);
+    setDispatchTerminal(t, t.claim && t.claim.by ? (t.scopeRequest ? 'scope_paused' : 'died') : 'failed', opts.source || 'agent-terminal-failure', {
+      error: opts.error,
+      failureShape,
+    });
+    stampDispatchEvent(t, opts.source || 'agent-terminal-failure', now);
+    putTicket(slug, t);
+    return { ok: true, ticket: t };
+  });
+}
+
 function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const failure = claudeQuotaFailure(opts.error);
@@ -1110,6 +1137,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     prepareDispatch,
     readDispatchBriefing,
     recordDispatchLaunch,
+    recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,
     dispatchIsolationExpectation,
     dispatchWorkspace,
