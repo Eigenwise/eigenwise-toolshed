@@ -360,14 +360,23 @@ plugin reload in Phase 3.
 
 ### 2c. Atomic live rules
 
-After a successful install, write the rules this project needs, using `references/rule-templates.md` as
+After a successful install, pin the hashed workspace artifacts to LF in the project-root `.gitattributes`. Create it when absent; otherwise preserve its content and add only missing entries:
+
+```gitattributes
+.claude/live-rules/rules/*.md text eol=lf
+.claude/live-rules/rules/**/*.md text eol=lf
+.claude/.codebase-info/*.md text eol=lf
+.claude/.codebase-info/**/*.md text eol=lf
+```
+
+Then write the rules this project needs, using `references/rule-templates.md` as
 reference material rather than a catalog to copy from. Create a new workspace's `.claude/live-rules/`
 directory directly. Write every accepted project rule as one
 `.claude/live-rules/rules/<stable-name>.md` file, then atomically write
 `.claude/live-rules/manifest.json`. Follow the exact individual-rule and manifest format in the reference:
-every manifest entry needs its relative rule path, the SHA-256 hash of the exact UTF-8 rule file contents,
-and applicability metadata (`description`, `globs`, `dirs`, `prompt`, `enabled`) derived for this project.
-Generate and validate those hashes mechanically, never by hand. A fresh workspace never creates
+every manifest entry needs its relative rule path, the SHA-256 hash of the UTF-8 rule file with `\r` bytes
+removed, and applicability metadata (`description`, `globs`, `dirs`, `prompt`, `priority`, `enabled`,
+`include`) derived for this project. Generate and validate those hashes mechanically, never by hand. A fresh workspace never creates
 `.claude/live-rules.md`.
 
 - Write the **craft baseline** (global, `priority` 90–100): atomic commits / two hats, simple design,

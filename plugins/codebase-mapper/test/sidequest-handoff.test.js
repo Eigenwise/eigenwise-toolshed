@@ -35,6 +35,13 @@ test('map handoff verifies artifacts and falls back only after one diagnosis-led
   assert.match(mapSkill, new RegExp(sharedTreeReason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 });
 
+test('map skill hash checks normalize CRLF documents', () => {
+  for (const skill of [mapSkill, updateSkill]) {
+    assert.match(skill, /readFileSync\(p\+n,'utf8'\)/);
+    assert.match(skill, /b\.replace\(\/\\r\/g,''\)/);
+  }
+});
+
 test('incremental handoff keeps no-ops inline and uses the same artifact rules', () => {
   assert.match(updateSkill, /A true no-op stays inline/);
   assert.match(updateSkill, /Do not ask the user whether to update the map, run this skill, or create a handoff/);

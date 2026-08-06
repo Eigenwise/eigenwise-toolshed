@@ -116,7 +116,7 @@ On completion, read the ticket evidence and verify `INDEX.md`, changed paths, an
 without repeating the codebase reading. Run:
 
 ```text
-node -e "const fs=require('node:fs'),c=require('node:crypto'),p='.claude/.codebase-info/',s=JSON.parse(fs.readFileSync(p+'.map-state.json','utf8'));if(!Array.isArray(s.documents))throw Error('documents');for(const n of new Set(['INDEX.md',...s.documents])){const b=fs.readFileSync(p+n);if(!s.hashes||s.hashes[n]!==c.createHash('sha256').update(b).digest('hex'))throw Error(n)}"
+node -e "const fs=require('node:fs'),c=require('node:crypto'),p='.claude/.codebase-info/',s=JSON.parse(fs.readFileSync(p+'.map-state.json','utf8'));if(!Array.isArray(s.documents))throw Error('documents');for(const n of new Set(['INDEX.md',...s.documents])){const b=fs.readFileSync(p+n,'utf8');if(!s.hashes||s.hashes[n]!==c.createHash('sha256').update(b.replace(/\r/g,'')).digest('hex'))throw Error(n)}"
 ```
 
 Require the writer's evidence to name cited-path checks, docs created/updated/removed, and confirmation

@@ -409,7 +409,7 @@ const ATOMIC_RULES_DIR = path.join('.claude', 'live-rules');
 const ATOMIC_MANIFEST = 'manifest.json';
 
 function hashContent(content) {
-  return crypto.createHash('sha256').update(content).digest('hex');
+  return crypto.createHash('sha256').update(String(content).replace(/\r/g, '')).digest('hex');
 }
 
 function getAtomicRulesDir(projectDir) {
@@ -464,6 +464,7 @@ function loadAtomicRules(projectDir) {
   if (!manifest || manifest.version !== 1 || !Array.isArray(manifest.rules)) return { rules: [], stale: true, dropped: [] };
   const rules = [];
   const dropped = [];
+  const mismatches = [];
   let stale = false;
   for (const entry of manifest.rules) {
     const droppedPath = entry && entry.path ? String(entry.path).replace(/\\/g, '/') : '<invalid manifest entry>';
@@ -490,14 +491,18 @@ function loadAtomicRules(projectDir) {
     }
     try {
       const rule = buildRule(entry.id || entry.path, sections[0].data, sections[0].body);
-      if (!sameManifestEntry(entry, manifestEntry(entry.path, rule, content))) stale = true;
+      const mismatch = manifestMismatchField(entry, manifestEntry(entry.path, rule, content));
+      if (mismatch) {
+        stale = true;
+        mismatches.push(droppedPath + ' (' + mismatch + ')');
+      }
       rules.push(enrichRule(rule, ATOMIC_RULES_DIR.replace(/\\/g, '/') + '/' + entry.path.replace(/\\/g, '/'), content));
     } catch (_) {
       stale = true;
       dropped.push(droppedPath);
     }
   }
-  return { rules, stale, dropped };
+  return { rules, stale, dropped, mismatches };
 }
 
 function loadRuleSet(projectDir) {
@@ -508,9 +513,14 @@ function loadRuleSet(projectDir) {
 
 function formatRuleSetStatus(ruleSet) {
   if (!ruleSet.stale) return '';
-  const stale = 'The manifest does not match the loaded rule files, but these rules were read directly and are in effect. ';
-  if (!ruleSet.dropped || !ruleSet.dropped.length) return stale;
-  return stale + 'Dropped rule files: ' + ruleSet.dropped.join(', ') + '. ';
+  const status = ['The manifest does not match the loaded rule files, but these rules were read directly and are in effect.'];
+  if (ruleSet.mismatches && ruleSet.mismatches.length) {
+    status.push('Mismatched manifest fields: ' + ruleSet.mismatches.join(', ') + '.');
+  }
+  if (ruleSet.dropped && ruleSet.dropped.length) {
+    status.push('Dropped rule files: ' + ruleSet.dropped.join(', ') + '.');
+  }
+  return status.join(' ') + ' ';
 }
 
 function loadRules(projectDir) {
@@ -549,16 +559,26 @@ function ruleFromAtomicFile(relativePath, content) {
   return buildRule(relativePath, sections[0].data, sections[0].body);
 }
 
+function manifestMismatchField(entry, expected) {
+  const fields = [
+    ['path', entry.path, expected.path],
+    ['hash', entry.hash, expected.hash],
+    ['description', entry.description, expected.description],
+    ['globs', entry.globs || [], expected.globs],
+    ['dirs', entry.dirs || [], expected.dirs],
+    ['prompt', entry.prompt || [], expected.prompt],
+    ['priority', entry.priority == null ? 0 : entry.priority, expected.priority],
+    ['enabled', entry.enabled, expected.enabled],
+    ['include', entry.include || [], expected.include],
+  ];
+  for (const [field, actual, target] of fields) {
+    if (JSON.stringify(actual) !== JSON.stringify(target)) return field;
+  }
+  return '';
+}
+
 function sameManifestEntry(entry, expected) {
-  return entry.path === expected.path &&
-    entry.hash === expected.hash &&
-    entry.description === expected.description &&
-    JSON.stringify(entry.globs || []) === JSON.stringify(expected.globs) &&
-    JSON.stringify(entry.dirs || []) === JSON.stringify(expected.dirs) &&
-    JSON.stringify(entry.prompt || []) === JSON.stringify(expected.prompt) &&
-    (entry.priority == null ? 0 : entry.priority) === expected.priority &&
-    entry.enabled === expected.enabled &&
-    JSON.stringify(entry.include || []) === JSON.stringify(expected.include);
+  return manifestMismatchField(entry, expected) === '';
 }
 
 function validateAtomicDirectory(directory, manifest) {

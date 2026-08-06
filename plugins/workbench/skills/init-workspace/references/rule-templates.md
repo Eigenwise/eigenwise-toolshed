@@ -13,9 +13,10 @@ Write each selected rule to its own `.claude/live-rules/rules/<stable-name>.md` 
 
 A new workspace uses `.claude/live-rules/`, never a new `.claude/live-rules.md`. Give every rule a
 stable kebab-case file name derived from its heading, such as `atomic-commits.md` or
-`svelte-5-components.md`. Then write `.claude/live-rules/manifest.json` from the exact UTF-8 contents
-of the selected rule files. Do not hand-type hashes: SHA-256 each complete rule file, including its
-final newline, and copy scope metadata from its frontmatter. Every manifest entry has this shape:
+`svelte-5-components.md`. Then write `.claude/live-rules/manifest.json` from the UTF-8 contents of the
+selected rule files with `\r` bytes removed. Do not hand-type hashes: SHA-256 each complete normalized
+rule file, including its final newline, and copy scope metadata from its frontmatter. Every manifest entry
+has this shape:
 
 ```json
 {
@@ -23,12 +24,14 @@ final newline, and copy scope metadata from its frontmatter. Every manifest entr
   "rules": [
     {
       "path": "rules/atomic-commits.md",
-      "hash": "<sha256 of the exact rules/atomic-commits.md contents>",
+      "hash": "<sha256 of the LF-normalized rules/atomic-commits.md contents>",
       "description": "Atomic commits & two hats",
       "globs": [],
       "dirs": [],
       "prompt": [],
-      "enabled": true
+      "priority": 95,
+      "enabled": true,
+      "include": []
     }
   ]
 }

@@ -90,7 +90,7 @@ On completion, inspect the ticket evidence and verify `INDEX.md`, changed paths,
 redoing the codebase reading:
 
 ```text
-node -e "const fs=require('node:fs'),c=require('node:crypto'),p='.claude/.codebase-info/',s=JSON.parse(fs.readFileSync(p+'.map-state.json','utf8'));if(!Array.isArray(s.documents))throw Error('documents');for(const n of new Set(['INDEX.md',...s.documents])){const b=fs.readFileSync(p+n);if(!s.hashes||s.hashes[n]!==c.createHash('sha256').update(b).digest('hex'))throw Error(n)}"
+node -e "const fs=require('node:fs'),c=require('node:crypto'),p='.claude/.codebase-info/',s=JSON.parse(fs.readFileSync(p+'.map-state.json','utf8'));if(!Array.isArray(s.documents))throw Error('documents');for(const n of new Set(['INDEX.md',...s.documents])){const b=fs.readFileSync(p+n,'utf8');if(!s.hashes||s.hashes[n]!==c.createHash('sha256').update(b.replace(/\r/g,'')).digest('hex'))throw Error(n)}"
 ```
 
 Require cited-path checks, docs created/updated/removed, and confirmation that `CLAUDE.md` is untouched.
