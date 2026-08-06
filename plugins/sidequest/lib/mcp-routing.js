@@ -56,9 +56,7 @@ const {
   requiredReleaseReason,
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
-  withoutCategories,
-  CATEGORY_TAXONOMY_WARNING,
-  state
+  withoutCategories
 } = require("./mcp-shared");
 const tools = [
   {
@@ -201,7 +199,6 @@ const tools = [
           categories.push({ id: localRow.id, origin: "disabled", localRow: { id: localRow.id, kind: localRow.kind }, effective: null, ticketCount: usage(localRow.id) });
         }
       }
-      state.categoryListServed = true;
       const identity = { id: profile.id, name: profile.name, revision: profile.revision };
       const buildPayload = (page, total, nextCursor) => full ? Object.assign(args.profile != null ? { profile: identity } : { project: slug, projectName: meta.name, profile: identity }, { localRowCount: layer.rows.length, categories: page, warnings: layer.warnings, total, returned: page.length, nextCursor }) : { profile: identity, localRowCount: layer.rows.length, categories: page, total, returned: page.length, nextCursor };
       const paged = pagedPayload(categories, args, "category_list", buildPayload, full);

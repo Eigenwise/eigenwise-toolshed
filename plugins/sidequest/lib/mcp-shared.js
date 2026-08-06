@@ -13,7 +13,6 @@ const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const CATEGORY_TAXONOMY_WARNING = "Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.";
-const state = { categoryListServed: false };
 function serverVersion() {
   try {
     return require("../.claude-plugin/plugin.json").version || "0.0.0";
@@ -586,6 +585,5 @@ module.exports = {
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
   withoutCategories,
-  CATEGORY_TAXONOMY_WARNING,
-  state
+  CATEGORY_TAXONOMY_WARNING
 };

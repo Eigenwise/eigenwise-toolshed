@@ -2039,22 +2039,20 @@ test('MCP add warns when coding.hard already prescribes a fix', async () => {
   ]);
 });
 
-test('category stamps warn until category_list is served by the MCP session', async () => {
+test('category stamps stay quiet across MCP server restarts', async () => {
   const session = freshMcpServer();
   const slug = store.ensureProject(PROJ).slug;
   const existing = store.createTicket(slug, { title: 'update without category', category: 'coding.easy' });
   const unchangedCategory = await callToolOn(session, 'update', { ref: existing.ref, title: 'update without a category stamp' });
   assert.deepEqual(unchangedCategory.warnings, [NO_SCOPE_WARNING]);
 
-  const warned = await callToolOn(session, 'add', { title: 'category stamped before read', category: 'coding.easy' });
-  assert.deepEqual(warned.warnings, [
-    NO_SCOPE_WARNING,
-    'Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.',
-  ]);
-
   await callToolOn(session, 'category_list', {});
   const acknowledged = await callToolOn(session, 'add', { title: 'category stamped after read', category: 'coding.easy' });
   assert.deepEqual(acknowledged.warnings, [NO_SCOPE_WARNING]);
+
+  const restarted = freshMcpServer();
+  const afterRestart = await callToolOn(restarted, 'add', { title: 'category stamped after restart', category: 'coding.easy' });
+  assert.deepEqual(afterRestart.warnings, [NO_SCOPE_WARNING]);
 
   await callTool('category_list', {});
 });
@@ -2108,6 +2106,7 @@ test('add and update warn only for unknown ticket refs introduced by the operati
   const updated = await callTool('update', { ref: added.ref, description: 'now use SQ-9998' });
   assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998.', NO_SCOPE_WARNING]);
 
+  fs.mkdirSync(path.join(PROJ, 'src'), { recursive: true });
   const filesOnly = await callTool('update', { ref: added.ref, files: ['src/changed.ts'] });
   assert.deepStrictEqual(filesOnly.warnings, ['Planning-depth warning: declared file scope does not exist in the repo: src/changed.ts.']);
 });

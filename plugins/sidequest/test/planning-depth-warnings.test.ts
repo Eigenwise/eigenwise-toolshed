@@ -71,7 +71,8 @@ test('claim echoes missing planning context for dispatch visibility', () => {
   ]);
 });
 
-test('add warns when declared file scope does not exist in the repo', () => {
+test('add warns when declared file scope does not exist in an established directory', () => {
+  fs.mkdirSync(path.join(PROJ, 'missing'), { recursive: true });
   const added = cliJson([
     'add', '-t', 'missing scope', '--complexity', '3',
     '--why', 'exercise warning coverage for an invalid declared scope',
@@ -79,6 +80,16 @@ test('add warns when declared file scope does not exist in the repo', () => {
   ]);
 
   assert.deepStrictEqual(added.warnings, [MISSING_SCOPE_WARNING]);
+});
+
+test('add stays quiet for a greenfield scope whose parent directory does not exist', () => {
+  const added = cliJson([
+    'add', '-t', 'greenfield scope', '--complexity', '3',
+    '--why', 'create a new source subtree in a project that does not have one yet',
+    '--file', 'greenfield/src/entry.ts',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, []);
 });
 
 test('add warns when declared output is outside the repo worktree', () => {
@@ -98,6 +109,7 @@ test('add warns when declared output is outside the repo worktree', () => {
 });
 
 test('claim echoes declared file scope warning for dispatch visibility', () => {
+  fs.mkdirSync(path.join(PROJ, 'missing'), { recursive: true });
   const added = cliJson([
     'add', '-t', 'claim missing scope', '--complexity', '3',
     '--why', 'claim a ticket with an invalid declared scope for dispatch warning',
@@ -137,6 +149,7 @@ test('add and update warn only for unknown mentioned ticket refs', () => {
   const updated = cliJson(['update', added.ticket.ref, '--title', `follow ${known.ticket.ref} and SQ-9998`]);
   assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998.', NO_SCOPE_WARNING]);
 
+  fs.mkdirSync(path.join(PROJ, 'src'), { recursive: true });
   const filesOnly = cliJson(['update', added.ticket.ref, '--files', 'src/changed.ts']);
   assert.deepStrictEqual(filesOnly.warnings, ['Planning-depth warning: declared file scope does not exist in the repo: src/changed.ts.']);
 });
