@@ -213,8 +213,8 @@ test('submit rejects invalid verify commands without releasing the claim or pin'
 
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'invalid_verify');
-  assert.match(refused.message, /Verify must be a runnable command such as `cd <repo-relative-dir> && <command>`/);
-  assert.match(refused.message, /manual: <what you checked>/);
+  assert.match(refused.message, /Verify cannot use `;` command chaining/);
+  assert.match(refused.message, /join dependent steps with `&&`/);
   assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
   assert.strictEqual(git(['rev-parse', `refs/sidequest/${t.ref}`]), pinnedCommit);
 });

@@ -28,6 +28,27 @@ function manualVerify(value?: any) {
   return /^manual:\s+\S/i.test(String(value || '').trim());
 }
 
+function containsUnquotedSemicolon(command?: any) {
+  let quote = '';
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === ';') return true;
+  }
+  return false;
+}
+
 function verifyCommandError(value?: any) {
   const command = String(value || '').trim();
   if (!command || manualVerify(command)) return null;
@@ -47,8 +68,7 @@ function verifyCommandError(value?: any) {
   if (/<[^<>\r\n]+>/.test(command)) {
     return 'Verify contains an unresolved placeholder. Replace it with a runnable command such as `npm run test`.';
   }
-  const pluginDirectoryChanges = command.match(/(?:^|[;&]{1,2})\s*cd\s+plugins\/[^\s;&]+/g) || [];
-  if (command.includes(';') && pluginDirectoryChanges.length < 2) {
+  if (containsUnquotedSemicolon(command)) {
     return 'Verify cannot use `;` command chaining because it behaves differently across shells. Use one command or join dependent steps with `&&`.';
   }
   if (proseStarter || !likelyExecutable) {
