@@ -92,6 +92,18 @@ test('highStakes round-trips through CLI and MCP without changing the coding.nor
   assert.equal(JSON.parse(runCli(['update', cliRef, '--high-stakes', '--json']).stdout).ticket.highStakes, true);
 });
 
+test('profile get is a supported CLI action and unknown actions fail', () => {
+  const profile = store.createRoutingProfile('cli-profile-get', { name: 'CLI profile get' });
+
+  const get = runCli(['profile', 'get', profile.id, '--json']);
+  assert.equal(get.status, 0, get.stderr);
+  assert.equal(JSON.parse(get.stdout).profile.id, profile.id);
+
+  const unknown = runCli(['profile', 'unknown-action']);
+  assert.notEqual(unknown.status, 0);
+  assert.match(unknown.stderr, /profile: unknown action/);
+});
+
 test('only high-stakes briefings require expanded verification', () => {
   const basic = agentsync.renderTicketBriefing({ ref: 'SQ-basic', title: 'Basic', category: {}, model: 'sonnet', effort: 'medium' }, 'basic-token');
   const high = agentsync.renderTicketBriefing({ ref: 'SQ-high', title: 'High', category: {}, model: 'sonnet', effort: 'medium', highStakes: true }, 'high-token');
