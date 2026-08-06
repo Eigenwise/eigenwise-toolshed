@@ -206,6 +206,7 @@ const tools = [
         integrationBranch: args.integrationBranch,
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.
+        source: "mcp",
         transport: "mcp"
       });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);

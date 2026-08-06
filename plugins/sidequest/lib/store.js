@@ -1272,6 +1272,9 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
     if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
     const currentDispatch = dispatchState(t2);
+    if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || "").trim()) {
+      return { ok: false, reason: "unbound_dispatch", ticket: t2 };
+    }
     if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: "worktree_missing", ticket: t2 };
     if (pendingSubmission(t2) && !opts.force) return { ok: false, reason: "submitted", ticket: t2, submission: t2.submission };
     const held2 = t2.claim;

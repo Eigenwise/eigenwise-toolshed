@@ -99,6 +99,7 @@ test('batch launch records every prepared ticket and binds the shared native age
   const firstPrepared = store.prepareDispatch(slug, first.ref, { sessionId });
   const secondPrepared = store.prepareDispatch(slug, second.ref, { sessionId });
   const executor = firstPrepared.ticket.dispatchExecutor;
+  assert.deepEqual(firstPrepared.ticket.dispatch.preparedBy, { sessionId, surface: 'store' });
   assert.equal(secondPrepared.ticket.dispatchExecutor, executor);
 
   const prompt = [
@@ -265,6 +266,12 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
     agentName,
   }).ok, true);
   assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 1, noAgentId: 1 });
+  assert.equal(store.claimTicket(slug, ticket.ref, `unbound-isolated-worker-${ticket.id}`, {
+    sessionId,
+    token: prepared.token,
+    executor,
+    requireBoundAgent: true,
+  }).reason, 'unbound_dispatch');
   assert.equal(store.claimTicket(slug, ticket.ref, `isolated-stop-worker-${ticket.id}`, {
     sessionId,
     token: prepared.token,

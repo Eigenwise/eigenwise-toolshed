@@ -151,6 +151,14 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(adopted.reused, true);
   assert.equal(adopted.token, recovered.token);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-store-adopted');
+  assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.preparedBy, { sessionId: 'quota-store-primary', surface: 'store' });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: 'quota-store-adopted',
+    token: adopted.token,
+    executor: adopted.ticket.dispatchExecutor,
+    agentName: 'quota-store-worker',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('quota-store-adopted', adopted.ticket.dispatchExecutor, 'quota-store-agent', 'quota-store-worker').ok, true);
 
   const wrongEffort = await callTool('claim', {
     project: PROJECT,

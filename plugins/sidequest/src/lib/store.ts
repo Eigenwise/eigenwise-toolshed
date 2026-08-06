@@ -1257,6 +1257,9 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const currentDispatch = dispatchState(t);
+    if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || '').trim()) {
+      return { ok: false, reason: 'unbound_dispatch', ticket: t };
+    }
     if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: 'worktree_missing', ticket: t };
     // Submitted work awaits the orchestrator's publish transaction, not another
     // executor: re-claiming it would fork the already-verified commit. The

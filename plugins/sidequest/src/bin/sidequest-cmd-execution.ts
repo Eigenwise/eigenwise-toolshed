@@ -139,7 +139,7 @@ async function cmdClaim(opts: any, positional: any) {
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts) });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts), requireBoundAgent: true });
   const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
