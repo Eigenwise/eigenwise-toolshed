@@ -349,6 +349,8 @@ const tools = [
         autoApproved: !!res.autoApproved,
         scopeRequest: res.scopeRequest,
         command: res.command,
+        ...res.state ? { state: res.state } : {},
+        ...typeof res.ageMs === "number" ? { ageMs: res.ageMs } : {},
         ...ruling ? {
           state: ruling.state,
           effectiveScope: ruling.effectiveScope,

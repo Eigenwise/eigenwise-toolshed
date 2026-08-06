@@ -1,6 +1,5 @@
 import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
-import './_hook-runtime.js';
 'use strict';
 /**
  * Tests for the MCP tool layer (SQ-152): the JSON-RPC handler in lib/mcp.js and
@@ -559,6 +558,7 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-worktree-isolation', '--json'], sharedRoot).worktreeIsolation, false);
   assert.equal(runCli(['board-config', '--project', sharedRoot, '--no-auto-approve-test-scope', '--json'], sharedRoot).autoApproveTestScope, false);
   assert.equal(runCli(['board-config', '--project', sharedRoot, '--auto-approve-test-scope', '--json'], sharedRoot).autoApproveTestScope, true);
+  assert.deepEqual(runCli(['board-config', '--project', sharedRoot, '--auto-approve-scope', 'generated/**', '--auto-approve-scope', 'snapshots/**', '--json'], sharedRoot).autoApproveScope, ['generated/**', 'snapshots/**']);
 
   const sharedTicket = store.createTicket(sharedProject, {
     title: 'scope-less disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
@@ -1420,6 +1420,100 @@ test('MCP scopeRequest auto-approves the repo-root test directory a declared sou
   const pending = await callTool('scopeRequest', { project, ref: undeclared.ref, by: undeclaredBy, files: ['benchmarks/keyboard.cpp'] });
   assert.equal(pending.autoApproved, false);
   assert.deepEqual(pending.scopeRequest.files, ['benchmarks/keyboard.cpp']);
+});
+
+test('MCP scopeRequest derives build registration from a new in-scope source file', async () => {
+  const root = repoWithDirectories('sq-mcp-build-registration-', ['src/plugin']);
+  fs.writeFileSync(path.join(root, 'CMakeLists.txt'), 'add_library(plugin)\n');
+  const project = store.ensureProject(root).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Register graph parameters', files: ['src/plugin/graph_parameters.cpp'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'the new source needs the governing CMake registration to build',
+  });
+  const by = 'mcp-build-registration-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+
+  const approved = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['CMakeLists.txt'] });
+  assert.equal(approved.autoApproved, true);
+  assert.deepEqual(approved.approved, ['CMakeLists.txt']);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['src/plugin/graph_parameters.cpp', 'CMakeLists.txt']);
+  assert.match(store.getTicket(project, ticket.ref).comments.at(-1).body, /build-registration scope derived/);
+});
+
+test('MCP scopeRequest derives barrel registration without widening past the governing file', async () => {
+  const root = repoWithDirectories('sq-mcp-barrel-registration-', ['src/models']);
+  fs.writeFileSync(path.join(root, 'src/models/index.ts'), 'export {};\n');
+  const project = store.ensureProject(root).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Export widget model', files: ['src/models/widget.ts'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'the new model requires its local barrel export',
+  });
+  const by = 'mcp-barrel-registration-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+
+  const approved = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['src/models/index.ts'] });
+  assert.deepEqual(approved.approved, ['src/models/index.ts']);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['src/models/widget.ts', 'src/models/index.ts']);
+});
+
+test('MCP scopeRequest leaves build registration pending when no governing file exists', async () => {
+  const root = repoWithDirectories('sq-mcp-no-build-registration-', ['src']);
+  const project = store.ensureProject(root).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Unregistered source', files: ['src/widget.cpp'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a missing governing file cannot prove a build dependency',
+  });
+  const by = 'mcp-no-build-registration-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+
+  const pending = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['CMakeLists.txt'] });
+  assert.equal(pending.autoApproved, false);
+  assert.deepEqual(pending.scopeRequest.files, ['CMakeLists.txt']);
+});
+
+test('MCP scopeRequest auto-approves configured globs and keeps mixed requests pending', async () => {
+  const root = repoWithDirectories('sq-mcp-configured-scope-', ['src']);
+  const project = store.ensureProject(root).slug;
+  assert.deepEqual((await callTool('board_config', { project, autoApproveScope: ['tests/**'] })).autoApproveScope, ['tests/**']);
+  assert.throws(() => store.setBoardConfig(project, { autoApproveScope: ['../tests/**'] }), /autoApproveScope pattern must stay inside the board repo/);
+  const ticket = store.createTicket(project, {
+    title: 'Configured scope approval', files: ['src/widget.ts'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'configured test files need no manual scope ruling',
+  });
+  const by = 'mcp-configured-scope-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+
+  const approved = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['tests/widget.test.ts'] });
+  assert.equal(approved.autoApproved, true);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['src/widget.ts', 'tests/widget.test.ts']);
+
+  const mixed = store.createTicket(project, {
+    title: 'Mixed configured scope approval', files: ['src/widget.ts'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'only matching configured paths bypass approval',
+  });
+  const mixedBy = 'mcp-mixed-configured-scope-worker';
+  assert.equal((await callTool('claim', { project, ref: mixed.ref, by: mixedBy, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+  const pending = await callTool('scopeRequest', { project, ref: mixed.ref, by: mixedBy, files: ['tests/widget.test.ts', 'docs/widget.md'] });
+  assert.deepEqual(pending.approved, ['tests/widget.test.ts']);
+  assert.deepEqual(pending.scopeRequest.files, ['docs/widget.md']);
+  assert.match(store.getTicket(project, mixed.ref).comments.at(-1).body, /Auto-approved under board policy: tests\/widget.test.ts/);
+});
+
+test('MCP scopeRequest deduplicates a normalized pending request without another comment', async () => {
+  const project = store.ensureProject(repoWithDirectories('sq-mcp-scope-dedup-', ['src'])).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Deduplicate scope request', files: ['src/widget.ts'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'identical retries should preserve the pending request',
+  });
+  const by = 'mcp-scope-dedup-worker';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
+  await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['pending\\widget.ts'] });
+  const commentCount = store.getTicket(project, ticket.ref).comments.length;
+
+  const duplicate = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['pending/widget.ts'] });
+  assert.equal(duplicate.state, 'pending');
+  assert.equal(typeof duplicate.ageMs, 'number');
+  assert.equal(store.getTicket(project, ticket.ref).comments.length, commentCount);
 });
 
 test('MCP scopeRequest never auto-approves plugin source, hooks, or manifests', async () => {

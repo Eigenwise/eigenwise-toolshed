@@ -392,6 +392,7 @@ const tools: ToolDefinition[] = [
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true.' },
         autoApproveTestScope: { type: 'boolean', description: 'Widen scope into a test directory the ticket already reaches without a ruling (default true).' },
+        autoApproveScope: { type: 'array', items: { type: 'string' }, description: 'Repo-relative glob paths that receive automatic scope approval.' },
         worktreeSetup: { type: ['string', 'null'], description: 'One-line isolated-worktree setup; null clears it.' },
       },
     },
@@ -408,6 +409,7 @@ const tools: ToolDefinition[] = [
       if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.autoApproveTestScope !== undefined) patch.autoApproveTestScope = args.autoApproveTestScope;
+      if (args.autoApproveScope !== undefined) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length
         ? store.setBoardConfig(slug, patch)

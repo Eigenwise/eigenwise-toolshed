@@ -200,6 +200,7 @@ async function cmdBoardConfig(opts) {
   if (opts["integration-verify-timeout-ms"] != null) patch.integrationVerifyTimeoutMs = opts["integration-verify-timeout-ms"];
   if (opts["worktree-isolation"] !== void 0) patch.worktreeIsolation = opts["worktree-isolation"];
   if (opts["auto-approve-test-scope"] !== void 0) patch.autoApproveTestScope = opts["auto-approve-test-scope"];
+  if (opts["auto-approve-scope"] != null) patch.autoApproveScope = opts["auto-approve-scope"];
   if (opts["worktree-setup"] != null) patch.worktreeSetup = opts["worktree-setup"];
   const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
   if (!result.ok) fail(`board-config: no board "${meta.name}".`);
@@ -217,6 +218,7 @@ async function cmdBoardConfig(opts) {
   console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
   console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? "enabled" : "disabled"}`);
+  console.log(`configured scope auto-approval: ${payload.autoApproveScope.length ? payload.autoApproveScope.join(", ") : "(none)"}`);
   console.log(`worktree setup: ${payload.worktreeSetup || "(none)"}`);
 }
 async function cmdProjects(opts) {
