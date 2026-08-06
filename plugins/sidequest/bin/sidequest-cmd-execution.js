@@ -574,14 +574,14 @@ async function cmdIntegrate(opts, positional) {
     skipVerify: !!opts["skip-verify"]
   });
   if (!delivery.ok) {
-    if (delivery.reason === "verify_failed") {
+    if (delivery.reason === "verify_failed_post_merge" || delivery.reason === "verify_failed_post_merge_rollback_failed") {
       const payload = { project: slug, delivery: null, verifyFailed: delivery.verify };
       if (opts.json) {
         process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
         process.exitCode = 1;
         return;
       }
-      fail(`integrate: ${delivery.message || "verification failed before delivery"}`);
+      fail(`integrate: ${delivery.message || "verification failed after delivery and rollback"}`);
     }
     if (delivery.outside?.length) fail(`integrate: refused ${idOrRef}; submitted range changes paths outside its admitted scope: ${delivery.outside.join(", ")}.`);
     fail(`integrate: ${delivery.message || delivery.reason}.`);

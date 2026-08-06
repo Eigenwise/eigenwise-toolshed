@@ -665,7 +665,7 @@ const tools: ToolDefinition[] = [
       });
       if (!delivery.ok) {
         const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
-        if (delivery.reason === 'verify_failed') failure.verifyFailed = delivery.verify;
+        if (delivery.reason === 'verify_failed_post_merge' || delivery.reason === 'verify_failed_post_merge_rollback_failed') failure.verifyFailed = delivery.verify;
         return Object.assign(mutationAck(slug, delivery), failure);
       }
       const integration = delivery.integration;

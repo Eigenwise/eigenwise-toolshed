@@ -514,24 +514,27 @@ test('existing tickets with prose verify fields remain readable', () => {
   assert.strictEqual(store.getTicket(slug, t.ref).executorVerify, t.executorVerify);
 });
 
-test('integration runs verification before merging the submitted commit', () => {
+test('integration rolls back when post-merge verification fails', () => {
   cleanBranch();
-  const t = addTicket('pre-merge verification', { files: ['lib/preflight.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'preflight-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  const t = addTicket('post-merge verification', { files: ['lib/preflight.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'post-merge-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'preflight.js'), 'preflight\n');
   git(['add', 'lib/preflight.js']);
-  git(['commit', '-m', 'preflight candidate']);
+  git(['commit', '-m', 'post-merge candidate']);
   const commit = git(['rev-parse', 'HEAD']);
   pin(t, commit);
-  assert.strictEqual(runCli(['submit', t.ref, '--by', 'preflight-worker', '--commit', commit, '--verify', 'node -e "process.exit(1)"']).status, 0);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'post-merge-worker', '--commit', commit, '--verify', 'node -e "process.exit(1)"']).status, 0);
 
   const before = git(['rev-parse', 'HEAD']);
-  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target: store.integrationTarget(slug) });
+  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
   assert.strictEqual(rejected.ok, false);
-  assert.strictEqual(rejected.reason, 'verify_failed');
+  assert.strictEqual(rejected.reason, 'verify_failed_post_merge');
+  assert.strictEqual(rejected.verify.command, 'node -e "process.exit(1)"');
+  assert.ok(fs.existsSync(rejected.verify.logPath));
   assert.strictEqual(git(['rev-parse', 'HEAD']), before);
-  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verify_failed_post_merge');
 });
 
 test('integration closure consumes an in-scope submission with control-plane provenance', () => {

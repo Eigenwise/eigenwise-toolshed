@@ -688,7 +688,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   }
 });
 
-test('integrate returns actionable preflight verification failures', async () => {
+test('integrate returns actionable post-merge verification failures', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-integrate-verify-failure-')).slug;
   const original = store.integrateSubmission;
   const verify = {
@@ -700,14 +700,14 @@ test('integrate returns actionable preflight verification failures', async () =>
   };
   store.integrateSubmission = () => ({
     ok: false,
-    reason: 'verify_failed',
+    reason: 'verify_failed_post_merge',
     ticket: { ref: 'SQ-verify-failure', status: 'doing' },
     verify,
   });
   try {
     const result = await callHandler('integrate', { project, ref: 'SQ-verify-failure', by: 'payload-tester' });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, 'verify_failed');
+    assert.equal(result.reason, 'verify_failed_post_merge');
     assert.deepEqual(result.verifyFailed, verify);
   } finally {
     store.integrateSubmission = original;
