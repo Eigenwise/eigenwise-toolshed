@@ -443,11 +443,35 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     if (!ignored.length) return null;
     return `Worktree visibility warning: ignored paths unavailable in a linked worktree: ${ignored.join(", ")}. Use sharedTree: true, or run inline.`;
   }
+  function composeFilesBindingProjectRoot(projectPath) {
+    if (!projectPath) return [];
+    const names = ["compose.yaml", "compose.yml", "docker-compose.yaml", "docker-compose.yml"];
+    const rootMount = /(?:^|\n)\s*-\s*["']?(?:\.(?:[\\/])?|\$\{(?:PWD|COMPOSE_PROJECT_DIR)\}(?:[\\/])?)["']?\s*:/m;
+    const longRootMount = /type:\s*bind[\s\S]{0,300}?source:\s*["']?(?:\.(?:[\\/])?|\$\{(?:PWD|COMPOSE_PROJECT_DIR)\}(?:[\\/])?)["']?|source:\s*["']?(?:\.(?:[\\/])?|\$\{(?:PWD|COMPOSE_PROJECT_DIR)\}(?:[\\/])?)["']?[\s\S]{0,300}?type:\s*bind/m;
+    const matches = [];
+    for (const name of names) {
+      const file = path.join(projectPath, name);
+      try {
+        const contents = fs.readFileSync(file, "utf8");
+        if (rootMount.test(contents) || longRootMount.test(contents)) matches.push(name);
+      } catch (_) {
+      }
+    }
+    return matches;
+  }
+  function composeWorktreeWarning(ticket, projectPath) {
+    if (dispatchState(ticket)?.sharedTree !== false) return null;
+    const files = composeFilesBindingProjectRoot(projectPath);
+    if (!files.length) return null;
+    return `Worktree compatibility warning: ${files.join(", ")} bind-mounts the repository root, so a linked worktree is not the running app. Set worktreeIsolation: false for this board before dispatching.`;
+  }
   function dispatchWarnings(ticket, slug) {
     const warnings = dispatchUncertaintyWarnings(ticket, slug);
     const projectPath = slug ? readMeta(slug)?.path : null;
     const visibility = worktreeVisibilityWarning(ticket, projectPath);
     if (visibility) warnings.push(visibility);
+    const compose = composeWorktreeWarning(ticket, projectPath);
+    if (compose) warnings.push(compose);
     if (projectPath) {
       const browserReview = readonlyBrowserReviewWarning(ticket);
       if (browserReview) warnings.push(`Dispatch warning: ${browserReview.replace("Planning-depth warning: ", "")}`);
@@ -599,6 +623,6 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   function requestedReadonlyOverride(fields) {
     return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 module.exports = { createWarnings };

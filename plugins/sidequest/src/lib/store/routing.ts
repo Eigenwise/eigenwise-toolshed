@@ -271,6 +271,7 @@ function classifyDispatchFailure(error?: any) {
   if (claudeQuotaFailure(text)) return 'quota_exhausted';
   if (/prompt is too long|request too large \(max 32mb\)|context (?:length|window).*(?:exceed|too (?:large|long)|overflow)|maximum context/.test(normalized)) return 'context_overflow';
   if (/\bmax(?:imum)?[_ -]?(?:output[_ -]?)?tokens?\b/.test(normalized)) return 'max_tokens';
+  if (/\b(?:vite|app|service)\b.*\b(?:404|not found|missing)\b|\b(?:404|not found|missing)\b.*\b(?:vite|app|service)\b/.test(normalized)) return 'worktree_environment';
   if (/\b(?:agent|subagent)\b.*\b(?:terminated|stopped|died|crashed|fatal)\b|\b(?:terminated|stopped|died|crashed|fatal)\b.*\b(?:agent|subagent)\b/.test(normalized)) return 'agent_terminal';
   if (/not authenticated|unauthenticated|authentication failed|authorization failed|credential(?:s)? (?:rejected|invalid|expired)|(?:invalid|rejected) (?:credential|token)|\b401\b/.test(normalized)) return 'auth_failure';
   if (/backend (?:is )?(?:down|unavailable)|gateway (?:is )?(?:down|unavailable|not serving)|(?:model|model id).*(?:not (?:found|resolvable|available)|unavailable)|could not resolve.*model/.test(normalized)) return 'provider_unavailable';
@@ -279,7 +280,7 @@ function classifyDispatchFailure(error?: any) {
 
 function terminalAgentFailure(error?: any) {
   const failureShape = classifyDispatchFailure(error);
-  return ['context_overflow', 'max_tokens', 'agent_terminal'].includes(failureShape) ? failureShape : null;
+  return ['context_overflow', 'max_tokens', 'worktree_environment', 'agent_terminal'].includes(failureShape) ? failureShape : null;
 }
 
 function getRoutingFallback() {
