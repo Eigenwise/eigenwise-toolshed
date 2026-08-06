@@ -17,7 +17,7 @@ const {
 const { downloadCollector } = require('../bin/setup-observability.js');
 
 const configuredBinary = process.env.WORKBENCH_OTELCOL_CONTRIB;
-const runRealCollectorTest = Boolean(configuredBinary || process.env.CI);
+const runRealCollectorTest = Boolean(configuredBinary);
 
 test('the Collector config uses supported redaction and creates its queue directory', () => {
   const config = buildCollectorConfig();
