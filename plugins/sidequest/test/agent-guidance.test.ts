@@ -32,7 +32,8 @@ test('comment guidance makes durable handoffs concise and consumable', () => {
   assert.match(executorTemplate, /Record decisions, constraints,\n\s+risks/);
   assert.match(executorTemplate, /short\n   relevant excerpt/);
   assert.match(skill, /BOOKEND SUPERVISION/);
-  assert.match(skill, /read the submit report, run its verify command/);
+  assert.match(skill, /read the submit report/);
+  assert.match(skill, /merged-tree gate/);
   assert.match(publishing, /Read each submitted handoff/);
   assert.match(publishing, /Do not cherry-pick until the thread is understood/);
 });

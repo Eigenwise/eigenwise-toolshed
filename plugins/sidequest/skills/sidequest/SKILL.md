@@ -36,7 +36,7 @@ For substantial work:
    (`sidequest story add`, then `--story US-n` per piece): file the complete backlog under it and pin
    the execution contract on it. A story is Sidequest's own `US-n` grouping, not a Claude Code feature.
    One-ticket mode stays story-less; use stories for shared outcomes or dependencies. Cut along affected surfaces: store, CLI, MCP surface, skill/docs, and applicable full test directory.
-   Tickets carry anchors, contract, and an exact scoped verify. Use directory scope for the blast radius; details:
+   Tickets carry anchors, contract, and a scoped verify. Use directory scope for the blast radius; details:
    `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
@@ -48,8 +48,9 @@ For substantial work:
    normal mid-run tickets.
 4. **Execute proportionally** — "Route execution down" below.
 
-Complexity 4+ needs planning: scope, anchors, an exact scoped verify. Executors run the changed surface's tests; waves use the full suite once on the merged tree at integration. A passing executable done-oracle needs no review-audit + fix wave unless it
-lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
+Complexity 4+ needs planning: scope, anchors, a scoped verify. Executors test the changed
+surface; the full suite runs once on the merged tree at integration. A passing executable
+done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
 The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Investigation or other-file reading needs a ticket.
@@ -168,9 +169,8 @@ terminal comment keeps only the commit hash + verification. The orchestrator is 
 publish transaction (lock → delivery → merged-tree gate → central version → review → push → reachability → `done`):
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
-comment reads, or worktree peeks. At integration, read the submit report, deliver the range, and run the
-merged-tree gate plus the wave seam check (full suite once per wave). Judge by that oracle, never
-by opening source or reviewing diffs. A human-grade review need is a separately routed `review-audit`
+comment reads, or peeks. At integration, read the submit report, deliver the range, and run the
+merged-tree gate once per wave. Judge by that oracle, never by opening source or reviewing diffs. A human-grade review need is a separately routed `review-audit`
 (or `security-audit`) ticket, never orchestrator re-review. Never mark a submitted ticket done without
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
