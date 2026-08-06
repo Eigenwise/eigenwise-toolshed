@@ -411,6 +411,43 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
 });
 
+test('MCP rejects unsupported write and read parameters before they can be ignored', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-strict-arguments-'))).slug;
+  const story = store.createStory(project, { title: 'Strict arguments' });
+  const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
+  assert.equal(store.claimTicket(project, ticket.ref, 'argument-worker', { direct: true }).ok, true);
+
+  const invalidStoryLogArguments = [
+    { text: 'DISCOVERY: ignored entry' },
+    { kind: 'DISCOVERY' },
+  ];
+  for (const invalidArguments of invalidStoryLogArguments) {
+    const parameter = Object.keys(invalidArguments)[0];
+    const rejected = await callToolRaw('story_log', Object.assign({
+      project, story: story.ref, ref: ticket.ref, by: 'argument-worker',
+    }, invalidArguments));
+    assert.equal(rejected.isError, true);
+    assert.match(rejected.content[0].text, new RegExp(`story_log: unexpected parameter \"${parameter}\"`));
+  }
+  assert.deepEqual(store.storyDecisionLog(store.getStory(project, story.ref)).entries, []);
+
+  const rejectedComments = await callToolRaw('comments', { project, ref: ticket.ref, order: 'newest' });
+  assert.equal(rejectedComments.isError, true);
+  assert.match(rejectedComments.content[0].text, /comments: unexpected parameter "order"/);
+});
+
+test('list returns verify while retaining executorVerify for compatibility', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-verify-name-'))).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Verify field', executorVerify: 'node --test plugins/sidequest/test/mcp.test.ts', source: 'test',
+  });
+
+  const listed = await callTool('list', { project, all: true, detail: true });
+  const row = listed.tickets.find((candidate: any) => candidate.ref === ticket.ref);
+  assert.equal(row.verify, ticket.executorVerify);
+  assert.equal(row.executorVerify, ticket.executorVerify);
+});
+
 test('tools/list keeps schemas compact without losing claim and dispatch discipline', async () => {
   const tools = mcp.toolDescriptors();
   const descriptionBytes = (value: any): number => {
