@@ -1094,8 +1094,69 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
   const out = runGuardPeer({ tool_input: { to: executorName, message: 'one more thing' } });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /queued steering message/);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /redispatch the existing ticket/i);
+});
+
+test('peer-message hooks refuse a completed executor by its exact SendMessage target', () => {
+  const ticket = addStopTicket('completed executor cannot receive follow-up work');
+  const acting = claimStopTicket(ticket, `completed-message-${++sqSeq}`, 'completed-worker');
+  assert.equal(store.completeTicket(slug, ticket.ref, 'completed-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.status, 'done');
+  assert.equal(after.claim, null);
+  assert.equal(after.dispatch.outcome, 'done');
+
+  const payload = {
+    agent_id: 'orchestrator-after-completion',
+    tool_name: 'SendMessage',
+    tool_input: { to: acting.agent_name, message: 'Make one more revision.' },
+  };
+  for (const hook of [GUARD_PEER, FORCE_BYPASS]) {
+    const out = runHookOutput(hook, payload);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /redispatch the existing ticket/i);
+  }
+});
+
+test('peer-message hooks refuse a submitted executor by its exact SendMessage target', () => {
+  const ticket = addStopTicket('submitted executor cannot receive follow-up work');
+  const acting = claimStopTicket(ticket, `submitted-message-${++sqSeq}`, 'submitted-worker');
+  assert.equal(store.submitTicket(slug, ticket.ref, 'submitted-worker', {
+    commit: 'a'.repeat(40),
+    range: {
+      base: 'b'.repeat(40),
+      upstream: 'main',
+      upstreamCommit: 'c'.repeat(40),
+      commits: [],
+      changedPaths: [],
+      noOp: true,
+    },
+  }).ok, true);
+
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.claim, null);
+  assert.equal(after.dispatch.outcome, 'submitted');
+
+  const payload = {
+    agent_id: 'orchestrator-after-submission',
+    tool_name: 'SendMessage',
+    tool_input: { to: acting.agent_name, message: 'Make one more revision.' },
+  };
+  for (const hook of [GUARD_PEER, FORCE_BYPASS]) {
+    const out = runHookOutput(hook, payload);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /redispatch the existing ticket/i);
+  }
 });
 
 test('peer-guard: missing isolated worktree blocks a non-terminal resume only', () => {

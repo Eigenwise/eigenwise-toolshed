@@ -267,7 +267,7 @@ function terminalDispatchTarget(agentName?: any) {
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || state.agentName !== target || state.outcome !== 'died' || !state.terminalAt) continue;
+      if (!state || state.agentName !== target || !state.terminalAt || (state.outcome !== 'died' && ticket.claim?.by)) continue;
       terminal = { slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt };
     }
   }

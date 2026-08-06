@@ -164,7 +164,10 @@ optionally `--status todo`).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
 `submit` (claim released, parked in `doing`); the submission holds the full report, and the
-terminal comment keeps only the commit hash + verification. The orchestrator is the integrator: choose
+terminal comment keeps only the commit hash + verification. **Submit is terminal for the executor:** a
+submitted ticket cannot be amended by messaging the executor that produced it, however small the
+follow-up looks. File a follow-up ticket for changes. Redispatch the existing ticket only when it was
+released without a pending submission. The orchestrator is the integrator: choose
 `sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default, then run the
 publish transaction (lock → delivery → merged-tree gate → central version → review → push → reachability → `done`):
 `references/publishing.md`.

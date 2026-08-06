@@ -45,7 +45,7 @@ function main(): void {
     writeDeny(
       'PreToolUse',
       `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and executor "${to}" is closed. ` +
-        'Drop this queued steering message so it cannot wake a finished executor. Redispatch the ticket for later work; TaskStop the mapped executor if it is still listed.',
+        'File a follow-up ticket for changes, or redispatch the existing ticket when it was released without a pending submission.',
     );
     return;
   }

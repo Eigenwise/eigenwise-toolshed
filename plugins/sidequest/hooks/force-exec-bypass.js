@@ -487,6 +487,13 @@ function guardLateSteer(input) {
     const store = require(runtimeModule("store"));
     const terminal = store.terminalDispatchTarget(recipient);
     if (!terminal) return;
+    if (terminal.outcome !== "died") {
+      writeDeny(
+        "PreToolUse",
+        `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and ${recipient} cannot receive messages. File a follow-up ticket for changes, or redispatch the existing ticket when it was released without a pending submission.`
+      );
+      return;
+    }
     const sender = stringField(input, "agent_id", "agentId") || "orchestrator";
     const recorded = store.addComment(terminal.slug, terminal.ref, {
       by: sender,
