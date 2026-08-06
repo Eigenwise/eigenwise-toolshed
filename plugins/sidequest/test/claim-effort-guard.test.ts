@@ -97,6 +97,21 @@ function seed(category?: any) {
   return cliJson(['add', '-t', 'guard fixture', '-d', 'Where: claim guard fixture. Contract: exercise token-gated routed claims without changing state. Verify: inspect the claim response.', '--category', category]).ticket.ref;
 }
 
+function prepareBoundDispatch(slug: string, ref: string) {
+  const sessionId = `bound-claim-${ref}`;
+  const agentName = `bound-claim-agent-${ref}`;
+  const agentId = `bound-claim-id-${ref}`;
+  const prepared = store.prepareDispatch(slug, ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
+  return prepared;
+}
+
 function otherEffort(effort?: any) {
   return store.VALID_EFFORTS.find((candidate?: any) => candidate !== effort);
 }
@@ -109,7 +124,7 @@ test('Codex category routes reject a generic executor even when effort matches',
   assert.notEqual(rejected.status, 0);
   assert.match(rejected.stdout + rejected.stderr, new RegExp(expected));
   assert.equal(ticket(ref).status, 'todo');
-  const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, ref);
+  const prepared = prepareBoundDispatch(store.ensureProject(PROJ).slug, ref);
   assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected, '--token', prepared.token]).ok, true);
 });
 
@@ -148,7 +163,7 @@ test('a category-routed claim requires a prepared token even with its resolved e
   assert.match(payload.message, /dispatch/i);
   assert.match(payload.message, /--direct/i);
   assert.equal(ticket(ref).status, 'todo');
-  const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, ref);
+  const prepared = prepareBoundDispatch(store.ensureProject(PROJ).slug, ref);
   const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--token', prepared.token]);
   assert.equal(claim.ticket.status, 'doing');
 });
@@ -235,7 +250,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   fs.mkdirSync(agents, { recursive: true });
 
   const doneRef = seed('guard.codex');
-  const preparedDone = store.prepareDispatch(slug, doneRef);
+  const preparedDone = prepareBoundDispatch(slug, doneRef);
   assert.equal(preparedDone.ok, true);
   assert.ok(preparedDone.token);
   // Instant dispatch points the guard at the STABLE per-model executor, not a
@@ -260,7 +275,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   assert.ok(fs.existsSync(stableDef));
 
   const releaseRef = seed('guard.codex');
-  const preparedRelease = store.prepareDispatch(slug, releaseRef);
+  const preparedRelease = prepareBoundDispatch(slug, releaseRef);
   assert.equal(preparedRelease.ticket.dispatchExecutor, 'sidequest-exec-dispatch');
   assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
   const released = cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']);
@@ -303,7 +318,7 @@ test('a re-dispatch rotates the token against a constant stable executor and rej
   const slug = store.ensureProject(PROJ).slug;
   const ref = seed('guard.codex');
   const first = store.prepareDispatch(slug, ref);
-  const second = store.prepareDispatch(slug, ref);
+  const second = prepareBoundDispatch(slug, ref);
 
   assert.equal(first.ticket.dispatchExecutor, second.ticket.dispatchExecutor);
   assert.notEqual(first.token, second.token);

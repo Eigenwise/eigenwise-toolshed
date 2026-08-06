@@ -2600,6 +2600,14 @@ test('MCP claim passes prepared dispatch token and executor through to the store
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
+  const unbound = await callTool('claim', {
+    ref: added.ref,
+    by: 'mcp-unbound-agent',
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  });
+  assert.strictEqual(unbound.ok, false);
+  assert.strictEqual(unbound.reason, 'unbound_dispatch');
   assert.equal(store.recordDispatchLaunch(slug, added.ref, {
     sessionId: 'mcp-claim-binding',
     token: prepared.token,
