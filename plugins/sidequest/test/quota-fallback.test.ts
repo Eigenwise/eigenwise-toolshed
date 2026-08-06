@@ -381,8 +381,12 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
     token: preparedStopped.token,
     executor: preparedStopped.ticket.dispatchExecutor,
   }).ok, true);
-  assert.equal(store.markDispatchStopped('stopped-attempt', preparedStopped.ticket.dispatchExecutor).ok, true);
-  assert.equal(store.getTicket(slug, stopped.ref).dispatch.failureShape, 'process_death');
+  assert.equal(store.recordDispatchAgentFailure(slug, stopped.ref, {
+    token: preparedStopped.token,
+    executor: preparedStopped.ticket.dispatchExecutor,
+    error: 'Subagent terminated unexpectedly',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, stopped.ref).dispatch.failureShape, 'agent_terminal');
 
   const reconciled = createFixture('reconciled attempt');
   const preparedReconciled = store.prepareDispatch(slug, reconciled.ref, { sessionId: 'reconciled-attempt' });
@@ -404,7 +408,11 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
       token: prepared.token,
       executor: prepared.ticket.dispatchExecutor,
     }).ok, true);
-    assert.equal(store.markDispatchStopped(`bounded-attempt-${index}`, prepared.ticket.dispatchExecutor).ok, true);
+    assert.equal(store.recordDispatchAgentFailure(slug, bounded.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      error: 'Subagent terminated unexpectedly',
+    }).ok, true);
   }
   assert.equal(store.getTicket(slug, bounded.ref).dispatch.attempts.length, 8);
 });

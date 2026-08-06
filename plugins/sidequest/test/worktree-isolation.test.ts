@@ -208,14 +208,18 @@ test('an executor without a dispatch record cannot write into the shared checkou
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /no active dispatch record/);
 });
 
-test('a dead executor still expects its worktree after a resume', () => {
+test('a terminally failed executor still expects its worktree after a resume', () => {
   const agentId = 'a9dead';
   const { ticket, sessionId, executor } = dispatched(agentId);
   assert.equal(store.claimTicket(slug, ticket.ref, 'dead-worker', {
     token: ticket.dispatchNonce,
     executor: ticket.dispatchExecutor,
   }).ok, true);
-  assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: ticket.dispatchNonce,
+    executor,
+    error: 'Subagent terminated unexpectedly',
+  }).ok, true);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'died');
 
   const expectation = store.dispatchIsolationExpectation({ agentId, sessionId, executor });
@@ -291,7 +295,11 @@ test('an isolated scope pause preserves its worktree through approval', () => {
     assert.ok(fs.existsSync(marker));
     assert.doesNotMatch(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), /\.sidequest/);
 
-    assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: ticket.dispatchNonce,
+      executor,
+      error: 'Subagent terminated unexpectedly',
+    }).ok, true);
     const paused = store.getTicket(slug, ticket.ref);
     assert.equal(paused.dispatch.outcome, 'scope_paused');
     assert.ok(paused.scopePauseRecovery);
@@ -325,7 +333,7 @@ test('an isolated scope pause preserves its worktree through approval', () => {
 
 test('a missing paused worktree releases the claim and carries its snapshot into redispatch', () => {
   const agentId = 'a11scope-recovery';
-  const { ticket, sessionId, executor } = dispatched(agentId);
+  const { ticket, executor } = dispatched(agentId);
   const linked = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
   fs.mkdirSync(path.dirname(linked), { recursive: true });
   execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
@@ -336,7 +344,11 @@ test('a missing paused worktree releases the claim and carries its snapshot into
     }).ok, true);
     fs.appendFileSync(path.join(linked, 'README.md'), 'recover this work\n');
     assert.equal(store.requestScope(slug, ticket.ref, 'scope-recovery-worker', ['new.js'], { worktree: linked }).ok, true);
-    assert.equal(store.markDispatchStopped(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: ticket.dispatchNonce,
+      executor,
+      error: 'Subagent terminated unexpectedly',
+    }).ok, true);
     const paused = store.getTicket(slug, ticket.ref);
     assert.ok(paused.scopePauseRecovery);
 

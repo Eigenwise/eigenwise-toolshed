@@ -283,7 +283,8 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
   assert.equal(dispatch.agentId, agentId);
   assert.ok(dispatch.boundAt);
   assert.equal(dispatch.worktree, path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`));
-  assert.equal(dispatch.outcome, 'died');
+  assert.equal(dispatch.outcome, 'claimed');
+  assert.ok(dispatch.turnEndedAt);
 });
 
 test('read-only category classes dispatch through restricted stable executors', () => {
@@ -560,26 +561,30 @@ test('dispatch does not count an attempt that checkpointed a commit toward the r
   assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpointed-cleanup', { status: 'todo', source: 'test' }).ok, true);
 });
 
-test('dispatch counts died rounds toward the repeat-failure breaker', () => {
-  const ticket = createFixture('repeat died dispatch fixture');
+test('dispatch counts terminal Agent failures toward the repeat-failure breaker', () => {
+  const ticket = createFixture('repeat terminal failure dispatch fixture');
   for (const number of [1, 2]) {
-    const sessionId = `repeat-died-${number}-${Date.now()}`;
+    const sessionId = `repeat-terminal-failure-${number}-${Date.now()}`;
     const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
     const executor = prepared.ticket.dispatchExecutor;
-    const worker = `repeat-died-worker-${number}`;
+    const worker = `repeat-terminal-failure-worker-${number}`;
     assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
       sessionId,
       token: prepared.token,
       executor,
       agentName: worker,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, executor, `repeat-died-agent-${number}`, worker).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, `repeat-terminal-failure-agent-${number}`, worker).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, worker, {
       sessionId,
       token: prepared.token,
       executor,
     }).ok, true);
-    assert.equal(store.markDispatchStopped(sessionId, executor, `repeat-died-agent-${number}`, worker).ok, true);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      error: 'Agent stopped after max_tokens',
+    }).ok, true);
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'died');
     assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
   }
