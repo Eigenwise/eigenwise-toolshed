@@ -1,5 +1,6 @@
 import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
+import './_hook-runtime.js';
 import assert from 'node:assert';
 import { execFileSync, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
