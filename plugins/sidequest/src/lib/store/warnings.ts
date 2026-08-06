@@ -17,7 +17,7 @@ function executorText(value?: any, max?: any, label?: any) {
 }
 
 const VERIFY_BUILTINS = new Set([
-  'bash', 'bun', 'cargo', 'cd', 'cmd', 'composer', 'dart', 'deno', 'dotnet',
+  'bash', 'bun', 'cargo', 'cd', 'cmake', 'cmd', 'composer', 'ctest', 'dart', 'deno', 'dotnet',
   'elixir', 'eslint', 'flutter', 'git', 'go', 'gradle', 'java', 'jest', 'just',
   'make', 'mix', 'mvn', 'node', 'npm', 'npx', 'php', 'pnpm', 'poetry', 'powershell',
   'pwsh', 'py', 'pytest', 'python', 'python3', 'rake', 'ruby', 'sh', 'tox', 'tsc',
@@ -243,13 +243,16 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
   const verify = String(ticket?.executorVerify || '').trim();
   if (!verify || manualVerify(verify)) return null;
   const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
-  if (!match) return 'record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.';
-  const directory = path.resolve(String(projectPath || ''), match[1] || match[2]);
+  const directory = match
+    ? path.resolve(String(projectPath || ''), match[1] || match[2])
+    : String(projectPath || '');
   if (!projectPath || !relativePathWithin(projectPath, directory) || !fs.existsSync(directory)) {
-    return 'the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.';
+    return match
+      ? 'the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting.'
+      : 'the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.';
   }
 
-  const command = verify.slice(match[0].length).trim();
+  const command = match ? verify.slice(match[0].length).trim() : verify;
   const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? 'test' : null;
   const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
   const script = npmTest || (npmRun && (npmRun[1] || npmRun[2]));
