@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.395.0 (2026-08-06)
+
+### sidequest 4.30.0 → 4.31.0
+
+#### Features
+
+- A dispatch that correctly changes nothing can now close itself (SQ-1339)
+  A routed write dispatch that legitimately ends with nothing to commit had no legal way to close. `done` refused with `submission_required`. `submit` refused as `outside_scope` against the stale dispatch base. Pinning base equal to commit to prove emptiness refused as `empty_range`. The executor's only remaining move was to ask a human: "Someone with grooming/orchestrator authority needs to close this one manually."
+
+  The surrounding refusals did not help either. Five separate runs hit "has routed dispatch history. Executors cannot close released repository work" without being told what they SHOULD do instead.
+
+  `done` now accepts a routed write dispatch whose tree is clean since the dispatch base, recording the closure with explicit no-op evidence so grooming sees the truth rather than a fabricated change. `submit` gains an explicit no-op form that records an empty submission instead of refusing an empty range, for flows where the orchestrator wants something to integrate against. Refusals in this family now name the next legal action for the holder, and say what the orchestrator will do.
+
+  The clean-since-base check shares delta semantics with shared-tree attribution, so a sibling executor's uncommitted work in the same tree does not block a no-op closure.
+
 ## v3.394.0 (2026-08-06)
 
 ### sidequest 4.29.0 → 4.30.0
