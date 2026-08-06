@@ -6,6 +6,12 @@ import { build } from 'esbuild';
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
 export const nonBundledBuildDirectories = ['lib', 'bin'];
+export const bundledBuildOutputs = [{
+  sourceDirectory: 'src/hooks',
+  outputDirectory: 'hooks',
+  sourceExtension: '.ts',
+  outputExtension: '.js',
+}];
 
 // Only lib and bin mirror nested sources into output. Hook entry points stay top-level:
 // src/hooks/shared/* are bundled into each hook, and emitting them would flatten distinct
@@ -48,20 +54,22 @@ async function buildNonBundled(directory, banner) {
 }
 
 async function buildHooks() {
-  const entryPoints = await sourceEntries('hooks', { recursive: false });
-  for (const entryPoint of entryPoints) {
-    await build({
-      entryPoints: [entryPoint],
-      outfile: path.join(pluginRoot, 'hooks', `${path.basename(entryPoint, '.ts')}.js`),
-      bundle: true,
-      platform: 'node',
-      format: 'cjs',
-      target: 'node22',
-      charset: 'utf8',
-      legalComments: 'none',
-      sourcemap: false,
-      external: ['node:*'],
-    });
+  for (const { sourceDirectory, outputDirectory, outputExtension } of bundledBuildOutputs) {
+    const entryPoints = await sourceEntries(sourceDirectory.replace(/^src\//, ''), { recursive: false });
+    for (const entryPoint of entryPoints) {
+      await build({
+        entryPoints: [entryPoint],
+        outfile: path.join(pluginRoot, outputDirectory, `${path.basename(entryPoint, '.ts')}${outputExtension}`),
+        bundle: true,
+        platform: 'node',
+        format: 'cjs',
+        target: 'node22',
+        charset: 'utf8',
+        legalComments: 'none',
+        sourcemap: false,
+        external: ['node:*'],
+      });
+    }
   }
 }
 

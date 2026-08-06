@@ -134,15 +134,26 @@ function packageRootForScope(projectPath?: any, scope?: any) {
 
 function buildOutputDirectories(source?: any) {
   const outputs = new Map<string, any>();
-  const add = (directory?: any, sourceDirectory?: any) => {
-    const value = String(directory || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const normalizeDirectory = (directory?: any) => String(directory || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/$/, '');
+  const add = (directory?: any, sourceDirectory?: any, sourceExtension = '.ts', outputExtension = '.js') => {
+    const value = normalizeDirectory(directory);
     if (!value || value.includes('..') || path.isAbsolute(value)) return;
     const current = outputs.get(value);
-    outputs.set(value, { directory: value, sourceDirectory: sourceDirectory || current?.sourceDirectory || null });
+    outputs.set(value, {
+      directory: value,
+      sourceDirectory: sourceDirectory || current?.sourceDirectory || null,
+      sourceExtension: sourceExtension || current?.sourceExtension || '.ts',
+      outputExtension: outputExtension || current?.outputExtension || '.js',
+    });
   };
   const text = String(source || '');
   for (const directories of text.matchAll(/export\s+const\s+nonBundledBuildDirectories\s*=\s*\[([^\]]*)\]/g)) {
     for (const directory of (directories[1] || '').matchAll(/["']([^"']+)["']/g)) add(directory[1], directory[1]);
+  }
+  for (const mappings of text.matchAll(/export\s+const\s+bundledBuildOutputs\s*=\s*\[([\s\S]*?)\];/g)) {
+    for (const mapping of (mappings[1] || '').matchAll(/\{\s*sourceDirectory\s*:\s*["']([^"']+)["']\s*,\s*outputDirectory\s*:\s*["']([^"']+)["']\s*,\s*sourceExtension\s*:\s*["']([^"']+)["']\s*,\s*outputExtension\s*:\s*["']([^"']+)["']\s*,?\s*\}/g)) {
+      add(mapping[2], mapping[1], mapping[3], mapping[4]);
+    }
   }
   for (const match of text.matchAll(/--(?:outdir|out-dir|output-dir)\s*(?:=|\s+)\s*["']?([^"'\s;&]+)/gi)) add(match[1]);
   for (const match of text.matchAll(/(?:outdir|outDir|outputDir)\s*:\s*["']([^"']+)["']/g)) add(match[1]);
@@ -209,7 +220,8 @@ function sourceBuildOutputWarnings(ticket?: any, projectPath?: any) {
     if (!sourceRelative || (sourceRelative !== 'src' && !sourceRelative.startsWith('src/'))) continue;
     const sourceDirectory = sourceRelative.split('/')[1] || null;
     for (const output of packageBuildOutputs(packageRoot)) {
-      if (output.sourceDirectory && sourceDirectory && output.sourceDirectory !== sourceDirectory) continue;
+      const outputSourceDirectory = String(output.sourceDirectory || '').replace(/^src\//, '');
+      if (outputSourceDirectory && sourceDirectory && outputSourceDirectory !== sourceDirectory) continue;
       const target = path.resolve(packageRoot, output.directory);
       if (!isTrackedBuildOutput(projectPath, target) || scopeIncludesPath(ticket.files, projectPath, target)) continue;
       const packageRelative = relativePathWithin(projectPath, packageRoot)?.replace(/\\/g, '/') || '.';

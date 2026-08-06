@@ -106,10 +106,12 @@ function derivedGeneratedPairs(config?: any, files?: any) {
     for (const output of packageBuildOutputs(packageRoot)) {
       const sourceDirectory = String(output.sourceDirectory || '').trim();
       if (!sourceDirectory) continue;
-      const sourceRoot = path.resolve(packageRoot, 'src', sourceDirectory);
+      const sourceRoot = path.resolve(packageRoot, sourceDirectory.startsWith('src/') ? sourceDirectory : path.join('src', sourceDirectory));
       const outputRelative = relativePathWithin(sourceRoot, sourcePath);
-      if (outputRelative == null || outputRelative !== '.' && !outputRelative.endsWith('.ts')) continue;
-      const compiledRelative = outputRelative === '.' ? '.' : outputRelative.replace(/\.ts$/, '.js');
+      const sourceExtension = String(output.sourceExtension || '.ts');
+      const outputExtension = String(output.outputExtension || '.js');
+      if (outputRelative == null || outputRelative !== '.' && !outputRelative.endsWith(sourceExtension)) continue;
+      const compiledRelative = outputRelative === '.' ? '.' : `${outputRelative.slice(0, -sourceExtension.length)}${outputExtension}`;
       const outputPath = path.resolve(packageRoot, output.directory, compiledRelative);
       const outputFile = relativePathWithin(config.path, outputPath);
       if (outputFile) pairs.set(`${sourceFile}\0${outputFile}`, { from: sourceFile, to: outputFile });

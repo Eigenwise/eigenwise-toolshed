@@ -1436,21 +1436,29 @@ test('MCP scopeRequest never auto-approves plugin source, hooks, or manifests', 
   }
 });
 
-test('MCP scopeRequest keeps declared build output one-way: the source needs approval, the source grants its output', async () => {
+test('MCP scopeRequest keeps declared bundled hook output one-way: the source needs approval, the source grants its output', async () => {
   const worktree = createGitWorktree();
-  const source = 'plugins/sidequest/src/lib/store/worker.ts';
-  const output = 'plugins/sidequest/lib/store/worker.js';
-  for (const file of [source, output]) {
+  const source = 'plugins/sidequest/src/hooks/subagent-stop.ts';
+  const output = 'plugins/sidequest/hooks/subagent-stop.js';
+  for (const file of [source, output, 'plugins/sidequest/scripts/build.mjs']) {
     fs.mkdirSync(path.dirname(path.join(worktree, file)), { recursive: true });
-    fs.writeFileSync(path.join(worktree, file), 'export const worker = true;\n');
   }
-  fs.writeFileSync(path.join(worktree, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'esbuild --outdir lib' } }));
+  fs.writeFileSync(path.join(worktree, source), 'export const stop = true;\n');
+  fs.writeFileSync(path.join(worktree, output), 'module.exports = { stop: true };\n');
+  fs.writeFileSync(path.join(worktree, 'plugins', 'sidequest', 'scripts', 'build.mjs'), [
+    'export const bundledBuildOutputs = [{',
+    "  sourceDirectory: 'src/hooks',",
+    "  outputDirectory: 'hooks',",
+    "  sourceExtension: '.ts',",
+    "  outputExtension: '.js',",
+    '}];',
+  ].join('\n'));
+  fs.writeFileSync(path.join(worktree, 'plugins', 'sidequest', 'package.json'), JSON.stringify({ scripts: { build: 'node scripts/build.mjs' } }));
   gitAt(worktree, ['add', '.']);
   gitAt(worktree, ['commit', '-m', 'generated scope fixture']);
   const project = store.ensureProject(worktree).slug;
-  store.setBoardConfig(project, { generatedPairs: [{ from: 'plugins/*/src/lib/*.ts', to: 'plugins/*/lib/*.js' }] });
   const outputOnly = store.createTicket(project, {
-    title: 'Generated output scope', files: ['plugins/sidequest/lib'], complexity: 3,
+    title: 'Generated hook output scope', files: ['plugins/sidequest/hooks'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'editing generated output without its source is a mistake worth an approval round trip',
   });
   const by = 'mcp-generated-output-scope-worker';
