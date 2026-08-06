@@ -29,6 +29,15 @@ const CEILINGS_MS = {
   guardsSerial: { median: 200, p95: 300 },
 };
 const HOSTED_RUNNER = Boolean(process.env.CI);
+// A bare `node -e ''` costs about 40ms on an idle machine. When it costs many
+// times that, something else is using the box — three parallel executors, in the
+// run that prompted this — and a latency sample taken then describes the load,
+// not the hooks. Declining to judge is not the same as stretching the budget to
+// fit: scaling by this control was tried in 4.22.1 and flaked anyway, because the
+// hooks are I/O-bound and process start is not. So an overloaded run reports its
+// numbers and asserts nothing.
+const REFERENCE_PROCESS_START_MS = 40;
+const CONTENTION_FACTOR = 2;
 
 const pluginRoot = path.join(__dirname, '..');
 const hooksRoot = path.join(pluginRoot, 'hooks');
@@ -168,8 +177,12 @@ function measure(run: (index: number) => void): { median: number; p95: number; c
   };
 }
 
+function contended(control: { median: number }): boolean {
+  return control.median > REFERENCE_PROCESS_START_MS * CONTENTION_FACTOR;
+}
+
 function assertBudget(name: string, measured: { median: number; p95: number; control: { median: number; p95: number } }, ceiling: { median: number; p95: number }): void {
-  if (HOSTED_RUNNER) return;
+  if (HOSTED_RUNNER || contended(measured.control)) return;
   assert.ok(measured.median <= ceiling.median, `${name} median ${measured.median.toFixed(1)}ms exceeds the ${ceiling.median}ms ceiling (process-start control median ${measured.control.median.toFixed(1)}ms)`);
   assert.ok(measured.p95 <= ceiling.p95, `${name} p95 ${measured.p95.toFixed(1)}ms exceeds the ${ceiling.p95}ms ceiling (process-start control p95 ${measured.control.p95.toFixed(1)}ms)`);
 }
@@ -213,7 +226,10 @@ test('fresh-process hook latency stays inside release ceilings', (context: any) 
     ['inline-work-nudge', inlineWork, CEILINGS_MS.guard],
     ['common guards serial', guardsSerial, CEILINGS_MS.guardsSerial],
   ] as const) {
-    context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95; control ${measured.control.median.toFixed(1)}ms median, ${measured.control.p95.toFixed(1)}ms p95${HOSTED_RUNNER ? ' (hosted runner: reported, not asserted)' : ''}`);
+    const unasserted = HOSTED_RUNNER ? ' (hosted runner: reported, not asserted)'
+      : contended(measured.control) ? ` (machine busy, process start ${measured.control.median.toFixed(0)}ms vs ${REFERENCE_PROCESS_START_MS}ms idle: reported, not asserted)`
+        : '';
+    context.diagnostic(`${name}: ${measured.median.toFixed(1)}ms median, ${measured.p95.toFixed(1)}ms p95; control ${measured.control.median.toFixed(1)}ms median, ${measured.control.p95.toFixed(1)}ms p95${unasserted}`);
     assertBudget(name, measured, ceiling);
   }
 });
