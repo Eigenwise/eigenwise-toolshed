@@ -260,7 +260,7 @@ function createDispatch(dependencies) {
     }
     return null;
   }
-  function appendDispatchAttempt(state, outcome, source, failureShape, at) {
+  function appendDispatchAttempt(state, outcome, source, failureShape, at, commit) {
     const route = state && state.route && typeof state.route === "object" ? state.route : {};
     const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
     attempts.push({
@@ -272,9 +272,13 @@ function createDispatch(dependencies) {
       outcome,
       failureShape,
       terminalAt: at,
-      terminalSource: source || "store"
+      terminalSource: source || "store",
+      ...commit ? { commit } : {}
     });
     state.attempts = attempts.slice(-8);
+  }
+  function attemptCommit(ticket, opts) {
+    return opts?.commit || ticket?.checkpoint?.commit || ticket?.submission?.commit || null;
   }
   function setDispatchTerminal(ticket, outcome, source, opts) {
     const state = dispatchState(ticket);
@@ -285,7 +289,7 @@ function createDispatch(dependencies) {
     state.failureShape = failureShape;
     state.terminalAt = at;
     state.terminalSource = source || "store";
-    appendDispatchAttempt(state, outcome, source, failureShape, at);
+    appendDispatchAttempt(state, outcome, source, failureShape, at, attemptCommit(ticket, opts));
     delete state.supersededTokens;
   }
   function reopenScopePausedDispatch(ticket, now) {
@@ -414,7 +418,7 @@ function createDispatch(dependencies) {
       recent.unshift(attempt);
       if (recent.length === 2) break;
     }
-    return recent.length === 2 && recent.every((attempt) => attempt.outcome !== "submitted") ? recent : [];
+    return recent.length === 2 && recent.every((attempt) => attempt.outcome !== "submitted" && !attempt.commit) ? recent : [];
   }
   function repeatNoCommitDispatchError(ticket, state) {
     if (recentNoCommitAttempts(state).length !== 2) return null;

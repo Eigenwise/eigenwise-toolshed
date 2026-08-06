@@ -60,6 +60,19 @@ function liveDispatch(ticket: Ticket, sessionId: string, store: Store): boolean 
     && !store.claimPulse(ticket)?.reclaimable;
 }
 
+// An executor holding a live dispatch with a claim that is not reclaimable. The
+// reminder is for business this session left unfinished, and a running wave is
+// neither unfinished nor this session's to close — reading one as an open ticket
+// asks the orchestrator to interrupt healthy work (the-bot-resurrection, three
+// times in one night). This deliberately ignores which session prepared the
+// dispatch: session ids diverge across a long run, and that says nothing about
+// whether an executor is alive. A direct claim with no live dispatch behind it is
+// still this session's own to close, so it keeps its reminder.
+function heldByLiveExecutor(ticket: Ticket, store: Store): boolean {
+  if (!ticket.claim?.by || !ticket.dispatch || ticket.dispatch.terminalAt) return false;
+  return !store.claimPulse(ticket)?.reclaimable;
+}
+
 function byteCapped(message: string): string {
   return Buffer.byteLength(message) <= MAX_MESSAGE_BYTES ? message : message.slice(0, MAX_MESSAGE_BYTES - 1).trimEnd() + '…';
 }
@@ -117,7 +130,8 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     const touched = (ticket: Ticket): boolean => claimedRefs.has(String(ticket.ref || '')) || ticket.dispatch?.sessionId === sessionId;
     const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== 'done'
       && touched(ticket)
-      && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket) || pendingScopeApproval(ticket)));
+      && ((!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store))
+        || pendingSubmission(ticket) || pendingScopeApproval(ticket)));
     const doing = open.filter((ticket) => ticket.status === 'doing' && !pendingSubmission(ticket) && !pendingScopeApproval(ticket));
     const submissions = open.filter(pendingSubmission);
     const scopeApprovals = open.filter(pendingScopeApproval);

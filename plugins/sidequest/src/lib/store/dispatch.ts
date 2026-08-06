@@ -312,7 +312,7 @@ function soleIdleCandidate(candidates: any[]) {
   return null;
 }
 
-function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any) {
+function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any, commit?: any) {
   const route = state && state.route && typeof state.route === 'object' ? state.route : {};
   const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
   attempts.push({
@@ -325,8 +325,17 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
     failureShape,
     terminalAt: at,
     terminalSource: source || 'store',
+    ...(commit ? { commit } : {}),
   });
   state.attempts = attempts.slice(-8);
+}
+
+// What a run left behind, so a later guard can tell "died with nothing" from
+// "made real progress and ran out of turns" — opposite situations that want
+// opposite responses. A checkpoint or submission commit is the durable evidence;
+// the outcome label alone cannot carry it.
+function attemptCommit(ticket?: any, opts?: any) {
+  return opts?.commit || ticket?.checkpoint?.commit || ticket?.submission?.commit || null;
 }
 
 function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
@@ -338,7 +347,7 @@ function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: a
   state.failureShape = failureShape;
   state.terminalAt = at;
   state.terminalSource = source || 'store';
-  appendDispatchAttempt(state, outcome, source, failureShape, at);
+  appendDispatchAttempt(state, outcome, source, failureShape, at, attemptCommit(ticket, opts));
   delete state.supersededTokens;
 }
 
@@ -471,7 +480,7 @@ function recentNoCommitAttempts(state?: any) {
     recent.unshift(attempt);
     if (recent.length === 2) break;
   }
-  return recent.length === 2 && recent.every((attempt?: any) => attempt.outcome !== 'submitted') ? recent : [];
+  return recent.length === 2 && recent.every((attempt?: any) => attempt.outcome !== 'submitted' && !attempt.commit) ? recent : [];
 }
 
 function repeatNoCommitDispatchError(ticket?: any, state?: any) {

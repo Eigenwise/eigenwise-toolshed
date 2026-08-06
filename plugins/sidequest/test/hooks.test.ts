@@ -1547,6 +1547,32 @@ test('stop reminder: tells a claimed executor to hold pending scope approval', (
   assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
 });
 
+// Session ids diverge across a long orchestration, and the old exemption was
+// keyed on them, so a healthy running wave read as unfinished business and the
+// orchestrator was told to go close tickets its executors were mid-way through
+// (the-bot-resurrection, three times in one night).
+test('stop reminder: a live executor claim is in progress, not unfinished business', () => {
+  const dispatchSession = `reconcile-live-dispatch-${++sqSeq}`;
+  const ticket = addStopTicket('live executor mid-run');
+  claimStopTicket(ticket, dispatchSession, 'reconcile-live-executor');
+
+  const laterSession = `reconcile-live-later-${++sqSeq}`;
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: dispatchSession, cwd: BOARD_PATH }), null,
+    'the session that dispatched it sees a running wave, not an open ticket');
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: laterSession, cwd: BOARD_PATH }), null,
+    'a session id that moved on does not resurrect the reminder');
+
+  // Once the dispatch goes terminal the claim is nobody's live work, and the
+  // ticket is business the orchestrator still owes an answer on.
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-executor', { status: 'doing', source: 'test' }).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'reconcile-live-orchestrator', {
+    direct: true, reason: 'A direct claim with no live dispatch stays this session\'s own to close.',
+  }).ok, true);
+  const reminded = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: dispatchSession, cwd: BOARD_PATH });
+  assert.match(reminded.hookSpecificOutput.additionalContext, /1 ticket in doing/);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-orchestrator', { status: 'todo', source: 'test' }).ok, true);
+});
+
 test('stop reminder: names and re-escalates pending submissions within its byte budget', () => {
   const sessionId = `reconcile-${++sqSeq}`;
   const submitted = addTicket('pending integration');

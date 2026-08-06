@@ -85,6 +85,10 @@ function pendingScopeApproval(ticket) {
 function liveDispatch(ticket, sessionId, store) {
   return ticket.dispatch?.sessionId === sessionId && !ticket.dispatch.terminalAt && !store.claimPulse(ticket)?.reclaimable;
 }
+function heldByLiveExecutor(ticket, store) {
+  if (!ticket.claim?.by || !ticket.dispatch || ticket.dispatch.terminalAt) return false;
+  return !store.claimPulse(ticket)?.reclaimable;
+}
 function byteCapped(message) {
   return Buffer.byteLength(message) <= MAX_MESSAGE_BYTES ? message : message.slice(0, MAX_MESSAGE_BYTES - 1).trimEnd() + "…";
 }
@@ -133,7 +137,7 @@ function reconciliationMessage(data) {
     if (!project.ok || !project.slug) return null;
     const claimedRefs = new Set(store.sessionClaims(sessionId).map((claim) => String(claim.ref || "")).filter(Boolean));
     const touched = (ticket) => claimedRefs.has(String(ticket.ref || "")) || ticket.dispatch?.sessionId === sessionId;
-    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) || pendingSubmission(ticket) || pendingScopeApproval(ticket)));
+    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store) || pendingSubmission(ticket) || pendingScopeApproval(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket) && !pendingScopeApproval(ticket));
     const submissions = open.filter(pendingSubmission);
     const scopeApprovals = open.filter(pendingScopeApproval);

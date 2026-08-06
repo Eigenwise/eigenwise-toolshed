@@ -530,6 +530,36 @@ test('dispatch blocks a third terminal no-commit attempt unless explicitly overr
   assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-no-commit-cleanup', { status: 'todo', source: 'test' }).ok, true);
 });
 
+// The breaker is meant to catch a run that keeps dying with nothing to show,
+// and its remedy is an environment hypothesis. An attempt that checkpointed a
+// commit disproves that hypothesis: it read the environment fine and simply ran
+// out of runway, which is the opposite situation (the-bot-resurrection SQ-611).
+test('dispatch does not count an attempt that checkpointed a commit toward the repeat-failure breaker', () => {
+  const ticket = createFixture('checkpointed attempt fixture');
+  const checkpointCommit = '1590b92abc1234def5678abc1234def5678abcd';
+  for (const number of [1, 2]) {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `checkpointed-${number}-${Date.now()}` });
+    const worker = `checkpointed-worker-${number}`;
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+    if (number === 2) {
+      assert.equal(store.checkpointTicket(slug, ticket.ref, worker, {
+        commit: checkpointCommit,
+        verify: 'Reproduced all six anchors and ran the gate.',
+      }).ok, true);
+    }
+    assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
+  }
+
+  const attempts = store.getTicket(slug, ticket.ref).dispatch.attempts;
+  assert.equal(attempts.at(-1).commit, checkpointCommit);
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `checkpointed-3-${Date.now()}` });
+  assert.equal(prepared.ticket.dispatch.repeatFailureOverride, undefined);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpointed-cleanup', { status: 'todo', source: 'test' }).ok, true);
+});
+
 test('dispatch counts died rounds toward the repeat-failure breaker', () => {
   const ticket = createFixture('repeat died dispatch fixture');
   for (const number of [1, 2]) {
