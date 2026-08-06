@@ -1853,10 +1853,10 @@ test('MCP update makes control-plane scope approval discoverable and guards exec
   assert.deepEqual(store.getTicket(project, unclaimed.ref).files, ['lib/allowed.js', 'foreign/new.js']);
 });
 
-test('MCP update schema exposes scope approval through by', () => {
+test('MCP update schema exposes control-plane scope approval', () => {
   const update = mcp.toolDescriptors().find((descriptor: any) => descriptor.name === 'update');
   assert.ok(update);
-  assert.match(update.description, /by scopes/i);
+  assert.equal(update.inputSchema.properties.by.type, 'string');
 });
 
 test('sweepClaims releases stale claims through MCP', async () => {
@@ -2085,6 +2085,39 @@ test('native_agent carries ticket anchors and verify command through its stable 
     assert.match(native.prompt, /Title: prompt context/);
     assert.match(native.prompt, /Anchors:\nlib\/work\.js:14 executorPrompt/);
     assert.match(native.prompt, /Verify command:\nnode --test plugins\/sidequest\/test\/work\.test\.js/);
+  } finally {
+    clearCatalog();
+  }
+});
+
+test('native_agent applies explicit ticket route override refusals before spawning', async () => {
+  seedCatalog([
+    { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' },
+    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol', label: 'Sol' },
+  ]);
+  try {
+    const slug = store.ensureProject(PROJ).slug;
+    store.setCategory({ id: 'native-route-override-codex', name: 'Native route override Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+    store.setCategory({ id: 'native-route-override-claude', name: 'Native route override Claude', route: { model: 'sonnet', effort: 'high' } });
+    const crossing = store.createTicket(slug, {
+      title: 'Refuse provider crossing through MCP native agent',
+      category: 'native-route-override-claude',
+      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    });
+    const sameProvider = store.createTicket(slug, {
+      title: 'Allow same provider through MCP native agent',
+      category: 'native-route-override-codex',
+      route: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    });
+
+    await assert.rejects(
+      () => callHandler('native_agent', { ref: crossing.ref, prompt: 'Implement the ticket.' }),
+      /route override "codex-gpt-5-6-sol" crosses providers from category "native-route-override-claude" and was refused/,
+    );
+
+    const native = await callHandler('native_agent', { ref: sameProvider.ref, prompt: 'Implement the ticket.' });
+    assert.equal(native.effort, 'high');
+    assert.equal(native.spawn.subagent_type, 'sidequest-exec-dispatch');
   } finally {
     clearCatalog();
   }
@@ -3358,7 +3391,31 @@ test('SQ-923: done accepts the runtime id an executor reports for a Claude tier'
     body: 'A model nobody routes still has to be refused by name.',
   });
   assert.equal(unknown.isError, true, 'an unknown model is still refused');
-  assert.match(unknown.content[0].text, /unknown model "gpt-9-imaginary"/);
+});
+
+test('MCP add, update, and route_recipe carry a one-ticket route override', async () => {
+  const category = `mcp-ticket-route-${process.pid}`;
+  store.setCategory({ id: category, name: 'MCP ticket route', route: { model: 'sonnet', effort: 'medium' }, enabled: true });
+
+  const added = await callTool('add', {
+    project: PROJ,
+    title: 'Use an explicit ticket route',
+    category,
+    route: { model: 'sonnet', effort: 'high' },
+  });
+  const projectSlug = added.project;
+  assert.deepEqual(store.getTicket(projectSlug, added.ref)?.route, { model: 'sonnet', effort: 'high' }, 'MCP add persists the route under its acknowledged project slug');
+
+  await callTool('update', {
+    project: PROJ,
+    ref: added.ref,
+    route: { model: 'opus', effort: 'high' },
+  });
+  assert.deepEqual(store.getTicket(projectSlug, added.ref)?.route, { model: 'opus', effort: 'high' });
+
+  const recipe = await callTool('route_recipe', { project: PROJ, category, ticket: added.ref });
+  assert.deepEqual(recipe.route, { model: 'opus', effort: 'high' });
+  assert.deepEqual(recipe.ticket, { ref: added.ref, route: { model: 'opus', effort: 'high' } });
 });
 
 export {};

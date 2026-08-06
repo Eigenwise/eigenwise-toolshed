@@ -399,14 +399,14 @@ function integrationFailure(slug: any, ticket: any, patch: any) {
   return Object.assign({ ok: false, ticket: getTicket(slug, ticket.id) }, patch);
 }
 
-function rollbackPostMergeVerification(repo: string, mode: string, before: string) {
-  integrationGit(repo, mode === 'apply' ? ['reset', '--merge', before] : ['reset', '--hard', before]);
+function rollbackPostMergeVerification(repo: string, before: string) {
+  integrationGit(repo, ['reset', '--merge', before]);
 }
 
 function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string) {
   const verificationMessage = `${ticket.ref} verification failed after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;
   try {
-    rollbackPostMergeVerification(repo, mode, before);
+    rollbackPostMergeVerification(repo, before);
   } catch (error: any) {
     return integrationFailure(slug, ticket, {
       reason: 'verify_failed_post_merge_rollback_failed',
@@ -466,13 +466,22 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
     const staged = integrationGit(repo, ['diff', '--cached', '--name-only']).split(/\r?\n/).filter(Boolean);
     const untracked = integrationGit(repo, ['ls-files', '--others', '--exclude-standard']).split(/\r?\n/).filter(Boolean);
     const dirtyPaths = Array.from(new Set([...dirty, ...staged]));
-    if (mode === 'apply') {
-      const overlap = Array.from(new Set([...dirtyPaths, ...untracked])).filter((entry) => changedPaths.includes(entry));
-      if (overlap.length) {
-        return integrationFailure(slug, ticket, { reason: 'dirty_overlap', dirtyPaths: overlap, message: `apply refused; uncommitted changes overlap submitted paths: ${overlap.join(', ')}.` });
-      }
-    } else if (dirtyPaths.length) {
-      return integrationFailure(slug, ticket, { reason: 'checkout_dirty', dirtyPaths, message: `${mode} refused; the integration checkout has uncommitted changes: ${dirtyPaths.join(', ')}.` });
+    const declaredScope = Array.isArray(admitted.scopeValidation.admittedScope)
+      ? admitted.scopeValidation.admittedScope
+      : Array.isArray(ticket.files) ? ticket.files : [];
+    const integrationScope = Array.from(new Set([
+      ...declaredScope,
+      ...changedPaths,
+    ]));
+    const workingPaths = Array.from(new Set([...dirtyPaths, ...untracked]));
+    const scopedDirtyPaths = workingPaths.filter((entry) => commitScope.isInScope(entry, integrationScope));
+    const ignoredDirtyPaths = dirtyPaths.filter((entry) => !commitScope.isInScope(entry, integrationScope));
+    if (scopedDirtyPaths.length) {
+      return integrationFailure(slug, ticket, {
+        reason: 'dirty_scope',
+        dirtyPaths: scopedDirtyPaths,
+        message: `${mode} refused; uncommitted changes fall inside this ticket's declared scope: ${scopedDirtyPaths.join(', ')}.`,
+      });
     }
     const before = integrationGit(repo, ['rev-parse', 'HEAD']);
     const commits = Array.isArray(submission.commits) && submission.commits.length ? submission.commits : [submission.commit];
@@ -489,11 +498,20 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
           integrationGit(repo, ['cherry-pick', ...(mode === 'apply' ? ['--no-commit'] : []), commit]);
         } catch (error: any) {
           try { integrationGit(repo, ['cherry-pick', '--abort']); } catch (_) { /* best effort */ }
+          let rollbackNote = '';
           if (mode === 'replay') {
-            try { integrationGit(repo, ['reset', '--hard', before]); } catch (_) { /* best effort */ }
+            // --merge, never --hard: integration deliberately admits dirty files
+            // outside the ticket's scope, so a hard reset here would delete work
+            // this ticket was never allowed to touch. --merge refuses instead,
+            // and a refusal the caller never hears about is the same bug again.
+            try {
+              integrationGit(repo, ['reset', '--merge', before]);
+            } catch (rollbackError: any) {
+              rollbackNote = ` Rollback to ${before} refused: ${integrationGitError(rollbackError)}.`;
+            }
           }
           return integrationFailure(slug, ticket, {
-            reason: `${mode}_failed`, failedCommit: commit, before, message: integrationGitError(error),
+            reason: `${mode}_failed`, failedCommit: commit, before, message: `${integrationGitError(error)}${rollbackNote}`,
           });
         }
       }
@@ -515,6 +533,7 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
       verify,
       dirtyFiles: mode === 'apply' ? deliveredFiles : [],
       deliveredFiles,
+      ignoredDirtyPaths,
     });
     return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : result;
   } catch (error: any) {

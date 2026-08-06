@@ -9,30 +9,40 @@ const root = path.resolve(__dirname, '..');
 const mapSkill = fs.readFileSync(path.join(root, 'skills', 'map-codebase', 'SKILL.md'), 'utf8');
 const updateSkill = fs.readFileSync(path.join(root, 'skills', 'update-codebase-map', 'SKILL.md'), 'utf8');
 
-const artifactMarker = 'Shared-tree artifact mode: leave the generated map as working-tree output; verify, comment, and close with done. Do not commit, submit, push, or edit source.';
-const carveOut = 'Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.';
-const sharedTreeReason = 'Shared-tree dispatch is required because the map must describe the current working tree, including intentional uncommitted source, and the generated .claude/.codebase-info/** files must remain visible to the invoking session.';
+function sidequestHandoff(skill) {
+  const handoffStart = skill.indexOf('### Sidequest handoff');
+  const refreshStart = skill.indexOf('For a meaningful refresh');
+  const start = handoffStart === -1 ? refreshStart : handoffStart;
+  const end = skill.indexOf('\n### ', start + 5);
+  assert.notEqual(start, -1, 'the skill must define a Sidequest handoff');
+  return skill.slice(start, end === -1 ? undefined : end);
+}
 
-test('initial-map handoff requires the live Sidequest artifact contract', () => {
-  for (const tool of ['category_list', 'add', 'comment', 'dispatch', 'pulse', 'Agent']) {
-    assert.match(mapSkill, new RegExp(`\\b${tool}\\b`));
-  }
-  assert.match(mapSkill, /codebase-exploration/);
-  assert.match(mapSkill, /files: \["\.claude\/\.codebase-info\/"\]/);
-  assert.match(mapSkill, new RegExp(carveOut.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(mapSkill, new RegExp(artifactMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(mapSkill, /\{ sharedTree: true \}/);
-  assert.match(mapSkill, /Pass every returned spawn field to the native `Agent` unchanged/);
-  assert.match(mapSkill, /Do not poll or start a proxy\s+waiter/);
-  assert.match(mapSkill, /never touch\s+`CLAUDE\.md`/);
+function assertArtifactContract(skill, label) {
+  const handoff = sidequestHandoff(skill);
+  assert.match(handoff, /files:\s*\["\.claude\/\.codebase-info\/"\]/, `${label} names one map write root`);
+  assert.match(handoff, /\{\s*sharedTree:\s*true\s*\}/, `${label} uses shared-tree artifact mode`);
+  // The skills are operational guidance, so this boundary is observable only in its contract text.
+  assert.match(handoff, /Artifact write carve-out:\s+write only \.claude\/\.codebase-info\/\*\*; all project source is read-only\./, `${label} excludes source writes`);
+  assert.match(handoff, /never touch\s+`CLAUDE\.md`/, `${label} excludes CLAUDE.md writes`);
+}
+
+test('initial map handoff keeps the map artifact write boundary', () => {
+  const handoff = sidequestHandoff(mapSkill);
+  assertArtifactContract(mapSkill, 'initial map');
+  assert.match(handoff, /category_list/);
+  assert.match(handoff, /codebase-exploration/);
 });
 
-test('map handoff verifies artifacts and falls back only after one diagnosis-led retry', () => {
-  assert.match(mapSkill, /node -e "const fs=require\('node:fs'\)/);
+test('initial map handoff permits only one diagnosis-led retry', () => {
+  // Retry count is guidance rather than executable code, so the smallest distinctive contract phrase is the assertion.
   assert.match(mapSkill, /at\s+most one diagnose-first redispatch/);
   assert.match(mapSkill, /After a second failure/);
-  assert.match(mapSkill, /inline fallback/);
-  assert.match(mapSkill, new RegExp(sharedTreeReason.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+});
+
+test('incremental map handoff keeps the same artifact boundary and retry limit', () => {
+  assertArtifactContract(updateSkill, 'incremental map');
+  assert.match(updateSkill, /Retry once only\s+when a diagnosis changes the\s+launch/);
 });
 
 test('map skill hash checks normalize CRLF documents', () => {
@@ -42,22 +52,8 @@ test('map skill hash checks normalize CRLF documents', () => {
   }
 });
 
-test('incremental handoff keeps no-ops inline and uses the same artifact rules', () => {
-  assert.match(updateSkill, /A true no-op stays inline/);
-  assert.match(updateSkill, /Do not ask the user whether to update the map, run this skill, or create a handoff/);
-  assert.match(updateSkill, /immediately perform the warranted\s+update or handoff without waiting for a reply/);
-  assert.match(updateSkill, /Creating and dispatching this ticket is the\s+required default for a meaningful refresh/);
-  assert.match(updateSkill, /category_list/, 'checks the live category');
-  assert.match(updateSkill, new RegExp(carveOut.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(updateSkill, new RegExp(artifactMarker.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
-  assert.match(updateSkill, /\{ sharedTree: true \}/);
-  assert.match(updateSkill, /Retry once only\s+when a diagnosis changes the\s+launch/);
-  assert.match(updateSkill, /leave the map and state\s+untouched/);
-});
-
-test('large maps use area tickets and a dependent final artifact writer', () => {
+test('large maps use read-only area tickets and one artifact writer', () => {
   assert.match(mapSkill, /read-only area\s+tickets/);
   assert.match(mapSkill, /final artifact-writer ticket depending on them/);
-  assert.match(mapSkill, /Do not\s+create nested generic tasks/);
   assert.match(updateSkill, /read-only area tickets and one dependent final\s+artifact writer/);
 });

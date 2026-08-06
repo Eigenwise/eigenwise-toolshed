@@ -1,6 +1,6 @@
 "use strict";
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
   function dispatchTokenPrefix(token) {
     return token ? String(token).slice(0, 12) : null;
   }
@@ -183,7 +183,7 @@ function createDispatch(dependencies) {
     let category = requestedCategory == null ? null : getCategory(requestedCategory, { project });
     if (!category || !category.enabled) category = getCategory("general", { project });
     if (!category) return;
-    const resolved = resolveCategoryRoute(category);
+    const resolved = resolveTicketRoute(ticket, category);
     ticket.model = resolved.model;
     ticket.effort = resolved.effort;
     ticket.exec = execProjection(resolved.exec);
@@ -224,7 +224,7 @@ function createDispatch(dependencies) {
     for (const project of listProjects({ all: true })) {
       for (const ticket of listTickets(project.slug)) {
         const state = dispatchState(ticket);
-        if (!state || state.agentName !== target || state.outcome !== "died" || !state.terminalAt) continue;
+        if (!state || state.agentName !== target || !state.terminalAt || state.outcome !== "died" && ticket.claim?.by) continue;
         terminal = { slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt };
       }
     }
@@ -349,6 +349,7 @@ function createDispatch(dependencies) {
     return Array.isArray(state.supersededTokens) && state.supersededTokens.some((entry) => entry.digest === dispatchTokenDigest(token));
   }
   function routingPolicyAffectsTicket(ticket, categoryIds) {
+    if (ticket?.route != null) return false;
     if (!Array.isArray(categoryIds) || !categoryIds.length) return true;
     const affected = new Set(categoryIds.map(normalizeCategoryId));
     if (affected.has("general")) return true;
@@ -508,12 +509,13 @@ function createDispatch(dependencies) {
       }
       rederiveUnlaunchedPreparedRoute(t, slug);
       const policyCategory = getCategory(ticketCategory(t), { project: slug });
-      const resolvedPolicy = policyCategory && resolveCategoryRoute(policyCategory);
+      const resolvedPolicy = resolveTicketRoute(t, policyCategory);
       if (!current?.recovery && resolvedPolicy) {
         t.model = resolvedPolicy.model;
         t.effort = resolvedPolicy.effort;
         t.exec = execProjection(resolvedPolicy.exec);
       }
+      if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
       const currentRoute = activeDispatchRoute(t);
       const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
       if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor && currentExec && stableExecutorName(t) === t.dispatchExecutor) {

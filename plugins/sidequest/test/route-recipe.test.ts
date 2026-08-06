@@ -18,7 +18,10 @@ fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.str
   schemaVersion: 3,
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
-  models: [{ slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' }],
+  models: [
+    { slug: 'codex-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'Codex Terra' },
+    { slug: 'codex-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'Codex Sol' },
+  ],
 }));
 const env = Object.assign({}, process.env, {
   SIDEQUEST_HOME: home,
@@ -75,6 +78,30 @@ test('route requires JSON and names unknown and disabled categories', () => {
   result = cli('route', 'disabled-recipe', '--json');
   assert.notEqual(result.status, 0);
   assert.match(result.stderr, /disabled for this project/i);
+});
+
+test('route resolves a ticket override without changing its sibling recipe', () => {
+  const added = jsonCli('category', 'add', 'workflow-override', '--profile', 'coding', '--name', 'Workflow override', '--route-model', 'codex-terra', '--route-effort', 'medium');
+  assert.equal(added.result.status, 0, added.result.stderr);
+
+  const overridden = jsonCli('add', '--title', 'Use Sol', '--category', 'workflow-override', '--route-model', 'codex-sol', '--route-effort', 'high');
+  const sibling = jsonCli('add', '--title', 'Keep Terra', '--category', 'workflow-override');
+  assert.equal(overridden.result.status, 0, overridden.result.stderr);
+  assert.equal(sibling.result.status, 0, sibling.result.stderr);
+
+  const overrideRecipe = jsonCli('route', 'workflow-override', '--ticket', overridden.body.ticket.ref);
+  assert.equal(overrideRecipe.result.status, 0, overrideRecipe.result.stderr);
+  assert.deepEqual(overrideRecipe.body.route, { model: 'codex-sol', effort: 'high' });
+  assert.equal(overrideRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-sol effort=high]\n\n');
+  assert.deepEqual(overrideRecipe.body.ticket, {
+    ref: overridden.body.ticket.ref,
+    route: { model: 'codex-sol', effort: 'high' },
+  });
+
+  const siblingRecipe = jsonCli('route', 'workflow-override', '--ticket', sibling.body.ticket.ref);
+  assert.equal(siblingRecipe.result.status, 0, siblingRecipe.result.stderr);
+  assert.deepEqual(siblingRecipe.body.route, { model: 'codex-terra', effort: 'medium' });
+  assert.equal(siblingRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n');
 });
 
 export {};

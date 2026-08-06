@@ -485,6 +485,14 @@ function guardLateSteer(input: HookInput): void {
     const store = require(runtimeModule('store')) as Store;
     const terminal = store.terminalDispatchTarget(recipient);
     if (!terminal) return;
+    if (terminal.outcome !== 'died') {
+      writeDeny(
+        'PreToolUse',
+        `sidequest: ${terminal.ref} is terminal (${terminal.outcome}) and ${recipient} cannot receive messages. ` +
+          'File a follow-up ticket for changes, or redispatch the existing ticket when it was released without a pending submission.',
+      );
+      return;
+    }
     const sender = stringField(input, 'agent_id', 'agentId') || 'orchestrator';
     const recorded = store.addComment(terminal.slug, terminal.ref, {
       by: sender,
@@ -579,7 +587,9 @@ function main(): void {
     if (preparedSpawn?.route && markers.some((marker) =>
       marker.model !== (preparedSpawn.route?.marker ?? preparedSpawn.route?.model)
         || marker.effort !== preparedSpawn.route?.effort)) {
-      writeDeny('PreToolUse', 'sidequest: dispatch route marker must match the prepared spawn. Re-run dispatch and pass the returned spawn unchanged.');
+      const route = preparedSpawn.route;
+      const resolvedRoute = route ? `${route.model} / ${route.effort}` : 'the prepared ticket route';
+      writeDeny('PreToolUse', `sidequest: ticket resolved route is ${resolvedRoute}. A model cannot be overridden at spawn time. Set this ticket's route override before dispatching, then re-run dispatch and pass the returned spawn unchanged.`);
       return;
     }
     if (!routeModels.length) {

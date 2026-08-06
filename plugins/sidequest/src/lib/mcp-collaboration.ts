@@ -294,15 +294,16 @@ const tools: ToolDefinition[] = [
       }
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
-      if (!ticket.model || !ticket.effort) throw new Error(`native_agent: ${ticket.ref} has no routable model and effort.`);
-      const resolved = store.resolveExec(ticket.model, ticket.effort);
+      const route = store.resolveTicketRoute(ticket, ticket.category);
+      if (!route || !route.exec) throw new Error(`native_agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
+      const resolved = route.exec;
       const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, args.prompt), meta.path);
       const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!args.sharedTree;
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
-        agentType: resolved.agent || `sidequest-exec-${ticket.effort || 'low'}`,
+        agentType: resolved.agent || `sidequest-exec-${route.effort || 'low'}`,
         spawnModel: resolved.model,
-        effort: ticket.effort,
+        effort: route.effort,
         runtime: resolved.runsModel,
         launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
         description: agentsync.spawnDescription(ticket, resolved),

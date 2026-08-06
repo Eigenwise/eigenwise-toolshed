@@ -44,6 +44,12 @@ routes expose a backend-specific `exec.agent` with `exec.model` null, so spawn t
 `model` parameter omitted. Inject the category contract verbatim alongside the ticket contract. Never
 hand-pick a model or effort after reading the route.
 
+## Per-ticket model requests
+
+A user can name a route for one ticket without changing its classification: set `route: { model, effort }` through MCP `add`/`update` or CLI `--route-model` + `--route-effort`. The override wins only for that ticket's dispatch. Do not edit a category route to satisfy one request, because that silently repoints every later ticket in the category.
+
+An override uses the same route normalization, availability, and provider-boundary checks as dispatch. An unavailable explicit override refuses dispatch rather than falling back, because silently downgrading a user-requested stronger model defeats the request. Fetch its live recipe with `route_recipe({ category, ticket: ref })` or `sidequest route <category> --ticket <ref> --json`; its `route` and agent marker carry the resolved override.
+
 ## One-step workflow routing
 
 The `route_recipe` MCP tool and `sidequest route <category> --json` CLI command return the same one-step workflow recipe. Fetch it when the workflow starts, then wire only the `agent` fields into the caller. Never persist a recipe across route edits.

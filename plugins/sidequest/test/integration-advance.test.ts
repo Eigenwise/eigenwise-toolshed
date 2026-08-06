@@ -185,6 +185,34 @@ test('an untracked file does not block the fast-forward', async () => {
   assert.equal(fs.readFileSync(path.join(fixture.repo, 'scratch.log'), 'utf8'), 'ignore me\n');
 });
 
+test('a scoped integration branch advance leaves unrelated dirty files untouched', async () => {
+  const fixture = makeRepo('scoped-dirty');
+  const unrelated = path.join(fixture.repo, 'README.md');
+  fs.writeFileSync(unrelated, 'user keeps working\n');
+  const before = fs.readFileSync(unrelated);
+
+  const result = await advance(fixture, { admittedScope: ['feature.txt'], changedPaths: ['feature.txt'] });
+
+  assert.equal(result.advanced, true, result.message);
+  assert.deepEqual(result.ignoredDirtyPaths, ['README.md']);
+  assert.deepEqual(fs.readFileSync(unrelated), before);
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
+});
+
+test('a scoped integration branch advance refuses a dirty file inside scope', async () => {
+  const fixture = makeRepo('scoped-overlap');
+  const scoped = path.join(fixture.repo, 'feature.txt');
+  fs.writeFileSync(scoped, 'user edit\n');
+
+  const result = await advance(fixture, { admittedScope: ['feature.txt'], changedPaths: ['feature.txt'] });
+
+  assert.equal(result.advanced, false);
+  assert.equal(result.reason, 'checkout_dirty');
+  assert.deepEqual(result.dirtyPaths, ['feature.txt']);
+  assert.match(result.message, /declared scope: feature\.txt/);
+  assert.equal(fs.readFileSync(scoped, 'utf8'), 'user edit\n');
+});
+
 test('a checkout sitting on another branch refuses and prints the command to run', async () => {
   const fixture = makeRepo('elsewhere');
   git(['switch', '-c', 'spike'], fixture.repo);
@@ -310,7 +338,7 @@ test('groom-close --integration advances local main and reports it', async () =>
 
 test('groom-close --integration prints the refusal loudly when the checkout is not ready', async () => {
   const fixture = makeRepo('closure-refused');
-  fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'uncommitted edit\n');
+  fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'uncommitted edit\n');
   const { slug } = store.ensureProject(fixture.repo);
   const ticket = store.createTicket(slug, {
     title: 'refused advance fixture',
@@ -479,6 +507,22 @@ test('replay conflict aborts, restores HEAD, and keeps the pinned ref', () => {
   assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
 });
 
+test('replay conflict preserves an unrelated dirty tracked file during rollback', () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('replay-conflict-unrelated-dirty');
+  commitFile(fixture.repo, 'feature.txt', 'conflicting local work\n');
+  const unrelatedEdit = 'uncommitted work outside the ticket scope\n';
+  fs.writeFileSync(path.join(fixture.repo, 'README.md'), unrelatedEdit);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'replay', '--json']);
+
+  assert.equal(result.status, 1);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'README.md'), 'utf8'), unrelatedEdit);
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'doing');
+  assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
+});
+
 test('apply refuses an overlapping dirty path and names it without dropping the pinned ref', () => {
   const { fixture, slug, ticket, runCli } = deliveryTicket('apply-overlap');
   fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'user edit\n');
@@ -486,9 +530,54 @@ test('apply refuses an overlapping dirty path and names it without dropping the 
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'apply', '--json']);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /apply refused; uncommitted changes overlap submitted paths: feature\.txt/);
+  assert.match(result.stderr, /apply refused; uncommitted changes fall inside this ticket's declared scope: feature\.txt/);
   assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
   const stored = store.getTicket(slug, ticket.ref);
   assert.equal(stored.status, 'doing');
   assert.deepEqual(stored.submission.integration.dirtyPaths, ['feature.txt']);
+});
+
+test('integrate merge preserves unrelated dirty files', () => {
+  const { fixture, ticket, runCli } = deliveryTicket('merge-ignores-unrelated-dirty');
+  const unrelated = path.join(fixture.repo, 'README.md');
+  fs.writeFileSync(unrelated, 'user keeps working\n');
+  const before = fs.readFileSync(unrelated);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.delivery.ignoredDirtyPaths, ['README.md']);
+  assert.deepEqual(fs.readFileSync(unrelated), before);
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
+});
+
+test('integrate merge refuses dirty files inside the declared scope', () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('merge-dirty-scope');
+  const scoped = path.join(fixture.repo, 'feature.txt');
+  fs.writeFileSync(scoped, 'user edit\n');
+  const before = fs.readFileSync(scoped);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
+
+  assert.equal(result.status, 1);
+  assert.match(result.stderr, /merge refused; uncommitted changes fall inside this ticket's declared scope: feature\.txt/);
+  assert.deepEqual(fs.readFileSync(scoped), before);
+  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'dirty_scope');
+});
+
+test('a failed merged-tree gate restores the submitted work without resetting unrelated dirty files', () => {
+  const { fixture, ticket, runCli } = deliveryTicket('rollback-keeps-unrelated-dirty', {
+    verify: nodeVerify("console.error('integration verify failure'); process.exit(7)"),
+  });
+  const unrelated = path.join(fixture.repo, 'README.md');
+  fs.writeFileSync(unrelated, 'user keeps working\n');
+  const before = fs.readFileSync(unrelated);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.deepEqual(fs.readFileSync(unrelated), before);
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
 });

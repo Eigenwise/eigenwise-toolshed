@@ -92,7 +92,7 @@ attachment and report missing or unreadable ones, while the spawn keeps that con
 transcript. Never trust a worker's self-report — the
 claim's token and exact executor name are the evidence.
 
-**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Do not manually translate route, gateway, virtual-model, marker, or effort fields. See `references/routing-guide.md`.
+**Workflow callers:** call `route_recipe` or `sidequest route <category> --json`; wire only `recipe.agent.model` and `recipe.agent.promptPrefix + prompt` in Agent. Do not manually translate route, gateway, virtual-model, marker, or effort fields. A user-named model for one ticket means set that ticket's `route` override, never edit the category route, which repoints later tickets too. See `references/routing-guide.md`.
 
 **Locations:** CLI: `plugins/sidequest/bin/sidequest.js`; DB: `~/.claude/sidequest/sidequest.db`
 (`SIDEQUEST_HOME`); attachments: `~/.claude/sidequest/projects/<slug>/assets/`. Never scan from root.
@@ -164,7 +164,10 @@ optionally `--status todo`).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
 `submit` (claim released, parked in `doing`); the submission holds the full report, and the
-terminal comment keeps only the commit hash + verification. The orchestrator is the integrator: choose
+terminal comment keeps only the commit hash + verification. **Submit is terminal for the executor:** a
+submitted ticket cannot be amended by messaging the executor that produced it, however small the
+follow-up looks. File a follow-up ticket for changes. Redispatch the existing ticket only when it was
+released without a pending submission. The orchestrator is the integrator: choose
 `sidequest integrate <ref> --by <who> --mode apply|replay|merge` from the board default, then run the
 publish transaction (lock → delivery → merged-tree gate → central version → review → push → reachability → `done`):
 `references/publishing.md`.

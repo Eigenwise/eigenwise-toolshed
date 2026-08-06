@@ -104,16 +104,17 @@ async function cmdNativeAgent(opts, positional) {
   }
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`native-agent: no ticket "${idOrRef}".`);
-  if (!ticket.model || !ticket.effort) fail(`native-agent: ${ticket.ref} has no routable model and effort.`);
-  const resolved = store.resolveExec(ticket.model, ticket.effort);
+  const route = store.resolveTicketRoute(ticket, ticket.category);
+  if (!route || !route.exec) fail(`native-agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
+  const resolved = route.exec;
   const sessionId2 = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
   const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!opts["shared-tree"];
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
-    agentType: resolved.agent || `sidequest-exec-${ticket.effort || "low"}`,
+    agentType: resolved.agent || `sidequest-exec-${route.effort || "low"}`,
     spawnModel: resolved.model,
-    effort: ticket.effort,
+    effort: route.effort,
     runtime: resolved.runsModel,
     launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
     description: agentsync.spawnDescription(ticket, resolved),
@@ -173,13 +174,18 @@ async function cmdRoute(opts, positional) {
     const disabled = store.getCategory(categoryId, { project: slug, includeDisabled: true }) || store.getProjectCategories(slug).rows.some((row) => row.kind === "DISABLE" && row.id === String(categoryId).trim().toLowerCase());
     fail(`route: category "${categoryId}" is ${disabled ? "disabled for this project" : "unknown"}.`);
   }
-  const resolved = store.resolveCategoryRoute(category);
-  if (!resolved || !resolved.exec) fail(`route: category "${category.id}" has no available route.`);
+  const ticket = opts.ticket == null ? null : store.getTicket(slug, opts.ticket);
+  if (opts.ticket != null && !ticket) fail(`route: no ticket "${opts.ticket}".`);
+  const ticketCategoryId = ticket && (ticket.categoryId || (typeof ticket.category === "object" ? ticket.category.id : ticket.category));
+  if (ticket && ticketCategoryId !== category.id) fail(`route: ticket "${ticket.ref}" belongs to category "${ticketCategoryId || "none"}", not "${category.id}".`);
+  const resolved = ticket ? store.resolveTicketRoute(ticket, category) : store.resolveCategoryRoute(category);
+  if (!resolved || !resolved.exec) fail(resolved?.refusal || `route: category "${category.id}" has no available route.`);
   const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
   const selected = store.projectRoutingProfile(slug);
   process.stdout.write(JSON.stringify(Object.assign({}, recipe, {
     profile: { id: selected.profile.id, revision: selected.profile.revision },
-    categorySource: { kind: category.origin || "profile", baseProfileId: category.baseProfileId || null }
+    categorySource: { kind: category.origin || "profile", baseProfileId: category.baseProfileId || null },
+    ...ticket ? { ticket: { ref: ticket.ref, route: ticket.route || null } } : {}
   }), null, 2) + "\n");
 }
 async function cmdBoardConfig(opts) {

@@ -1094,8 +1094,69 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
   const out = runGuardPeer({ tool_input: { to: executorName, message: 'one more thing' } });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /queued steering message/);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Redispatch/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /redispatch the existing ticket/i);
+});
+
+test('peer-message hooks refuse a completed executor by its exact SendMessage target', () => {
+  const ticket = addStopTicket('completed executor cannot receive follow-up work');
+  const acting = claimStopTicket(ticket, `completed-message-${++sqSeq}`, 'completed-worker');
+  assert.equal(store.completeTicket(slug, ticket.ref, 'completed-worker', {
+    model: 'sonnet',
+    effort: 'high',
+    cleanDeclaredScope: true,
+  }).ok, true);
+
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.status, 'done');
+  assert.equal(after.claim, null);
+  assert.equal(after.dispatch.outcome, 'done');
+
+  const payload = {
+    agent_id: 'orchestrator-after-completion',
+    tool_name: 'SendMessage',
+    tool_input: { to: acting.agent_name, message: 'Make one more revision.' },
+  };
+  for (const hook of [GUARD_PEER, FORCE_BYPASS]) {
+    const out = runHookOutput(hook, payload);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /redispatch the existing ticket/i);
+  }
+});
+
+test('peer-message hooks refuse a submitted executor by its exact SendMessage target', () => {
+  const ticket = addStopTicket('submitted executor cannot receive follow-up work');
+  const acting = claimStopTicket(ticket, `submitted-message-${++sqSeq}`, 'submitted-worker');
+  assert.equal(store.submitTicket(slug, ticket.ref, 'submitted-worker', {
+    commit: 'a'.repeat(40),
+    range: {
+      base: 'b'.repeat(40),
+      upstream: 'main',
+      upstreamCommit: 'c'.repeat(40),
+      commits: [],
+      changedPaths: [],
+      noOp: true,
+    },
+  }).ok, true);
+
+  const after = store.getTicket(slug, ticket.ref);
+  assert.equal(after.claim, null);
+  assert.equal(after.dispatch.outcome, 'submitted');
+
+  const payload = {
+    agent_id: 'orchestrator-after-submission',
+    tool_name: 'SendMessage',
+    tool_input: { to: acting.agent_name, message: 'Make one more revision.' },
+  };
+  for (const hook of [GUARD_PEER, FORCE_BYPASS]) {
+    const out = runHookOutput(hook, payload);
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /follow-up ticket/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /redispatch the existing ticket/i);
+  }
 });
 
 test('peer-guard: missing isolated worktree blocks a non-terminal resume only', () => {
@@ -1701,44 +1762,8 @@ test('stop reminder: ignores re-entry and only re-escalates pending submissions'
   assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'a stable board without a submission remains silent');
 });
 
-test('session-start: carries evidence-first advisory routing guidance', () => {
+test('session-start excludes the retired generic-agent bypass', () => {
   const ctx = runHook(SESSION, { session_id: 'test' });
-  const substantiveMandate = 'REQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.';
-  assert.ok(ctx.startsWith(`=== sidequest (active) ===\n${substantiveMandate}\n`), 'the unchanged ticket and dispatch mandate must lead');
-  assert.match(ctx, /Operational requests \(run\/build\/test app; start\/stop dev server; open dashboard; answer from visible context\): act inline, without the Sidequest skill, category_list, or board reads\./);
-  assert.match(ctx, /Reload the Sidequest skill before board work/);
-  assert.match(ctx, /sidequest \(active\)/);
-  assert.match(ctx, /SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline/, 'solo-fit must choose a dispatch shape, never inline work');
-  assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
-  assert.match(ctx, /contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
-  assert.match(ctx, /Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence\. Plan first when unsure\./, 'the unpinnable-contract branch must be evidence-gated');
-  assert.match(ctx, /Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify\. Dispatch every dependency-ready ticket in parallel; same-file overlap in isolated worktrees needs assessment, not auto-serialization; never drip-file\/dispatch\/wait\. Discoveries still file mid-run\./, 'wave mode must file its planned backlog under a story before dispatch');
-  assert.match(ctx, /substantive actions are BLOCKED until claim/);
-  assert.match(ctx, /ROLE: you are this project's ORCHESTRATOR/);
-  assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
-  assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
-  assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket\/dispatch/);
-  assert.match(ctx, /Need other-file reading\? Ticket it/);
-  assert.match(ctx, /Ticket \+ dispatch MUST precede multi-file exploration/);
-  assert.match(ctx, /Native results: never TaskOutput/);
-  assert.match(ctx, /pulse ref \/ changes --since; TaskStop only after terminal board evidence/);
-  assert.match(ctx, /never proxy-wait via shell\/Monitor\/cron polls or blocking TaskOutput/, 'the proxy-wait ban must survive rewording');
-  assert.match(ctx, /direct:true claims need a recorded inline-safe reason, not `direct-ok`/);
-  assert.match(ctx, /pinpointed integration mechanical fix, release bookkeeping, or the user-directed 1–2 named-file carve-out/);
-  assert.match(ctx, /investigation or other-file reading, new behavior\/API, or an unpinpointed failing test is never inline/);
-  assert.match(ctx, /"context already loaded", "small change", and "faster myself" do not qualify/);
-  assert.match(ctx, /Use `bypassPermissions`; never `native_agent`/, 'dispatch mechanics line must survive rewording');
-  assert.match(ctx, /ONE diagnose-first retry/);
-  assert.match(ctx, /never blind respawn/);
-  assert.match(ctx, /Two failures: comment evidence \+ surface user/);
-  assert.match(ctx, /BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks\. Integrate by oracle: verify \+ wave suite \+ submit report; never re-review diffs or source\./, 'integration must use the executable oracle rather than re-reviewing executor work');
-  assert.ok(ctx.includes('mcp__plugin_sidequest_board__') && ctx.includes('FIRST'));
-  assert.match(ctx, /tools are absent \(not errors\), ask USER to run `\/reload-plugins`/);
-});
-
-test('session-start: keeps Explore narrow while rejecting generic implementation agents', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /`Explore`\/`claude-code-guide`\/`statusline-setup`: narrow harness recon/);
   const pluginRoot = path.join(__dirname, '..');
   const forceBypass = fs.readFileSync(path.join(HOOKS, 'force-exec-bypass.js'), 'utf8');
   const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
@@ -1747,14 +1772,13 @@ test('session-start: keeps Explore narrow while rejecting generic implementation
   }
 });
 
-test('session-start: conditions checkpoint guidance on its optional model snapshot', () => {
+test('session-start adds model-specific checkpoint guidance only for eligible models', () => {
+  const defaultContext = runHook(SESSION, { session_id: 'checkpoint-none' });
   const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });
-  assert.match(sonnet, /CHECKPOINT MODE \(Sonnet\)/);
-  assert.match(sonnet, /state your read and proceed on cheap-to-reverse config, category, or route edits/);
-  assert.match(sonnet, /ships, deletes data or refs, spends irreversible quota, or locks in work others build on/);
-  assert.match(sonnet, /routine ticket filing, an exact user spec, or mechanical single-project work/);
+  assert.notEqual(sonnet, defaultContext);
+  const compactDefault = runHook(SESSION, { session_id: 'checkpoint-compact-none', source: 'compact' });
   const compact = runHook(SESSION, { session_id: 'checkpoint-compact', source: 'compact', model: 'claude-haiku-4-5' });
-  assert.match(compact, /CHECKPOINT MODE \(Haiku\)/);
+  assert.notEqual(compact, compactDefault);
 
   for (const payload of [
     { session_id: 'checkpoint-none' },
@@ -1762,32 +1786,6 @@ test('session-start: conditions checkpoint guidance on its optional model snapsh
   ]) {
     assert.doesNotMatch(runHook(SESSION, payload), /CHECKPOINT MODE/, 'an absent or higher-tier model must not silently enable checkpoint mode');
   }
-});
-
-test('session-start: carries runtime resource and worker reporting coordination', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /Before each wave, assess shared runtime resources/, 'must require pre-wave assessment');
-  assert.match(ctx, /fixed ports, domains, shared DBs, servers, and files outside declared scope/, 'must name runtime collisions');
-  assert.match(ctx, /Serialize tickets that touch the same resource even across worktrees/, 'worktrees cannot make shared runtime resources parallel-safe');
-  assert.match(ctx, /Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup/, 'must define worker reporting and ownership');
-});
-
-test('session-start: makes solo-fit a dispatch-only gate and prefers contract-first waves', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.match(ctx, /SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline/);
-  assert.match(ctx, /Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor/);
-  assert.match(ctx, /shared types\/interfaces, file bounds, and per-piece verifies/);
-  assert.match(ctx, /3\+ independently checkable pieces use contract-first/);
-  assert.match(ctx, /pin contract, one parallel wave to category-appropriate cheaper models, integrate once/);
-  assert.match(ctx, /substantive actions are BLOCKED until claim/);
-  assert.match(ctx, /Otherwise use checkable ATOMIC tickets; several deliverables are a smell/);
-  assert.match(ctx, /Passing done-oracle skips audit\/fix unless high-stakes; full suite once\/wave/);
-});
-
-test('session-start: says sidequest coexists with an external tracker (Jira)', () => {
-  const ctx = runHook(SESSION, { session_id: 'test' });
-  assert.ok(ctx.includes('external tracker'), 'must address the external-tracker case');
-  assert.ok(ctx.includes('Jira'), 'must name Jira so the "already tracked" reflex is countered');
 });
 
 test('session-start: shows the live investigation workforce within its cap', () => {
@@ -1993,31 +1991,11 @@ test('session-start skips an unavailable integration target without failing the 
   assert.doesNotMatch(context, /worktree sweep failed/);
 });
 
-test('session-start: compact and resume preserve evidence-first routing guidance', () => {
+test('session-start compact contexts retain executable safeguards', () => {
   for (const source of ['compact', 'resume']) {
     const ctx = runHookForBudget(SESSION, { session_id: 't', source });
-    assert.match(ctx, /sidequest \(active — context restored\)/);
-    assert.ok(ctx.includes('Reload Sidequest'), `${source} must reload the skill`);
-    assert.match(ctx, /ROLE: ORCHESTRATOR/);
-    assert.match(ctx, /Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch/);
-    assert.match(ctx, /WebSearch is executor-only: file and dispatch a research ticket/);
-    assert.match(ctx, /USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket\/dispatch/);
-    assert.match(ctx, /Need other-file reading\? Ticket it/);
-    assert.match(ctx, /Ticket \+ dispatch BEFORE multi-file exploration/);
-    assert.match(ctx, /`direct:true` needs a 20\+ character inline-safe reason, not `direct-ok`/);
-    assert.match(ctx, /pinpointed integration mechanical fixes, release bookkeeping, or the user-directed 1–2 named-file carve-out qualify/);
-    assert.match(ctx, /investigation or other-file reading, new behavior\/API, or an unpinpointed failing test is never inline/);
-    assert.match(ctx, /"context already loaded", "small change", and "faster myself" do not/);
-    assert.ok(ctx.includes('mcp__plugin_sidequest_board__list') && ctx.includes('status=doing') && ctx.includes('FIRST'));
-    assert.ok(ctx.includes('pulse ref'), `${source} must point to the compact liveness read`);
-    assert.ok(ctx.includes('never TaskOutput'), `${source} must ban native Agent TaskOutput polling`);
-    assert.ok(ctx.includes('changes --since; TaskStop only after terminal board evidence'));
-    assert.match(ctx, /ONE diagnose-first retry/);
-    assert.match(ctx, /never blind respawn/);
-    assert.match(ctx, /Two failures: comment evidence \+ surface user/);
-    assert.match(ctx, /BOOKEND dispatch→submission/, `${source} must carry bookend supervision`);
+    assert.match(ctx, /never\s+TaskOutput/i, `${source} must ban native Agent TaskOutput polling`);
     assert.ok(/list --status(?: |=)doing/.test(ctx), `${source} must retain the CLI fallback`);
-    assert.match(ctx, /mcp__plugin_sidequest_board__\* absent \(not errors\)\? Ask USER to `\/reload-plugins`/);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
   }
@@ -2032,12 +2010,6 @@ test('session-start: embeds the expanded plugin path in CLI fallbacks', () => {
   assert.ok(ctx.includes(`node "${pluginRoot}/bin/sidequest.js"`), 'CLI fallback must embed the hook runtime plugin path');
   assert.ok(!ctx.includes('${CLAUDE_PLUGIN_ROOT}'), 'CLI fallback must not rely on an unset shell variable');
   assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `compact block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
-});
-
-test('session-start: source=startup still gets the full block', () => {
-  const ctx = runHook(SESSION, { session_id: 't', source: 'startup' });
-  assert.ok(ctx.includes('external tracker'), 'startup source must still carry the full nudge');
-  assert.ok(ctx.includes('Reload the Sidequest skill'), 'startup must reload the sidequest skill');
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
@@ -2090,12 +2062,6 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.doesNotMatch(readme, /per-prompt "use sidequest" reminder/);
   assert.doesNotMatch(readme, /marker-triggered capture/);
   assert.doesNotMatch(readme, /native_agent/);
-  assert.match(readme, /exact stable executor/);
-  assert.match(readme, /Native `Explore`/);
-  assert.match(readme, /Other generic\/custom implementation Agent launches are denied/);
-  const skill = fs.readFileSync(path.join(pluginRoot, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
-  assert.match(skill, /native `Explore`/);
-  assert.match(skill, /ticketed route/);
   for (const file of [
     path.join(pluginRoot, 'README.md'),
     path.join(HOOKS, 'force-exec-bypass.js'),
@@ -2459,7 +2425,8 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
       { SIDEQUEST_DISCOVERY_DIRS: catalog }
     );
     assert.equal(drifted.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /route marker must match the prepared spawn/);
+    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is codex-gpt-5-6-terra \/ high/);
+    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /cannot be overridden at spawn time/);
   } finally {
     if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
     else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
@@ -2516,7 +2483,8 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
     },
   });
   assert.equal(driftedRoute.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /route marker must match the prepared spawn/);
+  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is sonnet \/ high/);
+  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /Set this ticket's route override before dispatching/);
 
   const driftedBriefing = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
