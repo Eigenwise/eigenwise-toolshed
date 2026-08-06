@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.392.0 (2026-08-06)
+
+### observability 0.3.0 → 0.3.1
+
+#### Fixes
+
+- The observability suite stops downloading a Collector mid-test on CI (SQ-1373)
+  Two tests validated our generated config against a real OpenTelemetry Collector, and they ran only on CI, where no binary is configured — so each run fetched one over the network inside the suite's 30-second per-file budget. It timed out intermittently, turned main red, and through the publish guard that blocked releases for plugins nobody had touched.
+
+  They now run only when `WORKBENCH_OTELCOL_CONTRIB` names a binary. The suite passes four consecutive runs in about two seconds.
+
+  This trades the flake for the coverage: on CI those two tests now skip. SQ-1375 restores them properly, by provisioning the pinned binary as a cached workflow step so the test finds it instead of downloading it.
+
 ## v3.391.0 (2026-08-06)
 
 ### sidequest 4.27.0 → 4.28.0
