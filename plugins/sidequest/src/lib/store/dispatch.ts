@@ -260,8 +260,7 @@ function terminalDispatchTarget(agentName?: any) {
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || state.agentName !== target) continue;
-      if (!state.terminalAt) return null;
+      if (!state || state.agentName !== target || state.outcome !== 'died' || !state.terminalAt) continue;
       terminal = { slug: project.slug, id: ticket.id, ref: ticket.ref, outcome: state.outcome, terminalAt: state.terminalAt };
     }
   }
@@ -1067,16 +1066,11 @@ function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, age
         recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
       }
       if (active) {
-        if (t.scopeRequest) captureScopePauseRecovery(match.slug, t);
-        setDispatchTerminal(t, t.claim && t.claim.by ? (t.scopeRequest ? 'scope_paused' : 'died') : 'failed', 'subagent-stop');
-        if (!t.claim || !t.claim.by) {
-          t.dispatchNonce = null;
-          t.dispatchExecutor = null;
-        }
+        state.turnEndedAt = now;
       }
       stampDispatchEvent(t, 'subagent-stop', now);
       putTicket(match.slug, t);
-      return { ok: true, ticket: t, stopped: active };
+      return { ok: true, ticket: t, stopped: false, turnEnded: active };
     });
     if (!result || !result.ok) return { ok: false, reason: 'not_found' };
     stopped = stopped || result.stopped;

@@ -511,20 +511,27 @@ test('pre-tool hook: an unbound helper inherits the sole active ticket', () => {
   assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
 });
 
-test('pre-tool hook: a steer to a finished executor is recorded on the ticket, not dropped', () => {
-  // contractify SQ-84, 2026-08-05: the steer arrived after closure, the idle guard
-  // ended the teammate, and the instruction vanished. The sender holds the only copy.
+test('pre-tool hook: a steer between turns is delivered, but a terminal failure is recorded', () => {
   const ticket = addStopTicket('late steer capture', { files: ['lib/allowed.js'] });
   const sessionId = `late-steer-${++sqSeq}`;
   const acting = claimStopTicket(ticket, sessionId, 'late-steer-worker');
   assert.equal(store.markDispatchStopped(sessionId, acting.agent_type, acting.agent_id, acting.agent_name).ok, true);
 
-  const denied = runHookOutput(FORCE_BYPASS, {
+  const steer = {
     session_id: sessionId,
     agent_id: 'orchestrator-late-steer',
     tool_name: 'SendMessage',
     tool_input: { to: acting.agent_name, message: 'Prefer type filters over content search.' },
-  });
+  };
+  assert.equal(runHookOutput(FORCE_BYPASS, steer), null);
+
+  const dispatch = store.getTicket(slug, ticket.ref).dispatch;
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: store.getTicket(slug, ticket.ref).dispatchNonce,
+    executor: dispatch.executor,
+    error: 'Prompt is too long',
+  }).ok, true);
+  const denied = runHookOutput(FORCE_BYPASS, steer);
   assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
   const reason = denied.hookSpecificOutput.permissionDecisionReason;
   assert.match(reason, new RegExp(ticket.ref));
@@ -1071,12 +1078,16 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
-  assert.equal(store.completeTicket(slug, ticket.ref, 'terminal-worker', { sessionId }).ok, true);
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    error: 'Prompt is too long',
+  }).ok, true);
 
   const after = store.getTicket(slug, ticket.ref);
-  assert.equal(after.claim, null, 'done clears the worker claim before a message can arrive');
-  assert.equal(after.dispatch.agentName, executorName, 'done retains the mapped executor for terminal cleanup');
-  assert.equal(after.dispatch.outcome, 'done');
+  assert.equal(after.claim.by, 'terminal-worker');
+  assert.equal(after.dispatch.agentName, executorName, 'terminal failures retain the mapped executor for terminal cleanup');
+  assert.equal(after.dispatch.outcome, 'died');
   assert.ok(after.dispatch.terminalAt);
 
   const out = runGuardPeer({ tool_input: { to: executorName, message: 'one more thing' } });
@@ -1179,7 +1190,7 @@ test('teammate-idle: live and scope-paused claims remain alive', () => {
   }), null);
 });
 
-test('peer-guard: a scope-paused executor accepts steering only after approval without losing its dispatch', () => {
+test('peer-guard: an executor between turns accepts steering before and after scope approval', () => {
   const ticket = addStopTicket('scope-paused executor resumes', { files: ['lib/declared.js'] });
   const sessionId = `scope-pause-message-${++sqSeq}`;
   const stop = claimStopTicket(ticket, sessionId, 'scope-paused-worker');
@@ -1190,11 +1201,10 @@ test('peer-guard: a scope-paused executor accepts steering only after approval w
     `exec WAITING: ${ticket.ref} has a pending scope request; approve scope, then resume it from the recovery snapshot`,
   );
   const paused = store.getTicket(slug, ticket.ref);
-  assert.equal(paused.dispatch.outcome, 'scope_paused');
-  assert.ok(paused.dispatch.terminalAt);
-  assert.equal(store.claimReleaseVerdict(paused), null, 'an open scope pause keeps its claim');
-  const beforeApproval = runGuardPeer({ tool_input: { to: stop.agent_name, message: 'scope is approved' } });
-  assert.equal(beforeApproval.hookSpecificOutput.permissionDecision, 'deny');
+  assert.equal(paused.dispatch.outcome, 'claimed');
+  assert.equal(paused.dispatch.terminalAt, null);
+  assert.equal(store.claimReleaseVerdict(paused), null, 'an open scope request keeps its claim');
+  assert.strictEqual(runGuardPeer({ tool_input: { to: stop.agent_name, message: 'scope is approved' } }), null);
 
   store.updateTicket(slug, ticket.ref, { files: ['lib/declared.js', 'lib/resumed.js'] });
   const resumed = store.getTicket(slug, ticket.ref);
@@ -1641,7 +1651,7 @@ test('stop reminder: counts terminal dispatched claims that are reclaimable', ()
   const sessionId = `reconcile-terminal-${++sqSeq}`;
   const ticket = addTicket('dead executor');
   const stop = claimStopTicket(ticket, sessionId, 'reconcile-terminal');
-  assert.equal(store.markDispatchStopped(stop.session_id, stop.agent_type, stop.agent_id, stop.agent_name).ok, true);
+  assert.equal(recordTerminalAgentFailure(ticket, stop).ok, true);
   assert.equal(store.claimPulse(store.getTicket(slug, ticket.ref)).reclaimable, 'observed_stop');
 
   const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
@@ -1654,7 +1664,7 @@ test('stop reminder: excludes live claims from a mixed live and terminal dispatc
   const dead = addTicket('dead executor');
   claimStopTicket(live, sessionId, 'reconcile-mixed-live');
   const stop = claimStopTicket(dead, sessionId, 'reconcile-mixed-dead');
-  assert.equal(store.markDispatchStopped(stop.session_id, stop.agent_type, stop.agent_id, stop.agent_name).ok, true);
+  assert.equal(recordTerminalAgentFailure(dead, stop).ok, true);
 
   const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
   assert.match(output.hookSpecificOutput.additionalContext, /1 ticket in doing/);
@@ -1678,7 +1688,7 @@ test('stop reminder: ignores re-entry and only re-escalates pending submissions'
   const sessionId = `reconcile-bound-${++sqSeq}`;
   const ticket = addTicket('bounded reconciliation reminder');
   const stop = claimStopTicket(ticket, sessionId, 'reconcile-bound');
-  assert.equal(store.markDispatchStopped(stop.session_id, stop.agent_type, stop.agent_id, stop.agent_name).ok, true);
+  assert.equal(recordTerminalAgentFailure(ticket, stop).ok, true);
   const input = { session_id: sessionId, cwd: BOARD_PATH };
 
   assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
@@ -2162,6 +2172,15 @@ function claimStopTicket(ticket?: any, sessionId?: any, by?: any) {
   return { session_id: sessionId, agent_type: prepared.ticket.dispatchExecutor, agent_id: agentId, agent_name: agentName };
 }
 
+function recordTerminalAgentFailure(ticket?: any, stop?: any) {
+  const current = store.getTicket(slug, ticket.ref);
+  return store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: current.dispatchNonce,
+    executor: stop.agent_type,
+    error: 'Prompt is too long',
+  });
+}
+
 // Backdate the claim's `at` without waiting real time.
 function backdateSessionClaims(sessionId?: any, minutesAgo?: any, effort?: any) {
   const w = db.getRow(database, 'globals', 'workers');
@@ -2174,11 +2193,12 @@ function backdateSessionClaims(sessionId?: any, minutesAgo?: any, effort?: any) 
   db.putRow(database, 'globals', { key: 'workers', data: w });
 }
 
-test('subagent-stop: a stopped claim reports durable death evidence within budget', () => {
+test('subagent-stop: a terminal Agent failure reports durable death evidence within budget', () => {
   const sess = `sess-long-${++sqSeq}`;
   const t = addTicket('runaway 28-min ticket');
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
+  assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
   const ctx = runHookForBudget(SUBAGENT_STOP, stop);
   const expectedWorktree = path.join(BOARD_PATH, '.claude', 'worktrees', `agent-${stop.agent_id}`);
   assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
@@ -2199,7 +2219,7 @@ test('subagent-stop: a held claim is classified regardless of claimed effort', (
     const ticket = addEffortTicket(`${effort} stopped claim`, effort);
     const stop = claimStopTicket(ticket, session, `worker-${effort}`);
     const ctx = runHook(SUBAGENT_STOP, stop);
-    assert.match(ctx, new RegExp(`^exec DIED: ${ticket.ref} at `));
+    assert.match(ctx, new RegExp(`^exec WAITING: ${ticket.ref} ended a turn while holding its claim; it may resume\.`));
   }
 });
 
@@ -2237,16 +2257,16 @@ test('subagent-stop: a repeated stop repeats the held-claim verdict until releas
   const stop = claimStopTicket(t, sess, 'worker-dedupe');
   backdateSessionClaims(sess, 28);
   const expected = runHook(SUBAGENT_STOP, stop);
-  assert.match(expected, new RegExp(`^exec DIED: ${t.ref} at `));
+  assert.match(expected, new RegExp(`^exec WAITING: ${t.ref} ended a turn while holding its claim; it may resume\.`));
   assert.strictEqual(runHook(SUBAGENT_STOP, stop), expected);
 });
 
-test('subagent-stop: a stopped executor holding a fresh claim gets the dead-claim verdict', () => {
+test('subagent-stop: a stopped executor holding a fresh claim remains resumable', () => {
   const sess = `sess-fresh-${++sqSeq}`;
   const t = addTicket('quick ticket, just claimed');
   const stop = claimStopTicket(t, sess, 'worker-fresh');
   const ctx = runHook(SUBAGENT_STOP, stop);
-  assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at .*Next: recover the worktree diff, or release \\+ fresh dispatch\\.$`));
+  assert.match(ctx, new RegExp(`^exec WAITING: ${t.ref} ended a turn while holding its claim; it may resume\.`));
 });
 
 test('subagent-stop: a terminal release tells the parent to stop a Monitor-backed executor', () => {
@@ -2337,7 +2357,7 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
   });
   const parsed = out.trim() ? JSON.parse(out) : null;
   const ctx = parsed ? parsed.hookSpecificOutput.additionalContext : '';
-  assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
+  assert.match(ctx, new RegExp(`^exec WAITING: ${t.ref} ended a turn while holding its claim; it may resume\.`));
 });
 
 // Registered LAST: creates extra fixture categories, which would otherwise grow
@@ -2632,7 +2652,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
         agent_id: agentId,
         agent_name: agentName,
       });
-      assert.match(verdict, new RegExp(`^exec DIED: ${ticket.ref} at `));
+      assert.match(verdict, new RegExp(`^exec WAITING: ${ticket.ref} ended a turn while holding its claim; it may resume\.`));
     }
   } finally {
     if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
@@ -2684,8 +2704,8 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     agent_id: 'native-concurrent-1',
     agent_name: names[0],
   });
-  assert.match(firstStop, new RegExp(`^exec DIED: ${first.ref} at `));
-  assert.equal(store.getTicket(slug, first.ref).dispatch.outcome, 'died');
+  assert.match(firstStop, new RegExp(`^exec WAITING: ${first.ref} ended a turn while holding its claim; it may resume\.`));
+  assert.equal(store.getTicket(slug, first.ref).dispatch.outcome, 'claimed');
   assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'claimed');
 
   const secondStop = runHook(SUBAGENT_STOP, {
@@ -2693,9 +2713,9 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
     agent_type: preparedSecond.ticket.dispatchExecutor,
     agent_id: 'native-concurrent-2',
   });
-  assert.match(secondStop, new RegExp(`^exec DIED: ${second.ref} at `));
+  assert.match(secondStop, new RegExp(`^exec WAITING: ${second.ref} ended a turn while holding its claim; it may resume\.`));
   assert.doesNotMatch(secondStop, new RegExp(`${first.ref}.*(?:release \\+ fresh dispatch|TaskStop)`));
-  assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'died');
+  assert.equal(store.getTicket(slug, second.ref).dispatch.outcome, 'claimed');
 });
 
 test('session start reconciles a reload-lost launch once and leaves it ready to respawn', () => {
@@ -2719,7 +2739,7 @@ test('session start reconciles a reload-lost launch once and leaves it ready to 
   assert.ok(!second.includes('launched but never claimed'));
 });
 
-test('subagent stop marks a launch that never claimed as failed', () => {
+test('subagent stop records a turn end for a launch that has not claimed yet', () => {
   const ticket = addEffortTicket('stop before claim', 'high');
   const sessionId = `stop-${++sqSeq}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
@@ -2735,10 +2755,11 @@ test('subagent stop marks a launch that never claimed as failed', () => {
     agent_id: 'native-stop-1',
     agent_name: 'stop-before-claim',
   });
-  assert.match(context, /DIED before claiming/);
+  assert.equal(context, '');
   const after = store.getTicket(slug, ticket.ref);
-  assert.equal(after.dispatch.outcome, 'failed');
-  assert.equal(after.dispatchNonce, null);
+  assert.equal(after.dispatch.outcome, 'launched');
+  assert.ok(after.dispatch.turnEndedAt);
+  assert.equal(after.dispatchNonce, prepared.token);
 });
 
 test('subagent-stop: legacy ticket executors without identity stay silent', () => {

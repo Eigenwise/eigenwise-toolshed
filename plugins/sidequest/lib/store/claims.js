@@ -210,7 +210,7 @@ ${evidence.outputTail}`;
     const by = ticket && ticket.claim && ticket.claim.by;
     const idle = claimIdleLabel(verdict && verdict.idleMs);
     if (verdict.kind === "observed_stop") {
-      return `↩️ Auto-released to **todo**: its executor was observed to stop while holding the claim (SubagentStop at ${verdict.at}, was claimed by \`${by}\`). It is back in the ready pool; re-dispatch to continue the work.`;
+      return `↩️ Auto-released to **todo**: its executor had a recorded terminal Agent failure while holding the claim (at ${verdict.at}, was claimed by \`${by}\`). It is back in the ready pool; re-dispatch to continue the work.`;
     }
     if (verdict.kind === "abandoned_verifying") {
       return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;

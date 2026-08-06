@@ -35,7 +35,7 @@ interface Ticket {
   claim?: { by?: string; verification?: { startedAt?: string; command?: string } } | null;
   checkpoint?: { id?: string; commit?: string; at?: string } | null;
   scopeRequest?: { files?: string[] } | null;
-  dispatch?: { outcome?: string; terminalAt?: string; terminalSource?: string; worktree?: string };
+  dispatch?: { outcome?: string; terminalAt?: string; terminalSource?: string; turnEndedAt?: string; worktree?: string };
   submission?: { commit?: string; integratedAt?: string; unscopedPaths?: string[] };
   effort?: string;
 }
@@ -192,10 +192,11 @@ function stopVerdict(
       ticket = store.getTicket(held.slug, held.ticketId);
     } catch (_) {}
     const label = held.ref || held.ticketId || 'a ticket';
+    if (ticket?.dispatch?.outcome === 'died' && ticket.dispatch.terminalAt) return diedVerdict(store, held, ticket);
     if (ticket?.scopeRequest) {
       return `exec WAITING: ${label} has a pending scope request; approve scope, then resume it from the recovery snapshot`;
     }
-    return diedVerdict(store, held, ticket);
+    return `exec WAITING: ${label} ended a turn while holding its claim; it may resume. Do not re-dispatch or release it without a recorded terminal Agent failure.`;
   }
 
   if (dispatchStopped && classification.kind !== 'unknown') return 'exec DIED before claiming; TaskStop it first, then fresh-dispatch and spawn the returned spec';

@@ -1549,15 +1549,16 @@ test('MCP scopeRequest delivers the ruling on the same call', async () => {
   assert.deepEqual(store.getTicket(project, timeout.ref).scopeRequest.files, ['pending.js']);
 });
 
-test('scope rulings name stopped executors that need resuming', async () => {
+test('scope rulings leave an executor between turns claimed', async () => {
   const fixture = isolatedDispatch('sq-mcp-scope-resume-', 'scope-resume-agent', ['lib']);
   await callTool('scopeRequest', { project: fixture.project, ref: fixture.ref, by: fixture.by, files: ['denied.js'] });
   const executor = store.getTicket(fixture.project, fixture.ref).dispatchExecutor;
   assert.equal(store.markDispatchStopped('sq923-session-scope-resume-agent', executor, 'scope-resume-agent', 'scope-resume-agent').ok, true);
   const denied = await callTool('scopeDeny', { project: fixture.project, ref: fixture.ref, by: 'mcp-scope-resume-orchestrator', reason: 'The path is unavailable.' });
-  assert.deepEqual(denied.resume, { ticket: fixture.ref, agentName: 'scope-resume-agent' });
-  assert.match(denied.message, new RegExp(`${fixture.ref} was waiting on scope`));
-  assert.match(denied.message, /scope-resume-agent has stopped\. Resume that executor now/);
+  assert.equal(denied.resume, undefined);
+  const dispatch = store.getTicket(fixture.project, fixture.ref).dispatch;
+  assert.equal(dispatch.outcome, 'claimed');
+  assert.ok(dispatch.turnEndedAt);
 });
 
 test('MCP scopeRequest guides nonholders after an approval update', async () => {

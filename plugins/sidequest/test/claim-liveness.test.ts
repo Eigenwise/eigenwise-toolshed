@@ -166,7 +166,7 @@ test('a long claim does not let a second executor take the ticket', () => {
   assert.strictEqual(store.readyTickets(slug).some((entry?: any) => entry.ref === ticket.ref), false, 'live work never returns to the ready pool');
 });
 
-test('a quiet long-running executor survives the sweep; an observed stop does not', () => {
+test('a quiet long-running executor and an executor between turns survive the sweep', () => {
   const quiet = addRouted('quiet but alive');
   claimRouted(quiet, 'quiet-executor');
   backdateClaim(quiet.ref, 20 * HOUR);
@@ -177,25 +177,35 @@ test('a quiet long-running executor survives the sweep; an observed stop does no
   const prepared = claimRouted(stopped, 'stopped-executor', { sessionId: session });
   const marked = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
   assert.strictEqual(marked.ok, true);
-  assert.strictEqual(store.getTicket(slug, stopped.ref).claim.by, 'stopped-executor', 'the stop hook leaves the claim for the sweep to audit');
+  const betweenTurns = store.getTicket(slug, stopped.ref);
+  assert.strictEqual(betweenTurns.claim.by, 'stopped-executor');
+  assert.strictEqual(betweenTurns.dispatch.outcome, 'claimed');
+  assert.ok(betweenTurns.dispatch.turnEndedAt);
+  assert.strictEqual(store.readDispatchBriefing(slug, stopped.ref, prepared.token).ok, true);
 
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
-  const refs = swept.released.map((entry?: any) => entry.ref);
-  assert.deepStrictEqual(refs, [stopped.ref]);
-  assert.strictEqual(swept.released[0].kind, 'observed_stop');
+  assert.deepStrictEqual(swept.released, []);
 
   assert.strictEqual(store.getTicket(slug, quiet.ref).claim.by, 'quiet-executor', 'activity, not age, is what the backstop reads');
-  const after = store.getTicket(slug, stopped.ref);
-  assert.strictEqual(after.status, 'todo');
-  assert.strictEqual(after.claim, null);
-  assert.strictEqual(after.claimRelease.kind, 'observed_stop');
-
-  const note = after.comments.at(-1).body;
-  assert.match(note, /observed to stop while holding the claim/);
-  assert.doesNotMatch(note, /TTL/i, 'the released comment must name the real reason');
+  assert.strictEqual(store.getTicket(slug, stopped.ref).claim.by, 'stopped-executor');
 });
 
-test('an active verification marker is alive until SubagentStop records death', () => {
+test('an executor between turns can still submit with its prepared dispatch', () => {
+  const ticket = addRouted('submit after turn end');
+  const session = 'session-submit-after-turn-end';
+  const prepared = claimRouted(ticket, 'between-turns-executor', { sessionId: session });
+  assert.equal(store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null).ok, true);
+
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = "submitted after turn end";\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'submit after turn end fixture']);
+  const submitted = store.submitTicket(slug, ticket.ref, 'between-turns-executor', {
+    commit: git(['rev-parse', 'HEAD']),
+  });
+  assert.equal(submitted.ok, true);
+});
+
+test('an active verification marker is alive until a terminal Agent failure is recorded', () => {
   const ticket = addRouted('verification is still running');
   const session = 'session-verifying';
   const prepared = claimRouted(ticket, 'verifying-executor', { sessionId: session });
@@ -216,10 +226,19 @@ test('an active verification marker is alive until SubagentStop records death', 
 
   const stoppedDuringVerify = store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
   assert.equal(stoppedDuringVerify.ok, true);
-  assert.equal(stoppedDuringVerify.stopped, true);
+  assert.equal(stoppedDuringVerify.stopped, false);
+  const betweenTurnsPulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(betweenTurnsPulse.liveness, 'alive');
+  assert.equal(betweenTurnsPulse.claim.reclaimable, null);
+
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    error: 'Prompt is too long',
+  }).ok, true);
   const stoppedPulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(stoppedPulse.liveness, 'dead');
-  assert.equal(stoppedPulse.died.source, 'subagent-stop');
+  assert.equal(stoppedPulse.died.source, 'agent-terminal-failure');
   assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
   assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
@@ -238,7 +257,7 @@ test('a pending scope request reports waiting before and after the executor stop
   pulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(pulse.liveness, 'waiting');
   assert.equal(pulse.died, null);
-  assert.equal(pulse.dispatch.outcome, 'scope_paused');
+  assert.equal(pulse.dispatch.outcome, 'claimed');
 });
 
 test('the claim sweep releases a dead executor with a pending scope request', () => {
@@ -484,7 +503,11 @@ test('a closeout after an auto-release names the exact recovery instead of silen
   const ticket = addRouted('fail loud after auto-release');
   const session = 'session-fail-loud';
   const prepared = claimRouted(ticket, 'stranded-executor', { sessionId: session });
-  store.markDispatchStopped(session, prepared.ticket.dispatchExecutor, null, null);
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    error: 'Prompt is too long',
+  }).ok, true);
   store.sweepStaleClaims({ project: slug, source: 'test' });
 
   const submitted = store.submitTicket(slug, ticket.ref, 'stranded-executor', { commit: COMMIT });
@@ -516,7 +539,11 @@ test('a missing isolated worktree after stop is reclaimable while a live quiet d
   assert.equal(store.claimTicket(slug, stopped.ref, 'stopped-isolated-executor', {
     token: stoppedPrepared.token, executor: stoppedPrepared.ticket.dispatchExecutor, sessionId: stoppedSession,
   }).ok, true);
-  assert.equal(store.markDispatchStopped(stoppedSession, stoppedPrepared.ticket.dispatchExecutor, stoppedAgent, stoppedAgent).ok, true);
+  assert.equal(store.recordDispatchAgentFailure(slug, stopped.ref, {
+    token: stoppedPrepared.token,
+    executor: stoppedPrepared.ticket.dispatchExecutor,
+    error: 'Prompt is too long',
+  }).ok, true);
   const stoppedPulse = store.pulsePayload(slug, stopped.ref);
   assert.equal(stoppedPulse.liveness, 'dead');
   assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');

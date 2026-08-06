@@ -473,9 +473,9 @@ function guardHelperWrite(input: HookInput): void {
   );
 }
 
-// A steer aimed at an executor that already finished is dropped on the floor: the
-// teammate wakes, the idle guard ends it, and the instruction is gone. The sender is
-// the only party holding the text, so this is the one place it can be saved.
+// A steer aimed at an executor with a recorded terminal Agent failure cannot be
+// delivered. The sender is the only party holding the text, so this is the one
+// place it can be saved.
 function guardLateSteer(input: HookInput): void {
   const toolInput = toolInputOf(input);
   const recipient = String(toolInput?.to || '').trim();
