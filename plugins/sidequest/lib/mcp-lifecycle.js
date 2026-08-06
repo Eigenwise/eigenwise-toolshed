@@ -574,7 +574,7 @@ const tools = [
       const scope = store.effectiveScope(slug, ticket.files);
       const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
       if (!scopedRange.ok) {
-        const message = scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Expand scope with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}` : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
+        const message = scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.` : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: scopedRange.reason, message });
       }
       const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);

@@ -1442,7 +1442,9 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         const scopedCommitted = completionDelta.committed.filter((file: string) => commitScope.isInScope(file, declaredFiles));
         sharedTreeCommittedScope = dispatch?.sharedTree === true && scopedCommitted.length > 0;
         const scopedWorking = completionDelta.working.filter((file: string) => commitScope.isInScope(file, declaredFiles));
-        const scopedChanges = activeReadOnlyDispatch
+        // A restricted read-only executor cannot own shared-checkout changes; siblings must remain free to commit during its run.
+        const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch?.sharedTree === true;
+        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly
           ? Array.from(new Set([...scopedWorking, ...scopedCommitted]))
           : [];
         if (scopedChanges.length) {

@@ -496,7 +496,7 @@ async function cmdSubmit(opts, positional) {
   if (!scopedRange.ok) {
     if (scopedRange.reason === "missing_scope") fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
     if (scopedRange.reason === "outside_scope") {
-      fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Expand scope with: ${scopeRemedy(ticket, scopedRange.outside)}`);
+      fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${scopeRemedy(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`);
     }
     fail(`submit: could not inspect ${opts.commit} from this worktree: ${scopedRange.message || scopedRange.reason}`);
   }

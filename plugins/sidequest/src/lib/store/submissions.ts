@@ -149,12 +149,10 @@ function submissionUnscopedPaths(paths?: any) {
     .filter(Boolean)));
 }
 
-// Paths this run found already dirty and left exactly as it found them. The scope
-// gate exists to catch what an executor wrote, and in a shared tree those are not
-// the same set: a screenshot the user dropped in the repo root blocked a verified
-// submission for want of a ruling nobody should have had to make (SQ-95). Identity
-// is content-aware, so touching an inherited path puts it straight back under the
-// gate.
+// A shared tree can contain user dirt at launch and sibling dirt added later.
+// Content identity proves the first case; the submitted range proves the second.
+// Neither belongs in this ticket's commit, so closeout reports it without pushing
+// the executor to sweep foreign work into scope (SQ-95, SQ-1328).
 function inheritedDirtyPaths(slug?: any, ticket?: any) {
   const baseline = dispatchState(ticket)?.dirtyBaseline;
   const inherited = new Map<string, string>();
@@ -172,6 +170,20 @@ function inheritedDirtyPaths(slug?: any, ticket?: any) {
     if (identities.get(key) === entry.identity) inherited.set(key, entry.path);
   }
   return inherited;
+}
+
+function sharedTreeUnsubmittedWorkingPaths(ticket?: any, range?: any, reportedPaths?: any, inherited?: any) {
+  if (dispatchState(ticket)?.sharedTree !== true || !range) return [];
+  return reportedPaths.filter((file: string) => !inherited.has(dirtyPathKey(file)));
+}
+
+function sharedTreeWorkingPathAdvisory(inheritedPaths?: any, unsubmittedWorkingPaths?: any) {
+  const attributedPaths = [
+    ...inheritedPaths.map((file: string) => `${file} (present before dispatch)`),
+    ...unsubmittedWorkingPaths.map((file: string) => `${file} (not in submitted range)`),
+  ];
+  if (!attributedPaths.length) return null;
+  return `Shared-tree working paths excluded from this submission: ${attributedPaths.join(', ')}. Commit only your declared scope; never stash or revert foreign paths.`;
 }
 
 function submissionReadiness(submission?: any) {
@@ -546,10 +558,25 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (validationError) {
       return { ok: false, reason: 'invalid_verify', ticket: t, message: validationError };
     }
+    const admittedScope = effectiveScope(slug, t.files);
+    const outsideSubmittedRange = range
+      ? range.changedPaths.filter((file: string) => !commitScope.isInScope(file, admittedScope))
+      : [];
+    if (outsideSubmittedRange.length) {
+      return {
+        ok: false,
+        reason: 'outside_scope',
+        outside: outsideSubmittedRange,
+        ticket: t,
+        message: `submit: refused ${t.ref}; submitted range changes paths outside its declared scope: ${outsideSubmittedRange.join(', ')}. Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`,
+      };
+    }
     const inherited = inheritedDirtyPaths(slug, t);
     const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
-    const gatedPaths = reportedPaths.filter((file: string) => !inherited.has(dirtyPathKey(file)));
     const inheritedPaths = reportedPaths.filter((file: string) => inherited.has(dirtyPathKey(file)));
+    const unsubmittedWorkingPaths = sharedTreeUnsubmittedWorkingPaths(t, range, reportedPaths, inherited);
+    const excludedWorkingPaths = new Set([...inheritedPaths, ...unsubmittedWorkingPaths].map(dirtyPathKey));
+    const gatedPaths = reportedPaths.filter((file: string) => !excludedWorkingPaths.has(dirtyPathKey(file)));
     const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
     if (!readiness.ok) {
       return {
@@ -557,9 +584,10 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         reason: readiness.reason,
         ticket: t,
         submissionReadiness: readiness,
-        message: `submit: refused ${t.ref}; ${readiness.message} Request scope, include every blocked path in a complete commit, then submit again.`,
+        message: `submit: refused ${t.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`,
       };
     }
+    const workingPathAdvisory = sharedTreeWorkingPathAdvisory(inheritedPaths, unsubmittedWorkingPaths);
     const submittedAt = new Date().toISOString();
     let comment = null;
     if (submissionComment) {
@@ -575,9 +603,10 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       gitRef: gitRef || submissionGitRef(t),
       verify,
       worktree,
-      admittedScope: effectiveScope(slug, t.files),
+      admittedScope,
       unscopedPaths: gatedPaths,
       ...(inheritedPaths.length ? { inheritedPaths } : {}),
+      ...(unsubmittedWorkingPaths.length ? { unsubmittedWorkingPaths } : {}),
       integratedAt: null,
     }, range || {});
     const dispatch = dispatchState(t);
@@ -599,7 +628,8 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     if (comment) queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
-    return { ok: true, ticket: t, comment, ...((submissionComment as any)?.advisory ? { advisory: (submissionComment as any).advisory } : {}) };
+    const advisories = [(submissionComment as any)?.advisory, workingPathAdvisory].filter(Boolean);
+    return { ok: true, ticket: t, comment, ...(advisories.length ? { advisory: advisories.join(' ') } : {}) };
   });
 }
 
