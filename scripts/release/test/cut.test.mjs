@@ -265,32 +265,98 @@ test('a failing suite leaves the release local and says so', async (t) => {
   assert.deepEqual(context.remoteRefs(), before);
 });
 
-test('a failed parent Test workflow blocks publishing', async (t) => {
+test('a failed Test workflow on the remote parent blocks a local cut', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
-  const parent = context.commit('integrate');
+  const localParent = context.commit('integrate');
+  const remoteParent = context.originGit('rev-parse', 'main');
   const before = context.remoteRefs();
+  let checkedCommit = null;
   const failedTestRun = () => ({
     status: 0,
-    stdout: JSON.stringify([{ headSha: parent, conclusion: 'failure' }]),
+    stdout: JSON.stringify([{ headSha: remoteParent, conclusion: 'failure' }]),
     stderr: '',
   });
 
   assert.throws(
-    () => assertParentCiPassed(context.root, parent, failedTestRun),
+    () => assertParentCiPassed(context.root, remoteParent, failedTestRun),
     /Test workflow for .* concluded failure; refusing to publish/,
   );
   await assert.rejects(
     () => cut({
       repoRoot: context.root,
-      push: true,
       skipTests: true,
       log: () => {},
-      assertParentCiPassed: (repoRoot, commit) => assertParentCiPassed(repoRoot, commit, failedTestRun),
+      assertParentCiPassed: (repoRoot, commit) => {
+        checkedCommit = commit;
+        return assertParentCiPassed(repoRoot, commit, failedTestRun);
+      },
     }),
     /Test workflow for .* concluded failure; refusing to publish/,
   );
+  assert.equal(checkedCommit, remoteParent);
+  assert.notEqual(checkedCommit, localParent);
   assert.deepEqual(context.remoteRefs(), before);
+});
+
+test('a local cut prints the passing remote CI verdict with its push command', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
+  const remoteParent = context.originGit('rev-parse', 'main');
+  const logs = [];
+
+  const result = await cut({
+    repoRoot: context.root,
+    skipTests: true,
+    log: (message) => logs.push(message),
+    assertParentCiPassed: (repoRoot, commit) => {
+      assert.equal(commit, remoteParent);
+      return { commit, conclusion: 'success' };
+    },
+  });
+
+  assert.deepEqual(result.ci, { status: 'passed', commit: remoteParent, conclusion: 'success' });
+  assert.ok(logs.includes(`Test CI on origin/main (${remoteParent}) passed.`));
+  assert.ok(logs.includes(`  ${result.pushCommand}`));
+});
+
+test('a CI override records its reason for a local cut', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
+  const remoteParent = context.originGit('rev-parse', 'main');
+  const logs = [];
+
+  const result = await cut({
+    repoRoot: context.root,
+    skipTests: true,
+    ciOverrideReason: 'SQ-1349 repairs the failed Test workflow',
+    log: (message) => logs.push(message),
+    assertParentCiPassed: (repoRoot, commit) => assertParentCiPassed(repoRoot, commit, () => ({
+      status: 0,
+      stdout: JSON.stringify([{ headSha: remoteParent, conclusion: 'failure' }]),
+      stderr: '',
+    })),
+  });
+
+  assert.deepEqual(result.ci, {
+    status: 'overridden',
+    commit: remoteParent,
+    reason: 'SQ-1349 repairs the failed Test workflow',
+    error: `Test workflow for ${remoteParent} concluded failure; refusing to publish. Retry with --ci-override "<reason>" only when the release fixes that CI failure.`,
+  });
+  assert.ok(logs.includes(`Test CI on origin/main (${remoteParent}) was overridden: SQ-1349 repairs the failed Test workflow`));
+});
+
+test('a missing Test workflow run offers the optional container check', (t) => {
+  const context = setup(t);
+  const parent = context.originGit('rev-parse', 'main');
+
+  assert.throws(
+    () => assertParentCiPassed(context.root, parent, () => ({ status: 0, stdout: '[]', stderr: '' })),
+    /no completed Test workflow run found.*git archive .*\| docker run -i --rm node:22.*git init -q/s,
+  );
 });
 
 test('a failing default suite writes its output and names the log', async (t) => {
