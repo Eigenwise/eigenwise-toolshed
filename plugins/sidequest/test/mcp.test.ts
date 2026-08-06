@@ -3055,14 +3055,37 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
   return { repo, project, ref: ticket.ref, by: `by-${agentId}`, worktree };
 }
 
-test('SQ-923: done closes a write-routed dispatch that provably wrote nothing', async () => {
+function recordNoOpVerification(fixture: any) {
+  assert.equal(store.addComment(fixture.project, fixture.ref, {
+    by: fixture.by,
+    source: 'mcp',
+    body: '[sidequest:verify-start] npm run test:full',
+  }).ok, true);
+  assert.equal(store.addComment(fixture.project, fixture.ref, {
+    by: fixture.by,
+    source: 'mcp',
+    body: '[sidequest:verify-complete] no-op',
+  }).ok, true);
+}
+
+test('SQ-1339: done closes a verified no-op write dispatch only after its explicit verification evidence', async () => {
   const fixture = isolatedDispatch('sq-mcp-noop-', 'a923noop', ['src/engine.js']);
   const baseCommit = store.getTicket(fixture.project, fixture.ref).dispatch.baseCommit;
   assert.equal(baseCommit, gitAt(fixture.repo, ['rev-parse', 'HEAD']), 'the dispatch records where the run started');
-  // The write-path guard itself is untouched: it still refuses on the ticket
-  // alone. Only a caller that went and looked at the worktree may relax it.
   assert.equal(store.completeTicket(fixture.project, fixture.ref, fixture.by, {}).reason, 'submission_required');
 
+  const missingEvidence = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'Read-only investigation complete; findings are in the thread and the repository is untouched.',
+  });
+  assert.equal(missingEvidence.ok, false);
+  assert.match(missingEvidence.message, /verify-complete\] no-op/);
+
+  recordNoOpVerification(fixture);
   const closed = await callTool('done', {
     project: fixture.project,
     ref: fixture.ref,
@@ -3076,6 +3099,39 @@ test('SQ-923: done closes a write-routed dispatch that provably wrote nothing', 
   assert.equal(done.status, 'done');
   assert.equal(done.completion.closeout, 'no-repo-changes', 'the closeout records how it was proven');
   assert.equal(done.completion.worktree, fixture.worktree);
+});
+
+test('SQ-1339: submit records and integrates an explicit no-op range', async () => {
+  const fixture = isolatedDispatch('sq-mcp-submit-noop-', 'a1339noop', ['src/engine.js']);
+  const commit = gitAt(fixture.worktree, ['rev-parse', 'HEAD']);
+  const gitRef = `refs/sidequest/${fixture.ref}`;
+  gitAt(fixture.worktree, ['update-ref', gitRef, commit]);
+  recordNoOpVerification(fixture);
+
+  const submitted = await callTool('submit', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    commit,
+    base: commit,
+    gitRef,
+    verify: 'npm run test:full',
+    worktree: fixture.worktree,
+    body: 'No repository change. Verification completed against the declared clean scope.',
+  });
+  assert.equal(submitted.ok, true, `submit was refused: ${submitted.message}`);
+  const submittedTicket = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(submittedTicket.submission.noOp, true);
+  assert.deepEqual(submittedTicket.submission.commits, []);
+  assert.deepEqual(submittedTicket.submission.changedPaths, []);
+
+  const delivered = store.integrateSubmission(fixture.project, fixture.ref, {
+    mode: 'replay',
+    target: store.integrationTarget(fixture.project),
+    skipVerify: true,
+  });
+  assert.equal(delivered.ok, true, `no-op integration was refused: ${delivered.message}`);
+  assert.equal(delivered.integration.resultingHead, commit);
 });
 
 test('SQ-923: done still refuses a write-routed dispatch that has work in its scope', async () => {

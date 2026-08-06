@@ -471,7 +471,7 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         commit: { type: "string" },
-        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from this submission range." },
+        base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from this submission range. Set it equal to commit for a verified no-op submission." },
         verify: { type: "string" },
         gitRef: { type: "string" },
         worktree: { type: "string", description: "Absolute path to this executor’s git worktree root. Required for isolated worktrees." },

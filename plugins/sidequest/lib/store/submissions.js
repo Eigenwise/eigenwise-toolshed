@@ -193,11 +193,13 @@ Expires: ${checkpoint.expiresAt}`;
     const changedPaths = Array.isArray(range.changedPaths) ? range.changedPaths.map((value) => String(value).trim().replace(/\\/g, "/")).filter(Boolean) : [];
     const integrationMode = range.integrationMode == null ? null : String(range.integrationMode).trim().toLowerCase();
     const integrationBranch = range.integrationBranch == null ? null : normalizeIntegrationBranch(range.integrationBranch);
-    if (!SUBMISSION_COMMIT_RE.test(base) || !upstream || !SUBMISSION_COMMIT_RE.test(upstreamCommit) || !commits.length || commits.some((value) => !SUBMISSION_COMMIT_RE.test(value)) || commits[commits.length - 1] !== commit || integrationMode != null && !["local", "remote"].includes(integrationMode)) {
+    const noOp = range.noOp === true;
+    if (!SUBMISSION_COMMIT_RE.test(base) || !upstream || !SUBMISSION_COMMIT_RE.test(upstreamCommit) || !noOp && !commits.length || noOp && commits.length || commits.some((value) => !SUBMISSION_COMMIT_RE.test(value)) || !noOp && commits[commits.length - 1] !== commit || integrationMode != null && !["local", "remote"].includes(integrationMode)) {
       throw new Error("invalid submission range metadata");
     }
     return Object.assign(
       { base, upstream, upstreamCommit, commits, changedPaths },
+      noOp ? { noOp: true } : {},
       integrationMode ? { integrationMode } : {},
       integrationBranch ? { integrationBranch } : {}
     );
@@ -417,7 +419,7 @@ ${verify.outputTail}` : null
       }
       const before = integrationGit(repo, ["rev-parse", "HEAD"]);
       const commits = Array.isArray(submission.commits) && submission.commits.length ? submission.commits : [submission.commit];
-      if (mode === "merge") {
+      if (!submission.noOp && mode === "merge") {
         try {
           integrationGit(repo, ["merge", "--no-ff", "--no-edit", pinnedCommit]);
         } catch (error) {
@@ -427,7 +429,7 @@ ${verify.outputTail}` : null
           }
           return integrationFailure(slug, ticket, { reason: "merge_failed", message: integrationGitError(error), before });
         }
-      } else {
+      } else if (!submission.noOp) {
         for (const commit of commits) {
           try {
             integrationGit(repo, ["cherry-pick", ...mode === "apply" ? ["--no-commit"] : [], commit]);
@@ -511,7 +513,7 @@ ${verify.outputTail}` : null
           message: `submit: refused ${t.ref}; scope approval remains pending. Approve or deny the request before submitting.`
         };
       }
-      const completion = completionTreeCheck(slug, t);
+      const completion = completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
       if (!completion.ok) return Object.assign({ ticket: t }, completion);
       const validationError = verifyCommandError(verify);
       if (validationError) {
