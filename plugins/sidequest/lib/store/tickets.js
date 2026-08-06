@@ -525,15 +525,17 @@ function createTickets(dependencies) {
         putTicket(slug, t);
         return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
       }
-      const testDirectories = autoApprovedTestScope(t, requested, additions, slug);
-      const buildRegistrations = testDirectories ? null : autoApprovedBuildRegistrationScope(t, additions, slug);
-      const globApproved = testDirectories || buildRegistrations ? [] : autoApprovedScopePaths(t, additions, slug);
-      const autoApproved = testDirectories || buildRegistrations || globApproved;
-      if (autoApproved.length === additions.length) {
+      const testDirectories = autoApprovedTestScope(t, requested, additions, slug) || [];
+      const testScopeApproved = testDirectories.length > 0;
+      const buildRegistrations = testScopeApproved ? [] : autoApprovedBuildRegistrationScope(t, additions, slug) || [];
+      const buildRegistrationApproved = buildRegistrations.length > 0;
+      const globApproved = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
+      const autoApproved = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : globApproved;
+      if (testScopeApproved || autoApproved.length === additions.length) {
         t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
         syncLiveDispatchScope(slug, t);
         if (!Array.isArray(t.comments)) t.comments = [];
-        const policy = testDirectories ? "test scope under board policy" : buildRegistrations ? "build-registration scope derived from the in-scope source layout" : "scope under board policy";
+        const policy = testScopeApproved ? "test scope under board policy" : buildRegistrations ? "build-registration scope derived from the in-scope source layout" : "scope under board policy";
         const comment2 = createComment({
           by: "board",
           body: `Auto-approved ${policy}: ${autoApproved.join(", ")}.`,
