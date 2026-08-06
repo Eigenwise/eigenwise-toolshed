@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.402.0",
+  "version": "3.403.0",
   "plugins": [
     {
       "name": "workbench",
       "source": "./plugins/workbench",
       "description": "Set up and maintain a Claude Code workspace, and the front door to the rest of the Toolshed: initialize project-side configuration, install and update plugins, diagnose local health, and wire up local observability.",
-      "version": "0.81.0",
+      "version": "0.81.1",
       "author": {
         "name": "Eigenwise"
       },
@@ -31,7 +31,7 @@
       "name": "observability",
       "source": "./plugins/observability",
       "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Prompts, responses, code, tool inputs and results, credentials, and environment values are never stored. Every sink beyond local SQLite is opt-in.",
-      "version": "0.3.2",
+      "version": "0.3.3",
       "author": {
         "name": "Eigenwise"
       },
@@ -77,7 +77,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "A local Kanban board for the side jobs that appear mid-task. You mention a bug while Claude is doing something else, it files a ticket, and the idea outlives the context window. It tracks work; it does not run it: no dispatch, no routing, no executors. A live, self-hosted dashboard spans every project you work in, and everything stays on your machine.",
-      "version": "4.37.0",
+      "version": "4.38.0",
       "author": {
         "name": "Eigenwise"
       },
@@ -100,7 +100,7 @@
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
       "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
-      "version": "2.14.0",
+      "version": "2.14.1",
       "author": {
         "name": "Eigenwise"
       },
