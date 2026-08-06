@@ -290,6 +290,9 @@ const tools = [
         candidate: args.candidate,
         deliverable: args.deliverable,
         releaseComment: { by, body: store.releaseCommentBody(reason, evidence.evidence), kind: "comment", source: "mcp" },
+        releaseKind: args.kind,
+        releaseReason: reason,
+        releaseEvidence: evidence.evidence,
         source: "mcp",
         sessionId: sessionOf(args)
       });
