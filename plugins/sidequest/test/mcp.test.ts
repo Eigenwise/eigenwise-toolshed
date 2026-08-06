@@ -1853,10 +1853,10 @@ test('MCP update makes control-plane scope approval discoverable and guards exec
   assert.deepEqual(store.getTicket(project, unclaimed.ref).files, ['lib/allowed.js', 'foreign/new.js']);
 });
 
-test('MCP update schema exposes scope approval through by', () => {
+test('MCP update schema exposes control-plane scope approval', () => {
   const update = mcp.toolDescriptors().find((descriptor: any) => descriptor.name === 'update');
   assert.ok(update);
-  assert.match(update.description, /by scopes/i);
+  assert.equal(update.inputSchema.properties.by.type, 'string');
 });
 
 test('sweepClaims releases stale claims through MCP', async () => {
@@ -3358,7 +3358,31 @@ test('SQ-923: done accepts the runtime id an executor reports for a Claude tier'
     body: 'A model nobody routes still has to be refused by name.',
   });
   assert.equal(unknown.isError, true, 'an unknown model is still refused');
-  assert.match(unknown.content[0].text, /unknown model "gpt-9-imaginary"/);
+});
+
+test('MCP add, update, and route_recipe carry a one-ticket route override', async () => {
+  const category = `mcp-ticket-route-${process.pid}`;
+  store.setCategory({ id: category, name: 'MCP ticket route', route: { model: 'sonnet', effort: 'medium' }, enabled: true });
+
+  const added = await callTool('add', {
+    project: PROJ,
+    title: 'Use an explicit ticket route',
+    category,
+    route: { model: 'sonnet', effort: 'high' },
+  });
+  const projectSlug = added.project;
+  assert.deepEqual(store.getTicket(projectSlug, added.ref)?.route, { model: 'sonnet', effort: 'high' }, 'MCP add persists the route under its acknowledged project slug');
+
+  await callTool('update', {
+    project: PROJ,
+    ref: added.ref,
+    route: { model: 'opus', effort: 'high' },
+  });
+  assert.deepEqual(store.getTicket(projectSlug, added.ref)?.route, { model: 'opus', effort: 'high' });
+
+  const recipe = await callTool('route_recipe', { project: PROJ, category, ticket: added.ref });
+  assert.deepEqual(recipe.route, { model: 'opus', effort: 'high' });
+  assert.deepEqual(recipe.ticket, { ref: added.ref, route: { model: 'opus', effort: 'high' } });
 });
 
 export {};

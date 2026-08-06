@@ -2364,7 +2364,8 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
       { SIDEQUEST_DISCOVERY_DIRS: catalog }
     );
     assert.equal(drifted.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /route marker must match the prepared spawn/);
+    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is codex-gpt-5-6-terra \/ high/);
+    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /cannot be overridden at spawn time/);
   } finally {
     if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
     else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
@@ -2421,7 +2422,8 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
     },
   });
   assert.equal(driftedRoute.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /route marker must match the prepared spawn/);
+  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is sonnet \/ high/);
+  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /Set this ticket's route override before dispatching/);
 
   const driftedBriefing = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,

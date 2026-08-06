@@ -113,6 +113,18 @@ function highStakesFromOpts(opts: any) {
   return String(opts['high-stakes']).toLowerCase() !== 'false';
 }
 
+function ticketRouteFromOpts(opts: any, allowClear = false) {
+  if (allowClear && opts.route === 'none') return null;
+  const hasModel = opts['route-model'] != null;
+  const hasEffort = opts['route-effort'] != null;
+  if (!hasModel && !hasEffort) return undefined;
+  if (!hasModel || !hasEffort) fail('--route-model and --route-effort must be provided together.');
+  const route = store.normalizeRoute({ model: opts['route-model'], effort: opts['route-effort'] });
+  if (!route) fail('ticket route override requires a valid model and effort.');
+  if (!store.availableRoute(route.model)) fail(`ticket route override model "${route.model}" isn't currently available.`);
+  return route;
+}
+
 function addPreview(opts: any, category: any, complexity: any) {
   const priority = store.VALID_PRIORITY.includes(String(opts.priority || '').toLowerCase())
     ? String(opts.priority).toLowerCase()
@@ -133,6 +145,7 @@ function addPreview(opts: any, category: any, complexity: any) {
     executorVerify: opts.verify || '',
     storyId: opts.story || null,
     category,
+    route: ticketRouteFromOpts(opts),
     complexity,
     complexityWhy: opts.why || '',
     source: opts.source || 'cli',
@@ -153,6 +166,7 @@ async function cmdAdd(opts: any) {
   }
   const { slug, meta } = await resolveProject(opts);
   const category = input.category == null ? null : categoryIdOrFail(slug, input.category);
+  const route = ticketRouteFromOpts(opts);
   const warnings: any = [];
   const created = store.createTicket(slug, {
     title: opts.title,
@@ -172,6 +186,7 @@ async function cmdAdd(opts: any) {
     complexity: opts.complexity,
     complexityWhy: opts.why,
     category,
+    route,
     source: opts.source || 'cli',
     onAssetError: (src: any) => warnings.push(`could not attach image: ${src}`),
   });
@@ -294,6 +309,8 @@ async function cmdUpdate(opts: any, positional: any) {
   }
   if (opts.story != null) patch.storyId = opts.story; // link (US-n / raw id) or clear ("none"/null)
   if (opts.category != null) patch.category = opts.category === 'none' ? null : categoryIdOrFail(slug, opts.category);
+  const route = ticketRouteFromOpts(opts, true);
+  if (route !== undefined) patch.route = route;
   if (opts.by != null) patch.by = opts.by;
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const saved = store.updateTicket(slug, idOrRef, patch);
@@ -344,4 +361,4 @@ async function cmdRm(opts: any, positional: any) {
 // release/complete it. Pass --by to be explicit; otherwise fall back to an env
 // hint or the machine name. Distinct concurrent workers should pass distinct --by.
 
-module.exports = { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts };
+module.exports = { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm, PRIORITY_MARK, modelMark, categoryIdOrFail, categoryEcho, categoryEchoLine, contractsFromOpts, contractWaiverFromOpts, readonlyFromOpts, highStakesFromOpts, ticketRouteFromOpts };

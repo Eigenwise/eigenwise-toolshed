@@ -25,6 +25,7 @@ function createTickets(dependencies) {
     makeWorkedBy,
     newTicketId,
     nextSeq,
+    normalizeRoute,
     path,
     pendingSubmission,
     putTicket,
@@ -54,6 +55,12 @@ function createTickets(dependencies) {
   }
   function dispatchReadOnly(ticket) {
     return typeof ticket?.readonlyOverride === "boolean" ? ticket.readonlyOverride : categoryReadOnly(ticket);
+  }
+  function normalizedTicketRoute(route) {
+    if (route == null) return null;
+    const normalized = normalizeRoute(route);
+    if (!normalized) throw new Error("Ticket route override requires a valid model and effort.");
+    return normalized;
   }
   function createTicket(slug, fields) {
     fields = fields || {};
@@ -89,6 +96,7 @@ function createTickets(dependencies) {
       storyId: coerceStoryId(slug, fields.storyId),
       // the user story this ticket belongs to (null = none)
       category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
+      route: normalizedTicketRoute(fields.route),
       complexity: coerceComplexity(fields.complexity),
       // 1..10 score the routing is derived from (entry points require it)
       complexityWhy: String(fields.complexityWhy || "").trim().slice(0, 1e3),
@@ -912,6 +920,7 @@ function createTickets(dependencies) {
       if (patch.highStakes !== void 0) t.highStakes = !!patch.highStakes;
       if (patch.storyId !== void 0) t.storyId = coerceStoryId(slug, patch.storyId);
       if (patch.category !== void 0) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
+      if (patch.route !== void 0) t.route = normalizedTicketRoute(patch.route);
       if (patch.complexity !== void 0) {
         const c = coerceComplexity(patch.complexity);
         if (c) t.complexity = c;
