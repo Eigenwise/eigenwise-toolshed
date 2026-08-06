@@ -96,12 +96,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 22
+      # The cache key must track COLLECTOR_VERSION. A hardcoded version would keep
+      # hitting on a bump, find the old binary already present, skip the download,
+      # and silently validate our config against the wrong Collector.
+      - name: Resolve pinned Collector version
+        id: collector-version
+        if: matrix.name == 'observability'
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="$(node -p "require('./plugins/observability/bin/setup-observability.js').COLLECTOR_VERSION")"
+          [ -n "$version" ] && [ "$version" != undefined ] || { echo "COLLECTOR_VERSION is not exported" >&2; exit 1; }
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
       - name: Cache pinned OpenTelemetry Collector
         if: matrix.name == 'observability'
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/otelcol-contrib
-          key: otelcol-contrib-0.120.0-${{ matrix.os }}-amd64
+          key: otelcol-contrib-${{ steps.collector-version.outputs.version }}-${{ matrix.os }}-amd64
       - name: Provision pinned OpenTelemetry Collector
         if: matrix.name == 'observability'
         shell: bash
