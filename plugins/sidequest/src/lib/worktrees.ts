@@ -5,6 +5,7 @@ const os = require('node:os');
 const fs = require('node:fs/promises');
 const nativeFs = require('node:fs');
 const { spawn } = require('node:child_process');
+const commitScope = require('./commit-scope.js');
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
 
@@ -444,14 +445,18 @@ async function resolveCommit(repo: string, revision: string): Promise<string | n
 
 // Untracked files do not block a fast-forward: git itself refuses to clobber one,
 // and a repo with a stray .env would otherwise never advance.
-async function checkoutState(repo: string): Promise<{ branch: string | null; trackedClean: boolean }> {
-  const [head, status] = await Promise.all([
+async function checkoutState(repo: string): Promise<{ branch: string | null; dirtyPaths: string[]; untrackedPaths: string[] }> {
+  const [head, modified, staged, untracked] = await Promise.all([
     git(repo, ['symbolic-ref', '--quiet', '--short', 'HEAD']),
-    git(repo, ['status', '--porcelain', '--untracked-files=no']),
+    git(repo, ['diff', '--name-only']),
+    git(repo, ['diff', '--cached', '--name-only']),
+    git(repo, ['ls-files', '--others', '--exclude-standard']),
   ]);
+  const paths = (result: GitResult) => result.ok && result.stdout ? result.stdout.split(/\r?\n/).filter(Boolean) : [];
   return {
     branch: head.ok && head.stdout ? head.stdout : null,
-    trackedClean: status.ok && status.stdout === '',
+    dirtyPaths: Array.from(new Set([...paths(modified), ...paths(staged)])),
+    untrackedPaths: paths(untracked),
   };
 }
 
@@ -629,10 +634,25 @@ async function advanceLocalIntegrationBranch(repo: string, options: any): Promis
       command: `git -C ${quoted(repo)} switch ${branch} && ${mergeCommand(repo, to)}`,
     }, common));
   }
-  if (!state.trackedClean) {
+  const protectedPaths = Array.from(new Set([
+    ...(Array.isArray(options.admittedScope) ? options.admittedScope : []),
+    ...(Array.isArray(options.changedPaths) ? options.changedPaths : []),
+  ]));
+  const scopedDirtyPaths = [...state.dirtyPaths, ...state.untrackedPaths]
+    .filter((entry) => protectedPaths.length && commitScope.isInScope(entry, protectedPaths));
+  const ignoredDirtyPaths = protectedPaths.length
+    ? state.dirtyPaths.filter((entry) => !commitScope.isInScope(entry, protectedPaths))
+    : state.untrackedPaths;
+  const blockingDirtyPaths = protectedPaths.length ? scopedDirtyPaths : state.dirtyPaths;
+  if (blockingDirtyPaths.length) {
+    const scopeReason = protectedPaths.length
+      ? `uncommitted changes inside this ticket's declared scope: ${blockingDirtyPaths.join(', ')}`
+      : 'modified tracked files';
     return advanceOutcome(Object.assign({
       reason: 'checkout_dirty',
-      message: `${branch} was left at ${shortCommit(branchHead)}: ${repo} has modified tracked files, so fast-forwarding it to ${shortCommit(to)} could clobber them. Commit or stash them, then advance it yourself.`,
+      dirtyPaths: blockingDirtyPaths,
+      ignoredDirtyPaths,
+      message: `${branch} was left at ${shortCommit(branchHead)}: ${repo} has ${scopeReason}, so fast-forwarding it to ${shortCommit(to)} could clobber them. Commit or stash them, then advance it yourself.`,
       command: mergeCommand(repo, to),
     }, common));
   }
@@ -656,6 +676,7 @@ async function advanceLocalIntegrationBranch(repo: string, options: any): Promis
   return advanceOutcome(Object.assign({
     advanced: true,
     reason: 'advanced',
+    ignoredDirtyPaths,
     message: `advanced ${branch} ${shortCommit(branchHead)} → ${shortCommit(to)} (fast-forward, ${repo}).`,
   }, common));
 }
