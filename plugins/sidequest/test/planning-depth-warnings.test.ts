@@ -304,13 +304,20 @@ test('rejects prose verification while preserving commands and recording manual 
   const command = cliJson(['add', '-t', 'command verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . && node --test "lib/verify.js"']);
   assert.strictEqual(command.ticket.executorVerify, 'cd . && node --test "lib/verify.js"');
 
-  const multiline = cliJson(['add', '-t', 'multiline verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . &&\nnode --test "lib/verify.js"']);
-  assert.strictEqual(multiline.ticket.executorVerify, 'cd . &&\nnode --test "lib/verify.js"');
+  const newline = cliResult(['add', '-t', 'newline verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . &&\nnode --test "lib/verify.js"']);
+  assert.strictEqual(newline.status, 1);
+  assert.match(newline.stderr + newline.stdout, /one runnable command line/);
 
   const prose = cliResult(['add', '-t', 'prose verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'Read the rendered page source and confirm the required points.']);
   assert.strictEqual(prose.status, 1);
   assert.match(prose.stderr + prose.stdout, /cd <repo-relative-dir> && <command>/);
   assert.match(prose.stderr + prose.stdout, /manual: <what you checked>/);
+
+  for (const verify of ['pytest -;', 'node --test <scratchpad>/future.test.ts', 'npm test; pytest']) {
+    const invalid = cliResult(['add', '-t', 'invalid verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', verify]);
+    assert.strictEqual(invalid.status, 1, verify);
+    assert.match(invalid.stderr + invalid.stdout, /runnable command|placeholder|chaining/);
+  }
 
   const manual = cliJson(['add', '-t', 'manual verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'manual: Reviewed the rendered page and reference output.']);
   assert.strictEqual(manual.ticket.executorVerify, 'manual: Reviewed the rendered page and reference output.');
