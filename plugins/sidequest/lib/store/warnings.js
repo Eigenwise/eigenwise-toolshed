@@ -124,6 +124,43 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     const unknown = [...refs].filter((ref) => !known.has(ref));
     return unknown.length ? [`Unknown ticket refs: ${unknown.join(", ")}.`] : [];
   }
+  const ANCHOR_PATH_TOKEN = /(?:^|[\s`"'(])((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+  const ANCHOR_SYMBOL_REFERENCE = /(?:^|[\s`"'(])([A-Za-z_$][\w$]*)`?\s+(?:is\s+at|in)\s+`?((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+  function anchorPath(projectPath, value) {
+    const relative = String(value || "").replace(/^\.\//, "");
+    const absolute = path.resolve(String(projectPath), relative);
+    return relative && !relative.startsWith("../") && relativePathWithin(projectPath, absolute) ? { relative, absolute } : null;
+  }
+  function executorAnchorWarnings(ticket, projectPath) {
+    if (!projectPath || !String(ticket?.executorAnchors || "").trim()) return [];
+    const anchors = String(ticket.executorAnchors);
+    const missing = /* @__PURE__ */ new Set();
+    const existing = /* @__PURE__ */ new Map();
+    for (const match of anchors.matchAll(ANCHOR_PATH_TOKEN)) {
+      const candidate = anchorPath(projectPath, match[1]);
+      if (!candidate) continue;
+      if (fs.existsSync(candidate.absolute)) existing.set(candidate.relative.toLowerCase(), candidate.absolute);
+      else missing.add(candidate.relative);
+    }
+    const warnings = [...missing].sort().map((relative) => `Planning-depth warning: executor anchor references path absent from this repo: ${relative}. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.`);
+    const absentSymbols = /* @__PURE__ */ new Set();
+    for (const match of anchors.matchAll(ANCHOR_SYMBOL_REFERENCE)) {
+      const symbol = match[1];
+      const candidate = anchorPath(projectPath, match[2]);
+      if (!candidate || !existing.has(candidate.relative.toLowerCase())) continue;
+      let contents = "";
+      try {
+        contents = fs.readFileSync(candidate.absolute, "utf8");
+      } catch (_) {
+        continue;
+      }
+      if (!new RegExp(`\\b${symbol}\\b`).test(contents)) absentSymbols.add(`${symbol}|${candidate.relative}`);
+    }
+    return [...warnings, ...[...absentSymbols].sort().map((entry) => {
+      const [symbol, relative] = entry.split("|");
+      return `Planning-depth warning: executor anchor says ${symbol} is in ${relative}, but ${symbol} does not appear in that file.`;
+    })];
+  }
   function ticketPrescribesFix(description) {
     const body = String(description || "");
     if (/^\s*fix\s*:/im.test(body)) return true;
@@ -608,6 +645,7 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     if (browserReview) warnings.push(browserReview);
     const verify = verifyCommandWarning(ticket, projectPath);
     if (verify) warnings.push(verify);
+    warnings.push(...executorAnchorWarnings(ticket, projectPath));
     if (!projectPath || !Array.isArray(ticket.files)) return warnings;
     warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
     const absent = ticket.files.filter((file) => {
