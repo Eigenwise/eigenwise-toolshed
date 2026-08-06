@@ -7,14 +7,12 @@ import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
-const performanceTest = path.join(testDirectory, 'hooks.perf.test.ts');
-const testConcurrency = 4;
+const testConcurrency = Math.min(8, Math.max(2, Math.floor(os.availableParallelism() / 2)));
 const testPhaseTimeoutMilliseconds = 480_000;
 const testFiles = (await fs.readdir(testDirectory))
   .filter((name) => name.endsWith('.test.ts'))
   .sort()
-  .map((name) => path.join(testDirectory, name))
-  .filter((file) => file !== performanceTest);
+  .map((name) => path.join(testDirectory, name));
 
 function runTests(phase, files, environment) {
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
@@ -41,7 +39,6 @@ const suiteTestEnvironment = {
 
 try {
   runTests('functional', testFiles, suiteTestEnvironment);
-  runTests('performance', [performanceTest], suiteTestEnvironment);
 } finally {
   await fs.rm(suiteTemporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
 }

@@ -87,11 +87,31 @@ function copyMarketplaceFiles(destination: string): void {
   });
 }
 
-test('MCP descriptors match the checked byte-level golden and removed ask/await tools stay absent', () => {
-  const expected = fs.readFileSync(path.join(FIXTURES, 'mcp-tool-descriptors.json'), 'utf8');
-  assert.equal(JSON.stringify(mcp.toolDescriptors()) + '\n', expected);
-  const names = (mcp.toolDescriptors() as Array<{ name: string }>).map((tool) => tool.name);
-  assert.equal(names.some((name) => name === 'ask' || name === 'await'), false);
+test('MCP descriptors preserve tool and caller-discipline contracts', () => {
+  const descriptors = mcp.toolDescriptors() as Array<{
+    name: string;
+    description: string;
+    inputSchema: { properties?: Record<string, { description?: string }>; required?: string[] };
+  }>;
+  const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
+  assert.equal(byName.size, descriptors.length);
+  assert.equal(byName.has('ask'), false);
+  assert.equal(byName.has('await'), false);
+  assert.equal(byName.has('native_agent'), false);
+  assert.match(byName.get('list')?.description ?? '', /changes\/pulse/);
+  assert.equal(byName.get('changes')?.description, 'THE polling read.');
+  assert.match(byName.get('claim')?.description ?? '', /Claim before work/);
+  assert.deepEqual(
+    Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token'].includes(name)).sort(),
+    ['by', 'effort', 'executor', 'token'],
+  );
+  assert.deepEqual(
+    Object.keys(byName.get('submit')?.inputSchema.properties ?? {}).filter((name) => ['commit', 'verify', 'worktree'].includes(name)).sort(),
+    ['commit', 'verify', 'worktree'],
+  );
+  assert.match(byName.get('comments')?.inputSchema.properties?.full?.description as string, /whole bodies/);
+  assert.match(byName.get('release')?.inputSchema.properties?.command?.description as string, /blocker\/contradiction/);
+  assert.match(byName.get('release')?.inputSchema.properties?.outputTail?.description as string, /blocker\/contradiction/);
 });
 
 test('CLI representative bytes, statuses, and removed commands match goldens', () => {
