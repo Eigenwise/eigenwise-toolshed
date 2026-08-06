@@ -306,7 +306,7 @@ const tools: ToolDefinition[] = [
         candidate: args.candidate,
         deliverable: args.deliverable,
         releaseComment: { by, body: store.releaseCommentBody(reason, evidence.evidence), kind: 'comment', source: 'mcp' },
-        releaseKind: args.kind,
+        releaseKind: evidence.releaseKind,
         releaseReason: reason,
         releaseEvidence: evidence.evidence,
         source: 'mcp',

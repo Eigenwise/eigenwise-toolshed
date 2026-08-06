@@ -212,7 +212,7 @@ async function cmdRelease(opts, positional) {
     candidate: opts.candidate,
     deliverable: opts.deliverable,
     ...reason ? { releaseComment: { by, body: store.releaseCommentBody(reason, evidence.evidence), kind: "comment", source: opts.source || "cli" } } : {},
-    releaseKind: opts["release-kind"],
+    releaseKind: evidence.releaseKind,
     releaseReason: reason,
     releaseEvidence: evidence.evidence,
     source: opts.source || "cli",

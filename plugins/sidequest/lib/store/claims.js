@@ -31,7 +31,7 @@ function createClaims(dependencies) {
           message: "release: technical_blocker requires a non-empty reason and command, a non-zero integer exitCode, and a non-empty outputTail. Capture the failed command result, then release again with all four fields."
         };
       }
-      return { ok: true, evidence: { kind: releaseKind, command, exitCode, outputTail } };
+      return { ok: true, releaseKind, evidence: { kind: releaseKind, command, exitCode, outputTail } };
     }
     if (releaseKind === "contradiction") {
       if (!reason || !command || !outputTail || args?.exitCode != null && !Number.isInteger(exitCode)) {
@@ -41,11 +41,11 @@ function createClaims(dependencies) {
           message: "release: contradiction requires a non-empty reason and command, a non-empty outputTail, and an integer exitCode when supplied. Capture the verbatim probe and its output, then release again with all required fields."
         };
       }
-      return { ok: true, evidence: { kind: releaseKind, command, ...Number.isInteger(exitCode) ? { exitCode } : {}, outputTail } };
+      return { ok: true, releaseKind, evidence: { kind: releaseKind, command, ...Number.isInteger(exitCode) ? { exitCode } : {}, outputTail } };
     }
-    if (!reason && !oracle && !releaseKind) return { ok: true, evidence: null };
-    if (!releaseKind && oracle) return { ok: true, evidence: null };
-    if (RELEASE_KINDS.has(releaseKind)) return { ok: true, evidence: null };
+    if (!reason && !oracle && !releaseKind) return { ok: true, releaseKind: null, evidence: null };
+    if (!releaseKind && oracle) return { ok: true, releaseKind: null, evidence: null };
+    if (RELEASE_KINDS.has(releaseKind)) return { ok: true, releaseKind, evidence: null };
     return {
       ok: false,
       reason: "release_kind_required",
