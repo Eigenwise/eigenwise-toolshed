@@ -1,5 +1,6 @@
 import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
+import { assertRepositoryHookRuntime } from './_hook-runtime.js';
 'use strict';
 
 const test = require('node:test');
@@ -73,6 +74,7 @@ function dispatchPrompt(ticket?: any, token?: any) {
 }
 
 function runHook(script?: any, payload?: any) {
+  assertRepositoryHookRuntime();
   const output = execFileSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: 'utf8',

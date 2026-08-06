@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_hook-runtime.js';
 import assert from 'node:assert';
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';

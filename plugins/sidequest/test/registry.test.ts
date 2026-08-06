@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_hook-runtime.js';
 'use strict';
 
 const assert = require('assert/strict');
