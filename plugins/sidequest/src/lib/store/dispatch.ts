@@ -636,9 +636,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const story = t.storyId ? getStory(slug, t.storyId) : null;
     const contract = storyExecutionContract(story);
     const contractDrift = t.storyContractDrift || null;
-    const useIntegrationTarget = !sharedTree || opts.integrationBranch != null || opts.integrationMode != null;
+    const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase();
+    const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
+    const useIntegrationTarget = explicitIntegrationTarget
+      || (!sharedTree && !readonly && !nonRepoOutput && configuredIntegrationMode !== 'auto');
     const integrationTargetState = useIntegrationTarget
-      ? (opts.integrationBranch != null || opts.integrationMode != null
+      ? (explicitIntegrationTarget
         ? integrationTarget(slug, {
           ...(opts.integrationBranch != null ? { branch: opts.integrationBranch } : {}),
           ...(opts.integrationMode != null ? { mode: opts.integrationMode } : {}),

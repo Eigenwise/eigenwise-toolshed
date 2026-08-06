@@ -555,8 +555,10 @@ function createDispatch(dependencies) {
       const story = t.storyId ? getStory(slug, t.storyId) : null;
       const contract = storyExecutionContract(story);
       const contractDrift = t.storyContractDrift || null;
-      const useIntegrationTarget = !sharedTree || opts.integrationBranch != null || opts.integrationMode != null;
-      const integrationTargetState = useIntegrationTarget ? opts.integrationBranch != null || opts.integrationMode != null ? integrationTarget(slug, {
+      const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
+      const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
+      const useIntegrationTarget = explicitIntegrationTarget || !sharedTree && !readonly && !nonRepoOutput && configuredIntegrationMode !== "auto";
+      const integrationTargetState = useIntegrationTarget ? explicitIntegrationTarget ? integrationTarget(slug, {
         ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
         ...opts.integrationMode != null ? { mode: opts.integrationMode } : {}
       }) : integrationTarget(slug) : null;
