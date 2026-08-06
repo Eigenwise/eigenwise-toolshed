@@ -868,6 +868,25 @@ test('worktree setup appears only in isolated worktree briefings', () => {
   assert.throws(() => store.setBoardConfig(slug, { worktreeSetup: 'x'.repeat(1001) }), /1000-character/);
 });
 
+test('briefings synchronize stale worktrees to their recorded integration target', () => {
+  const root = tmpDir();
+  const commit = 'a'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-1334', title: 'Sync worktree', model: 'opus', effort: 'high', category: {},
+    dispatch: {
+      sharedTree: false,
+      baseCommit: commit,
+      integrationTarget: { mode: 'local', branch: 'main' },
+    },
+  }, 'sync-token', undefined, root);
+
+  assert.ok(briefing.includes(`git merge-base --is-ancestor ${commit} HEAD`));
+  assert.ok(briefing.includes(`git fetch "${root}" "main"`));
+  assert.ok(briefing.includes(`git reset --hard ${commit}`));
+  assert.ok(briefing.includes(`[sidequest:worktree-sync] synced to ${commit}`));
+  assert.ok(briefing.includes('If fetching or resetting fails, stop and report the failure instead of working from the stale base.'));
+});
+
 test('renderTicketBriefing embeds no route marker for a Claude-backed route', () => {
   clearCatalog();
   const briefing = agentsync.renderTicketBriefing({

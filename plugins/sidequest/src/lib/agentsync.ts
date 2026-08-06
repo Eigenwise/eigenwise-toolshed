@@ -532,6 +532,22 @@ function ticketWorktreeSetup(ticket?: any, slug?: any) {
   return config && config.worktreeSetup ? config.worktreeSetup : null;
 }
 
+function ticketWorktreeSync(ticket?: any, projectPath?: any) {
+  const dispatch = ticket?.dispatch;
+  const root = String(projectPath || '').trim();
+  const target = dispatch?.integrationTarget;
+  const commit = String(dispatch?.baseCommit || '').trim();
+  if (dispatch?.sharedTree !== false || !root || !target || !commit) return null;
+  const branch = String(target.mode === 'remote' ? `refs/remotes/origin/${target.branch}` : target.branch || '').trim();
+  if (!branch) return null;
+  return [
+    `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
+    `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git reset --hard ${commit}\`.`,
+    `After a successful reset, post one board comment: \`[sidequest:worktree-sync] synced to ${commit}\`.`,
+    'If fetching or resetting fails, stop and report the failure instead of working from the stale base.',
+  ].join(' ');
+}
+
 function storyContractPacket(ticket?: any, slug?: any) {
   const snapshot = ticket && ticket.dispatch && ticket.dispatch.storyContract
     ? ticket.dispatch.storyContract
@@ -706,6 +722,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(', ') : '(No labels were recorded.)';
   const closeout = ticketCloseout(ticket);
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
+  const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
   const experimentLog = experimentLogPacket(ticket, slug);
   const planDocument = planDocumentPacket(ticket, slug);
@@ -733,6 +750,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     'Billable resources: when this work creates a cloud pod, VM, or other billable external resource, comment its id on the ticket immediately and terminate it before every stop, including error paths.',
     ...(ticket.highStakes ? ['High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration.'] : []),
     ...(worktreeIdentity ? [worktreeIdentity] : []),
+    ...(worktreeSync ? [worktreeSync] : []),
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     ...(ticketIsolationContract(ticket, project) || []),
     ...(scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : []),
