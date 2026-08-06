@@ -507,6 +507,22 @@ test('replay conflict aborts, restores HEAD, and keeps the pinned ref', () => {
   assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
 });
 
+test('replay conflict preserves an unrelated dirty tracked file during rollback', () => {
+  const { fixture, slug, ticket, runCli } = deliveryTicket('replay-conflict-unrelated-dirty');
+  commitFile(fixture.repo, 'feature.txt', 'conflicting local work\n');
+  const unrelatedEdit = 'uncommitted work outside the ticket scope\n';
+  fs.writeFileSync(path.join(fixture.repo, 'README.md'), unrelatedEdit);
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'replay', '--json']);
+
+  assert.equal(result.status, 1);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'README.md'), 'utf8'), unrelatedEdit);
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'doing');
+  assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
+});
+
 test('apply refuses an overlapping dirty path and names it without dropping the pinned ref', () => {
   const { fixture, slug, ticket, runCli } = deliveryTicket('apply-overlap');
   fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'user edit\n');
