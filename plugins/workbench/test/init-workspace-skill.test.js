@@ -147,7 +147,7 @@ test('init-workspace keeps CLAUDE.md and live rules as complementary defaults', 
 test('init-workspace writes new live rules as atomic files with a verified manifest', () => {
   assert.match(skill, /[Cc]reate a new workspace's `\.claude\/live-rules\/`\s+directory directly/);
   assert.match(skill, /every accepted project rule as one\s+`\.claude\/live-rules\/rules\/<stable-name>\.md`/);
-  assert.match(skill, /SHA-256 hash of\s+the exact UTF-8 rule file contents/);
+  assert.match(skill, /SHA-256 hash of the UTF-8 rule file with `\\r` bytes\s+removed/);
   assert.match(skill, /Generate and validate those hashes mechanically, never by hand/);
   assert.match(skill, /fresh workspace never creates\s+`\.claude\/live-rules\.md`/);
   assert.match(skill, /migrate its rules into atomic files without deleting the\noriginal/);
@@ -156,7 +156,14 @@ test('init-workspace writes new live rules as atomic files with a verified manif
   assert.match(ruleTemplates, /never a new `\.claude\/live-rules\.md`/);
   assert.match(ruleTemplates, /"version": 1/);
   assert.match(ruleTemplates, /"path": "rules\/atomic-commits\.md"/);
-  assert.match(ruleTemplates, /"hash": "<sha256 of the exact rules\/atomic-commits\.md contents>"/);
+  assert.match(skill, /SHA-256 hash of the UTF-8 rule file with `\\r` bytes\s+removed/);
+  assert.match(skill, /`priority`, `enabled`,\s+`include`/);
+  assert.match(ruleTemplates, /"hash": "<sha256 of the LF-normalized rules\/atomic-commits\.md contents>"/);
+  assert.match(ruleTemplates, /"priority": 95,/);
+  assert.match(ruleTemplates, /"include": \[\]/);
+  assert.match(skill, /pin the hashed workspace artifacts to LF/);
+  assert.match(skill, /\.claude\/live-rules\/rules\/\*\.md text eol=lf/);
+  assert.match(skill, /\.claude\/\.codebase-info\/\*\.md text eol=lf/);
   assert.match(ruleTemplates, /temporary sibling, validate every hash/);
   assert.doesNotMatch(ruleTemplates, /File header/);
 
