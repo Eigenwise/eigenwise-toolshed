@@ -8,6 +8,25 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.401.0 (2026-08-06)
+
+### sidequest 4.35.0 → 4.36.0
+
+#### Features
+
+- Executors verify what they changed; the integrator runs the full suite (SQ-1381)
+  Every executor was running the whole plugin suite before submitting, inside its own budget, in a worktree forked from `origin/main` when it was dispatched. The result could not be trusted: five executors in one session forked the same commit and four merges landed while they worked, so each one's "full suite passed" described a tree that no longer existed. The orchestrator re-ran the same suite on the merged tree anyway, and that is the run every decision was actually made on.
+
+  So the suite was being paid for twice, and the copy nobody could believe was the expensive one. Worse, it was the last thing every run did, which made it exactly where a run died when it ran out of budget: one executor was stopped partway through its gate after 319,915 tokens.
+
+  Executors now verify the surface they changed and submit. A submission whose verify command does not match the one the ticket declared is refused, so the scoped run cannot quietly become something else. The full suite runs once, on the merged tree, where it is the only place it means anything.
+- Ticket authoring: establish the premise, and ask for behavior instead of a test count (SQ-1382)
+  Two authoring rules, from watching the same mistake in two costumes: asserting instead of establishing, with the executor paying for it.
+
+  An orchestrator filed a fix whose premise was a number it had never measured. Two executors in a row released with `contradiction`, each having done the work to show the premise was false. The measurement, run afterward, found the effect had the opposite shape. A claim a fix depends on now needs the command, its output, and where it ran, or a link to the read-only ticket that established it. Unmeasured means file the measurement first. A warning fires at add and at dispatch, and stays quiet when the evidence is cited or linked.
+
+  The second rule is about coverage. Asking for "one test per fix" asks for a count, and a count is trivially satisfied by a golden that asserts bytes did not move. Tickets now state the behavior that must keep working, the input that would expose a break, and what a useful failure should identify. As many assertions as the contract needs, and no ceremony.
+
 ## v3.400.0 (2026-08-06)
 
 ### sidequest 4.34.0 → 4.35.0
