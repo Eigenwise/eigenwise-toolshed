@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.389.0 (2026-08-06)
+
+### sidequest 4.26.0 → 4.26.1
+
+#### Fixes
+
+- Declared hook sources grant their compiled output (SQ-1344)
+  4.13.0 made a declared source path grant its compiled twin, derived from the build script rather than configured by hand. Hooks were left out: `packageBuildOutputs` discovers a package's outputs by looking for `nonBundledBuildDirectories`, `--outdir` flags, and `outdir:` keys, and `buildHooks` writes an `outfile` instead. So a ticket declaring `plugins/sidequest/src/hooks/` never got `plugins/sidequest/hooks/`, and every hook change had to stop and ask for scope on its own build output. SQ-1327 hit it live.
+
+  The discovery now recognises the `outfile` shape too, so `src/hooks/x.ts` pairs with `hooks/x.js`. The pairing stays flat and stays one-way: `src/hooks/shared/**` is bundled into each hook rather than emitted, so it is deliberately not paired, and declaring compiled output still does not grant its source.
+
 ## v3.388.0 (2026-08-06)
 
 ### codebase-mapper 2.13.0 → 2.14.0
