@@ -442,6 +442,7 @@ function submissionRange(cwd, options) {
   }
   let commits;
   let rootCommit = false;
+  let noOp = false;
   if (rootBase) {
     if (parentCommits(cwd, tip.value).length) {
       return { ok: false, reason: "base_not_reachable", base: EMPTY_TREE, actualBase: mergeBase.value, upstream, tip: tip.value };
@@ -453,16 +454,19 @@ function submissionRange(cwd, options) {
     const commitList = gitResult(cwd, ["rev-list", "--reverse", `${effectiveBase}..${tip.value}`]);
     if (!commitList.ok) return { ok: false, reason: "git_error", message: commitList.message };
     commits = commitList.value ? commitList.value.split(/\r?\n/).filter(Boolean) : [];
-    if (!commits.length && !requestedBase && effectiveBase === tip.value) {
+    if (!commits.length && requestedBase && requestedBase.value === tip.value) {
+      noOp = true;
+    }
+    if (!commits.length && !noOp && !requestedBase && effectiveBase === tip.value) {
       const tipParents = parentCommits(cwd, tip.value);
       if (tipParents.length > 1) return { ok: false, reason: "merge_commit", commit: tip.value };
       rootCommit = tipParents.length === 0;
       effectiveBase = rootCommit ? EMPTY_TREE : tipParents[0];
       commits = [tip.value];
     }
-    if (!commits.length) return { ok: false, reason: "empty_range", base: effectiveBase, tip: tip.value };
+    if (!commits.length && !noOp) return { ok: false, reason: "empty_range", base: effectiveBase, tip: tip.value };
   }
-  if (!rootCommit) {
+  if (!rootCommit && !noOp) {
     const parents = gitResult(cwd, ["rev-list", "--parents", `${effectiveBase}..${tip.value}`]);
     if (!parents.ok) return { ok: false, reason: "git_error", message: parents.message };
     const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
@@ -477,7 +481,8 @@ function submissionRange(cwd, options) {
       upstream,
       upstreamCommit: currentUpstream.value,
       commits,
-      changedPaths: rangePaths(cwd, commits)
+      changedPaths: rangePaths(cwd, commits),
+      ...noOp ? { noOp: true } : {}
     };
   } catch (error) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
@@ -495,11 +500,17 @@ function validateStoredSubmissionRange(cwd, submissionValue) {
   });
   if (!range.ok) return range;
   const storedCommits = Array.isArray(submission.commits) ? submission.commits : [];
-  if (storedCommits.length && JSON.stringify(storedCommits) !== JSON.stringify(range.commits)) {
+  const rangeNoOp = "noOp" in range && range.noOp === true;
+  const rangeCommits = "commits" in range && Array.isArray(range.commits) ? range.commits : [];
+  const rangeChangedPaths = "changedPaths" in range && Array.isArray(range.changedPaths) ? range.changedPaths : [];
+  if (Boolean(submission.noOp) !== rangeNoOp) {
+    return Object.assign({}, range, { ok: false, reason: "no_op_changed", storedNoOp: Boolean(submission.noOp) });
+  }
+  if (storedCommits.length && JSON.stringify(storedCommits) !== JSON.stringify(rangeCommits)) {
     return Object.assign({}, range, { ok: false, reason: "range_changed", storedCommits });
   }
   const storedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
-  if (storedPaths.length && JSON.stringify(storedPaths) !== JSON.stringify(range.changedPaths)) {
+  if (storedPaths.length && JSON.stringify(storedPaths) !== JSON.stringify(rangeChangedPaths)) {
     return Object.assign({}, range, { ok: false, reason: "changed_paths_changed", storedPaths });
   }
   const admittedScope = scopedPaths(submission.admittedScope);
@@ -510,7 +521,7 @@ function validateStoredSubmissionRange(cwd, submissionValue) {
       message: "submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason."
     });
   }
-  const scopeValidation = validatePaths(admittedScope, range.changedPaths || []);
+  const scopeValidation = validatePaths(admittedScope, rangeChangedPaths);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, { admittedScope });
 }

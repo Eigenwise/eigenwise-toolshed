@@ -202,6 +202,21 @@ function pathList(paths?: any) {
 // already knows where this executor works, and a declared scope with nothing
 // uncommitted and nothing committed past the dispatch baseline is a refusal
 // with nothing behind it. Anything else stands (SQ-923).
+function hasNoOpVerificationEvidence(ticket: any) {
+  const holder = String(ticket?.claim?.by || '');
+  let verificationStarted = false;
+  for (const comment of Array.isArray(ticket?.comments) ? ticket.comments : []) {
+    if (comment?.by !== holder) continue;
+    const body = String(comment.body || '').trim();
+    if (body.startsWith('[sidequest:verify-start] ') && body.slice('[sidequest:verify-start] '.length).trim()) {
+      verificationStarted = true;
+      continue;
+    }
+    if (verificationStarted && body === '[sidequest:verify-complete] no-op') return true;
+  }
+  return false;
+}
+
 function provenNoOpCloseout(slug: any, ticket: any) {
   const workspace = store.dispatchWorkspace(slug, ticket);
   if (!workspace) {
@@ -212,7 +227,10 @@ function provenNoOpCloseout(slug: any, ticket: any) {
   if (!pending.ok) {
     return { ok: false as const, detail: `Could not inspect the declared scope in ${workspace.root}: ${pending.message || pending.reason}.` };
   }
-  if (!pending.pending) return { ok: true as const, root: workspace.root };
+  if (!pending.pending) {
+    if (hasNoOpVerificationEvidence(ticket)) return { ok: true as const, root: workspace.root };
+    return { ok: false as const, detail: 'Post [sidequest:verify-start] <command>, run the declared verify command, then post [sidequest:verify-complete] no-op before closing a no-change dispatch.' };
+  }
   const detail = [
     pending.working.length ? `uncommitted ${pathList(pending.working)}` : null,
     pending.committed.length ? `committed but not submitted ${pathList(pending.committed)}` : null,

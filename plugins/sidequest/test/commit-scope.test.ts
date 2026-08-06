@@ -454,14 +454,27 @@ test('SQ-923: a scoped commit that advanced the integration branch submits again
   assert.deepEqual(range.changedPaths, ['plugins/sidequest/engine.js']);
 });
 
-test('SQ-923: the empty-range recovery never invents a range for a merge tip or an explicit base', () => {
+test('SQ-1339: an explicit base equal to the tip records a no-op without weakening merge-tip refusal', () => {
   const root = repo();
   const main = branchOf(root);
   const tip = git(root, ['rev-parse', 'HEAD']);
   pin(root, 'refs/sidequest/SQ-3', tip);
   const explicit = commitScope.submissionRange(root, { commit: tip, gitRef: 'refs/sidequest/SQ-3', upstream: main, base: tip });
-  assert.equal(explicit.ok, false, 'an explicit base that names the tip is still an empty range');
-  assert.equal(explicit.reason, 'empty_range');
+  assert.equal(explicit.ok, true, `explicit no-op was refused: ${explicit.reason}`);
+  assert.equal('noOp' in explicit && explicit.noOp, true);
+  assert.deepEqual(explicit.commits, []);
+  assert.deepEqual(explicit.changedPaths, []);
+  assert.equal(commitScope.validateStoredSubmissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-3',
+    upstream: explicit.upstream,
+    upstreamCommit: explicit.upstreamCommit,
+    base: explicit.base,
+    commits: explicit.commits,
+    changedPaths: explicit.changedPaths,
+    noOp: true,
+    admittedScope: ['plugins/sidequest'],
+  }).ok, true);
 
   git(root, ['checkout', '-q', '-b', 'side']);
   fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'side.js'), 'side\n');

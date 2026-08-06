@@ -762,7 +762,7 @@ function updateDoneRefusal(ticket?: any) {
     return `${ticket.ref} has an active dispatch. Its executor must use done/completeTicket or commit and submit; update --status done cannot bypass that lifecycle.`;
   }
   if (state) {
-    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work; use the control-plane grooming closure with evidence.`;
+    return `${ticket.ref} has routed dispatch history. Executors cannot close released repository work. A claim holder can commit and submit verified scoped changes, or release it to todo with findings; the orchestrator will re-dispatch it or use the control-plane grooming closure with evidence.`;
   }
   return null;
 }
