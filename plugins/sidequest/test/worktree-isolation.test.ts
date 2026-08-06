@@ -242,6 +242,42 @@ test('the dispatch briefing states the isolation contract and the resume trap', 
   assert.ok(!sharedBriefing.includes('Worktree isolation contract'), 'a shared-tree dispatch is not told it is isolated');
 });
 
+test('an isolated scope pause retains a clean worktree for the scope ruling', () => {
+  const agentId = 'a10scope-retention';
+  const { ticket, executor } = dispatched(agentId);
+  const linked = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(path.dirname(linked), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, 'scope-retention-worker', {
+      token: ticket.dispatchNonce,
+      executor: ticket.dispatchExecutor,
+    }).ok, true);
+    const base = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
+
+    const requested = store.requestScope(slug, ticket.ref, 'scope-retention-worker', ['new.js']);
+    assert.equal(requested.ok, true);
+    assert.equal(execFileSync('git', ['status', '--porcelain'], { cwd: linked, encoding: 'utf8', windowsHide: true }), '');
+    const retained = store.getTicket(slug, ticket.ref);
+    const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
+    assert.notEqual(commit, base, 'a clean pause leaves a retention commit');
+    assert.equal(retained.scopeRequest.retention.commit, commit);
+    assert.equal(retained.scopeRequest.retention.worktree, linked.replace(/\\/g, '/'));
+
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: ticket.dispatchNonce,
+      executor,
+      error: 'Subagent terminated unexpectedly',
+    }).ok, true);
+    store.updateTicket(slug, ticket.ref, { files: ['README.md', 'new.js'] });
+    const resumed = store.getTicket(slug, ticket.ref);
+    assert.equal(resumed.dispatch.worktree, linked);
+    assert.equal(resumed.dispatch.outcome, 'claimed');
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
 test('an isolated scope pause preserves its worktree through denial', () => {
   const agentId = 'a10scope-denial';
   const { ticket, sessionId, executor } = dispatched(agentId);
