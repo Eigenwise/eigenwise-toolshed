@@ -8,6 +8,44 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.400.0 (2026-08-06)
+
+### sidequest 4.34.0 → 4.35.0
+
+#### Features
+
+- The repeat-dispatch breaker stops counting correct pauses as failures (SQ-1340)
+  Dispatching a ticket a third time was blocked with a diagnosis the board had never established: "Environment visibility is the leading hypothesis." It said that on every no-commit repeat, regardless of what the prior attempts actually were.
+
+  The cause was one layer below the message. Release validation checked the kind and then dropped it: `scope_pause` and `handback` were accepted, confirmed valid, and returned as an empty result, so they never reached the attempt record. The breaker had nothing to discriminate on, so it counted every terminal attempt with no commit as a failure. A scope pause is the board working as designed, and it was accumulating toward a block.
+
+  The validated kind now travels with the release, onto the terminal attempt, along with its reason and evidence. Scope pauses and handbacks no longer count toward the breaker at all. When it does block, it names the recorded attempts and their causes instead of asserting one hypothesis, and it only claims a worktree-shaped failure when the attempts carry that shape.
+
+  Found the hard way: this ticket was blocked from dispatching by its own breaker, with the exact wrong diagnosis it exists to remove.
+- Wrong anchors are caught when written, not when an executor hits them (SQ-1371)
+  An anchor that points at a file or symbol that does not exist was only discovered by the executor, after it had already paid for a worktree, a briefing, and the reading it took to find out. The ticket looked fine on the board the whole time.
+
+  Anchors are now checked at write time, so a bad one surfaces to whoever is filing the ticket while it is still cheap to fix. Executors are also told plainly that an anchor they find wrong can be corrected rather than treated as gospel or worked around.
+- A scope pause no longer destroys the worktree it paused in (SQ-1377)
+  An isolated worktree is removed when its agent finishes without changing anything. An executor that asks for scope before its first edit and then ends looks exactly like that, so the whole run is swept: one measured case cost 246,657 tokens for zero output, and the scope grant landed seconds after the executor gave up.
+
+  There is no cheap recovery once the process ends. A held claim makes it look like the work survived, and it has not. So the fix has to land before the pause, not after it: requesting scope from a clean isolated worktree now writes an empty marker commit first, which is enough to stop it reading as untouched.
+
+  The tests here cover our side, that the marker is written and the retention recorded. Whether the runtime sweeper spares a worktree whose only change is an empty commit is not something a test in this repo can observe. Every worktree carrying a real commit has survived so far, which is the evidence this rests on.
+- Test assertions that measured the wrong thing become measurements (SQ-1380)
+  Three assertions were shaping the code around numbers nobody had chosen deliberately.
+
+  The MCP `tools/list` payload had a 17,500-byte ceiling written as a literal in our own test, and the payload was sitting 17,492 bytes: eight bytes of headroom. Two executors were told that ceiling was a real protocol constraint and spent effort contorting schemas to fit under it. It is now a reported measurement against a recorded baseline, so a size change is visible without being a failure.
+
+  The CLI goldens compared a byte count and a sha256. A diff on those tells a reviewer nothing except that something moved, so the only available response was to regenerate them. They now assert the substrings the output must contain, which is the thing anyone actually cared about, and stay strict where the old golden was strict: an error case still has to print nothing to stdout.
+
+  The hook latency test gated on absolute wall-clock ceilings, which cannot mean anything on a hosted runner shared with other work. It reports its numbers now. A hook that crashes still fails the test, because every sample asserts its exit status.
+
+#### Fixes
+
+- Regressions for the board API papercuts that had no coverage (SQ-1378)
+  The four remaining papercuts from the earlier API pass turned out to be already fixed, with nothing asserting them. They have regressions now: MCP rejecting unknown parameters instead of silently ignoring them, `list` returning `verify` while keeping `executorVerify` for older callers, and `profile get` working as a CLI action with unknown actions failing loudly.
+
 ## v3.399.0 (2026-08-06)
 
 ### sidequest 4.33.0 → 4.34.0
