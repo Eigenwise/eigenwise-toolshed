@@ -262,7 +262,10 @@ test('an isolated scope pause retains a clean worktree for the scope ruling', ()
     const commit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
     assert.notEqual(commit, base, 'a clean pause leaves a retention commit');
     assert.equal(retained.scopeRequest.retention.commit, commit);
-    assert.equal(retained.scopeRequest.retention.worktree, linked.replace(/\\/g, '/'));
+    // The retention path comes back through git, which reports the canonical long
+    // form. A CI runner whose username exceeds 8 characters hands the test the 8.3
+    // short form instead (RUNNER~1), so both sides need resolving before comparing.
+    assert.equal(retained.scopeRequest.retention.worktree, fs.realpathSync.native(linked).replace(/\\/g, '/'));
 
     assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
       token: ticket.dispatchNonce,
