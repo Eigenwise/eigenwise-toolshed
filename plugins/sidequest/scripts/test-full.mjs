@@ -9,8 +9,11 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const testDirectory = path.join(pluginRoot, 'test');
 const testConcurrency = Math.min(8, Math.max(2, Math.floor(os.availableParallelism() / 2)));
 const testPhaseTimeoutMilliseconds = 480_000;
+// Benchmarks live behind `npm run test:perf`. Without this exclusion the glob
+// below sweeps them back into the default suite, which is the 23 seconds
+// SQ-1387 exists to remove.
 const testFiles = (await fs.readdir(testDirectory))
-  .filter((name) => name.endsWith('.test.ts'))
+  .filter((name) => name.endsWith('.test.ts') && !name.endsWith('.perf.test.ts'))
   .sort()
   .map((name) => path.join(testDirectory, name));
 
