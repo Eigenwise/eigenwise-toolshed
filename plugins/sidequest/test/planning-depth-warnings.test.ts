@@ -17,6 +17,7 @@ const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does 
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
 const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
 const BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output lib. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
+const HOOK_BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output hooks. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
 const READONLY_BROWSER_WARNING = 'Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.';
 
 function cliJson(args?: any) {
@@ -279,6 +280,33 @@ test('warns when tracked package build output is omitted from source scope', () 
 
   const included = cliJsonAt(project, ['add', '-t', 'source and output change', '--category', 'coding.normal', '--file', 'src/lib/store.ts', '--file', 'lib/store.js']);
   assert.deepStrictEqual(included.warnings, []);
+});
+
+test('discovers bundled hook output from the build script export', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'bundled-hook-output');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src', 'hooks'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'hooks'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { build: 'node scripts/build.mjs' } }));
+  fs.writeFileSync(path.join(project, 'scripts', 'build.mjs'), [
+    'export const bundledBuildOutputs = [{',
+    "  sourceDirectory: 'src/hooks',",
+    "  outputDirectory: 'hooks',",
+    "  sourceExtension: '.ts',",
+    "  outputExtension: '.js',",
+    '}];',
+  ].join('\n'));
+  fs.writeFileSync(path.join(project, 'src', 'hooks', 'subagent-stop.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(project, 'hooks', 'subagent-stop.js'), 'module.exports = {};\n');
+  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
+
+  const omitted = cliJsonAt(project, ['add', '-t', 'hook source change', '--category', 'coding.normal', '--file', 'src/hooks/subagent-stop.ts']);
+  assert.deepStrictEqual(omitted.warnings, [HOOK_BUILD_OUTPUT_WARNING]);
+
+  const outputOnly = cliJsonAt(project, ['add', '-t', 'hook output change', '--category', 'coding.normal', '--file', 'hooks/subagent-stop.js']);
+  assert.deepStrictEqual(outputOnly.warnings, []);
 });
 
 test('warns only for visual-evaluation and legacy visual-review categories', () => {
