@@ -2408,6 +2408,13 @@ test('MCP done requires a final report and release records its reason', async ()
   await callTool('release', { ref: released.ref, by: 'mcp-release-worker', reason: 'Scope needs approval.', kind: 'scope_pause', status: 'todo' });
   const afterRelease = store.getTicket(released.project, released.ref);
   assert.equal(afterRelease.claim, null);
+  assert.deepEqual(afterRelease.release, {
+    kind: 'scope_pause',
+    reason: 'Scope needs approval.',
+    evidence: null,
+    source: 'mcp',
+    at: afterRelease.release.at,
+  });
   assert.equal(afterRelease.comments.at(-1).body, 'Released: Scope needs approval.');
   assert.equal(afterRelease.comments.at(-1).by, 'mcp-release-worker');
 });
@@ -2440,6 +2447,13 @@ test('MCP release records technical-blocker evidence and refuses incomplete evid
     status: 'todo',
   });
   const released = store.getTicket(added.project, added.ref);
+  assert.equal(released.release.kind, 'technical_blocker');
+  assert.deepEqual(released.release.evidence, {
+    kind: 'technical_blocker',
+    command: 'npm run test:files -- test/mcp.test.ts',
+    exitCode: 1,
+    outputTail: 'not ok 1 - technical blocker fixture',
+  });
   assert.match(released.comments.at(-1).body, /Command: npm run test:files -- test\/mcp\.test\.ts/);
   assert.match(released.comments.at(-1).body, /Exit code: 1/);
   assert.match(released.comments.at(-1).body, /not ok 1 - technical blocker fixture/);

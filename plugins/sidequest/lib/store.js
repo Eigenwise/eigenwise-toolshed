@@ -1526,8 +1526,21 @@ function releaseTicket(slug, idOrRef, by, opts) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);
     }
     const terminalOutcome = opts.status === "done" ? "done" : dispatch2?.outcome === "died" || opts.claimRelease?.kind === "session_ended" ? "died" : "released";
+    const release = opts.releaseKind ? {
+      kind: String(opts.releaseKind),
+      reason: String(opts.releaseReason || "").trim() || null,
+      evidence: opts.releaseEvidence || null,
+      source: opts.source || "cli",
+      at: now
+    } : null;
+    if (release) t.release = release;
     if (!dispatch2?.terminalAt || dispatch2.outcome !== terminalOutcome) {
-      setDispatchTerminal(t, terminalOutcome, opts.source || "cli", { failureShape: "unknown" });
+      setDispatchTerminal(t, terminalOutcome, opts.source || "cli", {
+        failureShape: opts.failureShape || release?.kind || "unknown",
+        releaseKind: release?.kind,
+        releaseReason: release?.reason,
+        releaseEvidence: release?.evidence
+      });
     }
     t.dispatchNonce = null;
     t.dispatchExecutor = null;

@@ -318,9 +318,10 @@ function soleIdleCandidate(candidates: any[]) {
   return null;
 }
 
-function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any, commit?: any) {
+function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failureShape?: any, at?: any, commit?: any, release?: any) {
   const route = state && state.route && typeof state.route === 'object' ? state.route : {};
   const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
+  const terminalSource = source || 'store';
   attempts.push({
     route: normalizeRoute(route),
     executor: state.executor || null,
@@ -330,9 +331,11 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
     sharedTree: state.sharedTree === true,
     outcome,
     failureShape,
+    source: terminalSource,
     terminalAt: at,
-    terminalSource: source || 'store',
+    terminalSource,
     ...(commit ? { commit } : {}),
+    ...(release?.kind ? { release } : {}),
   });
   state.attempts = attempts.slice(-8);
 }
@@ -349,12 +352,17 @@ function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: a
   const state = dispatchState(ticket);
   if (!state) return;
   const at = new Date().toISOString();
-  const failureShape = opts && opts.failureShape || classifyDispatchFailure(opts && opts.error);
+  const release = opts?.releaseKind ? {
+    kind: opts.releaseKind,
+    reason: opts.releaseReason || null,
+    evidence: opts.releaseEvidence || null,
+  } : null;
+  const failureShape = opts?.failureShape || release?.kind || classifyDispatchFailure(opts?.error);
   state.outcome = outcome;
   state.failureShape = failureShape;
   state.terminalAt = at;
   state.terminalSource = source || 'store';
-  appendDispatchAttempt(state, outcome, source, failureShape, at, attemptCommit(ticket, opts));
+  appendDispatchAttempt(state, outcome, source, failureShape, at, attemptCommit(ticket, opts), release);
   delete state.supersededTokens;
 }
 
@@ -480,7 +488,7 @@ function recentNoCommitAttempts(state?: any) {
   const rounds = new Set<string>();
   for (let index = attempts.length - 1; index >= 0; index -= 1) {
     const attempt = attempts[index];
-    if (!attempt?.terminalAt) continue;
+    if (!attempt?.terminalAt || ['scope_pause', 'handback'].includes(attempt.release?.kind)) continue;
     const round = String(attempt.preparedAt || attempt.tokenPrefix || attempt.terminalAt);
     if (rounds.has(round)) continue;
     rounds.add(round);
@@ -490,14 +498,21 @@ function recentNoCommitAttempts(state?: any) {
   return recent.length === 2 && recent.every((attempt?: any) => attempt.outcome !== 'submitted' && !attempt.commit) ? recent : [];
 }
 
+function recordedAttemptSummary(attempt?: any) {
+  const kind = attempt?.release?.kind || attempt?.outcome || 'unknown';
+  const at = attempt?.terminalAt || 'unknown time';
+  return `${kind} at ${at}`;
+}
+
 function repeatNoCommitDispatchError(ticket?: any, state?: any) {
   const attempts = recentNoCommitAttempts(state);
   if (attempts.length !== 2) return null;
+  const recordedAttempts = attempts.map(recordedAttemptSummary).join('; ');
   const worktreeFailures = attempts.every((attempt?: any) => attempt.sharedTree === false && attempt.failureShape === 'worktree_environment');
   if (worktreeFailures) {
-    return `prepare dispatch: ${ticket.ref} has two isolated no-commit dispatches that failed to find the app or service. This is a worktree-shaped failure. Check for repository bind mounts or unavailable paths, then set worktreeIsolation:false or dispatch with sharedTree:true. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
+    return `prepare dispatch: ${ticket.ref} has two isolated no-commit dispatches (${recordedAttempts}) that failed to find the app or service. Check for repository bind mounts or unavailable paths, then set worktreeIsolation:false or dispatch with sharedTree:true. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
   }
-  return `prepare dispatch: ${ticket.ref} has two prior terminal dispatches without a commit. Environment visibility is the leading hypothesis. Check ignored paths, dispatch with sharedTree:true, or run inline. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
+  return `prepare dispatch: ${ticket.ref} has two prior terminal no-commit dispatches (${recordedAttempts}). Review the recorded release reasons, correct the ticket when they show a contradiction, then dispatch with allowRepeatFailure:true when a repeat is intentional.`;
 }
 
 function worktreeIsolationWarning(slug?: any) {

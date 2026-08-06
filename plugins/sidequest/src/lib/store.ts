@@ -1563,8 +1563,21 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       : dispatch?.outcome === 'died' || opts.claimRelease?.kind === 'session_ended'
         ? 'died'
         : 'released';
+    const release = opts.releaseKind ? {
+      kind: String(opts.releaseKind),
+      reason: String(opts.releaseReason || '').trim() || null,
+      evidence: opts.releaseEvidence || null,
+      source: opts.source || 'cli',
+      at: now,
+    } : null;
+    if (release) t.release = release;
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
-      setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', { failureShape: 'unknown' });
+      setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
+        failureShape: opts.failureShape || release?.kind || 'unknown',
+        releaseKind: release?.kind,
+        releaseReason: release?.reason,
+        releaseEvidence: release?.evidence,
+      });
     }
     t.dispatchNonce = null;
     t.dispatchExecutor = null;
