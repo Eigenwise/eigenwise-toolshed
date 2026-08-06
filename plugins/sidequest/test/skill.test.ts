@@ -14,9 +14,16 @@ const checkpointing = fs.readFileSync(path.join(__dirname, '..', 'skills', 'side
 // SKILL.md loads into the orchestrator (the priciest model) every session, so
 // its size is a budget like the hook byte budgets: detail belongs in
 // references/ that load on demand. Raise this only with a deliberate decision.
+//
+// Raised 17600 -> 18000 on 2026-08-06, deliberately. SQ-1381 landed guidance
+// that saves minutes of executor wall-clock per run and put the file 72 bytes
+// over. Getting back under took four prose edits and three full gate runs, and
+// the edits were driven by the byte count rather than by whether the wording
+// was better. A budget that shapes prose it was never meant to judge needs
+// headroom; one that never binds is not a budget. 18000 keeps it binding.
 test('SKILL.md stays inside its session-load byte budget', () => {
-  assert.ok(Buffer.byteLength(skill, 'utf8') <= 17600,
-    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 17600 — move detail into references/`);
+  assert.ok(Buffer.byteLength(skill, 'utf8') <= 18000,
+    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 18000 — move detail into references/`);
 });
 
 test('checkpointing reference documents model limits and narrow decision triggers', () => {
