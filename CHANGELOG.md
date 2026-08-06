@@ -8,6 +8,23 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.402.0 (2026-08-06)
+
+### sidequest 4.36.0 → 4.37.0
+
+#### Features
+
+- The test suite runs in half the time, with nothing removed (SQ-1387)
+  Two things were making every run slower than it needed to be, and neither was the number of tests.
+
+  A hook latency benchmark sat inside the default suite costing 23.6 seconds, 12.7% of the total. An audit proved it could not do its job: injecting a 100ms delay into session-start raised the reported median from 244ms to 434ms and the test still passed. It has no threshold to fail. It now lives behind `npm run test:perf`, and the coverage it was genuinely providing, that every hook runs without crashing, moved to a smoke test that reads the hook list from `hooks.json` instead of a hardcoded set, so a new hook is covered the moment it is configured.
+
+  The runner was pinned to 4-way concurrency on a machine with 32 cores. Measured across the whole suite: 106s at 4, 77s at 8, 83s at 12, 88s at 16. It gets worse past 8, because the heaviest files spawn git subprocesses and build real worktrees that then contend on the same disk. The setting is now derived from available cores with that cap, so a small CI runner gets a small number.
+
+  Full gate wall clock: about 190 seconds down to 102.
+
+  Separately, the MCP descriptor golden compared serialized bytes, which meant a diff on it told a reviewer only that something moved. Reversing the descriptor order was enough to fail it, and that changes no contract. It now asserts what callers actually depend on: removed tools stay absent, names stay unique, and the descriptions and schema properties that carry caller discipline still say what they need to say.
+
 ## v3.401.0 (2026-08-06)
 
 ### sidequest 4.35.0 → 4.36.0
