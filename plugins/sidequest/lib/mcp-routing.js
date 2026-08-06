@@ -392,12 +392,13 @@ const tools = [
         alwaysInScope: { type: "array", items: { type: "string" }, description: "When supplied, replaces the board paths merged into every ticket scope." },
         readOnlyDeniedTools: { type: "array", items: { type: "string" } },
         generatedPairs: {},
-        integrationMode: { type: "string", enum: ["auto", "local", "remote"], description: "auto is local without origin; local does not push." },
+        integrationMode: { type: "string", description: "auto is local without origin; local does not push." },
         integrationBranch: { type: "string", minLength: 1, description: "Branch used as the integration baseline. Defaults to main. Remote mode requires origin/<branch>." },
-        delivery: { type: "string", enum: ["merge", "replay", "apply"], description: "Default submission delivery mode. Defaults to merge." },
+        delivery: { type: "string", description: "Default submission delivery mode. Defaults to merge." },
         integrationVerifyTimeoutMs: { type: "integer" },
-        worktreeIsolation: { type: "boolean", description: "When false, dispatched executors for this board always run in the shared checkout — no isolated worktree. Default true." },
-        autoApproveTestScope: { type: "boolean", description: "Widen scope into a test directory the ticket already reaches without a ruling (default true)." },
+        worktreeIsolation: { type: "boolean", description: "false runs executors in the shared checkout (default true)." },
+        autoApproveTestScope: { type: "boolean", description: "Auto-approve reachable test directories (default true)." },
+        autoApproveScope: { type: "array", items: { type: "string" }, description: "Repo-relative auto-approved globs." },
         worktreeSetup: { type: ["string", "null"], description: "One-line isolated-worktree setup; null clears it." }
       }
     },
@@ -414,6 +415,7 @@ const tools = [
       if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
       if (args.worktreeIsolation !== void 0) patch.worktreeIsolation = args.worktreeIsolation;
       if (args.autoApproveTestScope !== void 0) patch.autoApproveTestScope = args.autoApproveTestScope;
+      if (args.autoApproveScope !== void 0) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;
       const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);

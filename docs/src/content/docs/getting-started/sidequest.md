@@ -242,10 +242,15 @@ sidequest board-config --integration-branch feat/client-work
 sidequest board-config --delivery replay
 sidequest board-config --no-worktree-isolation
 sidequest board-config --no-auto-approve-test-scope
+sidequest board-config --auto-approve-scope "generated/**"
 sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
 ```
 
 A scope request is auto-approved when every requested path sits in a test directory the ticket already reaches: any existing `test/`, `tests/`, `spec/`, `specs/`, or `__tests__/` beside a file the ticket declares, or beside any of its parents up to the repo root. So a ticket owning `plugins/x/src/thing.ts` widens into `plugins/x/test/**` on its own, and one owning `src/synth.cpp` widens into the repo's `tests/**`, but neither reaches the other's. The widening is recorded as a board comment and reviewed at publish. Pass `--no-auto-approve-test-scope` to turn it off. The MCP equivalent is `board_config` with `autoApproveTestScope: false`.
+
+A new source file can also add its one governing build-registration file without a ruling. Sidequest walks from the declared source toward the repository root and admits only the file it finds, such as `CMakeLists.txt`, `Cargo.toml`, `go.mod`, a `.csproj`, `pyproject.toml`, `package.json`, or the nearest barrel file. It leaves requests pending when the repository structure does not prove that dependency.
+
+For opt-in board-specific paths, set one or more `--auto-approve-scope` globs, for example `--auto-approve-scope "generated/**"`. The MCP equivalent is `board_config` with `autoApproveScope: ["generated/**"]`. Matching paths are admitted immediately; a mixed request keeps its unmatched paths pending and records both groups.
 
 `integrationBranch` defaults to `main`. Set it to the branch your board actually integrates, such as `feat/client-work`; submissions and worktree cleanup then use that branch as their baseline. In local mode it must exist locally. In remote mode `origin/<branch>` must exist locally, so fetch it first. Sidequest refuses a missing configured branch and tells you to create, fetch, or reconfigure it rather than silently falling back to `main`.
 

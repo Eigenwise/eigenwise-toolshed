@@ -334,6 +334,77 @@ function autoApprovedTestScope(ticket?: any, requested?: any, additions?: any, s
   return normalizeFiles(normalizeFiles(additions).map((file?: any) => enclosingTestRoot(file, roots)).filter(Boolean));
 }
 
+const SOURCE_FILE_EXTENSIONS = new Set(['.c', '.cc', '.cpp', '.cxx', '.cs', '.go', '.js', '.jsx', '.py', '.rs', '.ts', '.tsx']);
+
+function isSourceFile(file?: any) {
+  return SOURCE_FILE_EXTENSIONS.has(path.extname(repoRelative(file)).toLowerCase());
+}
+
+function buildRegistrationCandidates(source?: any) {
+  const extension = path.extname(repoRelative(source)).toLowerCase();
+  if (extension === '.cs') return ['*.csproj', '*.vcxproj'];
+  if (extension === '.go') return ['go.mod'];
+  if (extension === '.py') return ['pyproject.toml', 'setup.py', '__init__.py'];
+  if (extension === '.rs') return ['Cargo.toml', 'mod.rs'];
+  if (extension === '.ts' || extension === '.tsx' || extension === '.js' || extension === '.jsx') return ['package.json', 'index.ts', 'index.js'];
+  return ['CMakeLists.txt'];
+}
+
+function registrationFileAt(repo?: any, parent?: any, candidate?: any) {
+  if (candidate === '*.csproj' || candidate === '*.vcxproj') {
+    try {
+      const suffix = candidate.slice(1).toLowerCase();
+      return fs.readdirSync(path.join(repo, ...parent)).find((name: string) => name.toLowerCase().endsWith(suffix)) || null;
+    } catch (_) {
+      return null;
+    }
+  }
+  try {
+    return fs.statSync(path.join(repo, ...parent, candidate)).isFile() ? candidate : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function governingBuildRegistrationFile(source?: any, slug?: any) {
+  const repo = readMeta(slug)?.path;
+  if (!repo || !isSourceFile(source)) return null;
+  const segments = repoRelative(source).split('/').filter(Boolean);
+  segments.pop();
+  for (let depth = segments.length; depth >= 0; depth--) {
+    const parent = segments.slice(0, depth);
+    for (const candidate of buildRegistrationCandidates(source)) {
+      const name = registrationFileAt(repo, parent, candidate);
+      if (name) return [...parent, name].join('/');
+    }
+  }
+  return null;
+}
+
+function autoApprovedBuildRegistrationScope(ticket?: any, additions?: any, slug?: any) {
+  const requested = normalizeFiles(additions);
+  if (!requested.length) return null;
+  const registrations = new Map<string, string>();
+  for (const source of normalizeFiles(ticket?.files)) {
+    const registration = governingBuildRegistrationFile(source, slug);
+    if (registration) registrations.set(registration.toLowerCase(), registration);
+  }
+  if (!registrations.size || requested.some((file?: any) => !registrations.has(repoRelative(file).toLowerCase()))) return null;
+  return requested.map((file?: any) => registrations.get(repoRelative(file).toLowerCase()));
+}
+
+function globExpression(pattern?: any) {
+  const escaped = String(pattern).replace(/[.+^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escaped.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*')}$`, process.platform === 'win32' ? 'i' : '');
+}
+
+function autoApprovedScopePaths(ticket?: any, additions?: any, slug?: any) {
+  const patterns = boardConfig(slug)?.autoApproveScope || [];
+  if (!patterns.length) return [];
+  const expressions = patterns.map((pattern: string) => globExpression(pattern));
+  return normalizeFiles(additions).filter((file?: any) => expressions.some((expression: RegExp) => expression.test(repoRelative(file))));
+}
+
 // The marker is a recovery breadcrumb, never a gate. A scope request is pure
 // board state; an unbound dispatch (agentId/boundAt null) or unreachable
 // worktree must not make filing it impossible for executor and orchestrator
@@ -448,21 +519,44 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const covered = requested.filter((file?: any) => commitScope.isInScope(file, scope));
     const now = new Date().toISOString();
     touchClaimActivity(t, by, now);
+    const previousRequest = t.scopeRequest;
+    if (previousRequest && sameFiles(requested, previousRequest.requested || previousRequest.files)) {
+      t.updatedAt = now;
+      putTicket(slug, t);
+      return {
+        ok: true,
+        ticket: t,
+        covered,
+        scopeRequest: previousRequest,
+        command: scopeExpansionCommand(t, previousRequest.files),
+        state: 'pending',
+        ageMs: Math.max(0, Date.parse(now) - Date.parse(previousRequest.at)),
+      };
+    }
     if (!additions.length) {
       clearCoveredScopeRequest(slug, t, now);
       t.updatedAt = now;
       putTicket(slug, t);
       return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
     }
-    const testDirectories = autoApprovedTestScope(t, requested, additions, slug);
-    if (testDirectories) {
-      // Test-only widening is audited here; publish reverify runs it before the integrated-diff review.
-      t.files = boundedFiles(scopeExpansionFiles(t, testDirectories));
+    const testDirectories = autoApprovedTestScope(t, requested, additions, slug) || [];
+    const testScopeApproved = testDirectories.length > 0;
+    const buildRegistrations = testScopeApproved ? [] : autoApprovedBuildRegistrationScope(t, additions, slug) || [];
+    const buildRegistrationApproved = buildRegistrations.length > 0;
+    const globApproved = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
+    const autoApproved = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : globApproved;
+    if (testScopeApproved || autoApproved.length === additions.length) {
+      t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
       syncLiveDispatchScope(slug, t);
       if (!Array.isArray(t.comments)) t.comments = [];
+      const policy = testScopeApproved
+        ? 'test scope under board policy'
+        : buildRegistrations
+          ? 'build-registration scope derived from the in-scope source layout'
+          : 'scope under board policy';
       const comment = createComment({
         by: 'board',
-        body: `Auto-approved test scope under board policy: ${testDirectories.join(', ')}.`,
+        body: `Auto-approved ${policy}: ${autoApproved.join(', ')}.`,
         kind: 'comment',
         source: 'policy',
       }, now);
@@ -472,20 +566,25 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       t.updatedAt = now;
       putTicket(slug, t);
       queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
-      return { ok: true, ticket: t, covered, approved: testDirectories, autoApproved: true, scopeRequest: null, command: null, comment };
+      return { ok: true, ticket: t, covered, approved: autoApproved, autoApproved: true, scopeRequest: null, command: null, comment };
     }
-    const command = scopeExpansionCommand(t, requested);
-    const previousRequest = t.scopeRequest;
+    if (globApproved.length) {
+      t.files = boundedFiles(scopeExpansionFiles(t, globApproved));
+      syncLiveDispatchScope(slug, t);
+    }
+    const pendingAdditions = additions.filter((file?: any) => !globApproved.includes(file));
+    const command = scopeExpansionCommand(t, pendingAdditions);
     if (previousRequest) scopeResolution(slug, t, previousRequest, 'superseded', now, [], [], false);
-    const request = { by, files: additions, requested, covered, at: now };
+    const request = { by, files: pendingAdditions, requested, covered, at: now };
     createScopeRequestMarker(slug, t, request);
     t.scopeRequest = request;
     const dispatch = dispatchState(t);
     if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
     if (!Array.isArray(t.comments)) t.comments = [];
+    const autoApprovedText = globApproved.length ? ` Auto-approved under board policy: ${globApproved.join(', ')}.` : '';
     const comment = createComment({
       by,
-      body: `Scope expansion requested: ${additions.join(', ')}.${covered.length ? ` Already in scope: ${covered.join(', ')}.` : ''} Approve with \`${command}\`; claim remains held.`,
+      body: `Scope expansion requested: ${pendingAdditions.join(', ')}.${covered.length ? ` Already in scope: ${covered.join(', ')}.` : ''}${autoApprovedText} Approve with \`${command}\`; claim remains held.`,
       kind: 'comment',
       source: opts.source || 'cli',
     }, now);
@@ -495,7 +594,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     t.updatedAt = now;
     putTicket(slug, t);
     queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
-    return { ok: true, ticket: t, scopeRequest: t.scopeRequest, command, comment };
+    return { ok: true, ticket: t, scopeRequest: t.scopeRequest, covered, approved: globApproved, autoApproved: false, command, comment };
   });
 }
 
