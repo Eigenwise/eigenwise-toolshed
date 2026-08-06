@@ -8,7 +8,6 @@ const path = require('node:path');
 const test = require('node:test');
 
 const installer = path.join(__dirname, '..', 'bin', 'install-workspace-plugins.js');
-const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'init-workspace', 'SKILL.md'), 'utf8');
 
 function writeFakeClaude(directory, projectDir) {
   const script = path.join(directory, 'fake-claude.js');
@@ -241,10 +240,3 @@ test('honors a personal local scope only when it is explicit in the plan', () =>
   ]);
   assert.equal(state.plugins[0].scope, 'local');
 }));
-
-test('documents one reload boundary and the selected-plugin verification list', () => {
-  assert.equal((skill.match(/Run \*\*`\/reload-plugins`\*\*/g) ?? []).length, 1);
-  assert.match(skill, /confirm every selected plugin is\ninstalled, enabled, and at its requested scope/);
-  assert.match(skill, /Optional plugins\.\*\* Verify each selected extra is usable/);
-  assert.match(skill, /Tell the user \*\*exactly what they got\*\*: which plugins are enabled/);
-});

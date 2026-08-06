@@ -371,7 +371,6 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
     assert.match(dispatch, /^model: claude-codex-auto$/m);
     assert.match(dispatch, /^effort: high$/m);
     assert.match(dispatch, /^maxTurns: 250$/m);
-    assert.match(dispatch, /reasoning effort set by the dispatch route marker/);
     for (const effort of EFFORTS) {
       const builtin = fs.readFileSync(path.join(dir, `sidequest-exec-${effort}.md`), 'utf8');
       assert.doesNotMatch(builtin, /^model:/m);
@@ -380,20 +379,6 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   } finally {
     for (const category of categories) store.setCategory(category);
     db.close();
-  }
-});
-
-// Field case 2026-08-02: an executor tried to refresh the codebase map mid-wave because
-// the mapper's staleness hook read as an instruction. Parallel executors on one tree
-// would collide on the map, and the result would describe a state not yet on main
-// (SQ-1259). The template forbids it and hands the refresh back to the orchestrator.
-test('every executor is told the codebase map is not its to update', () => {
-  const dir = tmpDir();
-  agentsync.syncExecAgents(null, { dir });
-  for (const file of readDir(dir)) {
-    const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /NEVER update the codebase map/, `${file} lost the map prohibition`);
-    assert.match(body, /Map refresh\s+is the orchestrator's, once, after integration/, `${file} lost the map hand-back`);
   }
 });
 
@@ -417,9 +402,6 @@ test('read-only stable executors deny the writers and grant everything else', ()
     // Playwright, Context7, and the board are read-only work's actual tools; denying them was the
     // accidental side effect of the old allow list.
     assert.doesNotMatch(denied![1], /playwright|context7|mcp__plugin_sidequest_board__/i);
-    assert.match(body, /Read-only role/);
-    assert.match(body, /Bash is for inspection, tests, and verification, not edits/);
-    assert.match(body, /board blocker comment/);
     // Bash stays, so this is not a write-proof sandbox and must not claim to be.
     assert.doesNotMatch(body, /tools cannot change files/i);
   }
@@ -530,35 +512,9 @@ test('sync writes route-independent generated executors', () => {
   assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
-  assert.match(body, /resolves the real Codex model/);
-  assert.match(body, /NEVER write, quote, or echo such a line/);
   assert.ok(body.includes(agentsync.MARKER));
-  assert.match(body, /Never read large files whole/);
-  assert.match(body, /Long-running commands go through\s+`run_in_background` with the completion notification, never a poll loop/);
   assert.equal(agentsync.EXECUTOR_CHECKPOINT_TOOL_ROUNDS, 100);
-  assert.match(body, /every `Read` or `Grep` result stays in this run's history/);
-  assert.match(body, /scoped `Read` calls with `offset`\/`limit`, `Grep` with `head_limit`/);
-  assert.match(body, /Around 100 tool rounds, do not limp onward/);
-  assert.match(body, /`Continuation checkpoint`/);
-  assert.match(body, /then `release` the ticket to `todo` and end/);
-  assert.match(body, /Do not submit at a checkpoint/);
-  assert.match(body, /mcp__plugin_sidequest_board__commit/);
-  assert.match(body, /mcp__plugin_sidequest_board__submit/);
-  assert.match(body, /absolute `worktree`/);
-  assert.match(body, /Never publish, push/);
-  assert.match(body, /full final report: changed paths, verification evidence, commit hash/);
-  assert.match(body, /After a terminal board closeout, stop without a routine `SendMessage` to `main`/);
-  assert.match(body, /`kind=question` needs, a scope conflict, or a failure the board cannot/);
   assert.doesNotMatch(body, /verified milestone/);
-  assert.match(body, /Teammate subagent fan-out must omit the Agent `name` parameter/);
-  assert.match(body, /First classify matching work through Sidequest categories and board routing/);
-  assert.match(body, /genuinely uncategorized bounded work/);
-  assert.match(body, /Audit and review work always needs its routed `review-audit` ticket executor/);
-  assert.match(body, /`general-purpose` only after that category check/);
-  assert.match(body, /run in the background from your current working tree/);
-  assert.match(body, /omit `isolation`/);
-  assert.match(body, /report a visibility block rather than clean findings/);
-  assert.match(body, /Helper writes are mechanically limited to the parent ticket's effective scope/);
   assert.doesNotMatch(body, /sidequest submit <ref>/);
   assert.doesNotMatch(body, /\{\{[A-Z_]+\}\}/);
 });

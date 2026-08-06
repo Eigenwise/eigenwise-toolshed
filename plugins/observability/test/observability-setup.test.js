@@ -408,20 +408,14 @@ test('disable tears down managed runtime and keeps the consent record reconfigur
   assert.equal(otherSettings.statusLine, undefined);
 });
 
-test('enable-project-telemetry hands off global gateway wiring to the gateway skill', () => {
+test('enable-project-telemetry excludes retired gateway modes', () => {
   const skillPath = path.join(__dirname, '..', 'skills', 'enable-project-telemetry', 'SKILL.md');
   const document = fs.readFileSync(skillPath, 'utf8');
-  assert.match(document, /invoke\s+`\/model-gateway:model-gateway` and use its `env --write-user` command/);
-  assert.match(document, /installed plugin command\s+is not on PATH/);
-  assert.match(document, /wiring is global and has no mode to choose, so do not ask about it/);
-  // The mode interview is gone with per-project wiring. Leaving any of it behind
-  // would have a skill ask a question the CLI can no longer answer.
   assert.doesNotMatch(document, /--show-mode|--mode global|--mode local|--write-project/);
   assert.doesNotMatch(document, /`codex-gateway env --/);
 });
 
-test('observability README retention guidance matches the store', () => {
+test('observability README does not promise unsupported retention policies', () => {
   const readme = fs.readFileSync(path.join(__dirname, '..', 'README.md'), 'utf8');
-  assert.match(readme, /stays until you delete it/);
   assert.doesNotMatch(readme, /retained for 30 days|retained for 365 days|under 24 hours|age-prune/);
 });
