@@ -112,6 +112,14 @@ test('stale map hashes never hide a manual edit', () => {
   assert.match(output, /hash manifest is stale/);
 });
 
+test('CRLF map documents retain their LF hashes', () => {
+  const directory = project();
+  const target = path.join(directory, '.claude', '.codebase-info', 'modules.md');
+  fs.writeFileSync(target, fs.readFileSync(target, 'utf8').replace(/\n/g, '\r\n'));
+
+  assert.strictEqual(documents.loadMap(directory).state.stale, false);
+});
+
 test('concurrent sessions keep independent map ledgers', () => {
   const directory = project();
   const state = path.join(directory, 'state');

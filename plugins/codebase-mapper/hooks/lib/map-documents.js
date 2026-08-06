@@ -10,7 +10,7 @@ const INDEX_NAME = 'INDEX.md';
 const STATE_NAME = '.map-state.json';
 
 function hashContent(content) {
-  return crypto.createHash('sha256').update(content).digest('hex');
+  return crypto.createHash('sha256').update(String(content).replace(/\r/g, '')).digest('hex');
 }
 
 function mapDirectory(projectDir) {

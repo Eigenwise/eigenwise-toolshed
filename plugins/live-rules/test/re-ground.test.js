@@ -71,6 +71,55 @@ test('a stale manifest is detected and direct file hashes still re-ground rules'
   assert.match(output, /The manifest does not match the loaded rule files, but these rules were read directly and are in effect\./);
 });
 
+test('a template-style manifest entry with priority and include matches its rule', () => {
+  const dir = project();
+  const rulesDirectory = path.join(dir, '.claude', 'live-rules', 'rules');
+  const content = '---\ndescription: Atomic commits & two hats\npriority: 95\n---\nRule body.\n';
+  fs.mkdirSync(rulesDirectory, { recursive: true });
+  fs.writeFileSync(path.join(rulesDirectory, 'atomic-commits.md'), content);
+  fs.writeFileSync(path.join(dir, '.claude', 'live-rules', 'manifest.json'), JSON.stringify({
+    version: 1,
+    rules: [{
+      path: 'rules/atomic-commits.md',
+      hash: rules.hashContent(content),
+      description: 'Atomic commits & two hats',
+      globs: [],
+      dirs: [],
+      prompt: [],
+      priority: 95,
+      enabled: true,
+      include: [],
+    }],
+  }) + '\n');
+
+  assert.strictEqual(rules.loadRuleSet(dir).stale, false);
+});
+
+test('CRLF atomic rule files retain their LF manifest hash', () => {
+  const dir = project();
+  const state = path.join(dir, 'state');
+  atomic(dir, [{ data: { description: 'Always', priority: 95 }, body: 'Rule body.' }]);
+  const target = path.join(dir, '.claude', 'live-rules', 'rules', '001.md');
+  fs.writeFileSync(target, fs.readFileSync(target, 'utf8').replace(/\n/g, '\r\n'));
+
+  const output = hook(promptHook, dir, state, { session_id: 'one', prompt: 'hello' });
+  assert.match(output, /Rule body/);
+  assert.doesNotMatch(output, /The manifest does not match/);
+});
+
+test('manifest mismatch warnings name the differing field', () => {
+  const dir = project();
+  const state = path.join(dir, 'state');
+  atomic(dir, [{ data: { description: 'Always', priority: 95 }, body: 'Rule body.' }]);
+  const manifestPath = path.join(dir, '.claude', 'live-rules', 'manifest.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.rules[0].priority = 0;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest) + '\n');
+
+  const output = hook(promptHook, dir, state, { session_id: 'one', prompt: 'hello' });
+  assert.match(output, /Mismatched manifest fields: rules\/001\.md \(priority\)\./);
+});
+
 test('session ledgers are isolated across concurrent session ids', () => {
   const dir = project();
   const state = path.join(dir, 'state');
