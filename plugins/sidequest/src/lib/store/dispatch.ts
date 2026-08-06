@@ -636,8 +636,17 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const story = t.storyId ? getStory(slug, t.storyId) : null;
     const contract = storyExecutionContract(story);
     const contractDrift = t.storyContractDrift || null;
-    const targetOverride = opts.integrationBranch != null || opts.integrationMode != null
-      ? integrationTarget(slug, { branch: opts.integrationBranch, mode: opts.integrationMode })
+    const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase();
+    const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
+    const useIntegrationTarget = explicitIntegrationTarget
+      || (!sharedTree && !readonly && !nonRepoOutput && configuredIntegrationMode !== 'auto');
+    const integrationTargetState = useIntegrationTarget
+      ? (explicitIntegrationTarget
+        ? integrationTarget(slug, {
+          ...(opts.integrationBranch != null ? { branch: opts.integrationBranch } : {}),
+          ...(opts.integrationMode != null ? { mode: opts.integrationMode } : {}),
+        })
+        : integrationTarget(slug))
       : null;
     delete t.storyContractDrift;
     t.dispatch = {
@@ -645,13 +654,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       declaredFiles,
-      // Where this run starts from, so a closeout can tell "wrote nothing" from
-      // "committed and never submitted" — in a shared tree the executor's branch
-      // IS the integration branch, so there is no other baseline (SQ-923).
-      baseCommit: targetOverride
-        ? integrationTargetCommit(readMeta(slug)?.path || '', targetOverride)
+      // Record the integration target commit so an isolated executor can bring
+      // its harness-created worktree forward before changing it.
+      baseCommit: integrationTargetState
+        ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
         : commitScope.headCommit(readMeta(slug)?.path || ''),
-      ...(targetOverride ? { integrationTarget: targetOverride } : {}),
+      ...(integrationTargetState ? { integrationTarget: integrationTargetState } : {}),
       readonly,
       ...(nonRepoOutput ? { nonRepoOutput: true } : {}),
       artifactMode,

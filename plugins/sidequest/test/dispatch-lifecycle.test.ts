@@ -25,7 +25,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 process.env.CLAUDE_PROJECT_DIR = PROJECT;
-execFileSync('git', ['init', '--quiet'], { cwd: PROJECT });
+execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: PROJECT });
 execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: PROJECT });
 execFileSync('git', ['config', 'user.name', 'Dispatch Lifecycle Test'], { cwd: PROJECT });
 fs.writeFileSync(path.join(PROJECT, 'tracked.js'), 'module.exports = 1;\n');
@@ -970,6 +970,27 @@ test('SQ-971: a dispatch records its feature integration target separately from 
   assert.equal(prepared.ticket.dispatch.baseCommit, featureHead);
   assert.notEqual(prepared.ticket.dispatch.baseCommit, defaultHead);
   assert.notEqual(store.boardConfig(slug).integrationBranch, branch);
+});
+
+test('a dispatch records the configured local integration branch without an override', () => {
+  const branch = `configured-target-${Date.now()}`;
+  const defaultHead = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  const targetHead = execFileSync('git', ['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'configured target base'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  execFileSync('git', ['update-ref', `refs/heads/${branch}`, targetHead], { cwd: PROJECT });
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: branch });
+  try {
+    const ticket = createFixture('configured local integration target');
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'configured-target-session' });
+    assert.deepEqual(prepared.ticket.dispatch.integrationTarget, {
+      mode: 'local',
+      upstream: branch,
+      branch,
+    });
+    assert.equal(prepared.ticket.dispatch.baseCommit, targetHead);
+    assert.notEqual(prepared.ticket.dispatch.baseCommit, defaultHead);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: 'auto', integrationBranch: 'main' });
+  }
 });
 
 test('an explicit missing integration branch refuses with its exact ref', () => {
