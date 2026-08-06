@@ -18,7 +18,6 @@ const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a w
 const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
 const BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output lib. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
 const READONLY_BROWSER_WARNING = 'Planning-depth warning: this readonly browser/visual ticket may need a driver script. Read-only executors cannot write one; grant write scope with an explicit no-repo-writes mandate, or use a browser tool that needs no script.';
-const VERIFY_WARNING = 'Planning-depth warning: record verify commands as `cd <repo-relative-dir> && ...`, then run that exact string before submitting.';
 
 function cliJson(args?: any) {
   return cliJsonAt(PROJ, args);
@@ -321,16 +320,18 @@ test('rejects prose verification while preserving commands and recording manual 
   assert.match(unsetVariable.stderr + unsetVariable.stdout, /SIDEQUEST_VERIFY_UNSET_TEST/);
 });
 
-test('warns for an unrunnable recorded verify command, not a cd-prefixed one', () => {
+test('accepts repository-root and subdirectory verify commands', () => {
   const scopedFile = path.join(PROJ, 'lib', 'verify.js');
   fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
   fs.writeFileSync(scopedFile, 'verify\n');
 
-  const bare = cliJson(['add', '-t', 'bare verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'node --test']);
-  assert.deepStrictEqual(bare.warnings, [VERIFY_WARNING]);
+  const rootCommand = 'cmake -S . -B build && cmake --build build && ctest --test-dir build --output-on-failure';
+  const root = cliJson(['add', '-t', 'root verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', rootCommand]);
+  assert.strictEqual(root.ticket.executorVerify, rootCommand);
+  assert.deepStrictEqual(root.warnings, []);
 
-  const exact = cliJson(['add', '-t', 'exact verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . && node --test']);
-  assert.deepStrictEqual(exact.warnings, []);
+  const subdirectory = cliJson(['add', '-t', 'subdirectory verify', '--category', 'coding.normal', '--file', 'lib/verify.js', '--verify', 'cd . && node --test']);
+  assert.deepStrictEqual(subdirectory.warnings, []);
 });
 
 test('dispatch rejects broken npm and node test verifies while add and update only warn', () => {
