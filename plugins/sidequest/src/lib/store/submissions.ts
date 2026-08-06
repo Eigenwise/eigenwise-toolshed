@@ -1,5 +1,7 @@
 'use strict';
 
+const { resolveSuite } = require('../suite-resolver.js');
+
 function createSubmissions(dependencies: any) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
@@ -266,8 +268,22 @@ function integrationVerifyOutputTail(logPath: string) {
   }
 }
 
+function integrationVerifyCommand(slug: any, ticket: any) {
+  const recorded = String(ticket.submission?.verify || '').trim();
+  const projectPath = String(readMeta(slug)?.path || '').trim();
+  const pluginDirectories = new Set(
+    (Array.isArray(ticket.files) ? ticket.files : [])
+      .map((file: any) => /^plugins\/([^/]+)(?:\/|$)/.exec(String(file || '').replace(/\\/g, '/'))?.[1])
+      .filter(Boolean),
+  );
+  if (!projectPath || pluginDirectories.size !== 1) return recorded;
+  const directoryName = [...pluginDirectories][0];
+  const suite = resolveSuite(projectPath, { name: directoryName, dir: `plugins/${directoryName}` });
+  return suite ? `cd ${suite.cwd} && ${suite.command}` : recorded;
+}
+
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
-  const command = String(ticket.submission?.verify || '').trim();
+  const command = integrationVerifyCommand(slug, ticket);
   if (opts?.skipVerify === true) return { status: 'skipped', skippedByChoice: true, command: command || null };
   if (!command) return { status: 'none', command: null };
   const validationError = verifyCommandError(command);
@@ -560,6 +576,15 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const validationError = verifyCommandError(verify);
     if (validationError) {
       return { ok: false, reason: 'invalid_verify', ticket: t, message: validationError };
+    }
+    const declaredExecutorVerify = String(t.executorVerify || '').trim();
+    if (declaredExecutorVerify && verify !== declaredExecutorVerify) {
+      return {
+        ok: false,
+        reason: 'executor_verify_mismatch',
+        ticket: t,
+        message: `submit: refused ${t.ref}; verification must match the declared executor verify command.`,
+      };
     }
     const admittedScope = effectiveScope(slug, t.files);
     const outsideSubmittedRange = range
