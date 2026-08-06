@@ -1345,6 +1345,28 @@ function clearOracleMarker(ticket) {
   ticket.oracle = null;
   return true;
 }
+function scopeRequestWorkInHand(slug, ticket) {
+  if (!ticket?.scopeRequest) return null;
+  const checkpoint = ticket.checkpoint;
+  if (checkpoint) return { commit: checkpoint.commit || null, source: "checkpoint" };
+  const submission = ticket.submission;
+  if (submission?.commit) return { commit: submission.commit, source: "submission" };
+  const delta = dispatchDelta(slug, ticket);
+  if (!delta.ok) return null;
+  const declaredFiles = Array.isArray(ticket.dispatch?.declaredFiles) ? ticket.dispatch.declaredFiles : normalizeFiles(ticket.files);
+  const pending = commitScope.scopedWorkPending(delta.workspace.root, declaredFiles, { base: delta.workspace.base });
+  if (!pending.ok || !pending.committed.length) return null;
+  try {
+    const commit = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
+      cwd: delta.workspace.root,
+      encoding: "utf8",
+      windowsHide: true
+    }).trim();
+    return { commit, source: "dispatch_delta" };
+  } catch (_) {
+    return { commit: null, source: "dispatch_delta" };
+  }
+}
 function releaseTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -1466,6 +1488,19 @@ function releaseTicket(slug, idOrRef, by, opts) {
         ticket: t,
         claim: held
       };
+    }
+    if (!opts.requireReleaseVerdict) {
+      const workInHand = scopeRequestWorkInHand(slug, t);
+      if (workInHand) {
+        const commit = workInHand.commit ? ` at commit ${workInHand.commit}` : "";
+        return {
+          ok: false,
+          reason: "scope_work_pending",
+          message: `${t.ref} cannot release while scope approval remains pending and it has work in hand${commit}. Checkpoint and hold with \`checkpoint\`; a scope timeout is a wait, not a release.`,
+          ticket: t,
+          commit: workInHand.commit
+        };
+      }
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
