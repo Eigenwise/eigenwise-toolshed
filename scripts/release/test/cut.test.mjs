@@ -155,7 +155,7 @@ test('.release/HOLD stops a normal window and --force overrides it', async (t) =
   assert.equal(context.version('sidequest'), '3.6.18');
 });
 
-test('an existing tag stops the cut instead of moving it', async (t) => {
+test('local tags from an unpublished attempt explain how to recover', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
   const integration = context.commit('integrate');
@@ -163,7 +163,7 @@ test('an existing tag stops the cut instead of moving it', async (t) => {
 
   await assert.rejects(
     () => cut({ repoRoot: context.root, skipTests: true, log: () => {} }),
-    /these tags already exist.*v3\.208\.0/s,
+    /local tags are leftovers from an unpublished attempt.*Verify they are absent from origin, delete the local tags, then retry/s,
   );
   assert.equal(context.version('sidequest'), '3.6.17');
   assert.equal(context.git('rev-list', '-n', '1', 'refs/tags/v3.208.0'), integration, 'the existing tag did not move');
@@ -246,11 +246,12 @@ test('the cut refuses a dirty tree and the wrong branch', async (t) => {
   await assert.rejects(() => cut({ repoRoot: wrongBranch.root, skipTests: true, log: () => {} }), /cutting from "dev"/);
 });
 
-test('a failing suite leaves the release local and says so', async (t) => {
+test('a failing suite leaves the release local and prints recovery commands', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
-  context.commit('integrate');
+  const originalHead = context.commit('integrate');
   const before = context.remoteRefs();
+  let failure;
 
   await assert.rejects(
     () => cut({
@@ -259,19 +260,26 @@ test('a failing suite leaves the release local and says so', async (t) => {
       log: () => {},
       runSuite: (suite) => ({ code: 1, command: suite.command }),
     }),
-    /release suites failed, nothing was published/,
+    (error) => {
+      failure = error;
+      return /release suites failed, nothing was published/.test(error.message);
+    },
   );
 
+  assert.match(failure.message, new RegExp(`git reset --hard ${originalHead}`));
+  assert.match(failure.message, /git tag -d v3\.208\.0 sidequest-v3\.6\.18/);
+  assert.match(failure.message, /A reset does not delete local tags/);
   assert.deepEqual(context.remoteRefs(), before);
 });
 
-test('a failed Test workflow on the remote parent blocks a local cut', async (t) => {
+test('a failed Test workflow refuses before suites or release mutations', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
   const localParent = context.commit('integrate');
   const remoteParent = context.originGit('rev-parse', 'main');
   const before = context.remoteRefs();
   let checkedCommit = null;
+  let suiteRuns = 0;
   const failedTestRun = () => ({
     status: 0,
     stdout: JSON.stringify([{ headSha: remoteParent, conclusion: 'failure' }]),
@@ -285,8 +293,11 @@ test('a failed Test workflow on the remote parent blocks a local cut', async (t)
   await assert.rejects(
     () => cut({
       repoRoot: context.root,
-      skipTests: true,
       log: () => {},
+      runSuite: () => {
+        suiteRuns += 1;
+        return { code: 0, command: 'should not run' };
+      },
       assertParentCiPassed: (repoRoot, commit) => {
         checkedCommit = commit;
         return assertParentCiPassed(repoRoot, commit, failedTestRun);
@@ -296,6 +307,10 @@ test('a failed Test workflow on the remote parent blocks a local cut', async (t)
   );
   assert.equal(checkedCommit, remoteParent);
   assert.notEqual(checkedCommit, localParent);
+  assert.equal(suiteRuns, 0, 'a CI refusal skips release suites');
+  assert.equal(context.git('rev-parse', 'HEAD'), localParent, 'no release commit exists');
+  assert.equal(context.exists('.release/unreleased/SQ-1.md'), true, 'the fragment is still queued');
+  assert.equal(context.git('tag', '--list'), '', 'no release tags were created');
   assert.deepEqual(context.remoteRefs(), before);
 });
 

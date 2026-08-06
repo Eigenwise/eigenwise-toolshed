@@ -87,16 +87,32 @@ export function defaultSuiteRunner(repoRoot, { log = console.log, tag = 'release
   };
 }
 
-function assertNoStaleTags(git, plan, { remote, checkRemote, force }) {
-  const existing = new Set(git.localTags());
-  if (checkRemote) for (const tag of git.remoteTags(remote)) existing.add(tag);
-  const clashes = plan.tags.filter((tag) => existing.has(tag));
-  if (clashes.length === 0) return;
+function assertNoStaleTags(git, plan, { remote, force }) {
+  const localTags = new Set(git.localTags());
+  const remoteTags = new Set(git.remoteTags(remote));
+  const remoteClashes = plan.tags.filter((tag) => remoteTags.has(tag));
+  const localOnlyClashes = plan.tags.filter((tag) => localTags.has(tag) && !remoteTags.has(tag));
+  if (remoteClashes.length === 0 && localOnlyClashes.length === 0) return;
   if (force) return;
+  if (remoteClashes.length > 0) {
+    throw new Error(
+      `these tags already exist on ${remote}: ${remoteClashes.join(', ')}. ` +
+      'Cut a new window instead of moving a published tag; --force only when you are deliberately repairing the remote state.',
+    );
+  }
   throw new Error(
-    `these tags already exist, so this window was published (or half-published) before: ${clashes.join(', ')}. ` +
-    'Cut a new window instead of moving a tag; --force only if you know the tag is a local leftover.',
+    `these local tags are leftovers from an unpublished attempt: ${localOnlyClashes.join(', ')}. ` +
+    `Verify they are absent from ${remote}, delete the local tags, then retry; --force only if you know the tags are safe to reuse.`,
   );
+}
+
+function releaseRecoveryInstructions(plan, originalHead) {
+  return [
+    'The release commit and tags are local only. To undo this local window:',
+    `  git reset --hard ${originalHead}`,
+    `  git tag -d ${plan.tags.join(' ')}`,
+    'A reset does not delete local tags, so run both commands before retrying.',
+  ].join('\n');
 }
 
 function containerTestCommand(commit) {
@@ -164,8 +180,9 @@ function assertReleaseIntact(git, plan, commit) {
 
 /**
  * Builds the whole release locally, then publishes it with one atomic ref update. Everything
- * before that push is disposable: a failure leaves no tag, no release commit on the remote, and
- * the fragments still queued for the next window.
+ * before that push stays local. Later failures print the commands that restore the original
+ * commit and remove the local tags, rather than attempting a reset that could discard allowed
+ * working-tree changes or suite output.
  */
 export async function cut(options = {}) {
   const {
@@ -263,7 +280,20 @@ export async function cut(options = {}) {
     return { status: 'nothing-to-release', plan };
   }
 
-  assertNoStaleTags(git, plan, { remote, checkRemote: push, force });
+  assertNoStaleTags(git, plan, { remote, force });
+
+  let ci = null;
+  if (!dryRun && (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote)))) {
+    const parent = git.remoteBranchHead(remote, publishBranch);
+    const assertCiPassed = options.assertParentCiPassed ?? assertParentCiPassed;
+    try {
+      const result = assertCiPassed(repoRoot, parent);
+      ci = { status: 'passed', commit: parent, conclusion: result?.conclusion ?? 'success' };
+    } catch (error) {
+      if (!ciOverrideReason) throw error;
+      ci = { status: 'overridden', commit: parent, reason: ciOverrideReason, error: error.message };
+    }
+  }
 
   if (dryRun) {
     log(formatPlan(plan));
@@ -329,55 +359,46 @@ export async function cut(options = {}) {
   }
   plan.commit = commit;
 
-  const failures = [];
-  const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log, tag: plan.tag });
-  if (!skipTests) {
-    for (const suite of plan.suites) {
-      const result = runSuite(suite);
-      if (result.code !== 0) {
-        const logNotice = result.logPath ? ` (log: ${result.logPath})` : '';
-        failures.push(`${suite.plugin}: ${result.command} exited ${result.code}${logNotice}`);
+  try {
+    const failures = [];
+    const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log, tag: plan.tag });
+    if (!skipTests) {
+      for (const suite of plan.suites) {
+        const result = runSuite(suite);
+        if (result.code !== 0) {
+          const logNotice = result.logPath ? ` (log: ${result.logPath})` : '';
+          failures.push(`${suite.plugin}: ${result.command} exited ${result.code}${logNotice}`);
+        }
       }
     }
-  }
-  if (failures.length > 0) {
-    throw new Error(
-      `release suites failed, nothing was published:\n  ${failures.join('\n  ')}\n` +
-      'The release commit and tags are local only. Fix the failing suite, then rerun the release window.',
-    );
-  }
-  assertReleaseIntact(git, plan, commit);
-  let ci = null;
-  if (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote))) {
-    const parent = git.remoteBranchHead(remote, publishBranch);
-    const assertCiPassed = options.assertParentCiPassed ?? assertParentCiPassed;
-    try {
-      const result = assertCiPassed(repoRoot, parent);
-      ci = { status: 'passed', commit: parent, conclusion: result?.conclusion ?? 'success' };
-    } catch (error) {
-      if (!ciOverrideReason) throw error;
-      ci = { status: 'overridden', commit: parent, reason: ciOverrideReason, error: error.message };
+    if (failures.length > 0) {
+      throw new Error(
+        `release suites failed, nothing was published:\n  ${failures.join('\n  ')}`,
+      );
     }
-  }
+    assertReleaseIntact(git, plan, commit);
 
-  const refspecs = planRefspecs(plan, commit);
-  const pushCommand = planPushCommand(plan, { remote, commit });
-  let pushed = false;
-  if (push) {
-    git.pushAtomic(remote, refspecs);
-    pushed = true;
-    log(`published ${plan.tag} (${commit})`);
-  } else {
-    log(`built ${plan.tag} locally as ${commit}; publish it with:`);
-    if (ci?.status === 'passed') {
-      log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) passed.`);
-    } else if (ci?.status === 'overridden') {
-      log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) was overridden: ${ci.reason}`);
+    const refspecs = planRefspecs(plan, commit);
+    const pushCommand = planPushCommand(plan, { remote, commit });
+    let pushed = false;
+    if (push) {
+      git.pushAtomic(remote, refspecs);
+      pushed = true;
+      log(`published ${plan.tag} (${commit})`);
+    } else {
+      log(`built ${plan.tag} locally as ${commit}; publish it with:`);
+      if (ci?.status === 'passed') {
+        log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) passed.`);
+      } else if (ci?.status === 'overridden') {
+        log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) was overridden: ${ci.reason}`);
+      }
+      log(`  ${pushCommand}`);
     }
-    log(`  ${pushCommand}`);
-  }
 
-  return { status: 'cut', plan, commit, message, pushed, pushCommand, refspecs, touched, consumed, ci };
+    return { status: 'cut', plan, commit, message, pushed, pushCommand, refspecs, touched, consumed, ci };
+  } catch (error) {
+    throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin)}`, { cause: error });
+  }
 }
 
 export async function main(argv) {
