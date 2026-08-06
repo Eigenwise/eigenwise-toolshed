@@ -719,7 +719,7 @@ test('verify commands reject direct multi-plugin directory chaining', () => {
   assert.throws(() => store.createTicket(project, {
     title: 'unsafe multi-plugin verify',
     executorVerify: 'cd plugins/sidequest && npm test; cd plugins/playbook && npm test',
-  }), /multi-plugin verify commands/);
+  }), /Verify cannot use `;` command chaining/);
   assert.doesNotThrow(() => store.createTicket(project, {
     title: 'safe multi-plugin verify',
     executorVerify: '(cd plugins/sidequest && npm test) && (cd plugins/playbook && npm test)',

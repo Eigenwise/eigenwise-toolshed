@@ -28,20 +28,51 @@ function manualVerify(value?: any) {
   return /^manual:\s+\S/i.test(String(value || '').trim());
 }
 
+function containsUnquotedSemicolon(command?: any) {
+  let quote = '';
+  for (let index = 0; index < command.length; index += 1) {
+    const character = command[index];
+    if (character === '\\') {
+      index += 1;
+      continue;
+    }
+    if (quote) {
+      if (character === quote) quote = '';
+      continue;
+    }
+    if (character === '"' || character === "'") {
+      quote = character;
+      continue;
+    }
+    if (character === ';') return true;
+  }
+  return false;
+}
+
 function verifyCommandError(value?: any) {
   const command = String(value || '').trim();
   if (!command || manualVerify(command)) return null;
   if (/^manual:/i.test(command)) {
-    return 'Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `cd <repo-relative-dir> && <command>`.';
+    return 'Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.';
   }
   const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1]
     || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2]
     || '';
   const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase())
+    || /^\(cd\s/.test(command)
     || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first);
   const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
-  if (command.endsWith('.') || proseStarter || !likelyExecutable && /[.!?]/.test(command)) {
-    return 'Verify must be a runnable command such as `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.';
+  if (/\r|\n/.test(command)) {
+    return 'Verify must be one runnable command line. Use `npm run test` or `cd <repo-relative-dir> && <command>`.';
+  }
+  if (/<[^<>\r\n]+>/.test(command)) {
+    return 'Verify contains an unresolved placeholder. Replace it with a runnable command such as `npm run test`.';
+  }
+  if (containsUnquotedSemicolon(command)) {
+    return 'Verify cannot use `;` command chaining because it behaves differently across shells. Use one command or join dependent steps with `&&`.';
+  }
+  if (proseStarter || !likelyExecutable) {
+    return 'Verify must start with a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.';
   }
   for (const match of command.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
     const name = match[1] || match[2];
@@ -289,6 +320,22 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
   return null;
 }
 
+function verifyPathWarning(ticket?: any, projectPath?: any) {
+  const verify = String(ticket?.executorVerify || '').trim();
+  if (!projectPath || !verify || manualVerify(verify)) return null;
+  const absent = new Set<string>();
+  const tokens = [...verify.matchAll(/(?:["']([^"']*)["']|([^\s;&|()]+))/g)].map((match) => match[1] ?? match[2]);
+  for (const token of tokens) {
+    if (!token || token.startsWith('-') || token === '.' || token === '..') continue;
+    if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(token)) continue;
+    const pathToken = token.replace(/[?*].*$/, '');
+    if (!pathToken || fs.existsSync(path.resolve(projectPath, pathToken))) continue;
+    absent.add(token);
+  }
+  if (!absent.size) return null;
+  return `recorded verify references paths absent from this repo: ${[...absent].join(', ')}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;
+}
+
 function derivedVerifyCommand(ticket?: any, projectPath?: any) {
   if (!projectPath) return null;
   const plugins = new Set<string>();
@@ -366,6 +413,8 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   const warnings = [
     ...crossTicketStateWarnings(ticket, slug),
   ];
+  const verifyPath = verifyPathWarning(ticket, slug ? readMeta(slug)?.path : null);
+  if (verifyPath) warnings.push(verifyPath);
   if (dispatchState(ticket)?.sharedTree === true) {
     const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd());
     if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);

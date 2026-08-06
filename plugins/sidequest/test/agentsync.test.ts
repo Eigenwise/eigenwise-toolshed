@@ -95,6 +95,28 @@ test('dispatch uncertainty does not inspect symbols named in ticket text', () =>
   assert.doesNotMatch(briefing, /ticket text includes|current main snapshot/);
 });
 
+test('dispatch uncertainty warns when a greenfield verify path does not exist', () => {
+  const root = tmpDir();
+  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
+  assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
+  assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
+  fs.writeFileSync(path.join(root, 'README.md'), 'fixture\n');
+  assert.equal(git(root, ['add', '.']).status, 0);
+  assert.equal(git(root, ['commit', '-m', 'fixture']).status, 0);
+
+  const store = require('../lib/store.js');
+  const slug = store.ensureProject(root, 'greenfield verify path').slug;
+  const ticket = store.createTicket(slug, {
+    title: 'Create future verifier',
+    executorVerify: 'node --test test/future.test.ts',
+  });
+
+  const warnings = store.dispatchUncertaintyWarnings(ticket, slug).join('\n');
+  assert.match(warnings, /recorded verify references paths absent from this repo: test\/future\.test\.ts/);
+  assert.match(agentsync.renderTicketBriefing(ticket, 'greenfield-token', slug, root), /greenfield work/);
+});
+
+
 test('SQ-677: briefing comments preserve the full chronological durable thread byte-for-byte', () => {
   const comments = [
     {
