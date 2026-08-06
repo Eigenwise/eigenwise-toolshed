@@ -4,6 +4,7 @@ import { writeContext } from './shared/output.js';
 import { pluginRoot, runtimeModule } from './shared/paths.js';
 import { initializeCompactionState, isPrimarySession } from './shared/compaction.js';
 import { runSweep } from './shared/sweep-handoff.js';
+import { registerSweepSession } from './shared/worktree-sweep.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -136,6 +137,7 @@ async function main(): Promise<void> {
 
   const syncResult = provisionExecAgents();
   const lostLaunches = reconcileLostLaunches(data);
+  registerSweepSession(data);
   let sweepNotices: string[] = [];
   try {
     sweepNotices = await runSweep(data);

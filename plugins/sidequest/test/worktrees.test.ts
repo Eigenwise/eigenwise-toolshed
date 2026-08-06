@@ -169,6 +169,26 @@ test('worktree sweep caps orphan branch candidates', async () => {
   assert.deepEqual(result.orphanBranches.map((entry: any) => entry.branch), branches.slice(0, 2));
 });
 
+test('worktree sweep skips a worktree owned by another live session', async () => {
+  const worktree = agentWorktree('live-session');
+  try {
+    integrate(makeCommit(worktree, 'live-session.txt'));
+    makeOld(worktree);
+
+    const result = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      upstream: 'origin/main',
+      livePaths: [worktree],
+    });
+
+    assert.equal(entryFor(result, worktree).reason, 'live_session');
+    assert.ok(fs.existsSync(worktree));
+  } finally {
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+  }
+});
+
 test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees', () => {
   const equivalentOld = agentWorktree('equivalent-old');
   integrate(makeCommit(equivalentOld, 'equivalent-old.txt'));
@@ -234,6 +254,7 @@ test('worktrees sweep prunes only patch-equivalent orphan worktree branches', ()
   const unintegrated = dryRun.orphanBranches.find((entry: any) => entry.branch === branchName('orphan-unintegrated'));
   assert.equal(unintegrated.action, 'keep');
   assert.equal(unintegrated.patchEquivalent, false);
+  assert.equal(unintegrated.subject, 'fixture orphan-unintegrated.txt');
   assert.equal(dryRun.orphanBranches.some((entry: any) => entry.branch === branchName('checked-out-equivalent')), false);
 
   const applied = cliJson(['worktrees', 'sweep', '--yes', '--json']);

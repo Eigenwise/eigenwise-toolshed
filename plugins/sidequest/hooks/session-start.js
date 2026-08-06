@@ -87,8 +87,8 @@ function stateDirectory() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
   return import_node_path2.default.join(home, "compaction-suggestions");
 }
-function stateFile(sessionId) {
-  return import_node_path2.default.join(stateDirectory(), `${encodeURIComponent(sessionId)}.json`);
+function stateFile(sessionId2) {
+  return import_node_path2.default.join(stateDirectory(), `${encodeURIComponent(sessionId2)}.json`);
 }
 function transcriptBytes(transcriptPath) {
   try {
@@ -97,21 +97,21 @@ function transcriptBytes(transcriptPath) {
     return 0;
   }
 }
-function writeState(sessionId, state) {
+function writeState(sessionId2, state) {
   try {
     import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
-    import_node_fs2.default.writeFileSync(stateFile(sessionId), JSON.stringify(state));
+    import_node_fs2.default.writeFileSync(stateFile(sessionId2), JSON.stringify(state));
     return true;
   } catch (_) {
     return false;
   }
 }
-function initializeCompactionState(sessionId, transcriptPath) {
-  if (!sessionId || !compactionSuggestionsEnabled()) return;
-  const file = stateFile(sessionId);
+function initializeCompactionState(sessionId2, transcriptPath) {
+  if (!sessionId2 || !compactionSuggestionsEnabled()) return;
+  const file = stateFile(sessionId2);
   if (import_node_fs2.default.existsSync(file)) return;
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  writeState(sessionId, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
+  writeState(sessionId2, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 // src/hooks/shared/sweep-handoff.ts
@@ -192,6 +192,56 @@ async function runSweep(data) {
   return report === null ? [...carried, HANDOFF_FAILED_NOTICE] : [...carried, ...report];
 }
 
+// src/hooks/shared/worktree-sweep.ts
+var import_node_fs4 = __toESM(require("node:fs"));
+var import_promises = require("node:fs/promises");
+var import_node_os3 = __toESM(require("node:os"));
+var import_node_path4 = __toESM(require("node:path"));
+function stateFile2() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path4.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
+  return import_node_path4.default.join(home, "worktree-sweep-sessions.json");
+}
+function readState() {
+  try {
+    return JSON.parse(import_node_fs4.default.readFileSync(stateFile2(), "utf8"));
+  } catch (_) {
+    return {};
+  }
+}
+function writeState2(state) {
+  try {
+    import_node_fs4.default.mkdirSync(import_node_path4.default.dirname(stateFile2()), { recursive: true });
+    import_node_fs4.default.writeFileSync(stateFile2(), JSON.stringify(state), "utf8");
+  } catch (_) {
+  }
+}
+function sessionId(data) {
+  return stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+}
+function currentProject(data, store) {
+  const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const currentPath = store.nearestRepoRoot(start);
+  const found = store.findProject(currentPath);
+  return {
+    project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
+    currentPath
+  };
+}
+function registerSweepSession(data) {
+  const id = sessionId(data);
+  if (!id) return;
+  try {
+    const store = require(runtimeModule("store"));
+    const { project, currentPath } = currentProject(data, store);
+    if (!project) return;
+    const state = readState();
+    state.sessions = state.sessions || {};
+    state.sessions[id] = currentPath;
+    writeState2(state);
+  } catch (_) {
+  }
+}
+
 // src/hooks/session-start.ts
 var MAX_WORKFORCE_BYTES = 1800;
 var MAX_WORKFORCE_DESCRIPTION = 90;
@@ -256,9 +306,9 @@ function provisionExecAgents() {
 }
 function reconcileLostLaunches(data) {
   try {
-    const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+    const sessionId2 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
     const store = require(runtimeModule("store"));
-    const result = store.reconcileLaunchedDispatches(sessionId, { source: "session-start" });
+    const result = store.reconcileLaunchedDispatches(sessionId2, { source: "session-start" });
     return result && Array.isArray(result.reconciled) ? result.reconciled : [];
   } catch (_) {
     return [];
@@ -282,11 +332,12 @@ async function main() {
   const data = readStdin();
   if (!data) return;
   if (isPrimarySession(data)) {
-    const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
-    initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
+    const sessionId2 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+    initializeCompactionState(sessionId2, data.transcript_path || data.transcriptPath);
   }
   const syncResult = provisionExecAgents();
   const lostLaunches = reconcileLostLaunches(data);
+  registerSweepSession(data);
   let sweepNotices = [];
   try {
     sweepNotices = await runSweep(data);

@@ -43,6 +43,63 @@ function canonicalPath(value) {
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   }
 }
+function persistentStateFile() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || path.join(os.homedir(), ".claude", "sidequest");
+  return path.join(home, "worktree-sweep-failures.json");
+}
+function readFailureState() {
+  try {
+    return JSON.parse(nativeFs.readFileSync(persistentStateFile(), "utf8"));
+  } catch (_) {
+    return {};
+  }
+}
+function writeFailureState(state) {
+  try {
+    nativeFs.mkdirSync(path.dirname(persistentStateFile()), { recursive: true });
+    nativeFs.writeFileSync(persistentStateFile(), JSON.stringify(state), "utf8");
+  } catch (_) {
+  }
+}
+function isFilenameTooLong(message) {
+  return /filename too long|enametoolong/i.test(String(message || ""));
+}
+function failureFingerprint(message) {
+  return isFilenameTooLong(message) ? "filename-too-long" : String(message || "").replace(/\d+/g, "#").slice(0, 500);
+}
+function recordFailure(pathname, message) {
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  const fingerprint = failureFingerprint(message);
+  const existing = state[key];
+  const attempts = existing?.fingerprint === fingerprint ? existing.attempts + 1 : 1;
+  state[key] = { ...existing, fingerprint, attempts };
+  writeFailureState(state);
+  return { attempts, suppressed: attempts > 2 };
+}
+function clearFailure(pathname) {
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  if (!(key in state)) return;
+  delete state[key];
+  writeFailureState(state);
+}
+function shouldSkipKnownFailure(pathname) {
+  const state = readFailureState()[canonicalPath(pathname)];
+  return state?.fingerprint === "filename-too-long" && state.attempts >= 2;
+}
+function shouldTryExtendedPath(pathname, message) {
+  if (process.platform !== "win32" || !isFilenameTooLong(message)) return false;
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  if (state[key]?.extendedPathAttempted) return false;
+  state[key] = { ...state[key] || { fingerprint: "filename-too-long", attempts: 0 }, extendedPathAttempted: true };
+  writeFailureState(state);
+  return true;
+}
+function extendedWindowsPath(pathname) {
+  return path.win32.toNamespacedPath(path.resolve(pathname));
+}
 function parseWorktreeList(output) {
   return output.split(/\r?\n\r?\n/).filter(Boolean).map((block) => {
     const entry = {};
@@ -136,10 +193,12 @@ function skippedEntry(entry, ticket, reason, current) {
     current
   };
 }
-async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream) {
+async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream, livePaths = []) {
   const ticket = ticketForWorktree(tickets, entry);
-  const current = canonicalPath(entry.worktree) === canonicalPath(currentPath);
+  const worktreePath = canonicalPath(entry.worktree);
+  const current = worktreePath === canonicalPath(currentPath);
   if (current) return skippedEntry(entry, ticket, "current_worktree", true);
+  if (livePaths.some((livePath) => worktreePath === canonicalPath(livePath))) return skippedEntry(entry, ticket, "live_session", false);
   if (entry.locked) return skippedEntry(entry, ticket, "locked", false);
   if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
   if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, "live_claim", false);
@@ -206,8 +265,9 @@ async function orphanDirectories(repo, registered) {
     throw error;
   }
 }
-async function classifyOrphanDirectory(tickets, entry, minAgeMs) {
+async function classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) {
   const ticket = ticketForWorktree(tickets, entry);
+  if (livePaths.some((livePath) => canonicalPath(entry.worktree) === canonicalPath(livePath))) return skippedEntry(entry, ticket, "live_session", false);
   if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
   if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, "live_claim", false);
   const [ageMs, contents] = await Promise.all([worktreeAge(entry.worktree), fs.readdir(entry.worktree)]);
@@ -279,10 +339,14 @@ async function findOrphanBranches(repo, checkedOutBranches, upstream, maxCandida
   if (!result.ok) throw new Error(result.stderr || "could not list worktree branches");
   const branches = result.stdout ? result.stdout.split(/\r?\n/).filter(Boolean) : [];
   return Promise.all(branches.filter((branch) => !checkedOutBranches.has(branch)).slice(0, maxCandidates).map(async (branch) => {
-    const patch = await patchEquivalence(repo, branch, upstream);
-    const reachable = await reachableFrom(repo, branch, upstream);
+    const [patch, reachable, subject] = await Promise.all([
+      patchEquivalence(repo, branch, upstream),
+      reachableFrom(repo, branch, upstream),
+      git(repo, ["log", "-1", "--format=%s", branch])
+    ]);
     return {
       branch,
+      subject: subject.ok ? subject.stdout : "",
       ahead: patch.ahead,
       reachable,
       patchEquivalent: patch.equivalent,
@@ -504,6 +568,13 @@ async function advanceLocalIntegrationBranch(repo, options) {
     message: `advanced ${branch} ${shortCommit(branchHead)} → ${shortCommit(to)} (fast-forward, ${repo}).`
   }, common));
 }
+async function removeCandidate(repo, entry) {
+  const remove = async (pathname) => entry.orphanDirectory ? fs.rm(pathname, { recursive: true, force: false }).then(() => ({ ok: true, stderr: "" })).catch((error) => ({ ok: false, stderr: String(error && error.message || error) })) : git(repo, entry.clean ? ["worktree", "remove", pathname] : ["worktree", "remove", "--force", pathname]);
+  const first = await remove(entry.path);
+  if (first.ok || !shouldTryExtendedPath(entry.path, first.stderr)) return first;
+  const extended = await remove(extendedWindowsPath(entry.path));
+  return extended.ok ? extended : { ok: false, stderr: `${first.stderr}; extended-path retry: ${extended.stderr}` };
+}
 async function sweep(repo, tickets, options = {}) {
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0 ? Number(options.minAgeMs) : DEFAULT_MIN_AGE_MS;
   const upstream = integrationUpstream(options);
@@ -532,7 +603,8 @@ async function sweep(repo, tickets, options = {}) {
   const allCandidates = [...candidates, ...orphanCandidates];
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
   const boundedCandidates = allCandidates.slice(0, maxCandidates);
-  const entries = await Promise.all(boundedCandidates.map((entry) => entry.orphanDirectory ? classifyOrphanDirectory(tickets, entry, minAgeMs) : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream)));
+  const livePaths = Array.isArray(options.livePaths) ? options.livePaths.map((pathname) => String(pathname)) : [];
+  const entries = await Promise.all(boundedCandidates.map((entry) => entry.orphanDirectory ? classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths)));
   const execute = !!options.execute;
   const removed = [];
   const backups = [];
@@ -541,6 +613,11 @@ async function sweep(repo, tickets, options = {}) {
   const failures = [];
   if (execute) {
     for (const entry of entries.filter((candidate) => candidate.action === "remove")) {
+      if (shouldSkipKnownFailure(entry.path)) {
+        entry.action = "keep";
+        entry.reason = "known_permanent_failure";
+        continue;
+      }
       if (!entry.clean) {
         try {
           entry.backup = entry.orphanDirectory ? await backupDirtyOrphanDirectory(entry, options) : await backupDirtyWorktree(repo, entry, upstream, options);
@@ -550,11 +627,14 @@ async function sweep(repo, tickets, options = {}) {
           continue;
         }
       }
-      const result = entry.orphanDirectory ? await fs.rm(entry.path, { recursive: true, force: false }).then(() => ({ ok: true, stderr: "" })).catch((error) => ({ ok: false, stderr: String(error && error.message || error) })) : await git(repo, entry.clean ? ["worktree", "remove", entry.path] : ["worktree", "remove", "--force", entry.path]);
+      const result = await removeCandidate(repo, entry);
       if (!result.ok) {
-        failures.push({ path: entry.path, message: result.stderr || "worktree remove failed" });
+        const message = result.stderr || "worktree remove failed";
+        const failure = recordFailure(entry.path, message);
+        failures.push({ path: entry.path, message, suppressed: failure.suppressed });
         continue;
       }
+      clearFailure(entry.path);
       removed.push(entry.path);
       if (entry.orphanDirectory) continue;
       const branch = localBranchName(entry.branch);

@@ -1964,7 +1964,7 @@ test('sweep worker: records its notices for the next session instead of dropping
   assert.ok(Array.isArray(JSON.parse(fs.readFileSync(report, 'utf8')).notices));
 });
 
-test('session-start reports an unavailable integration target with the repair command', () => {
+test('session-start skips an unavailable integration target without failing the sweep', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
   gitFixture(['init'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
@@ -1977,9 +1977,9 @@ test('session-start reports an unavailable integration target with the repair co
   store.setBoardConfig(board.slug, { integrationBranch: 'missing-target' });
 
   const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.match(context, /worktree sweep failed/);
-  assert.match(context, /board-config --project/);
-  assert.match(context, /missing-target/);
+  assert.match(context, /skipped worktree sweep/);
+  assert.match(context, /configured integration branch is unavailable locally/);
+  assert.doesNotMatch(context, /worktree sweep failed/);
 });
 
 test('session-start: compact and resume preserve evidence-first routing guidance', () => {

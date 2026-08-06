@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
-import { sweepWorktrees } from './shared/worktree-sweep.js';
+import { sweepWorktrees, unregisterSweepSession } from './shared/worktree-sweep.js';
 
 async function main(): Promise<void> {
   const data = readStdin();
@@ -31,6 +31,7 @@ async function main(): Promise<void> {
     notices.push(`sidequest: session-end worktree sweep failed: ${(error && error.message) || error}`);
   }
 
+  unregisterSweepSession(data);
   if (notices.length) console.error(notices.join('\n'));
 }
 
