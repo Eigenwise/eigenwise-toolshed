@@ -53,28 +53,52 @@ function main(): void {
     claudeQuotaFailure: (error: string) => boolean;
     findProject: (project: string) => { ok: boolean; slug?: string };
     recoverDispatchQuotaFailure: (slug: string, ref: string, options: Record<string, unknown>) => { ok: boolean; recovery?: Recovery };
+    recordDispatchAgentFailure: (slug: string, ref: string, options: Record<string, unknown>) => { ok: boolean; ticket?: { dispatch?: { failureShape?: string } } };
   };
   const error = stringField(input, 'error');
-  if (!store.claudeQuotaFailure(error)) return;
   const project = store.findProject(projectArg);
   if (!project.ok || !project.slug) return;
 
-  const recovered: Array<{ ref: string; recovery: Recovery }> = [];
+  if (store.claudeQuotaFailure(error)) {
+    const recovered: Array<{ ref: string; recovery: Recovery }> = [];
+    for (const launch of launches) {
+      const result = store.recoverDispatchQuotaFailure(project.slug, launch.ref, {
+        token: launch.token,
+        executor,
+        sessionId: stringField(input, 'session_id', 'sessionId') || null,
+        error,
+        source: 'agent-launch-failure',
+      });
+      if (result.ok && result.recovery) recovered.push({ ref: launch.ref, recovery: result.recovery });
+    }
+    if (!recovered.length) return;
+
+    const routes = recovered.map(({ ref, recovery }) => `${ref} → ${recovery.model}·${recovery.effort}`).join(', ');
+    const refs = recovered.map(({ ref }) => ref).join(', ');
+    const message = `sidequest: Claude quota blocked ${refs} before claim. Prepared the configured fallback dispatch (${routes}) with a fresh token and kept the failed primary attempt in the dispatch ledger. Run dispatch again for each ref and spawn the returned spec. Category policy is unchanged.`;
+    writeJson({
+      systemMessage: message,
+      hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: message },
+    });
+    return;
+  }
+
+  const failed: Array<{ ref: string; failureShape: string }> = [];
   for (const launch of launches) {
-    const result = store.recoverDispatchQuotaFailure(project.slug, launch.ref, {
+    const result = store.recordDispatchAgentFailure(project.slug, launch.ref, {
       token: launch.token,
       executor,
       sessionId: stringField(input, 'session_id', 'sessionId') || null,
       error,
-      source: 'agent-launch-failure',
+      source: 'agent-terminal-failure',
     });
-    if (result.ok && result.recovery) recovered.push({ ref: launch.ref, recovery: result.recovery });
+    const failureShape = result.ticket?.dispatch?.failureShape;
+    if (result.ok && failureShape) failed.push({ ref: launch.ref, failureShape });
   }
-  if (!recovered.length) return;
+  if (!failed.length) return;
 
-  const routes = recovered.map(({ ref, recovery }) => `${ref} → ${recovery.model}·${recovery.effort}`).join(', ');
-  const refs = recovered.map(({ ref }) => ref).join(', ');
-  const message = `sidequest: Claude quota blocked ${refs} before claim. Prepared the configured fallback dispatch (${routes}) with a fresh token and kept the failed primary attempt in the dispatch ledger. Run dispatch again for each ref and spawn the returned spec. Category policy is unchanged.`;
+  const outcomes = failed.map(({ ref, failureShape }) => `${ref} (${failureShape})`).join(', ');
+  const message = `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. The dispatch now records died, so its claimed work can be reclaimed safely.`;
   writeJson({
     systemMessage: message,
     hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: message },

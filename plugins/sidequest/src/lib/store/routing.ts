@@ -270,9 +270,16 @@ function classifyDispatchFailure(error?: any) {
   const normalized = text.toLowerCase();
   if (claudeQuotaFailure(text)) return 'quota_exhausted';
   if (/prompt is too long|request too large \(max 32mb\)|context (?:length|window).*(?:exceed|too (?:large|long)|overflow)|maximum context/.test(normalized)) return 'context_overflow';
+  if (/\bmax(?:imum)?[_ -]?(?:output[_ -]?)?tokens?\b/.test(normalized)) return 'max_tokens';
+  if (/\b(?:agent|subagent)\b.*\b(?:terminated|stopped|died|crashed|fatal)\b|\b(?:terminated|stopped|died|crashed|fatal)\b.*\b(?:agent|subagent)\b/.test(normalized)) return 'agent_terminal';
   if (/not authenticated|unauthenticated|authentication failed|authorization failed|credential(?:s)? (?:rejected|invalid|expired)|(?:invalid|rejected) (?:credential|token)|\b401\b/.test(normalized)) return 'auth_failure';
   if (/backend (?:is )?(?:down|unavailable)|gateway (?:is )?(?:down|unavailable|not serving)|(?:model|model id).*(?:not (?:found|resolvable|available)|unavailable)|could not resolve.*model/.test(normalized)) return 'provider_unavailable';
   return 'unknown';
+}
+
+function terminalAgentFailure(error?: any) {
+  const failureShape = classifyDispatchFailure(error);
+  return ['context_overflow', 'max_tokens', 'agent_terminal'].includes(failureShape) ? failureShape : null;
 }
 
 function getRoutingFallback() {
@@ -1278,6 +1285,7 @@ function applyDerivedRouting(t?: any, opts?: any) {
     normalizeRoute,
     claudeQuotaFailure,
     classifyDispatchFailure,
+    terminalAgentFailure,
     getRoutingFallback,
     setRoutingFallback,
     routingProfileSettings,
