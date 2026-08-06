@@ -11,6 +11,13 @@ function dispatchState(ticket?: any) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
 }
 
+function dispatchPreparationAttribution(opts?: any) {
+  return {
+    sessionId: opts?.sessionId ? String(opts.sessionId) : null,
+    surface: String(opts?.source || opts?.transport || 'store'),
+  };
+}
+
 function sharedTreeArtifactRequested(ticket?: any) {
   return String(ticket && ticket.description || '')
     .split(/\r?\n/)
@@ -656,6 +663,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     delete t.storyContractDrift;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
+      preparedBy: dispatchPreparationAttribution(opts),
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       declaredFiles,
@@ -825,6 +833,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
     const launchSeq = nextDispatchLaunchSeq(state);
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
+      preparedBy: dispatchPreparationAttribution(opts),
       sharedTree: state.sharedTree === true,
       declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t.files),
       artifactMode: state.artifactMode === true,

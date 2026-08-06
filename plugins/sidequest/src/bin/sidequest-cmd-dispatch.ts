@@ -29,6 +29,7 @@ async function cmdDispatch(opts: any, positional: any) {
       sessionId,
       sharedTree: !!opts['shared-tree'],
       allowRepeatFailure: !!opts['allow-repeat-failure'],
+      source: 'cli',
       transport: 'cli',
       allowUnverifiedTransport: unverifiedTransport,
     });

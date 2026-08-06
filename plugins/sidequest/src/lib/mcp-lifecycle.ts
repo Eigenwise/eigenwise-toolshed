@@ -102,7 +102,7 @@ const tools: ToolDefinition[] = [
           : {};
         return Object.assign({ ok: false }, drift, guidance);
       }
-      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args) });
+      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
       if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
       return mutationAck(slug, res);
     },

@@ -153,6 +153,14 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(adopted.reused, true);
   assert.equal(adopted.token, recovered.token);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-store-adopted');
+  assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.preparedBy, { sessionId: 'quota-store-primary', surface: 'store' });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: 'quota-store-adopted',
+    token: adopted.token,
+    executor: adopted.ticket.dispatchExecutor,
+    agentName: 'quota-store-worker',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('quota-store-adopted', adopted.ticket.dispatchExecutor, 'quota-store-agent', 'quota-store-worker').ok, true);
 
   const wrongEffort = await callTool('claim', {
     project: PROJECT,
@@ -182,6 +190,26 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(current.model, 'fable');
   assert.equal(current.effort, 'xhigh');
   assert.deepEqual(store.getCategory('quota.fixture').route, { model: 'fable', effort: 'xhigh' });
+});
+
+test('quota recovery cannot prepare a ticket parked before launch', () => {
+  const ticket = createFixture('parked quota recovery');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'parked-quota-session' });
+  assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'orchestrator' }).ok, true);
+
+  const parked = store.getTicket(slug, ticket.ref);
+  const recovered = store.recoverDispatchQuotaFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    error: "Agent launch failed: You've reached your Fable 5 limit",
+  });
+
+  assert.deepEqual(recovered, { ok: false, reason: 'not_prepared' });
+  const current = store.getTicket(slug, ticket.ref);
+  assert.equal(current.status, 'todo');
+  assert.equal(current.dispatchNonce, null);
+  assert.equal(current.dispatch.outcome, parked.dispatch.outcome);
+  assert.equal(current.dispatch.terminalAt, parked.dispatch.terminalAt);
 });
 
 test('PostToolUseFailure ignores generic errors and prepares quota fallback for CLI --session and MCP runtime-session adoption', async () => {

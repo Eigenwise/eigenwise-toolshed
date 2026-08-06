@@ -7,6 +7,12 @@ function createDispatch(dependencies) {
   function dispatchState(ticket) {
     return ticket && ticket.dispatch && typeof ticket.dispatch === "object" ? ticket.dispatch : null;
   }
+  function dispatchPreparationAttribution(opts) {
+    return {
+      sessionId: opts?.sessionId ? String(opts.sessionId) : null,
+      surface: String(opts?.source || opts?.transport || "store")
+    };
+  }
   function sharedTreeArtifactRequested(ticket) {
     return String(ticket && ticket.description || "").split(/\r?\n/).some((line) => line.trim() === SHARED_TREE_ARTIFACT_MARKER);
   }
@@ -570,6 +576,7 @@ function createDispatch(dependencies) {
       delete t.storyContractDrift;
       t.dispatch = {
         sessionId: opts.sessionId ? String(opts.sessionId) : null,
+        preparedBy: dispatchPreparationAttribution(opts),
         sharedTree,
         ...worktreeWarning ? { worktreeWarning } : {},
         declaredFiles,
@@ -729,6 +736,7 @@ function createDispatch(dependencies) {
       const launchSeq = nextDispatchLaunchSeq(state);
       t.dispatch = {
         sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
+        preparedBy: dispatchPreparationAttribution(opts),
         sharedTree: state.sharedTree === true,
         declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t.files),
         artifactMode: state.artifactMode === true,

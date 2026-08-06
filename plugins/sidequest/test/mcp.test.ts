@@ -2597,10 +2597,25 @@ test('MCP claim passes prepared dispatch token and executor through to the store
   store.setCategory({ id: 'mcp-dispatch-claim', name: 'MCP dispatch claim', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const added = await callTool('add', { title: 'nonce through MCP', category: 'mcp-dispatch-claim' });
   const slug = store.ensureProject(PROJ).slug;
-  const prepared = store.prepareDispatch(slug, added.ref);
+  const prepared = store.prepareDispatch(slug, added.ref, { sessionId: 'mcp-claim-binding' });
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
+  const unbound = await callTool('claim', {
+    ref: added.ref,
+    by: 'mcp-unbound-agent',
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  });
+  assert.strictEqual(unbound.ok, false);
+  assert.strictEqual(unbound.reason, 'unbound_dispatch');
+  assert.equal(store.recordDispatchLaunch(slug, added.ref, {
+    sessionId: 'mcp-claim-binding',
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: 'mcp-claim-binding-agent',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('mcp-claim-binding', prepared.ticket.dispatchExecutor, 'mcp-claim-binding-id', 'mcp-claim-binding-agent').ok, true);
   const accepted = await callTool('claim', { ref: added.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.strictEqual(accepted.ok, true);
 });
