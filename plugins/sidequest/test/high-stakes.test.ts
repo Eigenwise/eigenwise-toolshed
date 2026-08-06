@@ -107,7 +107,7 @@ test('high-stakes integration warns until a review is recorded', async () => {
     project: unreviewed.slug, ref: unreviewed.ticket.ref, by: 'integrator', reason: 'Integrated test fixture.', integration: true,
   });
   assert.equal(warned.ok, true);
-  assert.equal(warned.advisory, 'high-stakes ticket integrated without a recorded review pass. Close it by recording a comment beginning `reviewed-by: <ref>` or linking a completed review-audit ticket.');
+  assert.equal(warned.advisory, 'high-stakes ticket integrated without a recorded review pass. Record one with a comment starting reviewed-by: <ref>, or link a completed review-audit ticket.');
 
   const linked = submitIntegrationFixture('Linked review');
   const review = store.createTicket(linked.slug, { title: 'Review', category: 'review-audit', status: 'done' });

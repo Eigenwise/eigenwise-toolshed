@@ -379,7 +379,7 @@ test('story contracts are bounded, revisioned, and warn claimed members about dr
   assert.match(changes.tickets.find((entry: any) => entry.ref === ticket.ref).warnings.join('\n'), /execution contract changed/);
 });
 
-test('story_log reads, appends from a claimed member, and clears after promotion', async () => {
+test('story_log reads, appends from a claimed member, and rotates after promotion', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-log-'))).slug;
   const story = store.createStory(project, { title: 'Decision log packet' });
   const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
@@ -400,15 +400,15 @@ test('story_log reads, appends from a claimed member, and clears after promotion
     { ref: ticket.ref, by: 'log-worker', kind: 'DISCOVERY', text: 'CLI and MCP share the same store API.' },
   );
 
-  const cleared = await callTool('story_log', { project, story: story.ref, clear: true, by: 'orchestrator' });
-  assert.equal(cleared.story.logBytes, 0);
-  assert.equal(cleared.story.logCapacity, 4096);
-  assert.equal(cleared.story.logRevision, 1);
-  assert.deepEqual(cleared.story.entries, []);
-  assert.equal(cleared.story.archivedEntries, 1);
-  const denied = await callToolRaw('story_log', { project, story: story.ref, clear: true, by: 'log-worker' });
+  const rotated = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
+  assert.equal(rotated.story.logBytes, 0);
+  assert.equal(rotated.story.logCapacity, 4096);
+  assert.equal(rotated.story.logRevision, 1);
+  assert.deepEqual(rotated.story.entries, []);
+  assert.equal(rotated.story.archivedEntries, 1);
+  const denied = await callToolRaw('story_log', { project, story: story.ref, rotate: true, by: 'log-worker' });
   assert.equal(denied.isError, true);
-  assert.match(denied.content[0].text, /clear:true requires by:"orchestrator"/);
+  assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
 });
 
 test('tools/list keeps schemas compact without losing claim and dispatch discipline', async () => {

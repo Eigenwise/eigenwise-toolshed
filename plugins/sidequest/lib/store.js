@@ -1644,7 +1644,7 @@ function linkedReviewPass(slug, ticket) {
   if (!ticket) return false;
   return listTickets(slug).some((candidate) => (candidate.category === "review-audit" || candidate.category?.id === "review-audit" || candidate.categoryId === "review-audit") && candidate.status === "done" && Array.isArray(candidate.links) && candidate.links.some((link) => String(link?.ref || "").toUpperCase() === String(ticket.ref || "").toUpperCase()));
 }
-const HIGH_STAKES_REVIEW_WARNING = "high-stakes ticket integrated without a recorded review pass. Close it by recording a comment beginning `reviewed-by: <ref>` or linking a completed review-audit ticket.";
+const HIGH_STAKES_REVIEW_WARNING = "high-stakes ticket integrated without a recorded review pass. Record one with a comment starting reviewed-by: <ref>, or link a completed review-audit ticket.";
 function completeTicketAsControlPlane(slug, idOrRef, opts) {
   opts = opts || {};
   const purpose = String(opts.purpose || "").trim();
@@ -1798,15 +1798,17 @@ const stories = createStories({
 const {
   STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
+  STORY_LOG_ENTRY_ADVISORY_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   appendStoryLogEntry,
-  clearStoryLog,
   coerceStoryId,
   createStory,
   deleteStory,
   getStory,
   listStories,
   normalizeStoryLogEntry,
+  rotateStoryLog,
+  storyLogEntryAdvisory,
   storyDecisionLog,
   storyDecisionLogWarnings,
   storyExecutionContract,
@@ -2051,13 +2053,15 @@ module.exports = {
   STORY_COLOR_NAMES,
   STORY_EXECUTION_CONTRACT_MAX_BYTES,
   STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
+  STORY_LOG_ENTRY_ADVISORY_BYTES,
   STORY_LOG_ENTRY_TEXT_MAX_BYTES,
   storyExecutionContract,
   normalizeStoryLogEntry,
+  rotateStoryLog,
+  storyLogEntryAdvisory,
   storyDecisionLog,
   storyReadPayload,
   appendStoryLogEntry,
-  clearStoryLog,
   storyDecisionLogWarnings,
   listStories,
   getStory,

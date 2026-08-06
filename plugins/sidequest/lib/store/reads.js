@@ -82,6 +82,10 @@ function createReads(dependencies) {
     return { tickets: page, total, returned: page.length, nextCursor };
   }
   const DEFAULT_LIST_PAGE_LIMIT = 40;
+  function ticketReadShape(ticket) {
+    if (!ticket || ticket.executorVerify === void 0) return ticket;
+    return Object.assign({}, ticket, { verify: ticket.executorVerify });
+  }
   function listPayload(slug, opts) {
     opts = opts || {};
     const project = String(slug || "");
@@ -100,6 +104,7 @@ function createReads(dependencies) {
       const offset = Math.min(decodeListCursor(paging.cursor), total);
       let tickets2 = queryTickets(project, { ...filter, limit: paging.limit, offset });
       if (opts.brief) tickets2 = tickets2.map((ticket) => briefTicket(project, ticket, { index }));
+      else tickets2 = tickets2.map(ticketReadShape);
       const returned = tickets2.length;
       const nextOffset = offset + returned;
       return {
@@ -113,6 +118,7 @@ function createReads(dependencies) {
     }
     let tickets = queryTickets(project, filter);
     if (opts.brief) tickets = tickets.map((ticket) => briefTicket(project, ticket, { index }));
+    else tickets = tickets.map(ticketReadShape);
     const page = pageTickets(tickets, paging);
     page.claimIdleMs = claimIdleMs();
     page.categories = classifierCategories({ project });

@@ -80,7 +80,7 @@ const HELP_COMMANDS = {
   changes: "sidequest changes [--since <iso>] [--project <path-or-slug>]",
   update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: "sidequest rm <id|SQ-n> [--force]",
-  profile: "sidequest profile <hygiene|list|show|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]",
+  profile: "sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]",
   category: "sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]",
   "global-fallback": "sidequest global-fallback [--model <model> --effort <effort>] [--json]",
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token nonce] [--effort level] [--force] [--direct --reason "why"]',
@@ -179,7 +179,7 @@ Usage:
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
   sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--complexity 1-10 --why "<motivation>"]
-  sidequest profile hygiene|list|show|create|edit|retire|use|repoint|promote|new-board ... [--json]
+  sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
   sidequest rm <id|SQ-n> [--force]
@@ -284,7 +284,7 @@ User stories (a lightweight grouping tickets can belong to):
   sidequest story list                             list stories with their color and ticket count
   sidequest story show US-n                         show a story and the tickets in it
   sidequest story contract US-n [-m text|--body-file path]  read or set its execution contract
-  sidequest story log US-n [-m text|--body-file path] [--ref SQ-n] [--by who] [--clear]  read, append, or clear its decision log
+  sidequest story log US-n [-m text|--body-file path] [--ref SQ-n] [--by who] [--rotate]  read, append, or rotate its decision log
   sidequest story update US-n [-t] [-d] [--color]  edit a story
   sidequest story rm US-n                           delete a story (member tickets are detached)
   sidequest add ... --story <US-n>                 file a ticket straight into a story

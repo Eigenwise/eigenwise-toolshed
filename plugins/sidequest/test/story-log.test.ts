@@ -52,7 +52,7 @@ test('append normalizes a one-line entry and records ticket attribution', () => 
   assert.match(log.entries[0].at, /^\d{4}-\d{2}-\d{2}T/);
 });
 
-test('CLI story log reads, appends a body file, and clears after promotion', () => {
+test('CLI story log reads, appends a body file, and rotates after promotion', () => {
   const createdStory = story('CLI surface');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'cli-worker');
@@ -65,12 +65,12 @@ test('CLI story log reads, appends a body file, and clears after promotion', () 
 
   const read = cliJson(['story', 'log', createdStory.ref, '--json']);
   assert.equal(read.story.entries.length, 1);
-  const cleared = cliJson(['story', 'log', createdStory.ref, '--clear', '--by', 'orchestrator', '--json']);
-  assert.equal(cleared.story.logBytes, 0);
-  assert.equal(cleared.story.logCapacity, 4096);
-  assert.equal(cleared.story.logRevision, 1);
-  assert.deepEqual(cleared.story.entries, []);
-  assert.equal(cleared.story.archivedEntries, 1);
+  const rotated = cliJson(['story', 'log', createdStory.ref, '--rotate', '--by', 'orchestrator', '--json']);
+  assert.equal(rotated.story.logBytes, 0);
+  assert.equal(rotated.story.logCapacity, 4096);
+  assert.equal(rotated.story.logRevision, 1);
+  assert.deepEqual(rotated.story.entries, []);
+  assert.equal(rotated.story.archivedEntries, 1);
   const full = cliJson(['story', 'log', createdStory.ref, '--full', '--json']);
   assert.equal(full.story.entries.length, 1);
   assert.equal(full.story.entries[0].text, 'first line second line');
@@ -123,16 +123,19 @@ test('orchestrator appends without a member ticket ref through the CLI', () => {
   assert.match(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
 });
 
-test('entry text over 280 UTF-8 bytes is refused rather than truncated', () => {
+test('entries up to 16 KB are stored and long entries advise without blocking', () => {
   const createdStory = story('Entry limit');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'limit-worker');
 
+  const entry = `DISCOVERY: ${'測'.repeat(2000)}`;
+  const updated = append(createdStory.ref, ticket.ref, 'limit-worker', entry);
+  assert.equal(updated.decisionLog[0].text, '測'.repeat(2000));
+  assert.match(store.storyLogEntryAdvisory(entry), /stored in full/);
   assert.throws(
-    () => append(createdStory.ref, ticket.ref, 'limit-worker', `DISCOVERY: ${'測'.repeat(94)}`),
-    /story log entry text exceeds the 280-byte limit/,
+    () => append(createdStory.ref, ticket.ref, 'limit-worker', `DISCOVERY: ${'測'.repeat(6000)}`),
+    /story log entry text exceeds the 16000-byte limit/,
   );
-  assert.equal(store.storyDecisionLog(store.getStory(slug, createdStory.ref)).entries.length, 0);
 });
 
 test('appends beyond the former aggregate limit and defaults reads to the briefing window', () => {
@@ -181,18 +184,18 @@ test('briefings retain the newest decision log entries within the 4 KB packet', 
   assert.match(packet, /omitted \d+ earlier entries.*sidequest story log US-\d+ --full/);
 });
 
-test('sequence numbers remain monotonic after the log is cleared', () => {
+test('sequence numbers remain monotonic after the log is rotated', () => {
   const createdStory = story('Monotonic sequence');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'sequence-worker');
 
   append(createdStory.ref, ticket.ref, 'sequence-worker', 'DECISION: first');
   append(createdStory.ref, ticket.ref, 'sequence-worker', 'CONSTRAINT: second');
-  const cleared = store.clearStoryLog(slug, createdStory.ref);
-  assert.equal(cleared.logRevision, 2);
-  assert.deepEqual(cleared.decisionLog, []);
-  assert.equal(cleared.archivedDecisionLog.length, 2);
-  const archived = store.storyDecisionLog(cleared, { full: true });
+  const rotated = store.rotateStoryLog(slug, createdStory.ref);
+  assert.equal(rotated.logRevision, 2);
+  assert.deepEqual(rotated.decisionLog, []);
+  assert.equal(rotated.archivedDecisionLog.length, 2);
+  const archived = store.storyDecisionLog(rotated, { full: true });
   assert.deepEqual(archived.entries.map((entry: any) => entry.seq), [1, 2]);
 
   const updated = append(createdStory.ref, ticket.ref, 'sequence-worker', 'DISCOVERY: third');

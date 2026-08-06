@@ -110,16 +110,18 @@ async function cmdStory(opts: any, positional: any) {
     case 'log': {
       if (!idOrRef) fail('story log: pass a story ref, e.g. sidequest story log US-1 [--body-file path]');
       const entry = await bodyFromOpts(opts, 'story log');
-      if (opts.clear && entry !== undefined) fail('story log: pass an entry or --clear, not both');
+      if (opts.rotate && entry !== undefined) fail('story log: pass an entry or --rotate, not both');
       const by = workerId(opts);
       let story;
-      if (opts.clear) {
-        if (by !== 'orchestrator') fail('story log: --clear requires --by orchestrator');
-        story = store.clearStoryLog(slug, idOrRef);
+      let advisory = null;
+      if (opts.rotate) {
+        if (by !== 'orchestrator') fail('story log: --rotate requires --by orchestrator');
+        story = store.rotateStoryLog(slug, idOrRef);
       } else if (entry === undefined) {
         story = store.getStory(slug, idOrRef);
       } else {
         story = store.appendStoryLogEntry(slug, idOrRef, { entry, ref: opts.ref, by });
+        advisory = store.storyLogEntryAdvisory(entry);
       }
       if (!story) fail(`story log: no story "${idOrRef}" in ${meta.name}`);
       const log = store.storyDecisionLog(story, { full: opts.full });
@@ -137,6 +139,7 @@ async function cmdStory(opts: any, positional: any) {
           omittedEntries: log.omittedEntries,
           archivedEntries: log.archivedEntries,
         },
+        ...(advisory ? { advisory } : {}),
       };
       if (opts.json) {
         process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
@@ -147,6 +150,7 @@ async function cmdStory(opts: any, positional: any) {
         console.log(`- #${item.seq} ${item.kind} (${item.ref || 'orchestrator'}, ${item.by}): ${item.text}`);
       }
       if (log.omittedEntries) console.log(`  ${log.omittedEntries} history entries omitted; pass --full for the complete history.`);
+      if (advisory) console.log(`  ${advisory}`);
       return;
     }
 
