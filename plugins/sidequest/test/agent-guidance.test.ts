@@ -14,6 +14,7 @@ const orchestrationPath = path.join(ROOT, 'skills', 'sidequest', 'references', '
 const orchestration = fs.readFileSync(orchestrationPath, 'utf8');
 const store = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'store.ts'), 'utf8');
 const warnings = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'store', 'warnings.ts'), 'utf8');
+const agentsync = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'agentsync.ts'), 'utf8');
 const publishing = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'publishing.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 
@@ -149,6 +150,12 @@ test('executor guidance keeps board lifecycle MCP-only and protects shared trees
   assert.match(executorTemplate, /missing or unreadable attachments as blockers or warnings/);
   assert.doesNotMatch(executorTemplate, /comments digest/i);
   assert.doesNotMatch(orchestration, /It carries the full ticket contract/);
+});
+
+test('executor guidance distinguishes a wrong in-scope anchor from a blocking contradiction', () => {
+  assert.match(agentsync, /An anchor is orientation, not a contract/);
+  assert.match(agentsync, /If that file is inside declared scope, correct the anchor in your handback and continue/);
+  assert.match(agentsync, /only when the needed file is outside declared scope or the ticket premise is false/);
 });
 
 test('owned background work stays non-terminal through Monitor timeouts', () => {
