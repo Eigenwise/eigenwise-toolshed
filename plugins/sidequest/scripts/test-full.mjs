@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -8,22 +9,39 @@ const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '.
 const testDirectory = path.join(pluginRoot, 'test');
 const performanceTest = path.join(testDirectory, 'hooks.perf.test.ts');
 const testConcurrency = 4;
+const testPhaseTimeoutMilliseconds = 480_000;
 const testFiles = (await fs.readdir(testDirectory))
   .filter((name) => name.endsWith('.test.ts'))
   .sort()
   .map((name) => path.join(testDirectory, name))
   .filter((file) => file !== performanceTest);
 
-function runTests(files) {
+function runTests(phase, files, environment) {
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
     cwd: pluginRoot,
     stdio: 'inherit',
     windowsHide: true,
-    env: suiteEnvironment(),
+    env: environment,
+    timeout: testPhaseTimeoutMilliseconds,
   });
+  if (result.error?.code === 'ETIMEDOUT') {
+    throw new Error(`Sidequest ${phase} tests timed out after ${testPhaseTimeoutMilliseconds}ms.`);
+  }
   if (result.error) throw result.error;
-  if (result.status !== 0) process.exit(result.status ?? 1);
+  if (result.status !== 0) throw new Error(`Sidequest ${phase} tests exited ${result.status ?? 1}.`);
 }
 
-runTests(testFiles);
-runTests([performanceTest]);
+const suiteTemporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-full-suite-'));
+const suiteTestEnvironment = {
+  ...suiteEnvironment(),
+  TMPDIR: suiteTemporaryDirectory,
+  TMP: suiteTemporaryDirectory,
+  TEMP: suiteTemporaryDirectory,
+};
+
+try {
+  runTests('functional', testFiles, suiteTestEnvironment);
+  runTests('performance', [performanceTest], suiteTestEnvironment);
+} finally {
+  await fs.rm(suiteTemporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+}
