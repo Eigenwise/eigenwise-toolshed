@@ -241,6 +241,53 @@ test('a pending scope request reports waiting before and after the executor stop
   assert.equal(pulse.dispatch.outcome, 'scope_paused');
 });
 
+test('the claim sweep releases a dead executor with a pending scope request', () => {
+  const ticket = addRouted('dead executor scope request');
+  claimRouted(ticket, 'dead-scope-worker', { sessionId: 'session-dead-scope' });
+  assert.equal(store.requestScope(slug, ticket.ref, 'dead-scope-worker', ['lib/dead-scope.js']).ok, true);
+  const dead = store.getTicket(slug, ticket.ref);
+  dead.dispatch.outcome = 'died';
+  dead.dispatch.terminalAt = new Date().toISOString();
+  persist(dead);
+
+  const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
+});
+
+test('a pending scope request preserves committed work and permits a checkpoint', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'scope request release guard',
+    description: 'Where: scope-release fixture. Contract: a scope timeout holds verified work. Verify: inspect release and checkpoint outcomes.',
+    category: 'codebase-exploration',
+    files: ['lib/release-guard.js'],
+    source: 'cli',
+  });
+  claimRouted(ticket, 'scope-release-guard-worker', { sessionId: 'session-scope-release-guard' });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'release-guard.js'), 'module.exports = true;\n');
+  git(['add', 'lib/release-guard.js']);
+  git(['commit', '-m', 'scope release guard fixture']);
+  const commit = git(['rev-parse', 'HEAD']);
+  assert.equal(store.requestScope(slug, ticket.ref, 'scope-release-guard-worker', ['foreign/release-guard.js']).ok, true);
+
+  const refused = store.releaseTicket(slug, ticket.ref, 'scope-release-guard-worker', { status: 'todo' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'scope_work_pending');
+  assert.equal(refused.commit, commit);
+  assert.match(refused.message, new RegExp(commit));
+  assert.match(refused.message, /Checkpoint and hold/);
+
+  const checkpoint = store.checkpointTicket(slug, ticket.ref, 'scope-release-guard-worker', {
+    commit,
+    verify: 'node --test test/claim-liveness.test.js',
+  });
+  assert.equal(checkpoint.ok, true);
+
+  const noWork = addRouted('scope request with no work');
+  claimRouted(noWork, 'scope-no-work-worker', { sessionId: 'session-scope-no-work' });
+  assert.equal(store.requestScope(slug, noWork.ref, 'scope-no-work-worker', ['foreign/no-work.js']).ok, true);
+  assert.equal(store.releaseTicket(slug, noWork.ref, 'scope-no-work-worker', { status: 'todo' }).ok, true);
+});
+
 test('a shared-tree write dispatch refuses an empty verification completion unless it declares a no-op', () => {
   const ticket = store.createTicket(slug, {
     title: 'shared-tree completion tree check',

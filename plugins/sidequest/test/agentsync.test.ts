@@ -894,7 +894,9 @@ test('briefings reject compensating workarounds when the root cause is out of sc
     ref: 'SQ-1138', title: 'Scope wall', model: 'opus', effort: 'high', category: {},
   }, 'scope-wall-token');
   assert.match(briefing, /Always call `scopeRequest` with `wait: true`/);
-  assert.match(briefing, /checkpoint with a commit and state exactly which scope ruling is pending/);
+  assert.match(briefing, /that is a wait, not a release/);
+  assert.match(briefing, /checkpoint-and-hold work in hand with a commit/);
+  assert.match(briefing, /state exactly which scope ruling is pending/);
   assert.match(briefing, /When the root cause is outside declared scope, request that scope and wait/);
   assert.match(briefing, /record the root-cause finding on the ticket and stop/);
   assert.match(briefing, /Never ship a compensating or downstream workaround inside scope instead/);
