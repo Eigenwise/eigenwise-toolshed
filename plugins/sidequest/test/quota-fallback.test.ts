@@ -351,6 +351,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   assert.equal(store.classifyDispatchFailure('Prompt is too long'), 'context_overflow');
   assert.equal(store.classifyDispatchFailure('Agent stopped after max_tokens'), 'max_tokens');
   assert.equal(store.classifyDispatchFailure('Subagent terminated unexpectedly'), 'agent_terminal');
+  assert.equal(store.classifyDispatchFailure('Vite returned 404 because the app service is missing.'), 'worktree_environment');
   assert.equal(store.classifyDispatchFailure('Request too large (max 32MB)'), 'context_overflow');
   assert.equal(store.classifyDispatchFailure('gateway not serving'), 'provider_unavailable');
   assert.equal(store.classifyDispatchFailure('not authenticated'), 'auth_failure');

@@ -514,6 +514,21 @@ test('worktree dispatch warnings name ignored missing paths without flagging ins
   assert.equal(store.releaseTicket(slug, installed.ref, 'visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
 });
 
+test('dispatch warns when compose bind-mounts the repository root into an isolated worktree', () => {
+  const compose = path.join(PROJECT, 'compose.yaml');
+  fs.writeFileSync(compose, 'services:\n  app:\n    volumes:\n      - .:/workspace\n');
+  const ticket = createFixture('compose worktree compatibility fixture');
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `compose-worktree-${Date.now()}` });
+    const warnings = store.dispatchWarnings(prepared.ticket, slug).join('\n');
+    assert.match(warnings, /compose\.yaml bind-mounts the repository root/);
+    assert.match(warnings, /worktreeIsolation: false/);
+  } finally {
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'compose-worktree-cleanup', { status: 'todo', source: 'test' }).ok, true);
+    fs.rmSync(compose, { force: true });
+  }
+});
+
 test('dispatch blocks a third terminal no-commit attempt unless explicitly overridden', () => {
   const ticket = createFixture('repeat no-commit dispatch fixture');
   for (const number of [1, 2]) {
@@ -591,6 +606,39 @@ test('dispatch counts terminal Agent failures toward the repeat-failure breaker'
   }
 
   assert.throws(() => store.prepareDispatch(slug, ticket.ref), /two prior terminal dispatches without a commit/);
+});
+
+test('repeat failures identify isolated missing-app errors as worktree-shaped', () => {
+  const ticket = createFixture('repeat worktree-shaped failure fixture');
+  for (const number of [1, 2]) {
+    const sessionId = `repeat-worktree-failure-${number}-${Date.now()}`;
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    const worker = `repeat-worktree-failure-worker-${number}`;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: worker,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, `repeat-worktree-failure-agent-${number}`, worker).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      error: 'Vite returned 404 because the app service is missing.',
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
+  }
+
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /worktree-shaped failure.*worktreeIsolation:false/);
+  const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-worktree-failure-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
 });
 
 test('release and submission clear retain structured rework attempts', () => {

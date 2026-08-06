@@ -268,6 +268,7 @@ function createDispatch(dependencies) {
       tokenPrefix: state.tokenPrefix || null,
       preparedAt: state.preparedAt || null,
       launchedAt: state.launchedAt || null,
+      sharedTree: state.sharedTree === true,
       outcome,
       failureShape,
       terminalAt: at,
@@ -420,7 +421,12 @@ function createDispatch(dependencies) {
     return recent.length === 2 && recent.every((attempt) => attempt.outcome !== "submitted" && !attempt.commit) ? recent : [];
   }
   function repeatNoCommitDispatchError(ticket, state) {
-    if (recentNoCommitAttempts(state).length !== 2) return null;
+    const attempts = recentNoCommitAttempts(state);
+    if (attempts.length !== 2) return null;
+    const worktreeFailures = attempts.every((attempt) => attempt.sharedTree === false && attempt.failureShape === "worktree_environment");
+    if (worktreeFailures) {
+      return `prepare dispatch: ${ticket.ref} has two isolated no-commit dispatches that failed to find the app or service. This is a worktree-shaped failure. Check for repository bind mounts or unavailable paths, then set worktreeIsolation:false or dispatch with sharedTree:true. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
+    }
     return `prepare dispatch: ${ticket.ref} has two prior terminal dispatches without a commit. Environment visibility is the leading hypothesis. Check ignored paths, dispatch with sharedTree:true, or run inline. Pass allowRepeatFailure:true to override this block; the override is recorded.`;
   }
   function worktreeIsolationWarning(slug) {
