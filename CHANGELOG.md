@@ -8,6 +8,32 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.394.0 (2026-08-06)
+
+### sidequest 4.29.0 → 4.30.0
+
+#### Features
+
+- A dispatch that cannot possibly work in a worktree now says so before it runs (SQ-1364)
+  Some projects structurally cannot use linked worktrees. A docker stack that bind-mounts the main checkout will never see the worktree as the running app, and a project whose corpus is gitignored sees an empty directory there. Nothing detected either shape, so every new orchestrator rediscovered it the same way: by dispatching, watching the executor fail on a missing app, diagnosing it, and re-dispatching into the main checkout. One such round trip measured 3m55s and 80.8k tokens.
+
+  The mechanism to turn worktree isolation off has existed since 2026-07-25. Two boards that needed it never got it, which is the recurring failure where a mechanism ships and the configuration step that makes it useful does not.
+
+  Dispatch now checks for the shape before spawning and warns in the result, naming the likely failure and the one-line fix, when an isolated dispatch targets a repository that a compose or docker file bind-mounts, or whose declared paths are gitignored. Worktree isolation is also surfaced in the orchestrator-facing board summary so it is visible when planning a wave rather than buried in CLI help.
+
+  The setting is not flipped automatically. Guessing wrong strands an executor in the shared tree, which is worse than the problem being solved, so the board warns precisely and leaves the decision to a human or orchestrator.
+
+#### Fixes
+
+- Hook tests no longer read whichever plugin version happens to be installed (SQ-1376)
+  Hooks resolve their runtime store from `CLAUDE_PLUGIN_ROOT`. Spawned-hook tests did not pin that variable, so they inherited whatever the surrounding session had set, which in a Claude Code session is the INSTALLED plugin cache rather than the repo under test. The suite then exercised the installed version's code and reported on it as if it were the working tree.
+
+  This turned a green suite into a coin flip that depends on which plugin version the developer has installed. Running the same commit with `CLAUDE_PLUGIN_ROOT` pointed at an installed 4.24.0 produced a failure in `quota-fallback.test.ts` that vanished the moment the variable was unset, with no code change in between. It also blocked the `integrate` preflight, which inherits the variable from the MCP server: four verified submissions had to be merged by hand because the preflight kept failing a test unrelated to any of them.
+
+  The spawned-hook test setup now pins the plugin root to the repo, and an assertion fails the suite if any hook resolves a runtime outside it, so a leaked environment is a loud failure instead of a silently wrong result.
+
+  Whether `runtimeModule()` should refuse a mismatched plugin root in production, rather than only in tests, is deliberately left open and tracked separately.
+
 ## v3.393.0 (2026-08-06)
 
 ### sidequest 4.28.0 → 4.29.0
