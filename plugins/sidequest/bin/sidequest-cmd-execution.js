@@ -263,6 +263,9 @@ async function cmdDone(opts, positional) {
 const QUIET_INTEGRATION_BRANCH_REASONS = ["remote_mode", "already_integrated"];
 function reportIntegrationBranch(outcome) {
   if (!outcome || QUIET_INTEGRATION_BRANCH_REASONS.includes(outcome.reason)) return;
+  if (outcome.ignoredDirtyPaths?.length) {
+    console.log(`  info: left unrelated dirty paths untouched: ${outcome.ignoredDirtyPaths.join(", ")}`);
+  }
   console.log(outcome.advanced ? `  ${outcome.message}` : `  ! ${outcome.message}`);
   if (outcome.command) console.log(`    run: ${outcome.command}`);
 }
@@ -288,7 +291,9 @@ async function cmdGroomClose(opts, positional) {
       res.integrationBranch = await worktrees.advanceIntegrationBranch(meta.path, {
         integrationTarget,
         submissionCommit: res.ticket.submission ? res.ticket.submission.commit : null,
-        submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null
+        submissionWorktree: res.ticket.submission ? res.ticket.submission.worktree : null,
+        admittedScope: res.ticket.submission ? res.ticket.submission.admittedScope : null,
+        changedPaths: res.ticket.submission ? res.ticket.submission.changedPaths : null
       });
       res.worktreeSweep = await worktrees.sweep(meta.path, store.worktreeGcTickets(), {
         execute: true,
@@ -614,6 +619,9 @@ async function cmdIntegrate(opts, positional) {
     return;
   }
   if (!closed.ok) fail(`integrate: delivered ${idOrRef}, but could not close it: ${closed.message || closed.reason}.`);
+  if (!opts.json && integration.ignoredDirtyPaths?.length) {
+    console.log(`info: left unrelated dirty paths untouched: ${integration.ignoredDirtyPaths.join(", ")}`);
+  }
   const result = integration.mode === "apply" ? `working tree changed: ${(integration.dirtyFiles || []).join(", ") || "(no files)"}` : `HEAD ${String(integration.resultingHead).slice(0, 12)}`;
   console.log(`✓ ${closed.ticket.ref} delivered by ${integration.mode} onto ${integration.targetBranch} (${result}) — ${meta.name}`);
 }
