@@ -117,7 +117,8 @@ The usual set is `INDEX.md`, `architecture.md`, `tech-landscape.md`, `directory-
 `coding-style.md`, `docker.md`, and `onboarding.md`. A project with no database or containers gets no
 `database.md` or `docker.md`, and a project with a major aspect none of those cover gets a doc of its
 own (say `ml-pipeline.md`). `.map-state.json` records the last mapped commit, document list, and a
-SHA-256 hash manifest. Hooks always hash the live files, so manual edits and stale manifests are
+SHA-256 hash manifest. The bundled state writer discovers those documents and replaces the state file
+atomically after the docs are final. Hooks always hash the live files, so manual edits and stale manifests are
 noticed without trusting stale state.
 
 `INDEX.md` is the compact hub that gets injected at session start; the detailed docs are read on demand.

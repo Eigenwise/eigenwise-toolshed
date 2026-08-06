@@ -155,14 +155,14 @@ Then carry out the additions and removals you identified in Step 3:
 
 ### Step 5 — Re-record state
 
-Rewrite `.claude/.codebase-info/.map-state.json` after the final document edits:
-- `mappedAt`: today's date
-- `gitCommit`: current `git rev-parse HEAD` (or `null` if not a git repo)
-- `documents`: the current set of docs (reflecting any added/removed)
-- `hashes`: SHA-256 hashes of the exact final contents of `INDEX.md` and every listed document
-- keep `tool` and bump `version` to match the plugin if needed
+After the final document edits, run the bundled state writer from the installed plugin:
 
-Stage the final document contents first, then atomically replace `.map-state.json`. A manual edit or
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/scripts/write-map-state.js" --project .
+```
+
+It discovers the current documents, records today's date and the current commit (or `null` outside a
+git repo), hashes the final bytes, and atomically replaces `.map-state.json` last. A manual edit or
 interrupted write can leave hashes stale; that is safe because hooks hash live files and treat the
 manifest only as a consistency check.
 
