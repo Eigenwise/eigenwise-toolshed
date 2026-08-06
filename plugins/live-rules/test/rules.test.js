@@ -52,7 +52,7 @@ function writeAtomicRule(projectDir, data = { description: 'Always' }) {
 function runHook(script, projectDir, stateDir, data) {
   return execFileSync(process.execPath, [script], {
     cwd: projectDir,
-    env: { ...process.env, LIVE_RULES_STATE_DIR: stateDir },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, LIVE_RULES_STATE_DIR: stateDir },
     input: JSON.stringify({ cwd: projectDir, ...data }),
     encoding: 'utf8',
   });

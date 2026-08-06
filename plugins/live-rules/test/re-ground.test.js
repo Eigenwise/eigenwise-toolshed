@@ -31,7 +31,7 @@ function atomic(projectDir, files) {
 function hook(script, projectDir, stateDir, data, env) {
   return execFileSync(process.execPath, [script], {
     cwd: projectDir,
-    env: { ...process.env, LIVE_RULES_STATE_DIR: stateDir, ...env },
+    env: { ...process.env, CLAUDE_PROJECT_DIR: projectDir, LIVE_RULES_STATE_DIR: stateDir, ...env },
     input: JSON.stringify({ cwd: projectDir, ...data }),
     encoding: 'utf8',
   });
