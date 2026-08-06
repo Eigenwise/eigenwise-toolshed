@@ -159,7 +159,7 @@ Whatever the route, a contract that makes fan-out safe pins:
   interpretations of the same seam.
 - **File boundaries per piece**, the blast radius each piece may touch, and any committed build output. Content-hashed output gets one rebuild ticket per wave.
 - **Dependency order**, so `ready` partitions the backlog into waves by itself.
-- **The exact verify command per piece**, runnable and deterministic.
+- **The exact scoped verify command per piece**, runnable and deterministic. The integrator runs the full merged-tree gate once per wave.
 - **Shared runtime resources**: fixed ports, servers, databases, fixture paths. Worktrees isolate
   files, not runtime, so two tickets sharing a port serialize even inside one wave.
 
@@ -179,7 +179,7 @@ by doing it. No story needed. This never means the orchestrator implements it.
 
 Everything larger gets a story, the contract pinned on it, and **every ticket for every planned wave
 filed under it before the first dispatch**: category from the live taxonomy, file scope, anchors,
-exact verify, and `depends-on` links. Never hand-pick a model or effort.
+exact scoped verify, and `depends-on` links. Never hand-pick a model or effort.
 
 Filing the whole thing up front is what makes the plan steerable. The user sees the entire feature on
 the board and can cut, reorder, or reshape it while that is still cheap. Drip-filing one ticket,
@@ -232,9 +232,8 @@ Note it, and cut thinner slices next time.
 
 ## 7. Review at the sized depth, then integrate
 
-The floor is always the same: read the submission report, run its verify command, run the full suite
-once for the wave. On green, integrate through the board's delivery mode, then the publish transaction
-under the publish lock.
+The floor is always the same: read the submission report, deliver the range, and run the merged-tree
+full gate once for the wave. On green, finish the publish transaction under the publish lock.
 
 How much review sits on top of that floor scales with the work:
 

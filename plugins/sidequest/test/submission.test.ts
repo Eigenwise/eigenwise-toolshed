@@ -219,6 +219,30 @@ test('submit rejects invalid verify commands without releasing the claim or pin'
   assert.strictEqual(git(['rev-parse', `refs/sidequest/${t.ref}`]), pinnedCommit);
 });
 
+test('submit requires the declared executor verify command', () => {
+  const t = addTicket('declared scoped verify', { executorVerify: 'node --test test/scoped-surface.test.js' });
+  const by = 'scoped-verify-worker';
+  const pinnedCommit = git(['rev-parse', 'origin/main']);
+  pin(t, pinnedCommit);
+  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+
+  const refused = store.submitTicket(slug, t.ref, by, {
+    commit: pinnedCommit,
+    verify: 'node --test test/unrelated.test.js',
+  });
+
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'executor_verify_mismatch');
+  assert.match(refused.message, /must match the declared executor verify command/);
+  assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
+
+  const accepted = store.submitTicket(slug, t.ref, by, {
+    commit: pinnedCommit,
+    verify: t.executorVerify,
+  });
+  assert.strictEqual(accepted.ok, true);
+});
+
 test('submit accepts runnable and manual verify commands', () => {
   const runnable = addTicket('runnable submit verify');
   const manual = addTicket('manual submit verify');
@@ -238,6 +262,26 @@ test('submit accepts runnable and manual verify commands', () => {
   assert.strictEqual(manualResult.ok, true);
   assert.strictEqual(store.getTicket(slug, runnable.ref).submission.verify, 'cd plugins/sidequest && npm run test:full');
   assert.strictEqual(store.getTicket(slug, manual.ref).submission.verify, 'manual: submission tests passed');
+});
+
+test('integration rejects a plugin change when its merged-tree full gate fails', () => {
+  const pluginDir = path.join(PROJECT_DIR, 'plugins', 'integration-gate-fixture');
+  fs.mkdirSync(pluginDir, { recursive: true });
+  fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node -e "process.exit(7)"' } }));
+  const t = addTicket('integration full gate', { files: ['plugins/integration-gate-fixture/src/changed.js'] });
+  t.submission = {
+    commit: COMMIT,
+    verify: 'cd plugins/integration-gate-fixture && node --test test/changed.test.js',
+    integration: { outcome: 'delivered' },
+  };
+  persist(t);
+
+  const result = store.verifyIntegration(slug, t.ref);
+
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'verify_failed');
+  assert.strictEqual(result.verify.status, 'failed');
+  assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && npm run test:full');
 });
 
 test('SQ-971: rejected range submission is quarantined and clean rebase resubmits', async () => {

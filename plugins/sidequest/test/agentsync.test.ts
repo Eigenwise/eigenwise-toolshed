@@ -729,6 +729,7 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /grep -nE '\^not ok\|\^# \(fail\|pass\)' "\$log" \| head -40/);
   assert.match(briefing, /exit "\$status"/);
   assert.match(briefing, /A passing suite's full output carries no information/);
+  assert.match(briefing, /integrator owns the merged-tree full gate/);
   assert.match(briefing, /Verify liveness: immediately before running the exact verify command/);
   assert.match(briefing, /\[sidequest:verify-start\] <command>/);
   assert.match(briefing, /\[sidequest:verify-complete\]/);
