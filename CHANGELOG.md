@@ -8,6 +8,33 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.393.0 (2026-08-06)
+
+### sidequest 4.28.0 → 4.29.0
+
+#### Features
+
+- Shared-tree submissions attribute changes to the run that made them (SQ-1328)
+  On boards that cannot use worktrees — BMR bans them, contractify must share because its docai container mounts the main checkout — the submit and done gates evaluated the whole dirty working tree. An executor was therefore blocked by its siblings' in-flight edits and by anything the user had left lying around. On 2026-07-31 all three executors of a BMR wave hit `unscoped_paths` and none of them could ever have submitted; nothing an executor could do would have helped.
+
+  4.23.0 covered the half a launch-time snapshot can see: paths already dirty when the run started are exempt while their content is unchanged. This covers the half it cannot, a sibling's edits landing during the run, by attributing changes to the dispatch delta and the submitted range rather than to whole-tree state.
+
+  Refusals on both entry points now name what the executor can actually act on, since a refusal improved on only the MCP handler or only the CLI leaves the other quietly unchanged.
+- Executor worktrees fork from the branch you actually integrate into (SQ-1334)
+  Worktrees forked from `origin/main`, so on any board where the user does not push, every executor started from a stale tree. Cantizans, 2026-07-31: origin was 15 commits behind local main, one executor's worktree was missing directories three delivered tickets had created, and that run was wasted outright. Setting `integrationMode: local` did not change the fork point, which made the setting a lie.
+
+  Dispatch now syncs the worktree to the configured local integration branch, so `integrationMode: local` means what it says and an executor starts from the tree its work will be merged into.
+- Planning warnings stop crying wolf on greenfield boards (SQ-1358)
+  On Terge_VST, a greenfield project, ticket writes produced 22 warnings the orchestrator knew were wrong and dismissed every time: 12 saying declared file scope does not exist in the repo, 6 about a verify command changing to a directory that does not exist, and 4 stamping a category without reading the taxonomy. A warning dismissed 22 times has stopped being a warning.
+
+  The scope and verify-path warnings now account for paths a ticket is about to create, which is the normal case on a new project rather than an error. The taxonomy warning was a straight false positive: it tracked process-local state in the MCP layer, so it fired regardless of whether the taxonomy had been read.
+- Ending a turn no longer counts as an executor dying (SQ-1374)
+  `SubagentStop` fires when a background agent ends a TURN, not when it is gone, and a background executor ends a turn every time it reports or waits on a ruling. The board read that as an observed death: the claim was auto-released and the dispatch went terminal, which also cleared the dispatch token a resumed executor needs in order to submit.
+
+  One ticket produced all four consequences in a single run. The executor ended a turn to ask for scope, so the board marked it died. A steer back to it was refused as "already died" and became a comment the agent never saw. A replacement dispatch could not claim, did nothing, and cost 38.6k tokens. The original resumed, finished the work, verified it green, and was then auto-released before it could hand in, forcing a manual integration.
+
+  A turn boundary is now recorded as a turn boundary. Auto-release requires a recorded terminal Agent failure, the kind 4.28.0 started observing from `PostToolUseFailure`. Pulse reports such an executor as waiting and says plainly that it may resume and must not be re-dispatched or released without that evidence, and a steer is refused only for a real terminal failure.
+
 ## v3.392.0 (2026-08-06)
 
 ### observability 0.3.0 → 0.3.1
