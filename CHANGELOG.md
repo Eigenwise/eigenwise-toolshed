@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.396.0 (2026-08-06)
+
+### observability 0.3.1 → 0.3.2
+
+#### Fixes
+
+- The real-Collector tests run in CI again, without downloading inside the test (SQ-1375)
+  Two tests check that our generated collector config is accepted by the actual pinned Collector binary, and that it converts delta sums and forwards gateway usage logs. They are the only tests that catch our config drifting away from what the real binary accepts; everything else validates our config against our own expectations.
+
+  They had been fetching that binary over the network from inside the suite, within a 30 second per-file budget, which intermittently timed out and turned main red. The previous fix removed CI from the condition that enables them. The flake went away and so did the coverage: they now skip everywhere unless a developer sets `WORKBENCH_OTELCOL_CONTRIB` by hand, which in practice is never.
+
+  CI now provisions the pinned Collector as a workflow step, cached on the runner and keyed by version, and exports `WORKBENCH_OTELCOL_CONTRIB` for the observability job. The tests find a configured binary, skip the download path entirely, and finish well inside their budget. The download helper stays for local use.
+
+  The cache key is derived from `COLLECTOR_VERSION` rather than written out. A hardcoded version would keep hitting the cache after a bump, find the old binary already present, skip the download, and quietly check the config against the wrong Collector.
+
 ## v3.395.0 (2026-08-06)
 
 ### sidequest 4.30.0 → 4.31.0

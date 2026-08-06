@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.395.0",
+  "version": "3.396.0",
   "plugins": [
     {
       "name": "workbench",
@@ -31,7 +31,7 @@
       "name": "observability",
       "source": "./plugins/observability",
       "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Prompts, responses, code, tool inputs and results, credentials, and environment values are never stored. Every sink beyond local SQLite is opt-in.",
-      "version": "0.3.1",
+      "version": "0.3.2",
       "author": {
         "name": "Eigenwise"
       },
