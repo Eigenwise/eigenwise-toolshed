@@ -8,6 +8,70 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.387.0 (2026-08-06)
+
+### codebase-mapper 2.12.3 → 2.13.0
+
+#### Features
+
+- Workspace rule templates stop producing a permanent manifest mismatch (SQ-1359)
+  Two defects that hit every workspace `init-workspace` sets up, both found the hard way on Terge_VST.
+
+  The live-rules reference doc's example manifest entry omitted `priority` and `include`. `sameManifestEntry` compares a missing `priority` as 0 against the rule's actual 95, so every entry written from our own template mismatched, and the workspace got a manifest-mismatch warning injected on every prompt. The template now carries the fields the comparison reads.
+
+  Hashes were computed over raw bytes, so a CRLF checkout of the same rule file hashed differently from an LF one and the manifest never matched. Both live-rules and codebase-mapper now normalize line endings before hashing, which also means a map or manifest built on one platform still verifies on another.
+
+  Fixture hook spawns in the live-rules tests now pin `CLAUDE_PROJECT_DIR` to the fixture directory. The hooks prefer that variable over the fixture cwd, so 13 tests read the real repository's rules and failed whenever it was set — invisible in CI, which never sets it, and a phantom red for anything run from inside a session.
+
+### live-rules 2.9.1 → 2.10.0
+
+#### Features
+
+- Workspace rule templates stop producing a permanent manifest mismatch (SQ-1359)
+  Two defects that hit every workspace `init-workspace` sets up, both found the hard way on Terge_VST.
+
+  The live-rules reference doc's example manifest entry omitted `priority` and `include`. `sameManifestEntry` compares a missing `priority` as 0 against the rule's actual 95, so every entry written from our own template mismatched, and the workspace got a manifest-mismatch warning injected on every prompt. The template now carries the fields the comparison reads.
+
+  Hashes were computed over raw bytes, so a CRLF checkout of the same rule file hashed differently from an LF one and the manifest never matched. Both live-rules and codebase-mapper now normalize line endings before hashing, which also means a map or manifest built on one platform still verifies on another.
+
+  Fixture hook spawns in the live-rules tests now pin `CLAUDE_PROJECT_DIR` to the fixture directory. The hooks prefer that variable over the fixture cwd, so 13 tests read the real repository's rules and failed whenever it was set — invisible in CI, which never sets it, and a phantom red for anything run from inside a session.
+
+### sidequest 4.24.0 → 4.25.0
+
+#### Features
+
+- Worktree sweep gets quieter, remembers, and surfaces orphan branches (SQ-1337)
+  The session-start worktree sweep injected noise into unrelated sessions and retried impossible deletions forever, while staying silent about the one thing worth saying. Across the-bot-resurrection sessions it made 38 injections naming seven unrelated projects and cost roughly 300 tokens prepended per session; les-undetectables saw 8 budget overruns from it.
+
+  Four changes:
+
+  - Sweep reporting is scoped to the session's own project instead of every board sharing a Sidequest home.
+  - A deletion that fails for a permanent reason is remembered in sweep state rather than retried on every session start.
+  - A worktree owned by another live session is skipped, tracked through a registered-session file that SessionStart writes and SessionEnd clears.
+  - Orphan worktree branches, the thing a sweep is actually well placed to notice, are surfaced with their subject line, capped so a large backlog cannot flood the report.
+
+  Delivered by orchestrator recovery: the executor verified green and then died at max_tokens before it could commit, so the work was recovered from its worktree and re-verified on the merged result.
+
+#### Fixes
+
+- Verify commands may run from the repository root (SQ-1357)
+  The verify-command validator demanded `cd <repo-relative-dir> && <command>` and rejected commands that legitimately run from the repository root. On Terge_VST it refused three `add` calls in a row, each re-sending a multi-kilobyte ticket payload, over `cmake -S . -B build && cmake --build build && ctest --test-dir build` — a command whose paths are already root-relative and which a cosmetic `cd .` does nothing for.
+
+  A root-relative command is now accepted as written. The rule it was actually protecting stays: a command that depends on a subdirectory still has to say so.
+
+### workbench 0.80.1 → 0.81.0
+
+#### Features
+
+- Workspace rule templates stop producing a permanent manifest mismatch (SQ-1359)
+  Two defects that hit every workspace `init-workspace` sets up, both found the hard way on Terge_VST.
+
+  The live-rules reference doc's example manifest entry omitted `priority` and `include`. `sameManifestEntry` compares a missing `priority` as 0 against the rule's actual 95, so every entry written from our own template mismatched, and the workspace got a manifest-mismatch warning injected on every prompt. The template now carries the fields the comparison reads.
+
+  Hashes were computed over raw bytes, so a CRLF checkout of the same rule file hashed differently from an LF one and the manifest never matched. Both live-rules and codebase-mapper now normalize line endings before hashing, which also means a map or manifest built on one platform still verifies on another.
+
+  Fixture hook spawns in the live-rules tests now pin `CLAUDE_PROJECT_DIR` to the fixture directory. The hooks prefer that variable over the fixture cwd, so 13 tests read the real repository's rules and failed whenever it was set — invisible in CI, which never sets it, and a phantom red for anything run from inside a session.
+
 ## v3.386.0 (2026-08-06)
 
 ### sidequest 4.23.1 → 4.24.0
