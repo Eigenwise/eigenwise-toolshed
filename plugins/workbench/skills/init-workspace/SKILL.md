@@ -475,7 +475,7 @@ scope that matches nothing) and re-verify. Report what you confirmed, concretely
   wiring as `wired` or `not wired` with its mode. For `not wired`, include the model-gateway skill's exact
   `env --write-user` recovery command for global mode.
 - Give a practical handover using only the tools that were selected and verified. Tell them they can say
-  "build/add/implement ..." or run `/sidequest:feature` for feature work when Sidequest is enabled; run
+  "build/add/implement ..." or run `/sidequest:user-story` for feature work when Sidequest is enabled; run
   `/codebase-mapper:update-codebase-map` after structural code changes when a map exists; ask to "add a live
   rule for ..." or run `/live-rules:add-rule` for a new project rule; and run `/playbook:retro` for a deeper
   workspace reflection. Also name `/workbench:workbench-doctor` for health checks and

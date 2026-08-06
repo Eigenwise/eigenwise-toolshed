@@ -1,5 +1,5 @@
 ---
-name: feature
+name: user-story
 description: >-
   Drive a feature from a rough request to shipped, integrated work through the Sidequest board, at a
   depth you choose to match the work: recon, competing architecture proposals judged and merged into
@@ -12,7 +12,7 @@ description: >-
   the app or answering from context.
 ---
 
-# feature
+# user-story
 
 A guided path from "build me X" to integrated, verified work on `main`. Two ideas run through all of
 it:
@@ -85,7 +85,7 @@ Drop out of this flow when it does not fit, and say so plainly:
 - Operational asks (run the build, start the dev server, open the dashboard, answer from what is
   already on screen): just do them.
 - A trivial edit to one or two files the user named, with no investigation: edit inline.
-- A single bug with a known cause: that is one ticket, not a feature flow.
+- A single bug with a known cause: that is one ticket, not a user-story flow.
 
 ## 2. Recon, bounded
 
