@@ -562,6 +562,35 @@ test('dispatch blocks a third terminal no-commit attempt unless explicitly overr
 // and its remedy is an environment hypothesis. An attempt that checkpointed a
 // commit disproves that hypothesis: it read the environment fine and simply ran
 // out of runway, which is the opposite situation (the-bot-resurrection SQ-611).
+test('repeat contradiction releases identify the ticket premise as the likely problem', () => {
+  const ticket = createFixture('repeat contradiction dispatch fixture');
+  for (const number of [1, 2]) {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `repeat-contradiction-${number}-${Date.now()}` });
+    const worker = `repeat-contradiction-worker-${number}`;
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, worker, {
+      status: 'todo',
+      source: 'mcp',
+      releaseKind: 'contradiction',
+      releaseReason: 'The named behavior does not occur.',
+      releaseEvidence: { kind: 'contradiction', command: 'node test/probe.js', outputTail: 'observed behavior differs' },
+    }).ok, true);
+  }
+
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), (error: any) => {
+    assert.match(error.message, /two contradiction releases/);
+    assert.match(error.message, /ticket premise is likely wrong, not the executor environment/);
+    assert.match(error.message, /Measure the claim, then rewrite the ticket/);
+    return true;
+  });
+  const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
+  assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-contradiction-cleanup', { status: 'todo', source: 'test' }).ok, true);
+});
+
 test('dispatch does not count an attempt that checkpointed a commit toward the repeat-failure breaker', () => {
   const ticket = createFixture('checkpointed attempt fixture');
   const checkpointCommit = '1590b92abc1234def5678abc1234def5678abcd';

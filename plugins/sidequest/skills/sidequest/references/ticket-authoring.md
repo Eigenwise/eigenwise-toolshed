@@ -8,6 +8,12 @@ A Sidequest category or config-schema change normally spans `src/lib/store.ts`, 
 
 Decide explicitly whether existing materialized profiles need a seed catch-up. Put that decision and the exact verify command in the ticket description.
 
+## Establish the premise and acceptance behavior
+
+A quantitative or behavioral claim that a fix depends on needs evidence before it becomes a ticket premise. Include the measurement command, its output, and where it ran, or link the read-only measurement ticket that established the numbers. When the claim has not been measured, file measurement work first and create the fix ticket from that result.
+
+State the behavior that must keep working, the regression input or consumer that would expose a break, and what a useful failure should identify. Add or update only the coverage needed to prove that behavior; use as many assertions as the contract requires.
+
 ## Carry paid recon into the ticket
 
 For every touched surface, include a `file:line` anchor and the relevant excerpt from the authoring
