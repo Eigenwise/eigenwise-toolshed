@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
@@ -221,7 +221,7 @@ function rederiveUnlaunchedPreparedRoute(ticket?: any, project?: any) {
   let category = requestedCategory == null ? null : getCategory(requestedCategory, { project });
   if (!category || !category.enabled) category = getCategory('general', { project });
   if (!category) return;
-  const resolved = resolveCategoryRoute(category);
+  const resolved = resolveTicketRoute(ticket, category);
   ticket.model = resolved.model;
   ticket.effort = resolved.effort;
   ticket.exec = execProjection(resolved.exec);
@@ -413,6 +413,7 @@ function isSupersededDispatchToken(ticket?: any, token?: any) {
 }
 
 function routingPolicyAffectsTicket(ticket?: any, categoryIds?: any) {
+  if (ticket?.route != null) return false;
   if (!Array.isArray(categoryIds) || !categoryIds.length) return true;
   const affected = new Set(categoryIds.map(normalizeCategoryId));
   if (affected.has('general')) return true;
@@ -584,12 +585,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     rederiveUnlaunchedPreparedRoute(t, slug);
     const policyCategory = getCategory(ticketCategory(t), { project: slug });
-    const resolvedPolicy = policyCategory && resolveCategoryRoute(policyCategory);
+    const resolvedPolicy = resolveTicketRoute(t, policyCategory);
     if (!current?.recovery && resolvedPolicy) {
       t.model = resolvedPolicy.model;
       t.effort = resolvedPolicy.effort;
       t.exec = execProjection(resolvedPolicy.exec);
     }
+    if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
     if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor

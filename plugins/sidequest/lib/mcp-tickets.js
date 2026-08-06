@@ -61,7 +61,7 @@ const {
 const tools = [
   {
     name: "add",
-    description: "File a new ticket. Choose category from the returned taxonomy and pass it here, or use legacy complexity + why. Set unclassified:true only when deliberately leaving classification for a later update before dispatch. model/effort are never set directly. description is a developer-to-developer spec (Where / Contract / Bounds / Verify), passed as a normal string (real newlines fine — no shell escaping).",
+    description: "File a new ticket. Choose category from the returned taxonomy and pass it here, or use legacy complexity + why. Set route only when the user explicitly requests a model for this one ticket; it never changes the category route. model/effort are never set directly. description is a developer-to-developer spec (Where / Contract / Bounds / Verify), passed as a normal string (real newlines fine — no shell escaping).",
     inputSchema: {
       type: "object",
       properties: {
@@ -83,6 +83,12 @@ const tools = [
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
         category: { type: "string", description: "Enabled category id from category_list." },
+        route: {
+          type: "object",
+          properties: { model: { type: "string" }, effort: { type: "string", enum: store.VALID_EFFORTS } },
+          required: ["model", "effort"],
+          description: "Optional route override for this ticket only. It never changes the category route."
+        },
         unclassified: { type: "boolean", description: "Deliberately defer classification until an update before dispatch." }
       },
       required: ["title"]
@@ -118,6 +124,7 @@ const tools = [
         complexity: args.complexity,
         complexityWhy: args.why,
         category,
+        route: args.route,
         source: "mcp"
       });
       const ticket = store.getTicket(slug, created.ref) || created;
@@ -129,7 +136,7 @@ const tools = [
   },
   {
     name: "update",
-    description: 'Update: by scopes. Any omitted field is left unchanged. Re-scoring needs both complexity and a fresh why. The claiming executor must request scope instead. Set storyId to "none" to detach. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update ticket fields by scope. by scopes an active ticket scope approval to the control-plane identity. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: "object",
       properties: {
@@ -153,12 +160,23 @@ const tools = [
         storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string" },
-        category: { type: "string", description: 'Enabled category id from category_list. Use "none" to clear.' }
+        category: { type: "string", description: 'Enabled category id from category_list. Use "none" to clear.' },
+        route: {
+          anyOf: [
+            {
+              type: "object",
+              properties: { model: { type: "string" }, effort: { type: "string", enum: store.VALID_EFFORTS } },
+              required: ["model", "effort"]
+            },
+            { const: "none" }
+          ],
+          description: 'Set a per-ticket route override or "none" to clear it. This never changes the category route.'
+        }
       },
       required: ["ref"]
     },
     handler(args) {
-      if (args.model != null || args.effort != null) throw new Error("update: model/effort are not accepted — routing is derived from complexity.");
+      if (args.model != null || args.effort != null) throw new Error("update: model/effort are not accepted — use route for a per-ticket override.");
       if (args.complexity != null && (!args.why || String(args.why).trim().length < 20)) {
         throw new Error("update: re-scoring complexity needs a fresh why (min 20 chars).");
       }
@@ -194,6 +212,7 @@ const tools = [
         }
       }
       if (args.why !== void 0) patch.complexityWhy = args.why;
+      if (args.route !== void 0) patch.route = args.route === "none" || args.route === null ? null : args.route;
       const updated = store.updateTicket(slug, args.ref, patch);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;

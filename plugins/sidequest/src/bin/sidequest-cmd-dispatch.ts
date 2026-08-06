@@ -191,13 +191,18 @@ async function cmdRoute(opts: any, positional: any) {
       || store.getProjectCategories(slug).rows.some((row: any) => row.kind === 'DISABLE' && row.id === String(categoryId).trim().toLowerCase());
     fail(`route: category "${categoryId}" is ${disabled ? 'disabled for this project' : 'unknown'}.`);
   }
-  const resolved = store.resolveCategoryRoute(category);
-  if (!resolved || !resolved.exec) fail(`route: category "${category.id}" has no available route.`);
+  const ticket = opts.ticket == null ? null : store.getTicket(slug, opts.ticket);
+  if (opts.ticket != null && !ticket) fail(`route: no ticket "${opts.ticket}".`);
+  const ticketCategoryId = ticket && (ticket.categoryId || (typeof ticket.category === 'object' ? ticket.category.id : ticket.category));
+  if (ticket && ticketCategoryId !== category.id) fail(`route: ticket "${ticket.ref}" belongs to category "${ticketCategoryId || 'none'}", not "${category.id}".`);
+  const resolved = ticket ? store.resolveTicketRoute(ticket, category) : store.resolveCategoryRoute(category);
+  if (!resolved || !resolved.exec) fail(resolved?.refusal || `route: category "${category.id}" has no available route.`);
   const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
   const selected = store.projectRoutingProfile(slug);
   process.stdout.write(JSON.stringify(Object.assign({}, recipe, {
     profile: { id: selected.profile.id, revision: selected.profile.revision },
     categorySource: { kind: category.origin || 'profile', baseProfileId: category.baseProfileId || null },
+    ...(ticket ? { ticket: { ref: ticket.ref, route: ticket.route || null } } : {}),
   }), null, 2) + '\n');
 }
 

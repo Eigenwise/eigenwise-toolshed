@@ -147,15 +147,15 @@ const tools = [
   },
   {
     name: "route_recipe",
-    description: "Resolve a category into a live Workflow agent recipe. Fetch it when starting work so route edits and warnings stay current.",
+    description: "Resolve a category, or one ticket in that category, into a live Workflow agent recipe. Fetch it when starting work so route edits and warnings stay current.",
     inputSchema: {
       type: "object",
-      properties: { category: { type: "string" }, project: PROJECT_PROP },
+      properties: { category: { type: "string" }, ticket: { type: "string", description: "Optional ticket ref. Its route override, when present, is resolved into the recipe." }, project: PROJECT_PROP },
       required: ["category"]
     },
     handler(args) {
       const { slug } = resolveProject(args.project);
-      return workflowRecipe(slug, args.category);
+      return workflowRecipe(slug, args.category, args.ticket);
     }
   },
   {

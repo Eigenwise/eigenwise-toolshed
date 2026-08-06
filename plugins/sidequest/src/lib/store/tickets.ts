@@ -5,7 +5,7 @@ function createTickets(dependencies: any) {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
     database, deleteCachedRow, dispatchState, effectiveScope, execFileSync, executorText, fs,
-    getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, path, pendingSubmission, putTicket,
+    getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock, reopenScopePausedDispatch,
     requestedReadonlyOverride, requireStatus, requireVerifyCommand, saveAssetData, stripLinksTo,
     ticketLockPath, ticketStoryId, touchClaimActivity, upperRef, withTicketLock,
@@ -22,6 +22,13 @@ function readOnlyOverrideActive(ticket?: any) {
 
 function dispatchReadOnly(ticket?: any) {
   return typeof ticket?.readonlyOverride === 'boolean' ? ticket.readonlyOverride : categoryReadOnly(ticket);
+}
+
+function normalizedTicketRoute(route?: any) {
+  if (route == null) return null;
+  const normalized = normalizeRoute(route);
+  if (!normalized) throw new Error('Ticket route override requires a valid model and effort.');
+  return normalized;
 }
 
 function createTicket(slug?: any, fields?: any) {
@@ -61,6 +68,7 @@ function createTicket(slug?: any, fields?: any) {
     highStakes: !!fields.highStakes,
     storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
     category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
+    route: normalizedTicketRoute(fields.route),
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
     files: boundedFiles(fields.files),          // declared file scope, for parallel-wave planning
@@ -970,6 +978,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.highStakes !== undefined) t.highStakes = !!patch.highStakes;
     if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
     if (patch.category !== undefined) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
+    if (patch.route !== undefined) t.route = normalizedTicketRoute(patch.route);
     // Complexity can move to another valid score, never clear; a fresh motivation
     // rides along whenever one is provided (the CLI demands one on change).
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }

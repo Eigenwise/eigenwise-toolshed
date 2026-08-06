@@ -77,7 +77,7 @@ function requireDispatchSession() {
   return sessionId;
 }
 
-function workflowRecipe(slug?: any, categoryId?: any) {
+function workflowRecipe(slug?: any, categoryId?: any, ticketRef?: any) {
   const requested = String(categoryId || '').trim();
   if (!requested) throw new Error('route_recipe: "category" is required.');
   const category = store.getCategory(requested, { project: slug });
@@ -86,13 +86,20 @@ function workflowRecipe(slug?: any, categoryId?: any) {
       || store.getProjectCategories(slug).rows.some((row: any) => row.kind === 'DISABLE' && row.id === requested.toLowerCase());
     throw new Error(`route_recipe: category "${requested}" is ${disabled ? 'disabled for this project' : 'unknown'}.`);
   }
-  const resolved = store.resolveCategoryRoute(category);
-  if (!resolved || !resolved.exec) throw new Error(`route_recipe: category "${category.id}" has no available route.`);
+  const ticket = ticketRef == null ? null : store.getTicket(slug, ticketRef);
+  if (ticketRef != null && !ticket) throw new Error(`route_recipe: no ticket "${ticketRef}".`);
+  const ticketCategoryId = ticket && (ticket.categoryId || (typeof ticket.category === 'object' ? ticket.category.id : ticket.category));
+  if (ticket && ticketCategoryId !== category.id) {
+    throw new Error(`route_recipe: ticket "${ticket.ref}" belongs to category "${ticketCategoryId || 'none'}", not "${category.id}".`);
+  }
+  const resolved = ticket ? store.resolveTicketRoute(ticket, category) : store.resolveCategoryRoute(category);
+  if (!resolved || !resolved.exec) throw new Error(resolved?.refusal || `route_recipe: category "${category.id}" has no available route.`);
   const recipe = agentsync.workflowRecipe(Object.assign({}, category, { project: slug }), resolved);
   const selected = store.projectRoutingProfile(slug);
   return Object.assign({}, recipe, {
     profile: { id: selected.profile.id, revision: selected.profile.revision },
     categorySource: { kind: category.origin || 'profile', baseProfileId: category.baseProfileId || null },
+    ...(ticket ? { ticket: { ref: ticket.ref, route: ticket.route || null } } : {}),
   });
 }
 

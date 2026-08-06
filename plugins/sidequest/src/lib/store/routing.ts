@@ -1102,6 +1102,29 @@ function routeReadyForAutomaticFallback(route?: any) {
   return !provider || provider === 'claude' || providerReadiness(provider)?.ready === true;
 }
 
+function resolveTicketRoute(ticket?: any, category?: any) {
+  const warnings: any[] = [];
+  const ref = String(ticket?.ref || 'Ticket');
+  const override = ticket && ticket.route != null ? normalizeRoute(ticket.route) : null;
+  if (ticket && ticket.route != null && !override) {
+    return { model: null, effort: null, exec: null, warnings: [`${ref} route override is missing or invalid.`], refusal: `${ref} route override is missing or invalid.` };
+  }
+  if (!override) return resolveCategoryRoute(category);
+
+  const primary = normalizeRoute(category && category.route);
+  const provider = routeProvider(primary);
+  if (primary && routeProvider(override) !== provider) {
+    const message = `${ref} route override "${override.model}" crosses providers from category "${category.id}" and was refused.`;
+    return { model: override.model, effort: override.effort, exec: null, warnings: [message], refusal: message };
+  }
+  const exec = resolveExec(override.model, override.effort);
+  if (!exec || !availableRoute(override.model) || !routeReadyForAutomaticFallback(override)) {
+    const message = `${ref} route override model "${override.model}" isn't currently available; explicit route overrides never fall back.`;
+    return { model: override.model, effort: override.effort, exec: null, warnings: [message], refusal: message };
+  }
+  return { model: exec.runsModel, effort: override.effort, exec, warnings, override: true };
+}
+
 function resolveCategoryRoute(category?: any) {
   const warnings: any[] = [];
   const primary = normalizeRoute(category && category.route);
@@ -1209,7 +1232,7 @@ function applyDerivedRouting(t?: any, opts?: any) {
       category = getCategory('general', { project });
     }
     if (category) {
-      const resolved = resolveCategoryRoute(category);
+      const resolved = resolveTicketRoute(t, category);
       if (!legacy) t.categoryId = requestedId;
       t.category = Object.assign({}, category, { projectedFromGeneral: fallback });
       t.model = resolved.model;
@@ -1217,6 +1240,13 @@ function applyDerivedRouting(t?: any, opts?: any) {
       t.exec = execProjection(resolved.exec);
       warnings.push(...resolved.warnings);
     }
+  } else if (t.route != null) {
+    const resolved = resolveTicketRoute(t);
+    t.category = null;
+    t.model = resolved.model;
+    t.effort = resolved.effort;
+    t.exec = execProjection(resolved.exec);
+    warnings.push(...resolved.warnings);
   } else {
     t.category = null;
     delete t.model;
@@ -1338,6 +1368,7 @@ function applyDerivedRouting(t?: any, opts?: any) {
     classifierCategories,
     routeProvider,
     routeReadyForAutomaticFallback,
+    resolveTicketRoute,
     resolveCategoryRoute,
     resolveCategoryFallback,
     providerDispatchRefusal,
