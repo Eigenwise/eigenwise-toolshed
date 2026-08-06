@@ -257,6 +257,7 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
       return match ? "the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting." : "the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.";
     }
     const command = match ? verify.slice(match[0].length).trim() : verify;
+    if (!match) return null;
     const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? "test" : null;
     const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
     const script = npmTest || npmRun && (npmRun[1] || npmRun[2]);

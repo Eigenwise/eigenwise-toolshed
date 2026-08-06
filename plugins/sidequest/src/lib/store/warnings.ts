@@ -253,6 +253,7 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
   }
 
   const command = match ? verify.slice(match[0].length).trim() : verify;
+  if (!match) return null;
   const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? 'test' : null;
   const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
   const script = npmTest || (npmRun && (npmRun[1] || npmRun[2]));
