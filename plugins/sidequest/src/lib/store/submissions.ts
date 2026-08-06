@@ -368,24 +368,35 @@ function integrationFailure(slug: any, ticket: any, patch: any) {
   return Object.assign({ ok: false, ticket: getTicket(slug, ticket.id) }, patch);
 }
 
+function rollbackPostMergeVerification(repo: string, mode: string, before: string) {
+  integrationGit(repo, mode === 'apply' ? ['reset', '--merge', before] : ['reset', '--hard', before]);
+}
+
+function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string) {
+  const verificationMessage = `${ticket.ref} verification failed after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;
+  try {
+    rollbackPostMergeVerification(repo, mode, before);
+  } catch (error: any) {
+    return integrationFailure(slug, ticket, {
+      reason: 'verify_failed_post_merge_rollback_failed',
+      before,
+      verify,
+      message: `${verificationMessage} Rollback failed: ${integrationGitError(error)}`,
+    });
+  }
+  return integrationFailure(slug, ticket, {
+    reason: 'verify_failed_post_merge',
+    before,
+    verify,
+    message: verificationMessage,
+  });
+}
+
 function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
   if (!admitted.ok) return admitted;
-  const preflight = verifyDeliveredSubmission(slug, admitted.ticket, opts);
-  const acceptedPreflight = ['passed', 'none', 'skipped', 'manual'].includes(preflight.status);
-  if (!acceptedPreflight) {
-    return {
-      ok: false,
-      reason: 'verify_failed',
-      ticket: admitted.ticket,
-      verify: preflight,
-      message: `${admitted.ticket.ref} integration refused before merge: ${preflight.error || `verification ${preflight.status}`}.`,
-    };
-  }
-  const prepared = updateSubmissionIntegration(slug, admitted.ticket.id, { verify: preflight, preflightAt: new Date().toISOString() });
-  if (!prepared.ok) return prepared;
-  const ticket = prepared.ticket;
+  const ticket = admitted.ticket;
   const project = readMeta(slug);
   const repo = project?.path;
   const mode = normalizeDeliveryMode(opts.mode);
@@ -463,10 +474,14 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
         ...integrationGit(repo, ['diff', '--cached', '--name-only']).split(/\r?\n/).filter(Boolean),
       ]))
       : changedPaths;
+    const verify = verifyDeliveredSubmission(slug, ticket, opts);
+    const acceptedVerify = ['passed', 'none', 'skipped', 'manual'].includes(verify.status);
+    if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
     const result = updateSubmissionIntegration(slug, ticket.id, {
       outcome: 'delivered',
       deliveredAt: new Date().toISOString(),
       resultingHead,
+      verify,
       dirtyFiles: mode === 'apply' ? deliveredFiles : [],
       deliveredFiles,
     });

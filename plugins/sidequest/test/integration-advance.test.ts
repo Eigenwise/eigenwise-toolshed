@@ -380,7 +380,25 @@ function nodeVerify(source: string) {
 }
 
 for (const mode of ['merge', 'replay', 'apply']) {
-  test(`integrate ${mode} refuses delivery when preflight verification fails`, () => {
+  test(`integrate ${mode} verifies the delivered result`, () => {
+    const { fixture, slug, ticket, runCli } = deliveryTicket(`verify-result-${mode}`, {
+      verify: nodeVerify("require('node:fs').accessSync('feature.txt')"),
+    });
+    const before = head(fixture.repo);
+    const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', mode, '--json']);
+
+    assert.equal(result.status, 0, result.stderr + result.stdout);
+    const payload = JSON.parse(result.stdout);
+    assert.equal(payload.verify.status, 'passed');
+    assert.ok(fs.existsSync(payload.verify.logPath));
+    assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+    if (mode === 'apply') assert.equal(head(fixture.repo), before);
+    else assert.notEqual(head(fixture.repo), before);
+  });
+}
+
+for (const mode of ['merge', 'replay', 'apply']) {
+  test(`integrate ${mode} rolls back a post-merge verification failure`, () => {
     const { fixture, slug, ticket, runCli } = deliveryTicket(`verify-fail-${mode}`, {
       verify: nodeVerify("console.error('integration verify failure'); process.exit(7)"),
     });
@@ -396,8 +414,9 @@ for (const mode of ['merge', 'replay', 'apply']) {
     assert.ok(fs.existsSync(payload.verifyFailed.logPath));
     const stored = store.getTicket(slug, ticket.ref);
     assert.equal(stored.status, 'doing');
-    assert.equal(stored.submission.integration, undefined);
+    assert.equal(stored.submission.integration.reason, 'verify_failed_post_merge');
     assert.equal(head(fixture.repo), before);
+    assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), '');
     assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
   });
 }
