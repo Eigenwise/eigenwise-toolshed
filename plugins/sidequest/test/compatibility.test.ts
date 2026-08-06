@@ -39,7 +39,12 @@ function assertCliGolden(name: string, fixture: Record<string, unknown>, env: Re
   const result = run(CLI, args, env);
   assert.equal(result.status, fixture.status, name);
   assert.equal(result.stderr, fixture.stderr, `${name} stderr`);
-  for (const expected of (fixture.stdoutContains as string[] | undefined) ?? []) {
+  const expectedSubstrings = fixture.stdoutContains as string[] | undefined;
+  if (expectedSubstrings === undefined) {
+    assert.equal(result.stdout, '', `${name} stdout should stay empty`);
+    return;
+  }
+  for (const expected of expectedSubstrings) {
     assert.ok(result.stdout.includes(expected), `${name} stdout includes ${JSON.stringify(expected)}`);
   }
 }
