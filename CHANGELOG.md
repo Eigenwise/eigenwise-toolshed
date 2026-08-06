@@ -8,6 +8,23 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.399.0 (2026-08-06)
+
+### sidequest 4.33.0 → 4.34.0
+
+#### Features
+
+- Board API errors name the call that would have worked (SQ-1336)
+  A batch of small API defects, each measured costing real retries across three consumer boards.
+
+  `link` wanted `{from, verb, to}` and refused every natural guess with a bare `bad_type` that named neither the valid verbs nor the expected shape: 14 consecutive failures in ten seconds on one board, eleven more across four days on another, twice abandoned for the CLI. The MCP path now names the verbs and the parameter shape, the way the CLI already did. Inverting a dependency no longer requires removing both directions first; `link` replaces an existing opposite-direction edge.
+
+  `groomClose`, `release`, and `done` revealed their requirements one refusal at a time, turning ten closures into roughly 25 tool calls. A refusal now lists every determinable missing parameter and flag at once.
+
+  There was no way to read a single ticket, so an orchestrator piped whole-board JSON through filters 37 times. `sidequest show <ref>` returns one ticket in full.
+
+  Story-log entries were refused past 280 bytes by a storage-side cap, while a separate cap already bounded what reaches an executor prompt; 22 refusals were observed. Storage is now generous and the briefing cap does the bounding, matching how comments already work. `--rotate` also refused the very `--by orchestrator` its own test passed, because the guard read a resolved default instead of the parsed option.
+
 ## v3.398.0 (2026-08-06)
 
 ### sidequest 4.32.0 → 4.33.0
