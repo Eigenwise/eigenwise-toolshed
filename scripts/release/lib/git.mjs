@@ -69,6 +69,13 @@ export function createGit({ cwd, run = spawnRunner(cwd), dryRun = false, onComma
         .map((line) => line.split('\t')[1] ?? '')
         .map((ref) => ref.replace(/^refs\/tags\//, '').replace(/\^\{\}$/, ''))
         .filter(Boolean),
+    remoteBranchHead: (remote, branch) => {
+      const ref = `refs/heads/${branch}`;
+      const output = capture(['ls-remote', '--exit-code', remote, ref]);
+      const [commit, foundRef] = output.split(/\s+/);
+      if (!commit || foundRef !== ref) throw new Error(`remote ${remote} has no ${ref}`);
+      return commit;
+    },
     remoteUrl: (remote) => capture(['remote', 'get-url', remote]),
 
     stagedFiles: () => capture(['diff', '--cached', '--name-only']).split('\n').map((line) => line.trim()).filter(Boolean),

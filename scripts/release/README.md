@@ -87,7 +87,11 @@ reduction in reach, not a proof, which is why the ref check is the actual guaran
 
 Any failure before that push leaves the remote untouched, the fragments still queued, and the
 next window free to retry. `cut.mjs` prints the push command by default and only runs it with
-`--push`.
+`--push`. Before it prints that command, a GitHub remote must have a passing `Test` workflow for
+the current remote publish-branch head. The local release parent has no CI run yet, so it is never
+the check target. A failed or missing run stops the cut unless `--ci-override "<reason>"` records
+why it may continue, such as a release that repairs CI. A missing run also prints an optional
+Docker command for reproducing the Sidequest suite locally; Docker is not required.
 
 ## What the engine refuses
 

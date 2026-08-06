@@ -33,6 +33,7 @@ suites passed.
   --no-branch-check        Allow cutting from a branch other than --publish-branch
   --allow-dirty            Tolerate unstaged or untracked files (staged changes are never allowed)
   --force                  Override .release/HOLD, held fragments, and existing tags
+  --ci-override <reason>   Proceed after a failed or missing Test workflow, recording why
   --json                   Machine-readable result
   --repo <dir>             Repository root (defaults to this script's repo)`;
 
@@ -98,6 +99,10 @@ function assertNoStaleTags(git, plan, { remote, checkRemote, force }) {
   );
 }
 
+function containerTestCommand(commit) {
+  return `git archive ${commit} | docker run -i --rm node:22 sh -c 'set -eu; mkdir repo; tar -x -C repo; cd repo; git init -q; cd plugins/sidequest; npm ci; npm run test:full'`;
+}
+
 export function assertParentCiPassed(repoRoot, commit, runner = spawnSync) {
   const result = runner('gh', [
     'run', 'list', '--workflow', 'Test', '--commit', commit, '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha',
@@ -118,10 +123,19 @@ export function assertParentCiPassed(repoRoot, commit, runner = spawnSync) {
     throw new Error(`cannot read Test workflow status for ${commit}: gh returned invalid JSON`);
   }
   const run = Array.isArray(runs) && runs.find((candidate) => candidate?.headSha === commit);
-  if (!run) throw new Error(`no completed Test workflow run found for ${commit}; refusing to publish`);
-  if (run.conclusion !== 'success') {
-    throw new Error(`Test workflow for ${commit} concluded ${run.conclusion || 'without a conclusion'}; refusing to publish`);
+  if (!run) {
+    throw new Error(
+      `no completed Test workflow run found for ${commit}; refusing to publish. ` +
+      `If Docker is available, run ${containerTestCommand(commit)} before retrying with --ci-override "<reason>".`,
+    );
   }
+  if (run.conclusion !== 'success') {
+    throw new Error(
+      `Test workflow for ${commit} concluded ${run.conclusion || 'without a conclusion'}; refusing to publish. ` +
+      'Retry with --ci-override "<reason>" only when the release fixes that CI failure.',
+    );
+  }
+  return { commit, conclusion: run.conclusion };
 }
 
 function isGitHubRemote(remoteUrl) {
@@ -169,6 +183,7 @@ export async function cut(options = {}) {
     branchCheck = true,
     allowDirty = false,
     force = false,
+    ciOverrideReason = null,
     log = console.log,
   } = options;
 
@@ -332,9 +347,17 @@ export async function cut(options = {}) {
     );
   }
   assertReleaseIntact(git, plan, commit);
-  if (push && (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote)))) {
+  let ci = null;
+  if (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote))) {
+    const parent = git.remoteBranchHead(remote, publishBranch);
     const assertCiPassed = options.assertParentCiPassed ?? assertParentCiPassed;
-    assertCiPassed(repoRoot, pinned);
+    try {
+      const result = assertCiPassed(repoRoot, parent);
+      ci = { status: 'passed', commit: parent, conclusion: result?.conclusion ?? 'success' };
+    } catch (error) {
+      if (!ciOverrideReason) throw error;
+      ci = { status: 'overridden', commit: parent, reason: ciOverrideReason, error: error.message };
+    }
   }
 
   const refspecs = planRefspecs(plan, commit);
@@ -346,10 +369,15 @@ export async function cut(options = {}) {
     log(`published ${plan.tag} (${commit})`);
   } else {
     log(`built ${plan.tag} locally as ${commit}; publish it with:`);
+    if (ci?.status === 'passed') {
+      log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) passed.`);
+    } else if (ci?.status === 'overridden') {
+      log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) was overridden: ${ci.reason}`);
+    }
     log(`  ${pushCommand}`);
   }
 
-  return { status: 'cut', plan, commit, message, pushed, pushCommand, refspecs, touched, consumed };
+  return { status: 'cut', plan, commit, message, pushed, pushCommand, refspecs, touched, consumed, ci };
 }
 
 export async function main(argv) {
@@ -369,6 +397,7 @@ export async function main(argv) {
       'no-branch-check': { type: 'boolean' },
       'allow-dirty': { type: 'boolean' },
       force: { type: 'boolean' },
+      'ci-override': { type: 'string' },
       json: { type: 'boolean' },
       repo: { type: 'string' },
       help: { type: 'boolean', short: 'h' },
@@ -396,6 +425,7 @@ export async function main(argv) {
     branchCheck: values['no-branch-check'] !== true,
     allowDirty: values['allow-dirty'] === true,
     force: values.force === true,
+    ciOverrideReason: values['ci-override'] ?? null,
     log: values.json ? () => {} : console.log,
   });
 
@@ -406,6 +436,7 @@ export async function main(argv) {
       pushed: result.pushed ?? false,
       pushCommand: result.pushCommand ?? null,
       refspecs: result.refspecs ?? [],
+      ci: result.ci ?? null,
       touched: result.touched ?? [],
       consumed: result.consumed ?? [],
       plan: result.plan,
