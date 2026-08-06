@@ -157,6 +157,18 @@ Expires: ${checkpoint.expiresAt}`;
     }
     return inherited;
   }
+  function sharedTreeUnsubmittedWorkingPaths(ticket, range, reportedPaths, inherited) {
+    if (dispatchState(ticket)?.sharedTree !== true || !range) return [];
+    return reportedPaths.filter((file) => !inherited.has(dirtyPathKey(file)));
+  }
+  function sharedTreeWorkingPathAdvisory(inheritedPaths, unsubmittedWorkingPaths) {
+    const attributedPaths = [
+      ...inheritedPaths.map((file) => `${file} (present before dispatch)`),
+      ...unsubmittedWorkingPaths.map((file) => `${file} (not in submitted range)`)
+    ];
+    if (!attributedPaths.length) return null;
+    return `Shared-tree working paths excluded from this submission: ${attributedPaths.join(", ")}. Commit only your declared scope; never stash or revert foreign paths.`;
+  }
   function submissionReadiness(submission) {
     const unscopedPaths = submissionUnscopedPaths(submission?.unscopedPaths);
     if (!unscopedPaths.length) return { ok: true, state: "ready", reason: null, unscopedPaths };
@@ -505,10 +517,23 @@ ${verify.outputTail}` : null
       if (validationError) {
         return { ok: false, reason: "invalid_verify", ticket: t, message: validationError };
       }
+      const admittedScope = effectiveScope(slug, t.files);
+      const outsideSubmittedRange = range ? range.changedPaths.filter((file) => !commitScope.isInScope(file, admittedScope)) : [];
+      if (outsideSubmittedRange.length) {
+        return {
+          ok: false,
+          reason: "outside_scope",
+          outside: outsideSubmittedRange,
+          ticket: t,
+          message: `submit: refused ${t.ref}; submitted range changes paths outside its declared scope: ${outsideSubmittedRange.join(", ")}. Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`
+        };
+      }
       const inherited = inheritedDirtyPaths(slug, t);
       const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
-      const gatedPaths = reportedPaths.filter((file) => !inherited.has(dirtyPathKey(file)));
       const inheritedPaths = reportedPaths.filter((file) => inherited.has(dirtyPathKey(file)));
+      const unsubmittedWorkingPaths = sharedTreeUnsubmittedWorkingPaths(t, range, reportedPaths, inherited);
+      const excludedWorkingPaths = new Set([...inheritedPaths, ...unsubmittedWorkingPaths].map(dirtyPathKey));
+      const gatedPaths = reportedPaths.filter((file) => !excludedWorkingPaths.has(dirtyPathKey(file)));
       const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
       if (!readiness.ok) {
         return {
@@ -516,9 +541,10 @@ ${verify.outputTail}` : null
           reason: readiness.reason,
           ticket: t,
           submissionReadiness: readiness,
-          message: `submit: refused ${t.ref}; ${readiness.message} Request scope, include every blocked path in a complete commit, then submit again.`
+          message: `submit: refused ${t.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`
         };
       }
+      const workingPathAdvisory = sharedTreeWorkingPathAdvisory(inheritedPaths, unsubmittedWorkingPaths);
       const submittedAt = (/* @__PURE__ */ new Date()).toISOString();
       let comment = null;
       if (submissionComment) {
@@ -534,9 +560,10 @@ ${verify.outputTail}` : null
         gitRef: gitRef || submissionGitRef(t),
         verify,
         worktree,
-        admittedScope: effectiveScope(slug, t.files),
+        admittedScope,
         unscopedPaths: gatedPaths,
         ...inheritedPaths.length ? { inheritedPaths } : {},
+        ...unsubmittedWorkingPaths.length ? { unsubmittedWorkingPaths } : {},
         integratedAt: null
       }, range || {});
       const dispatch = dispatchState(t);
@@ -558,7 +585,8 @@ ${verify.outputTail}` : null
       if (opts.sessionId) unregisterClaim(opts.sessionId, slug, t.id);
       queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
       if (comment) queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
-      return { ok: true, ticket: t, comment, ...submissionComment?.advisory ? { advisory: submissionComment.advisory } : {} };
+      const advisories = [submissionComment?.advisory, workingPathAdvisory].filter(Boolean);
+      return { ok: true, ticket: t, comment, ...advisories.length ? { advisory: advisories.join(" ") } : {} };
     });
   }
   function clearSubmission(slug, idOrRef, opts) {

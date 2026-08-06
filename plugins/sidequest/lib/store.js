@@ -1424,7 +1424,8 @@ function releaseTicket(slug, idOrRef, by, opts) {
         const scopedCommitted = completionDelta.committed.filter((file) => commitScope.isInScope(file, declaredFiles));
         sharedTreeCommittedScope = dispatch2?.sharedTree === true && scopedCommitted.length > 0;
         const scopedWorking = completionDelta.working.filter((file) => commitScope.isInScope(file, declaredFiles));
-        const scopedChanges = activeReadOnlyDispatch ? Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted])) : [];
+        const sharedTreeReadOnly = activeReadOnlyDispatch && dispatch2?.sharedTree === true;
+        const scopedChanges = activeReadOnlyDispatch && !sharedTreeReadOnly ? Array.from(/* @__PURE__ */ new Set([...scopedWorking, ...scopedCommitted])) : [];
         if (scopedChanges.length) {
           const paths = scopedChanges.sort();
           const mode = activeReadOnlyDispatch ? "read-only dispatch" : "declared scope";

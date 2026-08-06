@@ -340,6 +340,21 @@ test('a shared-tree write dispatch refuses an empty verification completion unle
   }).ok, true);
 });
 
+test('SQ-1328: a shared-tree read-only dispatch closes after a sibling commits in its scope', () => {
+  const ticket = addRouted('read-only closeout beside sibling commit');
+  claimRouted(ticket, 'read-only-sibling-worker', { sessionId: 'session-read-only-sibling' });
+
+  fs.appendFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = 2;\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'sibling executor change']);
+
+  const completed = store.completeTicket(slug, ticket.ref, 'read-only-sibling-worker', {
+    body: 'Read-only review completed without repository changes.',
+  });
+  assert.strictEqual(completed.ok, true, completed.message);
+  assert.strictEqual(completed.ticket.status, 'done');
+});
+
 test('a mixed source and test diff needs a claim-holder negative control before completion', () => {
   const by = 'negative-control-executor';
   const ticket = addNegativeControlTicket('negative control is required', by);

@@ -1195,4 +1195,113 @@ test('SQ-1367: a shared-tree submission is not gated on paths that were already 
   fs.rmSync(stray);
 });
 
+test('SQ-1328: concurrent shared-tree submissions attribute foreign working paths without weakening range scope', async () => {
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  cleanBranch();
+  const upstreamCommit = git(['rev-parse', 'origin/main']);
+  const userNotes = path.join(PROJECT_DIR, 'user-notes.txt');
+  fs.writeFileSync(userNotes, 'pre-existing user work\n');
+
+  const firstTicket = addTicket('first concurrent executor', { files: ['lib/first.js'], category: 'submission.fixture' });
+  const secondTicket = addTicket('second concurrent executor', { files: ['lib/second.js'], category: 'submission.fixture' });
+  const firstDispatch = store.prepareDispatch(slug, firstTicket.ref, { sessionId: 'concurrent-first', sharedTree: true });
+  const secondDispatch = store.prepareDispatch(slug, secondTicket.ref, { sessionId: 'concurrent-second', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, firstTicket.ref, 'concurrent-first-worker', {
+    token: firstDispatch.token, executor: firstDispatch.ticket.dispatchExecutor, sessionId: 'concurrent-first',
+  }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, secondTicket.ref, 'concurrent-second-worker', {
+    token: secondDispatch.token, executor: secondDispatch.ticket.dispatchExecutor, sessionId: 'concurrent-second',
+  }).ok, true);
+
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'second.js'), 'second executor in flight\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'first.js'), 'first executor committed\n');
+  git(['add', 'lib/first.js']);
+  git(['commit', '-m', 'first concurrent submission']);
+  const firstCommit = git(['rev-parse', 'HEAD']);
+  pin(firstTicket, firstCommit);
+
+  const firstSubmission = store.submitTicket(slug, firstTicket.ref, 'concurrent-first-worker', {
+    commit: firstCommit,
+    unscopedPaths: ['user-notes.txt', 'lib/second.js'],
+    range: {
+      base: upstreamCommit,
+      upstream: 'origin/main',
+      upstreamCommit,
+      commits: [firstCommit],
+      changedPaths: ['lib/first.js'],
+    },
+  });
+  assert.strictEqual(firstSubmission.ok, true, firstSubmission.message);
+  assert.deepStrictEqual(firstSubmission.ticket.submission.inheritedPaths, ['user-notes.txt']);
+  assert.deepStrictEqual(firstSubmission.ticket.submission.unsubmittedWorkingPaths, ['lib/second.js']);
+  assert.match(firstSubmission.advisory, /user-notes\.txt \(present before dispatch\)/);
+  assert.match(firstSubmission.advisory, /lib\/second\.js \(not in submitted range\)/);
+  assert.match(firstSubmission.advisory, /Commit only your declared scope; never stash or revert foreign paths/);
+
+  git(['add', 'lib/second.js']);
+  git(['commit', '-m', 'second concurrent submission']);
+  const secondCommit = git(['rev-parse', 'HEAD']);
+  pin(secondTicket, secondCommit);
+  const secondSubmission = store.submitTicket(slug, secondTicket.ref, 'concurrent-second-worker', {
+    commit: secondCommit,
+    unscopedPaths: ['user-notes.txt'],
+    range: {
+      base: firstCommit,
+      upstream: 'origin/main',
+      upstreamCommit,
+      commits: [secondCommit],
+      changedPaths: ['lib/second.js'],
+    },
+  });
+  assert.strictEqual(secondSubmission.ok, true, secondSubmission.message);
+  assert.deepStrictEqual(secondSubmission.ticket.submission.inheritedPaths, ['user-notes.txt']);
+
+  const escapedTicket = addTicket('submitted range still owns its scope', { files: ['lib/scoped.js'], category: 'submission.fixture' });
+  const escapedDispatch = store.prepareDispatch(slug, escapedTicket.ref, { sessionId: 'escaped-range', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, escapedTicket.ref, 'escaped-range-worker', {
+    token: escapedDispatch.token, executor: escapedDispatch.ticket.dispatchExecutor, sessionId: 'escaped-range',
+  }).ok, true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'foreign'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'scoped.js'), 'scoped\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'foreign', 'escaped.js'), 'escaped\n');
+  git(['add', 'lib/scoped.js', 'foreign/escaped.js']);
+  git(['commit', '-m', 'range with escaped path']);
+  const escapedCommit = git(['rev-parse', 'HEAD']);
+  pin(escapedTicket, escapedCommit);
+  const mcpEscapedSubmission = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: escapedTicket.ref,
+    by: 'escaped-range-worker',
+    commit: escapedCommit,
+    base: secondCommit,
+    worktree: PROJECT_DIR,
+    body: 'Escaped range refusal fixture.',
+  });
+  assert.strictEqual(mcpEscapedSubmission.ok, false);
+  assert.strictEqual(mcpEscapedSubmission.reason, 'outside_scope');
+  assert.match(mcpEscapedSubmission.message, /never stash, revert, or include foreign paths/);
+
+  const cliEscapedSubmission = runCli([
+    'submit', escapedTicket.ref, '--by', 'escaped-range-worker', '--commit', escapedCommit, '--base', secondCommit,
+  ]);
+  assert.strictEqual(cliEscapedSubmission.status, 1);
+  assert.match(cliEscapedSubmission.stderr + cliEscapedSubmission.stdout, /never stash, revert, or include foreign paths/);
+
+  const escapedSubmission = store.submitTicket(slug, escapedTicket.ref, 'escaped-range-worker', {
+    commit: escapedCommit,
+    range: {
+      base: secondCommit,
+      upstream: 'origin/main',
+      upstreamCommit,
+      commits: [escapedCommit],
+      changedPaths: ['foreign/escaped.js', 'lib/scoped.js'],
+    },
+  });
+  assert.strictEqual(escapedSubmission.ok, false);
+  assert.strictEqual(escapedSubmission.reason, 'outside_scope');
+  assert.deepStrictEqual(escapedSubmission.outside, ['foreign/escaped.js']);
+  assert.match(escapedSubmission.message, /never stash, revert, or include foreign paths/);
+});
+
 export {};
