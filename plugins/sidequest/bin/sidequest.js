@@ -51,7 +51,7 @@ function parseArgs(argv) {
         opts["auto-approve-test-scope"] = false;
         continue;
       }
-      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "skip-verify", "contract-waiver", "full", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "unverified-transport", "allow-repeat-failure"]);
+      const BOOL = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "unverified-transport", "allow-repeat-failure"]);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;

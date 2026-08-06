@@ -108,7 +108,7 @@ async function cmdStory(opts, positional) {
       let story;
       let advisory = null;
       if (opts.rotate) {
-        if (by !== "orchestrator") fail("story log: --rotate requires --by orchestrator");
+        if (opts.by !== "orchestrator") fail("story log: --rotate requires --by orchestrator");
         story = store.rotateStoryLog(slug, idOrRef);
       } else if (entry === void 0) {
         story = store.getStory(slug, idOrRef);

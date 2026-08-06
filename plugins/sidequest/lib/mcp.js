@@ -95,6 +95,7 @@ function validateToolArguments(tool, args) {
     throw new Error(`${tool.name}: arguments must be an object.`);
   }
   const allowed = new Set(Object.keys(tool.inputSchema.properties || {}));
+  if (tool.name === "dispatch") allowed.add("session");
   const unknown = Object.keys(args).filter((key) => !allowed.has(key));
   if (!unknown.length) return;
   const quoted = unknown.map((key) => `"${key}"`).join(", ");

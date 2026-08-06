@@ -2821,10 +2821,10 @@ test('read-only calls can finish out of order while retaining their JSON-RPC ids
   const tool = mcp.TOOLS.find((candidate: any) => candidate.name === 'list');
   const original = tool.handler;
   const releases: Array<() => void> = [];
-  tool.handler = (args: any) => new Promise((resolve) => releases.push(() => resolve({ marker: args.marker })));
+  tool.handler = (args: any) => new Promise((resolve) => releases.push(() => resolve({ marker: args.ref })));
   try {
-    const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9101, method: 'tools/call', params: { name: 'list', arguments: { marker: 'first' } } });
-    const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9102, method: 'tools/call', params: { name: 'list', arguments: { marker: 'second' } } });
+    const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9101, method: 'tools/call', params: { name: 'list', arguments: { ref: 'first' } } });
+    const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9102, method: 'tools/call', params: { name: 'list', arguments: { ref: 'second' } } });
     await new Promise((resolve) => setImmediate(resolve));
     assert.equal(releases.length, 2);
     releases[1]!();
@@ -2845,13 +2845,13 @@ test('mutations queue FIFO per board without blocking another board', async () =
   const started: string[] = [];
   const releases = new Map<string, () => void>();
   tool.handler = (args: any) => new Promise((resolve) => {
-    started.push(args.marker);
-    releases.set(args.marker, () => resolve({ marker: args.marker }));
+    started.push(args.ref);
+    releases.set(args.ref, () => resolve({ marker: args.ref }));
   });
-  const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, marker: 'first' } } });
-  const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, marker: 'second' } } });
+  const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'first' } } });
+  const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'second' } } });
   const otherProject = store.ensureProject(path.join(FIXTURE_ROOT, 'other-board')).slug;
-  const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, marker: 'other' } } });
+  const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, ref: 'other' } } });
   try {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(started, ['first', 'other']);
