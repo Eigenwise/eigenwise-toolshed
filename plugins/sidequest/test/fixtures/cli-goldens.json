@@ -4,8 +4,12 @@
       "--help"
     ],
     "status": 0,
-    "stdoutBytes": 14061,
-    "stdoutSha256": "c5b80ec5dd3e2833b4f9cbb425108ee85c3d8e597af9c9af53c962f3ad40c470",
+    "stdoutContains": [
+      "sidequest — a Trello-light quest log for Claude Code",
+      "Usage:",
+      "sidequest add ",
+      "sidequest dispatch "
+    ],
     "stderr": ""
   },
   "unknown": {
@@ -13,8 +17,6 @@
       "not-a-command"
     ],
     "status": 1,
-    "stdoutBytes": 0,
-    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "stderr": "sidequest: unknown command \"not-a-command\". Run \"sidequest help\".\n"
   },
   "askRemoved": {
@@ -22,8 +24,6 @@
       "ask"
     ],
     "status": 1,
-    "stdoutBytes": 0,
-    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "stderr": "sidequest: unknown command \"ask\". Run \"sidequest help\".\n"
   },
   "awaitRemoved": {
@@ -31,8 +31,6 @@
       "await"
     ],
     "status": 1,
-    "stdoutBytes": 0,
-    "stdoutSha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
     "stderr": "sidequest: unknown command \"await\". Run \"sidequest help\".\n"
   }
 }

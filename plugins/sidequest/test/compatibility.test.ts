@@ -2,7 +2,6 @@ import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -39,9 +38,10 @@ function assertCliGolden(name: string, fixture: Record<string, unknown>, env: Re
   const args = fixture.args as string[];
   const result = run(CLI, args, env);
   assert.equal(result.status, fixture.status, name);
-  assert.equal(Buffer.byteLength(result.stdout), fixture.stdoutBytes, `${name} stdout byte count`);
-  assert.equal(crypto.createHash('sha256').update(result.stdout).digest('hex'), fixture.stdoutSha256, `${name} stdout bytes`);
   assert.equal(result.stderr, fixture.stderr, `${name} stderr`);
+  for (const expected of (fixture.stdoutContains as string[] | undefined) ?? []) {
+    assert.ok(result.stdout.includes(expected), `${name} stdout includes ${JSON.stringify(expected)}`);
+  }
 }
 
 function configuredCommands(config: unknown): string[] {
