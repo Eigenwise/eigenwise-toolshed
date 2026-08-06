@@ -8,6 +8,30 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.388.0 (2026-08-06)
+
+### codebase-mapper 2.13.0 → 2.14.0
+
+#### Features
+
+- codebase-mapper ships its map-state writer instead of describing it (SQ-1360)
+  update-codebase-map asked the model to rewrite `.map-state.json` with today's date, the current commit, the document list, and SHA-256 hashes of every document's exact final bytes. That is mechanical work described in prose, so every workspace wrote a script for it and got to reintroduce the same bugs. On Terge_VST the orchestrator wrote its own `write-map-state.js` and invoked it twelve times, hand-patching a hardcoded document list as documents changed.
+
+  `plugins/codebase-mapper/scripts/write-map-state.js` now ships with the plugin, taking `--project <dir>` the way live-rules' `sync-atomic-rules.js` does. It discovers documents from the map directory rather than a hardcoded list, reads the current commit (null outside a repository), and replaces the state file last. Both map skills invoke it instead of describing the computation.
+
+### sidequest 4.25.0 → 4.26.0
+
+#### Features
+
+- A scope-request timeout can no longer discard verified work (SQ-1370)
+  An executor on contractify held a verified commit, could not submit because of a file it had never touched, filed a scope request, and released the ticket to todo when that request timed out. The commit survived only because someone went looking for it, and the steering that arrived moments later landed on a released ticket.
+
+  Releasing is the one move that throws work away: it clears the claim, invalidates the dispatch token, and drops the ticket back into the ready pool where a fresh dispatch starts over on a tree that already holds the work. So `releaseTicket` now refuses when a scope request is unresolved and the run has work in hand, naming the commit and pointing at `checkpoint`. Work in hand is evidence rather than a guess: a checkpoint commit, a submission commit, or scoped commits past the dispatch baseline, read through the same `scopedWorkPending` and `dispatchDelta` the done-no-op path already used.
+
+  Two things deliberately unchanged. A run with genuinely nothing to hand in still releases cleanly. And the claim sweep still auto-releases a dead executor holding a pending scope request — it carries its own liveness evidence and is not a scope timeout, which is a distinction the guard keeps and a test pins.
+
+  Executor guidance now matches what the store enforces: a `timeout` ruling is a wait, so checkpoint and hold with a commit and say which ruling is pending.
+
 ## v3.387.0 (2026-08-06)
 
 ### codebase-mapper 2.12.3 → 2.13.0
