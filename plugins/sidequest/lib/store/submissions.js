@@ -457,17 +457,19 @@ ${verify.outputTail}` : null
               integrationGit(repo, ["cherry-pick", "--abort"]);
             } catch (_) {
             }
+            let rollbackNote = "";
             if (mode === "replay") {
               try {
-                integrationGit(repo, ["reset", "--hard", before]);
-              } catch (_) {
+                integrationGit(repo, ["reset", "--merge", before]);
+              } catch (rollbackError) {
+                rollbackNote = ` Rollback to ${before} refused: ${integrationGitError(rollbackError)}.`;
               }
             }
             return integrationFailure(slug, ticket, {
               reason: `${mode}_failed`,
               failedCommit: commit,
               before,
-              message: integrationGitError(error)
+              message: `${integrationGitError(error)}${rollbackNote}`
             });
           }
         }

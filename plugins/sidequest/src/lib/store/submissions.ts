@@ -498,11 +498,20 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
           integrationGit(repo, ['cherry-pick', ...(mode === 'apply' ? ['--no-commit'] : []), commit]);
         } catch (error: any) {
           try { integrationGit(repo, ['cherry-pick', '--abort']); } catch (_) { /* best effort */ }
+          let rollbackNote = '';
           if (mode === 'replay') {
-            try { integrationGit(repo, ['reset', '--hard', before]); } catch (_) { /* best effort */ }
+            // --merge, never --hard: integration deliberately admits dirty files
+            // outside the ticket's scope, so a hard reset here would delete work
+            // this ticket was never allowed to touch. --merge refuses instead,
+            // and a refusal the caller never hears about is the same bug again.
+            try {
+              integrationGit(repo, ['reset', '--merge', before]);
+            } catch (rollbackError: any) {
+              rollbackNote = ` Rollback to ${before} refused: ${integrationGitError(rollbackError)}.`;
+            }
           }
           return integrationFailure(slug, ticket, {
-            reason: `${mode}_failed`, failedCommit: commit, before, message: integrationGitError(error),
+            reason: `${mode}_failed`, failedCommit: commit, before, message: `${integrationGitError(error)}${rollbackNote}`,
           });
         }
       }
