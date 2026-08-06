@@ -58,8 +58,6 @@ const {
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
   withoutCategories,
-  CATEGORY_TAXONOMY_WARNING,
-  state,
 } = require('./mcp-shared');
 
 type ToolDefinition = {
@@ -134,7 +132,6 @@ const tools: ToolDefinition[] = [
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       warnings.push(...store.ticketCategoryWarnings(ticket));
       warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
-      if (category && !state.categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       return mutationAck(slug, { ok: true, ticket }, warnings.length ? { warnings } : null);
     },
   },
@@ -214,7 +211,6 @@ const tools: ToolDefinition[] = [
         const scopeWarning = store.pendingScopeApprovalWarning(t);
         if (scopeWarning) warnings.push(scopeWarning);
       }
-      if (patch.category && !state.categoryListServed) warnings.push(CATEGORY_TAXONOMY_WARNING);
       return mutationAck(slug, { ok: true, ticket: t }, warnings.length ? { warnings } : null);
     },
   },

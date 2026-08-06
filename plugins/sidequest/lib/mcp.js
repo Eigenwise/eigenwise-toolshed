@@ -1,6 +1,5 @@
 "use strict";
-const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, state } = require("./mcp-shared");
-state.categoryListServed = false;
+const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES } = require("./mcp-shared");
 const { tools: readTools } = require("./mcp-read");
 const { tools: ticketTools } = require("./mcp-tickets");
 const { tools: lifecycleTools } = require("./mcp-lifecycle");

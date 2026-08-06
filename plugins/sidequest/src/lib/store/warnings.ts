@@ -618,7 +618,10 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   if (verify) warnings.push(verify);
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
-  const absent = ticket.files.filter((file?: any) => !fs.existsSync(path.resolve(projectPath, file)));
+  const absent = ticket.files.filter((file?: any) => {
+    const declared = path.resolve(projectPath, file);
+    return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
+  });
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);
   return warnings;
 }

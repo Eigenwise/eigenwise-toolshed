@@ -58,8 +58,6 @@ const {
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
   withoutCategories,
-  CATEGORY_TAXONOMY_WARNING,
-  state,
 } = require('./mcp-shared');
 
 type ToolDefinition = {
@@ -210,7 +208,6 @@ const tools: ToolDefinition[] = [
           categories.push({ id: localRow.id, origin: 'disabled', localRow: { id: localRow.id, kind: localRow.kind }, effective: null, ticketCount: usage(localRow.id) });
         }
       }
-      state.categoryListServed = true;
       const identity = { id: profile.id, name: profile.name, revision: profile.revision };
       const buildPayload = (page: any[], total: number, nextCursor: string | null) => full
         ? Object.assign(args.profile != null ? { profile: identity } : { project: slug, projectName: meta.name, profile: identity }, { localRowCount: layer.rows.length, categories: page, warnings: layer.warnings, total, returned: page.length, nextCursor })

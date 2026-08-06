@@ -25,7 +25,6 @@ const SERVER_NAME = 'sidequest';
 // fall back to this otherwise.
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 const CATEGORY_TAXONOMY_WARNING = 'Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.';
-const state = { categoryListServed: false };
 
 function serverVersion() {
   try {
@@ -707,5 +706,4 @@ module.exports = {
   verifyEmbedsWorktreeRoot,
   withoutCategories,
   CATEGORY_TAXONOMY_WARNING,
-  state,
 };
