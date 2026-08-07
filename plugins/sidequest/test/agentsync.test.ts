@@ -67,8 +67,11 @@ test('briefings surface tracked generated outputs paired into effective scope', 
   store.setBoardConfig(slug, { generatedPairs: [{ from: 'plugins/*/src/hooks/*.ts', to: 'plugins/*/hooks/*.js' }] });
   const ticket = store.createTicket(slug, { title: 'brief pair', files: [source], complexity: 2, complexityWhy: 'A tracked generated output must be visible to the executor.' });
   const briefing = agentsync.renderTicketBriefing(ticket, 'generated-brief-token', slug, root);
-  assert.match(briefing, /Auto-paired tracked generated files:/);
+  assert.match(briefing, /Auto-paired tracked generated files \(regenerate before verifying\):/);
+  assert.equal((briefing.match(/Auto-paired tracked generated files/g) || []).length, 1);
   assert.match(briefing, /plugins\/sidequest\/hooks\/brief\.js/);
+  store.setBoardConfig(slug, { generatedPairs: [] });
+  assert.doesNotMatch(agentsync.renderTicketBriefing(ticket, 'empty-generated-brief-token', slug, root), /Auto-paired tracked generated files/);
 });
 
 test('dispatch uncertainty does not inspect symbols named in ticket text', () => {
