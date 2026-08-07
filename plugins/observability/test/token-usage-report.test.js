@@ -30,11 +30,11 @@ function ingest(store, input) {
   assert.equal(result.accepted, true);
 }
 
-function ingestGatewayUsage(store, id, agentId, contextTokens, outputTokens, costUsd) {
+function ingestGatewayUsage(store, id, agentId, contextTokens, outputTokens, costUsd, observedAt = `2026-07-19T12:${String(id).padStart(2, '0')}:00.000Z`) {
   ingest(store, {
     source: 'codex_gateway',
     source_event_id: `gateway-${id}`,
-    observed_at: `2026-07-19T12:${String(id).padStart(2, '0')}:00.000Z`,
+    observed_at: observedAt,
     event_name: 'gateway.token.usage',
     session_id: 'board-cost-session',
     request_id: `board-cost-request-${id}`,
@@ -212,7 +212,7 @@ test('joins the read-only Sidequest board to gateway usage by dispatch agent', (
 
   const split = new Map(board.execution_split.map((row) => [row.role, row.usage]));
   assert.equal(split.get('board_executor').tokens.total.value, 410);
-  assert.equal(split.get('orchestrator').tokens.total.value, 550);
+  assert.equal(split.get('orchestrator_or_unidentified').tokens.total.value, 550);
   assert.equal(split.get('unmapped_agent').tokens.total.value, 45);
 
   assert.equal(board.rework.length, 1);
@@ -224,6 +224,40 @@ test('joins the read-only Sidequest board to gateway usage by dispatch agent', (
   assert.equal(drift.usage.tokens.total.value, 350);
   assert.match(formatTokenUsageReport(report), /SQ-1 \[coding\.hard\]: 350 \(derived\) tokens/);
   assert.match(formatTokenUsageReport(report), /gpt-primary -> gpt-fallback/);
+});
+
+test('windows board costs by usage timestamp and compares the preceding window', (t) => {
+  const store = temporaryStore(t);
+  const fixture = seedSidequestBoard(t);
+  ingestGatewayUsage(store, 70, 'agent-attempt-1', 10, 1, 0.1, '2026-07-17T12:00:00.000Z');
+  ingestGatewayUsage(store, 71, 'agent-attempt-1', 20, 2, 0.2, '2026-07-18T12:00:00.000Z');
+  ingestGatewayUsage(store, 72, 'agent-attempt-1', 30, 3, 0.3, '2026-07-19T12:00:00.000Z');
+
+  const allTime = buildTokenUsageReport(store, { board: fixture.board }).board_costs;
+  const allTimeWindow = buildTokenUsageReport(store, {
+    board: fixture.board,
+    boardCost: { since: '2026-07-01T00:00:00.000Z', until: '2026-08-01T00:00:00.000Z' },
+  }).board_costs;
+  assert.equal(allTimeWindow.tickets.find((row) => row.ticket_ref === 'SQ-1').usage.tokens.total.value, 66);
+  assert.equal(allTimeWindow.tickets.find((row) => row.ticket_ref === 'SQ-1').usage.tokens.total.value, allTime.tickets.find((row) => row.ticket_ref === 'SQ-1').usage.tokens.total.value);
+
+  const comparison = buildTokenUsageReport(store, {
+    board: fixture.board,
+    boardCost: {
+      since: '2026-07-18T00:00:00.000Z',
+      until: '2026-07-19T00:00:00.000Z',
+      comparePrevious: true,
+    },
+  }).board_costs;
+  assert.equal(comparison.tickets.find((row) => row.ticket_ref === 'SQ-1').usage.tokens.total.value, 22);
+  assert.deepEqual(comparison.source.usage_window, {
+    since: '2026-07-18T00:00:00.000Z',
+    until: '2026-07-19T00:00:00.000Z',
+  });
+  const category = comparison.comparison.categories.find((row) => row.category === 'coding.hard');
+  assert.equal(category.previous_average_tokens_per_ticket.value, 11);
+  assert.equal(category.current_average_tokens_per_ticket.value, 22);
+  assert.equal(category.delta_average_tokens_per_ticket.value, 11);
 });
 
 test('does not duplicate a batched agent across multiple tickets', (t) => {
@@ -263,13 +297,17 @@ test('does not duplicate a batched agent across multiple tickets', (t) => {
 
 test('uses SIDEQUEST_HOME and project overrides in report arguments', () => {
   const options = parseArgs(
-    ['--sidequest-home', 'C:/fixture/sidequest', '--project', 'C:/fixture/project', '--format', 'json'],
+    ['--sidequest-home', 'C:/fixture/sidequest', '--project', 'C:/fixture/project', '--format', 'json', '--since', '2026-07-01T00:00:00.000Z', '--until', '2026-07-08T00:00:00.000Z', '--compare-previous', '--ledger'],
     { SIDEQUEST_HOME: 'C:/ignored', CLAUDE_PROJECT_DIR: 'C:/ignored-project' },
     'C:/ignored-cwd',
   );
   assert.equal(options.sidequestHome, 'C:/fixture/sidequest');
   assert.equal(options.projectPath, 'C:/fixture/project');
   assert.equal(options.format, 'json');
+  assert.equal(options.since, '2026-07-01T00:00:00.000Z');
+  assert.equal(options.until, '2026-07-08T00:00:00.000Z');
+  assert.equal(options.comparePrevious, true);
+  assert.equal(options.includeLedger, true);
   assert.equal(defaultSidequestHome({ SIDEQUEST_HOME: 'C:/configured' }, 'C:/home'), path.resolve('C:/configured'));
 });
 
@@ -292,7 +330,7 @@ test('token usage report help lists every option', () => {
   const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8' });
 
   assert.equal(help.status, 0, help.stderr);
-  for (const flag of ['--db', '--format', '--sidequest-home', '--project', '--help']) {
+  for (const flag of ['--db', '--format', '--sidequest-home', '--project', '--since', '--until', '--compare-previous', '--ledger', '--help']) {
     assert.match(help.stdout, new RegExp(flag));
   }
 });

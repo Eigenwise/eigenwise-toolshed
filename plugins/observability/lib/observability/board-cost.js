@@ -248,12 +248,71 @@ function ticketCategory(ticket) {
   return String(ticket.category).toLowerCase();
 }
 
-function gatewayRows(store) {
-  return store.queryView('request_usage_resolved')
-    .filter((row) => row.evidence_event === 'gateway.token.usage');
+function normalizedTimestamp(value, optionName) {
+  if (value === null || value === undefined) return null;
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}T/.test(value) || !Number.isFinite(Date.parse(value))) {
+    throw new TypeError(`${optionName} must be an ISO-8601 timestamp.`);
+  }
+  return new Date(value).toISOString();
 }
 
-function buildBoardCostReport(store, board) {
+function usageWindow(options = {}) {
+  const since = normalizedTimestamp(options.since, 'since');
+  const until = normalizedTimestamp(options.until, 'until');
+  if (since && until && since >= until) throw new TypeError('since must be earlier than until.');
+  return { since, until };
+}
+
+function previousUsageWindow(window) {
+  if (!window.since || !window.until) {
+    throw new TypeError('comparePrevious requires both since and until.');
+  }
+  const duration = Date.parse(window.until) - Date.parse(window.since);
+  return {
+    since: new Date(Date.parse(window.since) - duration).toISOString(),
+    until: window.since,
+  };
+}
+
+function gatewayRows(store, window) {
+  const clauses = ["evidence_event = 'gateway.token.usage'"];
+  const parameters = [];
+  if (window.since) {
+    clauses.push('observed_at >= ?');
+    parameters.push(window.since);
+  }
+  if (window.until) {
+    clauses.push('observed_at < ?');
+    parameters.push(window.until);
+  }
+  return store.database.prepare(`
+    SELECT * FROM request_usage_resolved
+    WHERE ${clauses.join(' AND ')}
+  `).all(...parameters);
+}
+
+function comparisonCategoryRows(currentCategories, previousCategories) {
+  const categories = new Set([
+    ...currentCategories.map((row) => row.category),
+    ...previousCategories.map((row) => row.category),
+  ]);
+  return [...categories].sort().map((category) => {
+    const current = currentCategories.find((row) => row.category === category);
+    const previous = previousCategories.find((row) => row.category === category);
+    const currentValue = current ? current.average_tokens_per_ticket.value : null;
+    const previousValue = previous ? previous.average_tokens_per_ticket.value : null;
+    return {
+      category,
+      current_average_tokens_per_ticket: metric(currentValue),
+      previous_average_tokens_per_ticket: metric(previousValue),
+      delta_average_tokens_per_ticket: metric(
+        currentValue === null || previousValue === null ? null : currentValue - previousValue,
+      ),
+    };
+  });
+}
+
+function buildSingleBoardCostReport(store, board, window) {
   if (!board || !board.available) {
     return {
       available: false,
@@ -271,7 +330,7 @@ function buildBoardCostReport(store, board) {
     };
   }
 
-  const usageRows = gatewayRows(store);
+  const usageRows = gatewayRows(store, window);
   const rowsByAgent = new Map();
   for (const row of usageRows) {
     const key = row.agent_id || null;
@@ -339,7 +398,7 @@ function buildBoardCostReport(store, board) {
 
   const categoryRows = [];
   const categoryGroups = new Map();
-  for (const ticket of ticketRows.filter((entry) => entry.attempt_count.value > 0)) {
+  for (const ticket of ticketRows.filter((entry) => entry._rows.length > 0)) {
     const key = ticket.category || 'uncategorized';
     if (!categoryGroups.has(key)) categoryGroups.set(key, []);
     categoryGroups.get(key).push(ticket);
@@ -364,12 +423,12 @@ function buildBoardCostReport(store, board) {
 
   const boardAgentIds = new Set(ownersByAgent.keys());
   const splitGroups = new Map([
-    ['orchestrator', []],
+    ['orchestrator_or_unidentified', []],
     ['board_executor', []],
     ['unmapped_agent', []],
   ]);
   for (const row of usageRows) {
-    if (!row.agent_id) splitGroups.get('orchestrator').push(row);
+    if (!row.agent_id) splitGroups.get('orchestrator_or_unidentified').push(row);
     else if (boardAgentIds.has(row.agent_id)) splitGroups.get('board_executor').push(row);
     else splitGroups.get('unmapped_agent').push(row);
   }
@@ -440,7 +499,9 @@ function buildBoardCostReport(store, board) {
       project_slug: board.project_slug,
       read_only: true,
       usage_source: 'gateway.token.usage',
+      usage_window: window,
       join_key: 'agent_id',
+      orchestrator_attribution: 'agent-id-absence',
     },
     coverage: {
       gateway_request_count: usageRows.length,
@@ -455,6 +516,22 @@ function buildBoardCostReport(store, board) {
     route_drift: {
       tickets: driftTickets.map(({ _rows, ...entry }) => entry),
       rollups: driftRollups,
+    },
+  };
+}
+
+function buildBoardCostReport(store, board, options = {}) {
+  const window = usageWindow(options);
+  const previousWindow = options.comparePrevious ? previousUsageWindow(window) : null;
+  const current = buildSingleBoardCostReport(store, board, window);
+  if (!previousWindow || !current.available) return current;
+
+  const previous = buildSingleBoardCostReport(store, board, previousWindow);
+  return {
+    ...current,
+    comparison: {
+      previous_window: previousWindow,
+      categories: comparisonCategoryRows(current.categories, previous.categories),
     },
   };
 }

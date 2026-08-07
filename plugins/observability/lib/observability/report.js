@@ -284,10 +284,12 @@ function coverage(store) {
 
 function buildTokenUsageReport(store, options = {}) {
   if (!store || !store.database || typeof store.queryView !== 'function') throw new TypeError('A Workbench observability store is required.');
+  const includeLedger = options.includeLedger !== false;
   return {
     generated_at: new Date().toISOString(),
     quality_labels: ['exact', 'derived', 'estimated', 'inferred', 'unavailable'],
-    session_turn_ledger: requestLedger(store),
+    include_ledger: includeLedger,
+    session_turn_ledger: includeLedger ? requestLedger(store) : [],
     session_usage: sessionUsage(store),
     agent_usage: agentUsage(store),
     input_composition: inputComposition(store),
@@ -295,7 +297,7 @@ function buildTokenUsageReport(store, options = {}) {
     cache_economics: cacheEconomics(store),
     limit_signals: limitSignals(store),
     execution_tree: executionTree(store), tools: toolTable(store), route_comparison: routeComparison(store),
-    ticket_usage: ticketUsage(store), board_costs: buildBoardCostReport(store, options.board), coverage: coverage(store),
+    ticket_usage: ticketUsage(store), board_costs: buildBoardCostReport(store, options.board, options.boardCost), coverage: coverage(store),
   };
 }
 
@@ -304,12 +306,7 @@ function textValue(entry) {
 }
 
 function formatTokenUsageReport(report) {
-  const lines = ['Workbench token usage report', `Generated: ${report.generated_at}`, '', `Session / turn ledger (${report.session_turn_ledger.length})`];
-  for (const row of report.session_turn_ledger) {
-    lines.push(`${row.observed_at} ${row.request_id || 'unlinked request'} ${row.model || 'model unavailable'} ${row.backend || 'backend unavailable'} ${row.effort || 'effort unavailable'}`);
-    lines.push(`  input ${textValue(row.tokens.input)} | output ${textValue(row.tokens.output)} | cache read ${textValue(row.tokens.cache_read)} | cache creation ${textValue(row.tokens.cache_creation)} | latency ${textValue(row.latency_ms)} | cost ${textValue(row.cost_usd)}`);
-    lines.push(`  evidence: ${row.evidence.source}/${row.evidence.event} (${row.evidence.quality})`);
-  }
+  const lines = ['Workbench token usage report', `Generated: ${report.generated_at}`];
   lines.push('', `Session usage (${report.session_usage.length})`, `Agent usage (${report.agent_usage.length})`, `Input composition (${report.input_composition.length})`);
   lines.push(`Cache economics (${report.cache_economics.length})`, `Limit signals (${report.limit_signals.length})`);
   lines.push('', `Context timeline (${report.context_timeline.length})`);
@@ -318,7 +315,9 @@ function formatTokenUsageReport(report) {
   for (const row of report.ticket_usage) lines.push(`${row.ticket_ref || 'unattributed'}: ${textValue(row.request_count)} requests, cost ${textValue(row.estimated_cost_usd)} (${row.attribution})`);
   const board = report.board_costs;
   if (board.available) {
+    const window = board.source.usage_window || { since: null, until: null };
     lines.push('', `Board cost attribution (${board.tickets.length} tickets)`);
+    if (window.since || window.until) lines.push(`Usage window: ${window.since || 'all time'} to ${window.until || 'now'}`);
     for (const row of board.tickets) {
       lines.push(`${row.ticket_ref} [${row.category || 'uncategorized'}]: ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost, ${textValue(row.attempt_count)} attempts (${row.attribution})`);
     }
@@ -326,8 +325,14 @@ function formatTokenUsageReport(report) {
     for (const row of board.categories) {
       lines.push(`${row.category}: ${textValue(row.usage.tokens.total)} tokens total, ${textValue(row.average_tokens_per_ticket)} average per ticket, ${textValue(row.average_estimated_cost_usd_per_ticket)} average cost`);
     }
-    lines.push('', 'Orchestrator / executor split');
+    lines.push('', 'Execution split');
     for (const row of board.execution_split) lines.push(`${row.role}: ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost`);
+    if (board.comparison) {
+      lines.push('', `Previous window: ${board.comparison.previous_window.since} to ${board.comparison.previous_window.until}`);
+      for (const row of board.comparison.categories) {
+        lines.push(`${row.category}: ${textValue(row.current_average_tokens_per_ticket)} average per ticket, previous ${textValue(row.previous_average_tokens_per_ticket)}, delta ${textValue(row.delta_average_tokens_per_ticket)}`);
+      }
+    }
     lines.push('', `Bounce / rework (${board.rework.length})`);
     for (const row of board.rework) lines.push(`${row.ticket_ref}: ${textValue(row.bounce_count)} bounces, ${textValue(row.attempt_count)} attempts, ${textValue(row.usage.tokens.total)} tokens, ${textValue(row.usage.estimated_cost_usd)} cost`);
     lines.push('', `Route drift (${board.route_drift.rollups.length})`);
@@ -338,6 +343,14 @@ function formatTokenUsageReport(report) {
   lines.push('', 'Data quality');
   for (const row of report.coverage.measurements_by_quality) lines.push(`${row.quality}: ${row.count}`);
   lines.push(`Explicitly unavailable: ${report.coverage.explicitly_unavailable.join('; ')}`);
+  if (report.include_ledger) {
+    lines.push('', `Session / turn ledger (${report.session_turn_ledger.length})`);
+    for (const row of report.session_turn_ledger) {
+      lines.push(`${row.observed_at} ${row.request_id || 'unlinked request'} ${row.model || 'model unavailable'} ${row.backend || 'backend unavailable'} ${row.effort || 'effort unavailable'}`);
+      lines.push(`  input ${textValue(row.tokens.input)} | output ${textValue(row.tokens.output)} | cache read ${textValue(row.tokens.cache_read)} | cache creation ${textValue(row.tokens.cache_creation)} | latency ${textValue(row.latency_ms)} | cost ${textValue(row.cost_usd)}`);
+      lines.push(`  evidence: ${row.evidence.source}/${row.evidence.event} (${row.evidence.quality})`);
+    }
+  }
   return `${lines.join('\n')}\n`;
 }
 
