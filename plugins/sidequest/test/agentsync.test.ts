@@ -191,7 +191,10 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.match(descriptionPacket![1], /Description truncated at 8 KB/);
   assert.match(briefing, /Comment packet \(newest-first excerpts; read full history only when flagged below\):/);
   assert.match(briefing, new RegExp(ticket.executorVerify));
-  assert.match(briefing, /Verify completion discipline: run the declared verify command in the foreground/);
+  assert.match(briefing, /Verify completion discipline: the harness does not expose your remaining tool-call budget/);
+  assert.match(briefing, /Plan against the observed ~90-call backstop/);
+  assert.match(briefing, /Run the declared verify command as soon as a first implementation-ready change is in place/);
+  assert.match(briefing, /If a deliberate checkpoint is necessary before verification, say explicitly that verification was not reached and why/);
   assert.match(briefing, /plugins\/sidequest\/src\/lib\/agentsync\.ts/);
   assert.match(briefing, /briefing\.png/);
 });
