@@ -147,7 +147,7 @@
         "defaults": {
           "unit": "percent",
           "decimals": 1,
-          "noValue": "No data"
+          "noValue": "No gateway usage in this range"
         },
         "overrides": [
           {
@@ -779,7 +779,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (workbench_attribute_hook_name) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.hook_execution_complete\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_attribute_status =~ \"error|failed\" [$bucket]))",
+          "expr": "sum by (workbench_attribute_hook_name) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.hook_execution_complete\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_attribute_status =~ \"error|failed\" [$bucket])) or vector(0)",
           "legendFormat": "{{workbench_attribute_hook_name}}"
         }
       ],
@@ -810,7 +810,7 @@
               "mode": "normal"
             }
           },
-          "noValue": "No connection events in range. If sessions are running, the observer is not receiving them."
+          "noValue": "No gateway error records in this range"
         },
         "overrides": []
       },
@@ -833,7 +833,7 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum(count_over_time({service_name=\"codex-gateway\"} |~ \"(?i)(error|fail|throttl|rate.?limit|429)\" [$bucket]))",
+          "expr": "sum(count_over_time({service_name=\"codex-gateway\"} |~ \"(?i)(error|fail|throttl|rate.?limit|429)\" [$bucket])) or vector(0)",
           "legendFormat": "errors / throttles"
         }
       ],

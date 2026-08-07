@@ -107,7 +107,7 @@ function gatewayModelCostTargets() {
 }
 
 function gatewayCostExpression(entries, bucket = '$bucket') {
-  return entries.map(([model, prices]) => `(${gatewayModelCostExpression(model, prices, bucket)})`).join(' + ');
+  return entries.map(([model, prices]) => `((${gatewayModelCostExpression(model, prices, bucket)}) or vector(0))`).join(' + ');
 }
 
 function gatewayResolvedCodexCostExpression(bucket = '$bucket') {

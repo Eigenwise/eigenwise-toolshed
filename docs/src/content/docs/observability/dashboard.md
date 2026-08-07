@@ -3,41 +3,42 @@ title: Dashboard
 description: Inspect local Claude Code activity from one place.
 ---
 
-The dashboard reads local telemetry from enabled projects. Use the project filter for one codebase, or the global view for a cross-project picture. It is a local view over SQLite and loopback services, not a hosted telemetry console. The global view includes board-wide MCP connection activity; per-project views filter project-attributed records.
+The Grafana dashboard reads local telemetry from enabled projects. The global **Claude Code Usage** view answers four questions: what the selected range cost, where the spend went, whether the orchestrator or executors consumed it, and whether anything failed or stopped reporting.
 
-## Board routing
+Project dashboards are data-driven. Enabling telemetry keeps a project wired, but Grafana only gets a project dashboard after Claude Code metrics arrive for it. A project drops from the dashboard list after 30 days without Claude Code metrics. Gateway records are global because they do not carry project attribution, so gateway panels only appear on the global dashboard.
 
-Sidequest boards show their selected routing profile, revision, category count, and local-change badge. The Board routing panel lets you choose a profile and preview a repoint before applying it. The preview calls out changed, missing, and added categories, ADD collisions, foreign-base rows, and prepared dispatches that will be superseded. Local rows keep their provenance, so pins and board-only categories remain visible after a profile change.
+## At a glance
 
-## Profile library
+- **Claude API-equivalent cost** estimates Claude API list-price cost for the selected range. It is a comparison figure, not a bill.
+- **Work routed to Codex** shows the gateway list-price-equivalent share routed to Codex. It is global rather than project-specific.
+- **Tool failure rate** shows the share of observed tool calls marked failed or errored.
 
-The Profile library lets you inspect and edit profile categories. Its header shows how many boards follow the profile, and a save explains how many boards receive the update. Rows carry Profile, Override, Pinned, Board-only, or Disabled badges. Retired profiles stay hidden unless you ask to include them. The global availability fallback remains above the profile controls.
+## Where the spend goes
 
-Token panels split input, output, cache creation, and cache reads. The token cards are raw token counts. The USD card and the cost-by-token-type breakdown are API-equivalent estimates for the selected time range.
+- **Claude cost by model** graphs the Claude API-equivalent cost trend by model.
+- **Gateway cost by resolved model** graphs the backend model that handled each gateway request. This is the useful view for Sidequest executor traffic, where the client label is the virtual `claude-codex-auto` route.
+- **Claude cost by project** compares reporting projects on the global dashboard.
+- **Context by orchestrator vs executor** compares context-token volume by agent role.
 
-## Reading over-time panels
+Use the **Bucket** dropdown to change the aggregation window. Choose `1m` for close investigation or `1h` and above for an overview. Grafana legends and tooltips carry the individual series values, and **Inspect > Data** provides the table view.
 
-Use the **Bucket** dropdown to change the aggregation window. It is a Grafana dropdown, not a row of buttons. Choose `1m` for close investigation or `1h` and above for an overview. Every stacked bar is one bucket's total, split by its series, so bar height remains the combined total.
+## Failures and source activity
 
-**Cost over time, by model** prices each token type separately from the local model-price table, including Claude Haiku 4.5 and the current Codex route IDs. It is a list-price equivalent for comparing work across model routes, not a bill. Models without a table entry appear under **Unpriced model usage** instead of being treated as free. The virtual `claude-codex-auto` label is excluded because it has no single price.
+**Hook failures over time** and **Gateway errors and throttles** show when failures happened instead of reducing the whole range to a count. The three source cards show whether Claude metrics, observer records, and gateway records arrived in the last five minutes. A zero on the gateway card can also mean the gateway was idle.
 
-**Cost over time, by resolved model (gateway)** reads the gateway record for the backend model that handled each request. Use this panel for Sidequest executor traffic, where the client label is `claude-codex-auto`; the panel prices the resolved `gpt-5.6-*` model instead.
+A project dashboard starts with a telemetry status card. If it has no Claude Code metrics in the selected range, the card points to project telemetry setup instead of leaving the rest of the dashboard unexplained.
 
-## Efficiency
+## Resetting generated dashboards
 
-- **Context spent per answer token (lower is better)** shows input and cache tokens processed for every output token. Fresh executors normally use less context than the long-running orchestrator. A widening gap means the orchestrator is waking up with too much context.
-- **Work moved off the Anthropic limit** is the share of list-price-equivalent work routed through model-gateway to Codex models. Higher means the second subscription pool is doing more work. The dollar figures are comparisons, not charges.
-- **Background/compaction cost by model and project** ranks compaction, summaries, and other auxiliary work. A small amount is normal. Bursts are overhead rather than task output.
+From the installed Observability plugin's `bin` directory, run:
 
-MCP connection activity counts connection attempts by server and status. Claude Code names only plugin-hosted servers on that event, so IDE and user-configured servers are grouped as “unnamed (non-plugin server)” instead of being dropped. That event carries no project, so the panel is board-wide and shows up on the global dashboard only, not on the per-project ones.
+```sh
+node setup-observability.js --reset-dashboards
+```
 
-![Token usage by model](../../../assets/screenshots/observability-tokens-models.png)
+This removes every generated Grafana dashboard and records the reset time. The global dashboard returns on the next setup or ensure run. A project dashboard returns only after that project sends fresh Claude Code metrics, so old samples do not immediately rebuild the deleted list.
 
-![Cost by board activity](../../../assets/screenshots/observability-board-costs.png)
-
-![Gateway activity](../../../assets/screenshots/observability-mcp.png)
-
-These are counts and derived cost estimates from local records. They are for finding patterns, not billing statements.
+Resetting dashboards does not disable telemetry or delete stored metrics and logs.
 
 ## Deleting project data
 
@@ -48,10 +49,10 @@ Delete telemetry only when you mean it. It is permanent.
 :::
 
 ```sh
-docker exec workbench-otel-lgtm curl -X POST -g 'http://127.0.0.1:9090/api/v1/admin/tsdb/delete_series?match[]={project_id=~"project-id"}'
-docker exec workbench-otel-lgtm curl -X POST http://127.0.0.1:9090/api/v1/admin/tsdb/clean_tombstones
+docker exec workbench-otel-lgtm-demo curl -X POST -g 'http://127.0.0.1:9090/api/v1/admin/tsdb/delete_series?match[]={project_id=~"project-id"}'
+docker exec workbench-otel-lgtm-demo curl -X POST http://127.0.0.1:9090/api/v1/admin/tsdb/clean_tombstones
 ```
 
 ```sh
-docker exec workbench-otel-lgtm curl -X POST -g 'http://127.0.0.1:3100/loki/api/v1/delete?query={project_id="project-id"}&start=2026-01-01T00:00:00Z'
+docker exec workbench-otel-lgtm-demo curl -X POST -g 'http://127.0.0.1:3100/loki/api/v1/delete?query={project_id="project-id"}&start=2026-01-01T00:00:00Z'
 ```

@@ -218,29 +218,13 @@ function applyModelPricing(dashboard) {
     const codexCost = gatewayResolvedCodexCostExpression('$__range');
     const totalCost = gatewayTotalCostExpression('$__range');
     offloadPanel.datasource = { type: 'loki', uid: 'loki' };
-    offloadPanel.targets = [
-      {
-        refId: 'A',
-        datasource: offloadPanel.datasource,
-        expr: `(100 * (${codexCost}) / (${totalCost})) and ((${totalCost}) > 0)`,
-        legendFormat: 'Share routed to Codex',
-        instant: true,
-      },
-      {
-        refId: 'B',
-        datasource: offloadPanel.datasource,
-        expr: codexCost,
-        legendFormat: 'Codex list-price equivalent',
-        instant: true,
-      },
-      {
-        refId: 'C',
-        datasource: offloadPanel.datasource,
-        expr: totalCost,
-        legendFormat: 'Total list-price equivalent',
-        instant: true,
-      },
-    ];
+    offloadPanel.targets = [{
+      refId: 'A',
+      datasource: offloadPanel.datasource,
+      expr: `(100 * (${codexCost}) / (${totalCost})) and ((${totalCost}) > 0)`,
+      legendFormat: 'Share routed to Codex',
+      instant: true,
+    }];
   }
   return dashboard;
 }
