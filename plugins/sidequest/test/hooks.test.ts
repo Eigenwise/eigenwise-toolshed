@@ -255,6 +255,45 @@ test('pre-tool hook: a spawn prompt naming another ticket still records its laun
   assert.ok(launched.dispatch?.launchedAt, 'the launch must be recorded even when the prompt names other tickets');
 });
 
+test('pre-tool hook: an executor cannot redispatch its own active ticket', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'own dispatch refusal fixture',
+    category: 'debugging',
+    source: 'cli',
+  });
+  const sessionId = `own-dispatch-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const agentId = `own-dispatch-agent-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: agentId,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
+
+  const payload = {
+    session_id: sessionId,
+    agent_type: prepared.ticket.dispatchExecutor,
+    agent_id: agentId,
+    cwd: BOARD_PATH,
+    tool_name: 'mcp__plugin_sidequest_board__dispatch',
+    tool_input: { ref: ticket.ref, project: BOARD_PATH },
+  };
+  const blocked = runHookOutput(FORCE_BYPASS, payload);
+  assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+  assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /Release.*with a reason/i);
+  assert.equal(runHookOutput(FORCE_BYPASS, { ...payload, agent_id: 'unrelated-agent' }), null);
+
+  const shellBlocked = runHookOutput(FORCE_BYPASS, {
+    ...payload,
+    tool_name: 'Bash',
+    tool_input: { command: `sidequest dispatch ${ticket.ref}` },
+  });
+  assert.equal(shellBlocked.hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-commit-'));
   gitFixture(['init', '--quiet'], projectPath);
@@ -2190,6 +2229,10 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Agent'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover Sidequest CLI commands');
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Edit|Write|MultiEdit|NotebookEdit'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the helper write guard must be registered');

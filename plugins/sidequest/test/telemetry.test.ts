@@ -100,7 +100,7 @@ test('changes returns an ordered compact delta and reusable serverTime', async (
   assert.deepStrictEqual(Object.keys(changes).sort(), ['project', 'projectName', 'serverTime', 'since', 'tickets']);
   const changed = changes.tickets.find((ticket) => ticket.ref === ref);
   assert.ok(changed);
-  assert.deepStrictEqual(Object.keys(changed).sort(), ['checkpoint', 'claim', 'lastComment', 'lastEventSource', 'lastEventType', 'ref', 'status', 'title', 'updatedAt']);
+  assert.deepStrictEqual(Object.keys(changed).sort(), ['checkpoint', 'claim', 'lastComment', 'lastEventSource', 'lastEventType', 'liveness', 'livenessEvidence', 'ref', 'status', 'title', 'updatedAt']);
   assert.deepStrictEqual(changed.lastComment, {
     by: 'telemetry-worker',
     kind: 'comment',
