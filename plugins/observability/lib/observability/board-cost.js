@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { canonicalPath } = require('./path-identity.js');
 
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = function emitWarningWithoutSqliteExperimentalWarning(warning, ...args) {
@@ -21,14 +22,9 @@ function defaultSidequestHome(env = process.env, homedir = os.homedir()) {
   return path.resolve(configured || path.join(homedir, '.claude', 'sidequest'));
 }
 
-function normalizedPath(value) {
-  const resolved = path.resolve(String(value || '.'));
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-}
-
 function projectMatches(registeredPath, requestedPath) {
-  const registered = normalizedPath(registeredPath);
-  const requested = normalizedPath(requestedPath);
+  const registered = canonicalPath(registeredPath);
+  const requested = canonicalPath(requestedPath);
   return registered === requested || requested.startsWith(`${registered}${path.sep}.claude${path.sep}worktrees${path.sep}`);
 }
 

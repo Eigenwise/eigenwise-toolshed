@@ -1,6 +1,8 @@
 import crypto from 'node:crypto';
 import http from 'node:http';
 
+const { canonicalPath } = require('./worktrees.js') as { canonicalPath: (value: unknown) => string };
+
 const OBSERVER_URL = 'http://127.0.0.1:14319/v1/observations';
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -87,7 +89,7 @@ function projectIdentity(project: unknown): { slug: string | null; projectId: st
   const slug = identifier(typeof project === 'string' ? project : projectRecord.slug);
   const projectPath = projectRecord.path;
   const projectId = typeof projectPath === 'string' && projectPath.length > 0
-    ? crypto.createHash('sha256').update(projectPath).digest('hex')
+    ? crypto.createHash('sha256').update(canonicalPath(projectPath)).digest('hex')
     : null;
   return { slug, projectId };
 }

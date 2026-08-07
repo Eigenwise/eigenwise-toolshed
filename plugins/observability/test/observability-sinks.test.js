@@ -205,6 +205,37 @@ test('Grafana adopts the managed live container and honors configured loopback p
   assert.throws(() => grafana.runtimeConfig({ container: '../bad' }), /Invalid dashboard container name/);
 });
 
+test('Grafana recognizes a dashboard mount through a canonical path alias', (t) => {
+  const root = temporaryDirectory();
+  const dashboardDir = path.join(root, 'dashboards');
+  const alias = path.join(root, 'dashboards-alias');
+  fs.mkdirSync(dashboardDir);
+  fs.symlinkSync(dashboardDir, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+
+  const config = { container: 'workbench-otel-lgtm', grafanaPort: 13000, otlpPort: 14300 };
+  const bindings = JSON.stringify({
+    '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '13000' }],
+    '4318/tcp': [{ HostIp: '127.0.0.1', HostPort: '14300' }],
+  });
+  const mounts = JSON.stringify([{
+    Source: dashboardDir,
+    Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
+  }]);
+  const calls = [];
+
+  grafana.setup(config, {
+    dashboardDir: alias,
+    pluginVersion: '0.19.0',
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      return { status: 0, stdout: `true|${grafana.IMAGE}|0.19.0|${grafana.MANAGED_CONFIG_VERSION}|${bindings}|${mounts}` };
+    },
+  });
+
+  assert.equal(calls.length, 1);
+});
+
 test('Grafana replaces a container with an outdated dashboard mount', () => {
   const calls = [];
   const config = { container: 'workbench-otel-lgtm', grafanaPort: 13000, otlpPort: 14300 };

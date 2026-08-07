@@ -148,7 +148,8 @@ test('native lifecycle observations include only allowlisted metadata', () => {
   };
   const project = { slug: 'project-42', path: 'C:\\workspace\\canonical-project' };
   const observation = telemetry.ticketObservation(project, ticket) as TicketObservation;
-  const projectId = crypto.createHash('sha256').update(project.path).digest('hex');
+  const { canonicalPath } = require('../lib/worktrees.js') as { canonicalPath(value: unknown): string };
+  const projectId = crypto.createHash('sha256').update(canonicalPath(project.path)).digest('hex');
   assert.deepStrictEqual(observation.attributes, {
     category: 'coding.normal',
     configured_model: 'terra',

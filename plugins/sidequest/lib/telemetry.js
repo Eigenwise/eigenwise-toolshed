@@ -35,6 +35,7 @@ __export(telemetry_exports, {
 module.exports = __toCommonJS(telemetry_exports);
 var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_http = __toESM(require("node:http"));
+const { canonicalPath } = require("./worktrees.js");
 const OBSERVER_URL = "http://127.0.0.1:14319/v1/observations";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = /* @__PURE__ */ new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -83,7 +84,7 @@ function projectIdentity(project) {
   const projectRecord = isRecord(project) ? project : {};
   const slug = identifier(typeof project === "string" ? project : projectRecord.slug);
   const projectPath = projectRecord.path;
-  const projectId = typeof projectPath === "string" && projectPath.length > 0 ? import_node_crypto.default.createHash("sha256").update(projectPath).digest("hex") : null;
+  const projectId = typeof projectPath === "string" && projectPath.length > 0 ? import_node_crypto.default.createHash("sha256").update(canonicalPath(projectPath)).digest("hex") : null;
   return { slug, projectId };
 }
 function ticketObservation(project, ticketValue) {
