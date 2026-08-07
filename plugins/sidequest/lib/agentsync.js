@@ -67,6 +67,7 @@ function workflowRecipe(category, resolved) {
   return recipe;
 }
 const EXECUTOR_SKILLS = ["playbook:verify-discipline"];
+const EXECUTOR_TOOLS = ["default", ...EXECUTOR_SKILLS.map((skill) => `Skill(${skill})`)];
 const READ_ONLY_DENIED_TOOLS = [
   "Edit",
   "Write",
@@ -82,14 +83,14 @@ const READ_ONLY_DENIED_TOOLS = [
 function resolveReadOnlyTools(readOnlyDeniedTools) {
   const extra = Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [];
   return {
-    tools: null,
+    tools: EXECUTOR_TOOLS,
     disallowedTools: [.../* @__PURE__ */ new Set([...READ_ONLY_DENIED_TOOLS, ...extra])]
   };
 }
 function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
-function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools = EXECUTOR_TOOLS, disallowedTools, skills = EXECUTOR_SKILLS }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(", ")}
 ` : "";

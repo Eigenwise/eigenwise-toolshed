@@ -135,6 +135,7 @@ function workflowRecipe(category?: any, resolved?: any) {
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
 // required; `modelId`, `marker`, and `extraNote` are optional.
 const EXECUTOR_SKILLS = ['playbook:verify-discipline'];
+const EXECUTOR_TOOLS = ['default', ...EXECUTOR_SKILLS.map((skill) => `Skill(${skill})`)];
 
 // Read-only is expressed as a DENY list, not an allow list.
 //
@@ -162,7 +163,7 @@ const READ_ONLY_DENIED_TOOLS = [
 function resolveReadOnlyTools(readOnlyDeniedTools?: any) {
   const extra = Array.isArray(readOnlyDeniedTools) ? readOnlyDeniedTools : [];
   return {
-    tools: null,
+    tools: EXECUTOR_TOOLS,
     disallowedTools: [...new Set([...READ_ONLY_DENIED_TOOLS, ...extra])],
   };
 }
@@ -171,7 +172,7 @@ function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
-function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools = EXECUTOR_TOOLS, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(', ')}\n` : '';
   const disallowedToolsLine = Array.isArray(disallowedTools) && disallowedTools.length ? `disallowedTools: ${disallowedTools.join(', ')}\n` : '';
