@@ -27,13 +27,13 @@
 
 'use strict';
 
-const path = require('path');
-
 let lib;
+let projectRelative;
 let ledger;
 try {
   lib = require('./lib/rules');
   ledger = require('./lib/session-ledger');
+  ({ projectRelative } = require('./lib/canonical-path'));
 } catch (_) {
   process.exit(0);
 }
@@ -57,7 +57,7 @@ function main() {
   }
 
   const cwd = (data && typeof data.cwd === 'string' && data.cwd) || projectDir;
-  const cwdRel = path.relative(projectDir, cwd).replace(/\\/g, '/');
+  const cwdRel = projectRelative(projectDir, cwd);
   const selected = lib.attachIncludes(lib.selectForPrompt(ruleSet.rules, { promptText: '', cwdRel }), projectDir);
   const changed = ledger.changed(projectDir, data.session_id, selected, true);
   if (!changed.length) {

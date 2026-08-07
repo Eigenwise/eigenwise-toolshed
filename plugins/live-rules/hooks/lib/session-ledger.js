@@ -4,6 +4,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { canonicalPath } = require('./canonical-path');
 
 const MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
@@ -16,7 +17,7 @@ function stateRoot() {
 }
 
 function ledgerPath(projectDir, sessionId) {
-  return path.join(stateRoot(), digest(path.resolve(projectDir)), digest(sessionId) + '.json');
+  return path.join(stateRoot(), digest(canonicalPath(projectDir)), digest(sessionId) + '.json');
 }
 
 function cleanup(root) {

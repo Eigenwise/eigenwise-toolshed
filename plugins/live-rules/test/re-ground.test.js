@@ -37,6 +37,23 @@ function hook(script, projectDir, stateDir, data, env) {
   });
 }
 
+function alternateDriveCase(target) {
+  if (process.platform !== 'win32' || !/^[A-Za-z]:/.test(target)) return null;
+  const drive = target.slice(0, 1);
+  const alternate = drive === drive.toUpperCase() ? drive.toLowerCase() : drive.toUpperCase();
+  return alternate + target.slice(1);
+}
+
+function windowsShortPath(target) {
+  if (process.platform !== 'win32' || /[\s&|<>()^]/.test(target)) return null;
+  try {
+    const result = execFileSync(process.env.ComSpec || 'cmd.exe', ['/d', '/c', `for %I in (${target}) do @echo %~sI`], { encoding: 'utf8' }).trim();
+    return result && result.toLowerCase() !== target.toLowerCase() ? result : null;
+  } catch (_) {
+    return null;
+  }
+}
+
 test('unchanged prompts emit no rule content after the first grounding', () => {
   const dir = project();
   const state = path.join(dir, 'state');
@@ -150,6 +167,68 @@ test('path-scoped rules ground once when their edited path first applies', () =>
   assert.match(hook(editHook, dir, state, data), /Use strict types/);
   assert.strictEqual(hook(editHook, dir, state, data), '');
   assert.strictEqual(hook(editHook, dir, state, { session_id: 'one', tool_input: { file_path: 'other/a.ts' } }), '');
+});
+
+test('scoped hooks match paths with a different Windows drive-letter case', (testContext) => {
+  const dir = project();
+  const alternate = alternateDriveCase(dir);
+  if (!alternate) {
+    testContext.skip('Windows drive-letter paths are required');
+    return;
+  }
+
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'rule.js'), '');
+  atomic(dir, [{ data: { description: 'Source rule', globs: ['src/**/*.js'], dirs: ['src'] }, body: 'Use source rules.' }]);
+
+  assert.match(hook(editHook, dir, state, {
+    session_id: 'edit',
+    tool_input: { file_path: path.join(alternate, 'src', 'rule.js') },
+  }), /Use source rules/);
+  assert.match(hook(promptHook, dir, state, {
+    session_id: 'prompt',
+    cwd: path.join(alternate, 'src'),
+    prompt: 'hello',
+  }), /Use source rules/);
+  assert.match(hook(startHook, dir, state, {
+    session_id: 'start',
+    cwd: path.join(alternate, 'src'),
+    source: 'startup',
+  }), /Use source rules/);
+});
+
+test('edit rules match a short Windows path when the project root is long', (testContext) => {
+  const dir = project();
+  const shortDir = windowsShortPath(dir);
+  if (!shortDir) {
+    testContext.skip('This volume has no distinct 8.3 path');
+    return;
+  }
+
+  const state = path.join(dir, 'state');
+  fs.mkdirSync(path.join(dir, 'src'));
+  fs.writeFileSync(path.join(dir, 'src', 'rule.js'), '');
+  atomic(dir, [{ data: { description: 'Source rule', globs: ['src/**/*.js'] }, body: 'Use source rules.' }]);
+
+  assert.match(hook(editHook, dir, state, {
+    session_id: 'short-path',
+    tool_input: { file_path: path.join(shortDir, 'src', 'rule.js') },
+  }), /Use source rules/);
+});
+
+test('a Windows project alias keeps the existing session ledger', (testContext) => {
+  const dir = project();
+  const alternate = alternateDriveCase(dir);
+  if (!alternate) {
+    testContext.skip('Windows drive-letter paths are required');
+    return;
+  }
+
+  const state = path.join(dir, 'state');
+  atomic(dir, [{ data: { description: 'Always' }, body: 'Ledger rule.' }]);
+  assert.match(hook(promptHook, dir, state, { session_id: 'one', prompt: 'hello' }), /Ledger rule/);
+  assert.strictEqual(hook(promptHook, dir, state, { session_id: 'one', prompt: 'again' }, { CLAUDE_PROJECT_DIR: alternate }), '');
 });
 
 test('legacy monolithic files migrate into equivalent atomic files and remove the source', () => {
