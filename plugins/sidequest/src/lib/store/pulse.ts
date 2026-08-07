@@ -128,6 +128,9 @@ function createPulse(dependencies: any) {
     if (claim?.reclaimable) return { state: 'dead', evidence: `claim is reclaimable: ${claim.reclaimable}` };
     if (ticket?.scopeRequest) return { state: 'waiting', evidence: 'scope request pending' };
     if (claim?.verifying) return { state: 'alive', evidence: 'verification marker is active' };
+    if (dispatch?.outcome === 'launched' && !dispatch.boundAt && !dispatch.agentId && !claim && !ticket?.checkpoint) {
+      return { state: 'stalled', evidence: 'dispatch launched without a bound runtime identity, claim, or checkpoint' };
+    }
     if (claim && dispatch && !dispatch.terminalAt && (dispatch.agentId || dispatch.boundAt)) {
       return { state: 'unknown', evidence: 'a runtime identity was bound, but Sidequest has no process heartbeat' };
     }
@@ -252,14 +255,19 @@ function createPulse(dependencies: any) {
       .sort((a?: any, b?: any) => changedAt(a) - changedAt(b))
       .map((ticket?: any) => {
         const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug)];
+        const dispatch = dispatchState(ticket);
+        const claim = claimPulse(ticket, nowMs);
+        const liveness = livenessPulse(ticket, dispatch, claim, dispatchDeath(dispatch));
         return {
           ref: ticket.ref,
           title: ticket.title,
           status: ticket.status,
+          liveness: liveness.state,
+          livenessEvidence: liveness.evidence,
           lastEventType: ticket.lastEventType || null,
           lastEventSource: ticket.lastEventSource || null,
           lastComment: latestCommentExcerpt(ticket),
-          claim: claimPulse(ticket, nowMs),
+          claim,
           checkpoint: checkpointProjection(ticket, nowMs),
           ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
           ...(warnings.length ? { warnings } : {}),

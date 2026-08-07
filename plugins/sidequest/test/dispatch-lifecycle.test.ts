@@ -186,6 +186,28 @@ test('batch launch records every prepared ticket and binds the shared native age
   }
 });
 
+test('launched dispatches without an executor identity, claim, or checkpoint are stalled', () => {
+  const ticket = createFixture('stalled dispatch fixture');
+  const sessionId = `stalled-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor,
+    agentName: `stalled-agent-${ticket.id}`,
+  }).ok, true);
+
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'stalled');
+  assert.match(pulse.livenessEvidence, /without a bound runtime identity, claim, or checkpoint/);
+  const changed = store.changesPayload(slug, new Date(0).toISOString()).tickets.find((entry?: any) => entry.ref === ticket.ref);
+  assert.equal(changed.liveness, 'stalled');
+
+  assert.equal(store.bindDispatchAgent(sessionId, executor, `stalled-agent-${ticket.id}`, `stalled-agent-${ticket.id}`).ok, true);
+  assert.equal(store.pulsePayload(slug, ticket.ref).liveness, 'unknown');
+});
+
 test('same-name launches on different projects remain ambiguous', () => {
   const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-other-project-'));
   const otherSlug = store.ensureProject(otherProject).slug;

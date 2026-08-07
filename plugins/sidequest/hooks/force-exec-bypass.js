@@ -417,6 +417,46 @@ function dispatchIdentityMatches(ticket, agentId, type) {
   const agentName = dispatch?.agentName;
   return Boolean(agentName && (agentId === agentName || agentId.startsWith(`${agentName}-`) || agentId.startsWith(`a${agentName}-`) || type === agentName || type.startsWith(`${agentName}-`) || type.startsWith(`a${agentName}-`)));
 }
+function dispatchAttemptRef(input) {
+  const toolName = stringField(input, "tool_name");
+  const toolInput = toolInputOf(input);
+  if (toolName === "mcp__plugin_sidequest_board__dispatch") {
+    const ref = stringField(toolInput || {}, "ref").toUpperCase();
+    return /^SQ-\d+$/.test(ref) ? ref : null;
+  }
+  if (toolName !== "Bash" && toolName !== "PowerShell") return null;
+  const command = stringField(toolInput || {}, "command");
+  const match = /\bsidequest(?:\.js)?["']?\s+dispatch\s+(SQ-\d+)\b/i.exec(command);
+  return match ? match[1].toUpperCase() : null;
+}
+function activeExecutorTicketRefs(input) {
+  const agentId = stringField(input, "agent_id", "agentId");
+  const executor = stringField(input, "agent_type", "agentType", "subagent_type");
+  const sessionId = stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+  if (!agentId || !sessionId || !isCurrentExecutor(classifyExecutor(executor))) return /* @__PURE__ */ new Set();
+  try {
+    const store = require(runtimeModule("store"));
+    const refs = /* @__PURE__ */ new Set();
+    for (const project of store.listProjects({ all: true })) {
+      for (const ticket of store.listTickets(project.slug)) {
+        if (ticket.dispatch?.sessionId !== sessionId || ticket.dispatch?.terminalAt) continue;
+        if (dispatchIdentityMatches(ticket, agentId, executor) && ticket.ref) refs.add(ticket.ref.toUpperCase());
+      }
+    }
+    return refs;
+  } catch (_) {
+    return /* @__PURE__ */ new Set();
+  }
+}
+function guardOwnTicketDispatch(input) {
+  const ref = dispatchAttemptRef(input);
+  if (!ref || !activeExecutorTicketRefs(input).has(ref)) return false;
+  writeDeny(
+    "PreToolUse",
+    `sidequest: refusing to dispatch ${ref} from its active executor. Release ${ref} with a reason so the orchestrator can redispatch it; do not rotate this dispatch token yourself.`
+  );
+  return true;
+}
 function helperScope(store, project, projectPath, ticket) {
   return { ref: ticket.ref, projectPath, files: store.effectiveScope(project, ticket.files) };
 }
@@ -577,6 +617,7 @@ function main() {
   const input = readStdin();
   if (!input) return;
   const toolName = stringField(input, "tool_name");
+  if (guardOwnTicketDispatch(input)) return;
   if (toolName === "SendMessage") {
     guardLateSteer(input);
     return;
