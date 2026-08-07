@@ -106,6 +106,16 @@ const tools: ToolDefinition[] = [
       if (!args.title || !String(args.title).trim()) throw new Error('add: title is required.');
       if (args.model != null || args.effort != null) throw new Error('add: model/effort are not set directly — use category or complexity + why.');
       const { slug, meta } = resolveProject(args.project);
+      const verifyFailures = store.verifyCommandErrors(args.verify);
+      if (verifyFailures.length) {
+        return {
+          ok: false,
+          project: slug,
+          reason: 'invalid_verify',
+          message: verifyFailures[0],
+          failures: verifyFailures.map((message: string) => ({ reason: 'invalid_verify', message })),
+        };
+      }
       let category = null;
       if (args.category != null) {
         category = String(args.category).trim().toLowerCase();

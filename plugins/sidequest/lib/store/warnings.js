@@ -78,44 +78,48 @@ function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, comm
     }
     return false;
   }
-  function verifyCommandError(value) {
+  function verifyCommandErrors(value) {
     const command = String(value || "").trim();
-    if (!command || manualVerify(command)) return null;
+    if (!command || manualVerify(command)) return [];
     if (/^manual:/i.test(command)) {
-      return "Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.";
+      return ["Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`."];
     }
     const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1] || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2] || "";
     const likelyExecutable = VERIFY_BUILTINS.has(first.toLowerCase()) || /^\(cd\s/.test(command) || /[\\/]|\.(?:bat|cmd|com|exe|ps1|sh)$/i.test(first);
     const proseStarter = /^(?:check|confirm|ensure|inspect|look|open|read|review|verify)\s/i.test(command);
+    const errors = [];
     if (/\r|\n/.test(command)) {
-      return "Verify must be one runnable command line. Use `npm run test` or `cd <repo-relative-dir> && <command>`.";
+      errors.push("Verify must be one runnable command line. Use `npm run test` or `cd <repo-relative-dir> && <command>`.");
     }
     if (/<[^<>\r\n]+>/.test(command)) {
-      return "Verify contains an unresolved placeholder. Replace it with a runnable command such as `npm run test`.";
+      errors.push("Verify contains an unresolved placeholder. Replace it with a runnable command such as `npm run test`.");
     }
     if (containsUnquotedSemicolon(command)) {
-      return "Verify cannot use `;` command chaining because it behaves differently across shells. Use one command or join dependent steps with `&&`.";
+      errors.push("Verify cannot use `;` command chaining because it behaves differently across shells. Use one command or join dependent steps with `&&`.");
     }
     if (proseStarter || !likelyExecutable) {
-      return "Verify must start with a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.";
+      errors.push("Verify must start with a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.");
     }
     for (const match of command.matchAll(/\$([A-Za-z_][A-Za-z0-9_]*)|\$\{([A-Za-z_][A-Za-z0-9_]*)(?:\}|(?::[^}]*)\})/g)) {
       const name = match[1] || match[2];
       if (name && process.env[name] == null && !match[0].includes(":-")) {
-        return `Verify references unset environment variable ${name}. Set a portable default such as \`${"${"}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`;
+        errors.push(`Verify references unset environment variable ${name}. Set a portable default such as \`${"${"}${name}:-/tmp}\`, or use \`manual: <what you checked>\`.`);
       }
     }
     for (const match of command.matchAll(/%([A-Za-z_][A-Za-z0-9_]*)%/g)) {
       const name = match[1];
       if (name != null && process.env[name] == null) {
-        return `Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`;
+        errors.push(`Verify references unset environment variable ${name}. Set a portable default or use \`manual: <what you checked>\`.`);
       }
     }
-    return null;
+    return errors;
+  }
+  function verifyCommandError(value) {
+    return verifyCommandErrors(value)[0] || null;
   }
   function requireVerifyCommand(value) {
-    const error = verifyCommandError(value);
-    if (error) throw new Error(error);
+    const errors = verifyCommandErrors(value);
+    if (errors.length) throw new Error(errors.join("\n"));
   }
   function ticketReferenceWarnings(slug, title, description) {
     const refs = new Set((`${title || ""}
@@ -756,6 +760,6 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   function requestedReadonlyOverride(fields) {
     return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
 }
 module.exports = { createWarnings };
