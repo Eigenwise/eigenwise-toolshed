@@ -61,6 +61,39 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
+function objectProperties(value) {
+  return value && typeof value === "object" ? Object.fromEntries(Object.entries(value)) : {};
+}
+function marketplacePlugins(repoPath) {
+  const manifestPath = path.join(repoPath, ".claude-plugin", "marketplace.json");
+  if (!fs.existsSync(manifestPath)) return [];
+  const manifest = objectProperties(JSON.parse(fs.readFileSync(manifestPath, "utf8")));
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : [];
+  return plugins.flatMap((entry) => {
+    const plugin = objectProperties(entry);
+    const name = typeof plugin.name === "string" ? plugin.name.trim() : "";
+    const source = typeof plugin.source === "string" ? plugin.source.trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "") : "";
+    return name && source && !source.startsWith("../") ? [{ name, source }] : [];
+  });
+}
+function missingReleaseFragment(repoPath, ref, changedPaths) {
+  const plugins = marketplacePlugins(repoPath).filter((plugin) => changedPaths.some((changedPath) => changedPath === plugin.source || changedPath.startsWith(`${plugin.source}/`)));
+  if (!plugins.length) return null;
+  const fragmentPath = `.release/unreleased/${ref}.md`;
+  return changedPaths.includes(fragmentPath) && fs.existsSync(path.join(repoPath, fragmentPath)) ? null : { fragmentPath, plugins };
+}
+function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Request scope for ${fragmentPath}, then create it with:
+---
+ref: ${ref}
+title: <short user-facing title>
+bump: patch
+plugins:
+${plugins.map((plugin) => `  - ${plugin.name}`).join("\n")}
+---
+
+Describe the user-facing change.`;
+}
 const tools = [
   {
     name: "claim",
@@ -581,6 +614,15 @@ const tools = [
       if (!scopedRange.ok) {
         const message = scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.` : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: scopedRange.reason, message });
+      }
+      const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths);
+      if (missingFragment) {
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: "missing_release_fragment",
+          message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins)
+        });
       }
       const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);
       const res = store.submitTicket(slug, args.ref, by, {

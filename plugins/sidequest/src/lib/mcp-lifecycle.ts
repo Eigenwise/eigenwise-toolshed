@@ -71,6 +71,41 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
+type ShippedPlugin = {
+  name: string;
+  source: string;
+};
+
+function objectProperties(value: unknown): Record<string, unknown> {
+  return value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)) : {};
+}
+
+function marketplacePlugins(repoPath: string): ShippedPlugin[] {
+  const manifestPath = path.join(repoPath, '.claude-plugin', 'marketplace.json');
+  if (!fs.existsSync(manifestPath)) return [];
+  const manifest = objectProperties(JSON.parse(fs.readFileSync(manifestPath, 'utf8')));
+  const plugins = Array.isArray(manifest.plugins) ? manifest.plugins : [];
+  return plugins.flatMap((entry) => {
+    const plugin = objectProperties(entry);
+    const name = typeof plugin.name === 'string' ? plugin.name.trim() : '';
+    const source = typeof plugin.source === 'string' ? plugin.source.trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '') : '';
+    return name && source && !source.startsWith('../') ? [{ name, source }] : [];
+  });
+}
+
+function missingReleaseFragment(repoPath: string, ref: string, changedPaths: string[]) {
+  const plugins = marketplacePlugins(repoPath).filter((plugin) => changedPaths.some((changedPath) => changedPath === plugin.source || changedPath.startsWith(`${plugin.source}/`)));
+  if (!plugins.length) return null;
+  const fragmentPath = `.release/unreleased/${ref}.md`;
+  return changedPaths.includes(fragmentPath) && fs.existsSync(path.join(repoPath, fragmentPath))
+    ? null
+    : { fragmentPath, plugins };
+}
+
+function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugins: ShippedPlugin[]): string {
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Request scope for ${fragmentPath}, then create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
+}
+
 const tools: ToolDefinition[] = [
   {
     name: 'claim',
@@ -610,6 +645,15 @@ const tools: ToolDefinition[] = [
             ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`
             : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
         return mutationAck(slug, { ok: false, ticket, reason: scopedRange.reason, message });
+      }
+      const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths);
+      if (missingFragment) {
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: 'missing_release_fragment',
+          message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins),
+        });
       }
       const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);
       const res = store.submitTicket(slug, args.ref, by, {
