@@ -746,4 +746,4 @@ const tools: ToolDefinition[] = [
   },
 ];
 
-module.exports = { tools };
+module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage };

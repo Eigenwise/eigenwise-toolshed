@@ -13,6 +13,7 @@ const worktrees = require("../lib/worktrees");
 const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
+const { missingReleaseFragment, missingReleaseFragmentMessage } = require("../lib/mcp-lifecycle");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
 const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment } = require("./sidequest-cmd-shared");
 function reportClaimFailure(action, idOrRef, res, meta) {
@@ -508,6 +509,8 @@ async function cmdSubmit(opts, positional) {
     }
     fail(`submit: could not inspect ${opts.commit} from this worktree: ${scopedRange.message || scopedRange.reason}`);
   }
+  const missingFragment = missingReleaseFragment(process.cwd(), ticket.ref, scopedRange.paths);
+  if (missingFragment) fail(missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins));
   const unscopedPaths = commitScope.unscopedWorkingPaths(process.cwd(), scope);
   let res;
   try {

@@ -1239,6 +1239,68 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   })).ok, true);
 });
 
+test('CLI submit requires release fragments for marketplace plugin changes', async () => {
+  const missingWorktree = createGitWorktree();
+  addMarketplaceFixture(missingWorktree);
+  const missingProject = store.ensureProject(missingWorktree).slug;
+  const missing = store.createTicket(missingProject, {
+    title: 'CLI missing release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm CLI submissions require an authored release fragment',
+  });
+  const missingBy = 'cli-release-fragment-worker';
+  assert.equal((await callTool('claim', { project: missingProject, ref: missing.ref, by: missingBy, direct: true, reason: 'The CLI release fragment fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(missingWorktree, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(missingWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
+  gitAt(missingWorktree, ['add', 'plugins/fixture-plugin/index.js']);
+  gitAt(missingWorktree, ['commit', '-m', 'CLI plugin change without fragment']);
+  const missingCommit = gitAt(missingWorktree, ['rev-parse', 'HEAD']);
+  gitAt(missingWorktree, ['update-ref', `refs/sidequest/${missing.ref}`, missingCommit]);
+  const refused = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'submit', missing.ref, '--project', missingProject, '--by', missingBy, '--commit', missingCommit, '--worktree', missingWorktree, '--verify', 'node --test plugins/sidequest/test/mcp.test.js', '--body', 'Missing fragment evidence'], {
+    cwd: missingWorktree, encoding: 'utf8', windowsHide: true,
+    env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
+  });
+  assert.notEqual(refused.status, 0);
+  assert.match(refused.stderr, new RegExp(`Request scope for \\.release/unreleased/${missing.ref}\\.md`));
+  assert.ok(store.getTicket(missingProject, missing.ref).claim, 'CLI fragment refusal keeps the claim');
+
+  const docsWorktree = createGitWorktree();
+  addMarketplaceFixture(docsWorktree);
+  const docsProject = store.ensureProject(docsWorktree).slug;
+  const docs = store.createTicket(docsProject, {
+    title: 'CLI docs-only submission', files: ['docs'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm CLI docs-only submissions remain admitted',
+  });
+  const docsBy = 'cli-docs-worker';
+  assert.equal((await callTool('claim', { project: docsProject, ref: docs.ref, by: docsBy, direct: true, reason: 'The CLI docs-only fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(docsWorktree, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(docsWorktree, 'docs', 'guide.md'), 'docs\n');
+  gitAt(docsWorktree, ['add', 'docs/guide.md']);
+  gitAt(docsWorktree, ['commit', '-m', 'CLI docs change']);
+  const docsCommit = gitAt(docsWorktree, ['rev-parse', 'HEAD']);
+  gitAt(docsWorktree, ['update-ref', `refs/sidequest/${docs.ref}`, docsCommit]);
+  assert.equal(runCli(['submit', docs.ref, '--project', docsProject, '--by', docsBy, '--commit', docsCommit, '--worktree', docsWorktree, '--verify', 'node --test plugins/sidequest/test/mcp.test.js', '--body', 'CLI docs evidence', '--json'], docsWorktree).ok, true);
+
+  const fragmentWorktree = createGitWorktree();
+  addMarketplaceFixture(fragmentWorktree);
+  const fragmentProject = store.ensureProject(fragmentWorktree).slug;
+  const fragment = store.createTicket(fragmentProject, {
+    title: 'CLI plugin submission with release fragment', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm CLI plugin submissions with fragments remain admitted',
+  });
+  const fragmentBy = 'cli-valid-fragment-worker';
+  assert.equal((await callTool('claim', { project: fragmentProject, ref: fragment.ref, by: fragmentBy, direct: true, reason: 'The CLI valid fragment fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(fragmentWorktree, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(fragmentWorktree, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(fragmentWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
+  fs.writeFileSync(path.join(fragmentWorktree, '.release', 'unreleased', `${fragment.ref}.md`), `---\nref: ${fragment.ref}\ntitle: Fixture change\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nFixture change.\n`);
+  gitAt(fragmentWorktree, ['add', 'plugins/fixture-plugin/index.js', `.release/unreleased/${fragment.ref}.md`]);
+  gitAt(fragmentWorktree, ['commit', '-m', 'CLI plugin change with fragment']);
+  const fragmentCommit = gitAt(fragmentWorktree, ['rev-parse', 'HEAD']);
+  gitAt(fragmentWorktree, ['update-ref', `refs/sidequest/${fragment.ref}`, fragmentCommit]);
+  assert.equal(runCli(['submit', fragment.ref, '--project', fragmentProject, '--by', fragmentBy, '--commit', fragmentCommit, '--worktree', fragmentWorktree, '--verify', 'node --test plugins/sidequest/test/mcp.test.js', '--body', 'CLI valid fragment evidence', '--json'], fragmentWorktree).ok, true);
+});
+
+
 test('MCP commit and submit accept an 8.3 worktree alias', { skip: process.platform !== 'win32' }, async (context: any) => {
   const worktree = createGitWorktree();
   const alias = windowsShortPath(worktree);
