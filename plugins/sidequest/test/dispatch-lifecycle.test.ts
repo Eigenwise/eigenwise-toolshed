@@ -61,6 +61,21 @@ function createFixture(title?: any, category = 'dispatch.lifecycle') {
   });
 }
 
+function windowsShortPathAlias(directory = '') {
+  if (process.platform !== 'win32') return null;
+  const result = spawnSync('cmd.exe', ['/d', '/s', '/c', `for %I in ("${directory}") do @echo %~sI`], {
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  const alias = result.status === 0 ? result.stdout.trim() : '';
+  if (!alias || alias.toLowerCase() === directory.toLowerCase()) return null;
+  try {
+    return fs.realpathSync.native(alias) === fs.realpathSync.native(directory) ? alias : null;
+  } catch (error) {
+    return null;
+  }
+}
+
 function commitFixtureChange() {
   fs.appendFileSync(path.join(PROJECT, 'tracked.js'), 'module.exports = 1;\n');
   execFileSync('git', ['add', 'tracked.js'], { cwd: PROJECT });
@@ -919,6 +934,71 @@ test('released handbacks carry their committed worktree range into continuation 
     assert.ok(store.dispatchWarnings(continued.ticket, slug).some((warning?: any) => warning.includes(`at ${checkpoint}`)));
   } finally {
     store.releaseTicket(slug, ticket.ref, 'continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+  }
+});
+
+test('released handbacks carry checkpoints through 8.3 project aliases', { skip: process.platform !== 'win32' }, (context: { skip: (reason: string) => void }) => {
+  const projectAlias = windowsShortPathAlias(PROJECT);
+  if (!projectAlias) {
+    context.skip('8.3 aliases are disabled for this filesystem.');
+    return;
+  }
+  const aliasSlug = store.ensureProject(projectAlias).slug;
+  const ticket = store.createTicket(aliasSlug, {
+    title: '8.3 continuation checkpoint fixture',
+    category: 'dispatch.lifecycle',
+    files: ['tracked.js'],
+    source: 'test',
+  });
+  const sessionId = `continuation-short-path-${Date.now()}`;
+  const agentId = `continuation-short-path-${Date.now()}`;
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = path.join(projectAlias, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(aliasSlug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  try {
+    assert.equal(store.recordDispatchLaunch(aliasSlug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.claimTicket(aliasSlug, ticket.ref, 'continuation-short-path-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 3;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
+    execFileSync('git', ['commit', '--quiet', '-m', '8.3 continuation checkpoint'], { cwd: worktree });
+    const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    assert.equal(store.releaseTicket(aliasSlug, ticket.ref, 'continuation-short-path-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'Continue verification in another executor.',
+    }).ok, true);
+
+    const continued = store.prepareDispatch(aliasSlug, ticket.ref, { sessionId: `${sessionId}-next` });
+    assert.deepEqual(continued.ticket.dispatch.continuation, {
+      mode: 'checkpoint_replay',
+      ticketRef: ticket.ref,
+      sourceWorktree: worktree,
+      sourceBranch: branch,
+      baseCommit: prepared.ticket.dispatch.baseCommit,
+      commit: checkpoint,
+      commits: [checkpoint],
+      clean: true,
+      releasedAt: store.getTicket(aliasSlug, ticket.ref).dispatch.terminalAt,
+      releaseKind: 'handback',
+    });
+  } finally {
+    store.releaseTicket(aliasSlug, ticket.ref, 'continuation-short-path-cleanup', { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
     execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
   }
