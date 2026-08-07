@@ -919,6 +919,16 @@ function createDispatch(dependencies) {
     }
     state.boundAt = state.boundAt || now || (/* @__PURE__ */ new Date()).toISOString();
   }
+  function bindDispatchClaimToken(state, sessionId, executor, now) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const normalizedExecutor = String(executor || "").trim();
+    if (!state || state.sharedTree !== false || state.agentId || !normalizedSessionId || !normalizedExecutor) return false;
+    state.sessionId = normalizedSessionId;
+    state.executor = normalizedExecutor;
+    state.boundAt = state.boundAt || now || (/* @__PURE__ */ new Date()).toISOString();
+    state.bindSource = "claim_token";
+    return true;
+  }
   function bindDispatchAgent(sessionId, executor, agentId, agentName) {
     const normalizedSessionId = String(sessionId || "").trim();
     const normalizedExecutor = String(executor || "").trim();
@@ -959,6 +969,7 @@ function createDispatch(dependencies) {
   }
   function dispatchMatchesStopIdentity(state, sessionId, executor, agentId, agentName) {
     if (!state || state.sessionId !== sessionId || state.executor !== executor) return false;
+    if (state.bindSource === "claim_token" && !state.agentId) return true;
     if (agentName && state.agentName !== agentName) return false;
     if (!agentId) return agentName ? state.agentName === agentName : true;
     if (state.agentId) return state.agentId === agentId;
@@ -1076,6 +1087,7 @@ function createDispatch(dependencies) {
     dispatchIdentityAmbiguous,
     dispatchCanBindRuntimeIdentity,
     recordDispatchRuntimeIdentity,
+    bindDispatchClaimToken,
     bindDispatchAgent,
     dispatchMatchesStopIdentity,
     markDispatchStopped,

@@ -3021,32 +3021,27 @@ test('MCP dispatch refuses external providers without a ready schema-4 entry', a
   }
 });
 
-test('MCP claim passes prepared dispatch token and executor through to the store', async () => {
+test('MCP claim binds an unlaunched isolated dispatch with its prepared token', async () => {
   seedCatalog([{ id: 'claude-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   store.setCategory({ id: 'mcp-dispatch-claim', name: 'MCP dispatch claim', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const added = await callTool('add', { title: 'nonce through MCP', category: 'mcp-dispatch-claim' });
   const slug = store.ensureProject(PROJ).slug;
-  const prepared = store.prepareDispatch(slug, added.ref, { sessionId: 'mcp-claim-binding' });
+  const prepared = store.prepareDispatch(slug, added.ref, { sessionId: 'mcp-launch-session', sharedTree: false });
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
-  const unbound = await callTool('claim', {
+
+  const accepted = await callTool('claim', {
     ref: added.ref,
-    by: 'mcp-unbound-agent',
+    by: 'mcp-token-bound-agent',
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
   });
-  assert.strictEqual(unbound.ok, false);
-  assert.strictEqual(unbound.reason, 'unbound_dispatch');
-  assert.equal(store.recordDispatchLaunch(slug, added.ref, {
-    sessionId: 'mcp-claim-binding',
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
-    agentName: 'mcp-claim-binding-agent',
-  }).ok, true);
-  assert.equal(store.bindDispatchAgent('mcp-claim-binding', prepared.ticket.dispatchExecutor, 'mcp-claim-binding-id', 'mcp-claim-binding-agent').ok, true);
-  const accepted = await callTool('claim', { ref: added.ref, by: 'mcp-with-token', token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.strictEqual(accepted.ok, true);
+  const dispatch = store.getTicket(slug, added.ref).dispatch;
+  assert.equal(dispatch.bindSource, 'claim_token');
+  assert.equal(dispatch.sessionId, MCP_SESSION_ID);
+  assert.ok(dispatch.boundAt);
 });
 
 test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', async () => {

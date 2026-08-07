@@ -186,6 +186,33 @@ test('batch launch records every prepared ticket and binds the shared native age
   }
 });
 
+test('token claims independently bind every concurrently prepared isolated dispatch', () => {
+  const first = createFixture('first token binding fixture');
+  const second = createFixture('second token binding fixture');
+  const sessionId = `token-binding-${Date.now()}`;
+  const prepared = [
+    store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: false }),
+    store.prepareDispatch(slug, second.ref, { sessionId, sharedTree: false }),
+  ];
+
+  for (const [index, launch] of prepared.entries()) {
+    assert.equal(store.claimTicket(slug, launch.ticket.ref, `token-binding-worker-${index}`, {
+      sessionId,
+      token: launch.token,
+      executor: launch.ticket.dispatchExecutor,
+      requireBoundAgent: true,
+    }).ok, true);
+  }
+
+  for (const launch of prepared) {
+    const dispatch = store.getTicket(slug, launch.ticket.ref).dispatch;
+    assert.equal(dispatch.bindSource, 'claim_token');
+    assert.equal(dispatch.sessionId, sessionId);
+    assert.ok(dispatch.boundAt);
+    assert.equal(dispatch.outcome, 'claimed');
+  }
+});
+
 test('launched dispatches without an executor identity, claim, or checkpoint are stalled', () => {
   const ticket = createFixture('stalled dispatch fixture');
   const sessionId = `stalled-${Date.now()}`;
@@ -327,17 +354,13 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
     agentName,
   }).ok, true);
   assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 1, noAgentId: 1 });
-  assert.equal(store.claimTicket(slug, ticket.ref, `unbound-isolated-worker-${ticket.id}`, {
+  assert.equal(store.claimTicket(slug, ticket.ref, `token-bound-isolated-worker-${ticket.id}`, {
     sessionId,
     token: prepared.token,
     executor,
     requireBoundAgent: true,
-  }).reason, 'unbound_dispatch');
-  assert.equal(store.claimTicket(slug, ticket.ref, `isolated-stop-worker-${ticket.id}`, {
-    sessionId,
-    token: prepared.token,
-    executor,
   }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.bindSource, 'claim_token');
 
   runLifecycleHook(SUBAGENT_STOP, {
     session_id: sessionId,
