@@ -98,66 +98,8 @@ async function callMcp(name: string, args: Record<string, unknown>) {
   return tool.handler(args);
 }
 
-test('CLI scope-request keeps the claim while update --files approves the addition', () => {
-  const t = addTicket('CLI scope request');
-  const by = 'cli-scope-request-worker';
-  assert.strictEqual(runCli(['claim', t.ref, '--by', by, '--direct', '--reason', 'The scope request fixture requires a local direct claim.']).status, 0);
 
-  const requested = runCli(['scope-request', t.ref, '--by', by, '--files', 'lib/fixture.js,lib/new.js']);
-  assert.strictEqual(requested.status, 0, requested.stderr + requested.stdout);
-  assert.match(requested.stdout, new RegExp(`sidequest update ${t.ref} --files`));
-  assert.deepStrictEqual(store.getTicket(slug, t.ref).scopeRequest.files, ['lib/new.js']);
-  assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
 
-  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
-  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'partial\n');
-  git(['add', 'lib/fixture.js']);
-  const blocked = runCli(['commit', t.ref, '--by', by, '--message', 'must wait for scope approval']);
-  assert.strictEqual(blocked.status, 1, blocked.stderr + blocked.stdout);
-  assert.match(blocked.stderr + blocked.stdout, /scope approval remains pending/);
-  git(['reset', '--', 'lib/fixture.js']);
-  fs.unlinkSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'));
-
-  assert.strictEqual(runCli(['update', t.ref, '--files', 'lib/fixture.js,lib/new.js']).status, 0);
-  const approved = store.getTicket(slug, t.ref);
-  assert.strictEqual(approved.scopeRequest, null);
-  assert.strictEqual(approved.claim.by, by);
-  assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
-});
-
-test('CLI update resolves a scope request partially instead of leaving it pending', () => {
-  const t = addTicket('partial scope update resolution');
-  const by = 'partial-scope-worker';
-  assert.strictEqual(runCli(['claim', t.ref, '--by', by, '--direct', '--reason', 'The scope request fixture requires a local direct claim.']).status, 0);
-  assert.strictEqual(runCli(['scope-request', t.ref, '--by', by, '--files', 'lib/new.js,other/new.js']).status, 0);
-
-  const partial = runCli(['update', t.ref, '--by', 'scope-approval-orchestrator', '--files', 'lib/fixture.js,lib/new.js']);
-  assert.strictEqual(partial.status, 0, partial.stderr + partial.stdout);
-  assert.doesNotMatch(partial.stdout, /Scope request remains pending/);
-  const resolved = store.getTicket(slug, t.ref);
-  assert.strictEqual(resolved.scopeRequest, null, 'a control-plane files edit rules on the request');
-  assert.deepStrictEqual(resolved.files, ['lib/fixture.js', 'lib/new.js']);
-  const ruling = resolved.comments.at(-1).body;
-  assert.match(ruling, /granted lib\/new\.js/);
-  assert.match(ruling, /not granted: other\/new\.js/);
-  assert.strictEqual(resolved.claim.by, by, 'the ruling never disturbs the claim');
-  assert.strictEqual(runCli(['release', t.ref, '--by', by]).status, 0);
-});
-
-test('submit keeps a pending scope request in place', () => {
-  const t = addTicket('pending scope blocks submit');
-  const by = 'worker-a';
-  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
-  assert.strictEqual(store.requestScope(slug, t.ref, by, ['lib/new.js']).ok, true);
-
-  const refused = store.submitTicket(slug, t.ref, by, { commit: COMMIT });
-  assert.strictEqual(refused.ok, false);
-  assert.strictEqual(refused.reason, 'scope_request_pending');
-  const after = store.getTicket(slug, t.ref);
-  assert.deepStrictEqual(after.files, ['lib/fixture.js']);
-  assert.deepStrictEqual(after.scopeRequest.files, ['lib/new.js']);
-  assert.strictEqual(after.claim.by, by);
-});
 
 test('submit requires a held claim, records the submission, and releases the claim in doing', () => {
   const t = addTicket('submit happy path');

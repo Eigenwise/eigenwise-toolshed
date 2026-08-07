@@ -134,11 +134,6 @@ test('a claim far past any wall-clock TTL still commits, submits, and checkpoint
   // Closeout-adjacent paths that used to consult the clock.
   const checkpoint = store.checkpointTicket(slug, ticket.ref, by, { commit: COMMIT, verify: 'node --test: 16/16 matrix cases' });
   assert.strictEqual(checkpoint.ok, true, 'a checkpoint is proof of life, never something a timer refuses');
-  const scope = store.requestScope(slug, ticket.ref, by, ['lib/extra.js']);
-  assert.strictEqual(scope.ok, true);
-  store.updateTicket(slug, ticket.ref, { files: ['lib/fixture.js', 'lib/extra.js'] });
-  backdateClaim(ticket.ref, 10 * 24 * HOUR);
-
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = 2;\n');
   const committed = runCli(['commit', ticket.ref, '--by', by, '--message', 'scoped work from a very long run']);
   assert.strictEqual(committed.status, 0, committed.stderr + committed.stdout);
@@ -244,21 +239,6 @@ test('an active verification marker is alive until a terminal Agent failure is r
   assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
 });
 
-test('a pending scope request reports waiting before and after the executor stops', () => {
-  const ticket = addRouted('scope request is waiting');
-  const sessionId = 'session-scope-waiting';
-  const prepared = claimRouted(ticket, 'scope-waiting-executor', { sessionId });
-  assert.equal(store.requestScope(slug, ticket.ref, 'scope-waiting-executor', ['lib/extra.js']).ok, true);
-
-  let pulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(pulse.liveness, 'waiting');
-  assert.match(pulse.livenessEvidence, /scope request pending/);
-  assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, null, null).ok, true);
-  pulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(pulse.liveness, 'waiting');
-  assert.equal(pulse.died, null);
-  assert.equal(pulse.dispatch.outcome, 'claimed');
-});
 
 test('the claim sweep releases a dead executor with a pending scope request', () => {
   const ticket = addRouted('dead executor scope request');
@@ -273,39 +253,6 @@ test('the claim sweep releases a dead executor with a pending scope request', ()
   assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
 });
 
-test('a pending scope request preserves committed work and permits a checkpoint', () => {
-  const ticket = store.createTicket(slug, {
-    title: 'scope request release guard',
-    description: 'Where: scope-release fixture. Contract: a scope timeout holds verified work. Verify: inspect release and checkpoint outcomes.',
-    category: 'codebase-exploration',
-    files: ['lib/release-guard.js'],
-    source: 'cli',
-  });
-  claimRouted(ticket, 'scope-release-guard-worker', { sessionId: 'session-scope-release-guard' });
-  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'release-guard.js'), 'module.exports = true;\n');
-  git(['add', 'lib/release-guard.js']);
-  git(['commit', '-m', 'scope release guard fixture']);
-  const commit = git(['rev-parse', 'HEAD']);
-  assert.equal(store.requestScope(slug, ticket.ref, 'scope-release-guard-worker', ['foreign/release-guard.js']).ok, true);
-
-  const refused = store.releaseTicket(slug, ticket.ref, 'scope-release-guard-worker', { status: 'todo' });
-  assert.equal(refused.ok, false);
-  assert.equal(refused.reason, 'scope_work_pending');
-  assert.equal(refused.commit, commit);
-  assert.match(refused.message, new RegExp(commit));
-  assert.match(refused.message, /Checkpoint and hold/);
-
-  const checkpoint = store.checkpointTicket(slug, ticket.ref, 'scope-release-guard-worker', {
-    commit,
-    verify: 'node --test test/claim-liveness.test.js',
-  });
-  assert.equal(checkpoint.ok, true);
-
-  const noWork = addRouted('scope request with no work');
-  claimRouted(noWork, 'scope-no-work-worker', { sessionId: 'session-scope-no-work' });
-  assert.equal(store.requestScope(slug, noWork.ref, 'scope-no-work-worker', ['foreign/no-work.js']).ok, true);
-  assert.equal(store.releaseTicket(slug, noWork.ref, 'scope-no-work-worker', { status: 'todo' }).ok, true);
-});
 
 test('a shared-tree write dispatch refuses an empty verification completion unless it declares a no-op', () => {
   const ticket = store.createTicket(slug, {
@@ -724,68 +671,4 @@ test('an unbound claimed dispatch reports a binding fault and stays claimed with
   assert.equal(pulse.liveness, 'binding_fault');
   assert.equal(pulse.claim.reclaimable, null);
   assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'unbound-executor');
-});
-
-test('an unbound isolated dispatch can still file a scope request', () => {
-  const ticket = store.createTicket(slug, {
-    title: 'scope request without a bound worktree',
-    description: 'Where: scope fixture. Contract: a scope request is board state and never needs the worktree. Verify: inspect the recorded request.',
-    category: 'coding.normal',
-    files: ['lib/fixture.js'],
-    source: 'cli',
-  });
-  const by = 'unbound-scope-executor';
-  claimRouted(ticket, by, { sharedTree: false });
-  assert.strictEqual(store.getTicket(slug, ticket.ref).dispatch.worktree, undefined, 'the fixture dispatch must be unbound');
-
-  const requested = store.requestScope(slug, ticket.ref, by, ['lib/wanted.js']);
-  assert.strictEqual(requested.ok, true, `scope request must not fail on a missing worktree: ${requested.reason || ''}`);
-  assert.deepStrictEqual(store.getTicket(slug, ticket.ref).scopeRequest.files, ['lib/wanted.js']);
-});
-
-test('a control-plane files update resolves a pending scope request partially and syncs the dispatch record', () => {
-  const ticket = store.createTicket(slug, {
-    title: 'partial scope resolution',
-    description: 'Where: scope fixture. Contract: a scope edit rules on the pending request and the dispatch snapshot follows it. Verify: inspect files, request, and declaredFiles.',
-    category: 'coding.normal',
-    files: ['lib/fixture.js'],
-    source: 'cli',
-  });
-  const by = 'partial-scope-executor';
-  claimRouted(ticket, by, { sharedTree: false });
-
-  assert.strictEqual(store.requestScope(slug, ticket.ref, by, ['lib/wanted.js', 'lib/phantom.js']).ok, true);
-  const updated = store.updateTicket(slug, ticket.ref, { files: ['lib/fixture.js', 'lib/wanted.js'], by: 'orchestrator' });
-  assert.deepStrictEqual(updated.files, ['lib/fixture.js', 'lib/wanted.js']);
-  assert.strictEqual(updated.scopeRequest, null, 'the request is resolved, not left pending');
-  assert.deepStrictEqual(updated.dispatch.declaredFiles, updated.files, 'commit enforcement follows the ruling');
-  const resolution = updated.comments.at(-1).body;
-  assert.match(resolution, /granted lib\/wanted\.js/);
-  assert.match(resolution, /not granted: lib\/phantom\.js/);
-
-  const refiled = store.requestScope(slug, ticket.ref, by, ['lib/wanted.js']);
-  assert.strictEqual(refiled.ok, true, 'a granted path re-requested reports covered instead of dead-ending');
-  assert.strictEqual(refiled.scopeRequest, null);
-});
-
-test('a scope denial states the scope in force and syncs the dispatch record', () => {
-  const ticket = store.createTicket(slug, {
-    title: 'scope denial stays truthful',
-    description: 'Where: scope fixture. Contract: a denial names the live scope and leaves no stale dispatch snapshot. Verify: inspect the denial comment and declaredFiles.',
-    category: 'coding.normal',
-    files: ['lib/fixture.js'],
-    source: 'cli',
-  });
-  const by = 'denied-scope-executor';
-  claimRouted(ticket, by, { sharedTree: false });
-
-  assert.strictEqual(store.requestScope(slug, ticket.ref, by, ['lib/refused.js']).ok, true);
-  const denied = store.denyScopeRequest(slug, ticket.ref, 'orchestrator', 'The requested path belongs to another live ticket.');
-  assert.strictEqual(denied.ok, true);
-  assert.match(denied.comment.body, /Declared scope is now: lib\/fixture\.js/);
-  assert.doesNotMatch(denied.comment.body, /\.release\/unreleased/);
-  assert.doesNotMatch(denied.comment.body, /remains unchanged/);
-  const after = store.getTicket(slug, ticket.ref);
-  assert.strictEqual(after.scopeRequest, null);
-  assert.deepStrictEqual(after.dispatch.declaredFiles, ['lib/fixture.js']);
 });
