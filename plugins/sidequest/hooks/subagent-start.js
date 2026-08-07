@@ -46,6 +46,14 @@ function stringField(input, ...names) {
   return "";
 }
 
+// src/hooks/shared/output.ts
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+function writeContext(hookEventName, additionalContext) {
+  writeJson({ hookSpecificOutput: { hookEventName, additionalContext } });
+}
+
 // src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
@@ -53,6 +61,51 @@ function pluginRoot() {
 }
 function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/diagnostic-worktree-warning.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_path2 = __toESM(require("node:path"));
+var WARNING = "sidequest: foreign agent worktrees detected. Diagnostics under `.claude/worktrees/agent-*` outside this checkout are not actionable: they can be stale-index or missing-dependency artifacts, including error-severity diagnostics. Keep errors in your own files actionable; do not inspect or act on foreign-worktree diagnostics.";
+function gitDirectory(entry) {
+  try {
+    if (import_node_fs2.default.statSync(entry).isDirectory()) return entry;
+    const gitDir = /^gitdir:\s*(.+)$/m.exec(import_node_fs2.default.readFileSync(entry, "utf8"))?.[1];
+    return gitDir ? import_node_path2.default.resolve(import_node_path2.default.dirname(entry), gitDir.trim()) : null;
+  } catch (_) {
+    return null;
+  }
+}
+function checkoutLocation(start) {
+  let current = import_node_path2.default.resolve(start);
+  while (true) {
+    const gitDir = gitDirectory(import_node_path2.default.join(current, ".git"));
+    if (gitDir) {
+      if (import_node_path2.default.basename(gitDir) === ".git") return { checkoutRoot: current, projectRoot: current };
+      const commonGitDir = import_node_path2.default.resolve(gitDir, "..", "..");
+      if (import_node_path2.default.basename(commonGitDir) === ".git") return { checkoutRoot: current, projectRoot: import_node_path2.default.dirname(commonGitDir) };
+      return null;
+    }
+    const parent = import_node_path2.default.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+function isOwnWorktree(checkoutRoot, worktreesRoot, name) {
+  return import_node_path2.default.resolve(import_node_path2.default.dirname(checkoutRoot)) === import_node_path2.default.resolve(worktreesRoot) && import_node_path2.default.basename(checkoutRoot) === name;
+}
+function diagnosticWorktreeWarning(input) {
+  const start = stringField(input, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const location = checkoutLocation(start);
+  if (!location) return "";
+  const worktreesRoot = import_node_path2.default.join(location.projectRoot, ".claude", "worktrees");
+  try {
+    return import_node_fs2.default.readdirSync(worktreesRoot, { withFileTypes: true }).some(
+      (entry) => entry.isDirectory() && entry.name.startsWith("agent-") && !isOwnWorktree(location.checkoutRoot, worktreesRoot, entry.name)
+    ) ? WARNING : "";
+  } catch (_) {
+    return "";
+  }
 }
 
 // src/hooks/subagent-start.ts
@@ -84,8 +137,13 @@ function main() {
   const agentId = stringField(data, "agent_id", "agentId");
   const agentName = stringField(data, "agent_name", "agentName", "name");
   if (!sessionId || !executor || !agentId && !agentName || classifyExecutor(executor).kind === "unknown") return;
-  const store = require(runtimeModule("store"));
-  store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
+  try {
+    const store = require(runtimeModule("store"));
+    store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
+  } catch (_) {
+  }
+  const warning = diagnosticWorktreeWarning(data);
+  if (warning) writeContext("SubagentStart", warning);
 }
 try {
   main();

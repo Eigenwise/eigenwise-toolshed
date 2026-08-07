@@ -2142,6 +2142,27 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   assert.strictEqual(out.trim(), '', 'should emit nothing when nudge is off');
 });
 
+test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-diagnostic-worktrees-'));
+  gitFixture(['init'], repo);
+  const worktrees = path.join(repo, '.claude', 'worktrees');
+  const current = path.join(worktrees, 'agent-current');
+  fs.mkdirSync(current, { recursive: true });
+  fs.writeFileSync(path.join(current, '.git'), `gitdir: ${path.join(repo, '.git', 'worktrees', 'agent-current')}\n`);
+  const payload = {
+    session_id: 'diagnostic-worktree-warning',
+    agent_type: 'sidequest-exec-dispatch',
+    agent_id: 'diagnostic-worktree-agent',
+    cwd: current,
+  };
+
+  assert.equal(runHook(SUBAGENT_START, payload), '', 'the receiving agent\'s own worktree must stay quiet');
+  fs.mkdirSync(path.join(worktrees, 'agent-foreign'));
+  const warning = runHook(SUBAGENT_START, payload);
+  assert.match(warning, /foreign agent worktrees detected/);
+  assert.match(warning, /error-severity diagnostics/);
+});
+
 test('ticket filing stays explicit while the Agent gate enforces dispatch and docs match it', () => {
   const pluginRoot = path.join(__dirname, '..');
   const repoRoot = path.join(pluginRoot, '..', '..');
