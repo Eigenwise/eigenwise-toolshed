@@ -27,11 +27,11 @@ test('not-owner guidance does not tell callers to use the claim holder identity'
   assert.doesNotMatch(message, /--by <claim-owner>|--by other-worker/i);
 });
 
-test('unbound dispatch guidance directs an executor to release without redispatching', () => {
+test('unbound dispatch guidance tells an executor to present its prepared token', () => {
   const message = claimRefusalMessage('unbound_dispatch', 'SQ-42');
-  assert.match(message, /Release SQ-42 with a reason/i);
-  assert.match(message, /Do not redispatch/i);
-  assert.doesNotMatch(message, /sidequest dispatch SQ-42/i);
+  assert.match(message, /--token/i);
+  assert.match(message, /binds the claiming runtime/i);
+  assert.doesNotMatch(message, /Do not.*token/i);
 });
 
 test('dispatch-required guidance names both routed and direct claim paths', () => {

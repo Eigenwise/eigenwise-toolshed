@@ -335,6 +335,7 @@ const {
   dispatchIdentityAmbiguous,
   dispatchCanBindRuntimeIdentity,
   recordDispatchRuntimeIdentity,
+  bindDispatchClaimToken,
   bindDispatchAgent,
   dispatchMatchesStopIdentity,
   markDispatchStopped,
@@ -1295,7 +1296,9 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const currentDispatch = dispatchState(t);
-    if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || '').trim()) {
+    const now = new Date().toISOString();
+    if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || '').trim() && !currentDispatch.boundAt &&
+      !bindDispatchClaimToken(currentDispatch, opts.sessionId, opts.executor, now)) {
       return { ok: false, reason: 'unbound_dispatch', ticket: t };
     }
     if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: 'worktree_missing', ticket: t };
@@ -1307,7 +1310,6 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: 'claimed', ticket: t, claim: held };
     }
-    const now = new Date().toISOString();
     t.claim = { by, at: now };
     if (t.storyId) {
       const story = getStory(slug, t.storyId);
