@@ -14,8 +14,8 @@ type VerifyCapture = {
   reason?: string;
 };
 
-function shellCommand(command: string) {
-  if (process.platform === 'win32') {
+function shellCommand(command: string, platform = process.platform) {
+  if (platform === 'win32') {
     return {
       executable: process.env.ComSpec || 'cmd.exe',
       arguments: ['/d', '/v:on', '/s', '/c', `${command} & echo __SIDEQUEST_VERIFY_EXIT__=!errorlevel!`],
@@ -23,7 +23,7 @@ function shellCommand(command: string) {
   }
   return {
     executable: process.env.SHELL || '/bin/sh',
-    arguments: ['-c', `${command}; printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$?"`],
+    arguments: ['-c', `(${command}); printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$?"`],
   };
 }
 

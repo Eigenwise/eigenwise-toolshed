@@ -7,11 +7,16 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 
-const { runVerifyCapture } = require('../lib/verify-capture.js');
+const { runVerifyCapture, shellCommand } = require('../lib/verify-capture.js');
 
 function deleteLog(capture: { logPath: string }) {
   fs.rmSync(capture.logPath, { force: true });
 }
+
+test('verify capture wraps POSIX commands before recording their exit code', () => {
+  const shell = shellCommand('exit 7', 'linux');
+  assert.deepStrictEqual(shell.arguments, ['-c', `(exit 7); printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$?"`]);
+});
 
 test('verify capture executes through the host shell and separates failed suites from unavailable capture shells', async () => {
   const passed = await runVerifyCapture('cd . && echo verify-capture-ran');

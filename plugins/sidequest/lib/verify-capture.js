@@ -3,8 +3,8 @@ const fs = require("node:fs");
 const os = require("node:os");
 const path = require("node:path");
 const { spawn } = require("node:child_process");
-function shellCommand(command) {
-  if (process.platform === "win32") {
+function shellCommand(command, platform = process.platform) {
+  if (platform === "win32") {
     return {
       executable: process.env.ComSpec || "cmd.exe",
       arguments: ["/d", "/v:on", "/s", "/c", `${command} & echo __SIDEQUEST_VERIFY_EXIT__=!errorlevel!`]
@@ -12,7 +12,7 @@ function shellCommand(command) {
   }
   return {
     executable: process.env.SHELL || "/bin/sh",
-    arguments: ["-c", `${command}; printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$?"`]
+    arguments: ["-c", `(${command}); printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$?"`]
   };
 }
 function markerExitCode(logPath) {
