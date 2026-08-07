@@ -118,6 +118,7 @@ let warningsLayer: any;
 let DISPATCH_DESCRIPTION_MIN: any;
 function executorText(...args: any[]) { return warningsLayer.executorText(...args); }
 function manualVerify(...args: any[]) { return warningsLayer.manualVerify(...args); }
+function verifyCommandErrors(...args: any[]) { return warningsLayer.verifyCommandErrors(...args); }
 function verifyCommandError(...args: any[]) { return warningsLayer.verifyCommandError(...args); }
 function requireVerifyCommand(...args: any[]) {
   warningsLayer.requireVerifyCommand(...args);
@@ -2130,6 +2131,9 @@ module.exports = {
   integrateSubmission,
   verifyIntegration,
   effectiveScope,
+  verifyCommandErrors,
+  verifyCommandError,
+  completionTreeCheck,
   listProjects,
   findProject,
   archiveProject,

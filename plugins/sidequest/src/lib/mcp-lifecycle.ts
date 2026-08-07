@@ -104,6 +104,26 @@ function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugin
   return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
 }
 
+function combinedRefusal(ticket: any, failures: Array<{ reason: string; message: string }>) {
+  const primary = failures[0];
+  if (!primary) throw new Error('combined refusal requires at least one failure');
+  return {
+    ok: false,
+    ticket,
+    reason: primary.reason,
+    message: failures.map((failure) => failure.message).join('\n\n'),
+    failures,
+  };
+}
+
+function submissionRangeFailureMessage(ticket: any, range: any, gitRef: string) {
+  if (range.reason === 'missing_git_ref') {
+    return `submit: refused ${ticket.ref}; ${gitRef} is missing or does not point to the submitted commit. Run \`git update-ref ${gitRef} <commit>\`, then resubmit.`;
+  }
+  const detail = String(range.message || range.reason).trim();
+  return `submit: refused ${ticket.ref}; ${detail}. Rebase onto the current integration target, update ${gitRef}, and resubmit.`;
+}
+
 const tools: ToolDefinition[] = [
   {
     name: 'claim',
@@ -548,10 +568,22 @@ const tools: ToolDefinition[] = [
           message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(message)}. Remedy: ${remedy}`,
         });
       }
+      const completion = store.completionTreeCheck(slug, ticket, { explicitNoOp: String(args.base || '').trim() === commit });
+      const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
+      const independentFailures: Array<{ reason: string; message: string }> = [];
+      if (!completion.ok) independentFailures.push({ reason: completion.reason, message: completion.message });
+      for (const message of store.verifyCommandErrors(verify)) independentFailures.push({ reason: 'invalid_verify', message });
+      const declaredExecutorVerify = String(ticket.executorVerify || '').trim();
+      if (declaredExecutorVerify && verify !== declaredExecutorVerify) {
+        independentFailures.push({
+          reason: 'executor_verify_mismatch',
+          message: `submit: refused ${ticket.ref}; verification must match the declared executor verify command.`,
+        });
+      }
       const dispatchBase = String(ticket.dispatch?.baseCommit || '').trim() || null;
       const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
       if (dispatchBase) allowedBases.push(dispatchBase);
-      const range = commitScope.submissionRange(root, {
+      const rangeOptions = {
         commit,
         gitRef,
         upstream: target.upstream,
@@ -560,54 +592,67 @@ const tools: ToolDefinition[] = [
         dispatchBase,
         allowedBases,
         baseCandidates: args.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true }),
+      };
+      const range = commitScope.submissionRange(root, rangeOptions);
+      const diagnosticRange = range.ok
+        ? range
+        : commitScope.submissionRange(root, Object.assign({}, rangeOptions, { gitRef: commit }));
+      const submissionFailures: Array<{ reason: string; message: string }> = [];
+      if (!range.ok) submissionFailures.push({
+        reason: range.reason,
+        message: submissionRangeFailureMessage(ticket, range, gitRef),
       });
-      if (!range.ok) {
-        if (verify && heldByExecutor) {
-          const remedy = `Rebase onto the current ${target.upstream} target, update ${gitRef}, and resubmit. Or the orchestrator can cherry-pick refs/sidequest/${ticket.ref}-rejected and record the range override.`;
-          return mutationAck(slug, preserveRejectedSubmission({
-            slug,
-            ticket,
-            by,
-            root,
-            commit,
-            gitRef,
-            verify,
-            reason: range.reason,
-            message: range.message || '',
-            remedy,
-          }));
+      if (range.ok) {
+        const duplicate = store.submissionsPayload(slug).tickets
+          .filter((entry: any) => entry.ref !== ticket.ref)
+          .find((entry: any) => {
+            const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length
+              ? entry.submission.commits : [entry.submission.commit];
+            return commits.some((entryCommit: any) => range.commits.includes(entryCommit));
+          });
+        if (duplicate) {
+          submissionFailures.push({
+            reason: 'duplicate_submission',
+            message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`,
+          });
         }
-        return mutationAck(slug, { ok: false, ticket, reason: range.reason, message: range.message });
       }
-      const duplicate = store.submissionsPayload(slug).tickets
-        .filter((entry: any) => entry.ref !== ticket.ref)
-        .find((entry: any) => {
-          const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length
-            ? entry.submission.commits : [entry.submission.commit];
-          return commits.some((entryCommit: any) => range.commits.includes(entryCommit));
-        });
-      if (duplicate) {
-        return mutationAck(slug, { ok: false, ticket, reason: 'duplicate_submission', message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.` });
+      const rangeForChecks = range.ok ? range : diagnosticRange.ok ? diagnosticRange : null;
+      if (rangeForChecks) {
+        const scopedRange = commitScope.validateCommitRangeScope(root, rangeForChecks.commits, scope);
+        if (!scopedRange.ok) {
+          const message = scopedRange.reason === 'missing_scope'
+            ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`
+            : scopedRange.reason === 'outside_scope'
+              ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`
+              : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
+          submissionFailures.push({ reason: scopedRange.reason, message });
+        }
+        const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || rangeForChecks.changedPaths);
+        if (missingFragment) {
+          submissionFailures.push({
+            reason: 'missing_release_fragment',
+            message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins),
+          });
+        }
       }
-      const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
-      const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
-      if (!scopedRange.ok) {
-        const message = scopedRange.reason === 'missing_scope'
-          ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`
-          : scopedRange.reason === 'outside_scope'
-            ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`
-            : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
-        return mutationAck(slug, { ok: false, ticket, reason: scopedRange.reason, message });
-      }
-      const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths);
-      if (missingFragment) {
-        return mutationAck(slug, {
-          ok: false,
+      const failures = [...submissionFailures, ...independentFailures];
+      if (!range.ok && failures.length === 1 && verify && heldByExecutor) {
+        const remedy = `Rebase onto the current ${target.upstream} target, update ${gitRef}, and resubmit. Or the orchestrator can cherry-pick refs/sidequest/${ticket.ref}-rejected and record the range override.`;
+        return mutationAck(slug, preserveRejectedSubmission({
+          slug,
           ticket,
-          reason: 'missing_release_fragment',
-          message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins),
-        });
+          by,
+          root,
+          commit,
+          gitRef,
+          verify,
+          reason: range.reason,
+          message: range.message || '',
+          remedy,
+        }));
       }
+      if (failures.length) return mutationAck(slug, combinedRefusal(ticket, failures));
       const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);
       const res = store.submitTicket(slug, args.ref, by, {
         commit: range.commit,
@@ -643,11 +688,21 @@ const tools: ToolDefinition[] = [
     async handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'integrate');
+      const failures: Array<{ reason: string; message: string }> = [];
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) {
+        const delivery = store.integrateSubmission(slug, args.ref, {
+          mode: args.mode == null ? store.boardConfig(slug).delivery : args.mode,
+          overrideLegacyScope: args.overrideLegacyScope === true,
+          skipVerify: args.skipVerify === true,
+        });
+        const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
+        if (delivery.reason === 'verify_failed_post_merge' || delivery.reason === 'verify_failed_post_merge_rollback_failed') failure.verifyFailed = delivery.verify;
+        return Object.assign(mutationAck(slug, delivery), failure);
+      }
       const lock = await publish.publishLockStatus(meta.path);
       if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
-        return mutationAck(slug, {
-          ok: false,
-          ticket: store.getTicket(slug, args.ref),
+        failures.push({
           reason: 'publish_lock_required',
           message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || 'another session'}; acquire or re-acquire it before delivery.`,
         });
@@ -656,8 +711,17 @@ const tools: ToolDefinition[] = [
       try {
         target = store.integrationTarget(slug);
       } catch (error: any) {
-        return mutationAck(slug, { ok: false, ticket: store.getTicket(slug, args.ref), reason: 'integration_target_unavailable', message: (error && error.message) || String(error) });
+        failures.push({
+          reason: 'integration_target_unavailable',
+          message: (error && error.message) || String(error),
+        });
       }
+      const admitted = store.validateIntegrationSubmission(slug, args.ref, { overrideLegacyScope: args.overrideLegacyScope === true });
+      if (!admitted.ok) failures.push({
+        reason: admitted.reason,
+        message: admitted.message || `integrate: refused ${args.ref}; ${admitted.reason}.`,
+      });
+      if (failures.length) return mutationAck(slug, combinedRefusal(ticket, failures));
       const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
       const delivery = store.integrateSubmission(slug, args.ref, {
         mode,

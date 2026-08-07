@@ -1264,6 +1264,63 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   assert.match(foreignCommit.message, new RegExp(`only \\.release/unreleased/${foreign.ref}\\.md is implicitly writable`));
 });
 
+test('MCP submit reports every independently fixable completion refusal together', async () => {
+  const worktree = createGitWorktree();
+  addMarketplaceFixture(worktree);
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'batched submission refusals',
+    description: DISPATCH_DESCRIPTION,
+    category: 'coding.normal',
+    files: ['plugins/fixture-plugin'],
+    executorVerify: 'node --test plugins/fixture-plugin/test/declared.test.js',
+  });
+  const by = 'mcp-batched-refusal-worker';
+  claimDispatchedTicket(project, ticket, by, true);
+  fs.mkdirSync(path.join(worktree, 'plugins', 'fixture-plugin', 'test'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'plugins', 'fixture-plugin', 'index.js'), 'module.exports = true;\n');
+  fs.writeFileSync(path.join(worktree, 'plugins', 'fixture-plugin', 'test', 'index.test.js'), 'module.exports = true;\n');
+  gitAt(worktree, ['add', 'plugins/fixture-plugin']);
+  gitAt(worktree, ['commit', '-m', 'batched refusal fixture']);
+  const commit = gitAt(worktree, ['rev-parse', 'HEAD']);
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, commit]);
+
+  const refused = await callTool('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    commit,
+    worktree,
+    verify: 'node --test plugins/fixture-plugin/test/other.test.js',
+    body: 'Batched refusal evidence.',
+  });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'missing_release_fragment');
+  assert.deepEqual(refused.failures.map((failure: any) => failure.reason), [
+    'missing_release_fragment',
+    'negative_control_required',
+    'executor_verify_mismatch',
+  ]);
+  assert.match(refused.message, /Create it with:/);
+  assert.match(refused.message, /has not recorded a negative control/);
+  assert.match(refused.message, /must match the declared executor verify command/);
+});
+
+test('MCP add reports every verify-command defect together', async () => {
+  const refused = await callTool('add', {
+    title: 'batched verify command refusal',
+    unclassified: true,
+    verify: 'check test; npm run test',
+  });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'invalid_verify');
+  assert.equal(refused.failures.length, 2);
+  assert.match(refused.failures[0].message, /cannot use `;`/);
+  assert.match(refused.failures[1].message, /must start with a runnable command/);
+});
+
 test('CLI submit requires release fragments for marketplace plugin changes', async () => {
   const missingWorktree = createGitWorktree();
   addMarketplaceFixture(missingWorktree);
