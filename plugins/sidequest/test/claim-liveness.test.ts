@@ -444,12 +444,48 @@ test('a mixed source and test diff needs a claim-holder negative control before 
   git(['commit', '-m', 'negative control marker fixture']);
 });
 
+test('negative-control markers accept context after failed counts', () => {
+  const controls = [
+    '[sidequest:negative-control] node --import tsx --test plugins/sidequest/test/agentsync.test.ts failed=1 exit=1',
+    '[sidequest:negative-control] uv run pytest failed=1. Restoring the source made it fail; 5 passed.',
+  ];
+  for (const [index, body] of controls.entries()) {
+    const by = `negative-control-context-${index}`;
+    const ticket = addNegativeControlTicket('negative control allows trailing context', by);
+    assert.equal(store.addComment(slug, ticket.ref, { by, body, source: 'mcp' }).ok, true);
+    assert.equal(store.addComment(slug, ticket.ref, {
+      by,
+      body: '[sidequest:verify-complete]',
+      source: 'mcp',
+    }).ok, true);
+    git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+    git(['commit', '-m', 'negative control trailing context fixture']);
+  }
+});
+
+test('negative-control marker refusals quote malformed marker lines', () => {
+  const by = 'negative-control-malformed-marker';
+  const ticket = addNegativeControlTicket('negative control names malformed marker lines', by);
+  const markerLine = '[sidequest:negative-control] npm run test failed=not-a-number';
+  assert.equal(store.addComment(slug, ticket.ref, { by, body: markerLine, source: 'mcp' }).ok, true);
+  const refusal = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(refusal.reason, 'negative_control_required');
+  assert.match(refusal.message, new RegExp(markerLine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(refusal.message, /number was not where it was expected/);
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control malformed marker fixture']);
+});
+
 test('a valid negative-control waiver accepts a mixed source and test diff', () => {
   const by = 'negative-control-waiver-executor';
   const ticket = addNegativeControlTicket('negative control waiver', by);
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] waived This platform cannot safely run the reverted fixture in this environment.',
+    body: '[sidequest:negative-control] waived This platform cannot safely run the reverted fixture in this environment.\nThe isolated runner has no compatible fallback.',
     source: 'mcp',
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {

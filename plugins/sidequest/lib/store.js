@@ -603,22 +603,27 @@ function negativeControlResult(ticket) {
   if (!claimHolder) return { kind: "missing" };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
   let otherControlAuthor = "";
+  let malformedMarkerLine = "";
   for (const comment of comments.slice().reverse()) {
     const body = String(comment.body || "").trim();
+    const markerLine = body.split(/\r?\n/).map((line) => line.trim()).find((line) => line.startsWith("[sidequest:negative-control]"));
     if (comment?.by !== claimHolder) {
-      if (!otherControlAuthor && body.startsWith("[sidequest:negative-control]")) otherControlAuthor = String(comment?.by || "unknown");
+      if (!otherControlAuthor && markerLine) otherControlAuthor = String(comment?.by || "unknown");
       continue;
     }
-    const waived = body.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)$/);
+    if (!markerLine) continue;
+    const waived = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/);
     const waiverReason = waived?.[1]?.trim();
     if (waiverReason) return waiverReason.length >= 20 ? { kind: "waived" } : { kind: "short_waiver" };
-    const failed = body.match(/^\[sidequest:negative-control\]\s+(.+?)\s+failed=(\d+)$/);
+    const failed = markerLine.match(/^\[sidequest:negative-control\]\s+(.+?)\s+failed=(\d+)/);
     if (failed) return Number(failed[2]) > 0 ? { kind: "failed" } : { kind: "zero_failures" };
+    if (!malformedMarkerLine) malformedMarkerLine = markerLine;
   }
+  if (malformedMarkerLine) return { kind: "malformed_marker", markerLine: malformedMarkerLine };
   return otherControlAuthor ? { kind: "wrong_author", by: otherControlAuthor } : { kind: "missing" };
 }
 function negativeControlRefusal(ticket, result) {
-  const recipe = "Revert the non-test changes, run the changed tests, post [sidequest:negative-control] <command> failed=<n> with n greater than zero, then restore the change and run the declared verify. If the control cannot run, post [sidequest:negative-control] waived <reason of at least 20 characters>.";
+  const recipe = "Revert the non-test changes, run the changed tests, post a line beginning [sidequest:negative-control] <command> failed=<n> with n greater than zero, then restore the change and run the declared verify. You may add context after failed=<n>. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.";
   if (result.kind === "zero_failures") {
     return {
       ok: false,
@@ -631,6 +636,13 @@ function negativeControlRefusal(ticket, result) {
       ok: false,
       reason: "negative_control_waiver_too_short",
       message: `${ticket.ref} completion refused: a negative-control waiver needs a reason of at least 20 characters. ${recipe}`
+    };
+  }
+  if (result.kind === "malformed_marker") {
+    return {
+      ok: false,
+      reason: "negative_control_required",
+      message: `${ticket.ref} completion refused: found negative-control marker line "${result.markerLine}", but the number was not where it was expected. ${recipe}`
     };
   }
   if (result.kind === "wrong_author") {
