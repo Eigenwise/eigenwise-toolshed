@@ -409,6 +409,29 @@ test('observer binds only to loopback and acknowledges HTTP ingestion after comm
   assert.equal(healthBody.ok, true);
   assert.equal(healthBody.pid, process.pid);
   assert.equal(healthBody.pluginVersion, require('../.claude-plugin/plugin.json').version);
+  assert.equal(healthBody.storage.overDatabaseLimit, false);
+  assert.equal(healthBody.storage.overWalLimit, false);
+});
+
+test('observer runs retention and WAL maintenance after startup', async (t) => {
+  const store = temporaryStore(t);
+  store.ingest(requestObservation({
+    source_event_id: 'expired-maintenance',
+    observed_at: '2020-01-01T00:00:00.000Z',
+  }));
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-maintenance-${process.pid}.jsonl`),
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  t.after(() => observer.close());
+
+  await observer.start();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 0);
 });
 
 test('continuous outbox drain is fail-open and shares one in-flight flush', async (t) => {

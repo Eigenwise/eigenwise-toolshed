@@ -4,7 +4,7 @@
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
-const { openObservabilityStore } = require('../lib/observability/store.js');
+const { DEFAULT_RETENTION_DAYS, openObservabilityStore } = require('../lib/observability/store.js');
 const { drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { defaultSpoolPath } = require('../hooks/observability.js');
 const { createOutboxDrainer } = require('../lib/observability/outbox.js');
@@ -19,6 +19,7 @@ const {
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const OTLP_SIGNALS = Object.freeze({ '/v1/logs': 'logs', '/v1/traces': 'traces', '/v1/metrics': 'metrics' });
+const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 function assertLoopbackHost(host) {
   if (!LOOPBACK_HOSTS.has(host)) throw new Error(`Observer host must be loopback, received ${host}.`);
@@ -128,6 +129,7 @@ function createObserver(options = {}) {
     maxDelayMs: outbox.maxDelayMs,
   });
 
+  let maintenanceStatus = { failed: false, lastRunAt: null };
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${host}:${port || 80}`);
@@ -139,6 +141,8 @@ function createObserver(options = {}) {
           pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
           outbox: outboxHealth,
+          storage: store.storageMetrics(),
+          maintenance: maintenanceStatus,
         });
         return;
       }
@@ -200,6 +204,9 @@ function createObserver(options = {}) {
   let started = false;
   let spoolTimer = null;
   let outboxTimer = null;
+  let maintenanceStartTimer = null;
+  let maintenanceTimer = null;
+  let maintaining = false;
   let drainingSpool = false;
   const spoolPath = options.hookSpoolFile || process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath();
   const drainSpool = () => {
@@ -216,6 +223,22 @@ function createObserver(options = {}) {
   const drainOutbox = () => outbox.enabled
     ? outboxDrainer.flush().catch(() => null)
     : Promise.resolve(null);
+  const runMaintenance = () => {
+    if (maintaining) return null;
+    maintaining = true;
+    try {
+      const result = store.prune({
+        retentionDays: options.retentionDays === undefined ? DEFAULT_RETENTION_DAYS : options.retentionDays,
+      });
+      maintenanceStatus = { failed: false, lastRunAt: new Date().toISOString(), result };
+      return result;
+    } catch {
+      maintenanceStatus = { failed: true, lastRunAt: new Date().toISOString() };
+      return null;
+    } finally {
+      maintaining = false;
+    }
+  };
   return {
     host,
     port,
@@ -232,6 +255,13 @@ function createObserver(options = {}) {
         });
       });
       started = true;
+      maintenanceStartTimer = setTimeout(runMaintenance, 0);
+      if (typeof maintenanceStartTimer.unref === 'function') maintenanceStartTimer.unref();
+      maintenanceTimer = setInterval(
+        runMaintenance,
+        Math.max(60_000, Number(options.maintenanceIntervalMs) || DEFAULT_MAINTENANCE_INTERVAL_MS),
+      );
+      if (typeof maintenanceTimer.unref === 'function') maintenanceTimer.unref();
       drainSpool();
       spoolTimer = setInterval(drainSpool, Math.max(250, Number(options.hookSpoolIntervalMs) || 1000));
       if (typeof spoolTimer.unref === 'function') spoolTimer.unref();
@@ -243,6 +273,14 @@ function createObserver(options = {}) {
       return server.address();
     },
     async close() {
+      if (maintenanceStartTimer) {
+        clearTimeout(maintenanceStartTimer);
+        maintenanceStartTimer = null;
+      }
+      if (maintenanceTimer) {
+        clearInterval(maintenanceTimer);
+        maintenanceTimer = null;
+      }
       if (spoolTimer) {
         clearInterval(spoolTimer);
         spoolTimer = null;

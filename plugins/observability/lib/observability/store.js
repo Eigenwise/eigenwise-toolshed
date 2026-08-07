@@ -41,6 +41,16 @@ const USAGE_NAMES = new Set([
 ]);
 
 const DEFAULT_RETENTION_DAYS = 30;
+const DEFAULT_MAX_DATABASE_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_MAX_WAL_BYTES = 64 * 1024 * 1024;
+
+function fileBytes(filePath) {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
 
 function retentionCutoff(now, retentionDays) {
   if (!Number.isSafeInteger(retentionDays) || retentionDays < 1) {
@@ -211,6 +221,7 @@ function openObservabilityStore(databaseFile, options = {}) {
   if (!readOnly) {
     database.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
     database.exec('PRAGMA journal_mode=WAL');
+    database.exec(`PRAGMA journal_size_limit=${DEFAULT_MAX_WAL_BYTES}`);
     database.exec('PRAGMA synchronous=FULL');
     database.exec(TABLE_SQL);
     database.exec(RETENTION_PRUNE_TRIGGER_SQL);
@@ -601,6 +612,30 @@ function openObservabilityStore(databaseFile, options = {}) {
     };
   }
 
+  function checkpoint() {
+    assertOpen();
+    const result = database.prepare('PRAGMA wal_checkpoint(TRUNCATE)').get();
+    return {
+      busy: Number(result.busy || 0),
+      checkpointedFrames: Number(result.checkpointed || 0),
+      logFrames: Number(result.log || 0),
+    };
+  }
+
+  function storageMetrics() {
+    assertOpen();
+    const databaseBytes = databaseFile === ':memory:' ? 0 : fileBytes(databaseFile);
+    const walBytes = databaseFile === ':memory:' ? 0 : fileBytes(`${databaseFile}-wal`);
+    return {
+      databaseBytes,
+      walBytes,
+      maxDatabaseBytes: DEFAULT_MAX_DATABASE_BYTES,
+      maxWalBytes: DEFAULT_MAX_WAL_BYTES,
+      overDatabaseLimit: databaseBytes > DEFAULT_MAX_DATABASE_BYTES,
+      overWalLimit: walBytes > DEFAULT_MAX_WAL_BYTES,
+    };
+  }
+
   function prune(options = {}) {
     assertOpen();
     const retentionDays = options.retentionDays === undefined
@@ -632,22 +667,26 @@ function openObservabilityStore(databaseFile, options = {}) {
       estimatedReclaimableBytes,
       reusableBytes: 0,
     };
-    if (result.dryRun || result.counts.observations === 0) return result;
+    if (result.dryRun) return result;
 
-    transaction(() => {
-      database.prepare(`
-        INSERT INTO observability_meta (key, value) VALUES ('retention_prune_active', '1')
-        ON CONFLICT(key) DO UPDATE SET value = excluded.value
-      `).run();
-      database.prepare('DELETE FROM measurement WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-      database.prepare('DELETE FROM link WHERE from_event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-      database.prepare('DELETE FROM otlp_outbox WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-      database.prepare('DELETE FROM observation_dedupe WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-      database.prepare('DELETE FROM observation WHERE observed_at < ?').run(cutoff);
-      database.prepare("DELETE FROM observability_meta WHERE key = 'retention_prune_active'").run();
-    });
-    const freePagesAfter = database.prepare('PRAGMA freelist_count').get();
-    result.reusableBytes = Math.max(0, Number(freePagesAfter.freelist_count) - Number(freePagesBefore.freelist_count)) * pageSize;
+    if (result.counts.observations > 0) {
+      transaction(() => {
+        database.prepare(`
+          INSERT INTO observability_meta (key, value) VALUES ('retention_prune_active', '1')
+          ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        `).run();
+        database.prepare('DELETE FROM measurement WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+        database.prepare('DELETE FROM link WHERE from_event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+        database.prepare('DELETE FROM otlp_outbox WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+        database.prepare('DELETE FROM observation_dedupe WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+        database.prepare('DELETE FROM observation WHERE observed_at < ?').run(cutoff);
+        database.prepare("DELETE FROM observability_meta WHERE key = 'retention_prune_active'").run();
+      });
+      const freePagesAfter = database.prepare('PRAGMA freelist_count').get();
+      result.reusableBytes = Math.max(0, Number(freePagesAfter.freelist_count) - Number(freePagesBefore.freelist_count)) * pageSize;
+    }
+    result.checkpoint = checkpoint();
+    result.storage = storageMetrics();
     return result;
   }
 
@@ -707,6 +746,7 @@ function openObservabilityStore(databaseFile, options = {}) {
 
   return {
     acknowledgeOutbox,
+    checkpoint,
     close,
     database,
     failOutbox,
@@ -716,11 +756,14 @@ function openObservabilityStore(databaseFile, options = {}) {
     pendingOutbox,
     prune,
     queryView,
+    storageMetrics,
     transaction,
   };
 }
 
 module.exports = {
+  DEFAULT_MAX_DATABASE_BYTES,
+  DEFAULT_MAX_WAL_BYTES,
   DEFAULT_RETENTION_DAYS,
   buildOtlpPayload,
   openObservabilityStore,

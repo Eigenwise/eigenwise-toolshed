@@ -6,6 +6,7 @@ const http = require('node:http');
 const net = require('node:net');
 const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
+const { DEFAULT_MAX_DATABASE_BYTES, DEFAULT_MAX_WAL_BYTES } = require('./store.js');
 const grafanaLgtm = require('../../observability/sinks/grafana/index.js');
 const { provisionDashboards } = require('../../observability/sinks/grafana/dashboard-generator.js');
 const {
@@ -19,6 +20,8 @@ const {
 
 const LOCK_MAX_AGE_MS = 30_000;
 const LOOPBACK = '127.0.0.1';
+const MAX_MANAGED_LOG_BYTES = 16 * 1024 * 1024;
+const MANAGED_LOG_ARCHIVES = 3;
 
 function normalizeManagedConfig(value, options) {
   return require('../../bin/setup-observability.js').normalizeManagedConfig(value, options);
@@ -57,6 +60,52 @@ function pidFile(dataDir, name) {
 
 function processRecordFile(dataDir, name) {
   return path.join(dataDir, `${name}.pid.json`);
+}
+
+function fileBytes(filePath) {
+  try {
+    return fs.statSync(filePath).size;
+  } catch {
+    return 0;
+  }
+}
+
+function managedLogFile(dataDir, name) {
+  return path.join(dataDir, `${name}.log`);
+}
+
+function managedLogNeedsRotation(name, dataDir, options = {}) {
+  const maxBytes = Math.max(1, Number(options.maxManagedLogBytes) || MAX_MANAGED_LOG_BYTES);
+  return fileBytes(managedLogFile(dataDir, name)) > maxBytes;
+}
+
+function rotateManagedLog(name, dataDir, options = {}) {
+  if (!managedLogNeedsRotation(name, dataDir, options)) return false;
+  const archives = Math.max(1, Number(options.managedLogArchives) || MANAGED_LOG_ARCHIVES);
+  const logFile = managedLogFile(dataDir, name);
+  for (let index = archives; index >= 1; index -= 1) {
+    const source = index === 1 ? logFile : `${logFile}.${index - 1}`;
+    const target = `${logFile}.${index}`;
+    try { fs.rmSync(target, { force: true }); } catch {}
+    try { fs.renameSync(source, target); } catch {}
+  }
+  return !fs.existsSync(logFile);
+}
+
+function storageHealth(dataDir, options = {}) {
+  const databaseFile = path.join(dataDir, 'observability.db');
+  const maxDatabaseBytes = Math.max(1, Number(options.maxDatabaseBytes) || DEFAULT_MAX_DATABASE_BYTES);
+  const maxWalBytes = Math.max(1, Number(options.maxWalBytes) || DEFAULT_MAX_WAL_BYTES);
+  const databaseBytes = fileBytes(databaseFile);
+  const walBytes = fileBytes(`${databaseFile}-wal`);
+  return {
+    databaseBytes,
+    walBytes,
+    maxDatabaseBytes,
+    maxWalBytes,
+    overDatabaseLimit: databaseBytes > maxDatabaseBytes,
+    overWalLimit: walBytes > maxWalBytes,
+  };
 }
 
 function readPid(filePath) {
@@ -282,6 +331,7 @@ async function ensureObservability(options = {}) {
     }
 
     const started = [];
+    const rotatedLogs = [];
     const checkPort = options.checkPort || portListening;
     const startProcess = options.startProcess || startManagedProcess;
     const wait = options.waitForPort || waitForPort;
@@ -292,6 +342,7 @@ async function ensureObservability(options = {}) {
     ];
     for (const process of processes) {
       const listening = await checkPort(process.port, options);
+      const logNeedsRotation = managedLogNeedsRotation(process.name, dataDir, options);
       const restartManagedProcess = managedProcessNeedsRestart(process.name, dataDir, {
         pluginVersion: currentPluginVersion,
         scriptPath: process.scriptPath,
@@ -312,10 +363,15 @@ async function ensureObservability(options = {}) {
           needsRestart = Boolean(owner) || restartManagedProcess;
         }
       }
-      if (needsRestart && (listening || owner)) {
+      if ((needsRestart || logNeedsRotation) && (listening || owner)) {
         if (owner) stopProcess(owner, process.name, options);
         else stopManagedProcess(process.name, dataDir, options);
-        await wait(process.port, false, options);
+        if (await wait(process.port, false, options) && logNeedsRotation
+          && rotateManagedLog(process.name, dataDir, options)) {
+          rotatedLogs.push(process.name);
+        }
+      } else if (!listening && logNeedsRotation && rotateManagedLog(process.name, dataDir, options)) {
+        rotatedLogs.push(process.name);
       }
     }
     if (!await checkPort(ports.observer, options)) {
@@ -366,6 +422,7 @@ async function ensureObservability(options = {}) {
     return {
       enabled: true,
       started,
+      rotatedLogs,
       dashboard,
       dashboardSkipped,
       pluginDrift,
@@ -461,13 +518,14 @@ function stopProcess(pid, name, options = {}) {
 
 async function healthSnapshot(options = {}) {
   const dataDir = options.dataDir || defaultDataDir(options.environment);
+  const storage = storageHealth(dataDir, options);
   const configFile = options.configFile || defaultConfigPath(dataDir);
-  if (!fs.existsSync(configFile)) return { configured: false, enabled: false };
+  if (!fs.existsSync(configFile)) return { configured: false, enabled: false, storage };
   let config;
   try {
     config = normalizeManagedConfig(readObservabilityConfig(configFile));
   } catch (error) {
-    return { configured: true, enabled: false, error: error.message };
+    return { configured: true, enabled: false, error: error.message, storage };
   }
   const state = config.observability;
   if (!state.enabled) return {
@@ -476,6 +534,7 @@ async function healthSnapshot(options = {}) {
     sink: state.sink,
     dashboard: state.dashboard,
     ports: state.ports,
+    storage,
   };
   const [observerPort, collectorPort, observer] = await Promise.all([
     portListening(state.ports.observer, options),
@@ -513,6 +572,7 @@ async function healthSnapshot(options = {}) {
     ports: state.ports,
     observer: { listening: observerPort, healthy: observer },
     collector: { listening: collectorPort },
+    storage,
     dashboard,
   };
 }
@@ -571,17 +631,22 @@ if (require.main === module) main().catch(() => { process.exitCode = 0; });
 
 module.exports = {
   LOCK_MAX_AGE_MS,
+  MANAGED_LOG_ARCHIVES,
+  MAX_MANAGED_LOG_BYTES,
   acquireLock,
   consentedConfig,
   ensureObservability,
   healthSnapshot,
   launchEnsure,
+  managedLogNeedsRotation,
   observerIdentity,
   portListening,
   portOwner,
   releaseLock,
+  rotateManagedLog,
   startManagedProcess,
   stopManagedProcess,
+  storageHealth,
   teardownRuntime,
   waitForPort,
 };

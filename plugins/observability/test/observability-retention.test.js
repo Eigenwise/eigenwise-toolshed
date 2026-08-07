@@ -10,7 +10,7 @@ const { DatabaseSync } = require('node:sqlite');
 
 const { formatResult, parseArgs } = require('../bin/prune-observability.js');
 const { buildTokenUsageReport } = require('../lib/observability/report.js');
-const { openObservabilityStore } = require('../lib/observability/store.js');
+const { DEFAULT_MAX_WAL_BYTES, openObservabilityStore } = require('../lib/observability/store.js');
 
 const PROJECT_ID = 'a'.repeat(64);
 const NOW = new Date('2026-08-07T12:00:00.000Z');
@@ -115,6 +115,19 @@ test('retention removes only expired rows and preserves current report totals', 
   assert.equal(before.session_turn_ledger.find((row) => row.request_id === 'request-fresh-one').tokens.input.value, 200);
   assert.equal(after.session_turn_ledger.find((row) => row.request_id === 'request-fresh-one').tokens.input.value, 200);
   assert.equal(after.session_turn_ledger.find((row) => row.request_id === 'request-fresh-two').tokens.input.value, 300);
+});
+
+test('retention checkpoints the WAL and reports current storage limits', (t) => {
+  const { store } = temporaryStore(t);
+  ingest(store, usageObservation('old', '2026-05-01T12:00:00.000Z', 100));
+
+  const result = store.prune({ retentionDays: 30 });
+
+  assert.equal(store.database.prepare('PRAGMA journal_size_limit').get().journal_size_limit, DEFAULT_MAX_WAL_BYTES);
+  assert.equal(result.checkpoint.busy, 0);
+  assert.equal(result.storage.maxWalBytes, DEFAULT_MAX_WAL_BYTES);
+  assert.equal(result.storage.overWalLimit, false);
+  assert.equal(result.storage.databaseBytes > 0, true);
 });
 
 test('a second observer can write after retention pruning', (t) => {

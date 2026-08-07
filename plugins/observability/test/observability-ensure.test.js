@@ -125,6 +125,30 @@ test('ensure is idempotent while both managed ports are healthy', async (t) => {
   assert.deepEqual(result.started, []);
 });
 
+test('ensure rotates oversized managed logs before starting services', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'collector.log'), 'x'.repeat(128));
+  writeObservabilityConfig(configFile, enabledConfig());
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    maxManagedLogBytes: 64,
+    checkPort: async () => false,
+    waitForPort: async () => true,
+    startProcess() { return 1000; },
+  });
+
+  assert.deepEqual(result.rotatedLogs, ['collector']);
+  assert.equal(fs.existsSync(path.join(dataDir, 'collector.log')), false);
+  assert.equal(fs.readFileSync(path.join(dataDir, 'collector.log.1'), 'utf8').length, 128);
+});
+
 test('health reports whether the dashboard supports project-data deletes', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
@@ -135,10 +159,14 @@ test('health reports whether the dashboard supports project-data deletes', async
     'grafana-lgtm': { container: 'workbench-otel-lgtm', grafanaPort: 15433, otlpPort: 15434 },
   };
   writeObservabilityConfig(configFile, config);
+  fs.writeFileSync(path.join(dataDir, 'observability.db'), 'database');
+  fs.writeFileSync(path.join(dataDir, 'observability.db-wal'), 'wal');
 
   const snapshot = await healthSnapshot({
     dataDir,
     configFile,
+    maxDatabaseBytes: 4,
+    maxWalBytes: 2,
     dockerAvailable: true,
     healthTimeoutMs: 25,
     spawnSync(command, args) {
@@ -152,6 +180,10 @@ test('health reports whether the dashboard supports project-data deletes', async
   });
 
   assert.deepEqual(snapshot.dashboard.deletes, { prometheus: true, loki: true });
+  assert.equal(snapshot.storage.databaseBytes, 8);
+  assert.equal(snapshot.storage.walBytes, 3);
+  assert.equal(snapshot.storage.overDatabaseLimit, true);
+  assert.equal(snapshot.storage.overWalLimit, true);
 });
 
 test('plugin version drift replaces both managed processes and updates the marker', async (t) => {
