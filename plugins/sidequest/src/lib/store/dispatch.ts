@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, captureScopePauseRecovery, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, resumableScopePause, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, integrationTargetCommit, spawnDescription, claudeQuotaFailure } = dependencies;
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
@@ -290,7 +290,7 @@ function terminalDispatchForIdle(identity?: any) {
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
-      if (!state || !state.terminalAt || state.outcome === 'scope_paused' || ticket.claim?.by) continue;
+      if (!state || !state.terminalAt || ticket.claim?.by) continue;
       const byId = Boolean(agentId && state.agentId && String(state.agentId) === agentId);
       const byName = Boolean(agentName && state.agentName && String(state.agentName) === agentName);
       if (!byId && !byName) continue;
@@ -364,16 +364,6 @@ function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: a
   state.terminalSource = source || 'store';
   appendDispatchAttempt(state, outcome, source, failureShape, at, attemptCommit(ticket, opts), release);
   delete state.supersededTokens;
-}
-
-function reopenScopePausedDispatch(ticket?: any, now?: any) {
-  if (!resumableScopePause(ticket)) return false;
-  const state = dispatchState(ticket);
-  state.outcome = 'claimed';
-  state.resumedAt = now || new Date().toISOString();
-  delete state.terminalAt;
-  delete state.terminalSource;
-  return true;
 }
 
 function appendReworkEvent(ticket?: any, kind?: any, details?: any) {
@@ -489,7 +479,7 @@ function recentNoCommitAttempts(state?: any) {
   const rounds = new Set<string>();
   for (let index = attempts.length - 1; index >= 0; index -= 1) {
     const attempt = attempts[index];
-    if (!attempt?.terminalAt || ['scope_pause', 'handback'].includes(attempt.release?.kind)) continue;
+    if (!attempt?.terminalAt || attempt.release?.kind === 'handback') continue;
     const round = String(attempt.preparedAt || attempt.tokenPrefix || attempt.terminalAt);
     if (rounds.has(round)) continue;
     rounds.add(round);
@@ -731,9 +721,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       });
     }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
-    if (t.scopePauseRecovery && current?.outcome === 'released') {
-      t.scopePauseRecovery = Object.assign({}, t.scopePauseRecovery, { dispatchNonce: t.dispatchNonce });
-    }
     const requestedSharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
     let sharedTree = worktreeIsolation ? requestedSharedTree : true;
@@ -879,8 +866,7 @@ function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
       return { ok: false, reason: 'not_launched' };
     }
     const now = new Date().toISOString();
-    if (t.scopeRequest) captureScopePauseRecovery(slug, t);
-    setDispatchTerminal(t, t.claim && t.claim.by ? (t.scopeRequest ? 'scope_paused' : 'died') : 'failed', opts.source || 'agent-terminal-failure', {
+    setDispatchTerminal(t, t.claim && t.claim.by ? 'died' : 'failed', opts.source || 'agent-terminal-failure', {
       error: opts.error,
       failureShape,
     });
@@ -1262,7 +1248,6 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     terminalDispatchForIdle,
     soleIdleCandidate,
     setDispatchTerminal,
-    reopenScopePausedDispatch,
     appendReworkEvent,
     dispatchTokenDigest,
     isSupersededDispatchToken,

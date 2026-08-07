@@ -271,7 +271,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   checkpoint: 'Record candidate; retain claim.',
   sweepClaims: 'Release dead claims; live ones stay.',
   next: 'Claim the top available ticket.',
-  scopeRequest: 'Request scope; wait.',
+  scopeRequest: 'Request scope.',
   commit: 'Commit declared paths from claimed worktree.',
   submit: 'Submit verified work.',
   integrate: 'Deliver, verify.',

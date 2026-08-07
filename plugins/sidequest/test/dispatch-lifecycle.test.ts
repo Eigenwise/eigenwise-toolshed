@@ -714,62 +714,6 @@ test('dispatch does not count an attempt that checkpointed a commit toward the r
   assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpointed-cleanup', { status: 'todo', source: 'test' }).ok, true);
 });
 
-test('dispatch does not count release waits or checkpointed contradiction attempts toward the repeat-failure breaker', () => {
-  const waits = createFixture('release wait provenance fixture');
-  for (const number of [1, 2]) {
-    const prepared = store.prepareDispatch(slug, waits.ref, { sessionId: `release-wait-${number}-${Date.now()}` });
-    const worker = `release-wait-worker-${number}`;
-    assert.equal(store.claimTicket(slug, waits.ref, worker, {
-      token: prepared.token,
-      executor: prepared.ticket.dispatchExecutor,
-    }).ok, true);
-    assert.equal(store.releaseTicket(slug, waits.ref, worker, {
-      status: 'todo',
-      source: 'mcp',
-      releaseKind: 'scope_pause',
-      releaseReason: 'Awaiting approved scope.',
-    }).ok, true);
-  }
-  const waitAttempts = store.getTicket(slug, waits.ref).dispatch.attempts;
-  assert.equal(waitAttempts.at(-1).release.kind, 'scope_pause');
-  assert.equal(waitAttempts.at(-1).failureShape, 'scope_pause');
-  assert.equal(waitAttempts.at(-1).source, 'mcp');
-  const waitRetry = store.prepareDispatch(slug, waits.ref);
-  assert.equal(waitRetry.ticket.dispatch.repeatFailureOverride, undefined);
-  assert.equal(store.releaseTicket(slug, waits.ref, 'release-wait-cleanup', { status: 'todo', source: 'test' }).ok, true);
-
-  const progress = createFixture('contradiction with checkpoint fixture');
-  const contradiction = store.prepareDispatch(slug, progress.ref, { sessionId: `contradiction-release-${Date.now()}` });
-  assert.equal(store.claimTicket(slug, progress.ref, 'contradiction-release-worker', {
-    token: contradiction.token,
-    executor: contradiction.ticket.dispatchExecutor,
-  }).ok, true);
-  assert.equal(store.releaseTicket(slug, progress.ref, 'contradiction-release-worker', {
-    status: 'todo',
-    source: 'mcp',
-    releaseKind: 'contradiction',
-    releaseReason: 'The named target is absent.',
-    releaseEvidence: { kind: 'contradiction', command: 'rg named-target', outputTail: 'no matches' },
-  }).ok, true);
-
-  const checkpointed = store.prepareDispatch(slug, progress.ref, { sessionId: `checkpointed-release-${Date.now()}` });
-  assert.equal(store.claimTicket(slug, progress.ref, 'checkpointed-release-worker', {
-    token: checkpointed.token,
-    executor: checkpointed.ticket.dispatchExecutor,
-  }).ok, true);
-  const checkpointCommit = '1590b92abc1234def5678abc1234def5678abcd';
-  assert.equal(store.checkpointTicket(slug, progress.ref, 'checkpointed-release-worker', {
-    commit: checkpointCommit,
-    verify: 'Targeted test passed.',
-  }).ok, true);
-  assert.equal(store.releaseTicket(slug, progress.ref, 'checkpointed-release-worker', { status: 'todo', source: 'test' }).ok, true);
-  const progressAttempts = store.getTicket(slug, progress.ref).dispatch.attempts;
-  assert.equal(progressAttempts.at(-1).commit, checkpointCommit);
-  assert.equal(progressAttempts.at(-2).release.kind, 'contradiction');
-  const progressRetry = store.prepareDispatch(slug, progress.ref);
-  assert.equal(progressRetry.ticket.dispatch.repeatFailureOverride, undefined);
-  assert.equal(store.releaseTicket(slug, progress.ref, 'contradiction-checkpoint-cleanup', { status: 'todo', source: 'test' }).ok, true);
-});
 
 
 test('dispatch counts terminal Agent failures toward the repeat-failure breaker', () => {

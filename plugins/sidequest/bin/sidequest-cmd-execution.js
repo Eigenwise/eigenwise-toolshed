@@ -333,15 +333,6 @@ function outOfScopeComment(paths) {
 function scopeRemedy(ticket, paths) {
   return store.scopeExpansionCommand(ticket, paths);
 }
-function pendingScopeCommitRefusal(ticket) {
-  const request = ticket.scopeRequest;
-  if (!request) return null;
-  const pending = store.normalizeFiles(request.files);
-  const covered = store.normalizeFiles(request.covered);
-  const requested = store.normalizeFiles(request.requested || pending);
-  const approval = store.scopeExpansionCommand(ticket, requested);
-  return `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(", ")}.${covered.length ? ` Already effective: ${covered.join(", ")}.` : ""} Approve the request with \`${approval}\` before committing.`;
-}
 async function cmdScopeRequest(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("scope-request: pass a ticket ref, e.g. sidequest scope-request SQ-3 --file path/to/new-file.");
@@ -356,34 +347,16 @@ async function cmdScopeRequest(opts, positional) {
     return;
   }
   if (res.ok) {
-    if (res.scopeRequest) {
-      console.log(`✓ ${res.ticket.ref} scope expansion requested; claim remains held — ${meta.name}`);
-      console.log(`  pause for approval: ${res.command}`);
-    } else if (res.autoApproved) {
-      console.log(`✓ ${res.ticket.ref} test scope auto-approved: ${res.approved.join(", ")} — ${meta.name}`);
+    if (res.state === "refused") {
+      console.log(`✓ ${res.ticket.ref} scope expansion refused: ${res.refused.join(", ")} — ${meta.name}`);
+      console.log("  commit in-scope work, then release with --release-kind handback and name the refused paths.");
+    } else if (res.approved?.length) {
+      console.log(`✓ ${res.ticket.ref} scope auto-approved: ${res.approved.join(", ")} — ${meta.name}`);
     } else {
       console.log(`✓ ${res.ticket.ref} already covers: ${res.covered.join(", ")} — ${meta.name}`);
     }
   } else {
     reportClaimFailure("scope-request", idOrRef, res, meta);
-  }
-}
-async function cmdScopeDeny(opts, positional) {
-  const idOrRef = positional[0];
-  if (!idOrRef) fail('scope-deny: pass a ticket ref, e.g. sidequest scope-deny SQ-3 --reason "handled by another ticket".');
-  if (!opts.reason) fail("scope-deny: pass the orchestrator reason with --reason.");
-  const { slug, meta } = await resolveProject(opts);
-  const by = workerId(opts);
-  const res = store.denyScopeRequest(slug, idOrRef, by, opts.reason, { source: opts.source || "cli" });
-  if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
-    if (!res.ok) process.exitCode = 1;
-    return;
-  }
-  if (res.ok) {
-    console.log(`✓ ${res.ticket.ref} scope request denied; claim and declared scope remain intact. ${meta.name}`);
-  } else {
-    reportClaimFailure("scope-deny", idOrRef, res, meta);
   }
 }
 async function cmdCommit(opts, positional) {
@@ -404,8 +377,6 @@ async function cmdCommit(opts, positional) {
       fail(`commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`);
     }
   }
-  const pendingScopeRefusal = pendingScopeCommitRefusal(ticket);
-  if (pendingScopeRefusal) fail(pendingScopeRefusal);
   const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
   const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref);
   if (foreignFragments.length) {
@@ -727,4 +698,4 @@ async function cmdPublish(opts, positional) {
   }
   fail("publish: expected `sidequest publish lock|unlock|status|queue`");
 }
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeDeny, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish };

@@ -287,10 +287,6 @@ async function cmdUpdate(opts, positional) {
     ...store.ticketReferenceWarnings(slug, patch.title, patch.description),
     ...store.ticketPlanningWarnings(updated, meta.path)
   ];
-  if (patch.files !== void 0) {
-    const scopeWarning = store.pendingScopeApprovalWarning(updated);
-    if (scopeWarning) warnings.push(scopeWarning);
-  }
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated, category: opts.category != null ? categoryEcho(updated) : void 0, warnings }, null, 2) + "\n");
     return;

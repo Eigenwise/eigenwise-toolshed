@@ -741,9 +741,11 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(briefing, /first uncovered scope miss/);
   assert.match(briefing, /one consolidated request/);
   assert.match(briefing, /tests, fixtures, goldens, and generated outputs/);
-  assert.match(briefing, /Keep your claim held/);
-  assert.match(briefing, /pass the current linked worktree/);
-  assert.match(briefing, /Do not release or weaken scope lint/);
+  assert.match(briefing, /The answer is immediate/);
+  assert.match(briefing, /On refusal, commit in-scope work and release with kind `handback`/);
+  assert.doesNotMatch(briefing, /Keep your claim held/);
+  assert.doesNotMatch(briefing, /pass the current linked worktree/);
+  assert.doesNotMatch(briefing, /Do not release or weaken scope lint/);
   assert.match(briefing, /space file\.png/);
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /Inspect this attachment before implementation\./);
@@ -959,15 +961,12 @@ test('briefings reject compensating workarounds when the root cause is out of sc
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-1138', title: 'Scope wall', model: 'opus', effort: 'high', category: {},
   }, 'scope-wall-token');
-  assert.match(briefing, /Always call `scopeRequest` with `wait: true`/);
-  assert.match(briefing, /A `timeout` state is a wait, not a release/);
-  assert.match(briefing, /checkpoint-and-hold work in hand/);
-  assert.match(briefing, /call `scopeRequest` again with `wait: true` and the same worktree/);
-  assert.match(briefing, /send main one blocker message naming the pending files/);
-  assert.match(briefing, /Do not send a final response while the ruling is pending/);
-  assert.match(briefing, /SubagentStop hook blocks normal executor shutdown/);
-  assert.match(briefing, /When the root cause is outside declared scope, request that scope and wait/);
-  assert.match(briefing, /record the root-cause finding on the ticket and stop/);
+  assert.match(briefing, /The answer is immediate/);
+  assert.match(briefing, /On refusal, commit in-scope work and release with kind `handback`/);
+  assert.match(briefing, /The orchestrator can expand the ticket files and redispatch/);
+  assert.match(briefing, /request scope when a needed path is outside the declared set/);
+  assert.doesNotMatch(briefing, /scopeRequest` with `wait: true/);
+  assert.doesNotMatch(briefing, /ruling is pending/);
   assert.match(briefing, /Never ship a compensating or downstream workaround inside scope instead/);
   assert.match(briefing, /verified workaround is not a substitute for the root fix/);
 });

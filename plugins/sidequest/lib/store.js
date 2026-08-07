@@ -447,7 +447,6 @@ const {
   terminalDispatchForIdle,
   soleIdleCandidate,
   setDispatchTerminal,
-  reopenScopePausedDispatch,
   appendReworkEvent,
   dispatchTokenDigest,
   isSupersededDispatchToken,
@@ -487,7 +486,6 @@ const {
   assertDispatchTransport,
   assertSidequestInstall,
   availableRoute: (...args) => availableRoute(...args),
-  captureScopePauseRecovery: (...args) => captureScopePauseRecovery(...args),
   claimReclaimable: (...args) => claimReclaimable(...args),
   claimVerification: (...args) => claimVerification(...args),
   commitScope,
@@ -521,7 +519,6 @@ const {
   resolveTicketRoute: (...args) => resolveTicketRoute(...args),
   resolveCategoryRoute: (...args) => resolveCategoryRoute(...args),
   resolveExec: (...args) => resolveExec(...args),
-  resumableScopePause: (...args) => resumableScopePause(...args),
   stableExecutorName,
   storyExecutionContract: (...args) => storyExecutionContract(...args),
   ticketCategory: (...args) => ticketCategory(...args),
@@ -717,7 +714,6 @@ const {
   releaseCommentBody,
   technicalBlockerRelease,
   verificationCompletionCheck,
-  resumableScopePause,
   touchClaim,
   touchClaimActivity
 } = createClaims({
@@ -788,12 +784,8 @@ const {
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
-  pendingScopeApprovalWarning,
-  clearScopeRequestMarker,
-  captureScopePauseRecovery,
   requestScope,
-  waitForScopeResolution,
-  denyScopeRequest,
+  migrateLegacyScopeRequest,
   overlappingScopePaths,
   scopesOverlap,
   normalizeContracts,
@@ -843,7 +835,6 @@ const {
   readMeta,
   readyTickets,
   releaseLock,
-  reopenScopePausedDispatch,
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyCommand,
@@ -938,7 +929,6 @@ const {
   boardConfig,
   boundedExcerptForSubmission: (...args) => boundedExcerpt(...args),
   claimReclaimable,
-  clearScopeRequestMarker,
   commitScope,
   completionTreeCheck,
   coerceStatus,
@@ -1398,28 +1388,6 @@ function clearOracleMarker(ticket) {
   ticket.oracle = null;
   return true;
 }
-function scopeRequestWorkInHand(slug, ticket) {
-  if (!ticket?.scopeRequest) return null;
-  const checkpoint = ticket.checkpoint;
-  if (checkpoint) return { commit: checkpoint.commit || null, source: "checkpoint" };
-  const submission = ticket.submission;
-  if (submission?.commit) return { commit: submission.commit, source: "submission" };
-  const delta = dispatchDelta(slug, ticket);
-  if (!delta.ok) return null;
-  const declaredFiles = Array.isArray(ticket.dispatch?.declaredFiles) ? ticket.dispatch.declaredFiles : normalizeFiles(ticket.files);
-  const pending = commitScope.scopedWorkPending(delta.workspace.root, declaredFiles, { base: delta.workspace.base });
-  if (!pending.ok || !pending.committed.length) return null;
-  try {
-    const commit = execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
-      cwd: delta.workspace.root,
-      encoding: "utf8",
-      windowsHide: true
-    }).trim();
-    return { commit, source: "dispatch_delta" };
-  } catch (_) {
-    return { commit: null, source: "dispatch_delta" };
-  }
-}
 function releaseTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -1557,30 +1525,14 @@ function releaseTicket(slug, idOrRef, by, opts) {
         };
       }
     }
-    if (!opts.requireReleaseVerdict) {
-      const workInHand = scopeRequestWorkInHand(slug, t);
-      if (workInHand) {
-        const commit = workInHand.commit ? ` at commit ${workInHand.commit}` : "";
-        return {
-          ok: false,
-          reason: "scope_work_pending",
-          message: `${t.ref} cannot release while scope approval remains pending and it has work in hand${commit}. Checkpoint and hold with \`checkpoint\`; a scope timeout is a wait, not a release.`,
-          ticket: t,
-          commit: workInHand.commit
-        };
-      }
-    }
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
-    if (resumableScopePause(t)) captureScopePauseRecovery(slug, t);
     let comment = null;
     if (releaseComment) {
       if (!Array.isArray(t.comments)) t.comments = [];
       comment = createComment(releaseComment, now);
       t.comments.push(comment);
     }
-    clearScopeRequestMarker(t);
-    t.scopeRequest = null;
     if (oracleRequested) {
       t.oracle = oracleMarker(dispatch2, opts, now);
       writeOracleExperimentRound(slug, t);
@@ -1787,6 +1739,7 @@ const { sweepStaleDispatches, sweepStaleClaims } = createSweeps({
   getTicket,
   listProjects,
   listTickets,
+  migrateLegacyScopeRequest,
   preparedDispatchTtlMs,
   putTicket,
   releaseTicket,
@@ -2123,10 +2076,8 @@ module.exports = {
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
-  pendingScopeApprovalWarning,
   requestScope,
-  waitForScopeResolution,
-  denyScopeRequest,
+  migrateLegacyScopeRequest,
   normalizeContracts,
   contractCollisionReasons,
   STORY_PALETTE,

@@ -310,13 +310,6 @@ function ticketAssetsPacket(ticket, slug) {
     }
   }).join("\n");
 }
-function scopePauseRecoveryPacket(ticket, slug) {
-  const recovery = ticket && ticket.scopePauseRecovery;
-  const asset = String(recovery?.asset || "").trim();
-  if (!asset || !slug || recovery?.dispatchNonce !== ticket?.dispatchNonce) return null;
-  const patch = path.resolve(store.assetPath(slug, ticket.id, asset));
-  return `Scope-pause recovery: \`${patch}\` is an automatic snapshot of uncommitted work from a stopped executor. Stopped-agent messages are not a reliable recovery path, so a redispatch in a new worktree must apply this patch before implementation; do not apply it in the original paused worktree.`;
-}
 function planDocumentPacket(ticket, slug) {
   if (!ticket || !slug) return null;
   const plan = store.ticketPlanInfo(slug, ticket.id || ticket.ref);
@@ -587,7 +580,6 @@ It writes suite output to a temporary file and prints only \`verify=<passed|fail
     ...worktreeSync ? [worktreeSync] : [],
     ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     ...ticketIsolationContract(ticket, project) || [],
-    ...scopePauseRecoveryPacket(ticket, slug) ? [scopePauseRecoveryPacket(ticket, slug)] : [],
     ...experimentLog ? [`Experiment log:
 ${experimentLog}`] : [],
     ...planDocument ? [planDocument] : [],
@@ -595,7 +587,7 @@ ${experimentLog}`] : [],
 ${declaredFiles}`,
     ...generatedFiles.length ? [`Auto-paired tracked generated files (regenerate before verifying):
 ${generatedFiles.map((file) => `- ${file}`).join("\n")}`] : [],
-    "Scope check: before pausing for an uncertain path, call scope-request with that path. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Keep your claim held. Always call `scopeRequest` with `wait: true`: it blocks until the ruling lands or the wait times out, so do not end your turn while that call is outstanding. A `timeout` state is a wait, not a release: checkpoint-and-hold work in hand, send main one blocker message naming the pending files, then call `scopeRequest` again with `wait: true` and the same worktree. Do not send a final response while the ruling is pending. The SubagentStop hook blocks normal executor shutdown while an active scope request remains pending. For an isolated dispatch, pass the current linked worktree so Sidequest keeps a durable pending-request marker. Do not release or weaken scope lint; the orchestrator approves by updating the ticket files, then this executor continues. When the root cause is outside declared scope, request that scope and wait for its ruling, or record the root-cause finding on the ticket and stop. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix. Report every refused or unscoped path in the final report; never call partial work ready for integration. If a paused worktree is gone anyway, tell the orchestrator to re-dispatch fresh rather than resume.",
+    "Scope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch, or redispatch without expansion. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix. Report every refused or unscoped path in the final report; never call partial work ready for integration.",
     `Contract metadata:
 ${ticketContractsPacket(ticket)}`,
     `Readiness contract edges:

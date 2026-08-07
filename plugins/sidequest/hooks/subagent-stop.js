@@ -149,28 +149,6 @@ function terminalDispatchVerdict(store, tickets) {
   }
   return null;
 }
-function activeScopeWait(ticket) {
-  const dispatch = ticket.dispatch;
-  return Boolean(
-    ticket.claim?.by && ticket.scopeRequest && dispatch && !dispatch.terminalAt && ["prepared", "launched", "claimed"].includes(String(dispatch.outcome || ""))
-  );
-}
-function activeScopeWaitReason(store, claims) {
-  for (const claim of claims) {
-    if (!claim?.held || claim.status !== "doing") continue;
-    let ticket = null;
-    try {
-      ticket = store.getTicket(claim.slug, claim.ticketId);
-    } catch (_) {
-    }
-    if (!ticket || !activeScopeWait(ticket)) continue;
-    const label = ticket.ref || claim.ref || claim.ticketId || "the claimed ticket";
-    const requested = (ticket.scopeRequest?.files || []).filter(Boolean).join(", ");
-    const paths = requested ? ` for ${requested}` : "";
-    return `sidequest: ${label} still has a scope ruling pending${paths}. If main has not been notified, send one blocker message naming the pending files. Then call scopeRequest again with wait: true and the same worktree. Keep the claim held and do not finish until the request is approved or denied.`;
-  }
-  return null;
-}
 function stopVerdict(store, claims, classification, dispatchStopped, terminalTickets) {
   for (const claim of claims) {
     if (!claim || claim.status !== "done") continue;
@@ -204,9 +182,6 @@ function stopVerdict(store, claims, classification, dispatchStopped, terminalTic
     }
     const label = held.ref || held.ticketId || "a ticket";
     if (ticket?.dispatch?.outcome === "died" && ticket.dispatch.terminalAt) return diedVerdict(store, held, ticket);
-    if (ticket?.scopeRequest) {
-      return `exec WAITING: ${label} has a pending scope request; approve scope, then resume it from the recovery snapshot`;
-    }
     return `exec WAITING: ${label} ended a turn while holding its claim; it may resume. Do not re-dispatch or release it without a recorded terminal Agent failure.`;
   }
   if (dispatchStopped && classification.kind !== "unknown") return "exec DIED before claiming; TaskStop it first, then fresh-dispatch and spawn the returned spec";
@@ -248,11 +223,6 @@ function main() {
     return;
   }
   if (!Array.isArray(claims)) return;
-  const scopeWaitReason = activeScopeWaitReason(store, claims);
-  if (scopeWaitReason) {
-    writeJson({ decision: "block", reason: scopeWaitReason });
-    return;
-  }
   if (data.stop_hook_active) return;
   let dispatchStopped = false;
   let terminalTickets = [];

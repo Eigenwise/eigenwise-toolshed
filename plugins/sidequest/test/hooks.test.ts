@@ -1375,33 +1375,6 @@ test('teammate-idle: live and scope-paused claims remain alive', () => {
   }), null);
 });
 
-test('peer-guard: an executor between turns accepts steering before and after scope approval', () => {
-  const ticket = addStopTicket('scope-paused executor resumes', { files: ['lib/declared.js'] });
-  const sessionId = `scope-pause-message-${++sqSeq}`;
-  const stop = claimStopTicket(ticket, sessionId, 'scope-paused-worker');
-  assert.equal(store.requestScope(slug, ticket.ref, 'scope-paused-worker', ['lib/resumed.js']).ok, true);
-
-  const expectedBlock = {
-    decision: 'block',
-    reason: `sidequest: ${ticket.ref} still has a scope ruling pending for lib/resumed.js. If main has not been notified, send one blocker message naming the pending files. Then call scopeRequest again with wait: true and the same worktree. Keep the claim held and do not finish until the request is approved or denied.`,
-  };
-  assert.deepEqual(runHookOutput(SUBAGENT_STOP, stop), expectedBlock);
-  assert.deepEqual(runHookOutput(SUBAGENT_STOP, { ...stop, stop_hook_active: true }), expectedBlock);
-  const paused = store.getTicket(slug, ticket.ref);
-  assert.equal(paused.dispatch.outcome, 'claimed');
-  assert.equal(paused.dispatch.terminalAt, null);
-  assert.equal(store.claimReleaseVerdict(paused), null, 'an open scope request keeps its claim');
-  assert.strictEqual(runGuardPeer({ tool_input: { to: stop.agent_name, message: 'scope is approved' } }), null);
-
-  store.updateTicket(slug, ticket.ref, { files: ['lib/declared.js', 'lib/resumed.js'] });
-  const resumed = store.getTicket(slug, ticket.ref);
-  assert.equal(resumed.scopeRequest, null);
-  assert.equal(resumed.dispatch.outcome, 'claimed');
-  assert.equal(resumed.dispatch.terminalAt, undefined);
-  assert.equal(resumed.dispatch.agentName, stop.agent_name);
-  assert.strictEqual(runHookOutput(SUBAGENT_STOP, { ...stop, stop_hook_active: true }), null);
-  assert.strictEqual(runGuardPeer({ tool_input: { to: stop.agent_name, message: 'resume the approved work' } }), null);
-});
 
 test('peer-guard: an active dispatch still accepts main-thread steering', () => {
   const ticket = addEffortTicket('active executor accepts steering', 'high');
@@ -1730,20 +1703,6 @@ test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', ()
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
 });
 
-test('stop reminder: tells a claimed executor to hold pending scope approval', () => {
-  const sessionId = `reconcile-scope-${++sqSeq}`;
-  const ticket = addStopTicket('scope approval pending', { files: ['declared/'] });
-  claimStopTicket(ticket, sessionId, 'reconcile-scope');
-  const request = store.requestScope(slug, ticket.ref, 'reconcile-scope', ['outside/new.ts']);
-  assert.deepEqual(request.scopeRequest.files, ['outside/new.ts']);
-
-  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
-  const reminder = output.hookSpecificOutput.additionalContext;
-  assert.match(reminder, /1 ticket waiting on scope approval from the orchestrator/);
-  assert.match(reminder, /Checkpoint and hold; never release, releasing loses work/);
-  assert.doesNotMatch(reminder, /Update or close/);
-  assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
-});
 
 // Session ids diverge across a long orchestration, and the old exemption was
 // keyed on them, so a healthy running wave read as unfinished business and the
@@ -1771,38 +1730,6 @@ test('stop reminder: a live executor claim is in progress, not unfinished busine
   assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-orchestrator', { status: 'todo', source: 'test' }).ok, true);
 });
 
-test('stop reminder: names and re-escalates pending submissions within its byte budget', () => {
-  const sessionId = `reconcile-${++sqSeq}`;
-  const submitted = addTicket('pending integration');
-  claimStopTicket(submitted, sessionId, 'reconcile-submitted');
-  assert.equal(store.getTicket(slug, submitted.ref).dispatch.sessionId, sessionId);
-  assert.equal(store.findProject(BOARD_PATH).slug, slug);
-  assert.equal(store.submitTicket(slug, submitted.ref, 'reconcile-submitted', {
-    commit: 'abc1234',
-    sessionId,
-  }).ok, true);
-
-  const input = { session_id: sessionId, cwd: BOARD_PATH };
-  const initial = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input);
-  assert.equal(initial.hookSpecificOutput.hookEventName, 'Stop');
-  assert.match(initial.hookSpecificOutput.additionalContext, /1 submission pending integration/);
-  assert.match(initial.hookSpecificOutput.additionalContext, /Checkpoint and hold; never release, releasing loses work/);
-  assert.doesNotMatch(initial.hookSpecificOutput.additionalContext, /Update or close/);
-  assert.equal(initial.systemMessage, undefined, 'the reminder must go to Claude rather than the user-visible system message');
-  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null, 'a pending submission waits before escalating');
-
-  const escalated = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input);
-  const reminder = escalated.hookSpecificOutput.additionalContext;
-  assert.match(reminder, new RegExp(submitted.ref));
-  assert.match(reminder, /3 consecutive stops/);
-  assert.match(reminder, /Checkpoint and hold; never release, releasing loses work/);
-  assert.ok(Buffer.byteLength(reminder) <= BUDGET.reconciliation, `reconciliation reminder is ${Buffer.byteLength(reminder)} bytes`);
-
-  const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
-  const sizeAfterEscalation = fs.statSync(stateFile).size;
-  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null, 'the escalation does not repeat on every stop');
-  assert.equal(fs.statSync(stateFile).size, sizeAfterEscalation, 'the reminder state stays bounded across stops');
-});
 
 test('stop reminder: resets its counter when the board signature changes', () => {
   const sessionId = `reconcile-reset-${++sqSeq}`;

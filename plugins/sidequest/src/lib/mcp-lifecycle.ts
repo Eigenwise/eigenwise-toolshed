@@ -1,7 +1,5 @@
 'use strict';
 
-const { scopeRequestNotOwnerMessage } = require('./refusal-guidance');
-
 const {
   path,
   fs,
@@ -316,7 +314,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         reason: { type: 'string' },
-        kind: { type: 'string', enum: ['technical_blocker', 'scope_pause', 'contradiction', 'handback'] },
+        kind: { type: 'string', enum: ['technical_blocker', 'contradiction', 'handback'] },
         command: { type: 'string', description: 'Required for blocker/contradiction.' },
         exitCode: { type: 'integer' },
         outputTail: { type: 'string', description: 'Required blocker/contradiction output.' },
@@ -378,7 +376,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request scope. A pending request blocks here until it is ruled on.',
+    description: 'Request scope and receive an immediate ruling.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -386,65 +384,24 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         files: { type: 'array', items: { type: 'string' }, minItems: 1 },
-        wait: { type: 'boolean' },
-        timeoutMs: { type: 'integer' },
       },
       required: ['ref', 'by', 'files'],
     },
-    async handler(args) {
+    handler(args) {
       const { slug } = resolveProject(args.project);
       const by = requireBy(args, 'scopeRequest');
       const res = store.requestScope(slug, args.ref, by, args.files, { source: 'mcp' });
-      if (!res.ok && res.reason === 'not_owner') res.message = scopeRequestNotOwnerMessage(args.ref, res.claim || res.ticket);
-      // wait:true delivers the ruling on this same call. Executors that had to make a
-      // second call to collect it simply stopped instead, three times in one session
-      // (SQ-1348), so the briefing tells them to always pass it.
-      const ruling = res.ok && res.scopeRequest && args.wait === true
-        ? await store.waitForScopeResolution(slug, args.ref, by, res.scopeRequest.at, args.timeoutMs)
-        : null;
-      const changed = res.ok && res.scopeRequest !== undefined ? {
+      const changed = res.ok ? {
         covered: res.covered || [],
         approved: res.approved || [],
+        refused: res.refused || [],
         autoApproved: !!res.autoApproved,
-        scopeRequest: res.scopeRequest,
-        command: res.command,
-        ...(res.state ? { state: res.state } : {}),
-        ...(typeof res.ageMs === 'number' ? { ageMs: res.ageMs } : {}),
-        ...(ruling ? {
-          state: ruling.state,
-          effectiveScope: ruling.effectiveScope,
-          resolution: ruling.resolution || null,
-          ...(ruling.state === 'timeout' ? {
-            instruction: 'No ruling yet. Checkpoint with a commit and state exactly which scope ruling is pending.',
-          } : {}),
-        } : res.ok && res.scopeRequest ? {
-          instruction: 'Pending. Re-send this request with wait:true to receive the ruling on that call instead of ending your turn.',
+        state: res.state,
+        effectiveScope: res.resolution?.effectiveScope,
+        resolution: res.resolution || null,
+        ...(res.state === 'refused' ? {
+          instruction: 'Commit in-scope work, then release with kind "handback" and name the refused paths.',
         } : {}),
-      } : null;
-      return mutationAck(slug, res, changed);
-    },
-  },
-  {
-    name: 'scopeDeny',
-    description: 'Deny scope.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ref: { type: 'string' },
-        project: PROJECT_PROP,
-        by: { type: 'string' },
-        reason: { type: 'string' },
-      },
-      required: ['ref', 'by', 'reason'],
-    },
-    handler(args) {
-      const { slug } = resolveProject(args.project);
-      const by = requireBy(args, 'scopeDeny');
-      const reason = requiredText(args, 'reason', 'scopeDeny');
-      const res = store.denyScopeRequest(slug, args.ref, by, reason, { source: 'mcp' });
-      const changed = res.ok ? {
-        denied: res.denied,
-        ...(res.ticket.scopeResolution?.resume ? { resume: res.ticket.scopeResolution.resume, message: `${res.ticket.ref} was waiting on scope and ${res.ticket.scopeResolution.resume.agentName} has stopped. Resume that executor now.` } : {}),
       } : null;
       return mutationAck(slug, res, changed);
     },
@@ -486,19 +443,6 @@ const tools: ToolDefinition[] = [
             message: `commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`,
           });
         }
-      }
-      const pendingScopeRequest = ticket.scopeRequest;
-      if (pendingScopeRequest) {
-        const pending = store.normalizeFiles(pendingScopeRequest.files);
-        const covered = store.normalizeFiles(pendingScopeRequest.covered);
-        const requested = store.normalizeFiles(pendingScopeRequest.requested || pending);
-        const approval = store.scopeExpansionCommand(ticket, requested);
-        return mutationAck(slug, {
-          ok: false,
-          ticket,
-          reason: 'scope_request_pending',
-          message: `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(', ')}.${covered.length ? ` Already effective: ${covered.join(', ')}.` : ''} Approve the request with \`${approval}\` or deny it with \`sidequest scope-deny ${ticket.ref} --reason "why"\` before committing.`,
-        });
       }
       const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;

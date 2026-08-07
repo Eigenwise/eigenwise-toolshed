@@ -218,10 +218,6 @@ const tools = [
       const t = store.getTicket(slug, updated.ref) || updated;
       const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
-      if (patch.files !== void 0) {
-        const scopeWarning = store.pendingScopeApprovalWarning(t);
-        if (scopeWarning) warnings.push(scopeWarning);
-      }
       return mutationAck(slug, { ok: true, ticket: t }, warnings.length ? { warnings } : null);
     }
   },
