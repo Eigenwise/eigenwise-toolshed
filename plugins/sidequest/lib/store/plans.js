@@ -146,6 +146,36 @@ function createPlans(dependencies) {
       `Status: ${entry.status}`
     ].join("\n");
   }
+  function oracleExperimentEntryBlock(oracle) {
+    const date = String(oracle.at || (/* @__PURE__ */ new Date()).toISOString()).slice(0, 10);
+    return experimentEntryBlock({
+      round: oracle.round,
+      date,
+      headline: "Oracle verdict",
+      hypothesis: oracle.ask,
+      change: "",
+      commit: oracle.candidate || "",
+      branch: "",
+      measured: "",
+      deliverable: oracle.deliverable || "",
+      verdict: "",
+      outcome: "",
+      whyItFailed: "",
+      constraintBought: "",
+      status: ""
+    });
+  }
+  function writeOracleExperimentRound(slug, ticket) {
+    const oracle = ticket?.oracle;
+    if (!oracle) throw new Error("Oracle experiment round requires an active oracle marker.");
+    const existing = readExperimentLog(slug, ticket);
+    const log = existing ? existing.log : experimentLogTemplate(ticket);
+    if (experimentEntries(log).some((entry) => entry.round === oracle.round)) return null;
+    return writeExperimentLog(slug, ticket, `${String(log).trimEnd()}
+
+${oracleExperimentEntryBlock(oracle)}
+`);
+  }
   function appendExperimentEntry(slug, idOrRef, entry) {
     entry = entry || {};
     const round = experimentRound(entry.round);
@@ -255,23 +285,7 @@ ${block}
       let log = existing ? existing.log : experimentLogTemplate(ticket);
       let entry = experimentEntries(log).find((current) => current.round === oracle.round);
       if (!entry) {
-        const date = String(oracle.at || (/* @__PURE__ */ new Date()).toISOString()).slice(0, 10);
-        const block2 = experimentEntryBlock({
-          round: oracle.round,
-          date,
-          headline: "Oracle verdict",
-          hypothesis: oracle.ask,
-          change: "",
-          commit: oracle.candidate || "",
-          branch: "",
-          measured: "",
-          deliverable: oracle.deliverable || "",
-          verdict: "",
-          outcome: "",
-          whyItFailed: "",
-          constraintBought: "",
-          status: ""
-        });
+        const block2 = oracleExperimentEntryBlock(oracle);
         log = `${String(log).trimEnd()}
 
 ${block2}
@@ -343,6 +357,7 @@ ${String(log).slice(entry.end)}`, result: { priorRound: target, overturningRound
     applyExperimentVerdict,
     experimentPacket,
     ticketPlanInfo,
+    writeOracleExperimentRound,
     writeTicketPlan
   };
 }
