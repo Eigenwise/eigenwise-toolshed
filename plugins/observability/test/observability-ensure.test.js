@@ -243,6 +243,7 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
     dataDir,
     configFile,
     dockerAvailable: false,
+    activeProjectNames: ['atlas'],
     environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
     checkPort: async () => true,
   });
@@ -258,6 +259,7 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
     dataDir,
     configFile,
     dockerAvailable: true,
+    activeProjectNames: ['atlas'],
     environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
     checkPort: async () => true,
     spawnSync(command, args) {

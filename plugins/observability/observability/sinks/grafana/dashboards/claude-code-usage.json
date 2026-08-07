@@ -4,14 +4,15 @@
   "tags": [
     "claude-code",
     "workbench",
-    "tokens"
+    "cost",
+    "reliability"
   ],
   "timezone": "browser",
   "schemaVersion": 39,
   "editable": true,
   "refresh": "30s",
   "time": {
-    "from": "now-6h",
+    "from": "now-24h",
     "to": "now"
   },
   "templating": {
@@ -53,8 +54,8 @@
   },
   "panels": [
     {
-      "id": 101,
-      "title": "Tokens & models",
+      "id": 200,
+      "title": "At a glance",
       "type": "row",
       "collapsed": false,
       "gridPos": {
@@ -66,8 +67,8 @@
       "panels": []
     },
     {
-      "id": 1,
-      "title": "Fresh input (uncached)",
+      "id": 4,
+      "title": "Claude API-equivalent cost",
       "type": "stat",
       "datasource": {
         "type": "prometheus",
@@ -76,148 +77,7 @@
       "gridPos": {
         "x": 0,
         "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "value"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range]))",
-          "instant": true
-        }
-      ],
-      "description": "Fresh input after prompt-cache hits. Every request replays its full context, but cache reads serve most of it."
-    },
-    {
-      "id": 2,
-      "title": "Cache reads (billed at 10%)",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 6,
-        "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "value"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "green"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range]))",
-          "instant": true
-        }
-      ],
-      "description": "Previously seen context served from the prompt cache. It still counts as context volume, but API-equivalent pricing is 0.1× fresh input."
-    },
-    {
-      "id": 3,
-      "title": "Output tokens (raw)",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 1,
-        "w": 6,
-        "h": 4
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "value"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "purple"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range]))",
-          "instant": true
-        }
-      ],
-      "description": "New model output, shown as raw tokens. API-equivalent output pricing is roughly five times fresh-input pricing, depending on the model."
-    },
-    {
-      "id": 4,
-      "title": "Cost (USD estimate)",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 18,
-        "y": 1,
-        "w": 6,
+        "w": 8,
         "h": 4
       },
       "options": {
@@ -252,95 +112,22 @@
           "instant": true
         }
       ],
-      "description": "Claude Code client-reported API-equivalent cost over the selected range. It excludes the virtual claude-codex-auto dispatch label because Claude Code invents its dollar figure; see the gateway resolved-model cost panel for dispatch traffic."
+      "description": "Estimated list-price cost in the selected range. Subscription billing can differ."
     },
     {
-      "id": 30,
-      "title": "How tokens become cost",
-      "type": "text",
+      "id": 33,
+      "title": "Work routed to Codex",
+      "description": "Share of gateway list-price-equivalent cost routed to Codex in the selected range.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
       "gridPos": {
-        "x": 0,
-        "y": 5,
-        "w": 24,
+        "x": 8,
+        "y": 1,
+        "w": 8,
         "h": 4
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "**Every request replays its full context** (conversation, system prompt, and tools). Context volume = fresh input + cache reads + cache creation, so fresh input is naturally small. **Cost is a weighted sum:** input × 1.0, cache creation × 1.25, cache reads × 0.1, and output × about 5. **USD cost is the best proxy for subscription-window burn** because cheap cache reads dominate raw token totals."
-      }
-    },
-    {
-      "id": 5,
-      "title": "Tokens over time, by type",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 9,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "legendFormat": "{{type}}",
-          "expr": "sum by (type) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$bucket]))"
-        }
-      ],
-      "interval": "$bucket"
-    },
-    {
-      "id": 31,
-      "title": "Cost allocation, by token type (USD)",
-      "description": "Client-reported API-equivalent cost allocation in USD for the selected range, excluding the virtual dispatch label. Each slice uses the same selected-range total as Cost (USD estimate), so the four legend Totals add up to that card within rounding. The total is split by input × 1.0, cache reads × 0.1, cache creation × 1.25, and output × 5.0; per-model price differences stay in the reported USD total. This is a breakdown of the range, not a trend: all four targets are instant queries over $__range, so plotting them on a time axis leaves one point at the right edge and a legend Total that over-counts by the window/step overlap.",
-      "type": "piechart",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 9,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD"
-        },
-        "overrides": []
       },
       "options": {
         "reduceOptions": {
@@ -350,21 +137,52 @@
           ],
           "fields": ""
         },
-        "pieType": "donut",
-        "displayLabels": [
-          "percent"
-        ],
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "values": [
-            "value",
-            "percent"
-          ]
+        "orientation": "vertical",
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 1,
+          "noValue": "No gateway usage in this range"
         },
-        "tooltip": {
-          "mode": "single"
-        }
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Codex list-price equivalent"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Total list-price equivalent"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "currencyUSD"
+              },
+              {
+                "id": "decimals",
+                "value": 2
+              }
+            ]
+          }
+        ]
       },
       "targets": [
         {
@@ -373,9 +191,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "legendFormat": "fresh input",
-          "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
+          "legendFormat": "Share routed to Codex",
+          "instant": true
         },
         {
           "refId": "B",
@@ -383,9 +201,9 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "legendFormat": "cache reads",
-          "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range]))",
+          "legendFormat": "Codex list-price equivalent",
+          "instant": true
         },
         {
           "refId": "C",
@@ -393,62 +211,60 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "legendFormat": "cache creation",
-          "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
-        },
-        {
-          "refId": "D",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "legendFormat": "output",
-          "instant": true,
-          "expr": "(sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range])) or vector(0)) * (5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0))) / ((sum(increase(claude_code_token_usage_tokens_total{type=\"input\",project_id=~\"$project\"}[$__range])) or vector(0)) + 0.1 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheRead\",project_id=~\"$project\"}[$__range])) or vector(0)) + 1.25 * (sum(increase(claude_code_token_usage_tokens_total{type=\"cacheCreation\",project_id=~\"$project\"}[$__range])) or vector(0)) + 5 * (sum(increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) or vector(0)))"
+          "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]))",
+          "legendFormat": "Total list-price equivalent",
+          "instant": true
         }
       ]
     },
     {
-      "id": 6,
-      "title": "Tokens over time, by model",
-      "description": "Full input context volume by resolved gateway model. Adding per-type vectors would drop models missing a type (Codex has no cache measurements), so this tracks context_tokens, present on every record.",
-      "type": "timeseries",
+      "id": 13,
+      "title": "Tool failure rate",
+      "description": "Share of observed tool calls marked failed or error in the selected range.",
+      "type": "stat",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "x": 0,
-        "y": 17,
-        "w": 12,
-        "h": 8
+        "x": 16,
+        "y": 1,
+        "w": 8,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "colorMode": "value",
+        "graphMode": "none",
+        "textMode": "value"
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 55,
-            "lineWidth": 0,
-            "stacking": {
-              "mode": "normal"
-            }
+          "unit": "percent",
+          "decimals": 1,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 2
+              },
+              {
+                "color": "red",
+                "value": 10
+              }
+            ]
           }
         },
         "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
       },
       "targets": [
         {
@@ -457,176 +273,29 @@
             "type": "loki",
             "uid": "loki"
           },
-          "legendFormat": "{{workbench_attribute_model}}",
-          "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=~\"workbench-observer|codex-gateway\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$bucket]))"
+          "queryType": "instant",
+          "instant": true,
+          "expr": "(100 * sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_status =~ \"error|failed\" [$__range])) / sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))) or vector(0)"
         }
-      ],
-      "maxDataPoints": 60,
-      "interval": "$bucket"
+      ]
     },
     {
-      "id": 7,
-      "title": "Cost over time, by project",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
+      "id": 201,
+      "title": "Where the spend goes",
+      "type": "row",
+      "collapsed": false,
       "gridPos": {
-        "x": 12,
-        "y": 17,
-        "w": 12,
-        "h": 8
+        "x": 0,
+        "y": 5,
+        "w": 24,
+        "h": 1
       },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 100,
-            "lineWidth": 0,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "BMR"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Cantizans"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Terge"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "atomic-agents"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8F3BB8"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "contractify"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#56A64B"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "eigenwise-toolshed"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#E0B400"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "the-bot-resurrection"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#E24D42"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "legendFormat": "{{project_id}}",
-          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$bucket]))"
-        }
-      ],
-      "interval": "$bucket"
+      "panels": []
     },
     {
       "id": 32,
-      "title": "Cost over time, by model",
-      "description": "Client-side Claude Code metrics, priced by the model label Claude Code reports. Dispatch executor traffic uses the virtual claude-codex-auto label and resolves only in the gateway panel beside this one. Subscriptions are flat-rate, so this is a common unit for comparing activity, not money owed.",
+      "title": "Claude cost by model",
+      "description": "API-equivalent cost trend by Claude model. This is a comparison estimate, not money owed.",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
@@ -634,8 +303,8 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 25,
-        "w": 8,
+        "y": 6,
+        "w": 12,
         "h": 8
       },
       "interval": "$bucket",
@@ -785,17 +454,17 @@
     },
     {
       "id": 46,
-      "title": "Cost over time, by resolved model (gateway)",
-      "description": "Gateway token records, priced by the resolved backend model and token type. Dispatch executor traffic resolves here; subscriptions are flat-rate, so this is a common unit for comparing activity, not money owed.",
+      "title": "Gateway cost by resolved model",
+      "description": "List-price-equivalent trend for resolved gateway models. Gateway records are global until project attribution lands.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "x": 8,
-        "y": 25,
-        "w": 8,
+        "x": 12,
+        "y": 6,
+        "w": 12,
         "h": 8
       },
       "interval": "$bucket",
@@ -838,1055 +507,143 @@
       ]
     },
     {
-      "id": 33,
-      "title": "Unpriced model usage",
-      "description": "Models missing from the list-price table are deliberately shown here instead of being treated as zero-cost. Virtual dispatch labels resolve in the gateway cost panel, rather than appearing as unpriced client-side models.",
-      "type": "table",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 25,
-        "w": 8,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": false
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "instant": true,
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "__UNPRICED_MODELS__"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "renameByName": {
-              "model": "Unpriced model",
-              "Value": "Tokens in selected range"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 9,
-      "title": "Models in use",
-      "description": "Full input context volume (fresh input + cache) by resolved gateway model over the selected range. Output tokens excluded.",
-      "type": "bargauge",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 33,
-        "w": 12,
-        "h": 7
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "gradient",
-        "showUnfilled": true,
-        "valueMode": "text",
-        "reduceOptions": {
-          "values": true,
-          "calcs": [],
-          "limit": 25
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "palette-classic"
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "instant",
-          "instant": true,
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "legendFormat": "{{workbench_attribute_model}}",
-          "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))"
-        }
-      ]
-    },
-    {
-      "id": 10,
-      "title": "Token volume by backend",
-      "description": "Full input context volume by resolved backend from gateway records: anthropic (Claude subscription) vs codex (ChatGPT subscription). Output tokens excluded.",
-      "type": "bargauge",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 33,
-        "w": 12,
-        "h": 7
-      },
-      "options": {
-        "orientation": "horizontal",
-        "displayMode": "basic",
-        "showUnfilled": true,
-        "valueMode": "text",
-        "reduceOptions": {
-          "values": true,
-          "calcs": [],
-          "limit": 25
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
-          },
-          "min": 0
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "queryType": "instant",
-          "instant": true,
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "legendFormat": "{{workbench_attribute_backend}}",
-          "expr": "sum by (workbench_attribute_backend) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$__range]))"
-        }
-      ]
-    },
-    {
-      "id": 8,
-      "title": "Usage by project",
-      "type": "table",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 40,
-        "w": 24,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true
-      },
-      "fieldConfig": {
-        "defaults": {},
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Cost"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "instant": true,
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (project_id) (increase(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[$__range]))"
-        },
-        {
-          "refId": "B",
-          "format": "table",
-          "instant": true,
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range]))"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "organize",
-          "options": {
-            "renameByName": {
-              "project_id": "Project",
-              "Value #A": "Tokens",
-              "Value #B": "Cost"
-            }
-          }
-        }
-      ],
-      "description": "Exact Prometheus token and cost totals by project over the selected range. The table totals match the headline stats."
-    },
-    {
-      "id": 105,
-      "title": "Efficiency",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 48,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 37,
-      "title": "How to read this row",
-      "type": "text",
-      "transparent": true,
-      "gridPos": {
-        "x": 0,
-        "y": 49,
-        "w": 24,
-        "h": 5
-      },
-      "options": {
-        "mode": "markdown",
-        "content": "- **Context spent per answer token:** input and cache tokens processed for every output token. Lower is better. Main normally exceeds fresh executors; a widening gap means the long-running orchestrator is being woken with too much context.\n- **Work moved off the Anthropic limit:** share of list-price-equivalent work routed to Codex models through codex-gateway. Higher means the second subscription pool is doing more work. Dollar amounts are comparisons, not charges.\n- **Background/compaction work:** list-price equivalent attributed to compaction, summaries, and other auxiliary requests instead of task output. Small background noise is normal; bursts are waste."
-      }
-    },
-    {
-      "id": 32,
-      "title": "Context spent per answer token (lower is better)",
-      "description": "Billed input, cache creation, and cache reads divided by output tokens, split by query source. Lower is better. Main normally runs higher than subagent; a widening gap means the orchestrator is waking up with too much context.",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 54,
-        "w": 8,
-        "h": 7
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "vertical",
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value_and_name",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "decimals": 0,
-          "suffix": ":1",
-          "noValue": "No data"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "subagent"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Fresh executors"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "main"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Long-running orchestrator"
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "auxiliary"
-            },
-            "properties": [
-              {
-                "id": "displayName",
-                "value": "Background/compaction"
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "(sum by (query_source) (increase(claude_code_token_usage_tokens_total{type=~\"cacheRead|cacheCreation|input\",project_id=~\"$project\"}[$__range])) / sum by (query_source) (increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range]))) and (sum by (query_source) (increase(claude_code_token_usage_tokens_total{type=\"output\",project_id=~\"$project\"}[$__range])) > 0)",
-          "legendFormat": "{{query_source}}",
-          "instant": true
-        }
-      ]
-    },
-    {
-      "id": 33,
-      "title": "Work moved off the Anthropic limit",
-      "description": "Gateway-recorded resolved-model list-price equivalents show the Codex share of all known model costs. This includes dispatch executor traffic, unlike Claude Code’s virtual client-side dispatch label. The two figures underneath show the Codex and total list-price equivalents for the selected range.",
-      "type": "stat",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 8,
-        "y": 54,
-        "w": 8,
-        "h": 7
-      },
-      "options": {
-        "reduceOptions": {
-          "values": false,
-          "calcs": [
-            "lastNotNull"
-          ],
-          "fields": ""
-        },
-        "orientation": "vertical",
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value_and_name",
-        "justifyMode": "auto"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "decimals": 1,
-          "noValue": "No data"
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Codex list-price equivalent"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Total list-price equivalent"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
-          "legendFormat": "Share routed to Codex",
-          "instant": true
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range]))",
-          "legendFormat": "Codex list-price equivalent",
-          "instant": true
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]))",
-          "legendFormat": "Total list-price equivalent",
-          "instant": true
-        }
-      ]
-    },
-    {
-      "id": 34,
-      "title": "Background/compaction cost by model and project",
-      "description": "API-equivalent cost from compaction, summarization, and background work, sorted highest first. A large or climbing entry is overhead rather than work someone directly asked for.",
-      "type": "table",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 16,
-        "y": 54,
-        "w": 8,
-        "h": 7
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": false,
-          "reducer": [],
-          "countRows": false,
-          "fields": ""
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "custom": {
-            "cellOptions": {
-              "type": "auto",
-              "wrapText": true
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Model"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 180
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Project"
-            },
-            "properties": [
-              {
-                "id": "custom.width",
-                "value": 130
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "List-price equivalent"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              },
-              {
-                "id": "custom.width",
-                "value": 150
-              }
-            ]
-          }
-        ]
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "format": "table",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sort_desc(sum by (model, project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",query_source=\"auxiliary\",project_id=~\"$project\"}[$__range])))",
-          "instant": true
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "renameByName": {
-              "model": "Model",
-              "project_id": "Project",
-              "Value #A": "List-price equivalent"
-            },
-            "excludeByName": {
-              "Time": true
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 102,
-      "title": "Tool activity",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 61,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 13,
-      "title": "Tool activity error rate",
-      "description": "Share of completed tool activity carrying an error status. This is frequency, not token cost.",
-      "type": "stat",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 62,
-        "w": 12,
-        "h": 4
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "none",
-        "textMode": "value"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "percent",
-          "decimals": 1,
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "orange",
-                "value": 2
-              },
-              {
-                "color": "red",
-                "value": 10
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "(100 * sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_status =~ \"error|failed\" [$__range])) / sum(count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))) or vector(0)"
-        }
-      ]
-    },
-    {
-      "id": 14,
-      "title": "Tool activity duration p95",
-      "description": "Observed hook duration when the hook payload supplies it. Missing durations stay unavailable.",
-      "type": "stat",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 62,
-        "w": 12,
-        "h": 4
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "value",
-        "graphMode": "area",
-        "textMode": "value"
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ms",
-          "decimals": 0,
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "blue"
-          }
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "quantile_over_time(0.95, {service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_duration_ms_value [$__range]) by ()"
-        }
-      ]
-    },
-    {
-      "id": 11,
-      "title": "Tool activity by name",
-      "description": "Estimated result tokens by tool. A tool result re-enters the LLM as input on later requests, usually at cache-read rates after its first inclusion, so large results tax every turn until compaction. Call count stays visible for frequency.",
-      "type": "table",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 66,
-        "w": 12,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_attribute_tool_name) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))",
-          "legendFormat": "{{workbench_attribute_tool_name}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_attribute_tool_name) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" [$__range]))",
-          "legendFormat": "{{workbench_attribute_tool_name}}"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "workbench_attribute_tool_name": "Tool",
-              "Value #A": "Result tokens (estimate)",
-              "Value #B": "Calls"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 15,
-      "title": "Active vs idle time",
-      "description": "Claude Code active-time telemetry, grouped by the provider activity type.",
+      "id": 7,
+      "title": "Claude cost by project",
       "type": "timeseries",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
       },
       "gridPos": {
-        "x": 12,
-        "y": 66,
+        "x": 0,
+        "y": 14,
         "w": 12,
         "h": 8
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "s",
-          "custom": {
-            "drawStyle": "line",
-            "fillOpacity": 20,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "legendFormat": "{{type}}",
-          "expr": "sum by (type) (increase(claude_code_active_time_seconds_total{project_id=~\"$project\"}[$bucket]))"
-        }
-      ],
-      "interval": "$bucket"
-    },
-    {
-      "id": 103,
-      "title": "MCP",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 74,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 12,
-      "title": "MCP activity by server / tool",
-      "description": "MCP server rollup for estimated tool-result tokens and calls. Tool results re-enter the LLM as input on later requests. The adjacent definition table shows the per-request input cost of each server’s tool definitions; per-tool detail is directly beneath.",
-      "type": "table",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 75,
-        "w": 12,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": true,
-          "reducer": [
-            "sum"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_attribute_mcp_server) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))",
-          "legendFormat": "{{workbench_attribute_mcp_server}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_attribute_mcp_server) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$__range]))",
-          "legendFormat": "{{workbench_attribute_mcp_server}}"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "workbench_attribute_mcp_server": "MCP server",
-              "Value #A": "Result tokens (estimate)",
-              "Value #B": "Calls"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 25,
-      "title": "MCP definition footprint by server",
-      "description": "Estimated input tokens spent per request on each MCP server’s tool definitions. Server names come from normalized gateway.mcp.footprint records, so new servers appear automatically.",
-      "type": "table",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 75,
-        "w": 12,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "avg by (workbench_attribute_mcp_server) (avg_over_time({service_name=\"workbench-observer\"} |= \"gateway.mcp.footprint\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$__range]))",
-          "legendFormat": "{{workbench_attribute_mcp_server}}"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "workbench_attribute_mcp_server": "MCP server",
-              "Value #A": "Definition tokens per request"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 28,
-      "title": "MCP tool detail by server / tool",
-      "description": "Per-tool detail for the MCP server rollup above. Totals sum estimated result tokens and calls across all listed tools.",
-      "type": "table",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 83,
-        "w": 24,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": true,
-          "reducer": [
-            "sum"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_attribute_mcp_server, workbench_attribute_tool_name) (sum_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_tool_result_tokens_estimate_value [$__range]))",
-          "legendFormat": "{{workbench_attribute_mcp_server}} {{workbench_attribute_tool_name}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_attribute_mcp_server, workbench_attribute_tool_name) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.post_tool_use\" | workbench_attribute_is_mcp = \"true\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$__range]))",
-          "legendFormat": "{{workbench_attribute_mcp_server}} {{workbench_attribute_tool_name}}"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true
-            },
-            "renameByName": {
-              "workbench_attribute_mcp_server": "MCP server",
-              "workbench_attribute_tool_name": "Tool",
-              "Value #A": "Result tokens (estimate)",
-              "Value #B": "Calls"
-            }
-          }
-        }
-      ]
-    },
-    {
-      "id": 16,
-      "title": "MCP connection activity",
-      "description": "MCP server connection attempts, by server and status. This reads Claude Code's own claude_code.mcp_server_connection event, which names only plugin-hosted servers, so IDE and user-configured servers roll up under \"unnamed (non-plugin server)\" rather than being dropped. The event carries no project attribution, so this panel is board-wide and appears on the global dashboard only.",
-      "type": "timeseries",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 91,
-        "w": 24,
-        "h": 6
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
+          "unit": "currencyUSD",
           "custom": {
             "drawStyle": "bars",
-            "fillOpacity": 45,
+            "fillOpacity": 100,
+            "lineWidth": 0,
             "stacking": {
               "mode": "normal"
             }
-          },
-          "noValue": "No connection events in range. If sessions are running, the observer is not receiving them."
+          }
         },
-        "overrides": []
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "BMR"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#5794F2"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Cantizans"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#73BF69"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Terge"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#FF9830"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "atomic-agents"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#8F3BB8"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "contractify"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#56A64B"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "eigenwise-toolshed"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#E0B400"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "the-bot-resurrection"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "#E24D42"
+                }
+              }
+            ]
+          }
+        ]
       },
       "options": {
         "legend": {
           "displayMode": "table",
-          "placement": "bottom",
+          "placement": "right",
           "calcs": [
             "sum"
           ]
@@ -1899,149 +656,20 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "loki",
-            "uid": "loki"
+            "type": "prometheus",
+            "uid": "prometheus"
           },
-          "expr": "sum by (mcp_server, connection_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.mcp_server_connection\" | label_format mcp_server=\"{{ or .workbench_attribute_mcp_server .workbench_attribute_plugin_name \\\"unnamed (non-plugin server)\\\" }}\", connection_status=\"{{ or .workbench_attribute_status \\\"unknown\\\" }}\" [$bucket]))",
-          "legendFormat": "{{mcp_server}} ({{connection_status}})"
+          "legendFormat": "{{project_id}}",
+          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$bucket]))"
         }
       ],
-      "interval": "$bucket"
-    },
-    {
-      "id": 104,
-      "title": "Sessions & agents",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 97,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 19,
-      "title": "Gateway usage by session and role",
-      "description": "Exact provider input context and request count by session, agent role, and resolved model. Project names come from session-start events; Session is the short UUID fallback when a session has no labeled start event in the selected range.",
-      "type": "table",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 98,
-        "w": 12,
-        "h": 8
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": true,
-          "reducer": [
-            "sum"
-          ]
-        }
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short"
-        },
-        "overrides": []
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_session_id, session_label, workbench_attribute_agent_role, workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | label_format session_label=\"{{ .workbench_session_id | trunc 8 }}\" | unwrap workbench_measurement_context_tokens_value [$__range]))",
-          "legendFormat": "{{session_label}} {{workbench_attribute_agent_role}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_session_id, session_label, workbench_attribute_agent_role, workbench_attribute_model) (count_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | label_format session_label=\"{{ .workbench_session_id | trunc 8 }}\" [$__range]))",
-          "legendFormat": "{{session_label}} {{workbench_attribute_agent_role}}"
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "max by (workbench_session_id, workbench_attribute_project_name) (count_over_time({service_name=\"workbench-observer\"} |= \"hook.session_start\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | workbench_attribute_project_name != \"\" [$__range]))",
-          "legendFormat": "{{workbench_session_id}}"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
-        },
-        {
-          "id": "joinByField",
-          "options": {
-            "byField": "workbench_session_id",
-            "mode": "outer"
-          }
-        },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value #C": true,
-              "workbench_session_id": true
-            },
-            "indexByName": {
-              "workbench_attribute_project_name": 0,
-              "session_label": 1,
-              "workbench_attribute_agent_role": 2,
-              "workbench_attribute_model": 3,
-              "Value #A": 4,
-              "Value #B": 5
-            },
-            "renameByName": {
-              "workbench_attribute_project_name": "Project",
-              "session_label": "Session",
-              "workbench_attribute_agent_role": "Role",
-              "workbench_attribute_model": "Model",
-              "Value #A": "Context tokens",
-              "Value #B": "Requests"
-            }
-          }
-        },
-        {
-          "id": "sortBy",
-          "options": {
-            "fields": {},
-            "sort": [
-              {
-                "field": "Context tokens",
-                "desc": true
-              }
-            ]
-          }
-        }
-      ]
+      "interval": "$bucket",
+      "description": "API-equivalent Claude cost trend by reporting project."
     },
     {
       "id": 20,
-      "title": "Orchestrator vs executor usage",
-      "description": "Full input context grouped from exact gateway agent headers. A missing agent ID is the orchestrator.",
+      "title": "Context by orchestrator vs executor",
+      "description": "Context-token volume by agent role. This shows which role is consuming the model context budget.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
@@ -2049,7 +677,7 @@
       },
       "gridPos": {
         "x": 12,
-        "y": 98,
+        "y": 14,
         "w": 12,
         "h": 8
       },
@@ -2094,293 +722,22 @@
       "interval": "$bucket"
     },
     {
-      "id": 18,
-      "title": "Subagent lifecycle activity",
-      "description": "Starts and stops by agent type. Sidequest dispatch IDs are shortened in the legend. Counts lifecycle activity, not tokens.",
-      "type": "timeseries",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 106,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 45,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum by (agent_type) (count_over_time({service_name=\"workbench-observer\"} |~ \"hook.subagent_(start|stop)\" | workbench_attribute_agent_type != \"\" | label_format agent_type=\"{{ regexReplaceAll \\\"^sidequest-sq-([0-9]+)-.*\\\" .workbench_attribute_agent_type \\\"ticket $1\\\" }}\" [$bucket]))",
-          "legendFormat": "{{agent_type}}"
-        }
-      ],
-      "interval": "$bucket"
-    },
-    {
-      "id": 22,
-      "title": "Context-window growth",
-      "description": "Exact full input context by session. Session IDs are shortened to eight characters; drops can indicate compaction. Output has no source attribution.",
-      "type": "timeseries",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 106,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "line",
-            "lineWidth": 2,
-            "fillOpacity": 0,
-            "spanNulls": true,
-            "showPoints": "auto"
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "max by (session_label) (max_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_session_id != \"\" | label_format session_label=\"{{ .workbench_session_id | trunc 8 }}\" | unwrap workbench_measurement_context_tokens_value [$bucket]))",
-          "legendFormat": "session {{session_label}}"
-        }
-      ],
-      "maxDataPoints": 60,
-      "interval": "$bucket"
-    },
-    {
-      "id": 106,
-      "title": "Gateway internals",
+      "id": 202,
+      "title": "Failures and source activity",
       "type": "row",
       "collapsed": false,
       "gridPos": {
         "x": 0,
-        "y": 114,
+        "y": 22,
         "w": 24,
         "h": 1
       },
       "panels": []
     },
     {
-      "id": 21,
-      "title": "Input composition over time",
-      "description": "Estimated token split normalized to exact provider input. Tool-result tokens are nested in messages and are not stacked again.",
-      "type": "timeseries",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 115,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 55,
-            "lineWidth": 0,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_native_tools_tokens_value [$bucket]))",
-          "legendFormat": "native tools"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_system_tokens_value [$bucket]))",
-          "legendFormat": "system"
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_first_message_tokens_value [$bucket]))",
-          "legendFormat": "first message"
-        },
-        {
-          "refId": "D",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_history_tokens_value [$bucket]))",
-          "legendFormat": "history"
-        },
-        {
-          "refId": "E",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_input_mcp_tools_tokens_value [$bucket]))",
-          "legendFormat": "MCP tools"
-        }
-      ],
-      "maxDataPoints": 60,
-      "interval": "$bucket"
-    },
-    {
-      "id": 23,
-      "title": "Prompt-cache economics",
-      "description": "Exact aggregate cache buckets. Reads cost 0.1x base input, 5-minute writes 1.25x, and 1-hour writes 2x. Per-section cache attribution remains estimated.",
-      "type": "timeseries",
-      "datasource": {
-        "type": "loki",
-        "uid": "loki"
-      },
-      "gridPos": {
-        "x": 12,
-        "y": 115,
-        "w": 12,
-        "h": 8
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 55,
-            "lineWidth": 0,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "bottom",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_read_tokens_value [$bucket]))",
-          "legendFormat": "cache reads"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_5m_tokens_value [$bucket]))",
-          "legendFormat": "5m writes"
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "expr": "sum(sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_cache_creation_1h_tokens_value [$bucket]))",
-          "legendFormat": "1h writes"
-        }
-      ],
-      "maxDataPoints": 60,
-      "interval": "$bucket"
-    },
-    {
       "id": 17,
-      "title": "Hook execution activity / failures",
-      "description": "Own-hook completion frequency by hook name and provider status. Hook duration stays unavailable when Claude Code omits it from this event.",
+      "title": "Hook failures over time",
+      "description": "Observed failed hook completions. A flat zero means no matching failures in the selected range.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
@@ -2388,8 +745,8 @@
       },
       "gridPos": {
         "x": 0,
-        "y": 123,
-        "w": 24,
+        "y": 23,
+        "w": 12,
         "h": 8
       },
       "fieldConfig": {
@@ -2422,67 +779,52 @@
             "type": "loki",
             "uid": "loki"
           },
-          "expr": "sum by (workbench_attribute_hook_name, workbench_attribute_status) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.hook_execution_complete\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$bucket]))",
+          "expr": "sum by (workbench_attribute_hook_name) (count_over_time({service_name=\"workbench-observer\"} |= \"claude_code.hook_execution_complete\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_attribute_status =~ \"error|failed\" [$bucket])) or vector(0)",
           "legendFormat": "{{workbench_attribute_hook_name}}"
         }
       ],
       "interval": "$bucket"
     },
     {
-      "id": 107,
-      "title": "Board cost attribution",
-      "type": "row",
-      "collapsed": false,
-      "gridPos": {
-        "x": 0,
-        "y": 131,
-        "w": 24,
-        "h": 1
-      },
-      "panels": []
-    },
-    {
-      "id": 29,
-      "title": "Ticket dispatch usage and route drift",
-      "description": "Selected-range gateway usage joined to Sidequest ticket snapshots by dispatch agent ID. Each row is one unique dispatch attempt: repeated ticket rows are rework, and configured vs resolved model shows route drift. Batched agents mapped to multiple tickets are excluded rather than double-counted; the SQLite report retains their ambiguity and the structured bounce history. Dollar cost appears only when a cost_usd estimate is present.",
-      "type": "table",
+      "id": 210,
+      "title": "Gateway errors and throttles",
+      "description": "Gateway log records containing an error, failure, throttle, rate-limit, or HTTP 429 signal.",
+      "type": "timeseries",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "x": 0,
-        "y": 132,
-        "w": 24,
-        "h": 9
-      },
-      "options": {
-        "showHeader": true,
-        "footer": {
-          "show": true,
-          "reducer": [
-            "sum"
-          ]
-        }
+        "x": 12,
+        "y": 23,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short"
+          "unit": "short",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 45,
+            "stacking": {
+              "mode": "normal"
+            }
+          },
+          "noValue": "No gateway error records in this range"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Value #C"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              }
-            ]
-          }
-        ]
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": [
+            "sum"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi"
+        }
       },
       "targets": [
         {
@@ -2491,85 +833,206 @@
             "type": "loki",
             "uid": "loki"
           },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_agent_id, workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_agent_id != \"\" | unwrap workbench_measurement_context_tokens_value [$__range]))",
-          "legendFormat": "{{workbench_agent_id}}"
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_agent_id, workbench_attribute_model) (count_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_agent_id != \"\" [$__range]))",
-          "legendFormat": "{{workbench_agent_id}}"
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "sum by (workbench_agent_id, workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | workbench_agent_id != \"\" | unwrap workbench_measurement_cost_usd_value [$__range]))",
-          "legendFormat": "{{workbench_agent_id}}"
-        },
-        {
-          "refId": "D",
-          "datasource": {
-            "type": "loki",
-            "uid": "loki"
-          },
-          "queryType": "instant",
-          "instant": true,
-          "expr": "((sum by (workbench_agent_id, workbench_ticket_ref, workbench_attribute_category, workbench_attribute_configured_model) (count_over_time({service_name=\"workbench-observer\"} |= \"sidequest.ticket\" | workbench_agent_id != \"\" | workbench_ticket_ref != \"\" | workbench_attribute_category != \"\" | workbench_attribute_configured_model != \"\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$__range])) > bool 0) and on (workbench_agent_id) (count by (workbench_agent_id) (sum by (workbench_agent_id, workbench_ticket_ref, workbench_attribute_category, workbench_attribute_configured_model) (count_over_time({service_name=\"workbench-observer\"} |= \"sidequest.ticket\" | workbench_agent_id != \"\" | workbench_ticket_ref != \"\" | workbench_attribute_category != \"\" | workbench_attribute_configured_model != \"\" | workbench_session_id !~ \"(probe|session-gateway).*\" [$__range])) > bool 0) == 1))",
-          "legendFormat": "{{workbench_ticket_ref}}"
+          "expr": "sum(count_over_time({service_name=\"codex-gateway\"} |~ \"(?i)(error|fail|throttl|rate.?limit|429)\" [$bucket])) or vector(0)",
+          "legendFormat": "errors / throttles"
         }
       ],
-      "transformations": [
-        {
-          "id": "merge",
-          "options": {}
+      "interval": "$bucket"
+    },
+    {
+      "id": 220,
+      "title": "Claude metric samples, 5m",
+      "description": "Recent Prometheus samples. Zero means Claude metrics have not arrived in five minutes.",
+      "type": "stat",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 31,
+        "w": 8,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
         },
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value #D": true
-            },
-            "renameByName": {
-              "workbench_ticket_ref": "Ticket",
-              "workbench_attribute_category": "Category",
-              "workbench_attribute_configured_model": "Configured route",
-              "workbench_attribute_model": "Resolved model",
-              "workbench_agent_id": "Dispatch agent",
-              "Value #A": "Context tokens",
-              "Value #B": "Requests",
-              "Value #C": "Estimated cost"
-            }
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples in the last 5 minutes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
           }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "count(count_over_time(claude_code_token_usage_tokens_total{project_id=~\"$project\"}[5m]))",
+          "legendFormat": "Claude metric samples, 5m",
+          "instant": true
         }
       ]
     },
     {
-      "id": 31,
-      "title": "Wakeup join keys",
-      "type": "text",
+      "id": 221,
+      "title": "Observer records, 5m",
+      "description": "Recent observer log records. Zero means the observer has not reported in five minutes.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
       "gridPos": {
-        "x": 0,
-        "y": 141,
-        "w": 24,
+        "x": 8,
+        "y": 31,
+        "w": 8,
         "h": 4
       },
       "options": {
-        "mode": "markdown",
-        "content": "**Wakeup joins (SQ-755).** `hook.post_tool_use` records for `SendMessage` retain `workbench_attribute_recipient` and `workbench_tool_use_id`, so pre/post/tool-result records join on the exact tool-use ID without logging message text. The first later orchestrator `gateway.token.usage` record gets `workbench_attribute_wake_reason` as `subagent_stop` or `teammate_message` when the local observer already has the causal hook. Group wake reasons by `workbench_session_id`; an empty reason means no causal hook was available, not zero wakeups."
-      }
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples in the last 5 minutes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({service_name=\"workbench-observer\"}[5m]))",
+          "legendFormat": "Observer records, 5m",
+          "instant": true
+        }
+      ]
+    },
+    {
+      "id": 222,
+      "title": "Gateway records, 5m",
+      "description": "Recent gateway log records. Zero can mean the gateway is idle or unavailable.",
+      "type": "stat",
+      "datasource": {
+        "type": "loki",
+        "uid": "loki"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 31,
+        "w": 8,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "horizontal",
+        "colorMode": "value",
+        "graphMode": "area",
+        "textMode": "value_and_name",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "noValue": "No samples in the last 5 minutes",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "loki"
+          },
+          "expr": "sum(count_over_time({service_name=\"codex-gateway\"}[5m]))",
+          "legendFormat": "Gateway records, 5m",
+          "instant": true
+        }
+      ]
     }
   ]
 }

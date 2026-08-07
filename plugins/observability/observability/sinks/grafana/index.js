@@ -15,6 +15,35 @@ const DATA_VOLUME = 'workbench-lgtm-demo-data';
 const VERSION_LABEL = 'dev.eigenwise.workbench.version';
 const CONFIG_VERSION_LABEL = 'dev.eigenwise.workbench.lgtm-config-version';
 const MANAGED_CONFIG_VERSION = '1';
+const PROJECT_ACTIVITY_METRIC = 'claude_code_token_usage_tokens_total';
+
+function activeProjectNames(config = {}, context = {}) {
+  if (context.activeProjectNames) return new Set(context.activeProjectNames);
+  const state = inspect(config, context);
+  if (!state?.running) return new Set();
+  const docker = context.docker || 'docker';
+  const spawn = context.spawnSync || spawnSync;
+  const runtime = runtimeConfig(config);
+  const result = spawn(docker, [
+    'exec', runtime.container, 'curl', '--silent', '--show-error', '--fail', '--get',
+    '--data-urlencode', `match[]=${PROJECT_ACTIVITY_METRIC}`,
+    '--data-urlencode', `start=${context.activityStart}`,
+    'http://127.0.0.1:9090/api/v1/series',
+  ], { encoding: 'utf8', windowsHide: true });
+  if (result.error || result.status !== 0) {
+    throw new Error('Prometheus could not report recently active dashboard projects.');
+  }
+  let response;
+  try {
+    response = JSON.parse(result.stdout);
+  } catch {
+    throw new Error('Prometheus returned invalid project activity data.');
+  }
+  if (response.status !== 'success' || !Array.isArray(response.data)) {
+    throw new Error('Prometheus returned incomplete project activity data.');
+  }
+  return new Set(response.data.map(({ project_id: projectName }) => projectName).filter(Boolean));
+}
 
 function port(value, fallback, name) {
   const resolved = value === undefined ? fallback : Number(value);
@@ -199,6 +228,7 @@ module.exports = {
   IMAGE,
   MANAGED_CONFIG_VERSION,
   OTLP_PORT,
+  activeProjectNames,
   deleteStatus,
   resolve,
   runtimeConfig,

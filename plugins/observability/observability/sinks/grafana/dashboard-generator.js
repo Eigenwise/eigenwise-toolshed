@@ -7,11 +7,11 @@ const {
   gatewayResolvedCodexCostExpression,
   gatewayTotalCostExpression,
   modelCostTargets,
-  unpricedModelsExpression,
 } = require('./model-prices');
 
 const TEMPLATE_FILE = path.join(__dirname, 'dashboards', 'claude-code-usage.json');
 const GENERATED_DIRECTORY = 'grafana-dashboards';
+const RESET_MARKER_FILE = 'grafana-dashboard-reset.json';
 const PROJECT_ID = /^[a-f0-9]{64}$/;
 const PROJECT_NAME = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,63}$/;
 
@@ -56,8 +56,13 @@ function filterLoki(expression, projects) {
   return expression.replaceAll('{service_name="workbench-observer"}', `{service_name="workbench-observer"} | ${matcher}`);
 }
 
-// MCP events have no project attribution; offload share measures board-wide routing.
-const PROJECT_UNSCOPED_PANELS = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
+// Gateway records do not carry project attribution, so these remain global until SQ-1488 lands.
+const PROJECT_UNSCOPED_PANELS = new Set([
+  'Work routed to Codex',
+  'Gateway cost by resolved model',
+  'Gateway errors and throttles',
+  'Gateway records, 5m',
+]);
 
 // The project selector is baked into every query, so its variable is dropped.
 // Every other declared variable has to survive generation.
@@ -150,8 +155,8 @@ function globalDashboard(template, projects) {
   return filterDashboard(template, projects);
 }
 
-// By-project breakdowns can only ever show the board's own project — global-only.
-const GLOBAL_ONLY_PANELS = new Set(['Usage by project', 'Cost over time, by project']);
+// A by-project breakdown can only show the selected project on a per-project dashboard.
+const GLOBAL_ONLY_PANELS = new Set(['Claude cost by project']);
 
 const EMPTY_STATE_TITLE = 'Telemetry in the selected range';
 const EMPTY_STATE_MESSAGE = 'No Claude Code metrics in this range. Sessions may be running in directories that never got the telemetry env: run /workbench:enable-project-telemetry in this repository, then restart Claude Code there.';
@@ -204,40 +209,22 @@ function perProjectDashboard(template, project) {
 }
 
 function applyModelPricing(dashboard) {
-  const costPanel = dashboard.panels.find(({ title }) => title === 'Cost over time, by model');
+  const costPanel = dashboard.panels.find(({ title }) => title === 'Claude cost by model');
   if (costPanel) costPanel.targets = modelCostTargets();
-  const gatewayCostPanel = dashboard.panels.find(({ title }) => title === 'Cost over time, by resolved model (gateway)');
+  const gatewayCostPanel = dashboard.panels.find(({ title }) => title === 'Gateway cost by resolved model');
   if (gatewayCostPanel) gatewayCostPanel.targets = gatewayModelCostTargets();
-  const unpricedPanel = dashboard.panels.find(({ title }) => title === 'Unpriced model usage');
-  if (unpricedPanel) unpricedPanel.targets[0].expr = unpricedModelsExpression();
-  const offloadPanel = dashboard.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
+  const offloadPanel = dashboard.panels.find(({ title }) => title === 'Work routed to Codex');
   if (offloadPanel) {
     const codexCost = gatewayResolvedCodexCostExpression('$__range');
     const totalCost = gatewayTotalCostExpression('$__range');
     offloadPanel.datasource = { type: 'loki', uid: 'loki' };
-    offloadPanel.targets = [
-      {
-        refId: 'A',
-        datasource: offloadPanel.datasource,
-        expr: `(100 * (${codexCost}) / (${totalCost})) and ((${totalCost}) > 0)`,
-        legendFormat: 'Share routed to Codex',
-        instant: true,
-      },
-      {
-        refId: 'B',
-        datasource: offloadPanel.datasource,
-        expr: codexCost,
-        legendFormat: 'Codex list-price equivalent',
-        instant: true,
-      },
-      {
-        refId: 'C',
-        datasource: offloadPanel.datasource,
-        expr: totalCost,
-        legendFormat: 'Total list-price equivalent',
-        instant: true,
-      },
-    ];
+    offloadPanel.targets = [{
+      refId: 'A',
+      datasource: offloadPanel.datasource,
+      expr: `(100 * (${codexCost}) / (${totalCost})) and ((${totalCost}) > 0)`,
+      legendFormat: 'Share routed to Codex',
+      instant: true,
+    }];
   }
   return dashboard;
 }
@@ -254,6 +241,33 @@ function generatedDashboards(projects, template = JSON.parse(fs.readFileSync(TEM
   ];
 }
 
+function projectsWithActivity(projects, activeProjectNames) {
+  const active = activeProjectNames instanceof Set ? activeProjectNames : new Set(activeProjectNames || []);
+  return registeredProjects(projects).filter(({ project_name }) => active.has(project_name));
+}
+
+function dashboardActivityStart(dataDir, now = Date.now()) {
+  // Thirty days spans normal breaks between projects without keeping abandoned one-off dashboards forever.
+  // A manual reset moves the boundary forward so old samples cannot immediately recreate the deleted set.
+  const windowStart = now - (30 * 24 * 60 * 60 * 1000);
+  try {
+    const marker = JSON.parse(fs.readFileSync(path.join(dataDir, RESET_MARKER_FILE), 'utf8'));
+    const resetAt = Date.parse(marker.resetAt);
+    return new Date(Number.isFinite(resetAt) ? Math.max(windowStart, resetAt) : windowStart).toISOString();
+  } catch {
+    return new Date(windowStart).toISOString();
+  }
+}
+
+function resetDashboards(dataDir, now = Date.now()) {
+  fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
+  const directory = path.join(dataDir, GENERATED_DIRECTORY);
+  const resetAt = new Date(now).toISOString();
+  fs.rmSync(directory, { recursive: true, force: true });
+  fs.writeFileSync(path.join(dataDir, RESET_MARKER_FILE), `${JSON.stringify({ resetAt }, null, 2)}\n`, { mode: 0o600 });
+  return { directory, resetAt };
+}
+
 function provisionDashboards(dataDir, projects) {
   const directory = path.join(dataDir, GENERATED_DIRECTORY);
   fs.rmSync(directory, { recursive: true, force: true });
@@ -267,7 +281,11 @@ function provisionDashboards(dataDir, projects) {
 module.exports = {
   EMPTY_STATE_TITLE,
   GENERATED_DIRECTORY,
+  RESET_MARKER_FILE,
+  dashboardActivityStart,
   generatedDashboards,
+  projectsWithActivity,
   provisionDashboards,
   registeredProjects,
+  resetDashboards,
 };

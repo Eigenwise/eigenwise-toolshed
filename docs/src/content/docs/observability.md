@@ -11,6 +11,6 @@ The local observer stores canonical records in SQLite. It prunes records older t
 
 Hook observations are metadata-only. The observer records event type, project identity, permission mode, effort, tool facets, recipient, status, and error type. It never records prompt or response text, file contents, credentials, tool inputs or results, raw request bodies, or environment values. The request high-water guard uses the gateway's actual per-session peak and warns near the 32 MB body limit before an executor starts.
 
-The dashboard's **Cost over time, by resolved model (gateway)** panel uses gateway records and the model that actually handled each request. Use it for Sidequest dispatch executors: Claude Code labels those requests `claude-codex-auto`, a virtual route name with no single price. Client-reported cost panels exclude that virtual label rather than showing an invented dollar amount.
+The Grafana dashboard leads with cost, routing, failures, and source activity, then graphs spend by model, project, and agent role. Project dashboards appear only after that project reports Claude Code metrics and expire after 30 quiet days. Gateway panels stay on the global dashboard because gateway records do not yet carry project attribution.
 
 Start with [setup](./setup/) to install the plugin, then [per-project opt-in](./project-opt-in/) to turn it on for a repository, then the [dashboard](./dashboard/) guide to read the panels.
