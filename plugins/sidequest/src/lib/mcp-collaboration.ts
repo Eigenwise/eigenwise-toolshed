@@ -206,6 +206,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
         allowRepeatFailure: { type: 'boolean' },
+        allowUnscoped: { type: 'boolean', description: 'Explicitly allow a write ticket with no declared file scope.' },
         integrationBranch: { type: 'string' },
         full: { type: 'boolean', description: 'Include token, executor, warnings, and recovery details.' },
       },
@@ -219,6 +220,7 @@ const tools: ToolDefinition[] = [
         sessionId: requireDispatchSession(),
         sharedTree: !!args.sharedTree,
         allowRepeatFailure: args.allowRepeatFailure === true,
+        allowUnscoped: args.allowUnscoped === true,
         integrationBranch: args.integrationBranch,
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.

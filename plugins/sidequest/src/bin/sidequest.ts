@@ -53,7 +53,7 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure']);
+      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure', 'allow-unscoped']);
       if (val === null) {
         if (BOOL.has(key)) {
           opts[key] = true;
@@ -115,7 +115,7 @@ const HELP_COMMANDS: any = {
   ready: 'sidequest ready [--model <model>] [--category <id>] [--json] [--brief]',
   archive: 'sidequest archive [<id|SQ-n>] [--done]',
   unarchive: 'sidequest unarchive <id|SQ-n>',
-  dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--project <path-or-slug>] [--session id] [--unverified-transport]',
+  dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport]',
   briefing: 'sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]',
   'native-agent': 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]',
   temp: 'sidequest temp cleanup [--root <path>] [--json]',
@@ -218,7 +218,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--project <path-or-slug>] [--session id] [--unverified-transport]  prepare a token-gated dispatch: declared-file tickets use worktrees unless shared state or bounded artifact output is explicit; CLI transport refuses unless --unverified-transport (does not prove any session gets the board MCP) — use the board MCP dispatch tool instead
+  sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport]  prepare a token-gated dispatch: declared-file tickets use worktrees unless shared state or bounded artifact output is explicit; --allow-unscoped explicitly accepts a write ticket can block before submission; CLI transport refuses unless --unverified-transport (does not prove any session gets the board MCP); use the board MCP dispatch tool instead
   sidequest briefing <SQ-n> --token <token> [--project <path-or-slug>]  print the current token-gated executor briefing
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]  return an already-registered native Agent spawn spec + bounded prompt; CLI transport refuses unless --unverified-transport
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition

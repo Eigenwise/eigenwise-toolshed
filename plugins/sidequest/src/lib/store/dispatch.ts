@@ -565,6 +565,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const projectPath = readMeta(slug)?.path;
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+  const initialNoDeclaredFileScope = !dispatchReadOnly(found)
+    && Array.isArray(found.contracts?.changes) && found.contracts.changes.length > 0
+    && !normalizeFiles(found.files).length;
+  if (initialNoDeclaredFileScope && opts.allowUnscoped !== true) {
+    throw new Error(`prepare dispatch: ${found.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+  }
   const verifyError = dispatchVerifyCommandError(found, projectPath);
   if (verifyError) throw new Error(verifyError);
   if (projectPath) assertSidequestInstall(projectPath);
@@ -632,6 +638,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (refusal) throw new Error(refusal);
     const preparedExec = resolveExec(t.model, t.effort);
     if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
+    const noDeclaredFileScope = !dispatchReadOnly(t)
+      && Array.isArray(t.contracts?.changes) && t.contracts.changes.length > 0
+      && !normalizeFiles(t.files).length;
+    if (noDeclaredFileScope && opts.allowUnscoped !== true) {
+      throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
+    }
     const fallbackReason = !current?.recovery && resolvedPolicy?.fallbackReason || null;
     const recovery = current && current.recovery && activeDispatchRoute(t) ? current.recovery : null;
     const attempts = current && Array.isArray(current.attempts) ? current.attempts.slice() : [];
@@ -695,6 +707,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         : commitScope.headCommit(readMeta(slug)?.path || ''),
       ...(integrationTargetState ? { integrationTarget: integrationTargetState } : {}),
       readonly,
+      ...(noDeclaredFileScope ? {
+        unscopedOverride: {
+          at: now,
+          source: opts.source || opts.transport || 'store',
+        },
+      } : {}),
       ...(nonRepoOutput ? { nonRepoOutput: true } : {}),
       artifactMode,
       artifactRoot,

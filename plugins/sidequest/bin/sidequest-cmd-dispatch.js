@@ -30,6 +30,7 @@ async function cmdDispatch(opts, positional) {
       sessionId: sessionId2,
       sharedTree: !!opts["shared-tree"],
       allowRepeatFailure: !!opts["allow-repeat-failure"],
+      allowUnscoped: !!opts["allow-unscoped"],
       source: "cli",
       transport: "cli",
       allowUnverifiedTransport: unverifiedTransport
