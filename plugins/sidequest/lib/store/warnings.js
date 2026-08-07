@@ -439,14 +439,19 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     }
     return warnings;
   }
-  function staleWorktreeCwdWarning(cwd, projectPath) {
+  function staleWorktreeCwdWarning(cwd, projectPath, sharedTree) {
     const workingDirectory = String(cwd || "").trim();
     const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, "/").toLowerCase();
     const worktreesPath = "/.claude/worktrees/";
     const containsWorktreesPath = normalizedDirectory.includes(worktreesPath);
     if (!containsWorktreesPath) return null;
-    const projectRoot = String(projectPath || "").trim() || "the project root";
-    return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd; it should run from project root ${projectRoot}.`;
+    const projectRoot = String(projectPath || "").trim();
+    const normalizedProjectRoot = projectRoot.replace(/[\\/]+/g, "/").replace(/\/+$/, "").toLowerCase();
+    if (!normalizedProjectRoot || !normalizedDirectory.startsWith(`${normalizedProjectRoot}/.claude/worktrees/`)) return null;
+    if (sharedTree === true) {
+      return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd; it should run from project root ${projectRoot}.`;
+    }
+    return `Isolated-worktree dispatch: board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd, so the dispatch may fail to bind. Restart the session so the board server starts from project root ${projectRoot}.`;
   }
   function dispatchUncertaintyWarnings(ticket, slug) {
     const warnings = [
@@ -455,8 +460,9 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     const projectPath = slug ? readMeta(slug)?.path : null;
     const verifyPath = verifyPathWarning(ticket, projectPath);
     if (verifyPath) warnings.push(verifyPath);
-    if (dispatchState(ticket)?.sharedTree === true) {
-      const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath);
+    const dispatch = dispatchState(ticket);
+    if (dispatch) {
+      const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true);
       if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
     }
     return warnings.map((warning) => `Dispatch warning: ${warning}`);

@@ -802,16 +802,33 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.match(shared, /If it still differs after cd, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
 });
 
-test('stale worktree cwd warnings identify shared-tree dispatch scope', () => {
+test('stale worktree cwd warnings identify dispatch-specific consequences', () => {
   const store = require('../lib/store.js');
-  const projectRoot = 'C:\\Projects\\Toolshed';
-  const warning = store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed\\.CLAUDE\\WORKTREES\\SQ-538-river-bluffs', projectRoot);
-  assert.match(warning, /Shared-tree dispatch/);
-  assert.match(warning, /has no worktree of its own/);
-  assert.match(warning, /whatever cwd it inherits/);
-  assert.match(warning, /leftover/);
-  assert.ok(warning.includes(projectRoot));
-  assert.equal(store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed', projectRoot), null);
+  const projectRoot = tmpDir();
+  const slug = store.ensureProject(projectRoot, 'stale worktree cwd warning').slug;
+  const staleCwd = path.join(projectRoot, '.CLAUDE', 'WORKTREES', 'SQ-538-river-bluffs');
+  const originalCwd = process.cwd;
+  process.cwd = () => staleCwd;
+  try {
+    const sharedWarning = store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: true } }, slug).join('\n');
+    assert.match(sharedWarning, /Shared-tree dispatch/);
+    assert.match(sharedWarning, /has no worktree of its own/);
+    assert.match(sharedWarning, /whatever cwd it inherits/);
+    assert.match(sharedWarning, /leftover/);
+    assert.ok(sharedWarning.includes(projectRoot));
+
+    const isolatedWarning = store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: false } }, slug).join('\n');
+    assert.match(isolatedWarning, /Isolated-worktree dispatch/);
+    assert.match(isolatedWarning, /may fail to bind/);
+    assert.match(isolatedWarning, /Restart the session/);
+    assert.doesNotMatch(isolatedWarning, /Shared-tree dispatch/);
+
+    process.cwd = () => projectRoot;
+    assert.deepStrictEqual(store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: true } }, slug), []);
+    assert.deepStrictEqual(store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: false } }, slug), []);
+  } finally {
+    process.cwd = originalCwd;
+  }
 });
 
 test('worktree setup appears only in isolated worktree briefings', () => {
