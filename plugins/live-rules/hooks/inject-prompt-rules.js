@@ -22,13 +22,13 @@
 
 'use strict';
 
-const path = require('path');
-
 let lib;
+let projectRelative;
 let ledger;
 try {
   lib = require('./lib/rules');
   ledger = require('./lib/session-ledger');
+  ({ projectRelative } = require('./lib/canonical-path'));
 } catch (_) {
   process.exit(0);
 }
@@ -43,7 +43,7 @@ function main() {
   const cwd = (data && typeof data.cwd === 'string' && data.cwd) || projectDir;
   let cwdRel = '';
   try {
-    cwdRel = path.relative(projectDir, cwd).replace(/\\/g, '/');
+    cwdRel = projectRelative(projectDir, cwd);
   } catch (_) {
     cwdRel = '';
   }

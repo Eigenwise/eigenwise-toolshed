@@ -26,10 +26,12 @@
 const path = require('path');
 
 let lib;
+let projectRelative;
 let ledger;
 try {
   lib = require('./lib/rules');
   ledger = require('./lib/session-ledger');
+  ({ projectRelative } = require('./lib/canonical-path'));
 } catch (_) {
   process.exit(0);
 }
@@ -50,7 +52,7 @@ function main() {
   let relPath;
   try {
     const abs = path.resolve(projectDir, filePath);
-    relPath = path.relative(projectDir, abs).replace(/\\/g, '/');
+    relPath = projectRelative(projectDir, abs);
   } catch (_) {
     relPath = filePath.replace(/\\/g, '/');
   }
