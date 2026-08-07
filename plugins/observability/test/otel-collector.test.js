@@ -40,7 +40,7 @@ test('the committed sample config keeps the installer log filter in sync', () =>
   assert.equal(generatedFilter, sample.split('\n').find((line) => line.includes('log_record')));
 });
 
-test('fans every redacted signal out to an explicitly declared sink', () => {
+test('isolates every sink exporter in its own pipelines', () => {
   const sinkExporter = {
     endpoint: 'https://otlp.example.test',
     headers: { Authorization: 'Bearer private' },
@@ -53,14 +53,16 @@ test('fans every redacted signal out to an explicitly declared sink', () => {
   assert.equal(config.exporters[SINK_EXPORTER].compression, 'none');
   assert.equal(config.exporters[SINK_EXPORTER].headers.Authorization, 'Bearer private');
   for (const signal of ['logs', 'traces', 'metrics']) {
-    assert.deepEqual(config.service.pipelines[signal].exporters, ['otlphttp/observer', SINK_EXPORTER]);
+    assert.deepEqual(config.service.pipelines[`${signal}/observer`].exporters, ['otlphttp/observer']);
+    assert.deepEqual(config.service.pipelines[`${signal}/sink`].exporters, [SINK_EXPORTER]);
+    assert.ok(config.service.pipelines[`${signal}/observer`].processors.includes('batch/observer'));
+    assert.ok(config.service.pipelines[`${signal}/sink`].processors.includes('batch/sink'));
   }
-  for (const signal of ['logs', 'traces']) {
-    assert.deepEqual(config.service.pipelines[signal].processors, REQUIRED_PROCESSOR_ORDER);
-  }
-  assert.deepEqual(config.service.pipelines.metrics.processors, REQUIRED_METRICS_PROCESSOR_ORDER);
+  assert.equal(config.service.pipelines.logs, undefined);
 
-  assert.ok(validateCollectorConfig(config).some((error) => error.includes('unexpected exporter')));
+  config.service.pipelines['logs/observer'].exporters = ['otlphttp/observer', SINK_EXPORTER];
+  assert.ok(validateCollectorConfig(config, { sinkExporter }).some((error) => error.includes('must export only')));
+
   config.exporters[SINK_EXPORTER].endpoint = 'https://other.example.test/';
   const errors = validateCollectorConfig(config, { sinkExporter });
   assert.ok(errors.some((error) => error.includes('must not end with a slash')));

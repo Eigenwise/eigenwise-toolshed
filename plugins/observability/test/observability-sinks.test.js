@@ -673,6 +673,7 @@ test('Grafana dashboard separates token breakdowns from tool and MCP activity', 
     assert.match(panel.targets[0].expr, /gateway\.token\.usage/);
     assert.match(panel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
+  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /service_name=~"workbench-observer\|codex-gateway"/);
   assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$bucket\]/);
   assert.match(byTitle.get('Models in use').targets[0].expr, /\[\$__range\]/);
   assert.equal(byTitle.get('Models in use').targets[0].instant, true);

@@ -458,7 +458,7 @@
             "uid": "loki"
           },
           "legendFormat": "{{workbench_attribute_model}}",
-          "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=\"workbench-observer\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$bucket]))"
+          "expr": "sum by (workbench_attribute_model) (sum_over_time({service_name=~\"workbench-observer|codex-gateway\"} |= \"gateway.token.usage\" | workbench_session_id !~ \"(probe|session-gateway).*\" | unwrap workbench_measurement_context_tokens_value [$bucket]))"
         }
       ],
       "maxDataPoints": 60,

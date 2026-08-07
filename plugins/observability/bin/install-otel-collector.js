@@ -24,6 +24,8 @@ const REDACTED_KEYS = Object.freeze([
 ]);
 const REDACTION_STATEMENTS = Object.freeze(REDACTED_KEYS.map((key) => `delete_key(attributes, "${key}")`));
 const SINK_EXPORTER = 'otlphttp/sink';
+const OBSERVER_PIPELINE = 'observer';
+const SINK_PIPELINE = 'sink';
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', '[::1]', 'localhost']);
 const HEADER_NAME = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
 const FORBIDDEN_HEADERS = new Set(['content-length', 'content-type', 'host']);
@@ -69,7 +71,6 @@ function buildCollectorConfig(options = {}) {
   const observerEndpoint = options.observerEndpoint || 'http://127.0.0.1:14319';
   const queueDir = options.queueDirectory || path.join(defaultDataDir(), 'collector-queue');
   const sinkExporter = normalizeSinkExporter(options.sinkExporter);
-  const pipelineExporters = ['otlphttp/observer', ...(sinkExporter ? [SINK_EXPORTER] : [])];
   const exporters = {
     'otlphttp/observer': {
       endpoint: observerEndpoint,
@@ -94,6 +95,13 @@ function buildCollectorConfig(options = {}) {
     processors: [...processors],
     exporters: pipelineExporterNames,
   });
+  const observerSuffix = sinkExporter ? OBSERVER_PIPELINE : null;
+  const observerProcessors = buildProcessorConfigs(observerSuffix);
+  const sinkProcessors = sinkExporter ? buildProcessorConfigs(SINK_PIPELINE) : {};
+  const observerProcessorOrder = processorOrder(observerSuffix, REQUIRED_PROCESSOR_ORDER);
+  const observerMetricsProcessorOrder = processorOrder(observerSuffix, REQUIRED_METRICS_PROCESSOR_ORDER);
+  const sinkProcessorOrder = processorOrder(SINK_PIPELINE, REQUIRED_PROCESSOR_ORDER);
+  const sinkMetricsProcessorOrder = processorOrder(SINK_PIPELINE, REQUIRED_METRICS_PROCESSOR_ORDER);
 
   return {
     extensions: {
@@ -102,32 +110,49 @@ function buildCollectorConfig(options = {}) {
     receivers: {
       otlp: { protocols: { http: { endpoint: receiverEndpoint } } },
     },
-    processors: {
-      memory_limiter: { check_interval: '1s', limit_mib: 128, spike_limit_mib: 32 },
-      'filter/signals': {
-        error_mode: 'ignore',
-        // Keep only telemetry the ledger understands; drop everything else early.
-        logs: { log_record: [REQUIRED_LOG_FILTER] },
-      },
-      'transform/redact': {
-        error_mode: 'ignore',
-        log_statements: [{ context: 'log', statements: [...REDACTION_STATEMENTS] }],
-        trace_statements: [{ context: 'span', statements: [...REDACTION_STATEMENTS] }],
-        metric_statements: [{ context: 'datapoint', statements: [PROJECT_LABEL_PROMOTION, ...REDACTION_STATEMENTS] }],
-      },
-      deltatocumulative: {},
-      batch: { timeout: '5s', send_batch_size: 256 },
-    },
+    processors: { ...observerProcessors, ...sinkProcessors },
     exporters,
     service: {
       extensions: ['file_storage/observer_queue'],
       telemetry: { metrics: { level: 'none' } },
       pipelines: {
-        logs: pipeline(['otlp'], [...pipelineExporters]),
-        traces: pipeline(['otlp'], [...pipelineExporters]),
-        metrics: pipeline(['otlp'], [...pipelineExporters], REQUIRED_METRICS_PROCESSOR_ORDER),
+        [pipelineName('logs', observerSuffix)]: pipeline(['otlp'], ['otlphttp/observer'], observerProcessorOrder),
+        [pipelineName('traces', observerSuffix)]: pipeline(['otlp'], ['otlphttp/observer'], observerProcessorOrder),
+        [pipelineName('metrics', observerSuffix)]: pipeline(['otlp'], ['otlphttp/observer'], observerMetricsProcessorOrder),
+        ...(sinkExporter ? {
+          [pipelineName('logs', SINK_PIPELINE)]: pipeline(['otlp'], [SINK_EXPORTER], sinkProcessorOrder),
+          [pipelineName('traces', SINK_PIPELINE)]: pipeline(['otlp'], [SINK_EXPORTER], sinkProcessorOrder),
+          [pipelineName('metrics', SINK_PIPELINE)]: pipeline(['otlp'], [SINK_EXPORTER], sinkMetricsProcessorOrder),
+        } : {}),
       },
     },
+  };
+}
+
+function pipelineName(signal, suffix) {
+  return suffix ? `${signal}/${suffix}` : signal;
+}
+
+function processorOrder(suffix, requiredOrder) {
+  return requiredOrder.map((processor) => suffix ? `${processor}/${suffix}` : processor);
+}
+
+function buildProcessorConfigs(suffix) {
+  const processorName = (name) => suffix ? `${name}/${suffix}` : name;
+  return {
+    [processorName('memory_limiter')]: { check_interval: '1s', limit_mib: 128, spike_limit_mib: 32 },
+    [processorName('filter/signals')]: {
+      error_mode: 'ignore',
+      logs: { log_record: [REQUIRED_LOG_FILTER] },
+    },
+    [processorName('transform/redact')]: {
+      error_mode: 'ignore',
+      log_statements: [{ context: 'log', statements: [...REDACTION_STATEMENTS] }],
+      trace_statements: [{ context: 'span', statements: [...REDACTION_STATEMENTS] }],
+      metric_statements: [{ context: 'datapoint', statements: [PROJECT_LABEL_PROMOTION, ...REDACTION_STATEMENTS] }],
+    },
+    [processorName('deltatocumulative')]: {},
+    [processorName('batch')]: { timeout: '5s', send_batch_size: 256 },
   };
 }
 
@@ -193,43 +218,53 @@ function validateCollectorConfig(config, options = {}) {
     }
   }
 
-  const signalFilter = config.processors?.['filter/signals']?.logs?.log_record;
-  if (JSON.stringify(signalFilter) !== JSON.stringify([REQUIRED_LOG_FILTER])) {
-    errors.push('filter/signals logs must retain claude_code, agent_sdk, and gateway events');
-  }
+  const processorSuffixes = declaredSink ? [OBSERVER_PIPELINE, SINK_PIPELINE] : [null];
+  for (const suffix of processorSuffixes) {
+    const processorName = (name) => suffix ? `${name}/${suffix}` : name;
+    const signalFilter = config.processors?.[processorName('filter/signals')]?.logs?.log_record;
+    if (JSON.stringify(signalFilter) !== JSON.stringify([REQUIRED_LOG_FILTER])) {
+      errors.push('filter/signals logs must retain claude_code, agent_sdk, and gateway events');
+    }
 
-  const redact = config.processors?.['transform/redact'];
-  if (!redact) {
-    errors.push('missing transform/redact (content stripping) processor');
-  } else {
-    const groups = [
-      ['log_statements', 'log', REDACTION_STATEMENTS],
-      ['trace_statements', 'span', REDACTION_STATEMENTS],
-      ['metric_statements', 'datapoint', [PROJECT_LABEL_PROMOTION, ...REDACTION_STATEMENTS]],
-    ];
-    for (const [name, context, expected] of groups) {
-      const group = redact[name];
-      if (!Array.isArray(group) || group.length !== 1 || group[0]?.context !== context
-        || JSON.stringify(group[0]?.statements) !== JSON.stringify(expected)) {
-        errors.push(name === 'metric_statements'
-          ? 'transform/redact metric_statements must promote resource project.id and preserve content stripping'
-          : `transform/redact ${name} must preserve the required content stripping statements`);
+    const redact = config.processors?.[processorName('transform/redact')];
+    if (!redact) {
+      errors.push('missing transform/redact (content stripping) processor');
+    } else {
+      const groups = [
+        ['log_statements', 'log', REDACTION_STATEMENTS],
+        ['trace_statements', 'span', REDACTION_STATEMENTS],
+        ['metric_statements', 'datapoint', [PROJECT_LABEL_PROMOTION, ...REDACTION_STATEMENTS]],
+      ];
+      for (const [name, context, expected] of groups) {
+        const group = redact[name];
+        if (!Array.isArray(group) || group.length !== 1 || group[0]?.context !== context
+          || JSON.stringify(group[0]?.statements) !== JSON.stringify(expected)) {
+          errors.push(name === 'metric_statements'
+            ? 'transform/redact metric_statements must promote resource project.id and preserve content stripping'
+            : `transform/redact ${name} must preserve the required content stripping statements`);
+        }
       }
     }
   }
 
   const pipelines = config.service?.pipelines || {};
-  const expectedExporters = ['otlphttp/observer', ...(declaredSink ? [SINK_EXPORTER] : [])];
-  for (const signal of ['logs', 'traces', 'metrics']) {
-    const processors = pipelines[signal]?.processors;
-    const expectedProcessors = signal === 'metrics' ? REQUIRED_METRICS_PROCESSOR_ORDER : REQUIRED_PROCESSOR_ORDER;
-    if (JSON.stringify(processors) !== JSON.stringify(expectedProcessors)) {
-      errors.push(`pipeline ${signal} processor order must be ${expectedProcessors.join(',')}, got ${JSON.stringify(processors)}`);
+  const expectedPipelineNames = [];
+  for (const suffix of processorSuffixes) {
+    for (const signal of ['logs', 'traces', 'metrics']) {
+      const name = pipelineName(signal, suffix);
+      expectedPipelineNames.push(name);
+      const expectedProcessors = processorOrder(suffix, signal === 'metrics' ? REQUIRED_METRICS_PROCESSOR_ORDER : REQUIRED_PROCESSOR_ORDER);
+      if (JSON.stringify(pipelines[name]?.processors) !== JSON.stringify(expectedProcessors)) {
+        errors.push(`pipeline ${name} processor order must be ${expectedProcessors.join(',')}, got ${JSON.stringify(pipelines[name]?.processors)}`);
+      }
+      const expectedExporter = suffix === SINK_PIPELINE ? SINK_EXPORTER : 'otlphttp/observer';
+      if (JSON.stringify(pipelines[name]?.exporters) !== JSON.stringify([expectedExporter])) {
+        errors.push(`pipeline ${name} must export only to ${expectedExporter}, got ${JSON.stringify(pipelines[name]?.exporters)}`);
+      }
     }
-    const exporters = pipelines[signal]?.exporters;
-    if (JSON.stringify(exporters) !== JSON.stringify(expectedExporters)) {
-      errors.push(`pipeline ${signal} exporters must be ${expectedExporters.join(',')}, got ${JSON.stringify(exporters)}`);
-    }
+  }
+  if (JSON.stringify(Object.keys(pipelines).sort()) !== JSON.stringify(expectedPipelineNames.sort())) {
+    errors.push('collector pipelines must keep each exporter isolated');
   }
 
   const queueName = 'file_storage/observer_queue';
