@@ -172,14 +172,12 @@ test('fresh-process hook latency reports benchmark measurements', (context: any)
     agent_id: 'perf-stop-id',
     agent_name: 'perf-stop-agent',
   }));
-  const nearTurnCap = measure(() => runHook('near-turn-cap.js', { tool_name: 'Read', session_id: 'perf-guard' }));
   const inlineWork = measure(() => runHook('inline-work-nudge.js', {
     tool_name: 'Read',
     session_id: 'perf-guard',
     agent_id: 'executor',
   }));
   const guardsSerial = measure(() => {
-    runHook('near-turn-cap.js', { tool_name: 'Read', session_id: 'perf-guard' });
     runHook('inline-work-nudge.js', { tool_name: 'Read', session_id: 'perf-guard', agent_id: 'executor' });
   });
 
@@ -188,7 +186,6 @@ test('fresh-process hook latency reports benchmark measurements', (context: any)
     ['board-first', boardFirst],
     ['SubagentStart', subagentStart],
     ['SubagentStop', subagentStop],
-    ['near-turn-cap', nearTurnCap],
     ['inline-work-nudge', inlineWork],
     ['common guards serial', guardsSerial],
   ] as const) {

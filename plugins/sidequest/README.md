@@ -148,7 +148,7 @@ Executors do not push, bump manifests, or assign release versions. Partial submi
 The shipped hook registry covers the full Claude Code session and executor lifecycle:
 
 - `UserPromptSubmit`: board-first reminder.
-- `PreToolUse`: near-turn-cap warning, inline-work nudge, executor identity enforcement, task-output and peer-message guards, home-delete protection, repeated-command warning, Windows-path protection, destructive-git protection, shared-tree commit protection, and worktree-isolation protection.
+- `PreToolUse`: inline-work nudge, executor identity enforcement, task-output and peer-message guards, home-delete protection, repeated-command warning, Windows-path protection, destructive-git protection, shared-tree commit protection, and worktree-isolation protection.
 - `PostToolUseFailure` for `Agent`: quota-fallback preparation.
 - `Stop`: compaction suggestion and board-reconciliation reminder.
 - `PreCompact`: compaction policy.

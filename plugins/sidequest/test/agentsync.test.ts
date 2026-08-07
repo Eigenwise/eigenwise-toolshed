@@ -33,6 +33,16 @@ const STABLE_EXECUTORS = [
 function tmpDir() { return fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-test-')); }
 function git(dir: string, args: string[]) { return spawnSync('git', args, { cwd: dir, encoding: 'utf8', windowsHide: true }); }
 function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) => file.endsWith('.md')).sort(); }
+function parseExecutorFrontmatter(source: string) {
+  const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  if (!match || match[1] == null) throw new Error('executor definition must begin with frontmatter');
+  return Object.fromEntries(match[1].split(/\r?\n/)
+    .filter((line: string) => !line.startsWith(' ') && line.includes(':'))
+    .map((line: string) => {
+      const index = line.indexOf(':');
+      return [line.slice(0, index), line.slice(index + 1).trim()];
+    }));
+}
 function seedCatalog(models?: any) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
   fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
@@ -365,12 +375,14 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
     const result = agentsync.syncExecAgents(null, { dir });
     assert.equal(result.written, 12);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
-    // One collapsed dispatch def. A safe frontmatter effort allows internal non-marker
-    // calls, while maxTurns preserves the largest backstop.
+    // One collapsed dispatch definition keeps a safe frontmatter effort for internal non-marker calls.
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
     assert.match(dispatch, /^model: claude-codex-auto$/m);
     assert.match(dispatch, /^effort: high$/m);
-    assert.match(dispatch, /^maxTurns: 250$/m);
+    for (const file of STABLE_EXECUTORS) {
+      const body = fs.readFileSync(path.join(dir, file), 'utf8');
+      assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'maxTurns'), false, `${file} must be uncapped`);
+    }
     for (const effort of EFFORTS) {
       const builtin = fs.readFileSync(path.join(dir, `sidequest-exec-${effort}.md`), 'utf8');
       assert.doesNotMatch(builtin, /^model:/m);
@@ -490,14 +502,14 @@ test('sync prunes legacy per-combo codex executors in favor of the shared dispat
 });
 
 
-test('dispatch executors use a safe frontmatter effort with a max-tier turn cap', () => {
+test('dispatch executors use a safe frontmatter effort without a turn cap', () => {
   for (const body of [
     agentsync.renderDispatchAgent(),
     agentsync.renderReadOnlyDispatchAgent(),
   ]) {
     assert.match(body, /^effort: high$/m);
     assert.doesNotMatch(body, /^effort: max$/m);
-    assert.match(body, /^maxTurns: 250$/m);
+    assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'maxTurns'), false);
   }
 });
 

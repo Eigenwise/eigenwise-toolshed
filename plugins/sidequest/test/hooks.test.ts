@@ -48,7 +48,6 @@ const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
 const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
 const GUARD_POWERSHELL_CMD_SHIMS = path.join(HOOKS, 'guard-powershell-cmd-shims.js');
-const NEAR_TURN_CAP = path.join(HOOKS, 'near-turn-cap.js');
 const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
@@ -899,42 +898,6 @@ test('task-output guard: executor identity variants bypass the main-thread guard
       tool_name: 'TaskOutput', ...identity, tool_input: { task_id: 'sidequest-exec-dispatch@session-abc' },
     }), null);
   }
-});
-
-test('pre-tool hook warns at the soft threshold, then escalates inside the final band', () => {
-  const agentId = `near-cap-${Date.now()}`;
-  const payload = { tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' };
-  const run = () => execFileSync(process.execPath, [NEAR_TURN_CAP], {
-    input: JSON.stringify(payload), encoding: 'utf8', env: { ...process.env, SIDEQUEST_EXEC_MAX_TURNS: '1' },
-  });
-  // cap=1 → soft threshold 1, final band starts at 2, re-warn every 4 calls.
-  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /made 1 tool calls/);
-  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /TURN CAP IMMINENT/);
-  assert.equal(run(), '', 'call 3 is inside the re-warn cooldown');
-  assert.equal(run(), '', 'call 4 is inside the re-warn cooldown');
-  assert.equal(run(), '', 'call 5 is inside the re-warn cooldown');
-  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /TURN CAP IMMINENT/, 'the imperative repeats until the executor stops');
-});
-
-test('pre-tool hook soft warning fires on crossing the threshold, once', () => {
-  const agentId = `near-cap-cross-${Date.now()}`;
-  const counter = path.join(os.tmpdir(), 'sidequest-near-turn-cap', encodeURIComponent(agentId));
-  fs.mkdirSync(path.dirname(counter), { recursive: true });
-  const run = () => execFileSync(process.execPath, [NEAR_TURN_CAP], {
-    input: JSON.stringify({ tool_name: 'Read', agent_type: 'sidequest-exec-high', agent_id: agentId, effort: 'high' }),
-    encoding: 'utf8', env: { ...process.env },
-  });
-  // high effort → cap 150, soft threshold 120, final band from 135.
-  fs.writeFileSync(counter, '119 0');
-  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /near its 150-turn backstop/);
-  assert.equal(run(), '', 'no duplicate soft warning after the crossing');
-  fs.writeFileSync(counter, '134 0');
-  assert.match(JSON.parse(run()).hookSpecificOutput.additionalContext, /TURN CAP IMMINENT — 135 tool calls against a 150-turn hard cap/);
-});
-
-test('pre-tool near-cap hook ignores main-thread and unrelated subagent calls', () => {
-  assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_id: 'main-thread' }), null);
-  assert.equal(runHookOutput(NEAR_TURN_CAP, { tool_name: 'Read', agent_type: 'explore', agent_id: 'other-agent' }), null);
 });
 
 test('pre-tool repeated-command hook ignores main-thread and unrelated subagent calls', () => {
