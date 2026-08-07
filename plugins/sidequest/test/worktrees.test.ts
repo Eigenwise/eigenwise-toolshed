@@ -503,3 +503,69 @@ test('worktree sweep quarantines an orphan after its removal fails', async () =>
     fs.rmSync(quarantine, { recursive: true, force: true });
   }
 });
+
+test('worktree sweep retries a failed quarantine after the delay', async () => {
+  const orphan = path.join(WORKTREES, 'pub-retry-quarantine-orphan');
+  const quarantine = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-quarantine-'));
+  const fsPromises = require('node:fs/promises');
+  const remove = fsPromises.rm;
+  const rename = fsPromises.rename;
+  let removals = 0;
+  let moves = 0;
+  fs.mkdirSync(orphan);
+  fs.writeFileSync(path.join(orphan, 'locked.bin'), 'loaded native artifact\n');
+  makeOld(orphan);
+  fsPromises.rm = async () => {
+    removals += 1;
+    const error: NodeJS.ErrnoException = new Error('access denied');
+    error.code = 'EPERM';
+    throw error;
+  };
+  fsPromises.rename = async () => {
+    moves += 1;
+    const error: NodeJS.ErrnoException = new Error('access denied');
+    error.code = 'EPERM';
+    throw error;
+  };
+
+  try {
+    const first = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      upstream: 'origin/main',
+      quarantineDir: quarantine,
+    });
+    assert.equal(entryFor(first, orphan).reason, 'quarantine_failed');
+    assert.equal(removals, 1);
+    assert.equal(moves, 1);
+
+    const pending = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      upstream: 'origin/main',
+      quarantineDir: quarantine,
+    });
+    assert.equal(pending.entries.some((entry: any) => entry.path === orphan), false);
+    assert.equal(removals, 1);
+    assert.equal(moves, 1);
+
+    const statePath = path.join(SIDEQUEST_HOME, 'worktree-sweep-failures.json');
+    const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+    state[worktrees.canonicalPath(orphan)].quarantineFailedAt = new Date(Date.now() - 25 * 60 * 60 * 1000).toISOString();
+    fs.writeFileSync(statePath, JSON.stringify(state));
+
+    await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      upstream: 'origin/main',
+      quarantineDir: quarantine,
+    });
+    assert.equal(removals, 2);
+    assert.equal(moves, 2);
+  } finally {
+    fsPromises.rm = remove;
+    fsPromises.rename = rename;
+    fs.rmSync(orphan, { recursive: true, force: true });
+    fs.rmSync(quarantine, { recursive: true, force: true });
+  }
+});

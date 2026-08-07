@@ -7,6 +7,7 @@ const { execFileSync, spawn } = require("node:child_process");
 const commitScope = require("./commit-scope.js");
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
+const QUARANTINE_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1e3;
 function git(cwd, args) {
   return new Promise((resolve) => {
     const child = spawn("git", ["-c", "core.editor=true", ...args], {
@@ -140,13 +141,20 @@ function recordQuarantineFailure(pathname, message) {
   state[key] = {
     ...existing || { fingerprint: failureFingerprint(message), attempts: 1 },
     quarantineAttempted: true,
-    quarantineFailed: true
+    quarantineFailed: true,
+    quarantineFailedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
   writeFailureState(state);
 }
+function quarantineRetryDue(pathname) {
+  const failure = readFailureState()[canonicalPath(pathname)];
+  if (!failure?.quarantineFailed) return true;
+  const failedAt = Date.parse(String(failure.quarantineFailedAt || ""));
+  return !Number.isFinite(failedAt) || Date.now() - failedAt >= QUARANTINE_RETRY_INTERVAL_MS;
+}
 function shouldSkipKnownFailure(pathname) {
   const state = readFailureState()[canonicalPath(pathname)];
-  return Boolean(state?.quarantineFailed) || state?.fingerprint === "filename-too-long" && state.attempts >= 2;
+  return state?.fingerprint === "filename-too-long" && state.attempts >= 2;
 }
 function shouldTryExtendedPath(pathname, message) {
   if (process.platform !== "win32" || !isFilenameTooLong(message)) return false;
@@ -349,7 +357,7 @@ async function orphanDirectories(repo, registered) {
   try {
     const entries = await fs.readdir(parent, { withFileTypes: true });
     const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(parent, entry.name));
-    return Promise.all(directories.filter((directory) => !registered.has(canonicalPath(directory))).map(async (directory) => {
+    return Promise.all(directories.filter((directory) => quarantineRetryDue(directory)).filter((directory) => !registered.has(canonicalPath(directory))).map(async (directory) => {
       try {
         await fs.lstat(path.join(directory, ".git"));
         return null;
@@ -508,7 +516,7 @@ async function integrationCandidates(repo, options, branchHead, submissionCommit
   for (const entry of parseWorktreeList(listed.stdout)) {
     const commit = String(entry.head || "").trim();
     if (!/^[0-9a-f]{40}$/.test(commit) || commit === branchHead) continue;
-    if (isAgentWorktree(repo, entry.worktree)) continue;
+    if (isAgentWorktree(repo, entry.worktree) || !quarantineRetryDue(entry.worktree)) continue;
     if (executorWorktree && canonicalPath(entry.worktree) === executorWorktree) continue;
     if (!heads.has(commit)) heads.set(commit, entry.worktree);
   }
@@ -732,7 +740,7 @@ async function sweep(repo, tickets, options = {}) {
   if (!listed.ok) throw new Error(listed.stderr || "could not list git worktrees");
   const worktreeList = parseWorktreeList(listed.stdout);
   const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
-  const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
+  const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => quarantineRetryDue(entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
   const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
   const allCandidates = [...candidates, ...orphanCandidates];
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
