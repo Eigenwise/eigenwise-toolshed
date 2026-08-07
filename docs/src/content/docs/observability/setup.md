@@ -27,7 +27,7 @@ Every hook is fail-open with a short timeout.
 
 ## Bundled commands
 
-Under the plugin's `bin/` directory: `setup-observability --check` inspects sinks and ports, `project-telemetry` enables or disables a repository, `verify-project-telemetry --audit` explains missing attribution, `install-otel-collector` writes a Collector config, `observer` runs the canonical observer, `token-usage-report --help` lists local SQLite reporting options, `prune-observability` previews rows older than 90 days and requires `--apply` or `--yes` to delete them, and `statusline` provides the optional statusline shim.
+Under the plugin's `bin/` directory: `setup-observability --check` inspects sinks and ports, `project-telemetry` enables or disables a repository, `verify-project-telemetry --audit` explains missing attribution, `install-otel-collector` writes a Collector config, `observer` runs the canonical observer, `token-usage-report --help` lists local SQLite reporting options, `prune-observability` previews rows older than 30 days and requires `--apply` or `--yes` to delete them, and `statusline` provides the optional statusline shim.
 
 The statusline is installed by the setup flow when you select it. It reports current context and usage while the observer records metadata counts. `/workbench:update-toolshed` heals a stale statusline pin after an update, but only when this plugin is installed.
 

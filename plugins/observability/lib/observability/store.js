@@ -40,7 +40,7 @@ const USAGE_NAMES = new Set([
   'cache_creation_tokens',
 ]);
 
-const DEFAULT_RETENTION_DAYS = 90;
+const DEFAULT_RETENTION_DAYS = 30;
 
 function retentionCutoff(now, retentionDays) {
   if (!Number.isSafeInteger(retentionDays) || retentionDays < 1) {
