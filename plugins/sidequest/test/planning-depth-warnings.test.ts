@@ -20,6 +20,19 @@ fs.writeFileSync(path.join(CLAUDE_HOME, 'plugins', 'installed_plugins.json'), JS
   },
 }));
 process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-catalog-'));
+fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
+fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
+  schemaVersion: 3,
+  source: 'model-gateway',
+  codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+  models: [
+    { slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]', label: 'GPT-5.6 Sol' },
+    { slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' },
+    { slug: 'codex-gpt-5-6-luna', id: 'claude-gpt-5.6-luna[1m]', label: 'GPT-5.6 Luna' },
+  ],
+}));
+process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const WARNING = 'Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.';
 const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.';
