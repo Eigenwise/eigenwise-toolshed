@@ -60,6 +60,7 @@ async function cmdWorktrees(opts, positional) {
   }
   if (result.dryRun) console.log("  pass --yes to remove the planned worktrees.");
   if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
+  for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
   if (result.prunedOrphanBranches.length) console.log(`  pruned ${result.counts.prunedOrphanBranches} orphan worktree branch(es).`);
   for (const failure of result.failures) console.log(`  ERROR ${failure.path || "prune"}: ${failure.message}`);
   if (result.failures.length) process.exitCode = 1;

@@ -233,6 +233,45 @@ test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees'
   assert.ok(!fs.existsSync(dirtyOld));
 });
 
+test('worktree sweep salvages an old unintegrated worktree before removing it', async () => {
+  const worktree = agentWorktree('salvage-old');
+  const recovery = path.join(os.tmpdir(), `sq-worktrees-recovery-${Date.now()}`);
+  let salvaged: any;
+  try {
+    const commit = makeCommit(worktree, 'salvage-old.txt');
+    fs.appendFileSync(path.join(worktree, 'salvage-old.txt'), 'uncommitted recovery state\n');
+    makeOld(worktree);
+
+    const result = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      notIntegratedSalvageAgeMs: 0,
+      upstream: 'origin/main',
+    });
+
+    const entry = entryFor(result, worktree);
+    salvaged = result.salvaged.find((candidate: any) => candidate.path === worktree);
+    assert.equal(entry.reason, 'not_integrated_salvage');
+    assert.equal(entry.action, 'salvage');
+    assert.equal(salvaged.ref, `refs/salvage/${path.basename(worktree)}`);
+    assert.equal(git(['rev-parse', salvaged.ref]), commit);
+    git(['worktree', 'add', '--detach', recovery, salvaged.ref]);
+    git(['stash', 'apply', salvaged.uncommittedRef], recovery);
+    assert.match(fs.readFileSync(path.join(recovery, 'salvage-old.txt'), 'utf8'), /uncommitted recovery state/);
+    assert.match(salvaged.recovery, new RegExp(`stash apply "${salvaged.uncommittedRef}"`));
+    assert.equal(fs.existsSync(worktree), false);
+    assert.equal(branchExists(branchName('salvage-old')), false);
+  } finally {
+    if (fs.existsSync(recovery)) git(['worktree', 'remove', '--force', recovery]);
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+    if (salvaged) {
+      git(['update-ref', '-d', salvaged.ref]);
+      git(['update-ref', '-d', salvaged.uncommittedRef]);
+    }
+  }
+});
+
+
 test('worktrees sweep prunes only patch-equivalent orphan worktree branches', () => {
   const equivalentOrphan = agentWorktree('orphan-equivalent');
   integrate(makeCommit(equivalentOrphan, 'orphan-equivalent.txt'));

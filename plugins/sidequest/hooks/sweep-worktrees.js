@@ -51,6 +51,7 @@ function runtimeModule(name) {
 // src/hooks/shared/worktree-sweep.ts
 var MAX_PROJECTS_PER_START = 3;
 var MAX_CANDIDATES_PER_PROJECT = 8;
+var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 var MAX_ORPHAN_SUBJECT_LENGTH = 120;
 function stateFile() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
@@ -103,6 +104,9 @@ function orphanNotices(data, project, orphanBranches) {
   writeState(state);
   return kept.map((entry) => `sidequest: unintegrated orphan worktree branch ${entry.branch}: ${abbreviated(String(entry.subject || "no commit subject"))}.`);
 }
+function salvageNotices(salvaged) {
+  return salvaged.map((entry) => `sidequest: salvaged unintegrated worktree ${entry.path} at ${entry.ref}. Recover with ${entry.recovery}.`);
+}
 function missingIntegrationTarget(error) {
   return /Configured integration ref .+ does not exist\./.test(String(error?.message || error));
 }
@@ -137,12 +141,14 @@ async function sweepWorktrees(data, includeKnownProjects) {
       continue;
     }
     try {
+      const config = store.boardConfig(project.slug);
       const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
         execute: true,
         currentPath: isCurrentProject ? currentPath : "",
         livePaths: activePaths,
         integrationTarget: target,
-        maxCandidates: MAX_CANDIDATES_PER_PROJECT
+        maxCandidates: MAX_CANDIDATES_PER_PROJECT,
+        notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3
       });
       if (!isCurrentProject) continue;
       if (result.skipped === "repository_busy") {
@@ -153,6 +159,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
           notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || "a git entry"}: ${failure.message}`);
         }
       }
+      notices.push(...salvageNotices(result.salvaged || []));
       notices.push(...orphanNotices(data, project, result.orphanBranches || []));
     } catch (error) {
       if (isCurrentProject) {
