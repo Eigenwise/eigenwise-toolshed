@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.413.0 (2026-08-08)
+
+### sidequest 4.40.5 → 4.40.6
+
+#### Fixes
+
+- Carry released executor checkpoints into continuation dispatches (SQ-1462)
+- Preserve oracle verdict rounds when an executor asks for a ruling (SQ-1483)
+- Bound executor skill loading (SQ-1495) [`df7ac03`](https://github.com/Eigenwise/eigenwise-toolshed/commit/df7ac0352287d26cc6366234ace5eb9c42f9c651)
+- Explain rejected import-error negative controls (SQ-1498) [`0ee811d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0ee811dbd1827c2c22447ea7837e480d09b20429)
+- Rule on scope requests immediately instead of pausing the executor (SQ-1504)
+  Scope requests now rule immediately. Policy-allowed paths expand scope, while refused paths are handed back for orchestrator redispatch. Executors no longer wait on a pending ruling that may never arrive.
+- Preserve continuation checkpoints on Windows short paths (SQ-1509)
+  Continuation dispatches now keep committed handbacks when Windows path aliases resolve to the same repository.
+
 ## v3.412.0 (2026-08-07)
 
 ### observability 0.5.2 → 0.5.3
