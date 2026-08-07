@@ -75,9 +75,27 @@ function projectSettingsFile(projectDirectory) {
   return path.join(projectDirectory, '.claude', 'settings.local.json');
 }
 
+function canonicalPath(value) {
+  const resolved = path.resolve(value);
+  const missingSegments = [];
+  let existingAncestor = resolved;
+  while (!fs.existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+    if (parent === existingAncestor) break;
+    missingSegments.unshift(path.basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  try {
+    const canonical = fs.realpathSync.native(existingAncestor);
+    const completed = path.join(canonical, ...missingSegments);
+    return process.platform === 'win32' ? completed.toLowerCase() : completed;
+  } catch {
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
+}
+
 function registryKey(projectDirectory) {
-  const resolved = path.resolve(projectDirectory);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  return canonicalPath(projectDirectory);
 }
 
 function writeProjectWiringRegistry(projects) {

@@ -1,6 +1,8 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 const { test } = require('node:test');
 
@@ -186,6 +188,24 @@ test('private data in an untracked, unignored path outranks everything and names
   assert.equal(result.findings[0].severity, 'critical');
   assert.ok(JSON.stringify(result.findings).includes('.env.local'));
   assert.ok(!JSON.stringify(result).includes('sk-abcdefghijklmnopqrstuvwxyz012345'), 'the secret itself must never be reported');
+});
+
+test('private data written through a project alias remains a hazard', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'playbook-hazard-'));
+  const project = path.join(directory, 'project');
+  const alias = path.join(directory, 'project-alias');
+  fs.mkdirSync(project);
+  fs.symlinkSync(project, alias, 'junction');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const root = makeRoot();
+  const main = createTranscript({ root, slug: 'proj', sessionId: 's1' }).prompt('go');
+  main.tool('Write', { file_path: path.join(alias, '.env.local'), content: 'OPENAI_API_KEY=sk-abcdefghijklmnopqrstuvwxyz012345' }, { result: 'ok' });
+  main.write();
+
+  const result = await mine({ root, slug: 'proj', days: 7, sessions: 5, projectPath: project, git: () => new Set(['.env.local']), now: Date.now() });
+  const [hazard] = find(result, 'hazard-private-data');
+  assert.equal(hazard.paths[0], '.env.local');
 });
 
 test('new untracked source is not called a hazard when nothing tried to stage it', async () => {

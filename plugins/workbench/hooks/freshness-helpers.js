@@ -1,5 +1,6 @@
 'use strict';
 
+const fs = require('node:fs');
 const path = require('node:path');
 
 function readJson(fileSystem, file) {
@@ -52,10 +53,30 @@ function pluginInstances(registry) {
   return instances;
 }
 
-function normalizePath(value, platform = process.platform) {
+function canonicalPath(value, platform = process.platform) {
   if (typeof value !== 'string' || !value) return null;
   const api = platform === 'win32' ? path.win32 : path;
-  return api.resolve(value).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase();
+  const resolved = api.resolve(value);
+  const missingSegments = [];
+  let existingAncestor = resolved;
+  while (!fs.existsSync(existingAncestor)) {
+    const parent = api.dirname(existingAncestor);
+    if (parent === existingAncestor) break;
+    missingSegments.unshift(api.basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  try {
+    const canonical = fs.realpathSync.native(existingAncestor);
+    const completed = api.join(canonical, ...missingSegments);
+    return platform === 'win32' ? completed.toLowerCase() : completed;
+  } catch {
+    return platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
+}
+
+function normalizePath(value, platform = process.platform) {
+  const canonical = canonicalPath(value, platform);
+  return canonical?.replace(/\\/g, '/').replace(/\/+$/, '') ?? null;
 }
 
 function pathsOverlap(left, right) {
@@ -75,6 +96,7 @@ function activeInstances(registry, cwd, marketplace, platform = process.platform
 
 module.exports = {
   activeInstances,
+  canonicalPath,
   compareSemver,
   parseSemver,
   pluginIdParts,
