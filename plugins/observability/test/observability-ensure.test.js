@@ -41,24 +41,25 @@ function enabledConfig(ports = {}) {
   };
 }
 
-test('SessionStart launch is a silent no-op without enabled consent', (t) => {
+test('SessionStart launch is a silent no-op without enabled consent', async (t) => {
   const dataDir = temporaryDirectory(t);
   let spawned = false;
-  assert.equal(launchEnsure({ dataDir, spawn: () => { spawned = true; } }), false);
+  assert.equal(await launchEnsure({ dataDir, spawn: () => { spawned = true; } }), false);
   writeObservabilityConfig(path.join(dataDir, 'observability.json'), {
     observability: { enabled: false, sink: 'none', dashboard: false, sinks: {} },
   });
-  assert.equal(launchEnsure({ dataDir, spawn: () => { spawned = true; } }), false);
+  assert.equal(await launchEnsure({ dataDir, spawn: () => { spawned = true; } }), false);
   assert.equal(spawned, false);
 });
 
-test('SessionStart launch detaches the bounded ensure worker after consent', (t) => {
+test('SessionStart launch detaches the bounded ensure worker after consent', async (t) => {
   const dataDir = temporaryDirectory(t);
   writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
   let call;
   let unref = false;
-  const launched = launchEnsure({
+  const launched = await launchEnsure({
     dataDir,
+    checkPort: async () => false,
     spawn(command, args, options) {
       call = { command, args, options };
       return { unref() { unref = true; } };
@@ -322,6 +323,87 @@ test('ensure adopts a fresh managed observer without restarting it', async (t) =
   });
 
   assert.deepEqual(result.started, []);
+});
+
+test('ensure replaces an observer that reports another plugin version', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  writeObservabilityConfig(configFile, enabledConfig());
+  const killed = [];
+  const started = [];
+  let observerChecks = 0;
+
+  await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async (port) => port === 15432 && observerChecks++ === 0,
+    observerIdentity: async () => ({ pid: 202, pluginVersion: '0.3.1' }),
+    killProcess(pid, name) { killed.push({ pid, name }); },
+    startProcess(name) { started.push(name); return 1000 + started.length; },
+    waitForPort: async () => true,
+  });
+
+  assert.deepEqual(killed, [{ pid: 202, name: 'observer' }]);
+  assert.deepEqual(started, ['observer', 'collector']);
+});
+
+test('ensure removes an observer that holds the port without accepting connections', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  writeObservabilityConfig(configFile, enabledConfig());
+  const killed = [];
+
+  await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async () => false,
+    portOwner: () => 62536,
+    killProcess(pid, name) { killed.push({ pid, name }); },
+    startProcess() { return 1000; },
+    waitForPort: async () => true,
+  });
+
+  assert.deepEqual(killed, [{ pid: 62536, name: 'observer' }]);
+});
+
+test('SessionStart warns when it replaces an observer that does not identify itself', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+  const notices = [];
+
+  await launchEnsure({
+    dataDir,
+    checkPort: async () => false,
+    portOwner: () => 202,
+    reportNotice(message) { notices.push(message); },
+    spawn() { return { unref() {} }; },
+  });
+
+  assert.deepEqual(notices, ['Observability: replacing the observer on 127.0.0.1:15432 held by pid 202, no health response.']);
+});
+
+test('SessionStart warns when it replaces an observer from an older plugin version', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+  const notices = [];
+
+  await launchEnsure({
+    dataDir,
+    checkPort: async () => true,
+    observerIdentity: async () => ({ pid: 202, pluginVersion: '0.3.1' }),
+    reportNotice(message) { notices.push(message); },
+    spawn() { return { unref() {} }; },
+  });
+
+  assert.deepEqual(notices, ['Observability: replacing the observer on 127.0.0.1:15432 held by pid 202, plugin 0.3.1.']);
 });
 
 test('setup disable runs without a circular dependency warning', (t) => {

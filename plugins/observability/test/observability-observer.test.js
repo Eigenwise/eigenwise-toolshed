@@ -405,7 +405,10 @@ test('observer binds only to loopback and acknowledges HTTP ingestion after comm
   assert.equal(view.status, 200);
   assert.equal((await view.json()).rows[0].input_tokens, 100);
   const health = await fetch(`${base}/health`);
-  assert.equal((await health.json()).ok, true);
+  const healthBody = await health.json();
+  assert.equal(healthBody.ok, true);
+  assert.equal(healthBody.pid, process.pid);
+  assert.equal(healthBody.pluginVersion, require('../.claude-plugin/plugin.json').version);
 });
 
 test('continuous outbox drain is fail-open and shares one in-flight flush', async (t) => {

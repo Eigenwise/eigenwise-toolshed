@@ -117,13 +117,7 @@ function stopManagedProcess(name, dataDir, options = {}) {
     if (typeof options.killProcess === 'function') {
       options.killProcess(pid, name);
     } else if (processAlive(pid) && pid !== process.pid) {
-      if ((options.platform || process.platform) === 'win32') {
-        (options.spawnSync || spawnSync)('taskkill', ['/pid', String(pid), '/T', '/F'], {
-          encoding: 'utf8', timeout: 3000, windowsHide: true,
-        });
-      } else {
-        process.kill(pid, 'SIGTERM');
-      }
+      stopProcess(pid, name, options);
     }
   } finally {
     try { fs.rmSync(filePath, { force: true }); } catch {}
@@ -297,12 +291,30 @@ async function ensureObservability(options = {}) {
       { name: 'collector', port: ports.collector, scriptPath: collectorBinary },
     ];
     for (const process of processes) {
-      if (await checkPort(process.port, options)
-        && managedProcessNeedsRestart(process.name, dataDir, {
-          pluginVersion: currentPluginVersion,
-          scriptPath: process.scriptPath,
-        }, options)) {
-        stopManagedProcess(process.name, dataDir, options);
+      const listening = await checkPort(process.port, options);
+      const restartManagedProcess = managedProcessNeedsRestart(process.name, dataDir, {
+        pluginVersion: currentPluginVersion,
+        scriptPath: process.scriptPath,
+      }, options);
+      let owner = null;
+      let needsRestart = restartManagedProcess;
+      if (process.name === 'observer') {
+        const ownerFinder = options.portOwner || (!options.checkPort ? portOwner : null);
+        if (listening) {
+          const identifyObserver = options.observerIdentity || (options.checkPort ? null : observerIdentity);
+          const identity = identifyObserver ? await identifyObserver(process.port, options) : null;
+          needsRestart = identifyObserver
+            ? !identity || identity.pluginVersion !== currentPluginVersion
+            : restartManagedProcess;
+          if (needsRestart) owner = identity?.pid || (ownerFinder && ownerFinder(process.port, options));
+        } else {
+          owner = ownerFinder && ownerFinder(process.port, options);
+          needsRestart = Boolean(owner) || restartManagedProcess;
+        }
+      }
+      if (needsRestart && (listening || owner)) {
+        if (owner) stopProcess(owner, process.name, options);
+        else stopManagedProcess(process.name, dataDir, options);
         await wait(process.port, false, options);
       }
     }
@@ -366,16 +378,85 @@ async function ensureObservability(options = {}) {
   }
 }
 
-function observerHealth(port, options = {}) {
+function observerIdentity(port, options = {}) {
   const timeoutMs = Math.max(25, Number(options.healthTimeoutMs) || 300);
   return new Promise((resolve) => {
+    let settled = false;
+    const finish = (identity = null) => {
+      if (settled) return;
+      settled = true;
+      resolve(identity);
+    };
     const request = (options.httpGet || http.get)(`http://${LOOPBACK}:${port}/health`, { timeout: timeoutMs }, (response) => {
-      response.resume();
-      resolve(response.statusCode === 200);
+      if (response.statusCode !== 200) {
+        response.resume();
+        finish();
+        return;
+      }
+      const chunks = [];
+      response.on('data', (chunk) => chunks.push(chunk));
+      response.once('end', () => {
+        try {
+          const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
+          if (body?.ok === true && Number.isInteger(body.pid) && body.pid > 0 && typeof body.pluginVersion === 'string') {
+            finish({ pid: body.pid, pluginVersion: body.pluginVersion });
+            return;
+          }
+        } catch {}
+        finish();
+      });
+      response.once('error', () => finish());
     });
-    request.once('timeout', () => { request.destroy(); resolve(false); });
-    request.once('error', () => resolve(false));
+    request.once('timeout', () => { request.destroy(); finish(); });
+    request.once('error', () => finish());
   });
+}
+
+function observerHealth(port, options = {}) {
+  return observerIdentity(port, options).then(Boolean);
+}
+
+function portOwner(port, options = {}) {
+  const command = options.platform || process.platform;
+  const run = options.spawnSync || spawnSync;
+  try {
+    if (command === 'win32') {
+      const output = String(run('netstat', ['-ano', '-p', 'tcp'], {
+        encoding: 'utf8', timeout: 3000, windowsHide: true,
+      }).stdout || '');
+      for (const line of output.split(/\r?\n/)) {
+        const fields = line.trim().split(/\s+/);
+        if (fields[0]?.toUpperCase() !== 'TCP' || fields[1] !== `${LOOPBACK}:${port}` || fields[3] !== 'LISTENING') continue;
+        const pid = Number(fields[4]);
+        if (Number.isInteger(pid) && pid > 0) return pid;
+      }
+      return null;
+    }
+    const output = String(run('lsof', ['-nP', `-iTCP:${port}`, '-sTCP:LISTEN', '-t'], {
+      encoding: 'utf8', timeout: 3000, windowsHide: true,
+    }).stdout || '');
+    const pid = Number(output.trim().split(/\s+/, 1)[0]);
+    return Number.isInteger(pid) && pid > 0 ? pid : null;
+  } catch {
+    return null;
+  }
+}
+
+function stopProcess(pid, name, options = {}) {
+  if (!Number.isInteger(pid) || pid < 1 || pid === process.pid) return false;
+  if (typeof options.killProcess === 'function') {
+    options.killProcess(pid, name);
+    return true;
+  }
+  if (!processAlive(pid)) return false;
+  if ((options.platform || process.platform) === 'win32') {
+    (options.spawnSync || spawnSync)('taskkill', ['/pid', String(pid), '/T', '/F'], {
+      encoding: 'utf8', timeout: 3000, windowsHide: true,
+    });
+  } else {
+    process.kill(pid, 'SIGTERM');
+  }
+  return true;
 }
 
 async function healthSnapshot(options = {}) {
@@ -436,10 +517,30 @@ async function healthSnapshot(options = {}) {
   };
 }
 
-function launchEnsure(options = {}) {
+async function launchEnsure(options = {}) {
   const dataDir = options.dataDir || defaultDataDir(options.environment);
   const configFile = options.configFile || defaultConfigPath(dataDir);
-  if (!consentedConfig(configFile)) return false;
+  const config = consentedConfig(configFile);
+  if (!config) return false;
+  const observerPort = config.observability.ports.observer;
+  const checkPort = options.checkPort || portListening;
+  const listening = await checkPort(observerPort, options);
+  const ownerFinder = options.portOwner || (!options.checkPort ? portOwner : null);
+  const identity = listening ? await (options.observerIdentity || observerIdentity)(observerPort, options) : null;
+  const owner = identity?.pid || (ownerFinder && ownerFinder(observerPort, options));
+  const pluginRoot = options.pluginRoot || path.resolve(__dirname, '..', '..');
+  const currentPluginVersion = (options.setupModule || require('../../bin/setup-observability.js')).pluginVersion(pluginRoot);
+  const needsRestart = listening
+    ? !identity || identity.pluginVersion !== currentPluginVersion
+    : Boolean(owner);
+  if (needsRestart) {
+    const ownerDescription = identity
+      ? `pid ${identity.pid}, plugin ${identity.pluginVersion}`
+      : owner ? `pid ${owner}, no health response` : 'an unknown process, no health response';
+    if (typeof options.reportNotice === 'function') {
+      options.reportNotice(`Observability: replacing the observer on ${LOOPBACK}:${observerPort} held by ${ownerDescription}.`);
+    }
+  }
   const child = (options.spawn || spawn)(process.execPath, [__filename, '--run'], {
     detached: true,
     env: { ...process.env, ...(options.environment || {}) },
@@ -452,7 +553,11 @@ function launchEnsure(options = {}) {
 
 async function main() {
   if (process.argv.includes('--launch')) {
-    launchEnsure();
+    await launchEnsure({
+      reportNotice(message) {
+        process.stdout.write(JSON.stringify({ systemMessage: message }));
+      },
+    });
     return;
   }
   if (process.argv.includes('--health')) {
@@ -471,7 +576,9 @@ module.exports = {
   ensureObservability,
   healthSnapshot,
   launchEnsure,
+  observerIdentity,
   portListening,
+  portOwner,
   releaseLock,
   startManagedProcess,
   stopManagedProcess,

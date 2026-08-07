@@ -92,11 +92,16 @@ function defaultSink() {
   };
 }
 
+function installedPluginVersion() {
+  return require('../.claude-plugin/plugin.json').version;
+}
+
 function createObserver(options = {}) {
   const host = assertLoopbackHost(options.host || '127.0.0.1');
   const port = Number(options.port === undefined ? 14319 : options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid observer port: ${options.port}`);
   const maxBodyBytes = Math.max(1024, Number(options.maxBodyBytes) || 1024 * 1024);
+  const pluginVersion = options.pluginVersion || installedPluginVersion();
   const overriddenOutbox = options.outboxEndpoint
     ? { enabled: true, endpoint: options.outboxEndpoint, headers: options.outboxHeaders || {}, allowRemote: false }
     : null;
@@ -130,6 +135,8 @@ function createObserver(options = {}) {
         const [outboxHealth] = store.queryView('outbox_health', { limit: 1 });
         jsonResponse(response, 200, {
           ok: true,
+          pid: process.pid,
+          pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
           outbox: outboxHealth,
         });
