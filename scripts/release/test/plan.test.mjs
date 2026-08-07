@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { readRepoChangelog, releasedRefs } from '../lib/changelog.mjs';
+import { readRepoChangelog, releasedFragmentFingerprints } from '../lib/changelog.mjs';
 import { readFragments } from '../lib/fragments.mjs';
 import { readManifest } from '../lib/manifests.mjs';
 import { buildPlan, formatPlan, planCommitMessage, planPushCommand, PlanError } from '../lib/plan.mjs';
@@ -23,7 +23,7 @@ function planFor(t, { fragments = {}, changelog = null, plugins = PLUGINS, suite
     manifest,
     date: DEFAULT_DATE,
     sha: DEFAULT_SHA,
-    released: releasedRefs(readRepoChangelog(source)),
+    released: releasedFragmentFingerprints(readRepoChangelog(source)),
     suiteResolver: createSuiteResolver(repo.root),
     ...options,
   });
@@ -89,13 +89,22 @@ test('a window with nothing but held fragments releases nothing', (t) => {
   assert.match(formatPlan(plan), /nothing to release/);
 });
 
-test('a ref already in the changelog never ships twice', (t) => {
+test('an exact fragment already in the changelog never ships twice', (t) => {
   const plan = planFor(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch' }, 'SQ-2': { plugins: ['workbench'], bump: 'patch' } },
-    changelog: '# Changelog\n\n## v3.207.1 (2026-07-24)\n\n### sidequest 3.6.16 → 3.6.17\n\n#### Fixes\n- Something (SQ-1)\n',
+    fragments: { 'SQ-1': { title: 'SQ-1 title', plugins: ['sidequest'], bump: 'patch' }, 'SQ-2': { plugins: ['workbench'], bump: 'patch' } },
+    changelog: '# Changelog\n\n## v3.207.1 (2026-07-24)\n\n### sidequest 3.6.16 → 3.6.17\n\n#### Fixes\n- SQ-1 title (SQ-1)\n',
   });
   assert.deepEqual(plan.selected.map((fragment) => fragment.ref), ['SQ-2']);
-  assert.deepEqual(plan.skipped, [{ ref: 'SQ-1', reason: 'already released (present in CHANGELOG.md)' }]);
+  assert.deepEqual(plan.skipped, [{ ref: 'SQ-1', reason: 'already released (same fragment content is in CHANGELOG.md; this queued copy is stuck and its note will never ship)' }]);
+});
+
+test('a new fragment for a released ref stays selected', (t) => {
+  const plan = planFor(t, {
+    fragments: { 'SQ-1': { title: 'Claim-token binding fixes concurrent dispatches', plugins: ['sidequest'], bump: 'patch' } },
+    changelog: '# Changelog\n\n## v3.207.1 (2026-07-24)\n\n### sidequest 3.6.16 → 3.6.17\n\n#### Fixes\n- SQ-1 title (SQ-1)\n',
+  });
+  assert.deepEqual(plan.selected.map((fragment) => fragment.ref), ['SQ-1']);
+  assert.deepEqual(plan.skipped, []);
 });
 
 test('a hotfix releases only the tickets it names', (t) => {
@@ -116,7 +125,7 @@ test('a hotfix releases only the tickets it names', (t) => {
 
 test('a hotfix refuses what it cannot honestly release', (t) => {
   const fragments = {
-    'SQ-1': { plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' },
+    'SQ-1': { title: 'Shipped', plugins: ['sidequest'], bump: 'patch', commit: 'aaaaaaa' },
     'SQ-2': { plugins: ['workbench'], bump: 'patch', hold: true, commit: 'bbbbbbb' },
   };
   assert.throws(() => planFor(t, { fragments, mode: 'hotfix', tickets: ['SQ-9'] }), /no fragment .*SQ-9\.md/);
@@ -127,9 +136,9 @@ test('a hotfix refuses what it cannot honestly release', (t) => {
       fragments,
       mode: 'hotfix',
       tickets: ['SQ-1'],
-      changelog: '# Changelog\n\n## v1.0.0 (2026-07-24)\n\n#### Fixes\n- Shipped (SQ-1)\n',
+      changelog: '# Changelog\n\n## v1.0.0 (2026-07-24)\n\n#### Fixes\n- Shipped (SQ-1) [`aaaaaaa`](https://github.com/Eigenwise/eigenwise-toolshed/commit/aaaaaaa)\n',
     }),
-    /already in CHANGELOG\.md/,
+    /already released this exact fragment/,
   );
 
   const forced = planFor(t, { fragments, mode: 'hotfix', tickets: ['SQ-2'], force: true });

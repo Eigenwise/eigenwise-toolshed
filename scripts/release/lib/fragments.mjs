@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
@@ -31,6 +32,11 @@ export function compareRefs(a, b) {
   const right = /^(.*?)-(\d+)$/.exec(b);
   if (left && right && left[1] === right[1]) return Number(left[2]) - Number(right[2]);
   return a.localeCompare(b);
+}
+
+export function fragmentFingerprint({ ref, title, commit = null, body = '' }) {
+  const renderedContent = JSON.stringify({ ref, title, commit, body: (body ?? '').trim() });
+  return createHash('sha256').update(renderedContent).digest('hex');
 }
 
 function requireString(file, data, key, { optional = false } = {}) {

@@ -2,6 +2,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 
 import { resolveInRepo } from './paths.mjs';
+import { fragmentFingerprint } from './fragments.mjs';
 
 export const REPO_CHANGELOG = 'CHANGELOG.md';
 
@@ -16,6 +17,7 @@ const GROUPS = [
 // neither can forge one. The ref binds to the LAST parenthesised group, which is the one the
 // renderer appends, so a title containing "(SQ-999)" cannot mark SQ-999 as released.
 const RENDERED_ENTRY = /^- .* \(([A-Z][A-Z0-9]*-\d+)\)(?: \[`[0-9a-f]{7,40}`\]\([^\s)]*\))?$/;
+const RENDERED_ENTRY_DETAILS = /^- (.*) \(([A-Z][A-Z0-9]*-\d+)\)(?: \[`([0-9a-f]{7,40})`\]\([^\s)]*\))?$/;
 
 export function repoChangelogHeader() {
   return [
@@ -140,6 +142,25 @@ export function releasedRefs(text) {
     if (match) refs.add(match[1]);
   }
   return refs;
+}
+
+export function releasedFragmentFingerprints(text) {
+  const fingerprints = new Set();
+  const lines = (text ?? '').split('\n').map((line) => line.replace(/\r$/, ''));
+  for (let index = 0; index < lines.length; index += 1) {
+    const match = RENDERED_ENTRY_DETAILS.exec(lines[index]);
+    if (!match) continue;
+
+    const body = [];
+    for (let bodyIndex = index + 1; bodyIndex < lines.length; bodyIndex += 1) {
+      const line = lines[bodyIndex];
+      if (line === '') body.push(line);
+      else if (line.startsWith('  ')) body.push(line.slice(2));
+      else break;
+    }
+    fingerprints.add(fragmentFingerprint({ title: match[1], ref: match[2], commit: match[3] ?? null, body: body.join('\n') }));
+  }
+  return fingerprints;
 }
 
 export function readRepoChangelog(source) {

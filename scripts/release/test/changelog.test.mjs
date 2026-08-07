@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 
 import {
+  releasedFragmentFingerprints,
   releasedRefs,
   renderPluginSection,
   renderRepoSection,
@@ -9,6 +10,7 @@ import {
   repoSectionHeading,
   upsertSection,
 } from '../lib/changelog.mjs';
+import { fragmentFingerprint } from '../lib/fragments.mjs';
 
 const PLAN = {
   mode: 'normal',
@@ -104,6 +106,13 @@ test('the changelog is the ledger of what has already shipped', () => {
   assert.deepEqual([...releasedRefs(text)].sort(), ['SQ-800', 'SQ-817', 'SQ-823', 'SQ-834']);
   assert.equal(releasedRefs('').size, 0);
   assert.equal(releasedRefs('- not an entry SQ-1').size, 0, 'a ref needs its parentheses to count');
+});
+
+test('the changelog identifies exact fragment content', () => {
+  const text = renderRepoSection(PLAN);
+  const fingerprints = releasedFragmentFingerprints(text);
+  assert.ok(fingerprints.has(fragmentFingerprint(PLAN.plugins[0].entries[1])));
+  assert.ok(!fingerprints.has(fragmentFingerprint({ ...PLAN.plugins[0].entries[1], body: 'A different note.' })));
 });
 
 test('a hotfix window says so', () => {

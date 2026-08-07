@@ -44,13 +44,21 @@ test('a malformed fragment fails with its own reason', (t) => {
   assert.match(reasons(result), /ghost/);
 });
 
-test('a fragment for a ref that already shipped would release it twice', (t) => {
+test('a queued copy of a fragment that already shipped fails loudly', (t) => {
   const context = setup(t, {
-    fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch' } },
+    fragments: { 'SQ-1': { title: 'Already out', plugins: ['sidequest'], bump: 'patch' } },
     changelog: '# Changelog\n\n## v3.207.0 (2026-07-24)\n\n#### Fixes\n- Already out (SQ-1)\n',
   });
   const result = runGuard(context.root, { git: context.git });
-  assert.match(reasons(result), /SQ-1 already has a CHANGELOG\.md entry/);
+  assert.match(reasons(result), /SQ-1\.md is still queued even though this exact fragment already has a CHANGELOG\.md entry/);
+});
+
+test('a new fragment may reuse a released ref', (t) => {
+  const context = setup(t, {
+    fragments: { 'SQ-1': { title: 'New dispatch binding', plugins: ['sidequest'], bump: 'patch' } },
+    changelog: '# Changelog\n\n## v3.207.0 (2026-07-24)\n\n#### Fixes\n- Already out (SQ-1)\n',
+  });
+  assert.deepEqual(runGuard(context.root, { git: context.git }).failures, []);
 });
 
 test('the marketplace has to serve the default branch', (t) => {
