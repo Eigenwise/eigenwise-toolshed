@@ -148,6 +148,11 @@ test('applyExperimentVerdict creates a missing oracle round and preserves existi
     deliverable: 'artifacts/comparison.wav',
   }).ok, true);
 
+  const released = fs.readFileSync(store.assetPath(slug, created.id, `experiment-${created.ref}.md`), 'utf8');
+  assert.match(released, /## R1 — \d{4}-\d{2}-\d{2} — Oracle verdict/);
+  assert.match(released, /Hypothesis: Rank the candidates\./);
+  assert.match(released, /Deliverable: artifacts\/comparison\.wav/);
+
   const verdict = store.applyExperimentVerdict(slug, created.ref, {
     text: 'Candidate B wins.',
     outcome: 'accepted',

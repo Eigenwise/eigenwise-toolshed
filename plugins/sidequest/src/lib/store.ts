@@ -649,6 +649,7 @@ const {
   applyExperimentVerdict,
   experimentPacket,
   ticketPlanInfo,
+  writeOracleExperimentRound,
   writeTicketPlan,
 } = createPlans({
   assetPath,
@@ -1593,7 +1594,10 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
-    if (oracleRequested) t.oracle = oracleMarker(dispatch, opts, now);
+    if (oracleRequested) {
+      t.oracle = oracleMarker(dispatch, opts, now);
+      writeOracleExperimentRound(slug, t);
+    }
     t.claim = null;
     // Provenance for a claim taken away from its holder rather than handed back,
     // so a later closeout attempt can be refused with an actionable recovery.

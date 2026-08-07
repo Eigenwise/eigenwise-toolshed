@@ -741,6 +741,7 @@ const {
   applyExperimentVerdict,
   experimentPacket,
   ticketPlanInfo,
+  writeOracleExperimentRound,
   writeTicketPlan
 } = createPlans({
   assetPath,
@@ -1562,7 +1563,10 @@ function releaseTicket(slug, idOrRef, by, opts) {
     }
     clearScopeRequestMarker(t);
     t.scopeRequest = null;
-    if (oracleRequested) t.oracle = oracleMarker(dispatch2, opts, now);
+    if (oracleRequested) {
+      t.oracle = oracleMarker(dispatch2, opts, now);
+      writeOracleExperimentRound(slug, t);
+    }
     t.claim = null;
     if (opts.claimRelease) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);

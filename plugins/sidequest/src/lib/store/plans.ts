@@ -174,6 +174,35 @@ function experimentEntryBlock(entry?: any) {
   ].join('\n');
 }
 
+function oracleExperimentEntryBlock(oracle?: any) {
+  const date = String(oracle.at || new Date().toISOString()).slice(0, 10);
+  return experimentEntryBlock({
+    round: oracle.round,
+    date,
+    headline: 'Oracle verdict',
+    hypothesis: oracle.ask,
+    change: '',
+    commit: oracle.candidate || '',
+    branch: '',
+    measured: '',
+    deliverable: oracle.deliverable || '',
+    verdict: '',
+    outcome: '',
+    whyItFailed: '',
+    constraintBought: '',
+    status: '',
+  });
+}
+
+function writeOracleExperimentRound(slug?: any, ticket?: any) {
+  const oracle = ticket?.oracle;
+  if (!oracle) throw new Error('Oracle experiment round requires an active oracle marker.');
+  const existing = readExperimentLog(slug, ticket);
+  const log = existing ? existing.log : experimentLogTemplate(ticket);
+  if (experimentEntries(log).some((entry?: any) => entry.round === oracle.round)) return null;
+  return writeExperimentLog(slug, ticket, `${String(log).trimEnd()}\n\n${oracleExperimentEntryBlock(oracle)}\n`);
+}
+
 function appendExperimentEntry(slug?: any, idOrRef?: any, entry?: any) {
   entry = entry || {};
   const round = experimentRound(entry.round);
@@ -282,23 +311,7 @@ function applyExperimentVerdict(slug?: any, idOrRef?: any, input?: any) {
     let log = existing ? existing.log : experimentLogTemplate(ticket);
     let entry = experimentEntries(log).find((current?: any) => current.round === oracle.round);
     if (!entry) {
-      const date = String(oracle.at || new Date().toISOString()).slice(0, 10);
-      const block = experimentEntryBlock({
-        round: oracle.round,
-        date,
-        headline: 'Oracle verdict',
-        hypothesis: oracle.ask,
-        change: '',
-        commit: oracle.candidate || '',
-        branch: '',
-        measured: '',
-        deliverable: oracle.deliverable || '',
-        verdict: '',
-        outcome: '',
-        whyItFailed: '',
-        constraintBought: '',
-        status: '',
-      });
+      const block = oracleExperimentEntryBlock(oracle);
       log = `${String(log).trimEnd()}\n\n${block}\n`;
       entry = experimentEntries(log).find((current?: any) => current.round === oracle.round);
     }
@@ -368,6 +381,7 @@ function experimentPacket(slug?: any, idOrRef?: any) {
     applyExperimentVerdict,
     experimentPacket,
     ticketPlanInfo,
+    writeOracleExperimentRound,
     writeTicketPlan,
   };
 }
