@@ -55,6 +55,16 @@ test('verify capture executes through the host shell and separates failed suites
   }
 });
 
+test('verify capture returns after a Windows batch command', { skip: process.platform !== 'win32' }, async () => {
+  const capture = await runVerifyCapture('npm --version');
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    assert.match(fs.readFileSync(capture.logPath, 'utf8'), /\d+\.\d+\.\d+/);
+  } finally {
+    deleteLog(capture);
+  }
+});
+
 test('verify capture returns a timeout with partial output', async () => {
   const slowCommand = process.platform === 'win32'
     ? 'echo partial-output && ping -n 30 127.0.0.1'

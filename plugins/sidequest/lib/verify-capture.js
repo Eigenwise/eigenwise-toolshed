@@ -22,7 +22,7 @@ function shellScript(command, platform = process.platform) {
   if (platform === "win32") {
     return [
       "@echo off",
-      command,
+      `"%ComSpec%" /d /s /c "${command}"`,
       'set "sidequestExitCode=%ERRORLEVEL%"',
       "echo __SIDEQUEST_VERIFY_EXIT__=%sidequestExitCode%",
       "exit /b %sidequestExitCode%",
