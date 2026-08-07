@@ -145,6 +145,7 @@ function dispatchLaunchName(ref, title, sequence) {
 }
 
 // src/hooks/force-exec-bypass.ts
+var { canonicalPath } = require(import_node_path2.default.join(__dirname, "..", "lib", "worktrees.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
 var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
@@ -480,12 +481,12 @@ function restoresCommittedContent(input, target) {
     } else {
       return false;
     }
-    const repository = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+    const repository = canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
       cwd: import_node_path2.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
-    }).trim();
-    const relative = import_node_path2.default.relative(repository, target).replace(/\\/g, "/");
+    }).trim());
+    const relative = import_node_path2.default.relative(repository, canonicalPath(target)).replace(/\\/g, "/");
     if (!relative || relative === ".." || relative.startsWith("../") || import_node_path2.default.isAbsolute(relative)) return false;
     const committed = (0, import_node_child_process.execFileSync)("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
@@ -503,7 +504,7 @@ function projectRelative(target, projectPath) {
   return worktree ? worktree[1] || null : relative;
 }
 function inScope(target, scope) {
-  const relative = projectRelative(target, scope.projectPath);
+  const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
   if (!relative) return false;
   const key = process.platform === "win32" ? relative.toLowerCase() : relative;
   return scope.files.some((file) => {
