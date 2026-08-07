@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const { spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -284,4 +285,14 @@ test('keeps unavailable report values explicit', (t) => {
   assert.equal(report.session_turn_ledger[0].tokens.output.quality, 'unavailable');
   assert.equal(report.session_turn_ledger[0].cost_usd.value, null);
   assert.equal(report.session_turn_ledger[0].cost_usd.quality, 'unavailable');
+});
+
+test('token usage report help lists every option', () => {
+  const script = path.join(__dirname, '..', 'bin', 'token-usage-report.js');
+  const help = spawnSync(process.execPath, [script, '--help'], { encoding: 'utf8' });
+
+  assert.equal(help.status, 0, help.stderr);
+  for (const flag of ['--db', '--format', '--sidequest-home', '--project', '--help']) {
+    assert.match(help.stdout, new RegExp(flag));
+  }
 });
