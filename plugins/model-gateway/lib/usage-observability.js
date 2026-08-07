@@ -17,6 +17,7 @@ const MCP_SERVER_BYTES = Symbol('mcpServerBytes');
 const MAX_MCP_SERVER_MEASUREMENTS = 20;
 const DEFAULT_CONTEXT_SNAPSHOT_TTL_MS = 4 * 60 * 60 * 1000;
 const DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES = 500;
+const DEFAULT_PROJECT_LOOKUP_BYTES = 64 * 1024;
 const TOOL_RESULT_EVENT = 'gateway.tool_result.usage';
 const MCP_FOOTPRINT_EVENT = 'gateway.mcp.footprint';
 const REQUEST_BODY_STATE_DIR = process.env.MODEL_GATEWAY_REQUEST_BODY_DIR
@@ -40,6 +41,61 @@ const RATE_LIMIT_HEADERS = Object.freeze({
 
 function safeIdentifier(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
+}
+
+function projectNameFromCwd(cwd) {
+  if (typeof cwd !== 'string' || !path.isAbsolute(cwd)) return null;
+  const name = path.basename(path.resolve(cwd)).replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
+  return safeIdentifier(name);
+}
+
+function projectNameFromTranscript(filePath, maxBytes = DEFAULT_PROJECT_LOOKUP_BYTES) {
+  let handle;
+  try {
+    const stat = fs.statSync(filePath);
+    const bytes = Buffer.alloc(Math.min(stat.size, maxBytes));
+    handle = fs.openSync(filePath, 'r');
+    fs.readSync(handle, bytes, 0, bytes.length, 0);
+    const match = /"cwd"\s*:\s*"((?:\\.|[^"\\])*)"/.exec(bytes.toString('utf8'));
+    if (!match) return null;
+    return projectNameFromCwd(JSON.parse(`"${match[1]}"`));
+  } catch {
+    return null;
+  } finally {
+    if (handle !== undefined) fs.closeSync(handle);
+  }
+}
+
+class SessionProjectResolver {
+  constructor({ projectsDirectory, maxEntries = DEFAULT_CONTEXT_SNAPSHOT_MAX_IDENTITIES } = {}) {
+    this.projectsDirectory = projectsDirectory || path.join(process.env.CLAUDE_CONFIG_DIR || path.join(os.homedir(), '.claude'), 'projects');
+    this.maxEntries = maxEntries;
+    this.projects = new Map();
+  }
+
+  resolve(sessionId) {
+    if (!safeIdentifier(sessionId)) return null;
+    if (this.projects.has(sessionId)) {
+      const project = this.projects.get(sessionId);
+      this.projects.delete(sessionId);
+      this.projects.set(sessionId, project);
+      return project;
+    }
+    let project = null;
+    try {
+      const entries = fs.readdirSync(this.projectsDirectory, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        project = projectNameFromTranscript(path.join(this.projectsDirectory, entry.name, `${sessionId}.jsonl`));
+        if (project) break;
+      }
+    } catch {}
+    if (project) {
+      this.projects.set(sessionId, project);
+      while (this.projects.size > this.maxEntries) this.projects.delete(this.projects.keys().next().value);
+    }
+    return project;
+  }
 }
 
 function headerValue(headers, name) {
@@ -531,6 +587,8 @@ function buildOtlpLogPayload(record) {
   const attributes = Object.entries(record.attributes)
     .filter(([, value]) => value !== null && value !== undefined)
     .map(([key, value]) => ({ key, value: otlpValue(value) }));
+  const resourceAttributes = [{ key: 'service.name', value: { stringValue: 'codex-gateway' } }];
+  if (record.projectId) resourceAttributes.push({ key: 'project.id', value: { stringValue: record.projectId } });
   const logRecord = {
     timeUnixNano: String(BigInt(record.observedAt.getTime()) * 1000000n),
     observedTimeUnixNano: String(BigInt(record.observedAt.getTime()) * 1000000n),
@@ -542,7 +600,7 @@ function buildOtlpLogPayload(record) {
   if (record.spanId) logRecord.spanId = record.spanId;
   return {
     resourceLogs: [{
-      resource: { attributes: [{ key: 'service.name', value: { stringValue: 'codex-gateway' } }] },
+      resource: { attributes: resourceAttributes },
       scopeLogs: [{
         scope: { name: 'eigenwise.codex-gateway.usage', version: '1' },
         logRecords: [logRecord],
@@ -692,6 +750,9 @@ function createUsageCapture(options) {
       || (responseId ? { value: responseId, source: 'message_id' } : null)
       || { value: fallbackRequestId, source: 'generated' };
     const route = options.route || {};
+    const sessionId = safeIdentifier(headerValue(requestHeaders, 'x-claude-code-session-id'));
+    let projectId = null;
+    try { projectId = safeIdentifier(options.resolveProjectId?.(sessionId)); } catch {}
     const backend = safeIdentifier(route.backend);
     const resolvedModel = backend === 'anthropic'
       ? responseModel || safeIdentifier(route.effectiveModel || route.model)
@@ -721,7 +782,7 @@ function createUsageCapture(options) {
       request_id_source: requestIdEvidence.source,
       client_request_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-request-id'))
         || safeIdentifier(headerValue(requestHeaders, 'x-request-id')),
-      session_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-session-id')),
+      session_id: sessionId,
       agent_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-agent-id')),
       parent_agent_id: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-parent-agent-id')),
       agent_role: safeIdentifier(headerValue(requestHeaders, 'x-claude-code-agent-id')) ? 'executor' : 'orchestrator',
@@ -742,6 +803,7 @@ function createUsageCapture(options) {
       eventName,
       observedAt: options.now ? options.now() : new Date(),
       attributes,
+      projectId,
       ...trace,
     };
     try { options.emit?.(record); } catch {}
@@ -790,6 +852,7 @@ function toolResultUsageRecord(requestRecord, attribution) {
     eventName: TOOL_RESULT_EVENT,
     observedAt: requestRecord.observedAt,
     attributes,
+    projectId: requestRecord.projectId,
     traceId: requestRecord.traceId,
     spanId: requestRecord.spanId,
   };
@@ -826,6 +889,7 @@ function mcpFootprintRecords(requestRecord) {
         eventName: MCP_FOOTPRINT_EVENT,
         observedAt: requestRecord.observedAt,
         attributes,
+        projectId: requestRecord.projectId,
         traceId: requestRecord.traceId,
         spanId: requestRecord.spanId,
       };
@@ -858,6 +922,9 @@ function createGatewayUsageEmitter(options = {}) {
     now: options.contextNow || Date.now,
     ttlMs: snapshotTtlMs,
   });
+  const projectResolver = options.projectResolver || new SessionProjectResolver({
+    projectsDirectory: options.projectsDirectory,
+  });
   const schedule = options.schedule || ((work) => {
     const immediate = setImmediate(work);
     immediate.unref?.();
@@ -881,6 +948,7 @@ function createGatewayUsageEmitter(options = {}) {
       const contextCapture = toolResultTracker.capture(input.payload, input.requestHeaders);
       return createUsageCapture({
         ...input,
+        resolveProjectId(sessionId) { return projectResolver.resolve(sessionId); },
         sequence,
         maxResponseBytes,
         emit(record) {
@@ -913,5 +981,6 @@ module.exports = {
   recordRequestBodyHighWater,
   requestBodyHighWaterPath,
   resolveUsageEndpoint,
+  SessionProjectResolver,
   serializedBytes,
 };

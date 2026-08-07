@@ -32,6 +32,11 @@ function attributeMap(payload) {
   }));
 }
 
+function resourceAttributeMap(payload) {
+  const attributes = payload.resourceLogs[0].resource.attributes;
+  return Object.fromEntries(attributes.map(({ key, value }) => [key, value.stringValue]));
+}
+
 const payload = {
   model: 'claude-codex-auto',
   system: [{ type: 'text', text: 'private system' }],
@@ -300,6 +305,35 @@ test('accepts loopback OTLP endpoints only', () => {
   assert.equal(resolveUsageEndpoint({ CODEX_GATEWAY_USAGE_ENDPOINT: 'http://127.999.999.999/v1/logs' }), null);
   assert.equal(resolveUsageEndpoint({ CODEX_GATEWAY_USAGE_ENDPOINT: '0' }), null);
   assert.equal(createGatewayUsageEmitter({ endpoint: 'https://telemetry.example.com/v1/logs' }).enabled, false);
+});
+
+test('resolves a gateway session transcript into an OTLP project resource', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-project-'));
+  const projectsDirectory = path.join(directory, 'projects');
+  const sessionId = 'session-project';
+  const projectDirectory = path.join(directory, 'eigenwise-toolshed');
+  fs.mkdirSync(path.join(projectsDirectory, 'C--dev-eigenwise-public-eigenwise-toolshed'), { recursive: true });
+  fs.mkdirSync(projectDirectory);
+  fs.writeFileSync(
+    path.join(projectsDirectory, 'C--dev-eigenwise-public-eigenwise-toolshed', `${sessionId}.jsonl`),
+    JSON.stringify({ cwd: projectDirectory }) + '\n',
+  );
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const emitted = [];
+  const emitter = createGatewayUsageEmitter({
+    endpoint: 'http://127.0.0.1:4318/v1/logs',
+    projectsDirectory,
+    emit(record) { emitted.push(record); },
+  });
+  const record = finishEmitterRequest(emitter, { tools: [{ name: 'mcp__sidequest__claim' }], messages: [] }, 10, sessionId, 'agent-project');
+  const resource = resourceAttributeMap(buildOtlpLogPayload(record));
+
+  assert.equal(record.projectId, 'eigenwise-toolshed');
+  assert.equal(resource['project.id'], 'eigenwise-toolshed');
+  assert.equal(JSON.stringify(buildOtlpLogPayload(record)).includes(projectDirectory), false);
+  assert.ok(emitted.every((emittedRecord) => emittedRecord.projectId === 'eigenwise-toolshed'));
+  assert.ok(emitted.every((emittedRecord) => resourceAttributeMap(buildOtlpLogPayload(emittedRecord))['project.id'] === 'eigenwise-toolshed'));
 });
 
 test('JSON capture emits exact identities, resolved route, measurements, and no content', () => {
