@@ -2,8 +2,9 @@
 function createClaims(dependencies) {
   const {
     completionTreeCheck,
+    dispatchDelta,
     dispatchState,
-    fs,
+    isolatedDispatchWorktreeMissing,
     getTicket,
     putTicket,
     withTicketLock
@@ -159,13 +160,29 @@ ${evidence.outputTail}`;
     if (!Number.isFinite(stoppedMs)) return false;
     return !Number.isFinite(claimedMs) || stoppedMs >= claimedMs;
   }
-  function missingStoppedWorktree(dispatch) {
-    if (!dispatch || dispatch.sharedTree !== false || !dispatch.terminalAt || !dispatch.worktree) return false;
+  function missingIsolatedWorktree(dispatch) {
     try {
-      return !fs.existsSync(dispatch.worktree);
+      return isolatedDispatchWorktreeMissing(dispatch);
     } catch (_) {
       return false;
     }
+  }
+  function claimReleaseBlocker(slug, ticket) {
+    const dispatch = dispatchState(ticket);
+    if (!dispatch || dispatch.sharedTree !== true) return null;
+    const delta = dispatchDelta(slug, ticket);
+    if (!delta.ok) {
+      return {
+        kind: "shared_tree_state_unavailable",
+        reason: "the shared checkout could not be inspected for uncommitted changes"
+      };
+    }
+    if (!delta.working.length) return null;
+    return {
+      kind: "dirty_shared_tree",
+      paths: delta.working,
+      reason: "the shared checkout has uncommitted changes"
+    };
   }
   function claimReleaseVerdict(ticket, now) {
     const claim = ticket && ticket.claim;
@@ -177,23 +194,21 @@ ${evidence.outputTail}`;
     if (observedStop(dispatch, claim)) {
       return { kind: "observed_stop", idleMs, at: dispatch.terminalAt, reason: "its executor has a durable died outcome while still holding the claim" };
     }
+    if (missingIsolatedWorktree(dispatch)) {
+      return { kind: "missing_worktree", idleMs, reason: "its isolated executor worktree no longer exists" };
+    }
     if (verification) {
       if (idleMs > claimAbandonMs()) {
         return { kind: "abandoned_verifying", idleMs, at: verification.startedAt, reason: "its verification marker never completed past the unobserved-death backstop" };
       }
       return null;
     }
-    if (resumableScopePause(ticket)) {
-      if (missingStoppedWorktree(dispatch)) {
-        return { kind: "missing_worktree", idleMs, at: dispatch.terminalAt, reason: "its stopped executor worktree no longer exists" };
-      }
-      return null;
+    if (resumableScopePause(ticket)) return null;
+    if (dispatch) return null;
+    if (idleMs > claimIdleMs()) {
+      return { kind: "idle", idleMs, reason: "no board activity from the claim holder and no executor dispatch exists" };
     }
-    const liveAgent = Boolean(dispatch && !dispatch.terminalAt && (dispatch.boundAt || dispatch.agentId));
-    if (!liveAgent && idleMs > claimIdleMs()) {
-      return { kind: "idle", idleMs, reason: "no board activity from the claim holder and no live executor associated" };
-    }
-    if (!liveAgent && idleMs > claimAbandonMs()) {
+    if (idleMs > claimAbandonMs()) {
       return { kind: "abandoned", idleMs, reason: "no board activity from the claim holder past the unobserved-death backstop" };
     }
     return null;
@@ -218,8 +233,11 @@ ${evidence.outputTail}`;
     if (verdict.kind === "abandoned_verifying") {
       return `↩️ Auto-released to **todo**: verification from \`${by}\` never completed for ${idle}, past the unobserved-death backstop.`;
     }
+    if (verdict.kind === "missing_worktree") {
+      return `↩️ Auto-released to **todo**: the isolated executor worktree for \`${by}\` no longer exists.`;
+    }
     if (verdict.kind === "idle") {
-      return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle} and no live executor is associated with this ticket.`;
+      return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, and this claim has no executor dispatch.`;
     }
     return `↩️ Auto-released to **todo**: no board activity from \`${by}\` for ${idle}, past the unobserved-death backstop (nothing ever reported that executor stopping).`;
   }
@@ -250,10 +268,11 @@ ${evidence.outputTail}`;
     claimIdleAge,
     claimIdleMs,
     claimReclaimable,
+    claimReleaseBlocker,
     claimReleaseNote,
     claimReleaseVerdict,
     claimVerification,
-    missingStoppedWorktree,
+    missingIsolatedWorktree,
     observedStop,
     preparedDispatchTtlMs,
     recordClaimVerification,

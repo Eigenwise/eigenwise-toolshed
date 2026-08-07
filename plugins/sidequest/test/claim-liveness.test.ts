@@ -535,26 +535,57 @@ test('a closeout after an auto-release names the exact recovery instead of silen
   assert.match(committed.stderr + committed.stdout, /auto-released/);
 });
 
-test('a missing isolated worktree after stop is reclaimable while a live quiet dispatch remains protected', () => {
-  const stopped = addRouted('missing worktree after stop');
-  const stoppedSession = 'session-missing-worktree';
-  const stoppedAgent = 'missing-worktree-agent';
-  const stoppedPrepared = store.prepareDispatch(slug, stopped.ref, { sharedTree: false, sessionId: stoppedSession });
-  assert.equal(store.recordDispatchLaunch(slug, stopped.ref, {
-    token: stoppedPrepared.token, executor: stoppedPrepared.ticket.dispatchExecutor, sessionId: stoppedSession, agentName: stoppedAgent,
+test('the sweep refuses to release a shared-tree claim while the checkout is dirty', () => {
+  const ticket = addRouted('dirty shared checkout release guard');
+  const sessionId = 'session-dirty-shared-tree';
+  const agentId = 'dirty-shared-tree-agent';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: agentId,
   }).ok, true);
-  assert.equal(store.bindDispatchAgent(stoppedSession, stoppedPrepared.ticket.dispatchExecutor, stoppedAgent, stoppedAgent).ok, true);
-  assert.equal(store.claimTicket(slug, stopped.ref, 'stopped-isolated-executor', {
-    token: stoppedPrepared.token, executor: stoppedPrepared.ticket.dispatchExecutor, sessionId: stoppedSession,
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-shared-tree-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId,
   }).ok, true);
-  assert.equal(store.recordDispatchAgentFailure(slug, stopped.ref, {
-    token: stoppedPrepared.token,
-    executor: stoppedPrepared.ticket.dispatchExecutor,
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
     error: 'Prompt is too long',
   }).ok, true);
-  const stoppedPulse = store.pulsePayload(slug, stopped.ref);
-  assert.equal(stoppedPulse.liveness, 'dead');
-  assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
+
+  const fixturePath = path.join(PROJECT_DIR, 'lib', 'fixture.js');
+  const originalFixture = fs.readFileSync(fixturePath, 'utf8');
+  fs.writeFileSync(fixturePath, `${originalFixture}module.exports.dirty = true;\n`);
+  const blockedSweep = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(blockedSweep.released.some((entry?: any) => entry.ref === ticket.ref), false);
+  assert.deepStrictEqual(
+    blockedSweep.blocked.find((entry?: any) => entry.ref === ticket.ref),
+    { project: slug, ref: ticket.ref, kind: 'dirty_shared_tree', paths: ['lib/fixture.js'] },
+  );
+  assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'dirty-shared-tree-executor');
+
+  fs.writeFileSync(fixturePath, originalFixture);
+  const cleanSweep = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(cleanSweep.released.some((entry?: any) => entry.ref === ticket.ref && entry.kind === 'observed_stop'), true);
+});
+
+test('a missing isolated worktree is death evidence without a terminal dispatch stamp', () => {
+  const missing = addRouted('missing worktree without observed stop');
+  const missingSession = 'session-missing-worktree';
+  const missingAgent = 'missing-worktree-agent';
+  const missingPrepared = store.prepareDispatch(slug, missing.ref, { sharedTree: false, sessionId: missingSession });
+  assert.equal(store.recordDispatchLaunch(slug, missing.ref, {
+    token: missingPrepared.token, executor: missingPrepared.ticket.dispatchExecutor, sessionId: missingSession, agentName: missingAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(missingSession, missingPrepared.ticket.dispatchExecutor, missingAgent, missingAgent).ok, true);
+  assert.equal(store.claimTicket(slug, missing.ref, 'missing-isolated-executor', {
+    token: missingPrepared.token, executor: missingPrepared.ticket.dispatchExecutor, sessionId: missingSession,
+  }).ok, true);
+  const missingDispatch = store.getTicket(slug, missing.ref).dispatch;
+  assert.equal(missingDispatch.terminalAt, null);
+  assert.equal(fs.existsSync(missingDispatch.worktree), false);
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, missing.ref)).kind, 'missing_worktree');
+  assert.equal(store.pulsePayload(slug, missing.ref).liveness, 'dead');
 
   const live = addRouted('quiet live isolated dispatch');
   const liveSession = 'session-quiet-isolated';
@@ -567,10 +598,17 @@ test('a missing isolated worktree after stop is reclaimable while a live quiet d
   assert.equal(store.claimTicket(slug, live.ref, 'quiet-isolated-executor', {
     token: livePrepared.token, executor: livePrepared.ticket.dispatchExecutor, sessionId: liveSession,
   }).ok, true);
+  const liveDispatch = store.getTicket(slug, live.ref).dispatch;
+  fs.mkdirSync(liveDispatch.worktree, { recursive: true });
   backdateClaim(live.ref, 31 * 24 * HOUR);
   const livePulse = store.pulsePayload(slug, live.ref);
   assert.equal(livePulse.liveness, 'unknown');
   assert.equal(livePulse.claim.reclaimable, null);
+
+  const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(swept.released.some((entry?: any) => entry.ref === missing.ref && entry.kind === 'missing_worktree'), true);
+  assert.equal(store.getTicket(slug, live.ref).claim.by, 'quiet-isolated-executor');
+  fs.rmSync(liveDispatch.worktree, { recursive: true, force: true });
 });
 
 
@@ -627,7 +665,7 @@ test('the idle backstop only applies when no executor is associated', () => {
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a bound executor is not idle just because it is quiet');
 });
 
-test('an unbound claimed dispatch reports its missing identity and releases through the inactivity backstop', () => {
+test('an unbound claimed dispatch reports a binding fault and stays claimed without death evidence', () => {
   const ticket = addRouted('unbound dispatch claim');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-unbound-dispatch' });
   assert.equal(store.claimTicket(slug, ticket.ref, 'unbound-executor', {
@@ -638,14 +676,18 @@ test('an unbound claimed dispatch reports its missing identity and releases thro
   assert.equal(claimed.dispatch.agentId, undefined);
   assert.equal(claimed.dispatch.agentName, undefined);
   assert.equal(claimed.dispatch.boundAt, null);
-  const pulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(pulse.liveness, 'unknown');
-  assert.match(pulse.livenessEvidence, /before Sidequest recorded a runtime identity/);
+  let pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'binding_fault');
+  assert.match(pulse.livenessEvidence, /dispatch\.boundAt is null/);
 
   backdateClaim(ticket.ref, 2 * HOUR);
-  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)).kind, 'idle');
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)), null);
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
-  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
+  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), false);
+  pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'binding_fault');
+  assert.equal(pulse.claim.reclaimable, null);
+  assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'unbound-executor');
 });
 
 test('an unbound isolated dispatch can still file a scope request', () => {

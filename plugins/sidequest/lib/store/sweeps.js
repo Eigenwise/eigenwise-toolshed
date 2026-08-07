@@ -38,6 +38,7 @@ function createSweeps({ addComment, claimAbandonMs, claimIdleMs, claimReleaseNot
     opts = opts || {};
     const source = opts.source ? String(opts.source) : "sweep";
     const released = [];
+    const blocked = [];
     for (const project of listProjects({ all: true })) {
       if (opts.project && project.slug !== opts.project) continue;
       for (const ticket of listTickets(project.slug)) {
@@ -51,7 +52,12 @@ function createSweeps({ addComment, claimAbandonMs, claimIdleMs, claimReleaseNot
             requireReleaseVerdict: true,
             claimRelease: { kind: verdict.kind, reason: verdict.reason, idleMs: Number.isFinite(verdict.idleMs) ? verdict.idleMs : null }
           });
-          if (!res.ok) continue;
+          if (!res.ok) {
+            if (["dirty_shared_tree", "shared_tree_state_unavailable"].includes(res.reason)) {
+              blocked.push({ project: project.slug, ref: ticket.ref, kind: res.reason, paths: res.paths || [] });
+            }
+            continue;
+          }
           released.push({ project: project.slug, ref: ticket.ref, kind: verdict.kind });
           addComment(project.slug, ticket.id, {
             by: "sidequest",
@@ -64,7 +70,7 @@ function createSweeps({ addComment, claimAbandonMs, claimIdleMs, claimReleaseNot
       }
     }
     const dispatches = sweepStaleDispatches(opts);
-    return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, expiredDispatches: dispatches.expired };
+    return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, blocked, expiredDispatches: dispatches.expired };
   }
   return { sweepStaleDispatches, sweepStaleClaims };
 }

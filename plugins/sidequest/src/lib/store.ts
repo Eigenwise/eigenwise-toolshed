@@ -584,6 +584,7 @@ const {
   claimIdleAge,
   claimIdleMs,
   claimReclaimable,
+  claimReleaseBlocker,
   claimReleaseNote,
   claimReleaseVerdict,
   claimVerification,
@@ -597,8 +598,9 @@ const {
   touchClaimActivity,
 } = createClaims({
   completionTreeCheck,
+  dispatchDelta,
   dispatchState,
-  fs,
+  isolatedDispatchWorktreeMissing,
   getTicket,
   putTicket,
   withTicketLock,
@@ -1532,14 +1534,28 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (oracleRequested) oracleMarker(dispatch, opts, null);
     // The sweep decides on an unlocked snapshot; re-check under the lock so a
     // claim that came back to life in between is never released out from under it.
-    if (opts.requireReleaseVerdict && !claimReleaseVerdict(t)) {
-      return {
-        ok: false,
-        reason: 'claim_live',
-        message: `${t.ref} is still live-claimed by "${held && held.by}"; the sweep re-checked it under the lock and left it alone.`,
-        ticket: t,
-        claim: held,
-      };
+    if (opts.requireReleaseVerdict) {
+      if (!claimReleaseVerdict(t)) {
+        return {
+          ok: false,
+          reason: 'claim_live',
+          message: `${t.ref} is still live-claimed by "${held && held.by}"; the sweep re-checked it under the lock and left it alone.`,
+          ticket: t,
+          claim: held,
+        };
+      }
+      const releaseBlocker = claimReleaseBlocker(slug, t);
+      if (releaseBlocker) {
+        const changed = releaseBlocker.paths?.length ? ` Changed paths: ${releaseBlocker.paths.join(', ')}.` : '';
+        return {
+          ok: false,
+          reason: releaseBlocker.kind,
+          message: `${t.ref} claim release refused: ${releaseBlocker.reason}.${changed}`,
+          paths: releaseBlocker.paths || [],
+          ticket: t,
+          claim: held,
+        };
+      }
     }
     if (!opts.requireReleaseVerdict) {
       const workInHand = scopeRequestWorkInHand(slug, t);
