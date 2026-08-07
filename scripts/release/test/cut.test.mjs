@@ -298,9 +298,15 @@ test('a failed Test workflow refuses before suites or release mutations', async 
         suiteRuns += 1;
         return { code: 0, command: 'should not run' };
       },
-      assertParentCiPassed: (repoRoot, commit) => {
+      assertParentCiPassed: (repoRoot, commit, suites) => {
         checkedCommit = commit;
-        return assertParentCiPassed(repoRoot, commit, failedTestRun);
+        assert.deepEqual(suites, [{
+          plugin: 'sidequest',
+          cwd: 'plugins/sidequest',
+          setup: null,
+          command: 'node --test --test-timeout=30000 "test/*.test.js"',
+        }]);
+        return assertParentCiPassed(repoRoot, commit, failedTestRun, suites);
       },
     }),
     /Test workflow for .* concluded failure; refusing to publish/,
@@ -364,14 +370,28 @@ test('a CI override records its reason for a local cut', async (t) => {
   assert.ok(logs.includes(`Test CI on origin/main (${remoteParent}) was overridden: SQ-1349 repairs the failed Test workflow`));
 });
 
-test('a missing Test workflow run offers the optional container check', (t) => {
+test('a missing Test workflow run offers a committed container baseline and every planned suite', (t) => {
   const context = setup(t);
   const parent = context.originGit('rev-parse', 'main');
+  const suites = [
+    { plugin: 'sidequest', cwd: 'plugins/sidequest', setup: 'npm ci', command: 'npm run test:full' },
+    { plugin: 'workbench', cwd: 'plugins/workbench', setup: 'npm ci', command: 'npm test' },
+  ];
+  let failure;
 
   assert.throws(
-    () => assertParentCiPassed(context.root, parent, () => ({ status: 0, stdout: '[]', stderr: '' })),
-    /no completed Test workflow run found.*git archive .*\| docker run -i --rm node:22.*git init -q/s,
+    () => assertParentCiPassed(context.root, parent, () => ({ status: 0, stdout: '[]', stderr: '' }), suites),
+    (error) => {
+      failure = error;
+      return /no completed Test workflow run found/.test(error.message);
+    },
   );
+
+  const initialized = failure.message.indexOf('git init -q');
+  const baseline = failure.message.indexOf('git -c user.email=ci@local -c user.name=ci commit -q -m baseline');
+  const suitesStart = failure.message.indexOf('(cd "plugins/sidequest"; npm ci; npm run test:full)');
+  assert.ok(initialized < baseline && baseline < suitesStart);
+  assert.match(failure.message, /\(cd "plugins\/workbench"; npm ci; npm test\)/);
 });
 
 test('a failing default suite writes its output and names the log', async (t) => {

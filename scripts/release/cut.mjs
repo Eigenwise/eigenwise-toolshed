@@ -115,11 +115,20 @@ function releaseRecoveryInstructions(plan, originalHead) {
   ].join('\n');
 }
 
-function containerTestCommand(commit) {
-  return `git archive ${commit} | docker run -i --rm node:22 sh -c 'set -eu; mkdir repo; tar -x -C repo; cd repo; git init -q; cd plugins/sidequest; npm ci; npm run test:full'`;
+function quoteForSh(command) {
+  return `'${command.replaceAll("'", "'\"'\"'")}'`;
 }
 
-export function assertParentCiPassed(repoRoot, commit, runner = spawnSync) {
+function containerTestCommand(commit, suites) {
+  const suiteCommands = suites.map((suite) => {
+    const commands = [suite.setup, suite.command].filter(Boolean).join('; ');
+    return `(cd ${JSON.stringify(suite.cwd)}; ${commands})`;
+  }).join('; ');
+  const commands = `set -eu; mkdir repo; tar -x -C repo; cd repo; git init -q; git -c user.email=ci@local -c user.name=ci add -A; git -c user.email=ci@local -c user.name=ci commit -q -m baseline; ${suiteCommands}`;
+  return `git archive ${commit} | docker run -i --rm node:22 sh -c ${quoteForSh(commands)}`;
+}
+
+export function assertParentCiPassed(repoRoot, commit, runner = spawnSync, suites = []) {
   const result = runner('gh', [
     'run', 'list', '--workflow', 'Test', '--commit', commit, '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha',
   ], {
@@ -142,7 +151,7 @@ export function assertParentCiPassed(repoRoot, commit, runner = spawnSync) {
   if (!run) {
     throw new Error(
       `no completed Test workflow run found for ${commit}; refusing to publish. ` +
-      `If Docker is available, run ${containerTestCommand(commit)} before retrying with --ci-override "<reason>".`,
+      `If Docker is available, run ${containerTestCommand(commit, suites)} before retrying with --ci-override "<reason>".`,
     );
   }
   if (run.conclusion !== 'success') {
@@ -285,9 +294,10 @@ export async function cut(options = {}) {
   let ci = null;
   if (!dryRun && (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote)))) {
     const parent = git.remoteBranchHead(remote, publishBranch);
-    const assertCiPassed = options.assertParentCiPassed ?? assertParentCiPassed;
+    const assertCiPassed = options.assertParentCiPassed
+      ?? ((repoRoot, commit, suites) => assertParentCiPassed(repoRoot, commit, spawnSync, suites));
     try {
-      const result = assertCiPassed(repoRoot, parent);
+      const result = assertCiPassed(repoRoot, parent, plan.suites);
       ci = { status: 'passed', commit: parent, conclusion: result?.conclusion ?? 'success' };
     } catch (error) {
       if (!ciOverrideReason) throw error;
