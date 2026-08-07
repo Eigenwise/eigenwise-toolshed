@@ -8,6 +8,38 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.406.0 (2026-08-07)
+
+### sidequest 4.39.1 → 4.40.0
+
+#### Features
+
+- Carry implementation context into executor spawns (SQ-1265)
+  Dispatch prompts now spend a bounded 1.2 KB on the ticket title, body excerpt, declared scope, anchors, and newest story finding before the token-gated fetch. Per-section caps keep the serialized spawn below the existing 2 KB ceiling even when one field is huge. The fetched briefing raises the newest-first story log window to 16 KB, enough for one maximum-size 16,000-byte handoff plus metadata. That small upfront packet replaces the 439-byte pointer without reintroducing full board payloads, and targets the measured 63-425 KB rediscovery runs.
+- Scope inside a ticket's own package is granted without a ruling (SQ-1384)
+  A scope request used to pause the executor and wait for a human ruling no matter
+  what it asked for. That round trip is fatal rather than slow: an executor that
+  pauses before its first edit has an unchanged worktree, and the runtime sweeps
+  it when the process ends. Two of those cost 520,087 tokens for zero output in a
+  single session.
+
+  An audit of 2,243 tickets found 30 retained scope resolutions: 25 granted, 2
+  partial, 3 denied. The three refusals share real boundaries, and those are what
+  the new default is built from. Concrete paths inside the ticket's own package or
+  plugin are granted at request time. Another package or plugin, protected control
+  and release paths, wildcards, and read-only tickets still pause for a ruling, and
+  the scope record still shows what was granted and why.
+
+### workbench 0.82.0 → 0.83.0
+
+#### Features
+
+- The freshness guard checks the remote manifest for every plugin (SQ-1383)
+  The prompt freshness guard used to compare two things that could both be stale,
+  so it could report everything current while an installed plugin sat behind. It
+  now checks the remote manifest for every active Toolshed plugin, through a cache
+  so the check does not pay a network round trip on every prompt.
+
 ## v3.405.0 (2026-08-07)
 
 ### sidequest 4.39.0 → 4.39.1
