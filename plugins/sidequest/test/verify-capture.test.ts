@@ -13,9 +13,13 @@ function deleteLog(capture: { logPath: string }) {
   fs.rmSync(capture.logPath, { force: true });
 }
 
-test('verify capture wraps POSIX commands before recording their exit code', () => {
-  const shell = shellCommand('exit 7', 'linux');
-  assert.deepStrictEqual(shell.arguments, ['-c', `(exit 7); printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$?"`]);
+function nodeCommand(scriptPath: string, argument: string) {
+  return `"${process.execPath}" "${scriptPath}" "${argument}"`;
+}
+
+test('verify capture runs generated POSIX scripts through the host shell', () => {
+  const shell = shellCommand('verify-script.sh', 'linux');
+  assert.deepStrictEqual(shell.arguments, ['verify-script.sh']);
 });
 
 test('verify capture executes through the host shell and separates failed suites from unavailable capture shells', async () => {
@@ -48,5 +52,35 @@ test('verify capture executes through the host shell and separates failed suites
   } finally {
     if (originalShell === undefined) delete process.env[shellEnvironment];
     else process.env[shellEnvironment] = originalShell;
+  }
+});
+
+test('verify capture returns a timeout with partial output', async () => {
+  const slowCommand = process.platform === 'win32'
+    ? 'echo partial-output && ping -n 30 127.0.0.1'
+    : 'printf partial-output; sleep 30';
+  const capture = await runVerifyCapture(slowCommand, process.cwd(), 100);
+  try {
+    assert.deepStrictEqual(
+      { status: capture.status, exitCode: capture.exitCode },
+      { status: 'could-not-run', exitCode: 2 },
+    );
+    assert.equal(capture.reason, 'Verification timed out after 100ms; partial output captured.');
+    assert.match(fs.readFileSync(capture.logPath, 'utf8'), /partial-output/);
+  } finally {
+    deleteLog(capture);
+  }
+});
+
+test('verify capture preserves quoted absolute paths in verify commands', async () => {
+  const scriptPath = path.join(os.tmpdir(), `sidequest quoted ${Date.now()}.js`);
+  fs.writeFileSync(scriptPath, 'process.stdout.write(process.argv[2] + \'\\n\');\n', 'utf8');
+  const capture = await runVerifyCapture(nodeCommand(scriptPath, scriptPath));
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    assert.match(fs.readFileSync(capture.logPath, 'utf8'), new RegExp(scriptPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  } finally {
+    fs.rmSync(scriptPath, { force: true });
+    deleteLog(capture);
   }
 });
