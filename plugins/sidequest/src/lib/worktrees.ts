@@ -8,6 +8,7 @@ const { spawn } = require('node:child_process');
 const commitScope = require('./commit-scope.js');
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
+const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1000;
 
 interface GitResult {
   ok: boolean;
@@ -197,6 +198,41 @@ function localBranchName(ref: unknown): string | null {
   return match?.[1] || null;
 }
 
+function worktreePath(entry: any): string {
+  return String(entry.path || entry.worktree);
+}
+
+function salvageRef(entry: any, suffix = ''): string {
+  return `refs/salvage/${path.basename(worktreePath(entry))}${suffix}`;
+}
+
+async function createSalvageRef(repo: string, ref: string, revision: string): Promise<void> {
+  const created = await git(repo, ['update-ref', ref, revision, '0000000000000000000000000000000000000000']);
+  if (!created.ok) throw new Error(created.stderr || `could not create salvage ref ${ref}`);
+}
+
+async function salvageWorktree(repo: string, entry: any): Promise<{ ref: string; uncommittedRef: string | null }> {
+  const worktree = worktreePath(entry);
+  const head = await git(worktree, ['rev-parse', 'HEAD']);
+  if (!head.ok || !head.stdout) throw new Error(head.stderr || 'could not resolve worktree HEAD');
+  const ref = salvageRef(entry);
+  await createSalvageRef(repo, ref, head.stdout);
+  if (entry.clean) return { ref, uncommittedRef: null };
+
+  const stash = await git(worktree, ['stash', 'create']);
+  if (!stash.ok || !stash.stdout) throw new Error(stash.stderr || 'could not capture uncommitted worktree changes');
+  const uncommittedRef = salvageRef(entry, '-uncommitted');
+  await createSalvageRef(repo, uncommittedRef, stash.stdout);
+  return { ref, uncommittedRef };
+}
+
+function recoveryCommand(entry: any): string {
+  const worktree = String(entry.path || entry.worktree);
+  const ref = String(entry.salvage?.ref || '');
+  const uncommittedRef = entry.salvage?.uncommittedRef ? ` && git -C "${worktree}" stash apply "${entry.salvage.uncommittedRef}"` : '';
+  return `git worktree add --detach "${worktree}" "${ref}"${uncommittedRef}`;
+}
+
 function integrationUpstream(options: any): string {
   const target = options.integrationTarget || {};
   const upstream = String(target.upstream || options.upstream || '').trim();
@@ -274,7 +310,7 @@ function skippedEntry(entry: any, ticket: any, reason: string, current: boolean)
   };
 }
 
-async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number, upstream: string, livePaths: string[] = []): Promise<any> {
+async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number, upstream: string, livePaths: string[] = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS): Promise<any> {
   const ticket = ticketForWorktree(tickets, entry);
   const worktreePath = canonicalPath(entry.worktree);
   const current = worktreePath === canonicalPath(currentPath);
@@ -291,7 +327,9 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
     reachableFrom(entry.worktree, 'HEAD', upstream),
   ]);
   const clean = cleanResult.ok ? cleanResult.stdout === '' : false;
+  const untracked = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line.startsWith('?? '));
   const oldEnough = ageMs != null && ageMs >= minAgeMs;
+  const oldEnoughToSalvage = ageMs != null && ageMs >= notIntegratedSalvageAgeMs;
 
   let action = 'keep';
   let reason = 'not_integrated';
@@ -309,6 +347,11 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
   } else if (patch.equivalent) {
     action = 'remove';
     reason = 'patch_equivalent';
+  } else if (oldEnoughToSalvage && untracked) {
+    reason = 'unrecoverable_untracked';
+  } else if (oldEnoughToSalvage) {
+    action = 'salvage';
+    reason = 'not_integrated_salvage';
   }
 
   return {
@@ -324,6 +367,8 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
     ageMs,
     minAgeMs,
     oldEnough,
+    notIntegratedSalvageAgeMs,
+    oldEnoughToSalvage,
     locked: null,
     action,
     reason,
@@ -752,20 +797,25 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0
     ? Number(options.minAgeMs)
     : DEFAULT_MIN_AGE_MS;
+  const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0
+    ? Number(options.notIntegratedSalvageAgeMs)
+    : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
   const upstream = integrationUpstream(options);
   if (await repositoryBusy(repo)) {
     return {
       dryRun: !options.execute,
       minAgeMs,
+      notIntegratedSalvageAgeMs,
       upstream,
       entries: [],
       orphanBranches: [],
       removed: [],
       backups: [],
+      salvaged: [],
       deletedBranches: [],
       prunedOrphanBranches: [],
       quarantined: [],
-      counts: { removedWorktrees: 0, quarantinedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
+      counts: { removedWorktrees: 0, salvagedWorktrees: 0, quarantinedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
       failures: [],
       skipped: 'repository_busy',
     };
@@ -787,24 +837,36 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const entries = await Promise.all(boundedCandidates.map((entry) => (
     entry.orphanDirectory
       ? classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs)
-      : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths)
+      : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs)
   )));
   const execute = !!options.execute;
   const removed: string[] = [];
   const backups: string[] = [];
+  const salvaged: Array<{ path: string; ref: string; uncommittedRef: string | null; recovery: string }> = [];
   const deletedBranches: string[] = [];
   const prunedOrphanBranches: string[] = [];
   const quarantined: Array<{ path: string; destination: string; message: string }> = [];
   const failures: Array<{ path: string | null; message: string; suppressed?: boolean }> = [];
 
   if (execute) {
-    for (const entry of entries.filter((candidate) => candidate.action === 'remove')) {
+    for (const entry of entries.filter((candidate) => candidate.action === 'remove' || candidate.action === 'salvage')) {
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = 'keep';
         entry.reason = 'known_permanent_failure';
         continue;
       }
-      if (!entry.clean) {
+      if (entry.action === 'salvage') {
+        try {
+          entry.salvage = await salvageWorktree(repo, entry);
+          salvaged.push({ path: entry.path, ...entry.salvage, recovery: recoveryCommand(entry) });
+        } catch (error: any) {
+          entry.action = 'keep';
+          entry.reason = 'salvage_failed';
+          failures.push({ path: entry.path, message: `salvage failed: ${(error && error.message) || error}` });
+          continue;
+        }
+      }
+      if (!entry.clean && !entry.salvage) {
         try {
           entry.backup = entry.orphanDirectory
             ? await backupDirtyOrphanDirectory(entry, options)
@@ -865,16 +927,19 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   return {
     dryRun: !execute,
     minAgeMs,
+    notIntegratedSalvageAgeMs,
     upstream,
     entries,
     orphanBranches,
     removed,
     backups,
+    salvaged,
     deletedBranches,
     prunedOrphanBranches,
     quarantined,
     counts: {
       removedWorktrees: removed.length,
+      salvagedWorktrees: salvaged.length,
       quarantinedWorktrees: quarantined.length,
       backedUpWorktrees: backups.length,
       deletedBranches: deletedBranches.length,
@@ -884,4 +949,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, classifyWorktree, advanceIntegrationBranch, sweep };

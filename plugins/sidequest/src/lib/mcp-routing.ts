@@ -391,6 +391,7 @@ const tools: ToolDefinition[] = [
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'false runs executors in the shared checkout (default true).' },
+        notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Age before an unintegrated inactive worktree is salvaged and removed (default 168 hours).' },
         autoApproveTestScope: { type: 'boolean', description: 'Auto-approve reachable test directories (default true).' },
         autoApproveScope: { type: 'array', items: { type: 'string' }, description: 'Repo-relative auto-approved globs.' },
         worktreeSetup: { type: ['string', 'null'], description: 'One-line isolated-worktree setup; null clears it.' },
@@ -408,6 +409,7 @@ const tools: ToolDefinition[] = [
       if (args.delivery != null) patch.delivery = args.delivery;
       if (args.integrationVerifyTimeoutMs != null) patch.integrationVerifyTimeoutMs = args.integrationVerifyTimeoutMs;
       if (args.worktreeIsolation !== undefined) patch.worktreeIsolation = args.worktreeIsolation;
+      if (args.notIntegratedSalvageAgeHours !== undefined) patch.notIntegratedSalvageAgeHours = args.notIntegratedSalvageAgeHours;
       if (args.autoApproveTestScope !== undefined) patch.autoApproveTestScope = args.autoApproveTestScope;
       if (args.autoApproveScope !== undefined) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== undefined) patch.worktreeSetup = args.worktreeSetup;

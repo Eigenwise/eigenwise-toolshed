@@ -197,6 +197,7 @@ var import_node_fs4 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
 var import_node_os3 = __toESM(require("node:os"));
 var import_node_path4 = __toESM(require("node:path"));
+var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 function stateFile2() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path4.default.join(import_node_os3.default.homedir(), ".claude", "sidequest");
   return import_node_path4.default.join(home, "worktree-sweep-sessions.json");

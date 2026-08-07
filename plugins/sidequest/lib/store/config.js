@@ -1,4 +1,5 @@
 "use strict";
+const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, execFileSync, fs, getProjectCategories, isTrackedBuildOutput, packageBuildOutputs, packageRootForScope, path, projectRoutingProfile, readMeta, routingProfileEntries, MAX_INTEGRATION_VERIFY_TIMEOUT_MS, WORKTREE_SETUP_MAX_LENGTH, withMetaLock, putProject }) {
   function defaultProjectName(absPath) {
     return path.basename(path.resolve(absPath)) || "project";
@@ -143,6 +144,14 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     if (typeof value !== "boolean") throw new Error("worktreeIsolation must be a boolean.");
     return value;
   }
+  function normalizeNotIntegratedSalvageAgeHours(value) {
+    if (value == null || value === "") return DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS;
+    const hours = Number(value);
+    if (!Number.isInteger(hours) || hours < DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) {
+      throw new Error(`notIntegratedSalvageAgeHours must be a whole number of at least ${DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS} hours.`);
+    }
+    return hours;
+  }
   function normalizeAutoApproveTestScope(value) {
     if (value == null) return true;
     if (typeof value !== "boolean") throw new Error("autoApproveTestScope must be a boolean.");
@@ -248,6 +257,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       delivery: normalizeDeliveryMode(meta.delivery),
       integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
       worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
+      notIntegratedSalvageAgeHours: normalizeNotIntegratedSalvageAgeHours(meta.notIntegratedSalvageAgeHours),
       autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
       autoApproveScope: normalizeAutoApproveScope(meta.autoApproveScope),
       worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
@@ -298,6 +308,9 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       if (Object.prototype.hasOwnProperty.call(patch, "worktreeIsolation")) {
         meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "notIntegratedSalvageAgeHours")) {
+        meta.notIntegratedSalvageAgeHours = normalizeNotIntegratedSalvageAgeHours(patch.notIntegratedSalvageAgeHours);
+      }
       if (Object.prototype.hasOwnProperty.call(patch, "autoApproveTestScope")) {
         meta.autoApproveTestScope = normalizeAutoApproveTestScope(patch.autoApproveTestScope);
       }
@@ -318,6 +331,6 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
     return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...config && config.alwaysInScope || [], ...paired]));
   }
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeNotIntegratedSalvageAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 module.exports = { createConfig };

@@ -578,6 +578,15 @@ test('board_config stores and clears a worktree setup command', async () => {
   assert.equal((await callTool('board_config', { project, worktreeSetup: null })).worktreeSetup, null);
 });
 
+test('board_config sets the unintegrated worktree salvage age', async () => {
+  const root = path.join(os.tmpdir(), 'sq-mcp-salvage-age');
+  const project = store.ensureProject(root, 'SQ salvage age').slug;
+  const configured = await callTool('board_config', { project, notIntegratedSalvageAgeHours: 336 });
+  assert.equal(configured.notIntegratedSalvageAgeHours, 336);
+  assert.equal(runCli(['board-config', '--project', root, '--not-integrated-salvage-age-hours', '504', '--json']).notIntegratedSalvageAgeHours, 504);
+  await assert.rejects(() => callTool('board_config', { project, notIntegratedSalvageAgeHours: 24 }), /at least 168 hours/);
+});
+
 test('board worktree isolation defaults on and overrides dispatch isolation when disabled', async () => {
   const isolatedRoot = committedRepo('sq-mcp-worktree-isolation-default-');
   const isolatedProject = store.ensureProject(isolatedRoot, 'SQ default isolation').slug;
