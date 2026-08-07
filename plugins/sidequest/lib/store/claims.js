@@ -14,6 +14,7 @@ function createClaims(dependencies) {
   const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
   const VERIFY_COMPLETE_COMMENT = "[sidequest:verify-complete]";
   const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
+  const VERIFY_COMPLETE_STATUSES = /* @__PURE__ */ new Set(["passed", "failed-suite", "could-not-run"]);
   const NEGATIVE_CONTROL_COMMENT = "[sidequest:negative-control] ";
   const RELEASE_KINDS = /* @__PURE__ */ new Set(["scope_pause", "handback"]);
   function technicalBlockerRelease(args) {
@@ -120,6 +121,8 @@ ${evidence.outputTail}`;
     }
     if (text === VERIFY_COMPLETE_COMMENT) return { kind: "complete", noOp: false };
     if (text === VERIFY_COMPLETE_NO_OP_COMMENT) return { kind: "complete", noOp: true };
+    const status = text.slice(VERIFY_COMPLETE_COMMENT.length).trim();
+    if (VERIFY_COMPLETE_STATUSES.has(status)) return { kind: "complete", noOp: false, status };
     if (text.startsWith(NEGATIVE_CONTROL_COMMENT)) return { kind: "negative-control" };
     return null;
   }

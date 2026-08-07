@@ -470,13 +470,19 @@ test('a source-only scoped diff still completes without a negative control', () 
   });
   const by = 'source-only-executor';
   claimRouted(ticket, by);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-start] npm run test:files test/fixture.test.js',
+    source: 'mcp',
+  }).ok, true);
   negativeControlVersion += 1;
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = ${negativeControlVersion};\n`);
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:verify-complete]',
+    body: '[sidequest:verify-complete] failed-suite',
     source: 'mcp',
   }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).claim.verification, undefined);
 
   git(['add', 'lib/fixture.js']);
   git(['commit', '-m', 'source-only negative control fixture']);
