@@ -6,6 +6,18 @@ const { openObservabilityStore } = require('../lib/observability/store.js');
 const { readSidequestBoard, defaultSidequestHome } = require('../lib/observability/board-cost.js');
 const { buildTokenUsageReport, formatTokenUsageReport } = require('../lib/observability/report.js');
 
+const HELP = `Usage: token-usage-report.js [options]
+
+Print the local SQLite usage report.
+
+Options:
+  --db <path>              SQLite database file.
+  --format <text|json>     Output format (default: text).
+  --sidequest-home <path>  Sidequest data directory.
+  --project <path>         Project directory for Sidequest costs.
+  --help                   Show this help message.
+`;
+
 function parseArgs(argv, env = process.env, cwd = process.cwd()) {
   const options = {
     databaseFile: defaultDatabaseFile(),
@@ -16,6 +28,7 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const next = argv[index + 1];
+    if (argument === '--help') return { ...options, help: true };
     if (argument === '--db' && next) { options.databaseFile = next; index += 1; continue; }
     if (argument === '--format' && ['text', 'json'].includes(next)) { options.format = next; index += 1; continue; }
     if (argument === '--sidequest-home' && next) { options.sidequestHome = next; index += 1; continue; }
@@ -27,6 +40,10 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
+  if (options.help) {
+    process.stdout.write(HELP);
+    return;
+  }
   const store = openObservabilityStore(options.databaseFile);
   try {
     const board = readSidequestBoard({

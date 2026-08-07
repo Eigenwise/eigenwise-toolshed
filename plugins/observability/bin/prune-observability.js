@@ -12,23 +12,41 @@ function parseRetentionDays(value) {
   return retentionDays;
 }
 
+const HELP = `Usage: prune-observability.js [options]
+
+Preview rows older than the retention window. Deletion requires --apply or --yes.
+
+Options:
+  --apply                    Delete matching rows. Destructive.
+  --yes                      Alias for --apply. Destructive.
+  --dry-run                  Preview matching rows without deleting them.
+  --db <path>                SQLite database file.
+  --format <text|json>       Output format (default: text).
+  --retention-days <days>    Keep this many days of observations (default: ${DEFAULT_RETENTION_DAYS}).
+  --help                     Show this help message.
+`;
+
 function parseArgs(argv) {
   const options = {
     databaseFile: defaultDatabaseFile(),
-    dryRun: false,
+    dryRun: true,
     format: 'text',
     retentionDays: DEFAULT_RETENTION_DAYS,
   };
+  let apply = false;
+  let dryRun = false;
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
     const next = argv[index + 1];
+    if (argument === '--apply' || argument === '--yes') { apply = true; continue; }
+    if (argument === '--dry-run') { dryRun = true; continue; }
+    if (argument === '--help') return { ...options, help: true };
     if (argument === '--db' && next) { options.databaseFile = next; index += 1; continue; }
-    if (argument === '--dry-run') { options.dryRun = true; continue; }
     if (argument === '--format' && ['text', 'json'].includes(next)) { options.format = next; index += 1; continue; }
     if (argument === '--retention-days' && next) { options.retentionDays = parseRetentionDays(next); index += 1; continue; }
     throw new Error(`Unknown or incomplete argument: ${argument}`);
   }
-  return options;
+  return { ...options, dryRun: !apply || dryRun };
 }
 
 function formatBytes(bytes) {
@@ -54,13 +72,18 @@ function formatResult(result) {
     `outbox records: ${result.counts.outbox}`,
     `${result.dryRun ? 'estimated reusable space' : 'reusable space'}: ${formatBytes(reusableBytes)}`,
     `SQLite keeps the ${formatBytes(result.databaseBytes)} database file size until VACUUM runs. VACUUM needs roughly that much free disk space.`,
+    ...(result.dryRun ? ['Run again with --apply to permanently delete these rows.'] : []),
     '',
   ].join('\n');
 }
 
 function main(argv = process.argv.slice(2)) {
   const options = parseArgs(argv);
-  const store = openObservabilityStore(options.databaseFile);
+  if (options.help) {
+    process.stdout.write(HELP);
+    return;
+  }
+  const store = openObservabilityStore(options.databaseFile, { readOnly: options.dryRun });
   try {
     const result = store.prune(options);
     process.stdout.write(options.format === 'json'

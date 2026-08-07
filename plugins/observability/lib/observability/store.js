@@ -200,22 +200,26 @@ function openObservabilityStore(databaseFile, options = {}) {
   if (typeof databaseFile !== 'string' || databaseFile.length === 0) {
     throw new TypeError('A database file is required.');
   }
-  if (databaseFile !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(databaseFile)), { recursive: true });
+  const readOnly = options.readOnly === true;
+  if (!readOnly && databaseFile !== ':memory:') fs.mkdirSync(path.dirname(path.resolve(databaseFile)), { recursive: true });
 
   const now = options.now || (() => new Date());
   const createId = options.randomUUID || randomUUID;
   const outboxEnabled = options.outboxEnabled !== false;
-  const database = new DatabaseSync(databaseFile, { timeout: options.busyTimeoutMs || 5000 });
-  database.exec(`PRAGMA busy_timeout=${Number(options.busyTimeoutMs || 5000)}`);
-  database.exec('PRAGMA journal_mode=WAL');
-  database.exec('PRAGMA synchronous=FULL');
-  database.exec(TABLE_SQL);
-  database.exec(RETENTION_PRUNE_TRIGGER_SQL);
-  database.exec(VIEW_SQL);
-  database.prepare(`
-    INSERT INTO observability_meta (key, value) VALUES ('schema_version', ?)
-    ON CONFLICT(key) DO NOTHING
-  `).run(String(SCHEMA_VERSION));
+  const busyTimeoutMs = Number(options.busyTimeoutMs || 5000);
+  const database = new DatabaseSync(databaseFile, { readOnly, timeout: busyTimeoutMs });
+  if (!readOnly) {
+    database.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
+    database.exec('PRAGMA journal_mode=WAL');
+    database.exec('PRAGMA synchronous=FULL');
+    database.exec(TABLE_SQL);
+    database.exec(RETENTION_PRUNE_TRIGGER_SQL);
+    database.exec(VIEW_SQL);
+    database.prepare(`
+      INSERT INTO observability_meta (key, value) VALUES ('schema_version', ?)
+      ON CONFLICT(key) DO NOTHING
+    `).run(String(SCHEMA_VERSION));
+  }
   const schema = database.prepare("SELECT value FROM observability_meta WHERE key = 'schema_version'").get();
   if (!schema || Number(schema.value) !== SCHEMA_VERSION) {
     database.close();
