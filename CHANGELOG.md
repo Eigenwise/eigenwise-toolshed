@@ -8,6 +8,41 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.410.0 (2026-08-07)
+
+### observability 0.5.0 → 0.5.1
+
+#### Fixes
+
+- Recover stale observability observer ports (SQ-1479)
+  Observability now replaces stale or unresponsive observer processes during upgrades and shows the owner details at session start.
+- Keep Grafana telemetry flowing when the local observer stalls (SQ-1480)
+  Collector sink pipelines now isolate local observer failures, and the model token panel also reads direct gateway telemetry.
+- Prune observability storage automatically (SQ-1481)
+  The observer now prunes expired telemetry on a schedule, checkpoints oversized WAL files, reports storage limits, and rotates managed logs.
+
+### sidequest 4.40.3 → 4.40.4
+
+#### Fixes
+
+- Refuse executor self-dispatches and show unbound launches as stalled (SQ-1416)
+  Executors now get an actionable release path when a dispatch is unbound, and the board shows launches that cannot be claimed as stalled.
+- Keep claims held when dispatch.boundAt is null and reclaim missing worktrees (SQ-1450)
+- Warn when worktree fixtures differ from integration (SQ-1454)
+- Accept annotated negative-control evidence (SQ-1465)
+  Negative-control markers now accept trailing context and explain malformed marker lines.
+- Retry failed worktree quarantines after a daily delay (SQ-1466)
+- Record oracle verdicts when the experiment round is missing (SQ-1467)
+  Oracle verdicts now create their missing experiment-log round instead of leaving the ticket unable to resolve the ask.
+- Let executor sessions compact under the veto policy (SQ-1468)
+  Executor sessions no longer block automatic compaction while they hold their own Sidequest claim.
+- Remove executor turn cap (SQ-1469)
+  Sidequest executor definitions no longer impose a turn cap, preventing completed work from being terminated before it can be committed or handed back.
+- Tell executors to regenerate paired outputs before verify (SQ-1472)
+  Executor briefings now tell users to regenerate auto-paired tracked generated files before verifying.
+- Stop treating slashed prose as anchor paths (SQ-1477)
+  Anchor warnings now ignore slash-containing prose and resolve package-relative files.
+
 ## v3.409.0 (2026-08-07)
 
 ### live-rules 2.10.0 → 2.10.1
