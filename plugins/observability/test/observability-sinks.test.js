@@ -20,6 +20,8 @@ const {
 const {
   MODEL_PRICES_PER_MILLION,
   gatewayModelCostTargets,
+  gatewayProjectCostTargets,
+  gatewayTotalCostExpression,
   modelCostTargets,
   unpricedModelsExpression,
 } = require('../observability/sinks/grafana/model-prices.js');
@@ -121,6 +123,13 @@ test('prices every active model label and token type from one table', () => {
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_read_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_creation_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_output_tokens_value/);
+  assert.ok(gatewayModelCostTargets().every(({ legendFormat }) => !legendFormat.includes('[1m]')));
+  const projectTargets = gatewayProjectCostTargets([{ project_name: 'atlas' }]);
+  assert.equal(projectTargets[0].legendFormat, 'atlas');
+  assert.match(projectTargets[0].expr, /workbench_attribute_project_name = "atlas"/);
+  assert.equal(projectTargets[1].legendFormat, 'Other / unattributed');
+  assert.match(projectTargets[1].expr, /workbench_attribute_project_name !~ "atlas"/);
+  assert.match(gatewayTotalCostExpression('$__range'), /gateway\.token\.usage/);
 });
 
 test('keeps only unknown exact model labels in the unpriced query', () => {
@@ -372,12 +381,24 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   assert.equal(global.title, 'Claude Code Usage');
   assert.equal(global.uid, 'claude-code-usage');
 
-  const gatewayCost = global.panels.find(({ title }) => title === 'Gateway cost by resolved model');
-  assert.equal(gatewayCost.datasource.uid, 'loki');
-  assert.equal(gatewayCost.interval, '$bucket');
-  assert.ok(gatewayCost.targets.some(({ legendFormat }) => legendFormat === 'gpt-5.6-terra'));
-  assert.ok(gatewayCost.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
-  assert.match(global.panels.find(({ title }) => title === 'Claude API-equivalent cost').targets[0].expr, /model!="claude-codex-auto"/);
+  const costByModel = global.panels.find(({ title }) => title === 'Cost by model');
+  assert.equal(costByModel.datasource.uid, 'loki');
+  assert.equal(costByModel.interval, '$bucket');
+  assert.ok(costByModel.targets.some(({ legendFormat }) => legendFormat === 'gpt-5.6-terra'));
+  assert.ok(costByModel.targets.some(({ legendFormat }) => legendFormat === 'claude-opus-5'));
+  assert.ok(costByModel.targets.every(({ legendFormat }) => !legendFormat.includes('[1m]')));
+  assert.ok(costByModel.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
+
+  const totalSpend = global.panels.find(({ title }) => title === 'Total spend');
+  assert.equal(totalSpend.datasource.uid, 'loki');
+  assert.equal(totalSpend.interval, '$bucket');
+  assert.deepEqual(totalSpend.options.reduceOptions.calcs, ['sum']);
+  assert.equal(totalSpend.targets[0].instant, undefined);
+  assert.match(totalSpend.targets[0].expr, /gateway\.token\.usage/);
+
+  const costByProject = global.panels.find(({ title }) => title === 'Cost by project');
+  assert.deepEqual(costByProject.targets.map(({ legendFormat }) => legendFormat), ['atlas', 'beacon', 'Other / unattributed']);
+  assert.ok(costByProject.targets.every(({ expr }) => expr.includes('workbench_attribute_project_name')));
 
   for (const { fileName, dashboard } of dashboards) {
     assert.deepEqual(dashboard.templating.list.map(({ name }) => name), ['bucket'], fileName + ' lost its bucket selector');
@@ -396,9 +417,10 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
   const atlasTitles = new Set(atlas.panels.map(({ title }) => title));
   for (const globalOnlyTitle of [
-    'Work routed to Codex', 'Gateway cost by resolved model', 'Claude cost by project',
-    'Gateway errors and throttles', 'Gateway records, 5m',
+    'Cost by project', 'Gateway errors and throttles', 'Gateway records, 5m',
   ]) assert.equal(atlasTitles.has(globalOnlyTitle), false, globalOnlyTitle);
+  assert.equal(atlasTitles.has('Work routed to Codex'), true);
+  assert.equal(atlasTitles.has('Cost by model'), true);
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
     assert.match(expression, /project_id="atlas"/);
@@ -537,7 +559,7 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
 
-  assert.equal(dashboard.panels.length, 15);
+  assert.equal(dashboard.panels.length, 14);
   assert.deepEqual(
     dashboard.panels.filter(({ type }) => type === 'row').map(({ title }) => title),
     ['At a glance', 'Where the spend goes', 'Failures and source activity'],
@@ -545,14 +567,14 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   assert.equal(dashboard.panels.some(({ type }) => type === 'table'), false);
 
   for (const title of [
-    'Claude cost by model', 'Gateway cost by resolved model', 'Claude cost by project',
+    'Cost by model', 'Cost by project',
     'Context by orchestrator vs executor', 'Hook failures over time', 'Gateway errors and throttles',
   ]) {
     assert.equal(byTitle.get(title)?.type, 'timeseries', 'missing graphical panel: ' + title);
     assert.equal(byTitle.get(title).interval, '$bucket');
   }
 
-  for (const title of ['Claude API-equivalent cost', 'Work routed to Codex', 'Tool failure rate']) {
+  for (const title of ['Total spend', 'Work routed to Codex', 'Tool failure rate']) {
     assert.equal(byTitle.get(title)?.type, 'stat', 'missing summary stat: ' + title);
   }
 
@@ -563,11 +585,17 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
     assert.match(health.fieldConfig.defaults.noValue, /No samples/);
   }
 
-  assert.match(byTitle.get('Claude cost by project').targets[0].expr, /sum by \(project_id\)/);
+  assert.equal(byTitle.get('Total spend').datasource.uid, 'loki');
+  assert.equal(byTitle.get('Cost by model').datasource.uid, 'loki');
+  assert.equal(byTitle.get('Cost by model').fieldConfig.defaults.decimals, 2);
+  assert.equal(byTitle.get('Cost by project').datasource.uid, 'loki');
+  assert.equal(byTitle.get('Cost by project').fieldConfig.defaults.decimals, 2);
+  assert.equal(byTitle.get('Work routed to Codex').options.textMode, 'value');
+  assert.equal(byTitle.has('Gateway cost by resolved model'), false);
+  assert.equal(byTitle.has('Claude cost by model'), false);
   assert.match(byTitle.get('Context by orchestrator vs executor').targets[0].expr, /workbench_attribute_agent_role/);
   assert.match(byTitle.get('Hook failures over time').targets[0].expr, /workbench_attribute_status =~ \"error\|failed\"/);
   assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /throttl\|rate\.\?limit\|429/);
-  assert.match(byTitle.get('Gateway cost by resolved model').description, /global until project attribution lands/);
 
   const lokiExpressions = dashboard.panels
     .flatMap((panel) => panel.targets || [])
@@ -614,9 +642,10 @@ test('every generated dashboard lays out in full-width bands with no overlaps or
   }
   const [, perProject] = dashboards;
   const byTitle = new Map(perProject.dashboard.panels.map((panel) => [panel.title, panel]));
-  assert.equal(byTitle.get('Claude API-equivalent cost').gridPos.w, 12);
-  assert.equal(byTitle.get('Tool failure rate').gridPos.x, 12);
-  assert.equal(byTitle.get('Claude cost by model').gridPos.w, 24);
+  assert.equal(byTitle.get('Total spend').gridPos.w, 8);
+  assert.equal(byTitle.get('Work routed to Codex').gridPos.w, 8);
+  assert.equal(byTitle.get('Tool failure rate').gridPos.x, 16);
+  assert.equal(byTitle.get('Cost by model').gridPos.w, 24);
   assert.equal(byTitle.get('Hook failures over time').gridPos.w, 24);
   assert.deepEqual(
     ['Claude metric samples, 5m', 'Observer records, 5m'].map((title) => byTitle.get(title).gridPos.w),

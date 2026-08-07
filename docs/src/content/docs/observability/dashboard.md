@@ -5,19 +5,18 @@ description: Inspect local Claude Code activity from one place.
 
 The Grafana dashboard reads local telemetry from enabled projects. The global **Claude Code Usage** view answers four questions: what the selected range cost, where the spend went, whether the orchestrator or executors consumed it, and whether anything failed or stopped reporting.
 
-Project dashboards are data-driven. Enabling telemetry keeps a project wired, but Grafana only gets a project dashboard after Claude Code metrics arrive for it. A project drops from the dashboard list after 30 days without Claude Code metrics. Gateway records are global because they do not carry project attribution, so gateway panels only appear on the global dashboard.
+Project dashboards are data-driven. Enabling telemetry keeps a project wired, but Grafana only gets a project dashboard after Claude Code metrics arrive for it. A project drops from the dashboard list after 30 days without Claude Code metrics. Gateway usage records carry project attribution, so each project dashboard includes its own spend total, model breakdown, and Codex share.
 
 ## At a glance
 
-- **Claude API-equivalent cost** estimates Claude API list-price cost for the selected range. It is a comparison figure, not a bill.
-- **Work routed to Codex** shows the gateway list-price-equivalent share routed to Codex. It is global rather than project-specific.
+- **Total spend** estimates list-price-equivalent cost across every backend for the selected range. It is a comparison figure, not a bill.
+- **Work routed to Codex** shows the share of that same total routed to Codex.
 - **Tool failure rate** shows the share of observed tool calls marked failed or errored.
 
 ## Where the spend goes
 
-- **Claude cost by model** graphs the Claude API-equivalent cost trend by model.
-- **Gateway cost by resolved model** graphs the backend model that handled each gateway request. This is the useful view for Sidequest executor traffic, where the client label is the virtual `claude-codex-auto` route.
-- **Claude cost by project** compares reporting projects on the global dashboard.
+- **Cost by model** graphs the same total by resolved backend model. Advertised aliases such as `claude-opus-5[1m]` are normalized to the resolved model, so a request appears once.
+- **Cost by project** compares the same backend-independent spend across reporting projects on the global dashboard. Usage without a currently active project is grouped as **Other / unattributed**, so the project totals still reconcile with **Total spend**.
 - **Context by orchestrator vs executor** compares context-token volume by agent role.
 
 Use the **Bucket** dropdown to change the aggregation window. Choose `1m` for close investigation or `1h` and above for an overview. Grafana legends and tooltips carry the individual series values, and **Inspect > Data** provides the table view.

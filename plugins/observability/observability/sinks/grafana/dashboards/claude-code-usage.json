@@ -68,11 +68,11 @@
     },
     {
       "id": 4,
-      "title": "Claude API-equivalent cost",
+      "title": "Total spend",
       "type": "stat",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "gridPos": {
         "x": 0,
@@ -83,7 +83,7 @@
       "options": {
         "reduceOptions": {
           "calcs": [
-            "lastNotNull"
+            "sum"
           ]
         },
         "colorMode": "value",
@@ -105,23 +105,24 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$__range]))",
-          "instant": true
+          "expr": "__GATEWAY_TOTAL_COST_TARGET__",
+          "legendFormat": "Total spend"
         }
       ],
-      "description": "Estimated list-price cost in the selected range. Subscription billing can differ."
+      "interval": "$bucket",
+      "description": "List-price-equivalent cost across every backend in the selected range. Subscription billing can differ."
     },
     {
       "id": 33,
       "title": "Work routed to Codex",
-      "description": "Share of gateway list-price-equivalent cost routed to Codex in the selected range.",
+      "description": "Share of total list-price-equivalent spend routed to Codex in the selected range.",
       "type": "stat",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "gridPos": {
         "x": 8,
@@ -140,7 +141,7 @@
         "orientation": "vertical",
         "colorMode": "value",
         "graphMode": "none",
-        "textMode": "value_and_name",
+        "textMode": "value",
         "justifyMode": "auto"
       },
       "fieldConfig": {
@@ -149,70 +150,17 @@
           "decimals": 1,
           "noValue": "No gateway usage in this range"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Codex list-price equivalent"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Total list-price equivalent"
-            },
-            "properties": [
-              {
-                "id": "unit",
-                "value": "currencyUSD"
-              },
-              {
-                "id": "decimals",
-                "value": 2
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "targets": [
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "expr": "(100 * sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range])) / sum(increase(claude_code_cost_usage_USD_total[$__range]))) and (sum(increase(claude_code_cost_usage_USD_total[$__range])) > 0)",
-          "legendFormat": "Share routed to Codex",
-          "instant": true
-        },
-        {
-          "refId": "B",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",model=~\"claude-(codex-)?gpt-.*\"}[$__range]))",
-          "legendFormat": "Codex list-price equivalent",
-          "instant": true
-        },
-        {
-          "refId": "C",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "expr": "sum(increase(claude_code_cost_usage_USD_total[$__range]))",
-          "legendFormat": "Total list-price equivalent",
+          "expr": "__CODEX_COST_SHARE_TARGET__",
+          "legendFormat": "Work routed to Codex",
           "instant": true
         }
       ]
@@ -294,183 +242,24 @@
     },
     {
       "id": 32,
-      "title": "Claude cost by model",
-      "description": "API-equivalent cost trend by Claude model. This is a comparison estimate, not money owed.",
-      "type": "timeseries",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
-      },
-      "gridPos": {
-        "x": 0,
-        "y": 6,
-        "w": 12,
-        "h": 8
-      },
-      "interval": "$bucket",
-      "fieldConfig": {
-        "defaults": {
-          "unit": "currencyUSD",
-          "custom": {
-            "drawStyle": "bars",
-            "fillOpacity": 100,
-            "lineWidth": 0,
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-opus-5[1m]"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-opus-4-8[1m]"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8F3BB8"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-sonnet-5[1m]"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "claude-fable-5[1m]"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#E24D42"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/^claude-(codex-)?gpt-5\\.6-sol$/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/^claude-(codex-)?gpt-5\\.6-terra$/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#E0B400"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byRegexp",
-              "options": "/^claude-(codex-)?gpt-5\\.6-luna$/"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#56A64B"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "sum"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi"
-        }
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
-          },
-          "legendFormat": "{{model}}",
-          "expr": "__MODEL_PRICE_TARGETS__"
-        }
-      ]
-    },
-    {
-      "id": 46,
-      "title": "Gateway cost by resolved model",
-      "description": "List-price-equivalent trend for resolved gateway models. Gateway records are global until project attribution lands.",
+      "title": "Cost by model",
+      "description": "List-price-equivalent cost trend by resolved backend model. Model aliases are normalized before pricing.",
       "type": "timeseries",
       "datasource": {
         "type": "loki",
         "uid": "loki"
       },
       "gridPos": {
-        "x": 12,
+        "x": 0,
         "y": 6,
-        "w": 12,
+        "w": 24,
         "h": 8
       },
       "interval": "$bucket",
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
+          "decimals": 2,
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 100,
@@ -508,11 +297,11 @@
     },
     {
       "id": 7,
-      "title": "Claude cost by project",
+      "title": "Cost by project",
       "type": "timeseries",
       "datasource": {
-        "type": "prometheus",
-        "uid": "prometheus"
+        "type": "loki",
+        "uid": "loki"
       },
       "gridPos": {
         "x": 0,
@@ -523,6 +312,7 @@
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
+          "decimals": 2,
           "custom": {
             "drawStyle": "bars",
             "fillOpacity": 100,
@@ -532,113 +322,7 @@
             }
           }
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "BMR"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#5794F2"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Cantizans"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#73BF69"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "Terge"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#FF9830"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "atomic-agents"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#8F3BB8"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "contractify"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#56A64B"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "eigenwise-toolshed"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#E0B400"
-                }
-              }
-            ]
-          },
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "the-bot-resurrection"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "mode": "fixed",
-                  "fixedColor": "#E24D42"
-                }
-              }
-            ]
-          }
-        ]
+        "overrides": []
       },
       "options": {
         "legend": {
@@ -656,15 +340,15 @@
         {
           "refId": "A",
           "datasource": {
-            "type": "prometheus",
-            "uid": "prometheus"
+            "type": "loki",
+            "uid": "loki"
           },
-          "legendFormat": "{{project_id}}",
-          "expr": "sum by (project_id) (increase(claude_code_cost_usage_USD_total{model!=\"claude-codex-auto\",project_id=~\"$project\"}[$bucket]))"
+          "legendFormat": "{{workbench_attribute_project_name}}",
+          "expr": "__GATEWAY_PROJECT_PRICE_TARGETS__"
         }
       ],
       "interval": "$bucket",
-      "description": "API-equivalent Claude cost trend by reporting project."
+      "description": "List-price-equivalent cost trend across every backend. Usage without a currently active project is grouped as Other / unattributed."
     },
     {
       "id": 20,

@@ -4,9 +4,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const {
   gatewayModelCostTargets,
+  gatewayProjectCostTargets,
   gatewayResolvedCodexCostExpression,
   gatewayTotalCostExpression,
-  modelCostTargets,
 } = require('./model-prices');
 
 const TEMPLATE_FILE = path.join(__dirname, 'dashboards', 'claude-code-usage.json');
@@ -56,12 +56,16 @@ function filterLoki(expression, projects) {
   return expression.replaceAll('{service_name="workbench-observer"}', `{service_name="workbench-observer"} | ${matcher}`);
 }
 
-// Gateway records do not carry project attribution, so these remain global until SQ-1488 lands.
 const PROJECT_UNSCOPED_PANELS = new Set([
-  'Work routed to Codex',
-  'Gateway cost by resolved model',
   'Gateway errors and throttles',
   'Gateway records, 5m',
+]);
+
+const GLOBAL_COST_PANELS = new Set([
+  'Total spend',
+  'Work routed to Codex',
+  'Cost by model',
+  'Cost by project',
 ]);
 
 // The project selector is baked into every query, so its variable is dropped.
@@ -130,11 +134,11 @@ function relayout(panels) {
   return bands.flatMap(({ members }) => members);
 }
 
-function filterDashboard(dashboard, projects, dropped = new Set()) {
+function filterDashboard(dashboard, projects, dropped = new Set(), globallyUnscoped = new Set()) {
   for (const panel of dashboard.panels) {
     for (const target of panel.targets || []) {
       if (typeof target.expr !== 'string') continue;
-      if (PROJECT_UNSCOPED_PANELS.has(panel.title)) {
+      if (PROJECT_UNSCOPED_PANELS.has(panel.title) || globallyUnscoped.has(panel.title)) {
         if (target.expr.includes('$project')) {
           throw new Error(`Project-unscoped panel cannot use $project: ${panel.title}`);
         }
@@ -152,11 +156,11 @@ function filterDashboard(dashboard, projects, dropped = new Set()) {
 }
 
 function globalDashboard(template, projects) {
-  return filterDashboard(template, projects);
+  return filterDashboard(template, projects, new Set(), GLOBAL_COST_PANELS);
 }
 
 // A by-project breakdown can only show the selected project on a per-project dashboard.
-const GLOBAL_ONLY_PANELS = new Set(['Claude cost by project']);
+const GLOBAL_ONLY_PANELS = new Set(['Cost by project']);
 
 const EMPTY_STATE_TITLE = 'Telemetry in the selected range';
 const EMPTY_STATE_MESSAGE = 'No Claude Code metrics in this range. Sessions may be running in directories that never got the telemetry env: run /workbench:enable-project-telemetry in this repository, then restart Claude Code there.';
@@ -208,11 +212,22 @@ function perProjectDashboard(template, project) {
   return dashboard;
 }
 
-function applyModelPricing(dashboard) {
-  const costPanel = dashboard.panels.find(({ title }) => title === 'Claude cost by model');
-  if (costPanel) costPanel.targets = modelCostTargets();
-  const gatewayCostPanel = dashboard.panels.find(({ title }) => title === 'Gateway cost by resolved model');
-  if (gatewayCostPanel) gatewayCostPanel.targets = gatewayModelCostTargets();
+function applyModelPricing(dashboard, projects) {
+  const totalSpendPanel = dashboard.panels.find(({ title }) => title === 'Total spend');
+  if (totalSpendPanel) {
+    totalSpendPanel.datasource = { type: 'loki', uid: 'loki' };
+    totalSpendPanel.interval = '$bucket';
+    totalSpendPanel.targets = [{
+      refId: 'A',
+      datasource: totalSpendPanel.datasource,
+      expr: gatewayTotalCostExpression('$bucket'),
+      legendFormat: 'Total spend',
+    }];
+  }
+  const costByModelPanel = dashboard.panels.find(({ title }) => title === 'Cost by model');
+  if (costByModelPanel) costByModelPanel.targets = gatewayModelCostTargets();
+  const costByProjectPanel = dashboard.panels.find(({ title }) => title === 'Cost by project');
+  if (costByProjectPanel) costByProjectPanel.targets = gatewayProjectCostTargets(projects);
   const offloadPanel = dashboard.panels.find(({ title }) => title === 'Work routed to Codex');
   if (offloadPanel) {
     const codexCost = gatewayResolvedCodexCostExpression('$__range');
@@ -222,7 +237,7 @@ function applyModelPricing(dashboard) {
       refId: 'A',
       datasource: offloadPanel.datasource,
       expr: `(100 * (${codexCost}) / (${totalCost})) and ((${totalCost}) > 0)`,
-      legendFormat: 'Share routed to Codex',
+      legendFormat: 'Work routed to Codex',
       instant: true,
     }];
   }
@@ -230,8 +245,8 @@ function applyModelPricing(dashboard) {
 }
 
 function generatedDashboards(projects, template = JSON.parse(fs.readFileSync(TEMPLATE_FILE, 'utf8'))) {
-  const pricedTemplate = applyModelPricing(template);
   const registered = registeredProjects(projects);
+  const pricedTemplate = applyModelPricing(template, registered);
   return [
     { fileName: 'claude-code-usage.json', dashboard: globalDashboard(structuredClone(pricedTemplate), registered) },
     ...registered.map((project) => ({
