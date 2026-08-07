@@ -183,6 +183,9 @@ function executorText(...args) {
 function manualVerify(...args) {
   return warningsLayer.manualVerify(...args);
 }
+function verifyCommandErrors(...args) {
+  return warningsLayer.verifyCommandErrors(...args);
+}
 function verifyCommandError(...args) {
   return warningsLayer.verifyCommandError(...args);
 }
@@ -2006,6 +2009,9 @@ module.exports = {
   integrateSubmission,
   verifyIntegration,
   effectiveScope,
+  verifyCommandErrors,
+  verifyCommandError,
+  completionTreeCheck,
   listProjects,
   findProject,
   archiveProject,
