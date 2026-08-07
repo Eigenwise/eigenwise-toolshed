@@ -8,6 +8,154 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.409.0 (2026-08-07)
+
+### live-rules 2.10.0 → 2.10.1
+
+#### Fixes
+
+- Scoped rules keep working when Windows hands us two spellings of the same path (SQ-1444)
+  Windows can name one directory more than one way: a short 8.3 form like
+  `C:\Users\RUNNER~1`, a different drive-letter case, a substituted drive. Claude
+  Code hands the project root and the edited file path to a hook through different
+  APIs, and those two can disagree about which spelling they use.
+
+  When they disagreed, the relative path came out looking like it pointed outside
+  the project, the hook decided the edit was somewhere else, and every glob- and
+  directory-scoped rule quietly did not inject. No warning. Rules looked like they
+  had simply never been written.
+
+  Both sides are now resolved to a real canonical path before they are compared,
+  so the spelling no longer decides whether your rules apply. Files that do not
+  exist yet still work, which matters because edit hooks fire for new files.
+
+### model-gateway 0.48.0 → 0.48.1
+
+#### Fixes
+
+- The secret-hazard check no longer misses in-project files on Windows (SQ-1446)
+  Same Windows path-spelling problem as SQ-1444, in three more places.
+
+  Playbook decides whether a written file is inside the project before warning you
+  about an untracked sensitive file. When the project root and the file path came
+  through with different spellings, a real in-project secret was dropped from the
+  hazard report, which is the one thing that check exists to catch.
+
+  Workbench compared installed-plugin and Sidequest install paths the same raw
+  way, so project- and local-scoped installs could be reported missing or inactive
+  and the freshness hook told you to set up something you already had.
+
+  Model-gateway used a raw path as its project-wiring registry key, so one project
+  could be recorded twice and reconciled twice against the same settings file.
+
+  All three now canonicalize both sides before comparing.
+
+### observability 0.4.0 → 0.5.0
+
+#### Features
+
+- The token report can now answer whether cost actually moved (SQ-1418)
+  The board cost report had no time window, so it could tell you what executors
+  cost in total and never whether that number went up or down after a change.
+  `--since`, `--until` and `--compare-previous` now window it, and the comparison
+  reports per-category average-token deltas between the two windows.
+
+  The orchestrator/executor split used to label agent-id-absent traffic as the
+  orchestrator. That was inference by absence: the gateway derives its role from
+  the same header, so an absent agent id means unidentified, not main loop. That
+  bucket is now called `orchestrator_or_unidentified` and says what it actually
+  knows.
+
+  The text report also printed the whole per-request ledger before any rollup, so
+  the summary sat a few thousand lines below the raw data. Rollups come first now
+  and the ledger is behind `--ledger`.
+- Canonicalize observability project paths (SQ-1445)
+  Observability now resolves filesystem aliases before deriving a telemetry `project_id`.
+  Telemetry rows written under the old raw-path-derived ID remain in the local store, but
+  are not read under the canonical project identity and will no longer appear in that
+  project's dashboard. New events use the canonical ID.
+
+### playbook 0.4.0 → 0.4.1
+
+#### Fixes
+
+- The secret-hazard check no longer misses in-project files on Windows (SQ-1446)
+  Same Windows path-spelling problem as SQ-1444, in three more places.
+
+  Playbook decides whether a written file is inside the project before warning you
+  about an untracked sensitive file. When the project root and the file path came
+  through with different spellings, a real in-project secret was dropped from the
+  hazard report, which is the one thing that check exists to catch.
+
+  Workbench compared installed-plugin and Sidequest install paths the same raw
+  way, so project- and local-scoped installs could be reported missing or inactive
+  and the freshness hook told you to set up something you already had.
+
+  Model-gateway used a raw path as its project-wiring registry key, so one project
+  could be recorded twice and reconciled twice against the same settings file.
+
+  All three now canonicalize both sides before comparing.
+
+### sidequest 4.40.2 → 4.40.3
+
+#### Fixes
+
+- Sidequest warns about diagnostics from other agents' worktrees (SQ-1420)
+  Sidequest now warns when diagnostics point at another agent's embedded worktree.
+  Those diagnostics can be stale or missing-dependency artifacts, including ones
+  shown as errors, and previously flooded agents' context until two executors hit
+  "Prompt is too long" before reading their briefings.
+
+  The warning keeps diagnostics in the receiving agent's own checkout actionable
+  and marks foreign-worktree diagnostics as non-actionable.
+- Plugin submissions now require a release fragment (SQ-1427)
+  Sidequest now refuses submissions that change a marketplace plugin without the
+  matching release fragment. The refusal says where to create it, what frontmatter
+  it needs, and that the executor must request scope for that path first.
+- Negative-control submissions keep executor attribution (SQ-1435)
+  Sidequest now accepts a real negative control recorded by the active executor instead of refusing the submission as if no control existed. When a control belongs to another executor, the refusal names the attribution mismatch.
+- Let executors write their own release fragment (SQ-1440)
+  Executors can commit their ticket's own release fragment without requesting scope. This removes the same scope round trip that blocked this fix and left other plugin fragments to be written by hand. Other tickets' fragments remain outside the grant.
+- The release-fragment guard now covers both submit paths (SQ-1448)
+  SQ-1427 made submit refuse a plugin change with no release fragment, but only
+  through the MCP tool. There are two submit paths, and the CLI one, which is what
+  inline and admin work uses, still let the change through.
+
+  Both paths enforce it now.
+
+  This matters because a plugin change that lands with no fragment never moves its
+  version, and a version that never moves never reaches anyone's install. The work
+  looks shipped and is not.
+- Salvage old unintegrated Sidequest worktrees before removing them (SQ-1449)
+  Sidequest now saves stale unintegrated worktrees to recovery refs before removing them.
+- Executor verification resolves its capture script from the installed plugin (SQ-1453)
+  Executor verification now uses the installed Sidequest plugin's own capture script path, so it works from projects that do not contain the Toolshed repository layout.
+- Raise release suite timeout and allow plugin overrides (SQ-1460)
+  Default test-directory suites now allow two minutes per test, so release cuts keep a useful timeout without treating normal filesystem and process I/O as a hung test. A plugin can set `suiteTimeout` in its `.claude-plugin/plugin.json` when its suite needs a different limit.
+- Integration git commands cannot wait on configured editors forever (SQ-1461)
+  Integration git commands now disable configured editors and time out after two minutes, so a hidden editor cannot leave a merge or replay blocked indefinitely.
+
+### workbench 0.83.0 → 0.83.1
+
+#### Fixes
+
+- The secret-hazard check no longer misses in-project files on Windows (SQ-1446)
+  Same Windows path-spelling problem as SQ-1444, in three more places.
+
+  Playbook decides whether a written file is inside the project before warning you
+  about an untracked sensitive file. When the project root and the file path came
+  through with different spellings, a real in-project secret was dropped from the
+  hazard report, which is the one thing that check exists to catch.
+
+  Workbench compared installed-plugin and Sidequest install paths the same raw
+  way, so project- and local-scoped installs could be reported missing or inactive
+  and the freshness hook told you to set up something you already had.
+
+  Model-gateway used a raw path as its project-wiring registry key, so one project
+  could be recorded twice and reconciled twice against the same settings file.
+
+  All three now canonicalize both sides before comparing.
+
 ## v3.408.0 (2026-08-07)
 
 ### observability 0.3.3 → 0.4.0
