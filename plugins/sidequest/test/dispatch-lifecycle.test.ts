@@ -93,6 +93,44 @@ function dispatchBindingCounts(refs: any[]) {
   };
 }
 
+test('scope drift ignores always-in-scope paths and preserves declared casing for real drift', () => {
+  const scopeDriftProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-scope-drift-project-'));
+  execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: scopeDriftProject });
+  execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: scopeDriftProject });
+  execFileSync('git', ['config', 'user.name', 'Scope Drift Test'], { cwd: scopeDriftProject });
+  fs.writeFileSync(path.join(scopeDriftProject, 'tracked.js'), 'module.exports = 1;\n');
+  execFileSync('git', ['add', 'tracked.js'], { cwd: scopeDriftProject });
+  execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: scopeDriftProject });
+  const scopeDriftSlug = store.ensureProject(scopeDriftProject).slug;
+  assert.equal(store.setBoardConfig(scopeDriftSlug, { alwaysInScope: ['docs/'] }).ok, true);
+  const docsOnly = store.createTicket(scopeDriftSlug, {
+    title: 'always-in-scope scope fixture',
+    category: 'dispatch.lifecycle',
+    files: ['tracked.js'],
+    source: 'test',
+  });
+  const realDrift = store.createTicket(scopeDriftSlug, {
+    title: 'real scope drift fixture',
+    category: 'dispatch.lifecycle',
+    files: ['CamelCase.js'],
+    source: 'test',
+  });
+  try {
+    const preparedDocsOnly = store.prepareDispatch(scopeDriftSlug, docsOnly.ref, { sessionId: `scope-drift-docs-${Date.now()}` });
+    assert.deepEqual(preparedDocsOnly.ticket.dispatch.declaredFiles, ['tracked.js', 'docs/']);
+    assert.equal(store.pulsePayload(scopeDriftSlug, docsOnly.ref).warnings, undefined);
+
+    store.prepareDispatch(scopeDriftSlug, realDrift.ref, { sessionId: `scope-drift-real-${Date.now()}` });
+    assert.equal(store.setBoardConfig(scopeDriftSlug, { alwaysInScope: [] }).ok, true);
+    assert.deepEqual(store.pulsePayload(scopeDriftSlug, realDrift.ref).warnings, [
+      'Scope drift: this live dispatch enforces CamelCase.js, docs but the ticket declares CamelCase.js. Commits are gated on the dispatch set; re-run update --files to resync.',
+    ]);
+  } finally {
+    store.deleteTicket(scopeDriftSlug, docsOnly.ref);
+    store.deleteTicket(scopeDriftSlug, realDrift.ref);
+  }
+});
+
 test('batch launch records every prepared ticket and binds the shared native agent', () => {
   const first = createFixture('first batch lifecycle fixture');
   const second = createFixture('second batch lifecycle fixture');

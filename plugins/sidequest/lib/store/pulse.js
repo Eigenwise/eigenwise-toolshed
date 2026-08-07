@@ -128,13 +128,26 @@ function createPulse(dependencies) {
     if (claim) return { state: "unknown", evidence: "claim held without live-process evidence" };
     return { state: "unknown", evidence: "no active claim or death record" };
   }
-  function scopeDriftWarnings(ticket) {
+  function scopeDriftWarnings(slug, ticket) {
     const dispatch = dispatchState(ticket);
     if (!dispatch || dispatch.terminalAt || !Array.isArray(dispatch.declaredFiles)) return [];
-    const normalize = (files) => Array.from(new Set((Array.isArray(files) ? files : []).map((file) => String(file || "").replace(/\\/g, "/").replace(/\/+$/, "").trim().toLowerCase()).filter(Boolean))).sort();
-    const declared = normalize(dispatch.declaredFiles);
-    const ticketFiles = normalize(ticket?.files);
-    if (declared.length === ticketFiles.length && declared.every((file, index) => file === ticketFiles[index])) return [];
+    const scopePathKey = (file) => process.platform === "win32" ? file.toLowerCase() : file;
+    const scopePaths = (files) => {
+      const paths = /* @__PURE__ */ new Map();
+      for (const file of Array.isArray(files) ? files : []) {
+        const normalized = String(file || "").replace(/\\/g, "/").replace(/\/+$/, "").trim();
+        const key = scopePathKey(normalized);
+        if (normalized && !paths.has(key)) paths.set(key, normalized);
+      }
+      return [...paths.values()].sort((left, right) => scopePathKey(left).localeCompare(scopePathKey(right)));
+    };
+    const alwaysInScope = new Set(scopePaths(boardConfig(slug)?.alwaysInScope).map(scopePathKey));
+    const declared = scopePaths(dispatch.declaredFiles).filter((file) => !alwaysInScope.has(scopePathKey(file)));
+    const ticketFiles = scopePaths(ticket?.files).filter((file) => !alwaysInScope.has(scopePathKey(file)));
+    if (declared.length === ticketFiles.length && declared.every((file, index) => {
+      const ticketFile = ticketFiles[index];
+      return ticketFile != null && scopePathKey(file) === scopePathKey(ticketFile);
+    })) return [];
     return [`Scope drift: this live dispatch enforces ${declared.join(", ") || "(none)"} but the ticket declares ${ticketFiles.join(", ") || "(none)"}. Commits are gated on the dispatch set; re-run update --files to resync.`];
   }
   function scopePulse(ticket) {
@@ -158,7 +171,7 @@ function createPulse(dependencies) {
     const claim = projectedClaim(ticket, now);
     const died = dispatchDeath(dispatch);
     const liveness = livenessPulse(ticket, dispatch, claim, died);
-    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(ticket)];
+    const warnings = [...storyContractDriftWarnings(ticket), ...storyDecisionLogWarnings(ticket, slug), ...scopeDriftWarnings(slug, ticket)];
     return {
       ref: ticket.ref,
       title: ticket.title,

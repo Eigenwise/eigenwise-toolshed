@@ -120,10 +120,10 @@ function derivedGeneratedPairs(config?: any, files?: any) {
   return [...pairs.values()];
 }
 
-function defaultAlwaysInScope(absPath?: any) {
+function defaultAlwaysInScope(absPath: string) {
   try {
     return fs.statSync(path.join(absPath, 'docs')).isDirectory() ? ['docs/'] : [];
-  } catch (_: any) {
+  } catch (_) {
     return [];
   }
 }
