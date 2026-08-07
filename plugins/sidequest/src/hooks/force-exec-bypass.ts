@@ -9,6 +9,8 @@ import { runtimeModule } from './shared/paths.js';
 // in the store even when the installed lib is mid-upgrade.
 import { dispatchLaunchName } from '../lib/exec-names.js';
 
+const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.js')) as { canonicalPath: (value: unknown) => string };
+
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
 const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']);
 const HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
@@ -487,10 +489,10 @@ function restoresCommittedContent(input: HookInput, target: string): boolean {
     } else {
       return false;
     }
-    const repository = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+    const repository = canonicalPath(execFileSync('git', ['rev-parse', '--show-toplevel'], {
       cwd: path.dirname(target), encoding: 'utf8', windowsHide: true,
-    }).trim();
-    const relative = path.relative(repository, target).replace(/\\/g, '/');
+    }).trim());
+    const relative = path.relative(repository, canonicalPath(target)).replace(/\\/g, '/');
     if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return false;
     const committed = execFileSync('git', ['show', `HEAD:${relative}`], {
       cwd: repository, windowsHide: true,
@@ -509,7 +511,7 @@ function projectRelative(target: string, projectPath: string): string | null {
 }
 
 function inScope(target: string, scope: HelperScope): boolean {
-  const relative = projectRelative(target, scope.projectPath);
+  const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
   if (!relative) return false;
   const key = process.platform === 'win32' ? relative.toLowerCase() : relative;
   return scope.files.some((file) => {

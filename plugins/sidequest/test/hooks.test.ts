@@ -117,6 +117,12 @@ function runHook(script?: any, payload?: any, envOverrides?: any) {
   return (parsed.hookSpecificOutput && parsed.hookSpecificOutput.additionalContext) || '';
 }
 
+function windowsShortPath(pathname: string): string {
+  return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${pathname}") do @echo %~sI`], {
+    encoding: 'utf8', windowsHide: true, shell: true,
+  }).trim();
+}
+
 function runSessionWithHome(home?: any, envOverrides?: any) {
   return execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'bootstrap-test' }),
@@ -673,14 +679,17 @@ test('pre-tool hook: an unbound helper can restore only one declared file to HEA
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-revert-'));
   fs.mkdirSync(path.join(projectPath, 'lib'));
   const allowedPath = path.join(projectPath, 'lib', 'allowed.js');
+  const outsidePath = path.join(projectPath, 'lib', 'outside.js');
   const committedContent = 'export const guard = true;\n';
   fs.writeFileSync(allowedPath, committedContent);
+  fs.writeFileSync(outsidePath, committedContent);
   gitFixture(['init', '--quiet'], projectPath);
   gitFixture(['config', 'user.email', 'sidequest@example.invalid'], projectPath);
   gitFixture(['config', 'user.name', 'Sidequest Tests'], projectPath);
-  gitFixture(['add', 'lib/allowed.js'], projectPath);
+  gitFixture(['add', 'lib/allowed.js', 'lib/outside.js'], projectPath);
   gitFixture(['commit', '--quiet', '-m', 'fixture'], projectPath);
   fs.writeFileSync(allowedPath, 'export const guard = false;\n');
+  fs.writeFileSync(outsidePath, 'export const guard = false;\n');
 
   const project = store.ensureProject(projectPath).slug;
   const parent = store.createTicket(project, { title: 'revert owner', category: 'debugging', files: ['lib/allowed.js'], source: 'cli' });
@@ -720,6 +729,24 @@ test('pre-tool hook: an unbound helper can restore only one declared file to HEA
   });
   assert.equal(smuggled.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(smuggled.hookSpecificOutput.permissionDecisionReason, /No active ticket is bound to acting agent/);
+
+  if (process.platform === 'win32') {
+    const aliasProjectPath = windowsShortPath(projectPath);
+    if (aliasProjectPath.toLowerCase() !== projectPath.toLowerCase()) {
+      const aliasAllowed = runHookOutput(FORCE_BYPASS, {
+        ...unbound,
+        tool_input: { file_path: path.join(aliasProjectPath, 'lib', 'allowed.js'), content: committedContent },
+      });
+      assert.equal(aliasAllowed, null);
+
+      const aliasOutside = runHookOutput(FORCE_BYPASS, {
+        ...unbound,
+        tool_input: { file_path: path.join(aliasProjectPath, 'lib', 'outside.js'), content: committedContent },
+      });
+      assert.equal(aliasOutside.hookSpecificOutput.permissionDecision, 'deny');
+      assert.match(aliasOutside.hookSpecificOutput.permissionDecisionReason, /No active ticket is bound to acting agent/);
+    }
+  }
 });
 
 test('pre-tool hook: ordinary subagents without a dispatch stay outside the helper scope guard', () => {
