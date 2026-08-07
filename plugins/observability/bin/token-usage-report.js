@@ -15,6 +15,10 @@ Options:
   --format <text|json>     Output format (default: text).
   --sidequest-home <path>  Sidequest data directory.
   --project <path>         Project directory for Sidequest costs.
+  --since <timestamp>      Include usage at or after this ISO-8601 timestamp.
+  --until <timestamp>      Include usage before this ISO-8601 timestamp.
+  --compare-previous       Compare the selected window with the preceding window.
+  --ledger                 Include the per-request ledger in text output.
   --help                   Show this help message.
 `;
 
@@ -24,6 +28,8 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     format: 'text',
     sidequestHome: defaultSidequestHome(env),
     projectPath: env.CLAUDE_PROJECT_DIR || cwd,
+    includeLedger: false,
+    comparePrevious: false,
   };
   for (let index = 0; index < argv.length; index += 1) {
     const argument = argv[index];
@@ -33,6 +39,10 @@ function parseArgs(argv, env = process.env, cwd = process.cwd()) {
     if (argument === '--format' && ['text', 'json'].includes(next)) { options.format = next; index += 1; continue; }
     if (argument === '--sidequest-home' && next) { options.sidequestHome = next; index += 1; continue; }
     if (argument === '--project' && next) { options.projectPath = next; index += 1; continue; }
+    if (argument === '--since' && next) { options.since = next; index += 1; continue; }
+    if (argument === '--until' && next) { options.until = next; index += 1; continue; }
+    if (argument === '--compare-previous') { options.comparePrevious = true; continue; }
+    if (argument === '--ledger') { options.includeLedger = true; continue; }
     throw new Error(`Unknown or incomplete argument: ${argument}`);
   }
   return options;
@@ -50,7 +60,15 @@ function main(argv = process.argv.slice(2)) {
       sidequestHome: options.sidequestHome,
       projectPath: options.projectPath,
     });
-    const report = buildTokenUsageReport(store, { board });
+    const report = buildTokenUsageReport(store, {
+      board,
+      includeLedger: options.includeLedger || options.format === 'json',
+      boardCost: {
+        since: options.since,
+        until: options.until,
+        comparePrevious: options.comparePrevious,
+      },
+    });
     const output = options.format === 'json'
       ? `${JSON.stringify(report, null, 2)}\n`
       : formatTokenUsageReport(report);
