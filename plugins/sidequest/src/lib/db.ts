@@ -22,6 +22,11 @@ try {
 }
 
 export const CURRENT_SCHEMA_VERSION = 7;
+// Board writers normally finish in milliseconds; five-second SQLite waits avoid failing on ordinary handoffs without hiding a wedged writer forever.
+export const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
+const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
+const busySleep = new Int32Array(new SharedArrayBuffer(4));
 
 // Pre-v5 default text; the v5 migration only refreshes rows the user never customized.
 const OLD_CODEBASE_EXPLORATION = {
@@ -183,6 +188,35 @@ export interface PageOptions {
 }
 
 const statementCaches = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
+
+function isSqliteBusy(error: unknown): boolean {
+  return error instanceof Error && /database is (?:locked|busy)/i.test(error.message);
+}
+
+function sqliteBusyError(operation: string, startedAt: number, cause: unknown): Error {
+  const elapsedMs = Date.now() - startedAt;
+  const originalMessage = cause instanceof Error ? cause.message : String(cause);
+  return new Error(
+    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${SQLITE_BUSY_TIMEOUT_MS}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
+    { cause },
+  );
+}
+
+function retryWhenSqliteBusy<T>(operation: string, work: () => T): T {
+  const startedAt = Date.now();
+  for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return work();
+    } catch (error) {
+      if (!isSqliteBusy(error) || attempt === SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
+        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error);
+        throw error;
+      }
+      Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[attempt] ?? 0);
+    }
+  }
+  throw new Error(`SQLite busy retry exhausted without an error while ${operation}.`);
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
@@ -363,10 +397,10 @@ function applyCategoryRows(
 
 export function openDb(homeRoot: string): SidequestDatabase {
   fs.mkdirSync(homeRoot, { recursive: true });
-  const database = new DatabaseSyncConstructor(path.join(homeRoot, 'sidequest.db'), { timeout: 5000 });
-  database.exec('PRAGMA journal_mode=WAL');
-  database.exec('PRAGMA busy_timeout=5000');
-  database.exec(`
+  const database = new DatabaseSyncConstructor(path.join(homeRoot, 'sidequest.db'), { timeout: SQLITE_BUSY_TIMEOUT_MS });
+  retryWhenSqliteBusy('enabling WAL mode', () => database.exec('PRAGMA journal_mode=WAL'));
+  database.exec(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
+  retryWhenSqliteBusy('initializing database schema', () => database.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       slug TEXT PRIMARY KEY,
       data TEXT
@@ -399,7 +433,7 @@ export function openDb(homeRoot: string): SidequestDatabase {
       value TEXT
     );
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
-  `);
+  `));
 
   const schemaRow = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
   let schemaVersion = Number(schemaRow && JSON.parse(schemaRow.value as string));
@@ -762,15 +796,15 @@ export function putRow<N extends TableName>(database: DatabaseSync, table: N, ro
     .map((column) => `${column} = excluded.${column}`)
     .join(', ');
   const placeholders = spec.columns.map(() => '?').join(', ');
-  return prepareCached(database, `
+  return retryWhenSqliteBusy(`writing ${table}`, () => prepareCached(database, `
     INSERT INTO ${table} (${spec.columns.join(', ')}) VALUES (${placeholders})
     ON CONFLICT(${keyColumns(spec).join(', ')}) DO UPDATE SET ${assignments}
-  `).run(...values).changes;
+  `).run(...values).changes);
 }
 
 export function deleteRow<N extends TableName>(database: DatabaseSync, table: N, key: DatabaseTableKeyMap[N]): boolean {
   assertWritable(database);
-  return prepareCached(database, `DELETE FROM ${table} WHERE ${keyWhere(tableSpec(table))}`).run(...keyValues(tableSpec(table), key)).changes !== 0;
+  return retryWhenSqliteBusy(`deleting from ${table}`, () => prepareCached(database, `DELETE FROM ${table} WHERE ${keyWhere(tableSpec(table))}`).run(...keyValues(tableSpec(table), key)).changes !== 0);
 }
 
 export function listRows<T = unknown, N extends TableName = TableName>(
@@ -822,7 +856,7 @@ export function hasRow<N extends TableName>(database: DatabaseSync, table: N, ke
 export function txn<T>(database: DatabaseSync, fn: () => T): T {
   const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
   if (row) assertWritable(database);
-  database.exec('BEGIN IMMEDIATE');
+  retryWhenSqliteBusy('beginning a write transaction', () => database.exec('BEGIN IMMEDIATE'));
   try {
     const result = fn();
     if (isRecord(result) && typeof result.then === 'function') {

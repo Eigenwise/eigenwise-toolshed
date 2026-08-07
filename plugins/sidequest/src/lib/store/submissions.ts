@@ -406,6 +406,17 @@ function integrationFailure(slug: any, ticket: any, patch: any) {
   return Object.assign({ ok: false, ticket: getTicket(slug, ticket.id) }, patch);
 }
 
+function deliveryRecordFailure(ticket: any, delivery: any, error: any) {
+  const detail = error?.message || String(error || 'unknown board write error');
+  return {
+    ok: false,
+    reason: 'delivery_record_failed',
+    ticket,
+    delivery,
+    message: `Delivered ${delivery.commit} to ${delivery.targetBranch} at ${delivery.resultingHead}; board record failed: ${detail}`,
+  };
+}
+
 function rollbackPostMergeVerification(repo: string, before: string) {
   integrationGit(repo, ['reset', '--merge', before]);
 }
@@ -444,6 +455,7 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const gitRef = String(submission.gitRef || submissionGitRef(ticket));
   let pinnedCommit: string;
   let changedPaths: string[];
+  let delivered: { commit: string; targetBranch: string; resultingHead: string } | null = null;
   try {
     pinnedCommit = integrationGit(repo, ['rev-parse', '--verify', `${gitRef}^{commit}`]).toLowerCase();
     if (pinnedCommit !== String(submission.commit).toLowerCase()) {
@@ -533,6 +545,7 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
     const verify = verifyDeliveredSubmission(slug, ticket, opts);
     const acceptedVerify = ['passed', 'none', 'skipped', 'manual'].includes(verify.status);
     if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
+    delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
     const result = updateSubmissionIntegration(slug, ticket.id, {
       outcome: 'delivered',
       deliveredAt: new Date().toISOString(),
@@ -542,8 +555,9 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
       deliveredFiles,
       ignoredDirtyPaths,
     });
-    return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : result;
+    return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result);
   } catch (error: any) {
+    if (delivered) return deliveryRecordFailure(ticket, delivered, error);
     return integrationFailure(slug, ticket, { reason: 'integration_error', message: integrationGitError(error) });
   }
 }
