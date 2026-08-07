@@ -126,7 +126,6 @@ function createPulse(dependencies: any) {
   function livenessPulse(ticket?: any, dispatch?: any, claim?: any, death?: any) {
     if (death) return { state: 'dead', evidence: `died outcome recorded${death.source ? ` by ${death.source}` : ''}` };
     if (claim?.reclaimable) return { state: 'dead', evidence: `claim is reclaimable: ${claim.reclaimable}` };
-    if (ticket?.scopeRequest) return { state: 'waiting', evidence: 'scope request pending' };
     if (claim?.verifying) return { state: 'alive', evidence: 'verification marker is active' };
     if (dispatch?.outcome === 'launched' && !dispatch.boundAt && !dispatch.agentId && !claim && !ticket?.checkpoint) {
       return { state: 'stalled', evidence: 'dispatch launched without a bound runtime identity, claim, or checkpoint' };
@@ -174,12 +173,10 @@ function createPulse(dependencies: any) {
   // gated on; it differs from `declared` exactly when scopeDriftWarnings fires.
   function scopePulse(ticket?: any) {
     const dispatch = dispatchState(ticket);
-    const request = ticket?.scopeRequest;
     const resolution = ticket?.scopeResolution;
     return {
       declared: Array.isArray(ticket?.files) ? ticket.files : [],
       enforced: dispatch && !dispatch.terminalAt && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : null,
-      request: request ? { by: request.by || null, at: request.at || null, files: request.files || [] } : null,
       lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null,
     };
   }

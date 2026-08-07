@@ -603,14 +603,6 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         ...(t.claimRelease ? { claimRelease: t.claimRelease, message: autoReleasedClaimMessage(t.ref, t.claimRelease) } : {}),
       };
     }
-    if (t.scopeRequest) {
-      return {
-        ok: false,
-        reason: 'scope_request_pending',
-        ticket: t,
-        message: `submit: refused ${t.ref}; scope approval remains pending. Approve or deny the request before submitting.`,
-      };
-    }
     const completion = completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
     if (!completion.ok) return Object.assign({ ticket: t }, completion);
     const validationError = verifyCommandError(verify);
@@ -680,7 +672,6 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }, range || {});
     const dispatch = dispatchState(t);
     const previousStatus = t.status;
-    delete t.scopePauseRecovery;
     t.claim = null;
     setDispatchTerminal(t, 'submitted', opts.source || 'cli', { failureShape: 'unknown' });
     t.dispatchNonce = null;

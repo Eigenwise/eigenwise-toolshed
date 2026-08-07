@@ -1,6 +1,6 @@
 'use strict';
 
-function createSweeps({ addComment, claimAbandonMs, claimIdleMs, claimReleaseNote, claimReleaseVerdict, dispatchState, expiredPreparedDispatch, getTicket, listProjects, listTickets, preparedDispatchTtlMs, putTicket, releaseTicket, setDispatchTerminal, stampDispatchEvent, withTicketLock }: any) {
+function createSweeps({ addComment, claimAbandonMs, claimIdleMs, claimReleaseNote, claimReleaseVerdict, dispatchState, expiredPreparedDispatch, getTicket, listProjects, listTickets, migrateLegacyScopeRequest, preparedDispatchTtlMs, putTicket, releaseTicket, setDispatchTerminal, stampDispatchEvent, withTicketLock }: any) {
 // Expire only dispatches that remained prepared. Launched and bound dispatches are stateful work, not wall-clock leases.
 function sweepStaleDispatches(opts?: any) {
   opts = opts || {};
@@ -44,6 +44,17 @@ function sweepStaleClaims(opts?: any) {
   const source = opts.source ? String(opts.source) : 'sweep';
   const released: any[] = [];
   const blocked: any[] = [];
+  const migratedScopeRequests: any[] = [];
+  for (const project of listProjects({ all: true })) {
+    if (opts.project && project.slug !== opts.project) continue;
+    for (const ticket of listTickets(project.slug)) {
+      if (!ticket.scopeRequest) continue;
+      try {
+        const result = migrateLegacyScopeRequest(project.slug, ticket.id);
+        if (result?.migrated) migratedScopeRequests.push({ project: project.slug, ref: ticket.ref });
+      } catch (_) {}
+    }
+  }
   for (const project of listProjects({ all: true })) {
     if (opts.project && project.slug !== opts.project) continue;
     for (const ticket of listTickets(project.slug)) {
@@ -74,7 +85,7 @@ function sweepStaleClaims(opts?: any) {
     }
   }
   const dispatches = sweepStaleDispatches(opts);
-  return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, blocked, expiredDispatches: dispatches.expired };
+  return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, blocked, migratedScopeRequests, expiredDispatches: dispatches.expired };
 }
 
 

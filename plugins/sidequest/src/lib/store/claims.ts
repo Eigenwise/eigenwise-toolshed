@@ -19,7 +19,7 @@ function createClaims(dependencies: any) {
   const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
   const VERIFY_COMPLETE_STATUSES = new Set(['passed', 'failed-suite', 'could-not-run']);
   const NEGATIVE_CONTROL_COMMENT = '[sidequest:negative-control] ';
-  const RELEASE_KINDS = new Set(['scope_pause', 'handback']);
+  const RELEASE_KINDS = new Set(['handback']);
 
   function technicalBlockerRelease(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }): { ok: true; evidence: { command: string; exitCode?: number; kind: string; outputTail: string } | null; releaseKind: string | null } | { ok: false; message: string; reason: string } {
     const reason = String(args?.reason || '').trim();
@@ -58,7 +58,7 @@ function createClaims(dependencies: any) {
     return {
       ok: false,
       reason: 'release_kind_required',
-      message: 'release: choose kind "technical_blocker" for a failed command, "contradiction" for an absent target with probe evidence, or "scope_pause" or "handback" for another non-technical release. Technical blockers need command, exitCode, and outputTail; contradictions need command and outputTail.',
+      message: 'release: choose kind "technical_blocker" for a failed command, "contradiction" for an absent target with probe evidence, or "handback" for another non-technical release. Technical blockers need command, exitCode, and outputTail; contradictions need command and outputTail.',
     };
   }
 
@@ -161,14 +161,6 @@ function createClaims(dependencies: any) {
     if (dispatch) delete dispatch.verifyStopAt;
   }
 
-  function resumableScopePause(ticket?: any) {
-    const dispatch = dispatchState(ticket);
-    return Boolean(
-      dispatch && dispatch.terminalAt && ticket?.claim?.by && ticket?.scopeRequest
-        && ['scope_paused', 'stopped_claimed'].includes(dispatch.outcome),
-    );
-  }
-
   function observedStop(dispatch?: any, claim?: any) {
     if (!dispatch || !['died', 'stopped_claimed'].includes(dispatch.outcome) || !dispatch.terminalAt) return false;
     const stoppedMs = Date.parse(dispatch.terminalAt);
@@ -218,7 +210,6 @@ function createClaims(dependencies: any) {
       }
       return null;
     }
-    if (resumableScopePause(ticket)) return null;
     if (dispatch) return null;
     if (idleMs > claimIdleMs()) {
       return { kind: 'idle', idleMs, reason: 'no board activity from the claim holder and no executor dispatch exists' };
@@ -299,7 +290,6 @@ function createClaims(dependencies: any) {
     preparedDispatchTtlMs,
     recordClaimVerification,
     releaseCommentBody,
-    resumableScopePause,
     technicalBlockerRelease,
     touchClaim,
     touchClaimActivity,

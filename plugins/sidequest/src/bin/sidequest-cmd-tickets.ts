@@ -321,10 +321,6 @@ async function cmdUpdate(opts: any, positional: any) {
     ...store.ticketReferenceWarnings(slug, patch.title, patch.description),
     ...store.ticketPlanningWarnings(updated, meta.path),
   ];
-  if (patch.files !== undefined) {
-    const scopeWarning = store.pendingScopeApprovalWarning(updated);
-    if (scopeWarning) warnings.push(scopeWarning);
-  }
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated, category: opts.category != null ? categoryEcho(updated) : undefined, warnings }, null, 2) + '\n');
     return;

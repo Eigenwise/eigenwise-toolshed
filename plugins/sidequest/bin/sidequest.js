@@ -5,7 +5,7 @@ const { fail } = require("./sidequest-cmd-shared");
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require("./sidequest-cmd-server");
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./sidequest-cmd-tickets");
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require("./sidequest-cmd-configuration");
-const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdScopeDeny, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
+const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
 const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
@@ -96,10 +96,9 @@ const HELP_COMMANDS = {
   submit: 'sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path]',
   integrate: "sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--skip-verify] [--override-legacy-scope] [--json]",
   publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
-  release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind scope_pause|handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
+  release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
   "scope-request": "sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who]",
-  "scope-deny": 'sidequest scope-deny <id|SQ-n> --reason "why" [--by who]',
   assign: "sidequest assign <id|SQ-n> [--to who=you]",
   unassign: "sidequest unassign <id|SQ-n>",
   remind: 'sidequest remind <id|SQ-n> (--in 1h|3h|tomorrow | --at "date/time")',
@@ -147,7 +146,6 @@ const HELP_ALIASES = {
   finish: "done",
   unclaim: "release",
   scope_request: "scope-request",
-  scope_deny: "scope-deny",
   restore: "unarchive",
   native_agent: "native-agent",
   board_config: "board-config",
@@ -201,9 +199,9 @@ Working the board safely (multi-agent):
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
   sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration] [--override-legacy-scope]   control-plane closure; --integration consumes a submitted ticket after publish, and the override permits only legacy submissions without a scope snapshot
-  sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind scope_pause|handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
+  sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --status doing --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] drop the claim without finishing
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
-  sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request a scope expansion and pause with the claim held
+  sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
   sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
@@ -403,10 +401,6 @@ async function main() {
     case "scope-request":
     case "scope_request":
       await cmdScopeRequest(opts, positional);
-      break;
-    case "scope-deny":
-    case "scope_deny":
-      await cmdScopeDeny(opts, positional);
       break;
     case "commit":
       await cmdCommit(opts, positional);

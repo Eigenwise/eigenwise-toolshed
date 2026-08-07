@@ -34,7 +34,6 @@ function createTickets(dependencies) {
     readMeta,
     readyTickets,
     releaseLock,
-    reopenScopePausedDispatch,
     requestedReadonlyOverride,
     requireStatus,
     requireVerifyCommand,
@@ -205,18 +204,7 @@ function createTickets(dependencies) {
   function scopeExpansionFiles(ticket, additions) {
     return normalizeFiles([...Array.isArray(ticket?.files) ? ticket.files : [], ...normalizeFiles(additions)]);
   }
-  function approvedScopeRequestFiles(ticket, files) {
-    const request = ticket?.scopeRequest;
-    const pending = normalizeFiles(request?.files);
-    if (!pending.length) return null;
-    const next = boundedFiles(files);
-    const pendingScope = scopeExpansionFiles(ticket, pending);
-    const requestedScope = scopeExpansionFiles(ticket, request?.requested || pending);
-    if (!sameFiles(next, pendingScope) && !sameFiles(next, requestedScope)) return null;
-    return requestedScope;
-  }
-  function scopeResolution(slug, ticket, request, state, now, granted, refused, resumed) {
-    const dispatch = dispatchState(ticket);
+  function scopeResolution(slug, ticket, request, state, now, granted, refused) {
     ticket.scopeResolution = {
       state,
       by: request?.by || null,
@@ -225,73 +213,17 @@ function createTickets(dependencies) {
       granted: normalizeFiles(granted),
       refused: normalizeFiles(refused),
       effectiveScope: effectiveScope(slug, ticket?.files),
-      at: now || (/* @__PURE__ */ new Date()).toISOString(),
-      resume: resumed ? {
-        ticket: ticket.ref,
-        agentName: dispatch?.agentName || dispatch?.agentId || ticket?.claim?.by || "unknown executor"
-      } : null
+      at: now || (/* @__PURE__ */ new Date()).toISOString()
     };
-  }
-  function clearCoveredScopeRequest(slug, ticket, now) {
-    const request = ticket?.scopeRequest;
-    const scope = effectiveScope(slug, ticket?.files);
-    const granted = normalizeFiles(request?.requested || request?.files).filter((file) => commitScope.isInScope(file, scope));
-    if (!request || !normalizeFiles(request.files).every((file) => commitScope.isInScope(file, scope))) return false;
-    clearScopeRequestMarker(slug, ticket);
-    const dispatch = dispatchState(ticket);
-    const resumed = reopenScopePausedDispatch(ticket, now);
-    scopeResolution(slug, ticket, request, "granted", now, granted, [], resumed);
-    ticket.scopeRequest = null;
-    if (dispatch && (!dispatch.terminalAt || resumed)) {
-      dispatch.declaredFiles = scope;
-      delete dispatch.scopeRequest;
-    }
-    return true;
   }
   function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
     if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = effectiveScope(slug, ticket?.files);
   }
-  function resolveScopeRequestAgainstUpdate(slug, ticket, patch, now) {
-    const request = ticket?.scopeRequest;
-    if (!request) return;
-    const caller = String(patch?.by || "").trim();
-    if (!caller || caller === ticket?.claim?.by) return;
-    const scope = effectiveScope(slug, ticket.files);
-    const requested = normalizeFiles(request.files);
-    const granted = requested.filter((file) => commitScope.isInScope(file, scope));
-    const refused = requested.filter((file) => !commitScope.isInScope(file, scope));
-    clearScopeRequestMarker(slug, ticket);
-    const resumed = reopenScopePausedDispatch(ticket, now);
-    scopeResolution(slug, ticket, request, granted.length ? refused.length ? "partial" : "granted" : "denied", now, granted, refused, resumed);
-    ticket.scopeRequest = null;
-    const dispatch = dispatchState(ticket);
-    if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
-    if (!Array.isArray(ticket.comments)) ticket.comments = [];
-    const grantedText = granted.length ? `granted ${granted.join(", ")}` : "granted none of the requested paths";
-    const refusedText = refused.length ? `; not granted: ${refused.join(", ")} (outside the updated scope)` : "";
-    const comment = createComment({
-      by: caller,
-      body: `Scope request resolved by scope update: ${grantedText}${refusedText}. Declared scope is now: ${normalizeFiles(ticket.files).join(", ") || "(none)"}.`,
-      kind: "comment",
-      source: patch?.source || "cli"
-    }, now);
-    ticket.comments.push(comment);
-    queueEventNotification(slug, ticket, "comment", comment.source, { commentBody: comment.body });
-  }
   function scopeExpansionCommand(ticket, additions) {
     const ref = String(ticket?.ref || "").trim();
     if (!ref) return null;
     return `sidequest update ${ref} --files ${JSON.stringify(scopeExpansionFiles(ticket, additions).join(","))}`;
-  }
-  function pendingScopeApprovalWarning(ticket) {
-    const requested = normalizeFiles(ticket?.scopeRequest?.files);
-    if (!requested.length) return null;
-    const command = scopeExpansionCommand(ticket, requested);
-    return `Scope request remains pending for ${requested.join(", ")}. This update did not cover every requested path; approve the full request with \`${command}\`.`;
-  }
-  function scopeRequestMarkerFile(ticket) {
-    return `scope-request-${String(ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.json`;
   }
   const TEST_DIRECTORY_NAMES = ["test", "tests", "spec", "specs", "__tests__"];
   function repoRelative(file) {
@@ -479,142 +411,6 @@ function createTickets(dependencies) {
       return !requestsSource || ticketDeclaresSourceDirectory(ticket, root, slug);
     });
   }
-  function createScopeRequestMarker(slug, ticket, request) {
-    const dispatch = dispatchState(ticket);
-    if (!dispatch || dispatch.sharedTree !== false) return;
-    const worktree = String(dispatch.worktree || "").trim();
-    if (!worktree) return;
-    try {
-      const root = commitScope.repoRoot(worktree);
-      const linked = commitScope.linkedWorktree(root);
-      if (!linked.ok || !linked.linked) return;
-      fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
-      fs.writeFileSync(assetPath(slug, ticket.id, scopeRequestMarkerFile(ticket)), JSON.stringify({
-        ref: ticket.ref,
-        by: request.by,
-        files: request.files,
-        requested: request.requested,
-        covered: request.covered,
-        retention: request.retention || null,
-        at: request.at
-      }) + "\n");
-    } catch (_) {
-    }
-  }
-  function clearScopeRequestMarker(slug, ticket) {
-    try {
-      fs.unlinkSync(assetPath(slug, ticket.id, scopeRequestMarkerFile(ticket)));
-    } catch (_) {
-    }
-    const worktree = String(ticket?.scopeRequest?.markerWorktree || "").trim();
-    if (!worktree) return;
-    const marker = path.join(worktree, ".sidequest", scopeRequestMarkerFile(ticket));
-    const relativeMarker = path.relative(worktree, marker).replace(/\\/g, "/");
-    try {
-      execFileSync("git", ["reset", "--quiet", "--", relativeMarker], { cwd: worktree, windowsHide: true, stdio: "ignore" });
-    } catch (_) {
-    }
-    try {
-      fs.unlinkSync(marker);
-    } catch (_) {
-    }
-    try {
-      fs.rmdirSync(path.dirname(marker));
-    } catch (_) {
-    }
-  }
-  function scopePauseRecoveryAsset(ticket) {
-    return `scope-pause-${String(ticket?.id || "ticket").replace(/[^a-z0-9_-]/gi, "_")}.patch`;
-  }
-  function retainCleanScopePauseWorktree(ticket) {
-    const dispatch = dispatchState(ticket);
-    const worktree = String(dispatch?.worktree || "").trim();
-    if (dispatch?.sharedTree !== false || !worktree || !fs.existsSync(worktree)) return null;
-    try {
-      const root = commitScope.repoRoot(worktree);
-      const linked = commitScope.linkedWorktree(root);
-      if (!linked.ok || !linked.linked) return null;
-      const status = execFileSync("git", ["status", "--porcelain"], {
-        cwd: root,
-        encoding: "utf8",
-        windowsHide: true
-      }).trim();
-      if (status) return null;
-      execFileSync("git", [
-        "-c",
-        "user.name=Sidequest",
-        "-c",
-        "user.email=sidequest@local",
-        "commit",
-        "--allow-empty",
-        "--no-gpg-sign",
-        "-m",
-        `sidequest: retain ${ticket.ref} scope pause`
-      ], {
-        cwd: root,
-        encoding: "utf8",
-        windowsHide: true
-      });
-      return { worktree: root, commit: execFileSync("git", ["rev-parse", "HEAD"], {
-        cwd: root,
-        encoding: "utf8",
-        windowsHide: true
-      }).trim() };
-    } catch (_) {
-      return null;
-    }
-  }
-  function noIndexDiff(worktree, relativePath) {
-    try {
-      return execFileSync("git", ["diff", "--binary", "--no-index", "--", "/dev/null", relativePath], {
-        cwd: worktree,
-        encoding: "utf8",
-        windowsHide: true
-      });
-    } catch (error) {
-      return String(error?.stdout || "");
-    }
-  }
-  function captureScopePauseRecovery(slug, ticket) {
-    const dispatch = dispatchState(ticket);
-    const worktree = String(dispatch?.worktree || ticket?.scopeRequest?.markerWorktree || "").trim();
-    if (!worktree || !fs.existsSync(worktree)) return null;
-    let patch = "";
-    try {
-      patch = execFileSync("git", ["diff", "--binary", "HEAD", "--", ".", ":(exclude).sidequest/**"], {
-        cwd: worktree,
-        encoding: "utf8",
-        windowsHide: true
-      });
-    } catch (_) {
-      return null;
-    }
-    try {
-      const untracked = execFileSync("git", ["ls-files", "--others", "--exclude-standard", "-z"], {
-        cwd: worktree,
-        encoding: "utf8",
-        windowsHide: true
-      }).split("\0");
-      for (const file of untracked) {
-        const relative = file.replace(/\\/g, "/");
-        if (!relative || relative === ".sidequest" || relative.startsWith(".sidequest/")) continue;
-        patch += noIndexDiff(worktree, relative);
-      }
-    } catch (_) {
-    }
-    if (!patch.trim()) return null;
-    const asset = scopePauseRecoveryAsset(ticket);
-    try {
-      fs.mkdirSync(assetsDir(slug, ticket.id), { recursive: true });
-      fs.writeFileSync(assetPath(slug, ticket.id, asset), patch);
-      if (!Array.isArray(ticket.assets)) ticket.assets = [];
-      if (!ticket.assets.includes(asset)) ticket.assets.push(asset);
-      ticket.scopePauseRecovery = { asset, at: (/* @__PURE__ */ new Date()).toISOString(), worktree };
-      return ticket.scopePauseRecovery;
-    } catch (_) {
-      return null;
-    }
-  }
   function requestScope(slug, idOrRef, by, files, opts) {
     opts = opts || {};
     by = String(by || "agent");
@@ -635,25 +431,12 @@ function createTickets(dependencies) {
       const covered = requested.filter((file) => commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();
       touchClaimActivity(t, by, now);
-      const previousRequest = t.scopeRequest;
-      if (previousRequest && sameFiles(requested, previousRequest.requested || previousRequest.files)) {
-        t.updatedAt = now;
-        putTicket(slug, t);
-        return {
-          ok: true,
-          ticket: t,
-          covered,
-          scopeRequest: previousRequest,
-          command: scopeExpansionCommand(t, previousRequest.files),
-          state: "pending",
-          ageMs: Math.max(0, Date.parse(now) - Date.parse(previousRequest.at))
-        };
-      }
+      const request = { by, files: additions, requested, covered, at: now };
       if (!additions.length) {
-        clearCoveredScopeRequest(slug, t, now);
+        scopeResolution(slug, t, request, "granted", now, requested, []);
         t.updatedAt = now;
         putTicket(slug, t);
-        return { ok: true, ticket: t, covered, scopeRequest: null, command: null };
+        return { ok: true, ticket: t, covered, approved: [], autoApproved: false, state: "granted", resolution: t.scopeResolution };
       }
       const testDirectories = autoApprovedTestScope(t, requested, additions, slug) || [];
       const testScopeApproved = testDirectories.length > 0;
@@ -663,136 +446,54 @@ function createTickets(dependencies) {
       const derivedScope = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : configuredScope;
       const remainingAfterDerivedScope = additions.filter((file) => !commitScope.isInScope(file, derivedScope));
       const packageScope = autoApprovedPackageScope(t, remainingAfterDerivedScope, slug);
-      const autoApproved = normalizeFiles([...derivedScope, ...packageScope]);
-      const everyAdditionApproved = additions.every((file) => commitScope.isInScope(file, autoApproved));
-      if (everyAdditionApproved) {
-        t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
-        syncLiveDispatchScope(slug, t);
-        const approvalRequest = { by, files: additions, requested, covered, at: now };
-        const granted = requested.filter((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
-        scopeResolution(slug, t, approvalRequest, "granted", now, granted, [], false);
-        if (!Array.isArray(t.comments)) t.comments = [];
-        const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "same-package scope derived from the ticket’s declared files";
-        const comment2 = createComment({
-          by: "board",
-          body: `Auto-approved ${policy}: ${autoApproved.join(", ")}.`,
-          kind: "comment",
-          source: "policy"
-        }, now);
-        t.comments.push(comment2);
-        t.lastEventType = "scope_auto_approved";
-        t.lastEventSource = "policy";
-        t.updatedAt = now;
-        putTicket(slug, t);
-        queueEventNotification(slug, t, "comment", comment2.source, { commentBody: comment2.body });
-        return { ok: true, ticket: t, covered, approved: autoApproved, autoApproved: true, scopeRequest: null, command: null, comment: comment2 };
-      }
-      if (autoApproved.length) {
-        t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
+      const approved = normalizeFiles([...derivedScope, ...packageScope]);
+      if (approved.length) {
+        t.files = boundedFiles(scopeExpansionFiles(t, approved));
         syncLiveDispatchScope(slug, t);
       }
-      const pendingAdditions = additions.filter((file) => !commitScope.isInScope(file, autoApproved));
-      const command = scopeExpansionCommand(t, pendingAdditions);
-      if (previousRequest) scopeResolution(slug, t, previousRequest, "superseded", now, [], [], false);
-      const retention = retainCleanScopePauseWorktree(t);
-      const effectiveCovered = requested.filter((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
-      const request = { by, files: pendingAdditions, requested, covered: effectiveCovered, at: now, ...retention ? { retention } : {} };
-      createScopeRequestMarker(slug, t, request);
-      t.scopeRequest = request;
-      const dispatch = dispatchState(t);
-      if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
+      const refused = additions.filter((file) => !commitScope.isInScope(file, approved));
+      const granted = requested.filter((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
+      const state = refused.length ? "refused" : "granted";
+      scopeResolution(slug, t, request, state, now, granted, refused);
       if (!Array.isArray(t.comments)) t.comments = [];
-      const autoApprovedText = autoApproved.length ? ` Auto-approved without a ruling: ${autoApproved.join(", ")}.` : "";
-      const comment = createComment({
-        by,
-        body: `Scope expansion requested: ${pendingAdditions.join(", ")}.${covered.length ? ` Already in scope: ${covered.join(", ")}.` : ""}${autoApprovedText} Approve with \`${command}\`; claim remains held.`,
-        kind: "comment",
-        source: opts.source || "cli"
-      }, now);
+      const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "same-package scope derived from the ticket’s declared files";
+      const body = refused.length ? `Scope expansion refused: ${refused.join(", ")}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
+      const comment = createComment({ by: refused.length ? "board" : "board", body, kind: "comment", source: refused.length ? opts.source || "cli" : "policy" }, now);
       t.comments.push(comment);
-      t.lastEventType = "scope_request";
-      t.lastEventSource = opts.source || "cli";
+      t.lastEventType = refused.length ? "scope_refused" : "scope_auto_approved";
+      t.lastEventSource = comment.source;
       t.updatedAt = now;
       putTicket(slug, t);
       queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
-      return { ok: true, ticket: t, scopeRequest: t.scopeRequest, covered: effectiveCovered, approved: autoApproved, autoApproved: false, command, comment };
+      return { ok: true, ticket: t, covered, approved, autoApproved: !refused.length, refused, state, resolution: t.scopeResolution, comment };
     });
   }
-  function denyScopeRequest(slug, idOrRef, by, reason, opts) {
-    opts = opts || {};
-    by = String(by || "orchestrator").trim() || "orchestrator";
-    reason = String(reason || "").trim();
-    if (!reason) throw new Error("scope-deny reason is required");
+  function migrateLegacyScopeRequest(slug, idOrRef) {
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
     return withTicketLock(slug, found.id, () => {
-      const t = getTicket(slug, found.id);
-      if (!t) return { ok: false, reason: "not_found" };
-      const request = t.scopeRequest;
-      if (!request) return { ok: false, reason: "no_scope_request", ticket: t };
+      const ticket = getTicket(slug, found.id);
+      const request = ticket?.scopeRequest;
+      if (!ticket || !request) return { ok: true, migrated: false, ticket };
       const now = (/* @__PURE__ */ new Date()).toISOString();
-      const denied = {
-        by,
-        reason,
-        files: normalizeFiles(request.files),
-        requested: normalizeFiles(request.requested || request.files),
-        covered: normalizeFiles(request.covered),
-        at: now
-      };
-      clearScopeRequestMarker(slug, t);
-      const dispatch = dispatchState(t);
-      const resumed = reopenScopePausedDispatch(t, now);
-      scopeResolution(slug, t, request, "denied", now, [], denied.files, resumed);
-      t.scopeRequest = null;
-      if (dispatch && (!dispatch.terminalAt || resumed)) delete dispatch.scopeRequest;
-      syncLiveDispatchScope(slug, t);
-      if (!Array.isArray(t.comments)) t.comments = [];
+      const requested = normalizeFiles(request.requested || request.files);
+      scopeResolution(slug, ticket, request, "refused", now, [], requested);
+      ticket.scopeRequest = null;
+      if (ticket.dispatch) delete ticket.dispatch.scopeRequest;
+      if (!Array.isArray(ticket.comments)) ticket.comments = [];
       const comment = createComment({
-        by,
-        // State the scope that is actually in force: a deny can follow a partial
-        // files edit, and "unchanged" then contradicts the ruling above it.
-        body: `Scope expansion denied: ${reason}. Declared scope is now: ${normalizeFiles(t.files).join(", ") || "(none)"}; commit within it or release the ticket if it cannot complete the work.`,
+        by: "board",
+        body: `Cleared legacy pending scope request from ${request.by || "unknown requester"}: ${requested.join(", ") || "(no paths recorded)"}. Scope requests now rule immediately; commit in-scope work and release with kind "handback" if these paths are still needed.`,
         kind: "comment",
-        source: opts.source || "cli"
+        source: "migration"
       }, now);
-      t.comments.push(comment);
-      t.lastEventType = "scope_denied";
-      t.lastEventSource = opts.source || "cli";
-      t.updatedAt = now;
-      putTicket(slug, t);
-      queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
-      return { ok: true, ticket: t, denied, comment };
-    });
-  }
-  function scopeResolutionMatches(resolution, by, requestAt) {
-    if (!resolution || resolution.by !== by) return false;
-    return !requestAt || resolution.requestAt === requestAt;
-  }
-  function waitForScopeResolution(slug, idOrRef, by, requestAt, timeoutMs) {
-    const timeout = Math.min(Math.max(Number(timeoutMs) || 12e4, 1), 18e4);
-    const deadline = Date.now() + timeout;
-    return new Promise((resolve) => {
-      const inspect = () => {
-        const ticket = getTicket(slug, idOrRef);
-        if (!ticket) return resolve({ ok: false, state: "not_found" });
-        const request = ticket.scopeRequest;
-        const resolution = ticket.scopeResolution;
-        if (scopeResolutionMatches(resolution, by, requestAt)) {
-          return resolve({ ok: true, ticket, state: resolution.state, effectiveScope: resolution.effectiveScope, resolution });
-        }
-        if (request && request.by === by && (!requestAt || request.at === requestAt)) {
-          if (Date.now() >= deadline) return resolve({ ok: true, ticket, state: "timeout", effectiveScope: effectiveScope(slug, ticket.files), scopeRequest: request });
-          return setTimeout(inspect, Math.min(50, Math.max(1, deadline - Date.now())));
-        }
-        return resolve({
-          ok: true,
-          ticket,
-          state: "superseded",
-          effectiveScope: effectiveScope(slug, ticket.files),
-          resolution: scopeResolutionMatches(resolution, by) ? resolution : null
-        });
-      };
-      inspect();
+      ticket.comments.push(comment);
+      ticket.lastEventType = "scope_request_migrated";
+      ticket.lastEventSource = "migration";
+      ticket.updatedAt = now;
+      putTicket(slug, ticket);
+      queueEventNotification(slug, ticket, "comment", comment.source, { commentBody: comment.body });
+      return { ok: true, migrated: true, ticket, comment };
     });
   }
   function overlappingScopePaths(filesA, filesB) {
@@ -973,8 +674,6 @@ function createTickets(dependencies) {
     const current = normalizeFiles(ticket.files);
     const next = boundedFiles(files);
     if (sameFiles(current, next)) return null;
-    const request = ticket.scopeRequest;
-    if (request && approvedScopeRequestFiles(ticket, next)) return null;
     const caller = String(patch?.by || "").trim();
     if (caller && caller !== ticket.claim.by) return null;
     const claimedSession = String(dispatchState(ticket)?.sessionId || "").trim();
@@ -1020,10 +719,7 @@ function createTickets(dependencies) {
       if (patch.files !== void 0) {
         const scopeRefusal = activeClaimScopeRefusal(t, patch.files, patch);
         if (scopeRefusal) throw new Error(scopeRefusal);
-        const approvedFiles = approvedScopeRequestFiles(t, patch.files);
-        t.files = approvedFiles || boundedFiles(patch.files);
-        const scopeEditAt = (/* @__PURE__ */ new Date()).toISOString();
-        if (!clearCoveredScopeRequest(slug, t, scopeEditAt)) resolveScopeRequestAgainstUpdate(slug, t, patch, scopeEditAt);
+        t.files = boundedFiles(patch.files);
         syncLiveDispatchScope(slug, t);
       }
       if (patch.contracts !== void 0) t.contracts = boundedContracts(patch.contracts);
@@ -1153,6 +849,6 @@ function createTickets(dependencies) {
   function listActive(slug) {
     return queryTickets(String(slug || ""), { archived: false });
   }
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, pendingScopeApprovalWarning, clearScopeRequestMarker, captureScopePauseRecovery, requestScope, waitForScopeResolution, denyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 module.exports = { createTickets };

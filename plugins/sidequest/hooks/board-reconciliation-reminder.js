@@ -79,9 +79,6 @@ function nudgeOff() {
 function pendingSubmission(ticket) {
   return Boolean(ticket.submission?.commit && !ticket.submission.integratedAt);
 }
-function pendingScopeApproval(ticket) {
-  return Boolean(ticket.scopeRequest);
-}
 function liveDispatch(ticket, sessionId, store) {
   return ticket.dispatch?.sessionId === sessionId && !ticket.dispatch.terminalAt && !store.claimPulse(ticket)?.reclaimable;
 }
@@ -137,32 +134,29 @@ function reconciliationMessage(data) {
     if (!project.ok || !project.slug) return null;
     const claimedRefs = new Set(store.sessionClaims(sessionId).map((claim) => String(claim.ref || "")).filter(Boolean));
     const touched = (ticket) => claimedRefs.has(String(ticket.ref || "")) || ticket.dispatch?.sessionId === sessionId;
-    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store) || pendingSubmission(ticket) || pendingScopeApproval(ticket)));
-    const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket) && !pendingScopeApproval(ticket));
+    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store) || pendingSubmission(ticket)));
+    const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
-    const scopeApprovals = open.filter(pendingScopeApproval);
     const pendingRefs = submissions.map((ticket) => String(ticket.ref || "")).filter(Boolean);
-    const otherOpen = open.length - doing.length - submissions.length - scopeApprovals.length;
+    const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
     const actionable = [
       doing.length ? `${countLabel(doing.length, "ticket")} in doing` : "",
       otherOpen ? `${countLabel(otherOpen, "ticket")} still open` : ""
     ].filter(Boolean);
     const waits = [
-      scopeApprovals.length ? `${countLabel(scopeApprovals.length, "ticket")} waiting on scope approval from the orchestrator` : "",
       submissions.length ? `${countLabel(submissions.length, "submission")} pending integration` : ""
     ].filter(Boolean);
     const state = [...actionable, ...waits].join(" / ");
     const closeActionable = actionable.length ? ` Update or close ${actionable.length === 1 && doing.length === 1 ? "it" : "them"} before finishing.` : "";
-    const holdWaits = waits.length ? " Pending approval is a wait, not a finished ticket. Checkpoint and hold; never release, releasing loses work." : "";
+    const holdWaits = waits.length ? " Pending integration is unfinished work. Checkpoint and hold; never release it as complete." : "";
     const signature = JSON.stringify(open.map((ticket) => ({
       ref: ticket.ref || "",
       status: ticket.status || "",
       claimBy: ticket.claim?.by || "",
       dispatchSessionId: ticket.dispatch?.sessionId || "",
       submissionCommit: ticket.submission?.commit || "",
-      integratedAt: ticket.submission?.integratedAt || "",
-      scopeRequest: ticket.scopeRequest?.files || []
+      integratedAt: ticket.submission?.integratedAt || ""
     })).sort((left, right) => left.ref.localeCompare(right.ref)));
     return {
       sessionId,

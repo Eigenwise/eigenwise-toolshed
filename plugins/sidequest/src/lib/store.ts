@@ -317,7 +317,6 @@ const {
   terminalDispatchForIdle,
   soleIdleCandidate,
   setDispatchTerminal,
-  reopenScopePausedDispatch,
   appendReworkEvent,
   dispatchTokenDigest,
   isSupersededDispatchToken,
@@ -357,7 +356,6 @@ const {
   assertDispatchTransport,
   assertSidequestInstall,
   availableRoute: (...args: any[]) => availableRoute(...args),
-  captureScopePauseRecovery: (...args: any[]) => captureScopePauseRecovery(...args),
   claimReclaimable: (...args: any[]) => claimReclaimable(...args),
   claimVerification: (...args: any[]) => claimVerification(...args),
   commitScope,
@@ -391,7 +389,6 @@ const {
   resolveTicketRoute: (...args: any[]) => resolveTicketRoute(...args),
   resolveCategoryRoute: (...args: any[]) => resolveCategoryRoute(...args),
   resolveExec: (...args: any[]) => resolveExec(...args),
-  resumableScopePause: (...args: any[]) => resumableScopePause(...args),
   stableExecutorName,
   storyExecutionContract: (...args: any[]) => storyExecutionContract(...args),
   ticketCategory: (...args: any[]) => ticketCategory(...args),
@@ -605,7 +602,6 @@ const {
   releaseCommentBody,
   technicalBlockerRelease,
   verificationCompletionCheck,
-  resumableScopePause,
   touchClaim,
   touchClaimActivity,
 } = createClaims({
@@ -679,12 +675,8 @@ const {
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
-  pendingScopeApprovalWarning,
-  clearScopeRequestMarker,
-  captureScopePauseRecovery,
   requestScope,
-  waitForScopeResolution,
-  denyScopeRequest,
+  migrateLegacyScopeRequest,
   overlappingScopePaths,
   scopesOverlap,
   normalizeContracts,
@@ -734,7 +726,6 @@ const {
   readMeta,
   readyTickets,
   releaseLock,
-  reopenScopePausedDispatch,
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyCommand,
@@ -836,7 +827,6 @@ const {
   boardConfig,
   boundedExcerptForSubmission: (...args: any[]) => boundedExcerpt(...args),
   claimReclaimable,
-  clearScopeRequestMarker,
   commitScope,
   completionTreeCheck,
   coerceStatus,
@@ -1373,32 +1363,6 @@ function clearOracleMarker(ticket?: any) {
   return true;
 }
 
-function scopeRequestWorkInHand(slug?: any, ticket?: any) {
-  if (!ticket?.scopeRequest) return null;
-  const checkpoint = ticket.checkpoint;
-  if (checkpoint) return { commit: checkpoint.commit || null, source: 'checkpoint' };
-  const submission = ticket.submission;
-  if (submission?.commit) return { commit: submission.commit, source: 'submission' };
-
-  const delta = dispatchDelta(slug, ticket);
-  if (!delta.ok) return null;
-  const declaredFiles = Array.isArray(ticket.dispatch?.declaredFiles)
-    ? ticket.dispatch.declaredFiles
-    : normalizeFiles(ticket.files);
-  const pending = commitScope.scopedWorkPending(delta.workspace.root, declaredFiles, { base: delta.workspace.base });
-  if (!pending.ok || !pending.committed.length) return null;
-  try {
-    const commit = execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
-      cwd: delta.workspace.root,
-      encoding: 'utf8',
-      windowsHide: true,
-    }).trim();
-    return { commit, source: 'dispatch_delta' };
-  } catch (_: any) {
-    return { commit: null, source: 'dispatch_delta' };
-  }
-}
-
 // Release a claim. Only the owner (or a stale claim) may release unless
 // opts.force; opts.status optionally moves the ticket at the same time.
 function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -1569,30 +1533,14 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         };
       }
     }
-    if (!opts.requireReleaseVerdict) {
-      const workInHand = scopeRequestWorkInHand(slug, t);
-      if (workInHand) {
-        const commit = workInHand.commit ? ` at commit ${workInHand.commit}` : '';
-        return {
-          ok: false,
-          reason: 'scope_work_pending',
-          message: `${t.ref} cannot release while scope approval remains pending and it has work in hand${commit}. Checkpoint and hold with \`checkpoint\`; a scope timeout is a wait, not a release.`,
-          ticket: t,
-          commit: workInHand.commit,
-        };
-      }
-    }
     const now = new Date().toISOString();
     const previousStatus = t.status;
-    if (resumableScopePause(t)) captureScopePauseRecovery(slug, t);
     let comment = null;
     if (releaseComment) {
       if (!Array.isArray(t.comments)) t.comments = [];
       comment = createComment(releaseComment, now);
       t.comments.push(comment);
     }
-    clearScopeRequestMarker(t);
-    t.scopeRequest = null;
     if (oracleRequested) t.oracle = oracleMarker(dispatch, opts, now);
     t.claim = null;
     // Provenance for a claim taken away from its holder rather than handed back,
@@ -1835,7 +1783,7 @@ function closeTicketForGrooming(slug?: any, idOrRef?: any, opts?: any) {
  * ------------------------------------------------------------------ */
 
 const { sweepStaleDispatches, sweepStaleClaims } = createSweeps({
-  addComment, claimAbandonMs, claimIdleMs, claimReleaseNote, claimReleaseVerdict, dispatchState, expiredPreparedDispatch, getTicket, listProjects, listTickets, preparedDispatchTtlMs, putTicket, releaseTicket, setDispatchTerminal, stampDispatchEvent, withTicketLock,
+  addComment, claimAbandonMs, claimIdleMs, claimReleaseNote, claimReleaseVerdict, dispatchState, expiredPreparedDispatch, getTicket, listProjects, listTickets, migrateLegacyScopeRequest, preparedDispatchTtlMs, putTicket, releaseTicket, setDispatchTerminal, stampDispatchEvent, withTicketLock,
 });
 
 // True when a ticket may be handed to a worker running as tier `want`: either the
@@ -2228,10 +2176,8 @@ module.exports = {
   normalizeFiles,
   scopeExpansionFiles,
   scopeExpansionCommand,
-  pendingScopeApprovalWarning,
   requestScope,
-  waitForScopeResolution,
-  denyScopeRequest,
+  migrateLegacyScopeRequest,
   normalizeContracts,
   contractCollisionReasons,
   STORY_PALETTE,
