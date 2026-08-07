@@ -517,6 +517,25 @@ function ticketWorktreeSetup(ticket?: any, slug?: any) {
   return config && config.worktreeSetup ? config.worktreeSetup : null;
 }
 
+function ticketContinuationPacket(ticket?: any) {
+  const continuation = ticket?.dispatch?.continuation;
+  if (continuation?.mode === 'checkpoint_replay' && Array.isArray(continuation.commits) && continuation.commits.length) {
+    const branch = continuation.sourceBranch || '(detached HEAD)';
+    return [
+      'Continuation handoff:',
+      `The previous executor released this same ticket from worktree ${continuation.sourceWorktree}.`,
+      `Previous branch: ${branch}`,
+      `Checkpoint commit: ${continuation.commit}`,
+      'Claude Code Agent spawns cannot attach a new agent to an existing linked worktree, so this dispatch carries the released commit range into its fresh isolated worktree.',
+      `After claiming and before any other work, run \`git cherry-pick ${continuation.commits.join(' ')}\`.`,
+      'If the cherry-pick fails, stop and report the failure. Do not rediscover or rewrite the checkpointed work.',
+    ].join('\n');
+  }
+  const fallback = ticket?.dispatch?.continuationFallback;
+  if (!fallback?.reason) return null;
+  return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree. ${fallback.sourceWorktree ? `Previous worktree: ${fallback.sourceWorktree}.` : ''}`.trim();
+}
+
 function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   const dispatch = ticket?.dispatch;
   const root = String(projectPath || '').trim();
@@ -716,6 +735,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
+  const continuation = ticketContinuationPacket(ticket);
   const experimentLog = experimentLogPacket(ticket, slug);
   const planDocument = planDocumentPacket(ticket, slug);
   const contract = storyContractPacket(ticket, slug);
@@ -742,6 +762,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
     'Billable resources: when this work creates a cloud pod, VM, or other billable external resource, comment its id on the ticket immediately and terminate it before every stop, including error paths.',
     ...(ticket.highStakes ? ['High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration.'] : []),
     ...(worktreeIdentity ? [worktreeIdentity] : []),
+    ...(continuation ? [continuation] : []),
     ...(worktreeSync ? [worktreeSync] : []),
     ...(worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : []),
     ...(ticketIsolationContract(ticket, project) || []),

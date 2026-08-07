@@ -613,6 +613,14 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     if (quantitativePremise) warnings.push(`Dispatch warning: ${quantitativePremise.replace("Planning-depth warning: ", "")}`);
     const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
     if (worktreeWarning) warnings.push(worktreeWarning);
+    const continuation = dispatchState(ticket)?.continuation;
+    if (continuation?.mode === "checkpoint_replay") {
+      warnings.push(`Continuation checkpoint carried from ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing replays it before work.`);
+    }
+    const continuationFallback = dispatchState(ticket)?.continuationFallback;
+    if (continuationFallback?.reason) {
+      warnings.push(`Continuation fallback: previous released worktree was not carried (${String(continuationFallback.reason).replace(/_/g, " ")}); dispatching a fresh worktree.`);
+    }
     const categoryId = ticket && (ticket.categoryId || ticket.category && ticket.category.id);
     if (/^(?:coding(?:\.|$)|debugging$)/.test(String(categoryId || "")) && !String(ticket.executorVerify || "").trim()) {
       warnings.push("Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.");

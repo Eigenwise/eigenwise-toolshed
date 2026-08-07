@@ -142,6 +142,25 @@ test('worktree sweep matches a submitted 8.3 alias', { skip: process.platform !=
   }
 });
 
+test('continuation source worktrees stay protected until their ticket is final', async () => {
+  const worktree = agentWorktree(`continuation-source-${Date.now()}`);
+  const ticket = {
+    ref: 'SQ-CONTINUATION',
+    status: 'todo',
+    dispatch: { continuation: { sourceWorktree: worktree } },
+  };
+  try {
+    const active = await worktrees.classifyWorktree(PROJECT, [ticket], { worktree }, path.join(PROJECT, 'current'), 0, 'origin/main');
+    assert.equal(active.reason, 'active_ticket');
+    ticket.status = 'done';
+    const finished = await worktrees.classifyWorktree(PROJECT, [ticket], { worktree }, path.join(PROJECT, 'current'), 0, 'origin/main');
+    assert.equal(finished.reason, 'ticket_done');
+    assert.equal(finished.action, 'remove');
+  } finally {
+    git(['worktree', 'remove', '--force', worktree]);
+  }
+});
+
 test('worktree sweep accepts an 8.3 alias in the repository root', { skip: process.platform !== 'win32' }, async (context: any) => {
   const worktree = agentWorktree('8dot3-sweep');
   try {

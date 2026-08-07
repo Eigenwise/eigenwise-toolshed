@@ -238,6 +238,9 @@ function ticketForWorktree(tickets: any[], entry: any): any | null {
   const submitted = tickets.find((ticket) => ticket.submission && ticket.submission.worktree
     && canonicalPath(ticket.submission.worktree) === worktree);
   if (submitted) return submitted;
+  const continued = tickets.find((ticket) => ticket.dispatch?.continuation?.sourceWorktree
+    && canonicalPath(ticket.dispatch.continuation.sourceWorktree) === worktree);
+  if (continued) return continued;
   const agentId = String(path.basename(entry.worktree)).replace(/^agent-/, '');
   const dispatched = tickets.find((ticket) => String(ticket.dispatch?.agentId || '') === agentId);
   if (dispatched) return dispatched;
