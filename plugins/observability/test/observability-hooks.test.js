@@ -10,6 +10,7 @@ const test = require('node:test');
 const { normalizeObservation } = require('../lib/observability/ingest.js');
 const { drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
+const { canonicalPath } = require('../lib/observability/path-identity.js');
 const { buildObservation, projectMetadata, repositoryRoot, spool, EVENT_MAP } = require('../hooks/observability.js');
 const { buildStatuslineObservations } = require('../bin/statusline.js');
 
@@ -106,12 +107,32 @@ test('every working directory inside one repository reports as that repository',
   const nested = path.join(root, 'apps', 'gui');
   fs.mkdirSync(nested, { recursive: true });
 
+  const alias = path.join(path.dirname(root), `${path.basename(root)}-alias`);
+  fs.symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => fs.rmSync(alias, { recursive: true, force: true }));
+
   assert.equal(repositoryRoot(nested), root);
   assert.deepEqual(projectMetadata(nested), projectMetadata(root));
+  assert.deepEqual(projectMetadata(alias), projectMetadata(root));
   assert.equal(projectMetadata(nested).project_name, 'sample-repo');
-  // A directory that is its own repository root keeps the identity it had before
-  // identity moved to the repository, so no registered project loses its dashboard.
-  assert.equal(projectMetadata(root).project_id, sha256(root));
+  assert.equal(projectMetadata(root).project_id, sha256(canonicalPath(root)));
+});
+
+test('canonical paths preserve missing segments after resolving their existing ancestor', (t) => {
+  const root = temporaryTree(t, 'path-identity');
+  fs.mkdirSync(root, { recursive: true });
+  const alias = path.join(path.dirname(root), `${path.basename(root)}-alias`);
+  fs.symlinkSync(root, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => fs.rmSync(alias, { recursive: true, force: true }));
+
+  assert.equal(
+    canonicalPath(path.join(alias, 'missing', 'child')),
+    canonicalPath(path.join(root, 'missing', 'child')),
+  );
+  assert.equal(
+    canonicalPath(path.join(root, 'Missing', 'Child'), 'win32'),
+    canonicalPath(path.join(root, 'missing', 'child'), 'win32'),
+  );
 });
 
 test('a linked worktree or submodule reports as its main worktree, never as agent-<hash>', (t) => {
@@ -138,12 +159,12 @@ test('project identity falls back to the directory itself outside a readable rep
   const loose = temporaryTree(t, 'loose-project');
   fs.mkdirSync(loose, { recursive: true });
   assert.equal(repositoryRoot(loose), null);
-  assert.deepEqual(projectMetadata(loose), { project_id: sha256(loose), project_name: 'loose-project' });
+  assert.deepEqual(projectMetadata(loose), { project_id: sha256(canonicalPath(loose)), project_name: 'loose-project' });
 
   const broken = temporaryTree(t, 'broken-repo');
   fs.mkdirSync(broken, { recursive: true });
   fs.writeFileSync(path.join(broken, '.git'), 'this is not a gitdir pointer\n');
-  assert.deepEqual(projectMetadata(broken), { project_id: sha256(broken), project_name: 'broken-repo' });
+  assert.deepEqual(projectMetadata(broken), { project_id: sha256(canonicalPath(broken)), project_name: 'broken-repo' });
 
   assert.equal(repositoryRoot(path.join(broken, 'never', 'created')), null);
   assert.deepEqual(projectMetadata(''), {});

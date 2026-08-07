@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { canonicalPath, resolvedPath } = require('../lib/observability/path-identity.js');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
@@ -75,23 +76,27 @@ function walkToRepositoryRoot(start) {
 function repositoryRoot(cwd) {
   if (typeof cwd !== 'string' || cwd.length === 0) return null;
   let start = null;
-  try { start = path.resolve(cwd); } catch { return null; }
-  if (REPOSITORY_ROOTS.has(start)) return REPOSITORY_ROOTS.get(start);
+  let cacheKey = null;
+  try {
+    start = resolvedPath(cwd);
+    cacheKey = canonicalPath(start);
+  } catch { return null; }
+  if (REPOSITORY_ROOTS.has(cacheKey)) return REPOSITORY_ROOTS.get(cacheKey);
   let root = null;
   try { root = walkToRepositoryRoot(start); } catch { root = null; }
   if (REPOSITORY_ROOTS.size >= REPOSITORY_ROOT_CAP) REPOSITORY_ROOTS.clear();
-  REPOSITORY_ROOTS.set(start, root);
+  REPOSITORY_ROOTS.set(cacheKey, root);
   return root;
 }
 
 function projectMetadata(cwd) {
   if (typeof cwd !== 'string' || cwd.length === 0) return {};
-  const root = repositoryRoot(cwd) || cwd;
+  const root = repositoryRoot(cwd) || resolvedPath(cwd);
   const basename = root.replace(/[\\/]+$/, '').split(/[\\/]/).pop();
   const projectName = basename.replace(/[^A-Za-z0-9_.:@-]/g, '-').slice(0, 64);
   if (!projectName || !/^[A-Za-z0-9]/.test(projectName)) return {};
   return {
-    project_id: crypto.createHash('sha256').update(root).digest('hex'),
+    project_id: crypto.createHash('sha256').update(canonicalPath(root)).digest('hex'),
     project_name: projectName,
   };
 }

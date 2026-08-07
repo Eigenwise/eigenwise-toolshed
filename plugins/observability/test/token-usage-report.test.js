@@ -126,6 +126,22 @@ function seedSidequestBoard(t) {
   };
 }
 
+test('finds a board project through a canonical path alias', (t) => {
+  const fixture = seedSidequestBoard(t);
+  const alias = path.join(path.dirname(fixture.projectPath), `${path.basename(fixture.projectPath)}-alias`);
+  fs.symlinkSync(fixture.projectPath, alias, process.platform === 'win32' ? 'junction' : 'dir');
+  t.after(() => fs.rmSync(alias, { recursive: true, force: true }));
+
+  const database = new DatabaseSync(path.join(fixture.sidequestHome, 'sidequest.db'));
+  database.prepare('UPDATE projects SET data = ? WHERE slug = ?')
+    .run(JSON.stringify({ path: alias, name: 'Board cost fixture' }), 'board-cost-fixture');
+  database.close();
+
+  const board = readSidequestBoard({ sidequestHome: fixture.sidequestHome, projectPath: fixture.projectPath });
+  assert.equal(board.available, true);
+  assert.equal(board.project_slug, 'board-cost-fixture');
+});
+
 test('builds a quality-labeled report from resolved SQLite views', (t) => {
   const store = temporaryStore(t);
   ingest(store, {

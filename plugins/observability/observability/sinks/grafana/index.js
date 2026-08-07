@@ -2,6 +2,7 @@
 
 const path = require('node:path');
 const { spawnSync } = require('node:child_process');
+const { canonicalPath } = require('../../../lib/observability/path-identity.js');
 
 const ID = 'grafana-lgtm';
 const IMAGE = 'grafana/otel-lgtm:0.11.0';
@@ -97,11 +98,11 @@ function bindingMatches(bindings, containerPort, hostPort) {
 }
 
 function dashboardMountMatches(mounts, dashboardDir) {
-  const expectedSource = path.resolve(dashboardDir);
+  const expectedSource = canonicalPath(dashboardDir);
   const target = '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards';
   return Array.isArray(mounts) && mounts.some((mount) => mount
     && mount.Destination === target && typeof mount.Source === 'string'
-    && path.resolve(mount.Source) === expectedSource);
+    && canonicalPath(mount.Source) === expectedSource);
 }
 
 function setup(config = {}, context = {}) {
