@@ -2583,6 +2583,49 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
   }
 });
 
+test('pre-tool hook: a prepared Codex route requires its marker and executor class', () => {
+  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-route-class-'));
+  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }],
+  }));
+  const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
+  try {
+    const ticket = fixtureTicket('SQ-1494 prepared Codex route', 'codex-gpt-5-6-terra', 'high');
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `route-class-${++sqSeq}` });
+    const projectPath = store.readMeta(slug).path;
+    const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
+    const marker = '[sidequest-route model=gpt-5.6-terra effort=high]';
+    const cases = [
+      { type: 'sidequest-exec-dispatch', acceptsMarker: true },
+      { type: 'sidequest-exec-dispatch-readonly', acceptsMarker: true },
+      { type: 'sidequest-exec-high', acceptsMarker: false },
+      { type: 'sidequest-exec-readonly-high', acceptsMarker: false },
+      { type: 'unrecognised-executor', acceptsMarker: false },
+    ];
+    for (const executorCase of cases) {
+      const withoutMarker = runForceBypassWithEnv({ subagent_type: executorCase.type, prompt }, { SIDEQUEST_DISCOVERY_DIRS: catalog });
+      assert.equal(withoutMarker.hookSpecificOutput.permissionDecision, 'deny', `${executorCase.type} must not run without the route marker`);
+      assert.match(withoutMarker.hookSpecificOutput.permissionDecisionReason, /missing the route marker/);
+
+      const withMarker = runForceBypassWithEnv({ subagent_type: executorCase.type, prompt: `${prompt}\n${marker}` }, { SIDEQUEST_DISCOVERY_DIRS: catalog });
+      if (executorCase.acceptsMarker) {
+        assert.notEqual(withMarker.hookSpecificOutput.permissionDecision, 'deny', `${executorCase.type} should carry the prepared Codex route`);
+      } else {
+        assert.equal(withMarker.hookSpecificOutput.permissionDecision, 'deny', `${executorCase.type} must not replace a Codex dispatch executor`);
+        assert.match(withMarker.hookSpecificOutput.permissionDecisionReason, /not a Codex dispatch executor/);
+      }
+    }
+  } finally {
+    if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
+    else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
+  }
+});
+
 test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject integrity drift', () => {
   const ticket = addEffortTicket('correct prepared dispatch spawn drift', 'high');
   const sessionId = `description-${++sqSeq}`;

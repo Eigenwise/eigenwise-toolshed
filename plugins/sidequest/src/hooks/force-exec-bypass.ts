@@ -333,6 +333,10 @@ function dispatchRouteMarkers(input: HookInput): Array<{ model: string; effort: 
   return [...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => ({ model: match[1] || '', effort: match[2] || '' }));
 }
 
+function isPreparedCodexRoute(route: PreparedDispatchSpawn['route'] | undefined): boolean {
+  return Boolean(route?.marker || route?.model.startsWith('codex-'));
+}
+
 function preparedDispatchValidation(input: HookInput): PreparedDispatchValidation {
   const toolInput = toolInputOf(input);
   if (!toolInput) return { status: 'none' };
@@ -657,6 +661,30 @@ function main(): void {
     return;
   }
   if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
+  const dispatchValidation = preparedDispatchValidation(input);
+  if (dispatchValidation.status === 'stale') {
+    writeDeny('PreToolUse', 'sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.');
+    return;
+  }
+  const preparedSpawn = dispatchValidation.spawn;
+  const preparedRoute = preparedSpawn?.route;
+  const markers = dispatchRouteMarkers(input);
+  const routeModels = [...new Set(markers.map((marker) => marker.model))];
+  if (isPreparedCodexRoute(preparedRoute)) {
+    const route = preparedRoute;
+    if (!routeModels.length) {
+      writeDeny('PreToolUse', 'sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.');
+      return;
+    }
+    if (markers.some((marker) => marker.model !== (route?.marker ?? route?.model) || marker.effort !== route?.effort)) {
+      writeDeny('PreToolUse', `sidequest: ticket resolved route is ${route?.model} / ${route?.effort}. A model cannot be overridden at spawn time. Set this ticket's route override before dispatching, then re-run dispatch and pass the returned spawn unchanged.`);
+      return;
+    }
+    if (classification.kind !== 'codex_dispatch' && classification.kind !== 'read_only_codex_dispatch') {
+      writeDeny('PreToolUse', `sidequest: ticket resolved route is ${route?.model} / ${route?.effort}, but ${type} is not a Codex dispatch executor. Re-run dispatch and pass the returned spawn unchanged.`);
+      return;
+    }
+  }
   if (!isCurrentExecutor(classification)) {
     writeDeny('PreToolUse', agentDenyReason(type, classification));
     return;
@@ -679,12 +707,6 @@ function main(): void {
     ...(isSubagentCaller(input) ? { run_in_background: true } : {}),
   };
   if (isSubagentCaller(input)) delete updatedInput.isolation;
-  const dispatchValidation = preparedDispatchValidation(input);
-  if (dispatchValidation.status === 'stale') {
-    writeDeny('PreToolUse', 'sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.');
-    return;
-  }
-  const preparedSpawn = dispatchValidation.spawn;
   if (preparedSpawn && briefingCommandDrifted(toolInput.prompt, preparedSpawn)) {
     writeDeny('PreToolUse', 'sidequest: dispatch briefing command must match the prepared spawn. Re-run dispatch and pass its spawn unchanged.');
     return;
@@ -703,19 +725,11 @@ function main(): void {
   const preparedCorrection = correctionMessage(corrections);
 
   if (classification.kind === 'codex_dispatch' || classification.kind === 'read_only_codex_dispatch') {
-    const markers = dispatchRouteMarkers(input);
-    const routeModels = [...new Set(markers.map((marker) => marker.model))];
-    // The prompt marker carries the gateway model form, so compare it against
-    // route.marker (recorded at dispatch-prepare since 3.6.7), not the board
-    // slug in route.model — those never match for codex routes. Falling back
-    // to route.model keeps pre-3.6.7 prepared dispatches denied into the
-    // "re-run dispatch" path, which records the marker.
-    if (preparedSpawn?.route && markers.some((marker) =>
-      marker.model !== (preparedSpawn.route?.marker ?? preparedSpawn.route?.model)
-        || marker.effort !== preparedSpawn.route?.effort)) {
-      const route = preparedSpawn.route;
-      const resolvedRoute = route ? `${route.model} / ${route.effort}` : 'the prepared ticket route';
-      writeDeny('PreToolUse', `sidequest: ticket resolved route is ${resolvedRoute}. A model cannot be overridden at spawn time. Set this ticket's route override before dispatching, then re-run dispatch and pass the returned spawn unchanged.`);
+    if (preparedRoute && markers.some((marker) =>
+      marker.model !== (preparedRoute.marker ?? preparedRoute.model)
+        || marker.effort !== preparedRoute.effort)) {
+      const route = preparedRoute;
+      writeDeny('PreToolUse', `sidequest: ticket resolved route is ${route.model} / ${route.effort}. A model cannot be overridden at spawn time. Set this ticket's route override before dispatching, then re-run dispatch and pass the returned spawn unchanged.`);
       return;
     }
     if (!routeModels.length) {
