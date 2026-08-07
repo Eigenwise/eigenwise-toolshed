@@ -186,7 +186,7 @@ ${evidence.outputTail}`;
       }
       return null;
     }
-    const liveAgent = Boolean(dispatch && !dispatch.terminalAt);
+    const liveAgent = Boolean(dispatch && !dispatch.terminalAt && (dispatch.boundAt || dispatch.agentId));
     if (!liveAgent && idleMs > claimIdleMs()) {
       return { kind: "idle", idleMs, reason: "no board activity from the claim holder and no live executor associated" };
     }

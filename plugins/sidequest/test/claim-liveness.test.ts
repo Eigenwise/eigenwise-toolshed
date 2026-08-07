@@ -605,9 +605,39 @@ test('the idle backstop only applies when no executor is associated', () => {
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, hand.ref)).kind, 'idle');
 
   const routed = addRouted('routed executor outlives the idle window');
-  claimRouted(routed, 'patient-executor');
+  const sessionId = 'session-bound-idle-window';
+  const agentId = 'bound-idle-window-agent';
+  const prepared = store.prepareDispatch(slug, routed.ref, { sharedTree: true, sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, routed.ref, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: agentId,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
+  assert.equal(store.claimTicket(slug, routed.ref, 'patient-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId,
+  }).ok, true);
   backdateClaim(routed.ref, 2 * HOUR);
-  assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a live executor is not idle just because it is quiet');
+  assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a bound executor is not idle just because it is quiet');
+});
+
+test('an unbound claimed dispatch reports its missing identity and releases through the inactivity backstop', () => {
+  const ticket = addRouted('unbound dispatch claim');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-unbound-dispatch' });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'unbound-executor', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: 'session-unbound-dispatch',
+  }).ok, true);
+
+  const claimed = store.getTicket(slug, ticket.ref);
+  assert.equal(claimed.dispatch.agentId, undefined);
+  assert.equal(claimed.dispatch.agentName, undefined);
+  assert.equal(claimed.dispatch.boundAt, null);
+  const pulse = store.pulsePayload(slug, ticket.ref);
+  assert.equal(pulse.liveness, 'unknown');
+  assert.match(pulse.livenessEvidence, /before Sidequest recorded a runtime identity/);
+
+  backdateClaim(ticket.ref, 2 * HOUR);
+  assert.equal(store.claimReleaseVerdict(store.getTicket(slug, ticket.ref)).kind, 'idle');
+  const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
+  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
 });
 
 test('an unbound isolated dispatch can still file a scope request', () => {
