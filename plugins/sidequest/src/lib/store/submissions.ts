@@ -240,7 +240,14 @@ function submissionGitRef(ticket?: any) {
 }
 
 function integrationGit(repo: string, args: string[]) {
-  return execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }).trim();
+  return execFileSync('git', ['-c', 'core.editor=true', ...args], {
+    cwd: repo,
+    encoding: 'utf8',
+    env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+    timeout: 120_000,
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }).trim();
 }
 
 function integrationGitError(error: any) {
