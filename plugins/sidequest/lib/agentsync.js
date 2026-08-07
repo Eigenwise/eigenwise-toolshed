@@ -487,18 +487,11 @@ function linkedPlanSuffix(link, slug) {
   const plan = link.ref ? store.ticketPlanInfo(slug, link.ref) : null;
   return plan ? ` (plan: ${path.resolve(plan.path)})` : "";
 }
-function filteredVerifyCommand(verify) {
+function capturedVerifyCommand(verify) {
   const command = String(verify || "").trim();
   if (!command) return "";
-  return [
-    'log="$(mktemp "${TMPDIR:-/tmp}/sidequest-verify.XXXXXX.log")"',
-    `(${command}) > "$log" 2>&1`,
-    "status=$?",
-    `printf 'exit=%s\\n' "$status"`,
-    `grep -nE '^not ok|^# (fail|pass)' "$log" | head -40`,
-    `printf 'details=%s\\n' "$log"`,
-    'exit "$status"'
-  ].join("\n");
+  const encoded = Buffer.from(command, "utf8").toString("base64");
+  return `node plugins/sidequest/lib/verify-capture.js --base64 ${encoded}`;
 }
 function dispatchUncertaintyPacket(ticket, slug) {
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
@@ -570,12 +563,12 @@ ${findingCheckpoints}`] : [],
 ${ticket.executorAnchors || "(No anchors were recorded.)"}`,
     `Verify command:
 ${ticket.executorVerify || "(No exact verify command was recorded.)"}`,
-    ...ticket.executorVerify ? [`Verify output discipline: run the exact command through this Bash wrapper so the suite writes to a temporary file and only its exit code, TAP counts, and log path enter the transcript:
+    ...ticket.executorVerify ? [`Verify output discipline: run this single Node command in a Bash tool. It captures the declared command without giving Windows cmd any wrapper syntax to parse:
 \`\`\`bash
-${filteredVerifyCommand(ticket.executorVerify)}
+${capturedVerifyCommand(ticket.executorVerify)}
 \`\`\`
-A passing suite's full output carries no information. Its exit code and summary counts are the signal. On failure, read only the relevant line ranges from the printed log path around the reported \`not ok\` lines. Iterate with the narrowest documented test file or consumer check. The declared command verifies this worktree's changed surface; the integrator owns the merged-tree full gate, so do not rerun it here unless the ticket is high-stakes or explicitly declares it.`] : [],
-    ...ticket.executorVerify ? ["Verify liveness: immediately before running the exact verify command, add a board comment whose body is `[sidequest:verify-start] <command>`. Immediately after that command exits, including on failure, add `[sidequest:verify-complete]`. If the declared write scope intentionally has no change, use `[sidequest:verify-complete] no-op` instead. These paired markers keep an in-flight long verify from being reclaimed."] : [],
+It writes suite output to a temporary file and prints only \`verify=<passed|failed-suite|could-not-run>\`, the exit code, and the log path. \`failed-suite\` means the command ran and its suite failed. \`could-not-run\` means the capture shell could not execute or report the command, so do not call the suite red: post that status and release with the log path and direct execution as the next step. The declared command verifies this worktree's changed surface; the integrator owns the merged-tree full gate, so do not rerun it here unless the ticket is high-stakes or explicitly declares it.`] : [],
+    ...ticket.executorVerify ? ["Verify liveness: immediately before running the exact verify command, add a board comment whose body is `[sidequest:verify-start] <command>`. Immediately after it exits, including on failure, post `[sidequest:verify-complete] passed`, `[sidequest:verify-complete] failed-suite`, or `[sidequest:verify-complete] could-not-run`. If the declared write scope intentionally has no change, use `[sidequest:verify-complete] no-op` instead. A could-not-run outcome requires a release, not a red-suite report. These paired markers keep an in-flight long verify from being reclaimed."] : [],
     ...ticket.executorVerify ? ["Verify completion discipline: run the declared verify command in the foreground with a timeout sized to the command, up to the tool maximum, never backgrounded. Kill any earlier backgrounded verify before starting it so two builds never race in one tree. Do not end the turn between the suite finishing and submission: add the verify-complete marker, run the negative control, submit, and write the final report in that same turn."] : [],
     "Billable resources: when this work creates a cloud pod, VM, or other billable external resource, comment its id on the ticket immediately and terminate it before every stop, including error paths.",
     ...ticket.highStakes ? ["High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."] : [],
