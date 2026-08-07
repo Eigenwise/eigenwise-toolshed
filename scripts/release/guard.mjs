@@ -3,9 +3,9 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { readRepoChangelog, releasedRefs, REPO_CHANGELOG } from './lib/changelog.mjs';
+import { readRepoChangelog, releasedFragmentFingerprints, REPO_CHANGELOG } from './lib/changelog.mjs';
 import { createGit } from './lib/git.mjs';
-import { fragmentFile, readFragments } from './lib/fragments.mjs';
+import { fragmentFile, fragmentFingerprint, readFragments } from './lib/fragments.mjs';
 import { checkManifest, MARKETPLACE_PATH, readManifest } from './lib/manifests.mjs';
 import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList } from './lib/cli.mjs';
@@ -65,10 +65,10 @@ export function runGuard(repoRoot, {
   const { fragments, errors } = readFragments(source, { knownPlugins: manifest.plugins });
   for (const error of errors) fail(error.message);
 
-  const released = releasedRefs(readRepoChangelog(source));
+  const released = releasedFragmentFingerprints(readRepoChangelog(source));
   for (const fragment of fragments) {
-    if (released.has(fragment.ref)) {
-      fail(`${fragmentFile(fragment.ref)} is still queued but ${fragment.ref} already has a ${REPO_CHANGELOG} entry; a cut would release it twice`);
+    if (released.has(fragmentFingerprint(fragment))) {
+      fail(`${fragmentFile(fragment.ref)} is still queued even though this exact fragment already has a ${REPO_CHANGELOG} entry; its note is stuck and will never ship`);
     }
   }
 

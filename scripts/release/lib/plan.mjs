@@ -1,4 +1,4 @@
-import { compareRefs } from './fragments.mjs';
+import { compareRefs, fragmentFingerprint } from './fragments.mjs';
 import { bumpVersion, maxLevel } from './semver.mjs';
 
 export const MODES = ['normal', 'hotfix'];
@@ -22,7 +22,9 @@ function selectFragments({ fragments, mode, tickets, released, force }) {
     for (const ref of tickets) {
       const fragment = byRef.get(ref);
       if (!fragment) throw new PlanError(`no fragment .release/unreleased/${ref}.md, so ${ref} cannot be hotfixed`);
-      if (released.has(ref)) throw new PlanError(`${ref} is already in CHANGELOG.md; it has been released`);
+      if (released.has(fragmentFingerprint(fragment))) {
+        throw new PlanError(`${ref} has already released this exact fragment; its queued copy is stuck and will never ship`);
+      }
       if (fragment.hold && !force) throw new PlanError(`${ref} is marked "hold: true"; pass --force to release it anyway`);
       selected.push(fragment);
     }
@@ -35,8 +37,9 @@ function selectFragments({ fragments, mode, tickets, released, force }) {
   }
 
   for (const fragment of fragments) {
-    if (released.has(fragment.ref)) skipped.push({ ref: fragment.ref, reason: 'already released (present in CHANGELOG.md)' });
-    else if (fragment.hold) skipped.push({ ref: fragment.ref, reason: 'held by "hold: true"' });
+    if (released.has(fragmentFingerprint(fragment))) {
+      skipped.push({ ref: fragment.ref, reason: 'already released (same fragment content is in CHANGELOG.md; this queued copy is stuck and its note will never ship)' });
+    } else if (fragment.hold) skipped.push({ ref: fragment.ref, reason: 'held by "hold: true"' });
     else selected.push(fragment);
   }
   return { selected, skipped };

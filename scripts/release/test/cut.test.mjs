@@ -111,9 +111,9 @@ test('rerunning the same cut releases nothing', async (t) => {
   assert.equal(context.read('CHANGELOG.md'), before);
 });
 
-test('a queued fragment for an already-released ref cannot ship twice', async (t) => {
+test('a queued copy of an already-released fragment cannot ship twice', async (t) => {
   const context = setup(t, {
-    changelog: '# Changelog\n\n## v3.207.0 (2026-07-24)\n\n### sidequest 3.6.16 → 3.6.17\n\n#### Fixes\n- Already out (SQ-1)\n',
+    changelog: '# Changelog\n\n## v3.207.0 (2026-07-24)\n\n### sidequest 3.6.16 → 3.6.17\n\n#### Fixes\n- SQ-1 title (SQ-1)\n',
   });
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
   context.commit('integrate');

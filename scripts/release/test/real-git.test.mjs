@@ -208,7 +208,7 @@ test('--sha plans the pinned commit, not the checkout it runs from', async (t) =
 
   repo.onBranch('dev');
   repo.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
-  repo.writeFragment('SQ-9', { plugins: ['workbench'], bump: 'major' });
+  repo.writeFragment('SQ-9', { title: 'Shipped already', plugins: ['workbench'], bump: 'major' });
   const devSha = repo.commit('integrate on dev');
 
   repo.onBranch('main');
@@ -219,7 +219,7 @@ test('--sha plans the pinned commit, not the checkout it runs from', async (t) =
   assert.equal(dryRun.status, 'dry-run');
   assert.equal(dryRun.plan.sha, devSha);
   assert.deepEqual(dryRun.plan.selected.map((fragment) => fragment.ref), ['SQ-1'], 'reads dev fragments from the pin');
-  assert.deepEqual(dryRun.plan.skipped, [{ ref: 'SQ-9', reason: 'already released (present in CHANGELOG.md)' }]);
+  assert.deepEqual(dryRun.plan.skipped, [{ ref: 'SQ-9', reason: 'already released (same fragment content is in CHANGELOG.md; this queued copy is stuck and its note will never ship)' }]);
   assert.deepEqual(dryRun.plan.plugins.map((plugin) => `${plugin.name} ${plugin.to}`), ['sidequest 3.7.0']);
 
   const real = await cut({ repoRoot: repo.root, sha: devSha, skipTests: true, log: () => {} });

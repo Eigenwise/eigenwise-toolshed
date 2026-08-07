@@ -4,9 +4,9 @@ import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { applyChangelogs, readRepoChangelog, releasedRefs, REPO_CHANGELOG } from './lib/changelog.mjs';
+import { applyChangelogs, readRepoChangelog, releasedFragmentFingerprints, REPO_CHANGELOG } from './lib/changelog.mjs';
 import { createGit } from './lib/git.mjs';
-import { fragmentFile, HOLD_FILE, isHeld, readFragments } from './lib/fragments.mjs';
+import { fragmentFile, fragmentFingerprint, HOLD_FILE, isHeld, readFragments } from './lib/fragments.mjs';
 import { applyVersions, checkManifest, readManifest } from './lib/manifests.mjs';
 import { resolveInRepo } from './lib/paths.mjs';
 import { buildPlan, formatPlan, planCommitMessage, planPushCommand, planRefspecs } from './lib/plan.mjs';
@@ -266,7 +266,7 @@ export async function cut(options = {}) {
   }
 
   const manifest = loadManifest(baseSource);
-  const released = releasedRefs(readRepoChangelog(baseSource));
+  const released = releasedFragmentFingerprints(readRepoChangelog(baseSource));
   const { fragments, errors } = readFragments(windowSource, { knownPlugins: manifest.plugins });
   if (errors.length > 0) throw new Error(`invalid release fragments:\n  ${errors.map((error) => error.message).join('\n  ')}`);
 
@@ -338,8 +338,8 @@ export async function cut(options = {}) {
       'Only a cut may write a version, so those commits must not be released this way.',
     );
   }
-  const releasedNow = releasedRefs(readRepoChangelog(disk));
-  const alreadyOut = plan.selected.filter((fragment) => releasedNow.has(fragment.ref));
+  const releasedNow = releasedFragmentFingerprints(readRepoChangelog(disk));
+  const alreadyOut = plan.selected.filter((fragment) => releasedNow.has(fragmentFingerprint(fragment)));
   if (alreadyOut.length > 0) {
     throw new Error(`${alreadyOut.map((fragment) => fragment.ref).join(', ')} became released while this cut was building; nothing was published`);
   }

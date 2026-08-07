@@ -2,7 +2,7 @@
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
-import { readRepoChangelog, releasedRefs } from './lib/changelog.mjs';
+import { readRepoChangelog, releasedFragmentFingerprints } from './lib/changelog.mjs';
 import { createGit } from './lib/git.mjs';
 import { buildPlan, formatPlan, planCommitMessage, planPushCommand } from './lib/plan.mjs';
 import { isHeld, readFragments } from './lib/fragments.mjs';
@@ -54,7 +54,7 @@ export function loadPlan(repoRoot, { mode = 'normal', tickets = null, sha = null
     manifest,
     mode,
     tickets,
-    released: releasedRefs(readRepoChangelog(source)),
+    released: releasedFragmentFingerprints(readRepoChangelog(source)),
     force,
     date: resolvedDate ?? today(),
     sha: pinned,
