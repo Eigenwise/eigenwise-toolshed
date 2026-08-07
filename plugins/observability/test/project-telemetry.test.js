@@ -29,7 +29,7 @@ function temporaryProject(t, name = 'telemetry-project') {
 }
 
 function temporaryRepository(t, name = 'sample-repo') {
-  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-repo-telemetry-')));
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-repo-telemetry-')));
   const root = path.join(directory, name);
   fs.mkdirSync(path.join(root, '.git'), { recursive: true });
   const projects = path.join(directory, 'claude-projects');

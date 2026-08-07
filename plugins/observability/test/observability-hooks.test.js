@@ -92,7 +92,7 @@ test('post-tool observations re-announce their project after an observer restart
 });
 
 function temporaryTree(t, name) {
-  const directory = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-repo-identity-')));
+  const directory = fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-repo-identity-')));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   return path.join(directory, name);
 }
