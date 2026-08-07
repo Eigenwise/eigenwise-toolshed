@@ -154,20 +154,24 @@ function localBranchName(ref) {
   const match = /^refs\/heads\/(.+)$/.exec(String(ref || ""));
   return match?.[1] || null;
 }
+function worktreePath(entry) {
+  return String(entry.path || entry.worktree);
+}
 function salvageRef(entry, suffix = "") {
-  return `refs/salvage/${path.basename(String(entry.worktree))}${suffix}`;
+  return `refs/salvage/${path.basename(worktreePath(entry))}${suffix}`;
 }
 async function createSalvageRef(repo, ref, revision) {
   const created = await git(repo, ["update-ref", ref, revision, "0000000000000000000000000000000000000000"]);
   if (!created.ok) throw new Error(created.stderr || `could not create salvage ref ${ref}`);
 }
 async function salvageWorktree(repo, entry) {
-  const head = await git(entry.worktree, ["rev-parse", "HEAD"]);
+  const worktree = worktreePath(entry);
+  const head = await git(worktree, ["rev-parse", "HEAD"]);
   if (!head.ok || !head.stdout) throw new Error(head.stderr || "could not resolve worktree HEAD");
   const ref = salvageRef(entry);
   await createSalvageRef(repo, ref, head.stdout);
   if (entry.clean) return { ref, uncommittedRef: null };
-  const stash = await git(entry.worktree, ["stash", "create"]);
+  const stash = await git(worktree, ["stash", "create"]);
   if (!stash.ok || !stash.stdout) throw new Error(stash.stderr || "could not capture uncommitted worktree changes");
   const uncommittedRef = salvageRef(entry, "-uncommitted");
   await createSalvageRef(repo, uncommittedRef, stash.stdout);
@@ -245,10 +249,10 @@ function skippedEntry(entry, ticket, reason, current) {
 }
 async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream, livePaths = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS) {
   const ticket = ticketForWorktree(tickets, entry);
-  const worktreePath = canonicalPath(entry.worktree);
-  const current = worktreePath === canonicalPath(currentPath);
+  const worktreePath2 = canonicalPath(entry.worktree);
+  const current = worktreePath2 === canonicalPath(currentPath);
   if (current) return skippedEntry(entry, ticket, "current_worktree", true);
-  if (livePaths.some((livePath) => worktreePath === canonicalPath(livePath))) return skippedEntry(entry, ticket, "live_session", false);
+  if (livePaths.some((livePath) => worktreePath2 === canonicalPath(livePath))) return skippedEntry(entry, ticket, "live_session", false);
   if (entry.locked) return skippedEntry(entry, ticket, "locked", false);
   if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
   if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, "live_claim", false);
@@ -259,6 +263,7 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
     reachableFrom(entry.worktree, "HEAD", upstream)
   ]);
   const clean = cleanResult.ok ? cleanResult.stdout === "" : false;
+  const untracked = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line.startsWith("?? "));
   const oldEnough = ageMs != null && ageMs >= minAgeMs;
   const oldEnoughToSalvage = ageMs != null && ageMs >= notIntegratedSalvageAgeMs;
   let action = "keep";
@@ -277,6 +282,8 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   } else if (patch.equivalent) {
     action = "remove";
     reason = "patch_equivalent";
+  } else if (oldEnoughToSalvage && untracked) {
+    reason = "unrecoverable_untracked";
   } else if (oldEnoughToSalvage) {
     action = "salvage";
     reason = "not_integrated_salvage";

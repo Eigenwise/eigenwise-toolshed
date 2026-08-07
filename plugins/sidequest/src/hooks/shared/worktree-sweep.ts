@@ -7,6 +7,7 @@ import { pluginRoot, runtimeModule } from './paths.js';
 
 const MAX_PROJECTS_PER_START = 3;
 const MAX_CANDIDATES_PER_PROJECT = 8;
+const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 const MAX_ORPHAN_SUBJECT_LENGTH = 120;
 
 type Project = { slug: string; name?: string; path: string };
@@ -19,6 +20,7 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (ref: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   integrationTarget: (slug: string) => { upstream: string; branch: string } | null;
+  boardConfig: (slug: string) => { notIntegratedSalvageAgeHours?: number } | null;
   worktreeGcTickets: () => any[];
   worktreeGcProjects: (currentSlug: string, limit: number) => Project[];
 }
@@ -30,11 +32,12 @@ interface Worktrees {
     livePaths: string[];
     integrationTarget: { upstream: string; branch: string };
     maxCandidates: number;
+    notIntegratedSalvageAgeMs: number;
   }) => Promise<{
     skipped?: string;
     failures?: Array<{ path: string | null; message: string; suppressed?: boolean }>;
-    orphanBranches?: Array<{ branch: string; action: string; reason: string; subject?: string }>;
-  }>;
+    salvaged?: Array<{ path: string; ref: string; recovery: string }>;
+    orphanBranches?: Array<{ branch: string; action: string; reason: string; subject?: string }>;  }>;
 }
 
 function stateFile(): string {
@@ -123,6 +126,10 @@ function orphanNotices(data: HookInput, project: Project, orphanBranches: Array<
   return kept.map((entry) => `sidequest: unintegrated orphan worktree branch ${entry.branch}: ${abbreviated(String(entry.subject || 'no commit subject'))}.`);
 }
 
+function salvageNotices(salvaged: Array<{ path: string; ref: string; recovery: string }>): string[] {
+  return salvaged.map((entry) => `sidequest: salvaged unintegrated worktree ${entry.path} at ${entry.ref}. Recover with ${entry.recovery}.`);
+}
+
 function missingIntegrationTarget(error: unknown): boolean {
   return /Configured integration ref .+ does not exist\./.test(String((error as Error)?.message || error));
 }
@@ -163,12 +170,14 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
     }
 
     try {
+      const config = store.boardConfig(project.slug);
       const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
         execute: true,
         currentPath: isCurrentProject ? currentPath : '',
         livePaths: activePaths,
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,
+        notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
       });
       if (!isCurrentProject) continue;
       if (result.skipped === 'repository_busy') {
@@ -179,6 +188,7 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
           notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || 'a git entry'}: ${failure.message}`);
         }
       }
+      notices.push(...salvageNotices(result.salvaged || []));
       notices.push(...orphanNotices(data, project, result.orphanBranches || []));
     } catch (error: any) {
       if (isCurrentProject) {

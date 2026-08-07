@@ -240,6 +240,7 @@ test('worktree sweep salvages an old unintegrated worktree before removing it', 
   try {
     const commit = makeCommit(worktree, 'salvage-old.txt');
     fs.appendFileSync(path.join(worktree, 'salvage-old.txt'), 'uncommitted recovery state\n');
+    assert.equal(git(['status', '--porcelain'], worktree), 'M salvage-old.txt');
     makeOld(worktree);
 
     const result = await worktrees.sweep(PROJECT, [], {
@@ -250,7 +251,8 @@ test('worktree sweep salvages an old unintegrated worktree before removing it', 
     });
 
     const entry = entryFor(result, worktree);
-    salvaged = result.salvaged.find((candidate: any) => candidate.path === worktree);
+    salvaged = result.salvaged.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+    assert.ok(salvaged);
     assert.equal(entry.reason, 'not_integrated_salvage');
     assert.equal(entry.action, 'salvage');
     assert.equal(salvaged.ref, `refs/salvage/${path.basename(worktree)}`);
@@ -271,8 +273,32 @@ test('worktree sweep salvages an old unintegrated worktree before removing it', 
   }
 });
 
+test('worktree sweep keeps untracked files that cannot be salvaged reversibly', async () => {
+  const worktree = agentWorktree('salvage-untracked');
+  try {
+    makeCommit(worktree, 'salvage-untracked.txt');
+    fs.writeFileSync(path.join(worktree, 'untracked.txt'), 'cannot lose this\n');
+    makeOld(worktree);
 
-test('worktrees sweep prunes only patch-equivalent orphan worktree branches', () => {
+    const result = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      notIntegratedSalvageAgeMs: 0,
+      upstream: 'origin/main',
+    });
+
+    const entry = entryFor(result, worktree);
+    assert.equal(entry.reason, 'unrecoverable_untracked');
+    assert.equal(entry.action, 'keep');
+    assert.ok(fs.existsSync(worktree));
+  } finally {
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+    if (branchExists(branchName('salvage-untracked'))) git(['branch', '-D', branchName('salvage-untracked')]);
+  }
+});
+
+
+test('worktrees sweep prunes only patch-equivalent orphan worktree branches', async () => {
   const equivalentOrphan = agentWorktree('orphan-equivalent');
   integrate(makeCommit(equivalentOrphan, 'orphan-equivalent.txt'));
   git(['worktree', 'remove', equivalentOrphan]);
@@ -290,7 +316,9 @@ test('worktrees sweep prunes only patch-equivalent orphan worktree branches', ()
   const orphan = dryRun.orphanBranches.find((entry: any) => entry.branch === branchName('orphan-equivalent'));
   assert.equal(orphan.action, 'prune');
   assert.equal(orphan.patchEquivalent, true);
-  const unintegrated = dryRun.orphanBranches.find((entry: any) => entry.branch === branchName('orphan-unintegrated'));
+  const fullSweep = await worktrees.sweep(PROJECT, [], { maxCandidates: 2, upstream: 'origin/main' });
+  const unintegrated = fullSweep.orphanBranches.find((entry: any) => entry.branch === branchName('orphan-unintegrated'));
+  assert.ok(unintegrated);
   assert.equal(unintegrated.action, 'keep');
   assert.equal(unintegrated.patchEquivalent, false);
   assert.equal(unintegrated.subject, 'fixture orphan-unintegrated.txt');

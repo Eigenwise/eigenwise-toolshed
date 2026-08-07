@@ -198,8 +198,12 @@ function localBranchName(ref: unknown): string | null {
   return match?.[1] || null;
 }
 
+function worktreePath(entry: any): string {
+  return String(entry.path || entry.worktree);
+}
+
 function salvageRef(entry: any, suffix = ''): string {
-  return `refs/salvage/${path.basename(String(entry.worktree))}${suffix}`;
+  return `refs/salvage/${path.basename(worktreePath(entry))}${suffix}`;
 }
 
 async function createSalvageRef(repo: string, ref: string, revision: string): Promise<void> {
@@ -208,13 +212,14 @@ async function createSalvageRef(repo: string, ref: string, revision: string): Pr
 }
 
 async function salvageWorktree(repo: string, entry: any): Promise<{ ref: string; uncommittedRef: string | null }> {
-  const head = await git(entry.worktree, ['rev-parse', 'HEAD']);
+  const worktree = worktreePath(entry);
+  const head = await git(worktree, ['rev-parse', 'HEAD']);
   if (!head.ok || !head.stdout) throw new Error(head.stderr || 'could not resolve worktree HEAD');
   const ref = salvageRef(entry);
   await createSalvageRef(repo, ref, head.stdout);
   if (entry.clean) return { ref, uncommittedRef: null };
 
-  const stash = await git(entry.worktree, ['stash', 'create']);
+  const stash = await git(worktree, ['stash', 'create']);
   if (!stash.ok || !stash.stdout) throw new Error(stash.stderr || 'could not capture uncommitted worktree changes');
   const uncommittedRef = salvageRef(entry, '-uncommitted');
   await createSalvageRef(repo, uncommittedRef, stash.stdout);
@@ -322,6 +327,7 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
     reachableFrom(entry.worktree, 'HEAD', upstream),
   ]);
   const clean = cleanResult.ok ? cleanResult.stdout === '' : false;
+  const untracked = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line.startsWith('?? '));
   const oldEnough = ageMs != null && ageMs >= minAgeMs;
   const oldEnoughToSalvage = ageMs != null && ageMs >= notIntegratedSalvageAgeMs;
 
@@ -341,6 +347,8 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
   } else if (patch.equivalent) {
     action = 'remove';
     reason = 'patch_equivalent';
+  } else if (oldEnoughToSalvage && untracked) {
+    reason = 'unrecoverable_untracked';
   } else if (oldEnoughToSalvage) {
     action = 'salvage';
     reason = 'not_integrated_salvage';
