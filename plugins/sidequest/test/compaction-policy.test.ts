@@ -28,10 +28,18 @@ function run(payload: unknown, env: Record<string, string> = {}) {
   });
 }
 
-function createDoing(title: string): { ticket: any; story: any } {
+function compactionDecision(output: string): unknown {
+  try {
+    return JSON.parse(output).decision;
+  } catch {
+    return undefined;
+  }
+}
+
+function createDoing(title: string, sessionId?: string): { ticket: any; story: any } {
   const story = store.createStory(slug, { title: 'Compaction policy story' });
   const ticket = store.createTicket(slug, { title, storyId: story.ref, source: 'test' });
-  assert.equal(store.claimTicket(slug, ticket.ref, 'policy-executor').ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'policy-executor', sessionId ? { sessionId } : undefined).ok, true);
   return { ticket, story };
 }
 
@@ -59,6 +67,16 @@ test('PreCompact pinning stays within the prompt budget for crowded boards', () 
   assert.match(result.stdout, /^Preserve verbatim in the summary:/);
 });
 
+test('PreCompact veto allows an executor session to compact', () => {
+  const sessionId = 'executor-session';
+  createDoing('Executor claim permits compaction', sessionId);
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: sessionId }, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
+
+  assert.equal(result.status, 0);
+  assert.match(result.stdout, /^Preserve verbatim in the summary:/);
+  assert.equal(compactionDecision(result.stdout), undefined);
+});
+
 test('PreCompact veto emits bounded JSON before falling back to pinning', () => {
   const { ticket } = createDoing('Veto while this claim is fresh');
   const payload = { hook_event_name: 'PreCompact', trigger: 'auto', cwd: boardPath, session_id: 'bounded-veto' };
@@ -66,9 +84,8 @@ test('PreCompact veto emits bounded JSON before falling back to pinning', () => 
     const result = run(payload, { SIDEQUEST_COMPACTION_POLICY: 'veto' });
     assert.equal(result.status, 0);
     assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
-    const output = JSON.parse(result.stdout);
-    assert.deepEqual(output.decision, 'block');
-    assert.match(output.reason, new RegExp(ticket.ref));
+    assert.equal(compactionDecision(result.stdout), 'block');
+    assert.match(JSON.parse(result.stdout).reason, new RegExp(ticket.ref));
   }
 
   const delayed = run(payload, { SIDEQUEST_COMPACTION_POLICY: 'veto' });

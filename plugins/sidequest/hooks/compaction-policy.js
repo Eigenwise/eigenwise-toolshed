@@ -109,8 +109,14 @@ function boundedInstruction(lines) {
   }
   return kept.length > 1 ? kept.join("\n") : "";
 }
-async function boardState(cwd) {
-  const store = require(runtimeModule("store"));
+function shouldAvoidVetoForSession(store, sessionId) {
+  try {
+    return store.sessionClaims(sessionId).some((claim) => claim.held);
+  } catch {
+    return true;
+  }
+}
+async function boardState(cwd, store) {
   const found = store.findProject(store.nearestRepoRoot(cwd));
   if (!found.ok || !found.slug || !found.meta?.path) return null;
   const tickets = store.listTickets(found.slug);
@@ -140,12 +146,17 @@ async function compactionPolicyOutput(input) {
   if (mode === "off") return "";
   const sessionId = String(input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || "").trim();
   try {
-    const state = await boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
+    const store = require(runtimeModule("store"));
+    const state = await boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()), store);
     if (!state) {
       writeCounter(sessionId, 0);
       return "";
     }
     if (mode !== "veto" || !state.unsafeReason) {
+      writeCounter(sessionId, 0);
+      return state.instruction;
+    }
+    if (shouldAvoidVetoForSession(store, sessionId)) {
       writeCounter(sessionId, 0);
       return state.instruction;
     }

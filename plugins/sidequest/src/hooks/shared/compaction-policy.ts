@@ -11,6 +11,7 @@ interface Store {
   listTickets: (slug: string) => any[];
   getStory: (slug: string, id: string) => any;
   worktreeGcTickets: () => Array<{ project?: string; ref?: string; claimLive?: boolean }>;
+  sessionClaims: (sessionId: string) => Array<{ held?: boolean }>;
 }
 
 interface CounterState {
@@ -78,8 +79,15 @@ function boundedInstruction(lines: string[]): string {
   return kept.length > 1 ? kept.join('\n') : '';
 }
 
-async function boardState(cwd: string): Promise<{ instruction: string; unsafeReason: string } | null> {
-  const store = require(runtimeModule('store')) as Store;
+function shouldAvoidVetoForSession(store: Store, sessionId: string): boolean {
+  try {
+    return store.sessionClaims(sessionId).some((claim) => claim.held);
+  } catch {
+    return true;
+  }
+}
+
+async function boardState(cwd: string, store: Store): Promise<{ instruction: string; unsafeReason: string } | null> {
   const found = store.findProject(store.nearestRepoRoot(cwd));
   if (!found.ok || !found.slug || !found.meta?.path) return null;
 
@@ -113,12 +121,17 @@ export async function compactionPolicyOutput(input: Record<string, unknown>): Pr
   if (mode === 'off') return '';
   const sessionId = String(input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || '').trim();
   try {
-    const state = await boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
+    const store = require(runtimeModule('store')) as Store;
+    const state = await boardState(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()), store);
     if (!state) {
       writeCounter(sessionId, 0);
       return '';
     }
     if (mode !== 'veto' || !state.unsafeReason) {
+      writeCounter(sessionId, 0);
+      return state.instruction;
+    }
+    if (shouldAvoidVetoForSession(store, sessionId)) {
       writeCounter(sessionId, 0);
       return state.instruction;
     }
