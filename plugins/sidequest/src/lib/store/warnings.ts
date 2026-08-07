@@ -105,11 +105,31 @@ function ticketReferenceWarnings(slug?: any, title?: any, description?: any) {
 
 const ANCHOR_PATH_TOKEN = /(?:^|[\s`"'(])((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
 const ANCHOR_SYMBOL_REFERENCE = /(?:^|[\s`"'(])([A-Za-z_$][\w$]*)`?\s+(?:is\s+at|in)\s+`?((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+const KNOWN_ANCHOR_FILE_EXTENSIONS = new Set([
+  '.bash', '.c', '.cc', '.cjs', '.cpp', '.cs', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.java', '.js', '.json', '.jsx', '.kt', '.md', '.mjs', '.php', '.png', '.ps1', '.py', '.rb', '.rs', '.scss', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml',
+]);
 
-function anchorPath(projectPath?: any, value?: any) {
+function anchorResolutionRoots(ticket?: any, projectPath?: any) {
+  const roots = new Map<string, string>();
+  const addRoot = (root?: any) => {
+    if (root) roots.set(String(root).toLowerCase(), String(root));
+  };
+  addRoot(projectPath);
+  for (const scope of normalizeFiles(ticket?.files)) addRoot(packageRootForScope(projectPath, scope));
+  return [...roots.values()];
+}
+
+function anchorPath(ticket?: any, projectPath?: any, value?: any) {
   const relative = String(value || '').replace(/^\.\//, '');
-  const absolute = path.resolve(String(projectPath), relative);
-  return relative && !relative.startsWith('../') && relativePathWithin(projectPath, absolute) ? { relative, absolute } : null;
+  if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) return null;
+  const roots = anchorResolutionRoots(ticket, projectPath);
+  const candidates = roots.map((root) => path.resolve(root, relative)).filter((absolute) => relativePathWithin(projectPath, absolute));
+  const hasKnownExtension = KNOWN_ANCHOR_FILE_EXTENSIONS.has(path.extname(relative).toLowerCase());
+  const firstSegment = relative.split('/')[0];
+  const hasExistingPrefix = roots.some((root) => fs.existsSync(path.resolve(root, firstSegment)));
+  if (!hasKnownExtension && !hasExistingPrefix) return null;
+  const existing = candidates.find((absolute) => fs.existsSync(absolute));
+  return { relative, absolute: existing || candidates[0], exists: Boolean(existing) };
 }
 
 function executorAnchorWarnings(ticket?: any, projectPath?: any) {
@@ -118,16 +138,16 @@ function executorAnchorWarnings(ticket?: any, projectPath?: any) {
   const missing = new Set<string>();
   const existing = new Map<string, string>();
   for (const match of anchors.matchAll(ANCHOR_PATH_TOKEN)) {
-    const candidate = anchorPath(projectPath, match[1]);
+    const candidate = anchorPath(ticket, projectPath, match[1]);
     if (!candidate) continue;
-    if (fs.existsSync(candidate.absolute)) existing.set(candidate.relative.toLowerCase(), candidate.absolute);
+    if (candidate.exists) existing.set(candidate.relative.toLowerCase(), candidate.absolute);
     else missing.add(candidate.relative);
   }
-  const warnings = [...missing].sort().map((relative) => `Planning-depth warning: executor anchor references path absent from this repo: ${relative}. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.`);
+  const warnings = [...missing].sort().map((relative) => `Anchor-path warning: executor anchor references path absent from this repo: ${relative}. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.`);
   const absentSymbols = new Set<string>();
   for (const match of anchors.matchAll(ANCHOR_SYMBOL_REFERENCE)) {
     const symbol = match[1];
-    const candidate = anchorPath(projectPath, match[2]);
+    const candidate = anchorPath(ticket, projectPath, match[2]);
     if (!candidate || !existing.has(candidate.relative.toLowerCase())) continue;
     let contents = '';
     try {
@@ -139,7 +159,7 @@ function executorAnchorWarnings(ticket?: any, projectPath?: any) {
   }
   return [...warnings, ...[...absentSymbols].sort().map((entry) => {
     const [symbol, relative] = entry.split('|');
-    return `Planning-depth warning: executor anchor says ${symbol} is in ${relative}, but ${symbol} does not appear in that file.`;
+    return `Anchor-path warning: executor anchor says ${symbol} is in ${relative}, but ${symbol} does not appear in that file.`;
   })];
 }
 

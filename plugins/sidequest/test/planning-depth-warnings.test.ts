@@ -96,7 +96,7 @@ test('add stays quiet for a greenfield scope whose parent directory does not exi
 test('add and update warn for nonexistent executor anchor paths without refusing the write', () => {
   fs.mkdirSync(path.join(PROJ, 'anchor-fixtures'), { recursive: true });
   fs.writeFileSync(path.join(PROJ, 'anchor-fixtures', 'target.js'), 'const targetSymbol = true;\n');
-  const missingWarning = 'Planning-depth warning: executor anchor references path absent from this repo: anchor-fixtures/missing.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.';
+  const missingWarning = 'Anchor-path warning: executor anchor references path absent from this repo: anchor-fixtures/missing.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.';
   const added = cliJson([
     'add', '-t', 'missing anchor path', '--complexity', '3',
     '--why', 'persist the ticket while exposing a stale anchor for correction',
@@ -111,7 +111,7 @@ test('add and update warn for nonexistent executor anchor paths without refusing
   ]);
 
   assert.deepStrictEqual(updated.warnings, [
-    'Planning-depth warning: executor anchor references path absent from this repo: anchor-fixtures/also-missing.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
+    'Anchor-path warning: executor anchor references path absent from this repo: anchor-fixtures/also-missing.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
   ]);
   assert.equal(updated.ticket.executorAnchors, 'targetSymbol is at anchor-fixtures/also-missing.js:8');
 });
@@ -126,7 +126,7 @@ test('a symbol anchor warns when its existing file does not contain that symbol'
   ]);
 
   assert.deepStrictEqual(added.warnings, [
-    'Planning-depth warning: executor anchor says requestedSymbol is in anchor-fixtures/wrong-symbol.js, but requestedSymbol does not appear in that file.',
+    'Anchor-path warning: executor anchor says requestedSymbol is in anchor-fixtures/wrong-symbol.js, but requestedSymbol does not appear in that file.',
   ]);
 });
 
@@ -142,6 +142,28 @@ test('correct executor anchors stay quiet', () => {
   assert.deepStrictEqual(added.warnings, []);
 });
 
+test('anchor warnings ignore slashed prose and resolve package-relative files', () => {
+  const packageRoot = path.join(PROJ, 'plugins', 'sidequest');
+  fs.mkdirSync(path.join(packageRoot, 'src', 'hooks'), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, 'src', 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(packageRoot, 'scripts'), { recursive: true });
+  fs.mkdirSync(path.join(PROJ, 'selfplay-s33-long'), { recursive: true });
+  fs.writeFileSync(path.join(packageRoot, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(packageRoot, 'scripts', '_exec-template.md'), '# template\n');
+  fs.writeFileSync(path.join(packageRoot, 'src', 'hooks', 'near-turn-cap.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(PROJ, 'selfplay-s33-long', 'champion.pt'), 'checkpoint\n');
+  const added = cliJson([
+    'add', '-t', 'anchor path classification', '--complexity', '3',
+    '--why', 'separate an absent source path from slashed prose and package-relative files',
+    '--file', 'plugins/sidequest/src/lib',
+    '--anchors', 'the cause was ref/token pairing; bb/100 and worker/chunking are prose; scripts/_exec-template.md and src/hooks/near-turn-cap.ts exist; selfplay-s33-long/champion.pt exists; missing/path.ts does not.',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, [
+    'Anchor-path warning: executor anchor references path absent from this repo: missing/path.ts. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
+  ]);
+});
+
 test('a greenfield declared anchor warns without refusing the ticket write', () => {
   const added = cliJson([
     'add', '-t', 'greenfield anchor', '--complexity', '3',
@@ -150,7 +172,7 @@ test('a greenfield declared anchor warns without refusing the ticket write', () 
   ]);
 
   assert.deepStrictEqual(added.warnings, [
-    'Planning-depth warning: executor anchor references path absent from this repo: greenfield-anchor/src/entry.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
+    'Anchor-path warning: executor anchor references path absent from this repo: greenfield-anchor/src/entry.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
   ]);
   assert.equal(added.ticket.executorAnchors, 'createEntry is at greenfield-anchor/src/entry.js:1');
 });
