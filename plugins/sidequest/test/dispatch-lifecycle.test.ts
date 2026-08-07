@@ -459,6 +459,8 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
     agentName: 'complete-lifecycle-worker',
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, executor, 'native-complete-agent', 'complete-lifecycle-worker').ok, true);
+  const worktree = store.getTicket(slug, ticket.ref).dispatch.worktree;
+  fs.mkdirSync(worktree, { recursive: true });
   let pulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(pulse.dispatch.state, 'bound');
   assert.equal(Object.hasOwn(pulse, 'dispatchNonce'), false);
@@ -502,6 +504,7 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   assert.equal(pulse.dispatch.state, 'done');
   assert.equal(pulse.dispatch.outcome, 'done');
   assert.equal(store.getTicket(slug, ticket.ref).lastEventType, 'dispatch');
+  fs.rmSync(worktree, { recursive: true, force: true });
 });
 
 test('oracle releases retain the round marker in pulse, changes, and brief list projections', () => {

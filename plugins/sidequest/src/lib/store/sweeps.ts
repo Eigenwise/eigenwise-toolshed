@@ -36,14 +36,14 @@ function sweepStaleDispatches(opts?: any) {
   return { ok: true, ttlMs: preparedDispatchTtlMs(), expired };
 }
 
-// Garbage-collect claims whose holder is gone: an observed stop first, then the
-// idle/abandoned backstops for deaths nothing reported. Each release re-checks
-// the verdict under the ticket lock, so a claim that is merely quiet — or one
-// replaced since the snapshot — is never swept.
+// Garbage-collect claims with concrete death evidence. Quiet routed executors stay
+// claimed because board silence is not process liveness. Each release re-checks
+// the verdict and shared-checkout safety under the ticket lock.
 function sweepStaleClaims(opts?: any) {
   opts = opts || {};
   const source = opts.source ? String(opts.source) : 'sweep';
   const released: any[] = [];
+  const blocked: any[] = [];
   for (const project of listProjects({ all: true })) {
     if (opts.project && project.slug !== opts.project) continue;
     for (const ticket of listTickets(project.slug)) {
@@ -57,7 +57,12 @@ function sweepStaleClaims(opts?: any) {
           requireReleaseVerdict: true,
           claimRelease: { kind: verdict.kind, reason: verdict.reason, idleMs: Number.isFinite(verdict.idleMs) ? verdict.idleMs : null },
         });
-        if (!res.ok) continue;
+        if (!res.ok) {
+          if (['dirty_shared_tree', 'shared_tree_state_unavailable'].includes(res.reason)) {
+            blocked.push({ project: project.slug, ref: ticket.ref, kind: res.reason, paths: res.paths || [] });
+          }
+          continue;
+        }
         released.push({ project: project.slug, ref: ticket.ref, kind: verdict.kind });
         addComment(project.slug, ticket.id, {
           by: 'sidequest', kind: 'comment', source,
@@ -69,7 +74,7 @@ function sweepStaleClaims(opts?: any) {
     }
   }
   const dispatches = sweepStaleDispatches(opts);
-  return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, expiredDispatches: dispatches.expired };
+  return { ok: true, idleMs: claimIdleMs(), abandonMs: claimAbandonMs(), released, blocked, expiredDispatches: dispatches.expired };
 }
 
 

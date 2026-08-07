@@ -2273,6 +2273,8 @@ function claimStopTicket(ticket?: any, sessionId?: any, by?: any) {
     agentName,
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
+  const worktree = store.getTicket(slug, ticket.ref).dispatch?.worktree;
+  if (worktree) fs.mkdirSync(worktree, { recursive: true });
   assert.equal(store.claimTicket(slug, ticket.ref, by, {
     sessionId,
     token: prepared.token,

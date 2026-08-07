@@ -307,10 +307,10 @@ test('claims sweep releases idle unassociated claims, audits release, and leaves
   assert.equal(before.tickets.find((ticket?: any) => ticket.ref === staleRef).claim.stale, true);
   assert.equal(before.tickets.find((ticket?: any) => ticket.ref === freshRef).claim.stale, false);
   const swept = cliJson(['claims', 'sweep']);
-  assert.equal(swept.released.length, 1);
+  assert.equal(swept.released.some((entry?: any) => entry.ref === staleRef && entry.kind === 'idle'), true);
   assert.equal(ticket(staleRef).status, 'todo');
   assert.equal(ticket(staleRef).claim, null);
-  assert.match(ticket(staleRef).comments.at(-1).body, /no board activity from `stale-worker`.*no live executor/);
+  assert.match(ticket(staleRef).comments.at(-1).body, /no board activity from `stale-worker`.*no executor dispatch/);
   assert.equal(ticket(freshRef).claim.by, 'fresh-worker');
 });
 

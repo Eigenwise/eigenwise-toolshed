@@ -132,7 +132,7 @@ function createPulse(dependencies: any) {
       return { state: 'unknown', evidence: 'a runtime identity was bound, but Sidequest has no process heartbeat' };
     }
     if (claim && dispatch && !dispatch.terminalAt) {
-      return { state: 'unknown', evidence: 'dispatch was claimed before Sidequest recorded a runtime identity; reclaim uses the unobserved-death inactivity backstop' };
+      return { state: 'binding_fault', evidence: 'dispatch.boundAt is null, so Sidequest cannot identify the executor process; the claim stays held because no death was observed' };
     }
     if (claim) return { state: 'unknown', evidence: 'claim held without live-process evidence' };
     return { state: 'unknown', evidence: 'no active claim or death record' };
