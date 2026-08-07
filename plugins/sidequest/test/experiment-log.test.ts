@@ -133,6 +133,38 @@ test('applyExperimentVerdict preserves the user words, clears the oracle, and re
   assert.match(refused.message, /not awaiting an oracle verdict/i);
 });
 
+test('applyExperimentVerdict creates a missing oracle round and preserves existing rounds', () => {
+  const created = ticket();
+  assert.equal(store.appendExperimentEntry(slug, created.ref, round(2)).ok, true);
+  const prepared = store.prepareDispatch(slug, created.ref, { sessionId: `missing-oracle-round-${Date.now()}` });
+  assert.equal(store.claimTicket(slug, created.ref, 'missing-oracle-round-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, created.ref, 'missing-oracle-round-worker', {
+    status: 'doing',
+    oracle: 'Rank the candidates.',
+    candidate: 'abc1234',
+    deliverable: 'artifacts/comparison.wav',
+  }).ok, true);
+
+  const verdict = store.applyExperimentVerdict(slug, created.ref, {
+    text: 'Candidate B wins.',
+    outcome: 'accepted',
+    why: 'The transient is less sharp.',
+    constraint: 'Keep the transient below the reference.',
+  });
+
+  assert.equal(verdict.ok, true);
+  assert.equal(store.getTicket(slug, created.ref).oracle, null);
+  const log = fs.readFileSync(store.assetPath(slug, created.id, verdict.asset), 'utf8');
+  assert.match(log, /## R1 — \d{4}-\d{2}-\d{2} — Oracle verdict/);
+  assert.match(log, /Hypothesis: Rank the candidates\./);
+  assert.match(log, /Deliverable: artifacts\/comparison\.wav/);
+  assert.match(log, /Verdict: "Candidate B wins\." — accepted/);
+  assert.match(log, /## R2 — 2026-07-02 — round 2/);
+});
+
 test('experimentPacket keeps pinned sections, recent full rounds, and caps old headlines first', () => {
   const created = ticket();
   for (let index = 1; index <= 7; index++) {
