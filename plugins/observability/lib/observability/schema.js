@@ -379,6 +379,7 @@ const TABLE_SQL = `
   ) STRICT;
 
   CREATE INDEX IF NOT EXISTS observation_observed_at_idx ON observation(observed_at);
+  CREATE INDEX IF NOT EXISTS observation_event_request_idx ON observation(event_name, request_id);
   CREATE INDEX IF NOT EXISTS observation_session_idx ON observation(session_id, observed_at);
   CREATE INDEX IF NOT EXISTS observation_request_idx ON observation(request_id, observed_at);
   CREATE INDEX IF NOT EXISTS observation_trace_idx ON observation(trace_id, span_id);
@@ -420,6 +421,8 @@ const TABLE_SQL = `
     PRIMARY KEY(source, source_event_id)
   ) STRICT;
 
+  CREATE INDEX IF NOT EXISTS observation_dedupe_event_idx ON observation_dedupe(event_id);
+
   CREATE TABLE IF NOT EXISTS otlp_outbox (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     event_id TEXT NOT NULL UNIQUE REFERENCES observation(event_id),
@@ -439,18 +442,8 @@ const TABLE_SQL = `
     SELECT RAISE(ABORT, 'observation is append-only');
   END;
 
-  CREATE TRIGGER IF NOT EXISTS observation_no_delete
-  BEFORE DELETE ON observation BEGIN
-    SELECT RAISE(ABORT, 'observation is append-only');
-  END;
-
   CREATE TRIGGER IF NOT EXISTS measurement_no_update
   BEFORE UPDATE ON measurement BEGIN
-    SELECT RAISE(ABORT, 'measurement is append-only');
-  END;
-
-  CREATE TRIGGER IF NOT EXISTS measurement_no_delete
-  BEFORE DELETE ON measurement BEGIN
     SELECT RAISE(ABORT, 'measurement is append-only');
   END;
 
@@ -458,9 +451,37 @@ const TABLE_SQL = `
   BEFORE UPDATE ON link BEGIN
     SELECT RAISE(ABORT, 'link is append-only');
   END;
+`;
 
-  CREATE TRIGGER IF NOT EXISTS link_no_delete
-  BEFORE DELETE ON link BEGIN
+const RETENTION_PRUNE_TRIGGER_SQL = `
+  DROP TRIGGER IF EXISTS observation_no_delete;
+  DROP TRIGGER IF EXISTS measurement_no_delete;
+  DROP TRIGGER IF EXISTS link_no_delete;
+
+  CREATE TRIGGER observation_no_delete
+  BEFORE DELETE ON observation
+  WHEN NOT EXISTS (
+    SELECT 1 FROM observability_meta
+    WHERE key = 'retention_prune_active' AND value = '1'
+  ) BEGIN
+    SELECT RAISE(ABORT, 'observation is append-only');
+  END;
+
+  CREATE TRIGGER measurement_no_delete
+  BEFORE DELETE ON measurement
+  WHEN NOT EXISTS (
+    SELECT 1 FROM observability_meta
+    WHERE key = 'retention_prune_active' AND value = '1'
+  ) BEGIN
+    SELECT RAISE(ABORT, 'measurement is append-only');
+  END;
+
+  CREATE TRIGGER link_no_delete
+  BEFORE DELETE ON link
+  WHEN NOT EXISTS (
+    SELECT 1 FROM observability_meta
+    WHERE key = 'retention_prune_active' AND value = '1'
+  ) BEGIN
     SELECT RAISE(ABORT, 'link is append-only');
   END;
 `;
@@ -480,6 +501,7 @@ module.exports = {
   MEASUREMENT_QUALITIES,
   MEASUREMENT_SCOPES,
   RESOLVED_VIEWS,
+  RETENTION_PRUNE_TRIGGER_SQL,
   SCHEMA_VERSION,
   TABLE_SQL,
 };
