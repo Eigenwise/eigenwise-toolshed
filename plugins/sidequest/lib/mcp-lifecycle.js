@@ -708,4 +708,4 @@ const tools = [
     }
   }
 ];
-module.exports = { tools };
+module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage };
