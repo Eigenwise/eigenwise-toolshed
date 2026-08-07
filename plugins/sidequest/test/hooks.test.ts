@@ -208,6 +208,47 @@ test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypa
   assert.strictEqual(out.hookSpecificOutput.hookEventName, 'PreToolUse');
 });
 
+test('pre-tool hook: a spawn prompt naming another ticket still records its launch', () => {
+  // Spawn prompts carry ticket title, description, and anchors, so a ticket that
+  // mentions another ticket puts two SQ refs in the prompt. Pairing refs to tokens
+  // by counting them prompt-wide recorded no launch at all, and the executor then
+  // failed its claim with unbound_dispatch (2026-08-07, sidequest 4.40.0).
+  const ticket = store.createTicket(slug, {
+    title: 'Four parameterised node kinds, following the pattern SQ-49 pinned',
+    description: 'Mirror what SQ-51 established, and keep SQ-52 unaffected.',
+    category: 'debugging',
+    source: 'cli',
+  });
+  const sessionId = `prompt-extra-refs-${++sqSeq}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const command = `node "C:\\\\launcher\\\\sidequest-launcher.js" briefing ${ticket.ref} --token ${prepared.token} --project "${BOARD_PATH}"`;
+  const prompt = [
+    '[sidequest-route model=gpt-5.6-terra effort=high]',
+    '',
+    'Implementation context:',
+    `Title: ${ticket.title}`,
+    'Description:',
+    'Mirror what SQ-51 established, and keep SQ-52 unaffected.',
+    '',
+    `FIRST action: run \`${command}\` and execute exactly what it prints.`,
+  ].join('\n');
+
+  runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    session_id: sessionId,
+    cwd: BOARD_PATH,
+    tool_input: {
+      subagent_type: prepared.ticket.dispatchExecutor,
+      isolation: 'worktree',
+      name: 'sq-extra-refs',
+      prompt,
+    },
+  });
+
+  const launched = store.getTicket(slug, ticket.ref);
+  assert.ok(launched.dispatch?.launchedAt, 'the launch must be recorded even when the prompt names other tickets');
+});
+
 test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-commit-'));
   gitFixture(['init', '--quiet'], projectPath);

@@ -209,6 +209,25 @@ function extractDispatchToken(prompt: unknown): string | null {
   return match ? match[1] || null : null;
 }
 
+// The refs a spawn actually dispatches are the ones paired with a token in a
+// briefing command. Spawn prompts carry ticket title, description, and anchors,
+// and ticket prose routinely names other tickets, so scanning the whole prompt
+// resolved unrelated refs: the gate then denied the spawn as conflicting or
+// ticket-not-found and recorded no launch, surfacing as unbound_dispatch.
+function dispatchRefs(prompt: unknown): string[] {
+  if (typeof prompt !== 'string' || !prompt) return [];
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+[^\s`"']+/gi)) {
+    const ref = (match[1] || '').toUpperCase();
+    if (ref && !seen.has(ref)) {
+      seen.add(ref);
+      out.push(ref);
+    }
+  }
+  return out;
+}
+
 function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
   if (typeof prompt !== 'string' || !prompt) return [];
   const headings = [...prompt.matchAll(/^Ref:\s*(SQ-\d+)\s*$/gim)];
@@ -218,6 +237,16 @@ function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
     return { ref: (match[1] || '').toUpperCase(), token: extractDispatchToken(section) };
   }).filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.token));
   if (launches.length) return launches;
+
+  // The briefing command pairs its ref with its token, so read the pair from
+  // there rather than counting refs across the whole prompt. Spawn prompts now
+  // carry ticket title, description, and anchors, and any of those may mention
+  // another ticket; counting prompt-wide silently recorded no launch at all,
+  // which surfaced later as unbound_dispatch.
+  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+([^\s`"']+)/gi)]
+    .map((match) => ({ ref: (match[1] || '').toUpperCase(), token: match[2] || '' }))
+    .filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.token));
+  if (briefings.length) return briefings;
 
   const refs = extractRefs(prompt);
   const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || '');
@@ -234,7 +263,8 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
 // the bare ref rather than an opaque token slice.
 function dispatchAgentName(input: HookInput): string | null {
   const toolInput = toolInputOf(input);
-  const refs = extractRefs(toolInput?.prompt);
+  const dispatched = dispatchRefs(toolInput?.prompt);
+  const refs = dispatched.length ? dispatched : extractRefs(toolInput?.prompt);
   const token = extractDispatchToken(toolInput?.prompt);
   if (refs.length !== 1 || !token) return null;
   return dispatchLaunchName(refs[0]);
@@ -265,7 +295,8 @@ function recordAuthoritativeLaunch(input: HookInput, type: string, agentName: st
 function resolveStampedModel(input: HookInput): ResolveResult {
   const toolInput = toolInputOf(input);
   const prompt = toolInput?.prompt;
-  const refs = extractRefs(prompt);
+  const dispatched = dispatchRefs(prompt);
+  const refs = dispatched.length ? dispatched : extractRefs(prompt);
   if (!refs.length) return { status: 'no-refs', refs };
 
   let store: Store;

@@ -253,6 +253,19 @@ function extractDispatchToken(prompt) {
   const match = matches.at(-1);
   return match ? match[1] || null : null;
 }
+function dispatchRefs(prompt) {
+  if (typeof prompt !== "string" || !prompt) return [];
+  const seen = /* @__PURE__ */ new Set();
+  const out = [];
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+[^\s`"']+/gi)) {
+    const ref = (match[1] || "").toUpperCase();
+    if (ref && !seen.has(ref)) {
+      seen.add(ref);
+      out.push(ref);
+    }
+  }
+  return out;
+}
 function dispatchLaunches(prompt) {
   if (typeof prompt !== "string" || !prompt) return [];
   const headings = [...prompt.matchAll(/^Ref:\s*(SQ-\d+)\s*$/gim)];
@@ -262,6 +275,8 @@ function dispatchLaunches(prompt) {
     return { ref: (match[1] || "").toUpperCase(), token: extractDispatchToken(section) };
   }).filter((launch) => Boolean(launch.ref && launch.token));
   if (launches.length) return launches;
+  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+([^\s`"']+)/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), token: match[2] || "" })).filter((launch) => Boolean(launch.ref && launch.token));
+  if (briefings.length) return briefings;
   const refs = extractRefs(prompt);
   const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || "");
   if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || "" }));
@@ -272,7 +287,8 @@ function toolInputOf(input) {
 }
 function dispatchAgentName(input) {
   const toolInput = toolInputOf(input);
-  const refs = extractRefs(toolInput?.prompt);
+  const dispatched = dispatchRefs(toolInput?.prompt);
+  const refs = dispatched.length ? dispatched : extractRefs(toolInput?.prompt);
   const token = extractDispatchToken(toolInput?.prompt);
   if (refs.length !== 1 || !token) return null;
   return dispatchLaunchName(refs[0]);
@@ -302,7 +318,8 @@ function recordAuthoritativeLaunch(input, type, agentName) {
 function resolveStampedModel(input) {
   const toolInput = toolInputOf(input);
   const prompt = toolInput?.prompt;
-  const refs = extractRefs(prompt);
+  const dispatched = dispatchRefs(prompt);
+  const refs = dispatched.length ? dispatched : extractRefs(prompt);
   if (!refs.length) return { status: "no-refs", refs };
   let store;
   try {
