@@ -163,6 +163,26 @@ export function workingPaths(cwd: string): string[] {
   return Array.from(new Set(paths));
 }
 
+export function ticketReleaseFragment(ticketRef: unknown): string | null {
+  const ref = typeof ticketRef === 'string' ? ticketRef.trim() : '';
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(ref) ? `.release/unreleased/${ref}.md` : null;
+}
+
+export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[] {
+  const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
+  const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
+  return fragment && !isInScope(fragment, scope) ? [...scope, fragment] : scope;
+}
+
+export function foreignReleaseFragmentPaths(cwd: string, ticketRef: unknown): string[] {
+  const ownFragment = ticketReleaseFragment(ticketRef);
+  return workingPaths(cwd).filter((file) => (
+    file.startsWith('.release/unreleased/')
+    && file.endsWith('.md')
+    && file !== ownFragment
+  ));
+}
+
 export function unscopedWorkingPaths(cwd: string, files: unknown): string[] {
   return workingPaths(cwd).filter((file) => !isInScope(file, files));
 }
@@ -534,7 +554,7 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 }
 
-export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown) {
+export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
   const range = submissionRange(cwd, {
     commit: submission.commit,
@@ -567,7 +587,8 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
       message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
     });
   }
-  const scopeValidation = validatePaths(admittedScope, rangeChangedPaths);
+  const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
+  const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, { admittedScope });
 }

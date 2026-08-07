@@ -1194,7 +1194,8 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   });
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'missing_release_fragment');
-  assert.match(refused.message, new RegExp(`Request scope for \\.release/unreleased/${missing.ref}\\.md`));
+  assert.match(refused.message, new RegExp(`Create it with:\\n---\\nref: ${missing.ref}`));
+  assert.doesNotMatch(refused.message, /Request scope/);
   assert.match(refused.message, /ref: .*\ntitle: <short user-facing title>\nbump: patch\nplugins:/);
   assert.ok(store.getTicket(missingProject, missing.ref).claim, 'fragment refusal keeps the claim');
 
@@ -1221,8 +1222,8 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   addMarketplaceFixture(fragmentWorktree);
   const fragmentProject = store.ensureProject(fragmentWorktree).slug;
   const fragment = store.createTicket(fragmentProject, {
-    title: 'plugin submission with release fragment', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
-    labels: ['direct-ok'], complexityWhy: 'confirm a shipped plugin change with its fragment submits unchanged',
+    title: 'plugin submission with release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm a shipped plugin change can include its ticket-bound fragment without declared release scope',
   });
   const fragmentBy = 'mcp-valid-fragment-worker';
   assert.equal((await callTool('claim', { project: fragmentProject, ref: fragment.ref, by: fragmentBy, direct: true, reason: 'The valid release fragment fixture requires a local direct claim.' })).ok, true);
@@ -1231,12 +1232,38 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   fs.writeFileSync(path.join(fragmentWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
   fs.writeFileSync(path.join(fragmentWorktree, '.release', 'unreleased', `${fragment.ref}.md`), `---\nref: ${fragment.ref}\ntitle: Fixture change\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nFixture change.\n`);
   gitAt(fragmentWorktree, ['add', 'plugins/fixture-plugin/index.js', `.release/unreleased/${fragment.ref}.md`]);
-  gitAt(fragmentWorktree, ['commit', '-m', 'plugin change with fragment']);
-  const fragmentCommit = gitAt(fragmentWorktree, ['rev-parse', 'HEAD']);
-  gitAt(fragmentWorktree, ['update-ref', `refs/sidequest/${fragment.ref}`, fragmentCommit]);
+  assert.deepEqual(store.effectiveScope(fragmentProject, fragment.files), ['plugins/fixture-plugin'], 'ordinary scope reporting excludes the ticket-bound grant');
+  const fragmentCommit = await callTool('commit', {
+    project: fragmentProject, ref: fragment.ref, by: fragmentBy, message: 'plugin change with fragment', worktree: fragmentWorktree,
+  });
+  assert.ok(fragmentCommit.commit, 'a ticket can commit its own release fragment without declaring it');
+  gitAt(fragmentWorktree, ['update-ref', `refs/sidequest/${fragment.ref}`, fragmentCommit.commit]);
   assert.equal((await callTool('submit', {
-    project: fragmentProject, ref: fragment.ref, by: fragmentBy, commit: fragmentCommit, worktree: fragmentWorktree, body: 'Valid fragment evidence',
+    project: fragmentProject, ref: fragment.ref, by: fragmentBy, commit: fragmentCommit.commit, worktree: fragmentWorktree, body: 'Valid fragment evidence',
   })).ok, true);
+  assert.deepEqual(store.getTicket(fragmentProject, fragment.ref).submission.admittedScope, ['plugins/fixture-plugin']);
+  assert.equal(store.validateIntegrationSubmission(fragmentProject, fragment.ref, {}).ok, true, 'integration revalidation admits only the matching ticket fragment');
+
+  const foreignWorktree = createGitWorktree();
+  addMarketplaceFixture(foreignWorktree);
+  const foreignProject = store.ensureProject(foreignWorktree).slug;
+  const foreign = store.createTicket(foreignProject, {
+    title: 'other release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm a ticket cannot write another ticket release fragment',
+  });
+  const foreignBy = 'mcp-foreign-fragment-worker';
+  assert.equal((await callTool('claim', { project: foreignProject, ref: foreign.ref, by: foreignBy, direct: true, reason: 'The foreign release fragment fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(foreignWorktree, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(foreignWorktree, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(foreignWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
+  fs.writeFileSync(path.join(foreignWorktree, '.release', 'unreleased', 'SQ-other.md'), 'foreign\n');
+  gitAt(foreignWorktree, ['add', 'plugins/fixture-plugin/index.js', '.release/unreleased/SQ-other.md']);
+  const foreignCommit = await callTool('commit', {
+    project: foreignProject, ref: foreign.ref, by: foreignBy, message: 'foreign release fragment', worktree: foreignWorktree,
+  });
+  assert.equal(foreignCommit.ok, false);
+  assert.equal(foreignCommit.reason, 'outside_scope');
+  assert.match(foreignCommit.message, new RegExp(`only \\.release/unreleased/${foreign.ref}\\.md is implicitly writable`));
 });
 
 test('CLI submit requires release fragments for marketplace plugin changes', async () => {
@@ -1260,7 +1287,8 @@ test('CLI submit requires release fragments for marketplace plugin changes', asy
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
   assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, new RegExp(`Request scope for \\.release/unreleased/${missing.ref}\\.md`));
+  assert.match(refused.stderr, new RegExp(`Create it with:\\n---\\nref: ${missing.ref}`));
+  assert.doesNotMatch(refused.stderr, /Request scope/);
   assert.ok(store.getTicket(missingProject, missing.ref).claim, 'CLI fragment refusal keeps the claim');
 
   const docsWorktree = createGitWorktree();
@@ -1284,8 +1312,8 @@ test('CLI submit requires release fragments for marketplace plugin changes', asy
   addMarketplaceFixture(fragmentWorktree);
   const fragmentProject = store.ensureProject(fragmentWorktree).slug;
   const fragment = store.createTicket(fragmentProject, {
-    title: 'CLI plugin submission with release fragment', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
-    labels: ['direct-ok'], complexityWhy: 'confirm CLI plugin submissions with fragments remain admitted',
+    title: 'CLI plugin submission with release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm CLI plugin submissions can commit their ticket-bound fragment without declared release scope',
   });
   const fragmentBy = 'cli-valid-fragment-worker';
   assert.equal((await callTool('claim', { project: fragmentProject, ref: fragment.ref, by: fragmentBy, direct: true, reason: 'The CLI valid fragment fixture requires a local direct claim.' })).ok, true);
@@ -1294,10 +1322,12 @@ test('CLI submit requires release fragments for marketplace plugin changes', asy
   fs.writeFileSync(path.join(fragmentWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
   fs.writeFileSync(path.join(fragmentWorktree, '.release', 'unreleased', `${fragment.ref}.md`), `---\nref: ${fragment.ref}\ntitle: Fixture change\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nFixture change.\n`);
   gitAt(fragmentWorktree, ['add', 'plugins/fixture-plugin/index.js', `.release/unreleased/${fragment.ref}.md`]);
-  gitAt(fragmentWorktree, ['commit', '-m', 'CLI plugin change with fragment']);
-  const fragmentCommit = gitAt(fragmentWorktree, ['rev-parse', 'HEAD']);
+  const fragmentCommit = runCli(['commit', fragment.ref, '--project', fragmentProject, '--by', fragmentBy, '--message', 'CLI plugin change with fragment', '--json'], fragmentWorktree).commit;
+  assert.ok(fragmentCommit, 'CLI commit admits the ticket-bound fragment without declared release scope');
   gitAt(fragmentWorktree, ['update-ref', `refs/sidequest/${fragment.ref}`, fragmentCommit]);
   assert.equal(runCli(['submit', fragment.ref, '--project', fragmentProject, '--by', fragmentBy, '--commit', fragmentCommit, '--worktree', fragmentWorktree, '--verify', 'node --test plugins/sidequest/test/mcp.test.js', '--body', 'CLI valid fragment evidence', '--json'], fragmentWorktree).ok, true);
+  assert.deepEqual(store.getTicket(fragmentProject, fragment.ref).submission.admittedScope, ['plugins/fixture-plugin']);
+  assert.equal(store.validateIntegrationSubmission(fragmentProject, fragment.ref, {}).ok, true);
 });
 
 

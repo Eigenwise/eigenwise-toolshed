@@ -459,7 +459,11 @@ async function cmdCommit(opts: any, positional: any) {
   }
   const pendingScopeRefusal = pendingScopeCommitRefusal(ticket);
   if (pendingScopeRefusal) fail(pendingScopeRefusal);
-  const scope = store.effectiveScope(slug, ticket.files);
+  const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
+  const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref);
+  if (foreignFragments.length) {
+    fail(`commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable. Other release fragments: ${foreignFragments.join(', ')}.`);
+  }
   const result = commitScope.commitScoped(process.cwd(), opts.message, scope);
   if (!result.ok) {
     if (result.reason === 'missing_scope') fail(`commit: ${ticket.ref} has no declared file scope; use the explicit shared-tree escape hatch only for uncommitted-state work, not commits.`);
@@ -563,7 +567,7 @@ async function cmdSubmit(opts: any, positional: any) {
       return commits.some((commit: any) => range.commits.includes(commit));
     });
   if (duplicate) fail(`submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`);
-  const scope = store.effectiveScope(slug, ticket.files);
+  const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
   const scopedRange = commitScope.validateCommitRangeScope(process.cwd(), range.commits, scope);
   if (!scopedRange.ok) {
     if (scopedRange.reason === 'missing_scope') fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
@@ -735,7 +739,7 @@ async function cmdPublish(opts: any, positional: any) {
             message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
           }
           : ticket.submission.base
-            ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission)
+            ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission, ticket.ref)
             : { ok: false, reason: 'legacy_submission' };
     }
     const queuePayload = releaseWindow
