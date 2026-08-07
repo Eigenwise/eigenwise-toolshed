@@ -204,7 +204,9 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.match(briefing, new RegExp(ticket.executorVerify));
   assert.match(briefing, /Verify completion discipline: the harness does not expose your remaining tool-call budget/);
   assert.match(briefing, /Plan against the observed ~90-call backstop/);
-  assert.match(briefing, /Run the declared verify command as soon as a first implementation-ready change is in place/);
+  assert.match(briefing, /Run the declared verify command as soon as that first implementation-ready change is in place/);
+  assert.match(briefing, /Before the declared verify, run the worktree setup and regenerate any outputs produced from your changed sources/);
+  assert.match(briefing, /Correct generated outputs may be uncommitted when you verify/);
   assert.match(briefing, /If a deliberate checkpoint is necessary before verification, say explicitly that verification was not reached and why/);
   assert.match(briefing, /plugins\/sidequest\/src\/lib\/agentsync\.ts/);
   assert.match(briefing, /briefing\.png/);

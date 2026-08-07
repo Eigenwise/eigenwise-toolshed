@@ -1,8 +1,35 @@
 import { spawnSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const outputDirectories = ['bin', 'lib', 'hooks'];
+
+function outputHashes() {
+  const hashes = new Map();
+  function collect(directory) {
+    if (!fs.existsSync(directory)) return;
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true })) {
+      const entryPath = path.join(directory, entry.name);
+      if (entry.isDirectory()) collect(entryPath);
+      if (entry.isFile()) {
+        hashes.set(path.relative(pluginRoot, entryPath), createHash('sha256').update(fs.readFileSync(entryPath)).digest('hex'));
+      }
+    }
+  }
+  for (const directory of outputDirectories) collect(path.join(pluginRoot, directory));
+  return hashes;
+}
+
+function changedOutputs(before, after) {
+  return [...new Set([...before.keys(), ...after.keys()])]
+    .filter((file) => before.get(file) !== after.get(file))
+    .sort();
+}
+
+const beforeBuild = outputHashes();
 const buildResult = spawnSync(process.execPath, [path.join(pluginRoot, 'scripts', 'build.mjs')], {
   cwd: pluginRoot,
   stdio: 'inherit',
@@ -12,19 +39,8 @@ const buildResult = spawnSync(process.execPath, [path.join(pluginRoot, 'scripts'
 if (buildResult.error) throw buildResult.error;
 if (buildResult.status !== 0) process.exit(buildResult.status ?? 1);
 
-const statusResult = spawnSync('git', ['status', '--porcelain', '--untracked-files=all', '--', 'bin', 'lib', 'hooks'], {
-  cwd: pluginRoot,
-  encoding: 'utf8',
-  windowsHide: true,
-});
-
-if (statusResult.error) throw statusResult.error;
-if (statusResult.status !== 0) process.exit(statusResult.status ?? 1);
-if (statusResult.stdout) {
-  const paths = statusResult.stdout
-    .trimEnd()
-    .split('\n')
-    .map((entry) => entry.slice(3));
-  process.stderr.write(`Generated outputs differ from the repository:\n${paths.join('\n')}\n`);
+const changed = changedOutputs(beforeBuild, outputHashes());
+if (changed.length) {
+  process.stderr.write(`Generated outputs changed during the build:\n${changed.join('\n')}\n`);
   process.exitCode = 1;
 }
