@@ -396,11 +396,13 @@ test('a mixed source and test diff needs a claim-holder negative control before 
     body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
     source: 'mcp',
   }).ok, true);
-  assert.equal(store.addComment(slug, ticket.ref, {
+  const wrongAuthor = store.addComment(slug, ticket.ref, {
     by,
     body: '[sidequest:verify-complete]',
     source: 'mcp',
-  }).reason, 'negative_control_required');
+  });
+  assert.equal(wrongAuthor.reason, 'negative_control_required');
+  assert.match(wrongAuthor.message, /negative control was recorded by "another-executor", but the current claim holder is "negative-control-executor"/);
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,

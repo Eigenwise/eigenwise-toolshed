@@ -2843,6 +2843,27 @@ test('MCP verdict records the oracle outcome and refuses a ticket with no oracle
   assert.match(refused.message, /not awaiting an oracle verdict/i);
 });
 
+test('MCP comments default to the active claim holder', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-comment-claim-holder')).slug;
+  const ticket = store.createTicket(project, {
+    title: 'comment claim holder fixture', complexity: 1,
+    complexityWhy: 'prove an omitted MCP comment author remains eligible for the claimant verification gates',
+  });
+  const by = 'mcp-comment-claim-holder';
+  assert.equal((await callTool('claim', {
+    project, ref: ticket.ref, by, direct: true,
+    reason: 'The comment attribution fixture requires a local direct claim.',
+  })).ok, true);
+
+  assert.equal((await callTool('comment', {
+    project,
+    ref: ticket.ref,
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+  })).ok, true);
+
+  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, by);
+});
+
 test('oversized comment acks advise without changing stored bodies', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-comment-advisory')).slug;
   const ticket = store.createTicket(project, {
