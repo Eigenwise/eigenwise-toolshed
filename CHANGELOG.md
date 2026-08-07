@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.412.0 (2026-08-07)
+
+### observability 0.5.2 → 0.5.3
+
+#### Fixes
+
+- Unify dashboard spend across model backends (SQ-1501)
+  Grafana now reports one reconciled spend total with unified model and project breakdowns across every backend. Project views include gateway-attributed spend, and the Codex routing stat no longer shows Grafana's query-reference label.
+
 ## v3.411.0 (2026-08-07)
 
 ### model-gateway 0.48.1 → 0.48.2
