@@ -4,7 +4,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import type { DatabaseSync, SQLInputValue, StatementSync } from 'node:sqlite';
 
 import type { ChangeCount, SidequestDatabase, TableName } from '../src/lib/db.js';
@@ -38,14 +38,44 @@ const databaseApi = require('../lib/db.js') as {
   selectRows<T>(database: DatabaseSync, sql: string, parameters?: readonly SQLInputValue[]): T[];
   prepareCached(database: DatabaseSync, sql: string): StatementSync;
   txn<T>(database: DatabaseSync, fn: () => T): T;
+  SQLITE_BUSY_TIMEOUT_MS: number;
 };
 
-const { openDb, getRow, putRow, deleteRow, listRows, listRowsPage, countRows, selectRows, prepareCached, txn } = databaseApi;
+const { openDb, getRow, putRow, deleteRow, listRows, listRowsPage, countRows, selectRows, prepareCached, txn, SQLITE_BUSY_TIMEOUT_MS } = databaseApi;
 
 function makeDb(): { db: SidequestDatabase; homeRoot: string } {
   const homeRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-db-test-'));
   const db = openDb(homeRoot);
   return { db, homeRoot };
+}
+
+function holdWriteLock(homeRoot: string, durationMs: number): Promise<ReturnType<typeof spawn>> {
+  const databasePath = path.join(homeRoot, 'sidequest.db');
+  const childProcess = spawn(process.execPath, ['-e', `
+    const { DatabaseSync } = require('node:sqlite');
+    const database = new DatabaseSync(${JSON.stringify(databasePath)});
+    database.exec('BEGIN IMMEDIATE');
+    process.stdout.write('locked');
+    setTimeout(() => {
+      database.exec('COMMIT');
+      database.close();
+    }, ${durationMs});
+  `], { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
+  return new Promise((resolve, reject) => {
+    childProcess.once('error', reject);
+    childProcess.stdout.once('data', () => resolve(childProcess));
+    childProcess.stderr.once('data', (data) => reject(new Error(String(data))));
+  });
+}
+
+function waitForProcessExit(childProcess: ReturnType<typeof spawn>): Promise<void> {
+  return new Promise((resolve, reject) => {
+    childProcess.once('error', reject);
+    childProcess.once('close', (code) => {
+      if (code === 0 || code === null) resolve();
+      else reject(new Error(`write lock process exited with ${code}`));
+    });
+  });
 }
 
 function ticket(id: string, project: string, status: string, ord: number): TicketDatabaseRow {
@@ -152,11 +182,40 @@ test('txn refuses Promise-returning callbacks and rolls back their synchronous w
   db.close();
 });
 
-test('openDb enables WAL', () => {
+test('openDb enables WAL and configures a busy timeout', () => {
   const { db } = makeDb();
 
   assert.strictEqual(db.prepare('PRAGMA journal_mode').get()?.journal_mode, 'wal');
+  assert.strictEqual(db.prepare('PRAGMA busy_timeout').get()?.timeout, SQLITE_BUSY_TIMEOUT_MS);
   db.close();
+});
+
+test('txn waits for a concurrent writer to release its lock', async () => {
+  const { db, homeRoot } = makeDb();
+  const childProcess = await holdWriteLock(homeRoot, 250);
+  const startedAt = Date.now();
+
+  txn(db, () => putRow(db, 'globals', { key: 'after-lock', data: {} }));
+
+  assert.ok(Date.now() - startedAt >= 200, 'transaction must wait for the active writer');
+  await waitForProcessExit(childProcess);
+  db.close();
+});
+
+test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
+  const { db, homeRoot } = makeDb();
+  const childProcess = await holdWriteLock(homeRoot, SQLITE_BUSY_TIMEOUT_MS * 4);
+
+  try {
+    assert.throws(
+      () => txn(db, () => putRow(db, 'globals', { key: 'blocked', data: {} })),
+      /Sidequest database stayed locked while beginning a write transaction.*after 3 attempts.*SQLite does not expose the locking process or claim identity/i,
+    );
+  } finally {
+    childProcess.kill();
+    await waitForProcessExit(childProcess);
+    db.close();
+  }
 });
 
 test('requiring db.js emits no SQLite ExperimentalWarning', () => {

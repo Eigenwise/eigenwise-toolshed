@@ -22,6 +22,11 @@ try {
 }
 
 export const CURRENT_SCHEMA_VERSION = 7;
+// Board writers normally finish in milliseconds; five-second SQLite waits avoid failing on ordinary handoffs without hiding a wedged writer forever.
+export const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
+const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
+const busySleep = new Int32Array(new SharedArrayBuffer(4));
 
 // Pre-v5 default text; the v5 migration only refreshes rows the user never customized.
 const OLD_CODEBASE_EXPLORATION = {
@@ -184,6 +189,35 @@ export interface PageOptions {
 
 const statementCaches = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
 
+function isSqliteBusy(error: unknown): boolean {
+  return error instanceof Error && /database is (?:locked|busy)/i.test(error.message);
+}
+
+function sqliteBusyError(operation: string, startedAt: number, cause: unknown): Error {
+  const elapsedMs = Date.now() - startedAt;
+  const originalMessage = cause instanceof Error ? cause.message : String(cause);
+  return new Error(
+    `Sidequest database stayed locked while ${operation} for ${elapsedMs}ms after ${SQLITE_BUSY_RETRY_ATTEMPTS} attempts, each waiting up to ${SQLITE_BUSY_TIMEOUT_MS}ms. SQLite does not expose the locking process or claim identity. Check active Sidequest writers, then retry. Original SQLite error: ${originalMessage}`,
+    { cause },
+  );
+}
+
+function retryWhenSqliteBusy<T>(operation: string, work: () => T): T {
+  const startedAt = Date.now();
+  for (let attempt = 0; attempt < SQLITE_BUSY_RETRY_ATTEMPTS; attempt += 1) {
+    try {
+      return work();
+    } catch (error) {
+      if (!isSqliteBusy(error) || attempt === SQLITE_BUSY_RETRY_ATTEMPTS - 1) {
+        if (isSqliteBusy(error)) throw sqliteBusyError(operation, startedAt, error);
+        throw error;
+      }
+      Atomics.wait(busySleep, 0, 0, SQLITE_BUSY_RETRY_DELAYS_MS[attempt] ?? 0);
+    }
+  }
+  throw new Error(`SQLite busy retry exhausted without an error while ${operation}.`);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
@@ -278,7 +312,7 @@ export function selectRows<T = Record<string, SQLOutputValue>>(
   sql: string,
   parameters: readonly SQLInputValue[] = [],
 ): T[] {
-  return prepareCached(database, sql).all(...parameters) as T[];
+  return retryWhenSqliteBusy('reading rows', () => prepareCached(database, sql).all(...parameters) as T[]);
 }
 
 export function selectRow<T = Record<string, SQLOutputValue>>(
@@ -286,7 +320,7 @@ export function selectRow<T = Record<string, SQLOutputValue>>(
   sql: string,
   parameters: readonly SQLInputValue[] = [],
 ): T | null {
-  return (prepareCached(database, sql).get(...parameters) as T | undefined) ?? null;
+  return retryWhenSqliteBusy('reading a row', () => (prepareCached(database, sql).get(...parameters) as T | undefined) ?? null);
 }
 
 function normalizedCategory(category: Record<string, unknown>): Record<string, unknown> {
@@ -329,7 +363,7 @@ function categoryDigest(categories: readonly Record<string, unknown>[]): string 
 }
 
 function categoryRows(database: DatabaseSync): Record<string, unknown>[] {
-  return prepareCached(database, 'SELECT data FROM categories ORDER BY id').all()
+  return retryWhenSqliteBusy('reading categories', () => prepareCached(database, 'SELECT data FROM categories ORDER BY id').all())
     .map((row) => {
       try {
         const parsed = JSON.parse(row.data as string) as unknown;
@@ -363,10 +397,10 @@ function applyCategoryRows(
 
 export function openDb(homeRoot: string): SidequestDatabase {
   fs.mkdirSync(homeRoot, { recursive: true });
-  const database = new DatabaseSyncConstructor(path.join(homeRoot, 'sidequest.db'), { timeout: 5000 });
-  database.exec('PRAGMA journal_mode=WAL');
-  database.exec('PRAGMA busy_timeout=5000');
-  database.exec(`
+  const database = new DatabaseSyncConstructor(path.join(homeRoot, 'sidequest.db'), { timeout: SQLITE_BUSY_TIMEOUT_MS });
+  retryWhenSqliteBusy('enabling WAL mode', () => database.exec('PRAGMA journal_mode=WAL'));
+  database.exec(`PRAGMA busy_timeout=${SQLITE_BUSY_TIMEOUT_MS}`);
+  retryWhenSqliteBusy('initializing database schema', () => database.exec(`
     CREATE TABLE IF NOT EXISTS projects (
       slug TEXT PRIMARY KEY,
       data TEXT
@@ -399,7 +433,7 @@ export function openDb(homeRoot: string): SidequestDatabase {
       value TEXT
     );
     INSERT OR IGNORE INTO meta (key, value) VALUES ('schema_version', '1');
-  `);
+  `));
 
   const schemaRow = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
   let schemaVersion = Number(schemaRow && JSON.parse(schemaRow.value as string));
@@ -740,12 +774,12 @@ export function getRow<T = unknown, N extends TableName = TableName>(
   const spec = tableSpec(table);
   const payload = payloadColumn(spec);
   const selection = payload ?? spec.columns.join(', ');
-  const row = prepareCached(database, `SELECT ${selection} FROM ${table} WHERE ${keyWhere(spec)}`).get(...keyValues(spec, key));
+  const row = retryWhenSqliteBusy(`reading ${table}`, () => prepareCached(database, `SELECT ${selection} FROM ${table} WHERE ${keyWhere(spec)}`).get(...keyValues(spec, key)));
   return row ? parseTableRow(spec, row) as T : null;
 }
 
 export function assertWritable(database: DatabaseSync): void {
-  const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+  const row = retryWhenSqliteBusy('checking schema version', () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get());
   const version = Number(row && JSON.parse(row.value as string));
   if (version > CURRENT_SCHEMA_VERSION) {
     throw new Error(`Sidequest database schema ${version} is newer than supported schema ${CURRENT_SCHEMA_VERSION}; refusing write.`);
@@ -762,15 +796,15 @@ export function putRow<N extends TableName>(database: DatabaseSync, table: N, ro
     .map((column) => `${column} = excluded.${column}`)
     .join(', ');
   const placeholders = spec.columns.map(() => '?').join(', ');
-  return prepareCached(database, `
+  return retryWhenSqliteBusy(`writing ${table}`, () => prepareCached(database, `
     INSERT INTO ${table} (${spec.columns.join(', ')}) VALUES (${placeholders})
     ON CONFLICT(${keyColumns(spec).join(', ')}) DO UPDATE SET ${assignments}
-  `).run(...values).changes;
+  `).run(...values).changes);
 }
 
 export function deleteRow<N extends TableName>(database: DatabaseSync, table: N, key: DatabaseTableKeyMap[N]): boolean {
   assertWritable(database);
-  return prepareCached(database, `DELETE FROM ${table} WHERE ${keyWhere(tableSpec(table))}`).run(...keyValues(tableSpec(table), key)).changes !== 0;
+  return retryWhenSqliteBusy(`deleting from ${table}`, () => prepareCached(database, `DELETE FROM ${table} WHERE ${keyWhere(tableSpec(table))}`).run(...keyValues(tableSpec(table), key)).changes !== 0);
 }
 
 export function listRows<T = unknown, N extends TableName = TableName>(
@@ -783,8 +817,8 @@ export function listRows<T = unknown, N extends TableName = TableName>(
   const selection = payload ?? spec.columns.join(', ');
   const filters = filtersFor(table, whereObj);
   const orderBy = spec.orderBy ? ` ORDER BY ${spec.orderBy}` : '';
-  const rows = prepareCached(database, `SELECT ${selection} FROM ${table}${whereClause(filters)}${orderBy}`)
-    .all(...filters.map(([, value]) => value));
+  const rows = retryWhenSqliteBusy(`listing ${table}`, () => prepareCached(database, `SELECT ${selection} FROM ${table}${whereClause(filters)}${orderBy}`)
+    .all(...filters.map(([, value]) => value)));
   return rows.map((row) => parseTableRow(spec, row) as T);
 }
 
@@ -802,27 +836,27 @@ export function listRowsPage<T = unknown, N extends TableName = TableName>(
   const selection = payload ?? spec.columns.join(', ');
   const filters = filtersFor(table, whereObj);
   const orderBy = spec.orderBy ? ` ORDER BY ${spec.orderBy}` : '';
-  const rows = prepareCached(database, `SELECT ${selection} FROM ${table}${whereClause(filters)}${orderBy} LIMIT ? OFFSET ?`)
-    .all(...filters.map(([, value]) => value), options.limit, offset);
+  const rows = retryWhenSqliteBusy(`listing ${table} page`, () => prepareCached(database, `SELECT ${selection} FROM ${table}${whereClause(filters)}${orderBy} LIMIT ? OFFSET ?`)
+    .all(...filters.map(([, value]) => value), options.limit, offset));
   return rows.map((row) => parseTableRow(spec, row) as T);
 }
 
 export function countRows<N extends TableName>(database: DatabaseSync, table: N, whereObj?: RowFilter<N>): number {
   const filters = filtersFor(table, whereObj);
-  const row = prepareCached(database, `SELECT COUNT(*) AS count FROM ${table}${whereClause(filters)}`)
-    .get(...filters.map(([, value]) => value));
+  const row = retryWhenSqliteBusy(`counting ${table}`, () => prepareCached(database, `SELECT COUNT(*) AS count FROM ${table}${whereClause(filters)}`)
+    .get(...filters.map(([, value]) => value)));
   return Number(row?.count ?? 0);
 }
 
 export function hasRow<N extends TableName>(database: DatabaseSync, table: N, key: DatabaseTableKeyMap[N]): boolean {
   const spec = tableSpec(table);
-  return prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== undefined;
+  return retryWhenSqliteBusy(`checking ${table}`, () => prepareCached(database, `SELECT 1 FROM ${table} WHERE ${keyWhere(spec)} LIMIT 1`).get(...keyValues(spec, key)) !== undefined);
 }
 
 export function txn<T>(database: DatabaseSync, fn: () => T): T {
-  const row = prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get();
+  const row = retryWhenSqliteBusy('checking schema version before a transaction', () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get());
   if (row) assertWritable(database);
-  database.exec('BEGIN IMMEDIATE');
+  retryWhenSqliteBusy('beginning a write transaction', () => database.exec('BEGIN IMMEDIATE'));
   try {
     const result = fn();
     if (isRecord(result) && typeof result.then === 'function') {
