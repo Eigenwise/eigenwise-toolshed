@@ -546,7 +546,7 @@ function worktreeIsolationWarning(slug?: any) {
 }
 
 function normalizedFilesystemPath(value?: any) {
-  const resolved = path.resolve(String(value || ''));
+  const resolved = fs.realpathSync.native(path.resolve(String(value || '')));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
