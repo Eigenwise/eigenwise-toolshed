@@ -19,7 +19,13 @@ interface GitResult {
 
 function git(cwd: string, args: string[]): Promise<GitResult> {
   return new Promise((resolve) => {
-    const child = spawn('git', args, { cwd, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const child = spawn('git', ['-c', 'core.editor=true', ...args], {
+      cwd,
+      env: { ...process.env, GIT_EDITOR: 'true', GIT_SEQUENCE_EDITOR: 'true' },
+      timeout: 120_000,
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
     const stdout: Buffer[] = [];
     const stderr: Buffer[] = [];
     child.stdout.on('data', (chunk: Buffer) => stdout.push(chunk));

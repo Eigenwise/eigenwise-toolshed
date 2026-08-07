@@ -212,7 +212,14 @@ Expires: ${checkpoint.expiresAt}`;
     return `refs/sidequest/${ticket.ref}`;
   }
   function integrationGit(repo, args) {
-    return execFileSync("git", args, { cwd: repo, encoding: "utf8", windowsHide: true, stdio: ["ignore", "pipe", "pipe"] }).trim();
+    return execFileSync("git", ["-c", "core.editor=true", ...args], {
+      cwd: repo,
+      encoding: "utf8",
+      env: { ...process.env, GIT_EDITOR: "true", GIT_SEQUENCE_EDITOR: "true" },
+      timeout: 12e4,
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    }).trim();
   }
   function integrationGitError(error) {
     return String(error?.stderr || error?.message || error || "").trim();
