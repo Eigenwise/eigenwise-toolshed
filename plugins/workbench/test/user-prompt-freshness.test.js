@@ -35,8 +35,12 @@ function reloadPending(directory) {
     options: {
       registryFile,
       pluginRoot,
+      cache: {
+        checkedAt: new Date().toISOString(),
+        manifest: { plugins: [{ name: 'workbench', version: '2.0.0' }] },
+      },
       warningStateDirectory: path.join(directory, 'warnings'),
-      warnedReloads: new Set(),
+      warnedStates: new Set(),
     },
   };
 }
@@ -46,7 +50,7 @@ test('a session with no reload pending permits with empty output and never fetch
   const registryFile = path.join(directory, 'installed_plugins.json');
   fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '1.0.0' }])));
   let fetches = 0;
-  const result = decide({ prompt: 'ship it', cwd: 'C:\\dev\\project' }, { registryFile, platform: 'win32', fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); } });
+  const result = decide({ prompt: 'ship it', cwd: 'C:\\dev\\project' }, { registryFile, platform: 'win32', cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [{ name: 'workbench', version: '1.0.0' }] } }, fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); } });
   assert.equal(result, '');
   assert.equal(fetches, 0);
 });
@@ -60,7 +64,7 @@ test('installed behind the central marketplace is no longer blocked (regression:
   fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '1.0.0' }])));
   let fetches = 0;
   const result = decide({ prompt: 'drop this zip and work on it', cwd: 'C:\\dev\\unrelated' }, {
-    registryFile, platform: 'win32', fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); },
+    registryFile, platform: 'win32', cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [{ name: 'workbench', version: '1.0.0' }] } }, fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); },
   });
   assert.equal(result, '');
   assert.equal(fetches, 0);
@@ -110,6 +114,71 @@ test('all prompts pass through and warn only once for the session', () => {
 
   const nextSession = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'another-session' }, options));
   assert.match(nextSession.hookSpecificOutput.additionalContext, /Workbench 3\.0\.0 is installed/);
+});
+
+test('compares installed plugins to the cached remote manifest rather than the local clone', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
+  } }));
+  const output = JSON.parse(decide({ prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'remote-behind' }, {
+    registryFile,
+    cache: {
+      checkedAt: new Date().toISOString(),
+      manifest: { plugins: [{ name: 'sidequest', version: '4.35.0' }] },
+    },
+    warningStateDirectory: path.join(directory, 'warnings'),
+    warnedStates: new Set(),
+  }));
+  assert.match(output.hookSpecificOutput.additionalContext, /sidequest 4\.34\.0 → 4\.35\.0/);
+  assert.match(output.hookSpecificOutput.additionalContext, /\/update-toolshed/);
+  assert.match(output.hookSpecificOutput.additionalContext, /\/reload-plugins cannot fetch new versions/);
+});
+
+test('reports every remotely outdated plugin in one compact warning', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
+    'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.80.0' }],
+    'model-gateway@eigenwise-toolshed': [{ scope: 'user', version: '0.47.0' }],
+  } }));
+  const output = JSON.parse(decide({ prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'multiple-remote-updates' }, {
+    registryFile,
+    cache: {
+      checkedAt: new Date().toISOString(),
+      manifest: { plugins: [
+        { name: 'sidequest', version: '4.35.0' },
+        { name: 'workbench', version: '0.81.0' },
+        { name: 'model-gateway', version: '0.48.0' },
+      ] },
+    },
+    warningStateDirectory: path.join(directory, 'warnings'),
+    warnedStates: new Set(),
+  }));
+  const message = output.hookSpecificOutput.additionalContext;
+  assert.match(message, /model-gateway 0\.47\.0 → 0\.48\.0/);
+  assert.match(message, /sidequest 4\.34\.0 → 4\.35\.0/);
+  assert.match(message, /workbench 0\.80\.0 → 0\.81\.0/);
+  assert.equal((message.match(/Toolshed updates available/g) || []).length, 1);
+});
+
+test('treats an unavailable remote manifest as unknown without claiming an update', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
+  } }));
+  const output = JSON.parse(decide({ prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'remote-unavailable' }, {
+    registryFile,
+    cache: { checkedAt: new Date().toISOString(), unavailable: true },
+    warningStateDirectory: path.join(directory, 'warnings'),
+    warnedStates: new Set(),
+  }));
+  assert.match(output.hookSpecificOutput.additionalContext, /freshness could not be determined/);
+  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /4\.35\.0/);
+  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /decision/);
 });
 
 test('selects user and overlapping project installs, excluding unrelated marketplaces', () => {

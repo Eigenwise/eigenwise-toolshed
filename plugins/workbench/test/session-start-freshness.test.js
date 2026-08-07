@@ -415,6 +415,7 @@ test('hooks.json registers the freshness hooks and nothing observability owns', 
   const commandsFor = (event) => (hooks[event] || []).flatMap((group) => group.hooks.map((h) => h.command)).join(' ');
   assert.ok(commandsFor('SessionStart').includes('session-start-freshness.js'));
   assert.ok(commandsFor('SessionStart').includes('billing-path-check.js'));
+  assert.ok(commandsFor('SessionStart').includes('marketplace-freshness-cache.js'));
   assert.ok(commandsFor('UserPromptSubmit').includes('user-prompt-freshness.js'));
   const all = Object.keys(hooks).map(commandsFor).join(' ');
   assert.ok(!all.includes('observability'), 'observability hooks belong to the observability plugin');
