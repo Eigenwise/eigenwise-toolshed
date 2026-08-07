@@ -703,6 +703,7 @@ test('a scope denial states the scope in force and syncs the dispatch record', (
   const denied = store.denyScopeRequest(slug, ticket.ref, 'orchestrator', 'The requested path belongs to another live ticket.');
   assert.strictEqual(denied.ok, true);
   assert.match(denied.comment.body, /Declared scope is now: lib\/fixture\.js/);
+  assert.doesNotMatch(denied.comment.body, /\.release\/unreleased/);
   assert.doesNotMatch(denied.comment.body, /remains unchanged/);
   const after = store.getTicket(slug, ticket.ref);
   assert.strictEqual(after.scopeRequest, null);

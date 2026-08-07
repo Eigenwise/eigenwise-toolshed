@@ -103,7 +103,7 @@ function missingReleaseFragment(repoPath: string, ref: string, changedPaths: str
 }
 
 function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugins: ShippedPlugin[]): string {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Request scope for ${fragmentPath}, then create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
 }
 
 const tools: ToolDefinition[] = [
@@ -500,7 +500,7 @@ const tools: ToolDefinition[] = [
           message: `commit: refused ${ticket.ref}; scope approval remains pending for ${pending.join(', ')}.${covered.length ? ` Already effective: ${covered.join(', ')}.` : ''} Approve the request with \`${approval}\` or deny it with \`sidequest scope-deny ${ticket.ref} --reason "why"\` before committing.`,
         });
       }
-      const scope = store.effectiveScope(slug, ticket.files);
+      const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
         return mutationAck(slug, {
@@ -508,6 +508,15 @@ const tools: ToolDefinition[] = [
           ticket,
           reason: 'outside_scope',
           message: `commit: refused ${ticket.ref}; declared paths are outside the repo worktree: ${outsideWorktree.join(', ')}. This dispatch cannot commit them. For genuine non-repo output, release and reclassify as non-repo/artifact work; otherwise declare in-repo paths and dispatch again.`,
+        });
+      }
+      const foreignFragments = commitScope.foreignReleaseFragmentPaths(root, ticket.ref);
+      if (foreignFragments.length) {
+        return mutationAck(slug, {
+          ok: false,
+          ticket,
+          reason: 'outside_scope',
+          message: `commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable. Other release fragments: ${foreignFragments.join(', ')}.`,
         });
       }
       const result = commitScope.commitScoped(root, message, scope);
@@ -636,7 +645,7 @@ const tools: ToolDefinition[] = [
       if (duplicate) {
         return mutationAck(slug, { ok: false, ticket, reason: 'duplicate_submission', message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.` });
       }
-      const scope = store.effectiveScope(slug, ticket.files);
+      const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
       const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
       if (!scopedRange.ok) {
         const message = scopedRange.reason === 'missing_scope'

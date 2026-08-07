@@ -30,6 +30,7 @@ var commit_scope_exports = {};
 __export(commit_scope_exports, {
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
+  foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
   headCommit: () => headCommit,
   isInScope: () => isInScope,
   linkedWorktree: () => linkedWorktree,
@@ -39,6 +40,8 @@ __export(commit_scope_exports, {
   scopedPaths: () => scopedPaths,
   scopedWorkPending: () => scopedWorkPending,
   submissionRange: () => submissionRange,
+  ticketCommitScope: () => ticketCommitScope,
+  ticketReleaseFragment: () => ticketReleaseFragment,
   unscopedWorkingPaths: () => unscopedWorkingPaths,
   validateCommitRangeScope: () => validateCommitRangeScope,
   validateCommitScope: () => validateCommitScope,
@@ -174,6 +177,19 @@ function workingPaths(cwd) {
     }
   }
   return Array.from(new Set(paths));
+}
+function ticketReleaseFragment(ticketRef) {
+  const ref = typeof ticketRef === "string" ? ticketRef.trim() : "";
+  return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(ref) ? `.release/unreleased/${ref}.md` : null;
+}
+function ticketCommitScope(effectiveFiles, declaredFiles, ticketRef) {
+  const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
+  const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
+  return fragment && !isInScope(fragment, scope) ? [...scope, fragment] : scope;
+}
+function foreignReleaseFragmentPaths(cwd, ticketRef) {
+  const ownFragment = ticketReleaseFragment(ticketRef);
+  return workingPaths(cwd).filter((file) => file.startsWith(".release/unreleased/") && file.endsWith(".md") && file !== ownFragment);
 }
 function unscopedWorkingPaths(cwd, files) {
   return workingPaths(cwd).filter((file) => !isInScope(file, files));
@@ -488,7 +504,7 @@ function submissionRange(cwd, options) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
-function validateStoredSubmissionRange(cwd, submissionValue) {
+function validateStoredSubmissionRange(cwd, submissionValue, ticketRef) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
   const range = submissionRange(cwd, {
     commit: submission.commit,
@@ -521,7 +537,8 @@ function validateStoredSubmissionRange(cwd, submissionValue) {
       message: "submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason."
     });
   }
-  const scopeValidation = validatePaths(admittedScope, rangeChangedPaths);
+  const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
+  const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
   return Object.assign({}, range, { admittedScope });
 }
@@ -554,6 +571,7 @@ function commitScoped(cwd, message, files) {
 0 && (module.exports = {
   commitPaths,
   commitScoped,
+  foreignReleaseFragmentPaths,
   headCommit,
   isInScope,
   linkedWorktree,
@@ -563,6 +581,8 @@ function commitScoped(cwd, message, files) {
   scopedPaths,
   scopedWorkPending,
   submissionRange,
+  ticketCommitScope,
+  ticketReleaseFragment,
   unscopedWorkingPaths,
   validateCommitRangeScope,
   validateCommitScope,

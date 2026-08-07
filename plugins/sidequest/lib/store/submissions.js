@@ -326,7 +326,7 @@ ${verify.outputTail}` : null
       };
     }
     const project = readMeta(slug);
-    const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission);
+    const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref);
     const legacyScopeOverride = opts?.overrideLegacyScope === true && scopeValidation.reason === "missing_scope_snapshot";
     if (!scopeValidation.ok && !legacyScopeOverride) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
@@ -551,7 +551,8 @@ ${verify.outputTail}` : null
         };
       }
       const admittedScope = effectiveScope(slug, t.files);
-      const outsideSubmittedRange = range ? range.changedPaths.filter((file) => !commitScope.isInScope(file, admittedScope)) : [];
+      const submissionScope = commitScope.ticketCommitScope(admittedScope, t.files, t.ref);
+      const outsideSubmittedRange = range ? range.changedPaths.filter((file) => !commitScope.isInScope(file, submissionScope)) : [];
       if (outsideSubmittedRange.length) {
         return {
           ok: false,
