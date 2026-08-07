@@ -85,9 +85,32 @@ function clearFailure(pathname) {
   delete state[key];
   writeFailureState(state);
 }
+function recordQuarantine(pathname, message, destination) {
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  const existing = state[key];
+  state[key] = {
+    ...existing || { fingerprint: failureFingerprint(message), attempts: 1 },
+    quarantineAttempted: true,
+    quarantinedPath: destination,
+    quarantinedAt: (/* @__PURE__ */ new Date()).toISOString()
+  };
+  writeFailureState(state);
+}
+function recordQuarantineFailure(pathname, message) {
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  const existing = state[key];
+  state[key] = {
+    ...existing || { fingerprint: failureFingerprint(message), attempts: 1 },
+    quarantineAttempted: true,
+    quarantineFailed: true
+  };
+  writeFailureState(state);
+}
 function shouldSkipKnownFailure(pathname) {
   const state = readFailureState()[canonicalPath(pathname)];
-  return state?.fingerprint === "filename-too-long" && state.attempts >= 2;
+  return Boolean(state?.quarantineFailed) || state?.fingerprint === "filename-too-long" && state.attempts >= 2;
 }
 function shouldTryExtendedPath(pathname, message) {
   if (process.platform !== "win32" || !isFilenameTooLong(message)) return false;
@@ -584,6 +607,23 @@ async function advanceLocalIntegrationBranch(repo, options) {
     message: `advanced ${branch} ${shortCommit(branchHead)} → ${shortCommit(to)} (fast-forward, ${repo}).`
   }, common));
 }
+function quarantineRoot(options) {
+  return options.quarantineDir || path.join(process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest"), "worktree-quarantine");
+}
+async function quarantineCandidate(entry, message, options) {
+  const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
+  const destination = path.join(quarantineRoot(options), `${path.basename(entry.path)}-${timestamp}`);
+  try {
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.rename(entry.path, destination);
+    recordQuarantine(entry.path, message, destination);
+    return { ok: true, destination, stderr: "" };
+  } catch (error) {
+    const stderr = String(error && error.message || error);
+    recordQuarantineFailure(entry.path, stderr);
+    return { ok: false, stderr };
+  }
+}
 async function removeCandidate(repo, entry) {
   const remove = async (pathname) => entry.orphanDirectory ? fs.rm(pathname, { recursive: true, force: false }).then(() => ({ ok: true, stderr: "" })).catch((error) => ({ ok: false, stderr: String(error && error.message || error) })) : git(repo, entry.clean ? ["worktree", "remove", pathname] : ["worktree", "remove", "--force", pathname]);
   const first = await remove(entry.path);
@@ -605,7 +645,8 @@ async function sweep(repo, tickets, options = {}) {
       backups: [],
       deletedBranches: [],
       prunedOrphanBranches: [],
-      counts: { removedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
+      quarantined: [],
+      counts: { removedWorktrees: 0, quarantinedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
       failures: [],
       skipped: "repository_busy"
     };
@@ -626,6 +667,7 @@ async function sweep(repo, tickets, options = {}) {
   const backups = [];
   const deletedBranches = [];
   const prunedOrphanBranches = [];
+  const quarantined = [];
   const failures = [];
   if (execute) {
     for (const entry of entries.filter((candidate) => candidate.action === "remove")) {
@@ -646,8 +688,18 @@ async function sweep(repo, tickets, options = {}) {
       const result = await removeCandidate(repo, entry);
       if (!result.ok) {
         const message = result.stderr || "worktree remove failed";
-        const failure = recordFailure(entry.path, message);
-        failures.push({ path: entry.path, message, suppressed: failure.suppressed });
+        recordFailure(entry.path, message);
+        const quarantine = await quarantineCandidate(entry, message, options);
+        if (!quarantine.ok || !quarantine.destination) {
+          entry.action = "keep";
+          entry.reason = "quarantine_failed";
+          failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
+          continue;
+        }
+        entry.action = "quarantine";
+        entry.reason = "remove_failed_quarantined";
+        entry.quarantine = quarantine.destination;
+        quarantined.push({ path: entry.path, destination: quarantine.destination, message });
         continue;
       }
       clearFailure(entry.path);
@@ -659,7 +711,7 @@ async function sweep(repo, tickets, options = {}) {
       if (deleted.ok) deletedBranches.push(branch);
       else failures.push({ path: branch, message: deleted.stderr || "git branch delete failed" });
     }
-    if (removed.length) {
+    if (removed.length || quarantined.length) {
       const prune = await git(repo, ["worktree", "prune"]);
       if (!prune.ok) failures.push({ path: null, message: prune.stderr || "git worktree prune failed" });
     }
@@ -686,8 +738,10 @@ async function sweep(repo, tickets, options = {}) {
     backups,
     deletedBranches,
     prunedOrphanBranches,
+    quarantined,
     counts: {
       removedWorktrees: removed.length,
+      quarantinedWorktrees: quarantined.length,
       backedUpWorktrees: backups.length,
       deletedBranches: deletedBranches.length,
       prunedOrphanBranches: prunedOrphanBranches.length
