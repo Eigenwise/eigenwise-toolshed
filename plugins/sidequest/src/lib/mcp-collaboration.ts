@@ -81,7 +81,9 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const res = store.addComment(slug, args.ref, { body: args.body, by: args.by || 'agent', kind: 'comment', source: 'mcp' });
+      const ticket = store.getTicket(slug, args.ref);
+      const by = args.by || ticket?.claim?.by || 'agent';
+      const res = store.addComment(slug, args.ref, { body: args.body, by, kind: 'comment', source: 'mcp' });
       return mutationAck(slug, res, res.ok ? { commentId: res.comment.id, at: res.comment.at } : null);
     },
   },

@@ -503,16 +503,20 @@ function negativeControlResult(ticket?: any) {
   const claimHolder = String(ticket?.claim?.by || '').trim();
   if (!claimHolder) return { kind: 'missing' };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
+  let otherControlAuthor = '';
   for (const comment of comments.slice().reverse()) {
-    if (comment?.by !== claimHolder) continue;
     const body = String(comment.body || '').trim();
+    if (comment?.by !== claimHolder) {
+      if (!otherControlAuthor && body.startsWith('[sidequest:negative-control]')) otherControlAuthor = String(comment?.by || 'unknown');
+      continue;
+    }
     const waived = body.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)$/);
     const waiverReason = waived?.[1]?.trim();
     if (waiverReason) return waiverReason.length >= 20 ? { kind: 'waived' } : { kind: 'short_waiver' };
     const failed = body.match(/^\[sidequest:negative-control\]\s+(.+?)\s+failed=(\d+)$/);
     if (failed) return Number(failed[2]) > 0 ? { kind: 'failed' } : { kind: 'zero_failures' };
   }
-  return { kind: 'missing' };
+  return otherControlAuthor ? { kind: 'wrong_author', by: otherControlAuthor } : { kind: 'missing' };
 }
 
 function negativeControlRefusal(ticket?: any, result?: any) {
@@ -529,6 +533,13 @@ function negativeControlRefusal(ticket?: any, result?: any) {
       ok: false,
       reason: 'negative_control_waiver_too_short',
       message: `${ticket.ref} completion refused: a negative-control waiver needs a reason of at least 20 characters. ${recipe}`,
+    };
+  }
+  if (result.kind === 'wrong_author') {
+    return {
+      ok: false,
+      reason: 'negative_control_required',
+      message: `${ticket.ref} completion refused: a negative control was recorded by "${result.by}", but the current claim holder is "${ticket.claim.by}". ${recipe}`,
     };
   }
   return {
