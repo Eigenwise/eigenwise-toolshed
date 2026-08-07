@@ -12,9 +12,17 @@ const { resolveSuite } = require('../lib/suite-resolver');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
 const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+const CLAUDE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-claude-'));
+fs.mkdirSync(path.join(CLAUDE_HOME, 'plugins'), { recursive: true });
+fs.writeFileSync(path.join(CLAUDE_HOME, 'plugins', 'installed_plugins.json'), JSON.stringify({
+  plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'user', installPath: path.join(__dirname, '..') }],
+  },
+}));
+process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
 const WARNING = 'Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.';
 const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
-const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
+const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.';
 const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
 const BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output lib. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
 const HOOK_BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output hooks. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
@@ -371,8 +379,16 @@ test('add warns for a write-scope ticket with no declared files, not when files 
   fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
   fs.writeFileSync(scopedFile, 'existing\n');
 
-  const noFiles = cliJson(['add', '-t', 'no scope declared', '--category', 'coding.normal', '--description', 'Add a thing.']);
+  const noFiles = cliJson(['add', '-t', 'no scope declared', '--category', 'coding.normal', '--description', 'The fixture leaves file scope empty so dispatch must refuse it unless the caller makes an explicit choice.', '--changes', 'planning warning dispatch behavior']);
   assert.deepStrictEqual(noFiles.warnings, [NO_SCOPE_WARNING]);
+
+  const refused = cliResult(['dispatch', noFiles.ticket.ref, '--unverified-transport']);
+  assert.notStrictEqual(refused.status, 0);
+  assert.match(refused.stderr + refused.stdout, /has no declared file scope for write work/);
+
+  const overridden = cliResult(['dispatch', noFiles.ticket.ref, '--unverified-transport', '--allow-unscoped']);
+  assert.strictEqual(overridden.status, 0, overridden.stderr + overridden.stdout);
+  assert.ok(JSON.parse(overridden.stdout).warnings.includes(`Dispatch warning: ${NO_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`));
 
   const withFiles = cliJson(['add', '-t', 'scope declared', '--category', 'coding.normal', '--description', 'Add a thing.', '--file', 'lib/existing.js']);
   assert.deepStrictEqual(withFiles.warnings, []);

@@ -254,7 +254,7 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     if (dispatchReadOnly(ticket)) return null;
     if (Array.isArray(ticket.files) && ticket.files.length) return null;
     if (Number(ticket?.complexity) >= 4) return null;
-    return "Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.";
+    return "Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.";
   }
   const BROWSER_REVIEW_CATEGORIES = /* @__PURE__ */ new Set(["visual-evaluation", "visual-review"]);
   function readonlyBrowserReviewWarning(ticket) {
@@ -585,6 +585,8 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   }
   function dispatchWarnings(ticket, slug) {
     const warnings = dispatchUncertaintyWarnings(ticket, slug);
+    const noScope = noDeclaredScopeWarning(ticket);
+    if (noScope) warnings.push(`Dispatch warning: ${noScope.replace("Planning-depth warning: ", "")}`);
     const projectPath = slug ? readMeta(slug)?.path : null;
     const visibility = worktreeVisibilityWarning(ticket, projectPath);
     if (visibility) warnings.push(visibility);
