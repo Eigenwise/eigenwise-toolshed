@@ -8,6 +8,39 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.411.0 (2026-08-07)
+
+### model-gateway 0.48.1 → 0.48.2
+
+#### Fixes
+
+- Gateway usage records now include their session project (SQ-1488)
+  Gateway token-usage records now resolve their Claude Code session to a project
+  and send that project as an OTLP resource attribute, so Codex spend appears in
+  per-project dashboards.
+
+### observability 0.5.1 → 0.5.2
+
+#### Fixes
+
+- Simplify Grafana dashboards and rebuild them from active telemetry (SQ-1492)
+  Grafana dashboards now focus on cost, routing, failures, and source health with 15 mostly graphical panels instead of 39. Project dashboards rebuild from recent telemetry rather than the opt-in registry, and `setup-observability --reset-dashboards` clears generated dashboards until fresh activity returns.
+
+### sidequest 4.40.4 → 4.40.5
+
+#### Fixes
+
+- Reserve executor verification budget (SQ-1400)
+  Briefings tell executors to run declared verification early, plan around the observed tool-call cap, and report when verification was not reached.
+- Refuse unscoped write dispatches (SQ-1485)
+  Dispatch now refuses write tickets without declared file scope unless the caller explicitly overrides it.
+- Wait for SQLite database contention (SQ-1493)
+  Sidequest now waits through brief SQLite lock contention and reports an actionable error if the wait expires.
+- Enforce Codex dispatch route markers (SQ-1494) [`ef2019d`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ef2019d5742c7a72262a18ff4cbdd9a55e28821b)
+  Sidequest now refuses a prepared Codex dispatch when its route marker is missing or a Claude executor class would run it on the wrong backend.
+- Fix Windows verification capture timeouts and quoted paths (SQ-1496)
+  Verification now stops timed-out Windows command trees and preserves quoted command paths.
+
 ## v3.410.0 (2026-08-07)
 
 ### observability 0.5.0 → 0.5.1
