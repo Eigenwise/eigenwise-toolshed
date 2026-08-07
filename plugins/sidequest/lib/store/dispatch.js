@@ -488,6 +488,78 @@ function createDispatch(dependencies) {
       return "Worktree isolation unavailable: repo has no commits or HEAD cannot be resolved; spawning in shared tree. Executor must scoped-commit immediately.";
     }
   }
+  function normalizedFilesystemPath(value) {
+    const resolved = path.resolve(String(value || ""));
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
+  function gitOutput(root, args) {
+    return execFileSync("git", args || [], {
+      cwd: root,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+  }
+  function continuationFallback(reason, worktree) {
+    return {
+      reason: String(reason || "unavailable"),
+      ...worktree ? { sourceWorktree: String(worktree) } : {}
+    };
+  }
+  function releasedContinuationState(slug, ticket, state) {
+    if (!state || state.outcome !== "released" || !state.terminalAt || state.sharedTree !== false) return null;
+    const worktree = String(state.worktree || "").trim();
+    if (!worktree || !fs.existsSync(worktree)) {
+      return { fallback: continuationFallback("released_worktree_missing", worktree) };
+    }
+    const attempts = Array.isArray(state.attempts) ? state.attempts : [];
+    const attempt = attempts[attempts.length - 1] || null;
+    const checkpointCommit = String(attempt?.commit || "").trim();
+    if (!checkpointCommit && attempt?.release?.kind !== "handback") {
+      return { fallback: continuationFallback("release_has_no_checkpoint_or_handback", worktree) };
+    }
+    try {
+      const projectPath = String(readMeta(slug)?.path || "").trim();
+      const projectGitDirectory = gitOutput(projectPath, ["rev-parse", "--git-common-dir"]);
+      const worktreeGitDirectory = gitOutput(worktree, ["rev-parse", "--git-common-dir"]);
+      if (normalizedFilesystemPath(path.resolve(projectPath, projectGitDirectory)) !== normalizedFilesystemPath(path.resolve(worktree, worktreeGitDirectory))) {
+        return { fallback: continuationFallback("released_worktree_belongs_to_another_repository", worktree) };
+      }
+      if (gitOutput(worktree, ["status", "--porcelain"])) {
+        return { fallback: continuationFallback("released_worktree_is_dirty", worktree) };
+      }
+      const baseCommit = gitOutput(worktree, ["rev-parse", "--verify", `${state.baseCommit}^{commit}`]);
+      const commit = gitOutput(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      if (checkpointCommit && gitOutput(worktree, ["rev-parse", "--verify", `${checkpointCommit}^{commit}`]) !== commit) {
+        return { fallback: continuationFallback("checkpoint_is_not_worktree_head", worktree) };
+      }
+      gitOutput(worktree, ["merge-base", "--is-ancestor", baseCommit, commit]);
+      const commits = gitOutput(worktree, ["rev-list", "--reverse", `${baseCommit}..${commit}`]).split(/\r?\n/).filter(Boolean);
+      if (!commits.length) return { fallback: continuationFallback("released_worktree_has_no_committed_progress", worktree) };
+      if (commits.length > 128) return { fallback: continuationFallback("released_worktree_commit_range_is_too_large", worktree) };
+      let sourceBranch = null;
+      try {
+        sourceBranch = gitOutput(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]) || null;
+      } catch (_) {
+      }
+      return {
+        continuation: {
+          mode: "checkpoint_replay",
+          ticketRef: ticket.ref,
+          sourceWorktree: worktree,
+          sourceBranch,
+          baseCommit,
+          commit,
+          commits,
+          clean: true,
+          releasedAt: state.terminalAt,
+          releaseKind: attempt?.release?.kind || (checkpointCommit ? "checkpoint" : "handback")
+        }
+      };
+    } catch (_) {
+      return { fallback: continuationFallback("released_worktree_git_state_is_unreadable", worktree) };
+    }
+  }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -508,6 +580,7 @@ function createDispatch(dependencies) {
       const current = dispatchState(t);
       const repeatFailure = repeatNoCommitDispatchError(t, current);
       if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
+      const releasedContinuation = releasedContinuationState(slug, t, current);
       if (t.claim && t.claim.by && !claimReclaimable(t)) {
         throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
       }
@@ -608,6 +681,9 @@ function createDispatch(dependencies) {
         sharedTree,
         ...worktreeWarning ? { worktreeWarning } : {},
         declaredFiles,
+        ...!sharedTree && releasedContinuation?.continuation ? { continuation: releasedContinuation.continuation } : {},
+        ...releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {},
+        ...sharedTree && releasedContinuation?.continuation ? { continuationFallback: continuationFallback("continuation_checkpoint_requires_isolated_worktree", releasedContinuation.continuation.sourceWorktree) } : {},
         // Record the integration target commit so an isolated executor can bring
         // its harness-created worktree forward before changing it.
         baseCommit: integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || ""),

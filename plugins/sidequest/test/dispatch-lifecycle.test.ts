@@ -34,6 +34,7 @@ execFileSync('git', ['add', 'tracked.js'], { cwd: PROJECT });
 execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: PROJECT });
 
 const store = require('../lib/store.js');
+const agentsync = require('../lib/agentsync.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
 const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
@@ -895,6 +896,65 @@ test('release and submission clear retain structured rework attempts', () => {
   assert.equal(after.reworkEvents[1].attempt.agentId, 'rework-agent-2');
   assert.equal(after.reworkEvents[1].attempt.outcome, 'submitted');
   assert.equal(Object.hasOwn(after.reworkEvents[1], 'submission'), false);
+});
+
+test('released handbacks carry their committed worktree range into continuation dispatches', () => {
+  const ticket = createFixture('continuation checkpoint fixture');
+  const sessionId = `continuation-${Date.now()}`;
+  const agentId = `continuation-${Date.now()}`;
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 2;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
+    execFileSync('git', ['commit', '--quiet', '-m', 'continuation checkpoint'], { cwd: worktree });
+    const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'Continue verification in another executor.',
+    }).ok, true);
+    const releasedAt = store.getTicket(slug, ticket.ref).dispatch.terminalAt;
+
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    assert.deepEqual(continued.ticket.dispatch.continuation, {
+      mode: 'checkpoint_replay',
+      ticketRef: ticket.ref,
+      sourceWorktree: worktree,
+      sourceBranch: branch,
+      baseCommit: prepared.ticket.dispatch.baseCommit,
+      commit: checkpoint,
+      commits: [checkpoint],
+      clean: true,
+      releasedAt,
+      releaseKind: 'handback',
+    });
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.match(briefing, new RegExp(`git cherry-pick ${checkpoint}`));
+    assert.match(briefing, /Agent spawns cannot attach a new agent to an existing linked worktree/);
+    assert.ok(store.dispatchWarnings(continued.ticket, slug).some((warning?: any) => warning.includes(`at ${checkpoint}`)));
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+  }
 });
 
 test('prepared dispatches expire on the configured TTL with an audit comment', () => {
