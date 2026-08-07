@@ -45,7 +45,7 @@ const mcp = require('../lib/mcp.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
-const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. Scope will be inferred from wherever the executor first writes, which can silently cap the work below what the description describes. Declare files now, or expect a possible partial submission.';
+const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.';
 
 // Write a fake model-gateway catalog (mirrors test/discovery.test.js) so a
 // discovered+enabled custom slug can be exercised over the MCP surface.
@@ -688,7 +688,10 @@ test('write acks and pulse stay lean: no body echoes, no lifecycle noise by defa
 });
 
 test('MCP defaults cap category, dispatch, and pulse result payloads', async () => {
-  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-payload-budget-')).slug;
+  const projectPath = path.join(os.tmpdir(), 'sq-mcp-payload-budget-');
+  const project = store.ensureProject(projectPath).slug;
+  fs.mkdirSync(projectPath, { recursive: true });
+  fs.writeFileSync(path.join(projectPath, 'fixture.ts'), 'export {};\n');
   for (let index = 0; index < 18; index += 1) {
     const id = `payload-${index}`;
     store.setProjectCategory(project, id, 'ADD', {
@@ -722,10 +725,10 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(dispatchPayload.agent, undefined);
   assert.equal(dispatchPayload.guidance, undefined);
 
-  const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging' });
+  const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging', files: ['fixture.ts'] });
   const warningDispatch = await callToolRaw('dispatch', { project, ref: warningTicket.ref });
   assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1200, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
-  assert.deepStrictEqual(JSON.parse(warningDispatch.content[0].text).warnings, ['Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.']);
+  assert.equal(JSON.parse(warningDispatch.content[0].text).warnings, undefined);
 
   const pulse = await callToolRaw('pulse', { project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(pulse.content[0].text) <= 1200, `pulse is ${Buffer.byteLength(pulse.content[0].text)} bytes`);
@@ -2131,7 +2134,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'full', 'integrationBranch', 'project', 'ref', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'full', 'integrationBranch', 'project', 'ref', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
@@ -2466,8 +2469,11 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
   assert.match(refused.content[0].text, /executor's entire brief is this ticket/);
 
   await callTool('update', { ref: added.ref, description: DISPATCH_DESCRIPTION });
-  const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
-  assert.match(dispatched.warnings[0], /no verify command/);
+  const dispatched = await callTool('dispatch', { ref: added.ref, full: true, allowUnscoped: true });
+  assert.deepStrictEqual(dispatched.warnings, [
+    `Dispatch warning: ${NO_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`,
+    'Dispatch warning: this coding/debugging ticket has no verify command. Add one before the executor starts.',
+  ]);
 
   seedCatalog([{ id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' }]);
   const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'source-lookup' });
