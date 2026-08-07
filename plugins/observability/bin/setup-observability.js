@@ -8,7 +8,12 @@ const path = require('node:path');
 const { spawnSync } = require('node:child_process');
 const { renderCollectorYaml } = require('./install-otel-collector.js');
 const grafanaLgtm = require('../observability/sinks/grafana/index.js');
-const { provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
+const {
+  dashboardActivityStart,
+  projectsWithActivity,
+  provisionDashboards,
+  resetDashboards,
+} = require('../observability/sinks/grafana/dashboard-generator.js');
 const {
   DEFAULT_SINK,
   SINK_IDS,
@@ -382,8 +387,18 @@ function configuredOptedInProjects(config) {
   return Array.isArray(projects) ? projects : [];
 }
 
+function activeDashboardProjects(config, dataDir, options = {}) {
+  const now = typeof options.now === 'function' ? options.now() : (options.now ?? Date.now());
+  const activityStart = dashboardActivityStart(dataDir, now);
+  const activeNames = grafanaLgtm.activeProjectNames(config?.observability?.sinks?.[DEFAULT_SINK] || {}, {
+    ...options,
+    activityStart,
+  });
+  return projectsWithActivity(configuredOptedInProjects(config), activeNames);
+}
+
 function startLgtm(dataDir, options = {}) {
-  const dashboardDir = provisionDashboards(dataDir, configuredOptedInProjects(options.config));
+  const dashboardDir = provisionDashboards(dataDir, activeDashboardProjects(options.config, dataDir, options));
   return grafanaLgtm.setup({}, { ...options, dataDir, dashboardDir });
 }
 
@@ -504,6 +519,10 @@ function deleteLocalObservabilityData(dataDir) {
 
 async function setupObservability(options = {}) {
   const plan = setupPlan(options);
+  if (options.resetDashboards) {
+    const now = typeof options.now === 'function' ? options.now() : (options.now ?? Date.now());
+    return { ...plan, resetDashboards: resetDashboards(plan.dataDir, now) };
+  }
   const before = readManagedConfig(plan.observabilityConfig);
   const dashboardRelevant = !options.disable && options.dashboard !== false
     && (!options.sink || options.sink === DEFAULT_SINK);
@@ -550,7 +569,7 @@ async function setupObservability(options = {}) {
   let sinkSetup = null;
   if (config.observability.dashboard) {
     if (available) {
-      const dashboardDir = provisionDashboards(plan.dataDir, configuredOptedInProjects(config));
+      const dashboardDir = provisionDashboards(plan.dataDir, activeDashboardProjects(config, plan.dataDir, options));
       dashboard = grafanaLgtm.setup(config.observability.sinks[DEFAULT_SINK], {
         ...options,
         dataDir: plan.dataDir,
@@ -626,6 +645,7 @@ function parseArgs(argv) {
     if (argument === '--sink-endpoint' && next) { options.sinkEndpoint = argv[++index]; continue; }
     if (argument === '--dashboard') { options.dashboard = true; continue; }
     if (argument === '--no-dashboard') { options.dashboard = false; continue; }
+    if (argument === '--reset-dashboards') { options.resetDashboards = true; continue; }
     if (argument === '--lgtm') { options.dashboard = true; options.lgtm = true; continue; }
     if (argument === '--observer-port' && next) { options.ports.observer = parsePort(argument, argv[++index]); continue; }
     if (argument === '--collector-port' && next) { options.ports.collector = parsePort(argument, argv[++index]); continue; }
@@ -647,6 +667,9 @@ function parseArgs(argv) {
     throw new Error(`--sink ${DEFAULT_SINK} requires --dashboard.`);
   }
   if (options.deleteData && !options.disable) throw new Error('--delete-data requires --disable.');
+  if (options.resetDashboards && Object.keys(options).some((key) => key !== 'resetDashboards')) {
+    throw new Error('--reset-dashboards cannot be combined with other options.');
+  }
   return options;
 }
 
@@ -661,6 +684,10 @@ function describeChange(change) {
 
 async function main() {
   const result = await setupObservability(parseArgs(process.argv.slice(2)));
+  if (result.resetDashboards) {
+    process.stdout.write('Generated Grafana dashboards were reset. Projects return after fresh Claude Code telemetry arrives.\n');
+    return;
+  }
   if (result.check) {
     process.stdout.write(`Current observability: ${JSON.stringify(configurationSummary(result.before))}.\n`);
     process.stdout.write(`Planned observability: ${JSON.stringify(configurationSummary(result.config))}.\n`);
@@ -700,6 +727,7 @@ module.exports = {
   MANAGED_DASHBOARD_CONTAINER,
   MIN_CLAUDE_VERSION,
   OBSERVABILITY_ENV,
+  activeDashboardProjects,
   applySettings,
   collectorArchiveUrl,
   collectorBinaryName,

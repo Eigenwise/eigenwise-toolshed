@@ -192,6 +192,7 @@ test('plans current-user application data and only starts LGTM on request', (t) 
   const registeredProject = { project_id: 'a'.repeat(64), project_name: 'atlas' };
   const lgtm = startLgtm(plan.dataDir, {
     config: { observability: { optedInProjects: [registeredProject] } },
+    activeProjectNames: ['atlas'],
     spawnSync(command, args) {
       calls.push([command, args]);
       return args[0] === 'inspect' ? { status: 1, stdout: '' } : { status: 0, stdout: 'container' };
@@ -209,11 +210,11 @@ test('plans current-user application data and only starts LGTM on request', (t) 
     Source: path.join(plan.dataDir, 'grafana-dashboards'),
     Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
   }]);
-  startLgtm(plan.dataDir, { spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: `true|||${MANAGED_CONFIG_VERSION}|null|${dashboardMounts}` }; } });
+  startLgtm(plan.dataDir, { activeProjectNames: [], spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: `true|||${MANAGED_CONFIG_VERSION}|null|${dashboardMounts}` }; } });
   assert.equal(resumed.length, 1);
 });
 
-test('setup mounts generated Grafana dashboards for every opted-in project', async (t) => {
+test('setup mounts generated Grafana dashboards only for active opted-in projects', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-lgtm-setup-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const dataDir = path.join(directory, 'data');
@@ -238,6 +239,7 @@ test('setup mounts generated Grafana dashboards for every opted-in project', asy
       },
     },
     dockerAvailable: true,
+    activeProjectNames: ['atlas'],
     claudeVersion: MIN_CLAUDE_VERSION,
     environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
     applyProjectSettings: false,
@@ -254,7 +256,6 @@ test('setup mounts generated Grafana dashboards for every opted-in project', asy
   assert.ok(runArgs.includes(`${dashboardDir}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   assert.deepEqual(fs.readdirSync(dashboardDir).sort(), [
     'claude-code-aaaaaaaaaaaaaaaa.json',
-    'claude-code-bbbbbbbbbbbbbbbb.json',
     'claude-code-usage.json',
   ]);
 });
@@ -342,6 +343,8 @@ test('configures generic OTLP from the private sink config and parses explicit C
 test('uses dashboard language, keeps the lgtm alias, and defaults bare setup from Docker', () => {
   assert.deepEqual(parseArgs(['--dashboard']), { dashboard: true });
   assert.deepEqual(parseArgs(['--lgtm']), { dashboard: true, lgtm: true });
+  assert.deepEqual(parseArgs(['--reset-dashboards']), { resetDashboards: true });
+  assert.throws(() => parseArgs(['--reset-dashboards', '--dashboard']), /cannot be combined/);
   assert.deepEqual(parseArgs([]), {});
   const plan = setupPlan({ dataDir: 'C:/Workbench', projectDir: '.' });
   const dashboard = configuredSink(plan, { config: {}, defaultDashboard: true });

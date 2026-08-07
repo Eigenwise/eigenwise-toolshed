@@ -8,7 +8,11 @@ const path = require('node:path');
 const { spawn, spawnSync } = require('node:child_process');
 const { DEFAULT_MAX_DATABASE_BYTES, DEFAULT_MAX_WAL_BYTES } = require('./store.js');
 const grafanaLgtm = require('../../observability/sinks/grafana/index.js');
-const { provisionDashboards } = require('../../observability/sinks/grafana/dashboard-generator.js');
+const {
+  dashboardActivityStart,
+  projectsWithActivity,
+  provisionDashboards,
+} = require('../../observability/sinks/grafana/dashboard-generator.js');
 const {
   DEFAULT_SINK,
   defaultConfigPath,
@@ -316,7 +320,13 @@ async function ensureObservability(options = {}) {
     let dashboard = null;
     let dashboardSkipped = false;
     if (state.dashboard) {
-      const dashboardDir = provisionDashboards(dataDir, state.optedInProjects);
+      const activityStart = dashboardActivityStart(dataDir, options.now ?? Date.now());
+      const activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
+        ...options,
+        activityStart,
+      });
+      const activeProjects = projectsWithActivity(state.optedInProjects, activeProjectNames);
+      const dashboardDir = provisionDashboards(dataDir, activeProjects);
       if (setup.dockerAvailable(options)) {
         dashboard = grafanaLgtm.setup(state.sinks[DEFAULT_SINK] || {}, {
           ...options,

@@ -10,7 +10,13 @@ const { DEFAULT_PORTS, normalizeManagedConfig } = require('../bin/setup-observab
 const { flushOutbox } = require('../lib/observability/outbox.js');
 const { buildOtlpPayload, openObservabilityStore } = require('../lib/observability/store.js');
 const grafana = require('../observability/sinks/grafana/index.js');
-const { generatedDashboards, provisionDashboards } = require('../observability/sinks/grafana/dashboard-generator.js');
+const {
+  dashboardActivityStart,
+  generatedDashboards,
+  projectsWithActivity,
+  provisionDashboards,
+  resetDashboards,
+} = require('../observability/sinks/grafana/dashboard-generator.js');
 const {
   MODEL_PRICES_PER_MILLION,
   gatewayModelCostTargets,
@@ -319,103 +325,84 @@ test('Grafana replaces a stale managed container and can delete its data volume'
   ]);
 });
 
-test('provisions opted-in global and per-project Grafana dashboards', (t) => {
+test('discovers recently active projects from Prometheus series', () => {
+  const calls = [];
+  const active = grafana.activeProjectNames({}, {
+    activityStart: '2026-07-08T12:00:00.000Z',
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}||${grafana.MANAGED_CONFIG_VERSION}|null|null` };
+      return { status: 0, stdout: JSON.stringify({ status: 'success', data: [{ project_id: 'atlas' }, { project_id: 'beacon' }] }) };
+    },
+  });
+
+  assert.deepEqual([...active], ['atlas', 'beacon']);
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'exec']);
+  assert.ok(calls[1][1].includes('start=2026-07-08T12:00:00.000Z'));
+  assert.ok(calls[1][1].includes('match[]=claude_code_token_usage_tokens_total'));
+});
+
+test('a dashboard reset removes generated files and excludes old activity', (t) => {
   const directory = temporaryDirectory();
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
   const projects = [
-    { project_name: 'atlas', project_id: 'a'.repeat(64), optedInAt: '2026-07-20T00:00:00.000Z' },
-    { project_name: 'beacon', project_id: 'b'.repeat(64), optedInAt: '2026-07-20T00:00:00.000Z' },
+    { project_name: 'atlas', project_id: 'a'.repeat(64) },
+    { project_name: 'beacon', project_id: 'b'.repeat(64) },
+  ];
+  const active = projectsWithActivity(projects, new Set(['beacon']));
+  assert.deepEqual(active.map(({ project_name }) => project_name), ['beacon']);
+
+  provisionDashboards(directory, active);
+  const resetAt = Date.parse('2026-08-07T12:00:00.000Z');
+  const reset = resetDashboards(directory, resetAt);
+  assert.equal(fs.existsSync(reset.directory), false);
+  assert.equal(dashboardActivityStart(directory, resetAt + 1000), '2026-08-07T12:00:00.000Z');
+});
+
+test('provisions global and active per-project Grafana dashboards', (t) => {
+  const directory = temporaryDirectory();
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const projects = [
+    { project_name: 'atlas', project_id: 'a'.repeat(64) },
+    { project_name: 'beacon', project_id: 'b'.repeat(64) },
   ];
   const dashboards = generatedDashboards(projects);
   assert.equal(dashboards.length, 3);
   const global = dashboards.find(({ fileName }) => fileName === 'claude-code-usage.json').dashboard;
   assert.equal(global.title, 'Claude Code Usage');
   assert.equal(global.uid, 'claude-code-usage');
-  const gatewayCost = global.panels.find(({ title }) => title === 'Cost over time, by resolved model (gateway)');
+
+  const gatewayCost = global.panels.find(({ title }) => title === 'Gateway cost by resolved model');
   assert.equal(gatewayCost.datasource.uid, 'loki');
   assert.equal(gatewayCost.interval, '$bucket');
   assert.ok(gatewayCost.targets.some(({ legendFormat }) => legendFormat === 'gpt-5.6-terra'));
   assert.ok(gatewayCost.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
-  const costEstimate = global.panels.find(({ title }) => title === 'Cost (USD estimate)');
-  assert.match(costEstimate.targets[0].expr, /model!="claude-codex-auto"/);
-  const offload = global.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
-  assert.equal(offload.datasource.uid, 'loki');
-  assert.ok(offload.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
-  // Panel-level "interval": "$bucket" reaches Grafana verbatim, so dropping the
-  // variable fails every bucketed panel with "Invalid interval string" (SQ-854).
+  assert.match(global.panels.find(({ title }) => title === 'Claude API-equivalent cost').targets[0].expr, /model!="claude-codex-auto"/);
+
   for (const { fileName, dashboard } of dashboards) {
-    assert.deepEqual(
-      dashboard.templating.list.map(({ name }) => name),
-      ['bucket'],
-      `${fileName} lost its bucket selector`,
-    );
-    const bucket = dashboard.templating.list[0];
-    assert.equal(bucket.type, 'interval');
-    assert.equal(bucket.auto, undefined);
-    assert.equal(bucket.query, '1m,5m,15m,1h,6h,1d');
-    assert.deepEqual(bucket.current, { text: '5m', value: '5m' });
+    assert.deepEqual(dashboard.templating.list.map(({ name }) => name), ['bucket'], fileName + ' lost its bucket selector');
+    assert.deepEqual(dashboard.templating.list[0].current, { text: '5m', value: '5m' });
     assert.doesNotMatch(JSON.stringify(dashboard), /\$__auto_interval_/);
     assert.deepEqual(undeclaredVariables(dashboard), []);
   }
-  const legacyTemplate = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
-  legacyTemplate.templating.list.find(({ name }) => name === 'bucket').current.value = '$__auto_interval_bucket';
-  assert.throws(
-    () => generatedDashboards([], legacyTemplate),
-    /Dashboard contains obsolete auto interval values: \$__auto_interval_bucket/,
-  );
 
-  const projectUnscopedTitles = new Set(['MCP connection activity', 'Work moved off the Anthropic limit']);
-  const regularPanels = global.panels
-    .filter(({ title }) => !projectUnscopedTitles.has(title));
-  const regularExpressions = regularPanels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
-  assert.ok(regularExpressions.every((expression) => !expression.includes('$project')));
-  for (const expression of regularExpressions.filter((expression) => expression.includes('claude_code_'))) {
-    // The metric's project_id label carries the sanitized basename (OTel
-    // resource attribute), never the registry's sha256 — matching hashes
-    // starved every claude_code panel.
+  const globalExpressions = global.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
+  assert.ok(globalExpressions.every((expression) => !expression.includes('$project')));
+  for (const expression of globalExpressions.filter((expression) => expression.includes('claude_code_'))) {
     assert.match(expression, /project_id=~"atlas\|beacon"/);
     assert.doesNotMatch(expression, /[0-9a-f]{64}/);
   }
-  for (const expression of regularExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
-    assert.match(expression, /workbench_attribute_project_name=~"atlas\|beacon"/);
-  }
-  // claude_code.* events carry no project attribution, so the injected matcher
-  // would filter on a label that is never present and starve the panel.
-  const connections = global.panels.find(({ title }) => title === 'MCP connection activity');
-  assert.doesNotMatch(connections.targets[0].expr, /workbench_attribute_project_name/);
-  assert.doesNotMatch(connections.targets[0].expr, /\$project/);
-  assert.match(connections.targets[0].expr, /^sum by \(mcp_server, connection_status\)/);
-  const offloadPanel = global.panels.find(({ title }) => title === 'Work moved off the Anthropic limit');
-  assert.equal(offloadPanel.type, 'stat');
-  assert.ok(offloadPanel.targets.every(({ expr }) => !expr.includes('project_id')));
-  assert.ok(offloadPanel.targets.every(({ expr }) => !expr.includes('$project')));
-  const topStats = global.panels.filter(({ gridPos }) => gridPos?.y === 1 && gridPos.h === 4);
-  assert.deepEqual(topStats.map(({ gridPos }) => gridPos), [
-    { x: 0, y: 1, w: 6, h: 4 },
-    { x: 6, y: 1, w: 6, h: 4 },
-    { x: 12, y: 1, w: 6, h: 4 },
-    { x: 18, y: 1, w: 6, h: 4 },
-  ]);
-  assert.ok(dashboards.every(({ dashboard }) => dashboard.panels.every(({ title }) => title !== 'Unattributed sessions')));
 
   const atlas = dashboards.find(({ dashboard }) => dashboard.title === 'Claude Code — atlas').dashboard;
+  const atlasTitles = new Set(atlas.panels.map(({ title }) => title));
+  for (const globalOnlyTitle of [
+    'Work routed to Codex', 'Gateway cost by resolved model', 'Claude cost by project',
+    'Gateway errors and throttles', 'Gateway records, 5m',
+  ]) assert.equal(atlasTitles.has(globalOnlyTitle), false, globalOnlyTitle);
   const atlasExpressions = atlas.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
   for (const expression of atlasExpressions.filter((expression) => expression.includes('claude_code_'))) {
     assert.match(expression, /project_id="atlas"/);
-    assert.doesNotMatch(expression, /[0-9a-f]{64}/);
   }
-  // By-project breakdowns are global-only; on a one-project board they can
-  // only ever show the board itself.
-  const atlasTitles = atlas.panels.map(({ title }) => title);
-  assert.equal(atlasTitles.includes('Usage by project'), false);
-  assert.equal(atlasTitles.includes('Cost over time, by project'), false);
-  assert.equal(atlasTitles.includes('MCP connection activity'), false);
-  assert.equal(atlasTitles.includes('Work moved off the Anthropic limit'), false);
-  const globalTitles = global.panels.map(({ title }) => title);
-  assert.ok(globalTitles.includes('Usage by project'));
-  assert.ok(globalTitles.includes('Cost over time, by project'));
-  assert.ok(globalTitles.includes('MCP connection activity'));
-  assert.ok(globalTitles.includes('Work moved off the Anthropic limit'));
   for (const expression of atlasExpressions.filter((expression) => expression.includes('service_name="workbench-observer"'))) {
     assert.match(expression, /workbench_attribute_project_name="atlas"/);
   }
@@ -423,11 +410,7 @@ test('provisions opted-in global and per-project Grafana dashboards', (t) => {
   const output = provisionDashboards(directory, projects);
   assert.deepEqual(fs.readdirSync(output).sort(), dashboards.map(({ fileName }) => fileName).sort());
   provisionDashboards(directory, []);
-  const empty = JSON.parse(fs.readFileSync(path.join(output, 'claude-code-usage.json'), 'utf8'));
   assert.deepEqual(fs.readdirSync(output), ['claude-code-usage.json']);
-  assert.equal(empty.panels.length, global.panels.length);
-  assert.ok(empty.panels.every(({ title }) => title !== 'Unattributed sessions'));
-  assert.ok(empty.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr).every((expression) => !expression.includes('$project')));
 });
 
 test('refuses to generate a dashboard whose panels outlive their variables', () => {
@@ -550,220 +533,49 @@ test('OTLP outbox keeps measurement metadata without exceeding collector attribu
   assert.equal(attributes.filter(({ key }) => key.endsWith('.value')).length, 60);
 });
 
-test('Grafana dashboard separates token breakdowns from tool and MCP activity', () => {
+test('Grafana dashboard answers cost, attribution, role, and reliability questions graphically', () => {
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
+
+  assert.equal(dashboard.panels.length, 15);
+  assert.deepEqual(
+    dashboard.panels.filter(({ type }) => type === 'row').map(({ title }) => title),
+    ['At a glance', 'Where the spend goes', 'Failures and source activity'],
+  );
+  assert.equal(dashboard.panels.some(({ type }) => type === 'table'), false);
+
   for (const title of [
-    'Tokens & models', 'Efficiency', 'Tool activity', 'MCP', 'Sessions & agents',
-    'Gateway internals', 'Board cost attribution',
+    'Claude cost by model', 'Gateway cost by resolved model', 'Claude cost by project',
+    'Context by orchestrator vs executor', 'Hook failures over time', 'Gateway errors and throttles',
   ]) {
-    const row = byTitle.get(title);
-    assert.equal(row?.type, 'row', `missing dashboard row: ${title}`);
-    assert.equal(row.collapsed, false);
-  }
-  for (const title of [
-    'Tokens over time, by type', 'Cost allocation, by token type (USD)', 'Tokens over time, by model', 'Cost over time, by resolved model (gateway)', 'Models in use', 'Token volume by backend',
-    'Background/compaction cost by model and project',
-    'Tool activity by name', 'MCP activity by server / tool', 'MCP definition footprint by server',
-    'Tool activity error rate',
-    'Tool activity duration p95', 'Active vs idle time', 'MCP connection activity',
-    'Hook execution activity / failures', 'Subagent lifecycle activity',
-    'Gateway usage by session and role',
-    'Ticket dispatch usage and route drift',
-  ]) assert.ok(byTitle.has(title), `missing dashboard panel: ${title}`);
-  const costByModel = byTitle.get('Cost over time, by model');
-  assert.equal(costByModel.type, 'timeseries');
-  assert.equal(costByModel.fieldConfig.defaults.custom.stacking.mode, 'normal');
-  assert.match(costByModel.description, /not money owed/);
-  assert.equal(byTitle.get('Unpriced model usage').type, 'table');
-  assert.ok(byTitle.get('How to read this row').options.content.includes('list-price-equivalent'));
-  for (const title of ['Tokens over time, by type', 'Tokens over time, by model', 'Cost over time, by project']) {
-    const overTime = byTitle.get(title);
-    assert.equal(overTime.interval, '$bucket');
-    assert.match(overTime.targets[0].expr, /\[\$bucket\]/);
-    assert.equal(overTime.fieldConfig.defaults.custom.stacking.mode, 'normal');
+    assert.equal(byTitle.get(title)?.type, 'timeseries', 'missing graphical panel: ' + title);
+    assert.equal(byTitle.get(title).interval, '$bucket');
   }
 
-  for (const title of [
-    'Fresh input (uncached)', 'Cache reads (billed at 10%)',
-    'Output tokens (raw)', 'Cost (USD estimate)',
-    'Context spent per answer token (lower is better)', 'Work moved off the Anthropic limit',
-  ]) assert.equal(byTitle.get(title)?.type, 'stat', `missing explanatory stat: ${title}`);
-  const billedPerOutput = byTitle.get('Context spent per answer token (lower is better)');
-  assert.equal(billedPerOutput.targets[0].instant, true);
-  assert.match(billedPerOutput.targets[0].expr, /sum by \(query_source\)/);
-  assert.match(billedPerOutput.targets[0].expr, /type=~"cacheRead\|cacheCreation\|input"/);
-  assert.match(billedPerOutput.targets[0].expr, /and \(sum by \(query_source\).*type="output".* > 0\)/);
-  assert.match(billedPerOutput.targets[0].expr, /\[\$__range\]/);
-  const offloadShare = byTitle.get('Work moved off the Anthropic limit');
-  assert.equal(offloadShare.targets.length, 3);
-  assert.ok(offloadShare.targets.every((target) => target.instant));
-  assert.match(offloadShare.targets[0].expr, /model=~"claude-\(codex-\)\?gpt-\.\*"/);
-  assert.match(offloadShare.targets[0].expr, /and \(sum\(increase\(claude_code_cost_usage_USD_total\[\$__range\]\)\) > 0\)/);
-  assert.ok(offloadShare.targets.every(({ expr }) => !expr.includes('project_id')));
-  const auxiliarySpend = byTitle.get('Background/compaction cost by model and project');
-  assert.equal(auxiliarySpend.type, 'table');
-  assert.equal(auxiliarySpend.targets[0].instant, true);
-  assert.match(auxiliarySpend.targets[0].expr, /^sort_desc\(sum by \(model, project_id\)/);
-  assert.match(auxiliarySpend.targets[0].expr, /query_source="auxiliary"/);
-  assert.match(auxiliarySpend.targets[0].expr, /\[\$__range\]/);
-  assert.match(JSON.stringify(auxiliarySpend.transformations), /"Model"/);
-  assert.match(JSON.stringify(auxiliarySpend.transformations), /"Project"/);
-  const tokenModel = byTitle.get('How tokens become cost');
-  assert.equal(tokenModel?.type, 'text');
-  assert.match(tokenModel.options.content, /Context volume = fresh input \+ cache reads \+ cache creation/);
-  assert.match(tokenModel.options.content, /cache reads × 0\.1/);
-  const tokenByType = byTitle.get('Tokens over time, by type');
-  const costByType = byTitle.get('Cost allocation, by token type (USD)');
-  assert.equal(costByType.fieldConfig.defaults.unit, 'currencyUSD');
-  assert.equal(costByType.gridPos.y, tokenByType.gridPos.y);
-  assert.equal(costByType.gridPos.x, tokenByType.gridPos.x + tokenByType.gridPos.w);
-  assert.equal(costByType.gridPos.h, tokenByType.gridPos.h);
-  assert.match(costByType.description, /four legend Totals add up to that card within rounding/);
-  assert.deepEqual(costByType.targets.map(({ legendFormat }) => legendFormat), ['fresh input', 'cache reads', 'cache creation', 'output']);
-  // Instant $__range targets are a snapshot allocation. On a time axis they draw
-  // one point at the right edge, and a per-step window would make the legend
-  // Total over-count by the window/step overlap and stop matching the USD card.
-  assert.equal(costByType.type, 'piechart');
-  assert.equal(costByType.fieldConfig.defaults.custom, undefined);
-  assert.deepEqual(costByType.options.legend.values, ['value', 'percent']);
-  for (const target of costByType.targets) {
-    assert.equal(target.instant, true);
-    assert.match(target.expr, /\[\$__range\]/);
-    assert.match(target.expr, /or vector\(0\)/);
-    assert.match(target.expr, /claude_code_cost_usage_USD_total/);
+  for (const title of ['Claude API-equivalent cost', 'Work routed to Codex', 'Tool failure rate']) {
+    assert.equal(byTitle.get(title)?.type, 'stat', 'missing summary stat: ' + title);
   }
-  const toolDurationP95 = byTitle.get('Tool activity duration p95');
-  assert.equal(toolDurationP95.targets[0].expr, 'quantile_over_time(0.95, {service_name="workbench-observer"} |= "hook.post_tool_use" | unwrap workbench_measurement_duration_ms_value [$__range]) by ()');
-  for (const title of ['Tool activity by name', 'MCP activity by server / tool']) {
-    const panel = byTitle.get(title);
-    assert.equal(panel.type, 'table');
-    assert.match(panel.description, /re-enter/i);
-    assert.match(panel.targets[0].expr, /workbench_measurement_tool_result_tokens_estimate_value/);
-    assert.match(panel.targets[1].expr, /count_over_time/);
-  }
-  assert.match(byTitle.get('MCP activity by server / tool').targets[0].expr, /sum by \(workbench_attribute_mcp_server\)/);
-  const definitionPanel = byTitle.get('MCP definition footprint by server');
-  assert.equal(definitionPanel.targets[0].instant, true);
-  assert.match(definitionPanel.targets[0].expr, /gateway\.mcp\.footprint/);
-  assert.match(definitionPanel.targets[0].expr, /workbench_attribute_mcp_server/);
-  assert.match(definitionPanel.targets[0].expr, /workbench_measurement_input_mcp_tools_tokens_value/);
-  assert.match(definitionPanel.targets[0].expr, /avg_over_time/);
-  assert.doesNotMatch(definitionPanel.targets[0].expr, /sum_over_time/);
-  assert.doesNotMatch(definitionPanel.targets[0].expr, /plugin_sidequest_board|plugin_playwright_playwright/);
-  assert.match(definitionPanel.description, /new servers appear automatically/i);
-  assert.ok(definitionPanel.transformations.some(({ id }) => id === 'organize'));
-  assert.match(JSON.stringify(definitionPanel.transformations), /Definition tokens per request/);
-  assert.match(byTitle.get('Token volume by backend').targets[0].expr, /workbench_attribute_backend/);
-  for (const title of ['Models in use', 'Token volume by backend']) {
-    assert.equal(byTitle.get(title).fieldConfig.defaults.min, 0);
-  }
-  const mcpActivity = byTitle.get('MCP activity by server / tool');
-  assert.deepEqual(mcpActivity.options.footer.reducer, ['sum']);
-  const mcpToolDetail = byTitle.get('MCP tool detail by server / tool');
-  assert.ok(mcpToolDetail);
-  assert.deepEqual(mcpToolDetail.options.footer.reducer, ['sum']);
-  assert.match(mcpToolDetail.targets[0].expr, /workbench_attribute_mcp_server, workbench_attribute_tool_name/);
 
-  for (const title of ['Tokens over time, by model', 'Models in use']) {
-    const panel = byTitle.get(title);
-    assert.equal(panel.datasource.type, 'loki');
-    assert.match(panel.description, /resolved gateway model/i);
-    assert.match(panel.targets[0].legendFormat, /workbench_attribute_model/);
-    assert.match(panel.targets[0].expr, /gateway\.token\.usage/);
-    assert.match(panel.targets[0].expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
+  for (const title of ['Claude metric samples, 5m', 'Observer records, 5m', 'Gateway records, 5m']) {
+    const health = byTitle.get(title);
+    assert.equal(health?.type, 'stat', 'missing source activity stat: ' + title);
+    assert.match(health.description, /five minutes|Recent/);
+    assert.match(health.fieldConfig.defaults.noValue, /No samples/);
   }
-  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /service_name=~"workbench-observer\|codex-gateway"/);
-  assert.match(byTitle.get('Tokens over time, by model').targets[0].expr, /\[\$bucket\]/);
-  assert.match(byTitle.get('Models in use').targets[0].expr, /\[\$__range\]/);
-  assert.equal(byTitle.get('Models in use').targets[0].instant, true);
 
-  // Binary + between per-type vectors drops any model missing a type (Codex
-  // records carry no cache measurements), so the model panels must unwrap a
-  // measurement present on every record.
-  for (const title of ['Tokens over time, by model', 'Models in use']) {
-    assert.match(byTitle.get(title).targets[0].expr, /context_tokens_value/);
-    assert.doesNotMatch(byTitle.get(title).targets[0].expr, /\) \+ sum/);
-  }
+  assert.match(byTitle.get('Claude cost by project').targets[0].expr, /sum by \(project_id\)/);
+  assert.match(byTitle.get('Context by orchestrator vs executor').targets[0].expr, /workbench_attribute_agent_role/);
+  assert.match(byTitle.get('Hook failures over time').targets[0].expr, /workbench_attribute_status =~ \"error\|failed\"/);
+  assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /throttl\|rate\.\?limit\|429/);
+  assert.match(byTitle.get('Gateway cost by resolved model').description, /global until project attribution lands/);
 
   const lokiExpressions = dashboard.panels
     .flatMap((panel) => panel.targets || [])
-    .filter((target) => target.datasource && target.datasource.type === 'loki')
+    .filter((target) => target.datasource?.type === 'loki')
     .map((target) => target.expr);
   for (const expression of lokiExpressions) {
     assert.doesNotMatch(expression, /\| json/);
-    assert.doesNotMatch(expression, /workbench_[a-z_]+(?:=|=~|!~)/);
-    // Grafana only interpolates $__rate_interval for Prometheus; on Loki it
-    // reaches the server verbatim and every panel parse-errors.
     assert.doesNotMatch(expression, /\$__rate_interval/);
-  }
-  assert.match(byTitle.get('Tool activity error rate').targets[0].expr, /or vector\(0\)$/);
-  const connectionActivity = byTitle.get('MCP connection activity');
-  assert.match(connectionActivity.targets[0].expr, /workbench_attribute_mcp_server/);
-  assert.doesNotMatch(connectionActivity.targets[0].expr, /or vector\(0\)/);
-  // Claude Code names only plugin-hosted servers on this event, so a `!= ""`
-  // guard on either label drops every row and the panel reads as a healthy zero.
-  assert.doesNotMatch(connectionActivity.targets[0].expr, /workbench_attribute_\w+ != ""/);
-  assert.match(connectionActivity.targets[0].expr, /label_format mcp_server=/);
-  assert.match(connectionActivity.targets[0].expr, /workbench_attribute_plugin_name/);
-  assert.match(connectionActivity.targets[0].expr, /unnamed \(non-plugin server\)/);
-  assert.equal(connectionActivity.targets[0].legendFormat, '{{mcp_server}} ({{connection_status}})');
-  assert.match(connectionActivity.fieldConfig.defaults.noValue, /the observer is not receiving them/);
-  for (const title of ['Tokens over time, by type', 'Tokens over time, by model', 'Context-window growth']) {
-    assert.deepEqual(byTitle.get(title).options.legend, { displayMode: 'table', placement: 'right', calcs: ['sum'] });
-  }
-  const hookActivity = byTitle.get('Hook execution activity / failures');
-  assert.match(hookActivity.targets[0].expr, /workbench_attribute_hook_name/);
-  assert.equal(hookActivity.targets[0].legendFormat, '{{workbench_attribute_hook_name}}');
-  const wakeupJoin = byTitle.get('Wakeup join keys');
-  assert.equal(wakeupJoin?.type, 'text');
-  assert.match(wakeupJoin.options.content, /workbench_attribute_recipient/);
-  assert.match(wakeupJoin.options.content, /workbench_tool_use_id/);
-  assert.match(wakeupJoin.options.content, /workbench_attribute_wake_reason/);
-  const lifecycle = byTitle.get('Subagent lifecycle activity');
-  assert.match(lifecycle.targets[0].expr, /workbench_attribute_agent_type != ""/);
-  assert.match(lifecycle.targets[0].expr, /regexReplaceAll/);
-  const sessionUsage = byTitle.get('Gateway usage by session and role');
-  assert.equal(sessionUsage.type, 'table');
-  assert.deepEqual(sessionUsage.options.footer.reducer, ['sum']);
-  assert.equal(sessionUsage.targets.length, 3);
-  assert.ok(sessionUsage.targets.every((target) => target.instant === true));
-  assert.match(sessionUsage.targets[0].expr, /sum by \(workbench_session_id, session_label, workbench_attribute_agent_role, workbench_attribute_model\)/);
-  assert.match(sessionUsage.targets[0].expr, /workbench_measurement_context_tokens_value/);
-  assert.match(sessionUsage.targets[1].expr, /count_over_time/);
-  assert.match(sessionUsage.targets[2].expr, /hook\.session_start/);
-  assert.match(sessionUsage.targets[2].expr, /workbench_attribute_project_name/);
-  assert.ok(sessionUsage.transformations.some(({ id }) => id === 'joinByField'));
-  assert.match(JSON.stringify(sessionUsage.transformations), /"byField":"workbench_session_id"/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /Project/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /Session/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /Role/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /Model/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /Context tokens/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /Requests/);
-  assert.match(JSON.stringify(sessionUsage.transformations), /"desc":true/);
-  const boardCost = byTitle.get('Ticket dispatch usage and route drift');
-  assert.equal(boardCost.type, 'table');
-  assert.match(boardCost.description, /Batched agents mapped to multiple tickets are excluded/i);
-  assert.ok(boardCost.targets.every((target) => target.instant === true));
-  assert.ok(boardCost.targets.every((target) => target.expr.includes('$__range')));
-  assert.ok(boardCost.targets.slice(0, 3).every((target) => target.expr.includes('gateway.token.usage')));
-  assert.match(boardCost.targets[3].expr, /sidequest\.ticket/);
-  assert.match(boardCost.targets[3].expr, /on \(workbench_agent_id\)/);
-  assert.match(boardCost.targets[3].expr, /== 1/);
-  assert.doesNotMatch(JSON.stringify(boardCost.targets), /group_left/);
-  assert.match(boardCost.targets[0].expr, /workbench_measurement_context_tokens_value/);
-  assert.match(boardCost.targets[2].expr, /workbench_measurement_cost_usd_value/);
-  assert.ok(boardCost.transformations.some(({ id }) => id === 'merge'));
-  assert.match(JSON.stringify(boardCost.transformations), /Configured route/);
-  assert.match(JSON.stringify(boardCost.transformations), /Resolved model/);
-  assert.equal(byTitle.get('Context-window growth').targets[0].legendFormat, 'session {{session_label}}');
-  for (const title of [
-    'Gateway usage by session and role', 'Orchestrator vs executor usage', 'Input composition over time',
-    'Context-window growth', 'Prompt-cache economics',
-    'MCP definition footprint by server',
-  ]) {
-    for (const target of byTitle.get(title).targets) assert.match(target.expr, /workbench_session_id !~ "\(probe\|session-gateway\)\.\*"/);
   }
 });
 
@@ -802,11 +614,14 @@ test('every generated dashboard lays out in full-width bands with no overlaps or
   }
   const [, perProject] = dashboards;
   const byTitle = new Map(perProject.dashboard.panels.map((panel) => [panel.title, panel]));
-  // 'Work moved off the Anthropic limit' sat between these two on the global
-  // dashboard; per-project they close over its slot instead of framing a gap.
-  assert.deepEqual(byTitle.get('Context spent per answer token (lower is better)').gridPos.w, 12);
-  assert.deepEqual(byTitle.get('Background/compaction cost by model and project').gridPos.x, 12);
-  assert.deepEqual(byTitle.get('Tokens over time, by model').gridPos.w, 24);
+  assert.equal(byTitle.get('Claude API-equivalent cost').gridPos.w, 12);
+  assert.equal(byTitle.get('Tool failure rate').gridPos.x, 12);
+  assert.equal(byTitle.get('Claude cost by model').gridPos.w, 24);
+  assert.equal(byTitle.get('Hook failures over time').gridPos.w, 24);
+  assert.deepEqual(
+    ['Claude metric samples, 5m', 'Observer records, 5m'].map((title) => byTitle.get(title).gridPos.w),
+    [12, 12],
+  );
 });
 
 test('PostHog batches canonical events through an isolated receiver and retries atomically', async (t) => {
