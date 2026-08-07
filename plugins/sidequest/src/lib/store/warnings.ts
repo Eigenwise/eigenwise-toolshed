@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveSuite } = require('../suite-resolver.js');
+const { ignoredPathsMissingFromWorktree } = require('../worktrees.js');
 
 function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }: any) {
 const DISPATCH_DESCRIPTION_MIN = 80;
@@ -509,10 +510,20 @@ function ignoredWorktreePaths(ticket?: any, projectPath?: any) {
   return [...ignored].sort();
 }
 
+function ignoredPathsMissingFromDispatchedWorktree(ticket?: any, projectPath?: any) {
+  const worktree = String(dispatchState(ticket)?.worktree || '').trim();
+  return projectPath && worktree
+    ? ignoredPathsMissingFromWorktree(projectPath, worktree, worktreeVisibilityTokens(ticket))
+    : [];
+}
+
 function worktreeVisibilityWarning(ticket?: any, projectPath?: any) {
-  const ignored = ignoredWorktreePaths(ticket, projectPath);
-  if (!ignored.length) return null;
-  return `Worktree visibility warning: ignored paths unavailable in a linked worktree: ${ignored.join(', ')}. Use sharedTree: true, or run inline.`;
+  const ignored = new Set([
+    ...ignoredWorktreePaths(ticket, projectPath),
+    ...ignoredPathsMissingFromDispatchedWorktree(ticket, projectPath),
+  ]);
+  if (!ignored.size) return null;
+  return `Worktree visibility warning: ignored paths unavailable in a linked worktree: ${[...ignored].sort().join(', ')}. Its test results can differ from integration; use sharedTree: true, or run inline.`;
 }
 
 function composeFilesBindingProjectRoot(projectPath?: any) {
