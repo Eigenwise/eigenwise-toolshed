@@ -669,6 +669,59 @@ test('pre-tool hook: helper writes use the bound agent scope in linked worktrees
   assert.equal(read, null);
 });
 
+test('pre-tool hook: an unbound helper can restore only one declared file to HEAD', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-revert-'));
+  fs.mkdirSync(path.join(projectPath, 'lib'));
+  const allowedPath = path.join(projectPath, 'lib', 'allowed.js');
+  const committedContent = 'export const guard = true;\n';
+  fs.writeFileSync(allowedPath, committedContent);
+  gitFixture(['init', '--quiet'], projectPath);
+  gitFixture(['config', 'user.email', 'sidequest@example.invalid'], projectPath);
+  gitFixture(['config', 'user.name', 'Sidequest Tests'], projectPath);
+  gitFixture(['add', 'lib/allowed.js'], projectPath);
+  gitFixture(['commit', '--quiet', '-m', 'fixture'], projectPath);
+  fs.writeFileSync(allowedPath, 'export const guard = false;\n');
+
+  const project = store.ensureProject(projectPath).slug;
+  const parent = store.createTicket(project, { title: 'revert owner', category: 'debugging', files: ['lib/allowed.js'], source: 'cli' });
+  const sibling = store.createTicket(project, { title: 'revert sibling', category: 'debugging', files: ['lib/sibling.js'], source: 'cli' });
+  const sessionId = `helper-revert-${++sqSeq}`;
+  for (const [ticket, agentName] of [[parent, 'revert-owner'], [sibling, 'revert-sibling']] as const) {
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, sharedTree: true });
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+      sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, `${agentName}-id`, agentName).ok, true);
+    assert.equal(store.claimTicket(project, ticket.ref, `${agentName}-claim`, {
+      sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+  }
+
+  const unbound = {
+    session_id: sessionId,
+    agent_id: `unbound-helper-${sqSeq}`,
+    agent_type: 'general-purpose',
+    cwd: projectPath,
+    tool_name: 'Write',
+    tool_input: { file_path: allowedPath, content: committedContent },
+  };
+  const editRestore = runHookOutput(FORCE_BYPASS, {
+    ...unbound,
+    tool_name: 'Edit',
+    tool_input: { file_path: allowedPath, old_string: 'export const guard = false;\n', new_string: committedContent },
+  });
+  assert.equal(editRestore, null);
+  assert.equal(runHookOutput(FORCE_BYPASS, unbound), null);
+  assert.deepEqual(Buffer.from(unbound.tool_input.content), execFileSync('git', ['show', 'HEAD:lib/allowed.js'], { cwd: projectPath }));
+
+  const smuggled = runHookOutput(FORCE_BYPASS, {
+    ...unbound,
+    tool_input: { file_path: allowedPath, content: 'export const guard = "smuggled";\n' },
+  });
+  assert.equal(smuggled.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(smuggled.hookSpecificOutput.permissionDecisionReason, /No active ticket is bound to acting agent/);
+});
+
 test('pre-tool hook: ordinary subagents without a dispatch stay outside the helper scope guard', () => {
   const out = runHookOutput(FORCE_BYPASS, {
     session_id: `ordinary-${++sqSeq}`,

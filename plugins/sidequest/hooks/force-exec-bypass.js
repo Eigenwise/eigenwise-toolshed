@@ -23,6 +23,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/force-exec-bypass.ts
+var import_node_child_process = require("node:child_process");
+var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
 
@@ -408,6 +410,15 @@ function denyReason(result, type) {
       return `${base}. ${retry}`;
   }
 }
+function dispatchIdentityMatches(ticket, agentId, type) {
+  const dispatch = ticket.dispatch;
+  if (dispatch?.agentId === agentId) return true;
+  const agentName = dispatch?.agentName;
+  return Boolean(agentName && (agentId === agentName || agentId.startsWith(`${agentName}-`) || agentId.startsWith(`a${agentName}-`) || type === agentName || type.startsWith(`${agentName}-`) || type.startsWith(`a${agentName}-`)));
+}
+function helperScope(store, project, projectPath, ticket) {
+  return { ref: ticket.ref, projectPath, files: store.effectiveScope(project, ticket.files) };
+}
 function helperScopes(input) {
   const agentId = stringField(input, "agent_id", "agentId");
   const type = stringField(input, "agent_type", "agentType", "subagent_type");
@@ -416,29 +427,32 @@ function helperScopes(input) {
   try {
     const store = require(runtimeModule("store"));
     const activeTickets = [];
+    const recoveryTickets = [];
     for (const project of store.listProjects({ all: true })) {
       const projectPath = String(store.readMeta(project.slug)?.path || "").trim();
       if (!projectPath) continue;
       for (const ticket of store.listTickets(project.slug)) {
-        if (!ticket.claim?.by || ticket.dispatch?.terminalAt || ticket.dispatch?.sessionId !== sessionId || !ticket.ref) continue;
-        activeTickets.push({ project: project.slug, projectPath, ticket });
+        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId) continue;
+        const candidate = { project: project.slug, projectPath, ticket };
+        if (ticket.claim?.by && !ticket.dispatch?.terminalAt) activeTickets.push(candidate);
+        if (dispatchIdentityMatches(ticket, agentId, type)) recoveryTickets.push(candidate);
       }
     }
-    if (!activeTickets.length) return { status: "no-active-ticket", scopes: [] };
-    const derivedFrom = (candidate, agentName) => candidate === agentName || candidate.startsWith(`${agentName}-`) || candidate.startsWith(`a${agentName}-`);
-    const ownedTickets = activeTickets.filter(({ ticket }) => {
-      const dispatch = ticket.dispatch;
-      if (dispatch?.agentId && dispatch.agentId === agentId) return true;
-      const agentName = dispatch?.agentName;
-      return Boolean(agentName && (derivedFrom(agentId, agentName) || derivedFrom(type, agentName)));
-    });
-    const owners = ownedTickets.length ? ownedTickets : activeTickets;
-    if (owners.length !== 1) return { status: "no-owner", scopes: [] };
-    const owner = owners[0];
-    return {
-      status: "ok",
-      scopes: [{ ref: owner.ticket.ref, projectPath: owner.projectPath, files: store.effectiveScope(owner.project, owner.ticket.files) }]
-    };
+    const ownedTickets = activeTickets.filter(({ ticket }) => dispatchIdentityMatches(ticket, agentId, type));
+    if (ownedTickets.length === 1) {
+      const owner = ownedTickets[0];
+      return { status: "ok", scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+    }
+    if (ownedTickets.length > 1) return { status: "no-owner", scopes: ownedTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
+    if (recoveryTickets.length === 1) {
+      const owner = recoveryTickets[0];
+      return { status: "recovery-owner", scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+    }
+    if (activeTickets.length === 1) {
+      const owner = activeTickets[0];
+      return { status: "ok", scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+    }
+    return { status: activeTickets.length ? "no-owner" : "no-active-ticket", scopes: activeTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
   } catch (_) {
     return { status: "no-active-ticket", scopes: [] };
   }
@@ -450,6 +464,37 @@ function writeTarget(input) {
   if (raw == null || !String(raw).trim()) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
   return import_node_path2.default.resolve(cwd, String(raw));
+}
+function restoresCommittedContent(input, target) {
+  try {
+    const toolInput = toolInputOf(input);
+    const toolName = stringField(input, "tool_name");
+    let restored;
+    if (toolName === "Write" && typeof toolInput?.content === "string") {
+      restored = toolInput.content;
+    } else if (toolName === "Edit" && typeof toolInput?.old_string === "string" && typeof toolInput.new_string === "string") {
+      const current = import_node_fs2.default.readFileSync(target, "utf8");
+      const first = current.indexOf(toolInput.old_string);
+      if (first < 0 || !toolInput.replace_all && current.indexOf(toolInput.old_string, first + toolInput.old_string.length) >= 0) return false;
+      restored = toolInput.replace_all ? current.split(toolInput.old_string).join(toolInput.new_string) : `${current.slice(0, first)}${toolInput.new_string}${current.slice(first + toolInput.old_string.length)}`;
+    } else {
+      return false;
+    }
+    const repository = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+      cwd: import_node_path2.default.dirname(target),
+      encoding: "utf8",
+      windowsHide: true
+    }).trim();
+    const relative = import_node_path2.default.relative(repository, target).replace(/\\/g, "/");
+    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path2.default.isAbsolute(relative)) return false;
+    const committed = (0, import_node_child_process.execFileSync)("git", ["show", `HEAD:${relative}`], {
+      cwd: repository,
+      windowsHide: true
+    });
+    return Buffer.from(restored, "utf8").equals(committed);
+  } catch (_) {
+    return false;
+  }
 }
 function projectRelative(target, projectPath) {
   const relative = import_node_path2.default.relative(projectPath, target).replace(/\\/g, "/");
@@ -480,7 +525,9 @@ function guardHelperWrite(input) {
   if (resolution.status === "no-active-ticket") return;
   const target = writeTarget(input);
   if (!target) return;
-  if (resolution.status === "no-owner") {
+  const matchingScopes = resolution.scopes.filter((scope2) => inScope(target, scope2));
+  if ((resolution.status === "recovery-owner" || resolution.status === "no-owner") && matchingScopes.length === 1 && restoresCommittedContent(input, target)) return;
+  if (resolution.status === "no-owner" || resolution.status === "recovery-owner") {
     writeDeny(
       "PreToolUse",
       `sidequest: refusing helper write to ${target}. No active ticket is bound to acting agent ${stringField(input, "agent_id", "agentId")}; refusing to borrow another ticket's scope.`

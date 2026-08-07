@@ -1,3 +1,5 @@
+import { execFileSync } from 'node:child_process';
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
@@ -77,7 +79,7 @@ interface HelperScope {
 }
 
 interface HelperScopeResolution {
-  status: 'no-active-ticket' | 'no-owner' | 'ok';
+  status: 'no-active-ticket' | 'no-owner' | 'recovery-owner' | 'ok';
   scopes: HelperScope[];
 }
 
@@ -402,6 +404,24 @@ function denyReason(result: ResolveResult, type: string): string {
   }
 }
 
+function dispatchIdentityMatches(ticket: Ticket, agentId: string, type: string): boolean {
+  const dispatch = ticket.dispatch;
+  if (dispatch?.agentId === agentId) return true;
+  const agentName = dispatch?.agentName;
+  return Boolean(agentName && (
+    agentId === agentName
+    || agentId.startsWith(`${agentName}-`)
+    || agentId.startsWith(`a${agentName}-`)
+    || type === agentName
+    || type.startsWith(`${agentName}-`)
+    || type.startsWith(`a${agentName}-`)
+  ));
+}
+
+function helperScope(store: Store, project: string, projectPath: string, ticket: Ticket): HelperScope {
+  return { ref: ticket.ref!, projectPath, files: store.effectiveScope(project, ticket.files) };
+}
+
 function helperScopes(input: HookInput): HelperScopeResolution {
   const agentId = stringField(input, 'agent_id', 'agentId');
   const type = stringField(input, 'agent_type', 'agentType', 'subagent_type');
@@ -410,38 +430,32 @@ function helperScopes(input: HookInput): HelperScopeResolution {
   try {
     const store = require(runtimeModule('store')) as Store;
     const activeTickets: Array<{ project: string; projectPath: string; ticket: Ticket }> = [];
+    const recoveryTickets: Array<{ project: string; projectPath: string; ticket: Ticket }> = [];
     for (const project of store.listProjects({ all: true })) {
       const projectPath = String(store.readMeta(project.slug)?.path || '').trim();
       if (!projectPath) continue;
       for (const ticket of store.listTickets(project.slug)) {
-        if (!ticket.claim?.by || ticket.dispatch?.terminalAt || ticket.dispatch?.sessionId !== sessionId || !ticket.ref) continue;
-        activeTickets.push({ project: project.slug, projectPath, ticket });
+        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId) continue;
+        const candidate = { project: project.slug, projectPath, ticket };
+        if (ticket.claim?.by && !ticket.dispatch?.terminalAt) activeTickets.push(candidate);
+        if (dispatchIdentityMatches(ticket, agentId, type)) recoveryTickets.push(candidate);
       }
     }
-    if (!activeTickets.length) return { status: 'no-active-ticket', scopes: [] };
-    // A per-ticket generated executor definition runs under a name DERIVED from the
-    // dispatch's launch name — "a" + launch name + "-" + hash — and its runtime id
-    // never binds, so exact equality against agentName never matches it (contractify
-    // SQ-85, 2026-08-05: three dispatches refused, zero lines written). A true helper
-    // spawned by an executor matches nothing; it inherits the sole active ticket, which
-    // is unambiguous by construction. Two or more still refuse rather than borrow.
-    const derivedFrom = (candidate: string, agentName: string): boolean =>
-      candidate === agentName
-      || candidate.startsWith(`${agentName}-`)
-      || candidate.startsWith(`a${agentName}-`);
-    const ownedTickets = activeTickets.filter(({ ticket }) => {
-      const dispatch = ticket.dispatch;
-      if (dispatch?.agentId && dispatch.agentId === agentId) return true;
-      const agentName = dispatch?.agentName;
-      return Boolean(agentName && (derivedFrom(agentId, agentName) || derivedFrom(type, agentName)));
-    });
-    const owners = ownedTickets.length ? ownedTickets : activeTickets;
-    if (owners.length !== 1) return { status: 'no-owner', scopes: [] };
-    const owner = owners[0]!;
-    return {
-      status: 'ok',
-      scopes: [{ ref: owner.ticket.ref!, projectPath: owner.projectPath, files: store.effectiveScope(owner.project, owner.ticket.files) }],
-    };
+    const ownedTickets = activeTickets.filter(({ ticket }) => dispatchIdentityMatches(ticket, agentId, type));
+    if (ownedTickets.length === 1) {
+      const owner = ownedTickets[0]!;
+      return { status: 'ok', scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+    }
+    if (ownedTickets.length > 1) return { status: 'no-owner', scopes: ownedTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
+    if (recoveryTickets.length === 1) {
+      const owner = recoveryTickets[0]!;
+      return { status: 'recovery-owner', scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+    }
+    if (activeTickets.length === 1) {
+      const owner = activeTickets[0]!;
+      return { status: 'ok', scopes: [helperScope(store, owner.project, owner.projectPath, owner.ticket)] };
+    }
+    return { status: activeTickets.length ? 'no-owner' : 'no-active-ticket', scopes: activeTickets.map((owner) => helperScope(store, owner.project, owner.projectPath, owner.ticket)) };
   } catch (_) {
     return { status: 'no-active-ticket', scopes: [] };
   }
@@ -454,6 +468,37 @@ function writeTarget(input: HookInput): string {
   if (raw == null || !String(raw).trim()) return '';
   const cwd = stringField(input, 'cwd') || process.cwd();
   return path.resolve(cwd, String(raw));
+}
+
+function restoresCommittedContent(input: HookInput, target: string): boolean {
+  try {
+    const toolInput = toolInputOf(input);
+    const toolName = stringField(input, 'tool_name');
+    let restored: string;
+    if (toolName === 'Write' && typeof toolInput?.content === 'string') {
+      restored = toolInput.content;
+    } else if (toolName === 'Edit' && typeof toolInput?.old_string === 'string' && typeof toolInput.new_string === 'string') {
+      const current = fs.readFileSync(target, 'utf8');
+      const first = current.indexOf(toolInput.old_string);
+      if (first < 0 || (!toolInput.replace_all && current.indexOf(toolInput.old_string, first + toolInput.old_string.length) >= 0)) return false;
+      restored = toolInput.replace_all
+        ? current.split(toolInput.old_string).join(toolInput.new_string)
+        : `${current.slice(0, first)}${toolInput.new_string}${current.slice(first + toolInput.old_string.length)}`;
+    } else {
+      return false;
+    }
+    const repository = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: path.dirname(target), encoding: 'utf8', windowsHide: true,
+    }).trim();
+    const relative = path.relative(repository, target).replace(/\\/g, '/');
+    if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return false;
+    const committed = execFileSync('git', ['show', `HEAD:${relative}`], {
+      cwd: repository, windowsHide: true,
+    });
+    return Buffer.from(restored, 'utf8').equals(committed);
+  } catch (_) {
+    return false;
+  }
 }
 
 function projectRelative(target: string, projectPath: string): string | null {
@@ -488,7 +533,11 @@ function guardHelperWrite(input: HookInput): void {
   if (resolution.status === 'no-active-ticket') return;
   const target = writeTarget(input);
   if (!target) return;
-  if (resolution.status === 'no-owner') {
+  const matchingScopes = resolution.scopes.filter((scope) => inScope(target, scope));
+  if ((resolution.status === 'recovery-owner' || resolution.status === 'no-owner')
+    && matchingScopes.length === 1
+    && restoresCommittedContent(input, target)) return;
+  if (resolution.status === 'no-owner' || resolution.status === 'recovery-owner') {
     writeDeny(
       'PreToolUse',
       `sidequest: refusing helper write to ${target}. No active ticket is bound to acting agent ${stringField(input, 'agent_id', 'agentId')}; refusing to borrow another ticket's scope.`,
