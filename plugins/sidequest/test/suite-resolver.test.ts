@@ -4,7 +4,7 @@ import path from 'node:path';
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-import { resolveSuite } from '../src/lib/suite-resolver.ts';
+const { resolveSuite } = require('../lib/suite-resolver');
 
 function makePlugin(suiteTimeout?: number) {
   const root = mkdtempSync(path.join(tmpdir(), 'suite-resolver-'));
