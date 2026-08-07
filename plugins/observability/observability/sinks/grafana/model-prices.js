@@ -90,8 +90,12 @@ function modelCostTargets() {
   }));
 }
 
-function gatewayModelCostExpression(model, prices, bucket = '$bucket') {
-  const selector = `${GATEWAY_USAGE_SELECTOR} | workbench_attribute_model = "${model}"`;
+function escapeLogqlRegex(value) {
+  return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
+}
+
+function gatewayModelCostExpression(model, prices, bucket = '$bucket', extraFilter = '') {
+  const selector = `${GATEWAY_USAGE_SELECTOR}${extraFilter} | workbench_attribute_model = "${model}"`;
   return Object.entries(prices).map(([type, price]) =>
     `sum(sum_over_time(${selector} | unwrap workbench_measurement_${GATEWAY_MEASUREMENT_BY_PRICE_TYPE[type]}_value [${bucket}])) * ${price / 1_000_000}`,
   ).join(' + ');
@@ -106,16 +110,36 @@ function gatewayModelCostTargets() {
   }));
 }
 
-function gatewayCostExpression(entries, bucket = '$bucket') {
-  return entries.map(([model, prices]) => `((${gatewayModelCostExpression(model, prices, bucket)}) or vector(0))`).join(' + ');
+function gatewayCostExpression(entries, bucket = '$bucket', extraFilter = '') {
+  return entries.map(([model, prices]) => `((${gatewayModelCostExpression(model, prices, bucket, extraFilter)}) or vector(0))`).join(' + ');
 }
 
 function gatewayResolvedCodexCostExpression(bucket = '$bucket') {
   return gatewayCostExpression(Object.entries(GATEWAY_RESOLVED_MODEL_ALIASES), bucket);
 }
 
-function gatewayTotalCostExpression(bucket = '$bucket') {
-  return gatewayCostExpression(gatewayModelPriceEntries(), bucket);
+function gatewayTotalCostExpression(bucket = '$bucket', extraFilter = '') {
+  return gatewayCostExpression(gatewayModelPriceEntries(), bucket, extraFilter);
+}
+
+function gatewayProjectCostTargets(projects) {
+  const targets = projects.map(({ project_name: projectName }, index) => ({
+    refId: `P${index + 1}`,
+    datasource: { type: 'loki', uid: 'loki' },
+    expr: gatewayTotalCostExpression('$bucket', ` | workbench_attribute_project_name = ${JSON.stringify(projectName)}`),
+    legendFormat: projectName,
+  }));
+  const knownProjects = projects.map(({ project_name: projectName }) => escapeLogqlRegex(projectName)).join('|');
+  const otherProjectsFilter = knownProjects
+    ? ` | workbench_attribute_project_name !~ ${JSON.stringify(knownProjects)}`
+    : '';
+  targets.push({
+    refId: `P${targets.length + 1}`,
+    datasource: { type: 'loki', uid: 'loki' },
+    expr: gatewayTotalCostExpression('$bucket', otherProjectsFilter),
+    legendFormat: 'Other / unattributed',
+  });
+  return targets;
 }
 
 function unpricedModelsExpression(bucket = '$bucket') {
@@ -129,6 +153,7 @@ module.exports = {
   MODEL_PRICES_PER_MILLION,
   UNPRICEABLE_VIRTUAL_DISPATCH_MODELS,
   gatewayModelCostTargets,
+  gatewayProjectCostTargets,
   gatewayResolvedCodexCostExpression,
   gatewayTotalCostExpression,
   modelCostExpression,
