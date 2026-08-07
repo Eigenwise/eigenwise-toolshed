@@ -491,7 +491,8 @@ function capturedVerifyCommand(verify) {
   const command = String(verify || "").trim();
   if (!command) return "";
   const encoded = Buffer.from(command, "utf8").toString("base64");
-  return `node plugins/sidequest/lib/verify-capture.js --base64 ${encoded}`;
+  const captureScript = path.join(__dirname, "verify-capture.js");
+  return `node "${captureScript}" --base64 ${encoded}`;
 }
 function dispatchUncertaintyPacket(ticket, slug) {
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug);

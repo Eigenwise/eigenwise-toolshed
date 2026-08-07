@@ -681,7 +681,11 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.ok(briefing.includes('token: "instant-token-334"'));
   assert.match(briefing, /Do not pass `direct`\. Do not substitute the model slug for `executor`\./);
   assert.match(briefing, /Verify output discipline: run this single Node command in a Bash tool/);
-  assert.match(briefing, /node plugins\/sidequest\/lib\/verify-capture\.js --base64 bm9kZSAtLXRlc3QgcGx1Z2lucy9zaWRlcXVlc3QvdGVzdC9hZ2VudHN5bmMudGVzdC5qcw==/);
+  const captureScript = path.resolve(__dirname, '..', 'lib', 'verify-capture.js');
+  assert.ok(path.isAbsolute(captureScript));
+  assert.ok(fs.existsSync(captureScript));
+  assert.ok(!captureScript.startsWith('plugins/'));
+  assert.ok(briefing.includes(`node "${captureScript}" --base64 bm9kZSAtLXRlc3QgcGx1Z2lucy9zaWRlcXVlc3QvdGVzdC9hZ2VudHN5bmMudGVzdC5qcw==`));
   assert.match(briefing, /verify=<passed\|failed-suite\|could-not-run>/);
   assert.match(briefing, /could-not-run.*do not call the suite red/);
   assert.match(briefing, /integrator owns the merged-tree full gate/);
