@@ -161,6 +161,17 @@ function createGitWorktree() {
   return worktree;
 }
 
+function addMarketplaceFixture(worktree: string) {
+  const marketplacePath = path.join(worktree, '.claude-plugin');
+  fs.mkdirSync(marketplacePath, { recursive: true });
+  fs.writeFileSync(path.join(marketplacePath, 'marketplace.json'), JSON.stringify({
+    plugins: [{ name: 'fixture-plugin', source: './plugins/fixture-plugin' }],
+  }));
+  gitAt(worktree, ['add', '.claude-plugin/marketplace.json']);
+  gitAt(worktree, ['commit', '-m', 'fixture marketplace']);
+  gitAt(worktree, ['push']);
+}
+
 function windowsShortPath(pathname: string) {
   if (process.platform !== 'win32') return pathname;
   return execFileSync('cmd.exe', ['/d', '/c', `for %I in ("${pathname}") do @echo %~sI`], {
@@ -1160,6 +1171,72 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree, body: 'Malformed submission evidence' });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP submit requires release fragments for marketplace plugin changes', async () => {
+  const missingWorktree = createGitWorktree();
+  addMarketplaceFixture(missingWorktree);
+  const missingProject = store.ensureProject(missingWorktree).slug;
+  const missing = store.createTicket(missingProject, {
+    title: 'missing release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm shipped plugin changes require an authored release fragment',
+  });
+  const missingBy = 'mcp-release-fragment-worker';
+  assert.equal((await callTool('claim', { project: missingProject, ref: missing.ref, by: missingBy, direct: true, reason: 'The release fragment fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(missingWorktree, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(missingWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
+  gitAt(missingWorktree, ['add', 'plugins/fixture-plugin/index.js']);
+  gitAt(missingWorktree, ['commit', '-m', 'plugin change without fragment']);
+  const missingCommit = gitAt(missingWorktree, ['rev-parse', 'HEAD']);
+  gitAt(missingWorktree, ['update-ref', `refs/sidequest/${missing.ref}`, missingCommit]);
+  const refused = await callTool('submit', {
+    project: missingProject, ref: missing.ref, by: missingBy, commit: missingCommit, worktree: missingWorktree, body: 'Missing fragment evidence',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'missing_release_fragment');
+  assert.match(refused.message, new RegExp(`Request scope for \\.release/unreleased/${missing.ref}\\.md`));
+  assert.match(refused.message, /ref: .*\ntitle: <short user-facing title>\nbump: patch\nplugins:/);
+  assert.ok(store.getTicket(missingProject, missing.ref).claim, 'fragment refusal keeps the claim');
+
+  const docsWorktree = createGitWorktree();
+  addMarketplaceFixture(docsWorktree);
+  const docsProject = store.ensureProject(docsWorktree).slug;
+  const docs = store.createTicket(docsProject, {
+    title: 'docs-only submission', files: ['docs'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm a marketplace fixture does not block unrelated documentation work',
+  });
+  const docsBy = 'mcp-docs-worker';
+  assert.equal((await callTool('claim', { project: docsProject, ref: docs.ref, by: docsBy, direct: true, reason: 'The docs-only fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(docsWorktree, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(docsWorktree, 'docs', 'guide.md'), 'docs\n');
+  gitAt(docsWorktree, ['add', 'docs/guide.md']);
+  gitAt(docsWorktree, ['commit', '-m', 'docs change']);
+  const docsCommit = gitAt(docsWorktree, ['rev-parse', 'HEAD']);
+  gitAt(docsWorktree, ['update-ref', `refs/sidequest/${docs.ref}`, docsCommit]);
+  assert.equal((await callTool('submit', {
+    project: docsProject, ref: docs.ref, by: docsBy, commit: docsCommit, worktree: docsWorktree, body: 'Docs-only evidence',
+  })).ok, true);
+
+  const fragmentWorktree = createGitWorktree();
+  addMarketplaceFixture(fragmentWorktree);
+  const fragmentProject = store.ensureProject(fragmentWorktree).slug;
+  const fragment = store.createTicket(fragmentProject, {
+    title: 'plugin submission with release fragment', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm a shipped plugin change with its fragment submits unchanged',
+  });
+  const fragmentBy = 'mcp-valid-fragment-worker';
+  assert.equal((await callTool('claim', { project: fragmentProject, ref: fragment.ref, by: fragmentBy, direct: true, reason: 'The valid release fragment fixture requires a local direct claim.' })).ok, true);
+  fs.mkdirSync(path.join(fragmentWorktree, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(fragmentWorktree, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(fragmentWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
+  fs.writeFileSync(path.join(fragmentWorktree, '.release', 'unreleased', `${fragment.ref}.md`), `---\nref: ${fragment.ref}\ntitle: Fixture change\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nFixture change.\n`);
+  gitAt(fragmentWorktree, ['add', 'plugins/fixture-plugin/index.js', `.release/unreleased/${fragment.ref}.md`]);
+  gitAt(fragmentWorktree, ['commit', '-m', 'plugin change with fragment']);
+  const fragmentCommit = gitAt(fragmentWorktree, ['rev-parse', 'HEAD']);
+  gitAt(fragmentWorktree, ['update-ref', `refs/sidequest/${fragment.ref}`, fragmentCommit]);
+  assert.equal((await callTool('submit', {
+    project: fragmentProject, ref: fragment.ref, by: fragmentBy, commit: fragmentCommit, worktree: fragmentWorktree, body: 'Valid fragment evidence',
+  })).ok, true);
 });
 
 test('MCP commit and submit accept an 8.3 worktree alias', { skip: process.platform !== 'win32' }, async (context: any) => {
