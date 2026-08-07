@@ -19,15 +19,6 @@ const NON_MAX_EFFORTS = ["low", "medium", "high", "xhigh"];
 const EXEC_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
 const EXECUTOR_CONTRADICTION_RULE = "Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.";
-const EXEC_MAX_TURNS = { low: 50, medium: 100, high: 150, xhigh: 200, max: 250 };
-function execMaxTurns(effort) {
-  const raw = process.env.SIDEQUEST_EXEC_MAX_TURNS;
-  if (raw != null && String(raw).trim() !== "") {
-    const n = Number(String(raw).trim());
-    if (Number.isInteger(n) && n > 0) return n;
-  }
-  return EXEC_MAX_TURNS[effort] || EXEC_MAX_TURNS.medium;
-}
 function defaultAgentsDir() {
   const explicit = process.env.SIDEQUEST_AGENTS_DIR;
   if (explicit && String(explicit).trim()) return path.resolve(String(explicit).trim());
@@ -98,7 +89,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
 function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
-function renderExecAgent({ name, effort, maxTurnsEffort = effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(", ")}
 ` : "";
@@ -108,7 +99,7 @@ function renderExecAgent({ name, effort, maxTurnsEffort = effort, modelId, marke
 ${skills.map((skill) => `  - ${skill}`).join("\n")}
 ` : "";
   return template.split("{{NAME}}").join(String(name)).split("{{EFFORT}}").join(String(effort)).split("{{MODEL_FRONTMATTER}}").join(modelId ? `
-model: ${modelId}` : "").split("{{MAX_TURNS}}").join(String(execMaxTurns(String(maxTurnsEffort)))).split("{{CHECKPOINT_TOOL_ROUNDS}}").join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS)).split("permissionMode: bypassPermissions").join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
+model: ${modelId}` : "").split("{{CHECKPOINT_TOOL_ROUNDS}}").join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS)).split("permissionMode: bypassPermissions").join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`).split("{{MARKER}}").join(marker || "").split("{{EXTRA_NOTE}}").join(extraNote || "").split("{{TICKET_BRIEF}}").join(`Teammate subagent fan-out must omit the Agent \`name\` parameter; named teammate spawns are rejected by the harness.${ticketBrief2 ? `
 
 ${ticketBrief2}` : ""}`);
 }
@@ -124,7 +115,6 @@ function renderDispatchAgent(_effort) {
   return collapseEffortProse(renderExecAgent({
     name: stableDispatchName(),
     effort: "high",
-    maxTurnsEffort: "max",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: dispatchNote()
@@ -135,7 +125,6 @@ function renderReadOnlyDispatchAgent(_effort, readOnlyDeniedTools) {
   return collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
     effort: "high",
-    maxTurnsEffort: "max",
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
@@ -868,9 +857,8 @@ function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools) {
   } catch (_) {
   }
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
-  const maxTurnsOverride = String(process.env.SIDEQUEST_EXEC_MAX_TURNS || "").trim();
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
-  return crypto.createHash("sha256").update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride, readOnlyTools, skills })).digest("hex");
+  return crypto.createHash("sha256").update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, readOnlyTools, skills })).digest("hex");
 }
 function installHashPath(dir) {
   return path.join(dir || defaultAgentsDir(), INSTALL_HASH_FILE);
@@ -967,12 +955,10 @@ module.exports = {
   ARTIFACT_LIFECYCLE_MARKER,
   NON_MAX_EFFORTS,
   EXECUTOR_CHECKPOINT_TOOL_ROUNDS,
-  EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   READ_ONLY_DENIED_TOOLS,
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
-  execMaxTurns,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,

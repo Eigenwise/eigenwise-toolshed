@@ -68,25 +68,6 @@ const EXEC_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 const EXECUTOR_CHECKPOINT_TOOL_ROUNDS = 100;
 const EXECUTOR_CONTRADICTION_RULE = 'Executor contradiction rule: An anchor is orientation, not a contract. When an anchor names the wrong file, locate the file the work actually needs. If that file is inside declared scope, correct the anchor in your handback and continue. Stop and report a contradiction only when the needed file is outside declared scope or the ticket premise is false. Scope limits writes, never reads: reading any worktree path is allowed. Before reporting, check it and include the checked path or target and result. An existing out-of-scope path or declared output is context, not a contradiction. After evidence of absence, do not redesign the ticket, reject the base, or invent a substitute.';
 
-// Effort-scaled hard caps stamped into every executor definition's `maxTurns`
-// frontmatter — the harness's runaway backstop, not a work budget. Legitimately
-// scoped atomic tickets should finish well below it. Complements (does not
-// replace) the SubagentStop wall-clock tripwire: maxTurns bounds turns, not minutes.
-const EXEC_MAX_TURNS: Record<string, number> = { low: 50, medium: 100, high: 150, xhigh: 200, max: 250 };
-
-// The cap for one effort tier. SIDEQUEST_EXEC_MAX_TURNS, when set to a positive
-// integer, overrides ALL tiers; garbage or non-positive values are ignored and
-// the effort default applies. Read at render time so a sync pass sees the
-// current environment.
-function execMaxTurns(effort?: any) {
-  const raw = process.env.SIDEQUEST_EXEC_MAX_TURNS;
-  if (raw != null && String(raw).trim() !== '') {
-    const n = Number(String(raw).trim());
-    if (Number.isInteger(n) && n > 0) return n;
-  }
-  return EXEC_MAX_TURNS[effort] || EXEC_MAX_TURNS.medium;
-}
-
 // Where generated exec agents go. In production that's the user's live
 // ~/.claude/agents (Claude Code loads them from there). But a test or isolated
 // server sets SIDEQUEST_HOME to a throwaway dir, and it must NOT pollute the
@@ -190,7 +171,7 @@ function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in the session scratchpad, never the repo, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 
-function renderExecAgent({ name, effort, maxTurnsEffort = effort, modelId, marker, extraNote, ticketBrief, tools, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
+function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief, tools, disallowedTools, skills = EXECUTOR_SKILLS }: any) {
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
   const toolsLine = Array.isArray(tools) && tools.length ? `tools: ${tools.join(', ')}\n` : '';
   const disallowedToolsLine = Array.isArray(disallowedTools) && disallowedTools.length ? `disallowedTools: ${disallowedTools.join(', ')}\n` : '';
@@ -199,7 +180,6 @@ function renderExecAgent({ name, effort, maxTurnsEffort = effort, modelId, marke
     .split('{{NAME}}').join(String(name))
     .split('{{EFFORT}}').join(String(effort))
     .split('{{MODEL_FRONTMATTER}}').join(modelId ? `\nmodel: ${modelId}` : '')
-    .split('{{MAX_TURNS}}').join(String(execMaxTurns(String(maxTurnsEffort))))
     .split('{{CHECKPOINT_TOOL_ROUNDS}}').join(String(EXECUTOR_CHECKPOINT_TOOL_ROUNDS))
     .split('permissionMode: bypassPermissions').join(`${toolsLine}${disallowedToolsLine}${skillsLine}permissionMode: bypassPermissions`)
     .split('{{MARKER}}').join(marker || '')
@@ -216,8 +196,7 @@ function dispatchNote() {
   return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 
-// The dispatch defs use a safe frontmatter effort for internal non-marker calls, while
-// retaining the max-tier backstop because dispatched tickets may run at any effort.
+// The dispatch defs use a safe frontmatter effort for internal non-marker calls.
 function collapseEffortProse(body: string): string {
   return body
     .split('Executes one or more sidequest tickets at high reasoning effort.')
@@ -230,7 +209,6 @@ function renderDispatchAgent(_effort?: any) {
   return collapseEffortProse(renderExecAgent({
     name: stableDispatchName(),
     effort: 'high',
-    maxTurnsEffort: 'max',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: dispatchNote(),
@@ -242,7 +220,6 @@ function renderReadOnlyDispatchAgent(_effort?: any, readOnlyDeniedTools?: any) {
   return collapseEffortProse(renderExecAgent({
     name: stableReadOnlyDispatchName(),
     effort: 'high',
-    maxTurnsEffort: 'max',
     modelId: DISPATCH_MODEL_ID,
     marker: MARKER,
     extraNote: `${dispatchNote()}${readOnlyNote()}`,
@@ -1043,10 +1020,9 @@ function stableInstallHash(skills = EXECUTOR_SKILLS, readOnlyDeniedTools?: any) 
     version = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version || version;
   } catch (_) {}
   const template = fs.readFileSync(TEMPLATE_PATH, 'utf8');
-  const maxTurnsOverride = String(process.env.SIDEQUEST_EXEC_MAX_TURNS || '').trim();
   const readOnlyTools = resolveReadOnlyTools(readOnlyDeniedTools);
   return crypto.createHash('sha256')
-    .update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, maxTurns: EXEC_MAX_TURNS, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, maxTurnsOverride, readOnlyTools, skills }))
+    .update(JSON.stringify({ version, template, marker: MARKER, dispatchModel: DISPATCH_MODEL_ID, checkpointToolRounds: EXECUTOR_CHECKPOINT_TOOL_ROUNDS, readOnlyTools, skills }))
     .digest('hex');
 }
 
@@ -1164,12 +1140,10 @@ module.exports = {
   ARTIFACT_LIFECYCLE_MARKER,
   NON_MAX_EFFORTS,
   EXECUTOR_CHECKPOINT_TOOL_ROUNDS,
-  EXEC_MAX_TURNS,
   DISPATCH_MODEL_ID,
   READ_ONLY_DENIED_TOOLS,
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
-  execMaxTurns,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,
