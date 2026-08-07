@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.407.0 (2026-08-07)
+
+### sidequest 4.40.0 → 4.40.1
+
+#### Fixes
+
+- Dispatch stopped binding when a ticket's text mentioned another ticket (SQ-1413)
+  4.40.0 started carrying ticket title, description, and anchors in the spawn
+  prompt. The Agent gate resolved a spawn's tickets by scanning that whole prompt
+  for `SQ-` refs, so any ticket whose own text named another ticket suddenly
+  looked like a multi-ticket batch. The gate then denied it as conflicting or
+  not-found and recorded no launch, and the executor failed its claim with
+  `unbound_dispatch`.
+
+  The gate now takes the dispatched refs from the briefing command, where each ref
+  is paired with its own token, and falls back to scanning only when no briefing
+  command is present. Ticket prose can name whatever it likes.
+
 ## v3.406.0 (2026-08-07)
 
 ### sidequest 4.39.1 → 4.40.0
