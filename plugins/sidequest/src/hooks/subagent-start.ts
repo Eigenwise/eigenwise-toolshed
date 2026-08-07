@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { readStdin, stringField } from './shared/input.js';
+import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
+import { diagnosticWorktreeWarning } from './diagnostic-worktree-warning.js';
 
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
@@ -38,10 +40,15 @@ function main(): void {
   const agentId = stringField(data, 'agent_id', 'agentId');
   const agentName = stringField(data, 'agent_name', 'agentName', 'name');
   if (!sessionId || !executor || (!agentId && !agentName) || classifyExecutor(executor).kind === 'unknown') return;
-  const store = require(runtimeModule('store')) as {
-    bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null) => unknown;
-  };
-  store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
+  try {
+    const store = require(runtimeModule('store')) as {
+      bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null) => unknown;
+    };
+    store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
+  } catch (_) {
+  }
+  const warning = diagnosticWorktreeWarning(data);
+  if (warning) writeContext('SubagentStart', warning);
 }
 
 try {

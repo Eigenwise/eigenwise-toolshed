@@ -242,6 +242,51 @@ function registerSweepSession(data) {
   }
 }
 
+// src/hooks/diagnostic-worktree-warning.ts
+var import_node_fs5 = __toESM(require("node:fs"));
+var import_node_path5 = __toESM(require("node:path"));
+var WARNING = "sidequest: foreign agent worktrees detected. Diagnostics under `.claude/worktrees/agent-*` outside this checkout are not actionable: they can be stale-index or missing-dependency artifacts, including error-severity diagnostics. Keep errors in your own files actionable; do not inspect or act on foreign-worktree diagnostics.";
+function gitDirectory(entry) {
+  try {
+    if (import_node_fs5.default.statSync(entry).isDirectory()) return entry;
+    const gitDir = /^gitdir:\s*(.+)$/m.exec(import_node_fs5.default.readFileSync(entry, "utf8"))?.[1];
+    return gitDir ? import_node_path5.default.resolve(import_node_path5.default.dirname(entry), gitDir.trim()) : null;
+  } catch (_) {
+    return null;
+  }
+}
+function checkoutLocation(start) {
+  let current = import_node_path5.default.resolve(start);
+  while (true) {
+    const gitDir = gitDirectory(import_node_path5.default.join(current, ".git"));
+    if (gitDir) {
+      if (import_node_path5.default.basename(gitDir) === ".git") return { checkoutRoot: current, projectRoot: current };
+      const commonGitDir = import_node_path5.default.resolve(gitDir, "..", "..");
+      if (import_node_path5.default.basename(commonGitDir) === ".git") return { checkoutRoot: current, projectRoot: import_node_path5.default.dirname(commonGitDir) };
+      return null;
+    }
+    const parent = import_node_path5.default.dirname(current);
+    if (parent === current) return null;
+    current = parent;
+  }
+}
+function isOwnWorktree(checkoutRoot, worktreesRoot, name) {
+  return import_node_path5.default.resolve(import_node_path5.default.dirname(checkoutRoot)) === import_node_path5.default.resolve(worktreesRoot) && import_node_path5.default.basename(checkoutRoot) === name;
+}
+function diagnosticWorktreeWarning(input) {
+  const start = stringField(input, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const location = checkoutLocation(start);
+  if (!location) return "";
+  const worktreesRoot = import_node_path5.default.join(location.projectRoot, ".claude", "worktrees");
+  try {
+    return import_node_fs5.default.readdirSync(worktreesRoot, { withFileTypes: true }).some(
+      (entry) => entry.isDirectory() && entry.name.startsWith("agent-") && !isOwnWorktree(location.checkoutRoot, worktreesRoot, entry.name)
+    ) ? WARNING : "";
+  } catch (_) {
+    return "";
+  }
+}
+
 // src/hooks/session-start.ts
 var MAX_WORKFORCE_BYTES = 1800;
 var MAX_WORKFORCE_DESCRIPTION = 90;
@@ -344,14 +389,15 @@ async function main() {
   } catch (error) {
     sweepNotices = [`sidequest: worktree sweep failed: ${error && error.message || error}`];
   }
+  const source = stringField(data, "source");
   const restartNotice = [
     syncResult && syncResult.written > 0 ? require(runtimeModule("agentsync")).RESTART_NOTICE : "",
     lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : "",
+    source === "compact" || source === "resume" ? "" : diagnosticWorktreeWarning(data),
     ...sweepNotices
   ].filter(Boolean).join("\n");
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
-  const source = stringField(data, "source");
   if (source === "compact" || source === "resume") {
     emit(
       '=== sidequest (active — context restored) ===\nROLE: ORCHESTRATOR. Reload Sidequest. Use dispatch executor/spawn verbatim. Ticket + dispatch BEFORE multi-file exploration. Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. `direct:true` needs a 20+ character inline-safe reason, not `direct-ok`; only pinpointed integration mechanical fixes, release bookkeeping, or the user-directed 1–2 named-file carve-out qualify. Work needing investigation or other-file reading, new behavior/API, or an unpinpointed failing test is never inline. "context already loaded", "small change", and "faster myself" do not; mcp__plugin_sidequest_board__list status=doing FIRST; `' + cli + " list --status=doing`; mcp__plugin_sidequest_board__* absent (not errors)? Ask USER to `/reload-plugins`.\nnever TaskOutput; pulse ref/changes --since; TaskStop only after terminal board evidence. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND dispatch→submission: no unprompted reads/pulses/peeks; oracle=verify+wave suite+submit report; never re-review diffs/source.\n" + checkpointingGuidance(data),
@@ -360,7 +406,7 @@ async function main() {
     return;
   }
   emit(
-    "=== sidequest (active) ===\nREQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.\nOperational requests (run/build/test app; start/stop dev server; open dashboard; answer from visible context): act inline, without the Sidequest skill, category_list, or board reads.\nROLE: you are this project's ORCHESTRATOR.\n" + checkpointingGuidance(data) + '\nReload the Sidequest skill before board work. SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline. Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor. If spec pins shared types/interfaces, file bounds, and per-piece verifies, 3+ independently checkable pieces use contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once. Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence. Plan first when unsure. Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify. Dispatch every dependency-ready ticket in parallel; same-file overlap in isolated worktrees needs assessment, not auto-serialization; never drip-file/dispatch/wait. Discoveries still file mid-run. Otherwise use checkable ATOMIC tickets; several deliverables are a smell. Passing done-oracle skips audit/fix unless high-stakes; full suite once/wave. An external tracker like Jira still uses Sidequest.\n• Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration. `Explore`/`claude-code-guide`/`statusline-setup`: narrow harness recon. direct:true claims need a recorded inline-safe reason, not `direct-ok`. Inline-safe is only a pinpointed integration mechanical fix, release bookkeeping, or the user-directed 1–2 named-file carve-out. Work needing investigation or other-file reading, new behavior/API, or an unpinpointed failing test is never inline. "context already loaded", "small change", and "faster myself" do not qualify. Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence; never proxy-wait via shell/Monitor/cron polls or blocking TaskOutput. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks. Integrate by oracle: verify + wave suite + submit report; never re-review diffs or source. substantive actions are BLOCKED until claim. Use `bypassPermissions`; never `native_agent`.\n• Batch small same-model tickets into ONE executor.\n• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\nmcp__plugin_sidequest_board__ MCP tools FIRST; CLI fallback. If those tools are absent (not errors), ask USER to run `/reload-plugins`.',
+    "=== sidequest (active) ===\nREQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.\nOperational requests (run/build/test app; start/stop dev server; open dashboard; answer from visible context): act inline, without the Sidequest skill, category_list, or board reads.\nROLE: you are this project's ORCHESTRATOR.\n" + checkpointingGuidance(data) + "\nReload the Sidequest skill before board work. SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline. Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor. If spec pins shared types/interfaces, file bounds, and per-piece verifies, 3+ independently checkable pieces use contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once. Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence. Plan first when unsure. Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify. Dispatch every dependency-ready ticket in parallel; same-file overlap in isolated worktrees needs assessment, not auto-serialization; never drip-file/dispatch/wait. Discoveries still file mid-run. Otherwise use checkable ATOMIC tickets; several deliverables are a smell. Passing done-oracle skips audit/fix unless high-stakes; full suite once/wave. An external tracker like Jira still uses Sidequest.\n• Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration. `Explore`/`claude-code-guide`/`statusline-setup`: narrow harness recon. Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence; never proxy-wait via shell/Monitor/cron polls or blocking TaskOutput. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks. Integrate by oracle: verify + wave suite + submit report; never re-review diffs or source. substantive actions are BLOCKED until claim. Use `bypassPermissions`; never `native_agent`.\n• Batch small same-model tickets into ONE executor.\n• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\nmcp__plugin_sidequest_board__ MCP tools FIRST; CLI fallback. If those tools are absent (not errors), ask USER to run `/reload-plugins`.",
     restartNotice
   );
 }

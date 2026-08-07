@@ -5,6 +5,7 @@ import { pluginRoot, runtimeModule } from './shared/paths.js';
 import { initializeCompactionState, isPrimarySession } from './shared/compaction.js';
 import { runSweep } from './shared/sweep-handoff.js';
 import { registerSweepSession } from './shared/worktree-sweep.js';
+import { diagnosticWorktreeWarning } from './diagnostic-worktree-warning.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -144,15 +145,16 @@ async function main(): Promise<void> {
   } catch (error: any) {
     sweepNotices = [`sidequest: worktree sweep failed: ${(error && error.message) || error}`];
   }
+  const source = stringField(data, 'source');
   const restartNotice = [
     syncResult && syncResult.written > 0 ? (require(runtimeModule('agentsync')) as AgentSync).RESTART_NOTICE : '',
     lostLaunches.length ? `sidequest: ${lostLaunches.join(', ')} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : '',
+    source === 'compact' || source === 'resume' ? '' : diagnosticWorktreeWarning(data),
     ...sweepNotices,
   ].filter(Boolean).join('\n');
 
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
-  const source = stringField(data, 'source');
 
   if (source === 'compact' || source === 'resume') {
     emit(
@@ -173,7 +175,7 @@ async function main(): Promise<void> {
       checkpointingGuidance(data) +
       '\n' +
       'Reload the Sidequest skill before board work. SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline. Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor. If spec pins shared types/interfaces, file bounds, and per-piece verifies, 3+ independently checkable pieces use contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once. Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence. Plan first when unsure. Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify. Dispatch every dependency-ready ticket in parallel; same-file overlap in isolated worktrees needs assessment, not auto-serialization; never drip-file/dispatch/wait. Discoveries still file mid-run. Otherwise use checkable ATOMIC tickets; several deliverables are a smell. Passing done-oracle skips audit/fix unless high-stakes; full suite once/wave. An external tracker like Jira still uses Sidequest.\n' +
-      '• Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration. `Explore`/`claude-code-guide`/`statusline-setup`: narrow harness recon. direct:true claims need a recorded inline-safe reason, not `direct-ok`. Inline-safe is only a pinpointed integration mechanical fix, release bookkeeping, or the user-directed 1–2 named-file carve-out. Work needing investigation or other-file reading, new behavior/API, or an unpinpointed failing test is never inline. "context already loaded", "small change", and "faster myself" do not qualify. Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence; never proxy-wait via shell/Monitor/cron polls or blocking TaskOutput. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks. Integrate by oracle: verify + wave suite + submit report; never re-review diffs or source. substantive actions are BLOCKED until claim. Use `bypassPermissions`; never `native_agent`.\n' +
+      '• Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration. `Explore`/`claude-code-guide`/`statusline-setup`: narrow harness recon. Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence; never proxy-wait via shell/Monitor/cron polls or blocking TaskOutput. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks. Integrate by oracle: verify + wave suite + submit report; never re-review diffs or source. substantive actions are BLOCKED until claim. Use `bypassPermissions`; never `native_agent`.\n' +
       '• Batch small same-model tickets into ONE executor.\n' +
       '• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n' +
       '• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\n' +
