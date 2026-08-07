@@ -88,7 +88,12 @@ function createPulse(dependencies: any) {
       const commit = git(['log', '-1', '--format=%H%x1f%s%x1f%cI', '--', ...files]);
       const [hash, subject, at] = commit ? commit.split('\x1f') : [];
       const changed = git(['status', '--porcelain', '--', ...files]);
-      return { commit: hash ? { hash, subject, at } : null, dirty: Boolean(changed) };
+      return {
+        commit: hash ? { hash, subject, at } : null,
+        commitNote: 'Last commit touching this ticket’s declared files; it may differ from repository HEAD.',
+        dirty: Boolean(changed),
+        dirtyNote: 'Whether this ticket’s declared files have uncommitted changes; it is not repository-wide.',
+      };
     } catch (_: any) {
       return null;
     }

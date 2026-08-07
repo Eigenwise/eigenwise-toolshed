@@ -452,23 +452,26 @@ function crossTicketStateWarnings(ticket?: any, slug?: any) {
   return warnings;
 }
 
-function staleWorktreeCwdWarning(cwd?: any) {
+function staleWorktreeCwdWarning(cwd?: any, projectPath?: any) {
   const workingDirectory = String(cwd || '').trim();
   const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, '/').toLowerCase();
   const worktreesPath = '/.claude/worktrees/';
   const containsWorktreesPath = normalizedDirectory.includes(worktreesPath);
   if (!containsWorktreesPath) return null;
-  return `Board server cwd ${workingDirectory} is inside .claude${path.sep}worktrees; spawned executors will inherit this stale-worktree cwd.`;
+  const projectRoot = String(projectPath || '').trim() || 'the project root';
+  return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd; it should run from project root ${projectRoot}.`;
 }
 
 function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   const warnings = [
     ...crossTicketStateWarnings(ticket, slug),
   ];
-  const verifyPath = verifyPathWarning(ticket, slug ? readMeta(slug)?.path : null);
+  const projectPath = slug ? readMeta(slug)?.path : null;
+  const verifyPath = verifyPathWarning(ticket, projectPath);
   if (verifyPath) warnings.push(verifyPath);
+  // Isolated dispatches pin an absolute worktree path in the briefing, so only shared-tree dispatches can inherit this cwd.
   if (dispatchState(ticket)?.sharedTree === true) {
-    const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd());
+    const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath);
     if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
   }
   return warnings.map((warning) => `Dispatch warning: ${warning}`);

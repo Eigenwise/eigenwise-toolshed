@@ -796,11 +796,16 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.match(shared, /If it still differs after cd, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
 });
 
-test('stale worktree cwd warnings accept Windows separators and casing', () => {
+test('stale worktree cwd warnings identify shared-tree dispatch scope', () => {
   const store = require('../lib/store.js');
-  const warning = store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed\\.CLAUDE\\WORKTREES\\SQ-538-river-bluffs');
-  assert.match(warning, /spawned executors will inherit this stale-worktree cwd/);
-  assert.equal(store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed'), null);
+  const projectRoot = 'C:\\Projects\\Toolshed';
+  const warning = store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed\\.CLAUDE\\WORKTREES\\SQ-538-river-bluffs', projectRoot);
+  assert.match(warning, /Shared-tree dispatch/);
+  assert.match(warning, /has no worktree of its own/);
+  assert.match(warning, /whatever cwd it inherits/);
+  assert.match(warning, /leftover/);
+  assert.ok(warning.includes(projectRoot));
+  assert.equal(store.staleWorktreeCwdWarning('C:\\Projects\\Toolshed', projectRoot), null);
 });
 
 test('worktree setup appears only in isolated worktree briefings', () => {

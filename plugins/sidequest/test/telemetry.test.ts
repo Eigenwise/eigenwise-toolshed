@@ -33,7 +33,7 @@ interface Pulse {
     verifying: boolean;
   };
   lastComment: { at: string; by: string; kind: string; body: string };
-  git: { commit: { hash: string }; dirty: boolean };
+  git: { commit: { hash: string }; commitNote: string; dirty: boolean; dirtyNote: string };
   [key: string]: unknown;
 }
 interface Changes {
@@ -85,7 +85,9 @@ test('CLI and MCP pulse return the compact liveness shape with git activity', as
   assert.strictEqual(pulse.comments, 1);
   assert.deepStrictEqual(pulse.lastComment, { at: pulse.lastComment.at, by: 'telemetry-worker', kind: 'comment', body: 'a recent telemetry note' });
   assert.match(pulse.git.commit.hash, /^[0-9a-f]{40}$/);
+  assert.match(pulse.git.commitNote, /declared files.*differ from repository HEAD/);
   assert.strictEqual(pulse.git.dirty, false);
+  assert.match(pulse.git.dirtyNote, /declared files.*not repository-wide/);
   const viaMcp = await callTool<Pulse>('pulse', { ref, full: true });
   assert.strictEqual(viaMcp.ref, ref);
   assert.strictEqual(viaMcp.git.commit.hash, pulse.git.commit.hash);

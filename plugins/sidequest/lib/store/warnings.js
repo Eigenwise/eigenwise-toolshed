@@ -439,22 +439,24 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     }
     return warnings;
   }
-  function staleWorktreeCwdWarning(cwd) {
+  function staleWorktreeCwdWarning(cwd, projectPath) {
     const workingDirectory = String(cwd || "").trim();
     const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, "/").toLowerCase();
     const worktreesPath = "/.claude/worktrees/";
     const containsWorktreesPath = normalizedDirectory.includes(worktreesPath);
     if (!containsWorktreesPath) return null;
-    return `Board server cwd ${workingDirectory} is inside .claude${path.sep}worktrees; spawned executors will inherit this stale-worktree cwd.`;
+    const projectRoot = String(projectPath || "").trim() || "the project root";
+    return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd; it should run from project root ${projectRoot}.`;
   }
   function dispatchUncertaintyWarnings(ticket, slug) {
     const warnings = [
       ...crossTicketStateWarnings(ticket, slug)
     ];
-    const verifyPath = verifyPathWarning(ticket, slug ? readMeta(slug)?.path : null);
+    const projectPath = slug ? readMeta(slug)?.path : null;
+    const verifyPath = verifyPathWarning(ticket, projectPath);
     if (verifyPath) warnings.push(verifyPath);
     if (dispatchState(ticket)?.sharedTree === true) {
-      const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd());
+      const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath);
       if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
     }
     return warnings.map((warning) => `Dispatch warning: ${warning}`);
