@@ -211,7 +211,7 @@ const TICKET_COMMENT_BODY_MAX_BYTES = 768;
 const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
 const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
 const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
-const STORY_DECISION_LOG_PACKET_MAX_BYTES = 4 * 1024;
+const STORY_DECISION_LOG_PACKET_MAX_BYTES = 16 * 1024;
 const DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES = 1024;
 function byteLength(value) {
   return Buffer.byteLength(String(value || ""), "utf8");
@@ -689,6 +689,27 @@ function ensureDispatchLauncher() {
   }
   return filePath;
 }
+function dispatchTicketContext(ticket, projectPath) {
+  const declaredFiles = Array.isArray(ticket?.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  let slug = null;
+  if (ticket?.storyId) {
+    try {
+      slug = store.findProject(projectPath)?.slug || null;
+    } catch (_) {
+    }
+  }
+  const decisionLog = storyDecisionLogPacket(ticket, slug);
+  return [
+    `Title: ${ticket?.title || "(Untitled ticket)"}`,
+    `Description:
+${ticketDescriptionPacket(ticket?.description)}`,
+    `Declared files:
+${declaredFiles}`,
+    `Anchors:
+${ticket?.executorAnchors || "(No anchors were recorded.)"}`,
+    ...decisionLog ? [decisionLog] : []
+  ].join("\n\n");
+}
 function renderDispatchStub(ticket, nonce, projectPath) {
   const project = String(projectPath || "").trim();
   if (!project) throw new Error("Dispatch board project path is required.");
@@ -709,6 +730,10 @@ function renderDispatchStub(ticket, nonce, projectPath) {
     `Ticket: ${ticket.ref}.`,
     `Dispatch board identity: --project ${quotedShellArgument(project)}.`,
     "",
+    "Implementation context:",
+    dispatchTicketContext(ticket, project),
+    "",
+    "The token-gated briefing adds comments, attachments, claim details, verification, and lifecycle instructions without loading them into the orchestrator transcript.",
     `FIRST action: run \`${command}\` and execute exactly what it prints.`
   ].join("\n");
 }

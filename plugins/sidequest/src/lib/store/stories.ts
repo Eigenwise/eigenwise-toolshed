@@ -53,8 +53,10 @@ function coerceStoryId(slug?: any, val?: any) {
 }
 
 const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
-const STORY_DECISION_LOG_BRIEFING_MAX_BYTES = 4 * 1024;
 const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 16000;
+// Story log entries are durable cross-ticket handoffs. The briefing window fits
+// one maximum-size entry plus its metadata while still bounding older history.
+const STORY_DECISION_LOG_BRIEFING_MAX_BYTES = 16 * 1024;
 const STORY_LOG_ENTRY_ADVISORY_BYTES = 4 * 1024;
 const STORY_LOG_KINDS = new Set(['DECISION', 'CONSTRAINT', 'DISCOVERY']);
 
@@ -104,7 +106,7 @@ function storyLogEntryAdvisory(value?: any) {
   const { text } = normalizeStoryLogEntry(value);
   const bytes = Buffer.byteLength(text, 'utf8');
   if (bytes <= STORY_LOG_ENTRY_ADVISORY_BYTES) return null;
-  return `entry stored in full (${(bytes / 1024).toFixed(1)} KB); briefings include only the newest entries within 4 KB.`;
+  return `entry stored in full (${(bytes / 1024).toFixed(1)} KB); briefings include only the newest entries within ${STORY_DECISION_LOG_BRIEFING_MAX_BYTES / 1024} KB.`;
 }
 
 function normalizeStoredStoryLogEntries(entries?: any) {

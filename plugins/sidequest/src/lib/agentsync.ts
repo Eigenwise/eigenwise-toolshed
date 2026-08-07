@@ -345,7 +345,7 @@ const TICKET_COMMENT_BODY_MAX_BYTES = 768;
 const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
 const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
 const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
-const STORY_DECISION_LOG_PACKET_MAX_BYTES = 4 * 1024;
+const STORY_DECISION_LOG_PACKET_MAX_BYTES = 16 * 1024;
 const DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES = 1024;
 
 function byteLength(value?: any) {
@@ -782,9 +782,9 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   return parts.join('\n\n');
 }
 
-// Stable executor definitions carry the invariant protocol as their system
-// prompt. The spawn prompt only carries a fetch command and route marker, so
-// instant dispatch keeps the durable ticket packet out of the launch request.
+// The launch prompt carries bounded implementation orientation. The token-gated
+// fetch keeps comments, attachments, claim details, and lifecycle instructions
+// out of the orchestrator transcript until the executor needs them.
 function renderTicketBriefing(ticket?: any, nonce?: any, slug?: any, projectPath?: any) {
   if (typeof nonce !== 'string' || !nonce.trim() || /[\r\n]/.test(nonce)) {
     throw new Error('dispatch briefing nonce is required and must be a non-empty one-line string.');
@@ -865,6 +865,24 @@ function ensureDispatchLauncher() {
   return filePath;
 }
 
+function dispatchTicketContext(ticket?: any, projectPath?: any) {
+  const declaredFiles = Array.isArray(ticket?.files) && ticket.files.length
+    ? ticket.files.map((file: any) => `- ${file}`).join('\n')
+    : '(No files were declared.)';
+  let slug = null;
+  if (ticket?.storyId) {
+    try { slug = store.findProject(projectPath)?.slug || null; } catch (_) {}
+  }
+  const decisionLog = storyDecisionLogPacket(ticket, slug);
+  return [
+    `Title: ${ticket?.title || '(Untitled ticket)'}`,
+    `Description:\n${ticketDescriptionPacket(ticket?.description)}`,
+    `Declared files:\n${declaredFiles}`,
+    `Anchors:\n${ticket?.executorAnchors || '(No anchors were recorded.)'}`,
+    ...(decisionLog ? [decisionLog] : []),
+  ].join('\n\n');
+}
+
 function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
   const project = String(projectPath || '').trim();
   if (!project) throw new Error('Dispatch board project path is required.');
@@ -885,6 +903,10 @@ function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
     `Ticket: ${ticket.ref}.`,
     `Dispatch board identity: --project ${quotedShellArgument(project)}.`,
     '',
+    'Implementation context:',
+    dispatchTicketContext(ticket, project),
+    '',
+    'The token-gated briefing adds comments, attachments, claim details, verification, and lifecycle instructions without loading them into the orchestrator transcript.',
     `FIRST action: run \`${command}\` and execute exactly what it prints.`,
   ].join('\n');
 }

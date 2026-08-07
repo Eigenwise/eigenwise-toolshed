@@ -633,7 +633,7 @@ test('renderDispatchStub keeps its briefing command alive after the dispatched c
   assert.equal(recovered.stdout, 'briefing SQ-586 --token briefing-token --project C:\\dev\\fixture');
 });
 
-test('SQ-677: fetched briefing carries the complete durable ticket packet while the spawn stays tiny', () => {
+test('SQ-677: fetched briefing carries the complete durable packet while the spawn carries bounded implementation context', () => {
   seedCatalog([TERRA]);
   const slug = 'briefing-測試';
   const ticket = {
@@ -710,10 +710,16 @@ test('SQ-677: fetched briefing carries the complete durable ticket packet while 
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
   assert.match(briefing, /inspect every entry before implementation/i);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
-  assert.ok(Buffer.byteLength(stub) < 600, `spawn stub is ${Buffer.byteLength(stub)} bytes`);
-  assert.doesNotMatch(stub, /y{1000}/);
+  assert.ok(stub.startsWith('[sidequest-route model=gpt-5.6-terra effort=high]\n'));
+  assert.ok(Buffer.byteLength(stub) < 16 * 1024, `spawn context is ${Buffer.byteLength(stub)} bytes`);
+  assert.match(stub, /Title: Instant dispatch/);
+  assert.match(stub, /Description:\ny{1000}/);
+  assert.match(stub, /Description truncated at 8 KB/);
+  assert.match(stub, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
+  assert.match(stub, /Anchors:\nlib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
-  assert.doesNotMatch(stub, /## This ticket/);
+  assert.doesNotMatch(stub, /Complete comment thread/);
+  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token instant-token-334 --project "C:\\dev\\fixture"`/);
 });
 
 test('SQ-677: malformed and foreign asset names stay bounded and inaccessible', () => {

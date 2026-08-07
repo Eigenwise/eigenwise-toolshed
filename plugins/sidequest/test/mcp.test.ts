@@ -387,7 +387,7 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
 
   const empty = await callTool('story_log', { project, story: story.ref });
   assert.equal(empty.story.logBytes, 0);
-  assert.equal(empty.story.logCapacity, 4096);
+  assert.equal(empty.story.logCapacity, 16 * 1024);
   assert.equal(empty.story.logRevision, 0);
   assert.deepEqual(empty.story.entries, []);
 
@@ -402,7 +402,7 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
 
   const rotated = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
   assert.equal(rotated.story.logBytes, 0);
-  assert.equal(rotated.story.logCapacity, 4096);
+  assert.equal(rotated.story.logCapacity, 16 * 1024);
   assert.equal(rotated.story.logRevision, 1);
   assert.deepEqual(rotated.story.entries, []);
   assert.equal(rotated.story.archivedEntries, 1);

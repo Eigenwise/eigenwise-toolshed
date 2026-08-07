@@ -67,7 +67,7 @@ test('CLI story log reads, appends a body file, and rotates after promotion', ()
   assert.equal(read.story.entries.length, 1);
   const rotated = cliJson(['story', 'log', createdStory.ref, '--rotate', '--by', 'orchestrator', '--json']);
   assert.equal(rotated.story.logBytes, 0);
-  assert.equal(rotated.story.logCapacity, 4096);
+  assert.equal(rotated.story.logCapacity, 16 * 1024);
   assert.equal(rotated.story.logRevision, 1);
   assert.deepEqual(rotated.story.entries, []);
   assert.equal(rotated.story.archivedEntries, 1);
@@ -117,10 +117,19 @@ test('orchestrator appends without a member ticket ref through the CLI', () => {
   const read = cliJson(['story', 'log', createdStory.ref, '--json']);
   assert.deepEqual(read.story.entries, defaulted.story.entries);
 
-  const briefing = require('../lib/agentsync.js').renderTicketBriefing({
-    ref: 'SQ-briefing', title: 'Briefing member', model: 'opus', effort: 'high', category: {}, storyId: createdStory.id,
-  }, 'story-log-token', slug);
+  const agentsync = require('../lib/agentsync.js');
+  const briefingTicket = {
+    ref: 'SQ-briefing', title: 'Briefing member', description: 'Consume the prior story finding.',
+    model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {},
+    storyId: createdStory.id, files: ['plugins/sidequest/src/lib/agentsync.ts'], executorAnchors: 'agentsync.ts renderDispatchStub',
+  };
+  const briefing = agentsync.renderTicketBriefing(briefingTicket, 'story-log-token', slug);
   assert.match(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
+  const spawn = agentsync.renderDispatchStub(briefingTicket, 'story-log-token', PROJECT_DIR);
+  assert.match(spawn, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
+  assert.match(spawn, /Description:\nConsume the prior story finding\./);
+  assert.match(spawn, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts/);
+  assert.match(spawn, /Anchors:\nagentsync\.ts renderDispatchStub/);
 });
 
 test('entries up to 16 KB are stored and long entries advise without blocking', () => {
@@ -132,6 +141,12 @@ test('entries up to 16 KB are stored and long entries advise without blocking', 
   const updated = append(createdStory.ref, ticket.ref, 'limit-worker', entry);
   assert.equal(updated.decisionLog[0].text, '測'.repeat(2000));
   assert.match(store.storyLogEntryAdvisory(entry), /stored in full/);
+  const maximumEntry = `DISCOVERY: ${'x'.repeat(store.STORY_LOG_ENTRY_TEXT_MAX_BYTES)}`;
+  const withMaximumEntry = append(createdStory.ref, ticket.ref, 'limit-worker', maximumEntry);
+  const briefingWindow = store.storyDecisionLog(withMaximumEntry);
+  assert.equal(briefingWindow.entries.length, 1);
+  assert.equal(briefingWindow.entries[0].text, 'x'.repeat(store.STORY_LOG_ENTRY_TEXT_MAX_BYTES));
+  assert.ok(briefingWindow.bytes <= store.STORY_DECISION_LOG_BRIEFING_MAX_BYTES);
   assert.throws(
     () => append(createdStory.ref, ticket.ref, 'limit-worker', `DISCOVERY: ${'測'.repeat(6000)}`),
     /story log entry text exceeds the 16000-byte limit/,
@@ -164,12 +179,12 @@ test('appends beyond the former aggregate limit and defaults reads to the briefi
   assert.equal(full.story.decisionLog.length, 61);
 });
 
-test('briefings retain the newest decision log entries within the 4 KB packet', () => {
+test('briefings retain the newest decision log entries within the 16 KB packet', () => {
   const createdStory = story('Briefing window');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'briefing-worker');
 
-  for (let index = 1; index <= 30; index++) {
+  for (let index = 1; index <= 60; index++) {
     append(createdStory.ref, ticket.ref, 'briefing-worker', `DISCOVERY: ${String(index).padStart(2, '0')} ${'x'.repeat(270)}`);
   }
 
@@ -178,8 +193,8 @@ test('briefings retain the newest decision log entries within the 4 KB packet', 
   }, 'story-log-token', slug);
   const packetStart = briefing.indexOf('## Story decision log');
   const packet = briefing.slice(packetStart, briefing.indexOf('## This ticket', packetStart));
-  assert.ok(Buffer.byteLength(packet, 'utf8') <= 4096);
-  assert.match(packet, /#30 DISCOVERY/);
+  assert.ok(Buffer.byteLength(packet, 'utf8') <= 16 * 1024);
+  assert.match(packet, /#60 DISCOVERY/);
   assert.doesNotMatch(packet, /#1 DISCOVERY/);
   assert.match(packet, /omitted \d+ earlier entries.*sidequest story log US-\d+ --full/);
 });
