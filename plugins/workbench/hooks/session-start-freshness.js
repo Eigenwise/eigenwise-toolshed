@@ -7,6 +7,7 @@ const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
 const {
+  canonicalPath,
   compareSemver: compareVersions,
   parseSemver: semver,
   pluginIdParts,
@@ -30,7 +31,7 @@ function marketplaceManifest(entry) {
 }
 
 function normalizedPath(value) {
-  return process.platform === 'win32' ? path.resolve(value).toLowerCase() : path.resolve(value);
+  return canonicalPath(value);
 }
 
 function proxyVersionFloor(gateway) {

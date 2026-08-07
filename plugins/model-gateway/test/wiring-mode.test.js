@@ -102,6 +102,17 @@ test('project wiring registry records writes and prunes missing or unowned setti
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
 });
 
+test('project wiring registry deduplicates an existing project alias', (t) => {
+  const { home, project } = fixture(t);
+  const alias = path.join(path.dirname(project), 'project-alias');
+  fs.symlinkSync(project, alias, 'junction');
+  wireProject(project);
+
+  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
+  assert.equal(run(home, alias, ['env', '--write-user']).code, 0);
+  assert.equal(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects.length, 1);
+});
+
 test('global wiring adopts and reports conflicting current project wiring without changing it', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');

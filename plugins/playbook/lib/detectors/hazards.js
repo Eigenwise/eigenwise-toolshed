@@ -1,6 +1,7 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const fs = require('node:fs');
 const path = require('node:path');
 
 const MAX_PATHS = 2000;
@@ -61,6 +62,25 @@ function classify(filePath, content) {
   return reasons;
 }
 
+function canonicalPath(value) {
+  const resolved = path.resolve(value);
+  const missingSegments = [];
+  let existingAncestor = resolved;
+  while (!fs.existsSync(existingAncestor)) {
+    const parent = path.dirname(existingAncestor);
+    if (parent === existingAncestor) break;
+    missingSegments.unshift(path.basename(existingAncestor));
+    existingAncestor = parent;
+  }
+  try {
+    const canonical = fs.realpathSync.native(existingAncestor);
+    const completed = path.join(canonical, ...missingSegments);
+    return process.platform === 'win32' ? completed.toLowerCase() : completed;
+  } catch {
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
+}
+
 /**
  * Flags the two ways private data reaches a commit: a file the repo neither tracks nor ignores, and a
  * bulk `git add` staged while such a file exists.
@@ -110,16 +130,17 @@ function createHazardDetector(options = {}) {
     finish() {
       const findings = [];
       const untracked = runGit(projectPath);
-      const insideProject = [...written.values()].filter((record) => {
-        const relative = path.relative(projectPath, record.filePath);
-        return relative && !relative.startsWith('..') && !path.isAbsolute(relative);
+      const canonicalProjectPath = canonicalPath(projectPath);
+      const insideProject = [...written.values()].flatMap((record) => {
+        const relative = path.relative(canonicalProjectPath, canonicalPath(record.filePath));
+        if (!relative || relative.startsWith('..') || path.isAbsolute(relative)) return [];
+        return [{ ...record, relative: relative.split(path.sep).join('/') }];
       });
 
       const exposed = [];
       if (untracked) {
         for (const record of insideProject) {
-          const relative = path.relative(projectPath, record.filePath).split(path.sep).join('/');
-          if (untracked.has(relative)) exposed.push({ ...record, relative });
+          if (untracked.has(record.relative)) exposed.push(record);
         }
       }
 

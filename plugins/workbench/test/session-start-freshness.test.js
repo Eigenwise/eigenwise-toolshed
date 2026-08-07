@@ -57,6 +57,22 @@ test('enumerates every board and maps it to its Sidequest project install', () =
   assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
+test('maps a Sidequest board through an existing project alias', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-freshness-'));
+  const project = path.join(directory, 'project');
+  const alias = path.join(directory, 'project-alias');
+  fs.mkdirSync(project);
+  fs.symlinkSync(project, alias, 'junction');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const result = audit(fixture({
+    registry: { plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '1.0.0' }] } },
+    boards: [{ name: 'Alias', path: alias }],
+  }));
+
+  assert.equal(result.mappings[0].status, 'installed');
+});
+
 test('keeps other projects out of the SessionStart health context', () => {
   const result = audit(fixture({
     currentProject: 'C:/work/one/subdirectory',

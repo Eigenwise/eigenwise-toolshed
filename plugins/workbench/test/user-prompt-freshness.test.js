@@ -186,6 +186,18 @@ test('selects user and overlapping project installs, excluding unrelated marketp
   assert.deepEqual(selected.map((entry) => entry.version).sort(), ['1.0.0', '1.1.0']);
 });
 
+test('selects project installs through an existing project alias', (t) => {
+  const directory = tempDirectory();
+  const project = path.join(directory, 'project');
+  const alias = path.join(directory, 'project-alias');
+  fs.mkdirSync(project);
+  fs.symlinkSync(project, alias, 'junction');
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+
+  const selected = activeInstances(registry([{ scope: 'project', projectPath: project, version: '1.1.0' }]), path.join(alias, '.claude', 'worktrees', 'check'), 'eigenwise-toolshed');
+  assert.deepEqual(selected.map((entry) => entry.version), ['1.1.0']);
+});
+
 test('compares SemVer 2 including prereleases', () => {
   assert.equal(compareSemver('1.0.0', '1.0.0'), 0);
   assert.equal(compareSemver('1.0.0-alpha.1', '1.0.0-alpha.beta'), -1);
