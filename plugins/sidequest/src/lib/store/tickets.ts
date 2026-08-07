@@ -413,6 +413,105 @@ function autoApprovedScopePaths(ticket?: any, additions?: any, slug?: any) {
   return normalizeFiles(additions).filter((file?: any) => expressions.some((expression: RegExp) => expression.test(repoRelative(file))));
 }
 
+const PACKAGE_SURFACE_CONTAINERS = new Set(['apps', 'crates', 'packages', 'plugins', 'services']);
+const PACKAGE_SURFACE_MARKERS = ['package.json', 'pyproject.toml', 'Cargo.toml', 'go.mod', 'CMakeLists.txt'];
+const PACKAGE_MANIFESTS = new Set([...PACKAGE_SURFACE_MARKERS.map((name: string) => name.toLowerCase()), 'package-lock.json', 'pnpm-lock.yaml', 'yarn.lock']);
+const CONTROL_PATH_SEGMENTS = new Set(['.claude', '.claude-plugin', '.circleci', '.github', '.gitlab', '.buildkite', '.changeset']);
+const ROOT_RELEASE_DIRECTORIES = new Set(['release', 'releases']);
+const CONTINUOUS_INTEGRATION_FILENAMES = new Set(['appveyor.yml', 'azure-pipelines.yml', 'bitbucket-pipelines.yml', 'jenkinsfile']);
+const CREDENTIAL_FILENAMES = new Set(['.npmrc', '.pypirc', 'credentials.json', 'credentials.toml', 'credentials.yaml', 'credentials.yml', 'id_ed25519', 'id_rsa', 'secrets.json', 'secrets.toml', 'secrets.yaml', 'secrets.yml']);
+
+function containsScopePattern(file?: any) {
+  return /[*?\[\]{}!]/.test(repoRelative(file));
+}
+
+function protectedAutoApprovalPath(file?: any) {
+  const normalized = repoRelative(file).toLowerCase();
+  const segments = normalized.split('/').filter(Boolean);
+  const basename = segments.at(-1) || '';
+  const firstSegment = segments[0] || '';
+  if (!segments.length || segments.some((segment: string) => CONTROL_PATH_SEGMENTS.has(segment))) return true;
+  if (ROOT_RELEASE_DIRECTORIES.has(firstSegment)) return true;
+  if (PACKAGE_MANIFESTS.has(basename) || CONTINUOUS_INTEGRATION_FILENAMES.has(basename) || CREDENTIAL_FILENAMES.has(basename)) return true;
+  if (basename === '.env' || basename.startsWith('.env.') || /\.(key|p12|pem|pfx)$/.test(basename)) return true;
+  return firstSegment === 'scripts' && /^(cut|publish|release)([.-]|$)/.test(basename);
+}
+
+function workspacePackageRoot(file?: any) {
+  const segments = repoRelative(file).split('/').filter(Boolean);
+  const firstSegment = segments[0] || '';
+  return segments.length > 1 && PACKAGE_SURFACE_CONTAINERS.has(firstSegment.toLowerCase())
+    ? segments.slice(0, 2).join('/')
+    : null;
+}
+
+function directoryHasPackageMarker(repository?: any, segments?: any) {
+  const directory = path.join(repository, ...segments);
+  for (const marker of PACKAGE_SURFACE_MARKERS) {
+    try {
+      if (fs.statSync(path.join(directory, marker)).isFile()) return true;
+    } catch (_) {}
+  }
+  try {
+    return fs.readdirSync(directory).some((name: string) => /\.(csproj|vcxproj)$/i.test(name));
+  } catch (_) {
+    return false;
+  }
+}
+
+function packageSurfaceRoot(file?: any, slug?: any) {
+  const workspaceRoot = workspacePackageRoot(file);
+  if (workspaceRoot) return workspaceRoot;
+  const repository = readMeta(slug)?.path;
+  if (!repository) return null;
+  const segments = repoRelative(file).split('/').filter(Boolean);
+  try {
+    if (!fs.statSync(path.join(repository, ...segments)).isDirectory()) segments.pop();
+  } catch (_) {
+    segments.pop();
+  }
+  for (let depth = segments.length; depth >= 0; depth -= 1) {
+    const parent = segments.slice(0, depth);
+    if (directoryHasPackageMarker(repository, parent)) return parent.join('/') || '.';
+  }
+  return null;
+}
+
+function packageRelativeSegments(file?: any, packageRoot?: any) {
+  const segments = repoRelative(file).split('/').filter(Boolean);
+  if (packageRoot === '.') return segments;
+  const rootSegments = repoRelative(packageRoot).split('/').filter(Boolean);
+  return segments.slice(rootSegments.length);
+}
+
+function ticketDeclaresSourceDirectory(ticket?: any, packageRoot?: any, slug?: any) {
+  return normalizeFiles(ticket?.files).some((file?: any) => {
+    const declaredRoot = packageSurfaceRoot(file, slug);
+    return declaredRoot != null
+      && declaredRoot.toLowerCase() === String(packageRoot).toLowerCase()
+      && packageRelativeSegments(file, declaredRoot)[0]?.toLowerCase() === 'src';
+  });
+}
+
+function autoApprovedPackageScope(ticket?: any, additions?: any, slug?: any) {
+  if (dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true) return [];
+  const testScopeDisabled = boardConfig(slug)?.autoApproveTestScope === false;
+  const testRoots = testScopeDisabled ? reachableTestRoots(ticket, slug) : [];
+  const declaredRoots = new Set(normalizeFiles(ticket?.files)
+    .filter((file?: any) => !containsScopePattern(file) && !protectedAutoApprovalPath(file))
+    .map((file?: any) => packageSurfaceRoot(file, slug))
+    .filter((root: string | null): root is string => root != null)
+    .map((root: string) => root.toLowerCase()));
+  if (!declaredRoots.size) return [];
+  return normalizeFiles(additions).filter((file?: any) => {
+    if (containsScopePattern(file) || protectedAutoApprovalPath(file) || enclosingTestRoot(file, testRoots)) return false;
+    const root = packageSurfaceRoot(file, slug);
+    if (root == null || !declaredRoots.has(root.toLowerCase())) return false;
+    const requestsSource = packageRelativeSegments(file, root)[0]?.toLowerCase() === 'src';
+    return !requestsSource || ticketDeclaresSourceDirectory(ticket, root, slug);
+  });
+}
+
 // The marker is a recovery breadcrumb, never a gate. A scope request is pure
 // board state; an unbound dispatch (agentId/boundAt null) or unreachable
 // worktree must not make filing it impossible for executor and orchestrator
@@ -588,17 +687,26 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const testScopeApproved = testDirectories.length > 0;
     const buildRegistrations = testScopeApproved ? [] : autoApprovedBuildRegistrationScope(t, additions, slug) || [];
     const buildRegistrationApproved = buildRegistrations.length > 0;
-    const globApproved = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
-    const autoApproved = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : globApproved;
-    if (testScopeApproved || autoApproved.length === additions.length) {
+    const configuredScope = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
+    const derivedScope = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : configuredScope;
+    const remainingAfterDerivedScope = additions.filter((file?: any) => !commitScope.isInScope(file, derivedScope));
+    const packageScope = autoApprovedPackageScope(t, remainingAfterDerivedScope, slug);
+    const autoApproved = normalizeFiles([...derivedScope, ...packageScope]);
+    const everyAdditionApproved = additions.every((file?: any) => commitScope.isInScope(file, autoApproved));
+    if (everyAdditionApproved) {
       t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
       syncLiveDispatchScope(slug, t);
+      const approvalRequest = { by, files: additions, requested, covered, at: now };
+      const granted = requested.filter((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
+      scopeResolution(slug, t, approvalRequest, 'granted', now, granted, [], false);
       if (!Array.isArray(t.comments)) t.comments = [];
-      const policy = testScopeApproved
+      const policy = testScopeApproved && !packageScope.length
         ? 'test scope under board policy'
-        : buildRegistrations
+        : buildRegistrationApproved && !packageScope.length
           ? 'build-registration scope derived from the in-scope source layout'
-          : 'scope under board policy';
+          : configuredScope.length && !packageScope.length
+            ? 'scope under board policy'
+            : 'same-package scope derived from the ticket’s declared files';
       const comment = createComment({
         by: 'board',
         body: `Auto-approved ${policy}: ${autoApproved.join(', ')}.`,
@@ -613,21 +721,22 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
       return { ok: true, ticket: t, covered, approved: autoApproved, autoApproved: true, scopeRequest: null, command: null, comment };
     }
-    if (globApproved.length) {
-      t.files = boundedFiles(scopeExpansionFiles(t, globApproved));
+    if (autoApproved.length) {
+      t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
       syncLiveDispatchScope(slug, t);
     }
-    const pendingAdditions = additions.filter((file?: any) => !globApproved.includes(file));
+    const pendingAdditions = additions.filter((file?: any) => !commitScope.isInScope(file, autoApproved));
     const command = scopeExpansionCommand(t, pendingAdditions);
     if (previousRequest) scopeResolution(slug, t, previousRequest, 'superseded', now, [], [], false);
     const retention = retainCleanScopePauseWorktree(t);
-    const request = { by, files: pendingAdditions, requested, covered, at: now, ...(retention ? { retention } : {}) };
+    const effectiveCovered = requested.filter((file?: any) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
+    const request = { by, files: pendingAdditions, requested, covered: effectiveCovered, at: now, ...(retention ? { retention } : {}) };
     createScopeRequestMarker(slug, t, request);
     t.scopeRequest = request;
     const dispatch = dispatchState(t);
     if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
     if (!Array.isArray(t.comments)) t.comments = [];
-    const autoApprovedText = globApproved.length ? ` Auto-approved under board policy: ${globApproved.join(', ')}.` : '';
+    const autoApprovedText = autoApproved.length ? ` Auto-approved without a ruling: ${autoApproved.join(', ')}.` : '';
     const comment = createComment({
       by,
       body: `Scope expansion requested: ${pendingAdditions.join(', ')}.${covered.length ? ` Already in scope: ${covered.join(', ')}.` : ''}${autoApprovedText} Approve with \`${command}\`; claim remains held.`,
@@ -640,7 +749,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     t.updatedAt = now;
     putTicket(slug, t);
     queueEventNotification(slug, t, 'comment', comment.source, { commentBody: comment.body });
-    return { ok: true, ticket: t, scopeRequest: t.scopeRequest, covered, approved: globApproved, autoApproved: false, command, comment };
+    return { ok: true, ticket: t, scopeRequest: t.scopeRequest, covered: effectiveCovered, approved: autoApproved, autoApproved: false, command, comment };
   });
 }
 

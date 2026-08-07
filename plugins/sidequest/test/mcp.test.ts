@@ -1406,9 +1406,10 @@ test('MCP scopeRequest auto-approves only test paths under an already-declared p
   });
   const mixedBy = 'mcp-mixed-plugin-tests-worker';
   assert.equal((await callTool('claim', { project, ref: mixed.ref, by: mixedBy, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
-  const pendingMixed = await callTool('scopeRequest', { project, ref: mixed.ref, by: mixedBy, files: ['plugins/sidequest/test/golden.json', 'plugins/sidequest/src/lib/store.ts'] });
-  assert.equal(pendingMixed.autoApproved, false);
-  assert.deepEqual(pendingMixed.scopeRequest.files, ['plugins/sidequest/test/golden.json']);
+  const approvedMixed = await callTool('scopeRequest', { project, ref: mixed.ref, by: mixedBy, files: ['plugins/sidequest/test/golden.json', 'plugins/sidequest/src/lib/store.ts'] });
+  assert.equal(approvedMixed.autoApproved, true);
+  assert.deepEqual(approvedMixed.approved, ['plugins/sidequest/test/golden.json']);
+  assert.equal(approvedMixed.scopeRequest, null);
 
   const crossPlugin = store.createTicket(project, {
     title: 'Cross-plugin test scope', files: ['plugins/sidequest/src/lib/store.ts'], complexity: 3,
@@ -1533,7 +1534,7 @@ test('MCP scopeRequest auto-approves configured globs and keeps mixed requests p
   const pending = await callTool('scopeRequest', { project, ref: mixed.ref, by: mixedBy, files: ['tests/widget.test.ts', 'docs/widget.md'] });
   assert.deepEqual(pending.approved, ['tests/widget.test.ts']);
   assert.deepEqual(pending.scopeRequest.files, ['docs/widget.md']);
-  assert.match(store.getTicket(project, mixed.ref).comments.at(-1).body, /Auto-approved under board policy: tests\/widget.test.ts/);
+  assert.match(store.getTicket(project, mixed.ref).comments.at(-1).body, /Auto-approved without a ruling: tests\/widget.test.ts/);
 });
 
 test('MCP scopeRequest deduplicates a normalized pending request without another comment', async () => {
@@ -1553,19 +1554,73 @@ test('MCP scopeRequest deduplicates a normalized pending request without another
   assert.equal(store.getTicket(project, ticket.ref).comments.length, commentCount);
 });
 
-test('MCP scopeRequest never auto-approves plugin source, hooks, or manifests', async () => {
-  const project = store.ensureProject(repoWithDirectories('sq-mcp-plugin-test-boundaries-', ['plugins/sidequest/test'])).slug;
-  for (const [index, file] of ['plugins/sidequest/src/new.ts', 'plugins/sidequest/hooks/new.js', 'plugins/sidequest/.claude-plugin/plugin.json'].entries()) {
+test('MCP scopeRequest auto-approves a concrete path inside the declared plugin without ending the attempt', async () => {
+  const fixture = isolatedDispatch('sq-mcp-package-scope-', 'a1384package', ['plugins/sidequest/src/lib/store/tickets.ts']);
+  const requestedFile = 'plugins/sidequest/src/lib/store/dispatch.ts';
+
+  const approved = await callTool('scopeRequest', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    files: [requestedFile],
+  });
+
+  assert.equal(approved.autoApproved, true);
+  assert.deepEqual(approved.approved, [requestedFile]);
+  assert.equal(approved.scopeRequest, null);
+  const ticket = store.getTicket(fixture.project, fixture.ref);
+  assert.deepEqual(ticket.files, ['plugins/sidequest/src/lib/store/tickets.ts', requestedFile]);
+  assert.equal(ticket.scopeResolution.state, 'granted');
+  assert.deepEqual(ticket.scopeResolution.requested, [requestedFile]);
+  assert.deepEqual(ticket.scopeResolution.granted, [requestedFile]);
+  assert.match(ticket.comments.at(-1).body, /same-package scope derived from the ticket’s declared files/);
+  assert.equal(ticket.dispatch.outcome, 'claimed');
+  assert.equal(ticket.dispatch.terminalAt, null);
+  assert.equal(ticket.dispatch.scopeRequest, undefined);
+  assert.equal(ticket.dispatch.attempts, undefined);
+});
+
+test('MCP scopeRequest keeps concrete out-of-bounds and protected paths pending for a ruling', async () => {
+  const root = repoWithDirectories('sq-mcp-package-boundaries-', ['plugins/sidequest/src', 'plugins/workbench/src']);
+  const project = store.ensureProject(root).slug;
+  const boundaries = [
+    ['another plugin', 'plugins/workbench/src/new.ts'],
+    ['continuous integration', '.github/workflows/ci.yml'],
+    ['Claude control files', '.claude/settings.json'],
+    ['release manifests', 'plugins/sidequest/.claude-plugin/plugin.json'],
+    ['wildcard expansion', 'plugins/sidequest/src/**/*.ts'],
+  ];
+
+  for (const [boundary, requestedFile] of boundaries) {
     const ticket = store.createTicket(project, {
-      title: `Plugin test boundary ${index}`, files: ['plugins/sidequest/src/lib/store.ts'], complexity: 3,
-      labels: ['direct-ok'], complexityWhy: 'only test directories may use the board policy',
+      title: `Package boundary: ${boundary}`,
+      files: ['plugins/sidequest/src/lib/store.ts'],
+      complexity: 3,
+      labels: ['direct-ok'],
+      complexityWhy: 'a path outside the concrete package surface requires an explicit ruling',
     });
-    const by = `mcp-plugin-test-boundary-${index}`;
-    assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope fixture requires a local direct claim.' })).ok, true);
-    const pending = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: [file] });
-    assert.equal(pending.autoApproved, false);
-    assert.deepEqual(pending.scopeRequest.files, [file]);
+    const by = `mcp-package-boundary-${ticket.ref}`;
+    assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The package boundary fixture requires a local direct claim.' })).ok, true);
+
+    const pending = await callTool('scopeRequest', { project, ref: ticket.ref, by, files: [requestedFile] });
+    assert.equal(pending.autoApproved, false, boundary);
+    assert.deepEqual(pending.scopeRequest.files, [requestedFile], boundary);
+    assert.deepEqual(store.getTicket(project, ticket.ref).files, ['plugins/sidequest/src/lib/store.ts'], boundary);
   }
+
+  const readOnlyTicket = store.createTicket(project, {
+    title: 'Read-only package scope',
+    files: ['plugins/sidequest/src/lib/store.ts'],
+    complexity: 3,
+    labels: ['direct-ok'],
+    complexityWhy: 'read-only work cannot widen its write scope automatically',
+    readonly: true,
+  });
+  const readOnlyBy = 'mcp-readonly-package-boundary';
+  assert.equal((await callTool('claim', { project, ref: readOnlyTicket.ref, by: readOnlyBy, direct: true, reason: 'The read-only package boundary fixture requires a local direct claim.' })).ok, true);
+  const readOnlyPending = await callTool('scopeRequest', { project, ref: readOnlyTicket.ref, by: readOnlyBy, files: ['plugins/sidequest/src/new.ts'] });
+  assert.equal(readOnlyPending.autoApproved, false);
+  assert.deepEqual(readOnlyPending.scopeRequest.files, ['plugins/sidequest/src/new.ts']);
 });
 
 test('MCP scopeRequest keeps declared bundled hook output one-way: the source needs approval, the source grants its output', async () => {

@@ -396,6 +396,89 @@ function createTickets(dependencies) {
     const expressions = patterns.map((pattern) => globExpression(pattern));
     return normalizeFiles(additions).filter((file) => expressions.some((expression) => expression.test(repoRelative(file))));
   }
+  const PACKAGE_SURFACE_CONTAINERS = /* @__PURE__ */ new Set(["apps", "crates", "packages", "plugins", "services"]);
+  const PACKAGE_SURFACE_MARKERS = ["package.json", "pyproject.toml", "Cargo.toml", "go.mod", "CMakeLists.txt"];
+  const PACKAGE_MANIFESTS = /* @__PURE__ */ new Set([...PACKAGE_SURFACE_MARKERS.map((name) => name.toLowerCase()), "package-lock.json", "pnpm-lock.yaml", "yarn.lock"]);
+  const CONTROL_PATH_SEGMENTS = /* @__PURE__ */ new Set([".claude", ".claude-plugin", ".circleci", ".github", ".gitlab", ".buildkite", ".changeset"]);
+  const ROOT_RELEASE_DIRECTORIES = /* @__PURE__ */ new Set(["release", "releases"]);
+  const CONTINUOUS_INTEGRATION_FILENAMES = /* @__PURE__ */ new Set(["appveyor.yml", "azure-pipelines.yml", "bitbucket-pipelines.yml", "jenkinsfile"]);
+  const CREDENTIAL_FILENAMES = /* @__PURE__ */ new Set([".npmrc", ".pypirc", "credentials.json", "credentials.toml", "credentials.yaml", "credentials.yml", "id_ed25519", "id_rsa", "secrets.json", "secrets.toml", "secrets.yaml", "secrets.yml"]);
+  function containsScopePattern(file) {
+    return /[*?\[\]{}!]/.test(repoRelative(file));
+  }
+  function protectedAutoApprovalPath(file) {
+    const normalized = repoRelative(file).toLowerCase();
+    const segments = normalized.split("/").filter(Boolean);
+    const basename = segments.at(-1) || "";
+    const firstSegment = segments[0] || "";
+    if (!segments.length || segments.some((segment) => CONTROL_PATH_SEGMENTS.has(segment))) return true;
+    if (ROOT_RELEASE_DIRECTORIES.has(firstSegment)) return true;
+    if (PACKAGE_MANIFESTS.has(basename) || CONTINUOUS_INTEGRATION_FILENAMES.has(basename) || CREDENTIAL_FILENAMES.has(basename)) return true;
+    if (basename === ".env" || basename.startsWith(".env.") || /\.(key|p12|pem|pfx)$/.test(basename)) return true;
+    return firstSegment === "scripts" && /^(cut|publish|release)([.-]|$)/.test(basename);
+  }
+  function workspacePackageRoot(file) {
+    const segments = repoRelative(file).split("/").filter(Boolean);
+    const firstSegment = segments[0] || "";
+    return segments.length > 1 && PACKAGE_SURFACE_CONTAINERS.has(firstSegment.toLowerCase()) ? segments.slice(0, 2).join("/") : null;
+  }
+  function directoryHasPackageMarker(repository, segments) {
+    const directory = path.join(repository, ...segments);
+    for (const marker of PACKAGE_SURFACE_MARKERS) {
+      try {
+        if (fs.statSync(path.join(directory, marker)).isFile()) return true;
+      } catch (_) {
+      }
+    }
+    try {
+      return fs.readdirSync(directory).some((name) => /\.(csproj|vcxproj)$/i.test(name));
+    } catch (_) {
+      return false;
+    }
+  }
+  function packageSurfaceRoot(file, slug) {
+    const workspaceRoot = workspacePackageRoot(file);
+    if (workspaceRoot) return workspaceRoot;
+    const repository = readMeta(slug)?.path;
+    if (!repository) return null;
+    const segments = repoRelative(file).split("/").filter(Boolean);
+    try {
+      if (!fs.statSync(path.join(repository, ...segments)).isDirectory()) segments.pop();
+    } catch (_) {
+      segments.pop();
+    }
+    for (let depth = segments.length; depth >= 0; depth -= 1) {
+      const parent = segments.slice(0, depth);
+      if (directoryHasPackageMarker(repository, parent)) return parent.join("/") || ".";
+    }
+    return null;
+  }
+  function packageRelativeSegments(file, packageRoot) {
+    const segments = repoRelative(file).split("/").filter(Boolean);
+    if (packageRoot === ".") return segments;
+    const rootSegments = repoRelative(packageRoot).split("/").filter(Boolean);
+    return segments.slice(rootSegments.length);
+  }
+  function ticketDeclaresSourceDirectory(ticket, packageRoot, slug) {
+    return normalizeFiles(ticket?.files).some((file) => {
+      const declaredRoot = packageSurfaceRoot(file, slug);
+      return declaredRoot != null && declaredRoot.toLowerCase() === String(packageRoot).toLowerCase() && packageRelativeSegments(file, declaredRoot)[0]?.toLowerCase() === "src";
+    });
+  }
+  function autoApprovedPackageScope(ticket, additions, slug) {
+    if (dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true) return [];
+    const testScopeDisabled = boardConfig(slug)?.autoApproveTestScope === false;
+    const testRoots = testScopeDisabled ? reachableTestRoots(ticket, slug) : [];
+    const declaredRoots = new Set(normalizeFiles(ticket?.files).filter((file) => !containsScopePattern(file) && !protectedAutoApprovalPath(file)).map((file) => packageSurfaceRoot(file, slug)).filter((root) => root != null).map((root) => root.toLowerCase()));
+    if (!declaredRoots.size) return [];
+    return normalizeFiles(additions).filter((file) => {
+      if (containsScopePattern(file) || protectedAutoApprovalPath(file) || enclosingTestRoot(file, testRoots)) return false;
+      const root = packageSurfaceRoot(file, slug);
+      if (root == null || !declaredRoots.has(root.toLowerCase())) return false;
+      const requestsSource = packageRelativeSegments(file, root)[0]?.toLowerCase() === "src";
+      return !requestsSource || ticketDeclaresSourceDirectory(ticket, root, slug);
+    });
+  }
   function createScopeRequestMarker(slug, ticket, request) {
     const dispatch = dispatchState(ticket);
     if (!dispatch || dispatch.sharedTree !== false) return;
@@ -576,13 +659,20 @@ function createTickets(dependencies) {
       const testScopeApproved = testDirectories.length > 0;
       const buildRegistrations = testScopeApproved ? [] : autoApprovedBuildRegistrationScope(t, additions, slug) || [];
       const buildRegistrationApproved = buildRegistrations.length > 0;
-      const globApproved = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
-      const autoApproved = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : globApproved;
-      if (testScopeApproved || autoApproved.length === additions.length) {
+      const configuredScope = testScopeApproved || buildRegistrationApproved ? [] : autoApprovedScopePaths(t, additions, slug);
+      const derivedScope = testScopeApproved ? testDirectories : buildRegistrationApproved ? buildRegistrations : configuredScope;
+      const remainingAfterDerivedScope = additions.filter((file) => !commitScope.isInScope(file, derivedScope));
+      const packageScope = autoApprovedPackageScope(t, remainingAfterDerivedScope, slug);
+      const autoApproved = normalizeFiles([...derivedScope, ...packageScope]);
+      const everyAdditionApproved = additions.every((file) => commitScope.isInScope(file, autoApproved));
+      if (everyAdditionApproved) {
         t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
         syncLiveDispatchScope(slug, t);
+        const approvalRequest = { by, files: additions, requested, covered, at: now };
+        const granted = requested.filter((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
+        scopeResolution(slug, t, approvalRequest, "granted", now, granted, [], false);
         if (!Array.isArray(t.comments)) t.comments = [];
-        const policy = testScopeApproved ? "test scope under board policy" : buildRegistrations ? "build-registration scope derived from the in-scope source layout" : "scope under board policy";
+        const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "same-package scope derived from the ticket’s declared files";
         const comment2 = createComment({
           by: "board",
           body: `Auto-approved ${policy}: ${autoApproved.join(", ")}.`,
@@ -597,21 +687,22 @@ function createTickets(dependencies) {
         queueEventNotification(slug, t, "comment", comment2.source, { commentBody: comment2.body });
         return { ok: true, ticket: t, covered, approved: autoApproved, autoApproved: true, scopeRequest: null, command: null, comment: comment2 };
       }
-      if (globApproved.length) {
-        t.files = boundedFiles(scopeExpansionFiles(t, globApproved));
+      if (autoApproved.length) {
+        t.files = boundedFiles(scopeExpansionFiles(t, autoApproved));
         syncLiveDispatchScope(slug, t);
       }
-      const pendingAdditions = additions.filter((file) => !globApproved.includes(file));
+      const pendingAdditions = additions.filter((file) => !commitScope.isInScope(file, autoApproved));
       const command = scopeExpansionCommand(t, pendingAdditions);
       if (previousRequest) scopeResolution(slug, t, previousRequest, "superseded", now, [], [], false);
       const retention = retainCleanScopePauseWorktree(t);
-      const request = { by, files: pendingAdditions, requested, covered, at: now, ...retention ? { retention } : {} };
+      const effectiveCovered = requested.filter((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
+      const request = { by, files: pendingAdditions, requested, covered: effectiveCovered, at: now, ...retention ? { retention } : {} };
       createScopeRequestMarker(slug, t, request);
       t.scopeRequest = request;
       const dispatch = dispatchState(t);
       if (dispatch && !dispatch.terminalAt) dispatch.scopeRequest = t.scopeRequest;
       if (!Array.isArray(t.comments)) t.comments = [];
-      const autoApprovedText = globApproved.length ? ` Auto-approved under board policy: ${globApproved.join(", ")}.` : "";
+      const autoApprovedText = autoApproved.length ? ` Auto-approved without a ruling: ${autoApproved.join(", ")}.` : "";
       const comment = createComment({
         by,
         body: `Scope expansion requested: ${pendingAdditions.join(", ")}.${covered.length ? ` Already in scope: ${covered.join(", ")}.` : ""}${autoApprovedText} Approve with \`${command}\`; claim remains held.`,
@@ -624,7 +715,7 @@ function createTickets(dependencies) {
       t.updatedAt = now;
       putTicket(slug, t);
       queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
-      return { ok: true, ticket: t, scopeRequest: t.scopeRequest, covered, approved: globApproved, autoApproved: false, command, comment };
+      return { ok: true, ticket: t, scopeRequest: t.scopeRequest, covered: effectiveCovered, approved: autoApproved, autoApproved: false, command, comment };
     });
   }
   function denyScopeRequest(slug, idOrRef, by, reason, opts) {
