@@ -188,15 +188,24 @@ test('briefings retain the newest decision log entries within the 16 KB packet',
     append(createdStory.ref, ticket.ref, 'briefing-worker', `DISCOVERY: ${String(index).padStart(2, '0')} ${'x'.repeat(270)}`);
   }
 
-  const briefing = require('../lib/agentsync.js').renderTicketBriefing({
-    ref: ticket.ref, title: ticket.title, model: 'opus', effort: 'high', category: {}, storyId: createdStory.id,
-  }, 'story-log-token', slug);
+  const agentsync = require('../lib/agentsync.js');
+  const briefingTicket = {
+    ref: ticket.ref, title: ticket.title, model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {}, storyId: createdStory.id,
+  };
+  const briefing = agentsync.renderTicketBriefing(briefingTicket, 'story-log-token', slug);
   const packetStart = briefing.indexOf('## Story decision log');
   const packet = briefing.slice(packetStart, briefing.indexOf('## This ticket', packetStart));
   assert.ok(Buffer.byteLength(packet, 'utf8') <= 16 * 1024);
   assert.match(packet, /#60 DISCOVERY/);
   assert.doesNotMatch(packet, /#1 DISCOVERY/);
   assert.match(packet, /omitted \d+ earlier entries.*sidequest story log US-\d+ --full/);
+
+  const spawn = agentsync.renderDispatchStub(briefingTicket, 'story-log-token', PROJECT_DIR);
+  assert.ok(Buffer.byteLength(spawn, 'utf8') < 1600, `spawn context is ${Buffer.byteLength(spawn, 'utf8')} bytes`);
+  assert.match(spawn, /Story handoff \(US-\d+, newest first through #60\)/);
+  assert.match(spawn, /#60 DISCOVERY/);
+  assert.doesNotMatch(spawn, /#59 DISCOVERY/);
+  assert.match(spawn, /Story handoff excerpt capped/);
 });
 
 test('sequence numbers remain monotonic after the log is rotated', () => {

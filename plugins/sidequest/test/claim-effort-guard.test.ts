@@ -428,8 +428,10 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
   const spawnBytes = Buffer.byteLength(serializedSpawn, 'utf8');
   const launchPayloadCeiling = 32 * 1024 * 1024;
   assert.ok(spawnBytes < launchPayloadCeiling, `serialized dispatched.spawn is ${spawnBytes} bytes`);
-  assert.ok(spawnBytes < 2000, `briefing fetch keeps dispatched.spawn at ${spawnBytes} bytes`);
-  assert.doesNotMatch(serializedSpawn, /description-marker-|First comment marker|asset-0-/);
+  assert.ok(spawnBytes < 2000, `bounded orientation keeps dispatched.spawn at ${spawnBytes} bytes`);
+  assert.match(serializedSpawn, /description-marker-/);
+  assert.match(serializedSpawn, /Description excerpt capped/);
+  assert.doesNotMatch(serializedSpawn, /d{1000}|First comment marker|asset-0-/);
 
   const briefing = runCli(['briefing', created.ref, '--token', dispatched.token]);
   assert.equal(briefing.status, 0, briefing.stderr);
@@ -453,7 +455,9 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
   assert.equal(dispatched.spawn.subagent_type, dispatched.agent);
   assert.equal(dispatched.tokenPrefix, dispatched.token.slice(0, 12));
   assert.equal(Object.hasOwn(dispatched, 'briefing'), false);
-  assert.ok(Buffer.byteLength(dispatched.spawn.prompt) < 600);
+  assert.ok(Buffer.byteLength(dispatched.spawn.prompt) < 1200);
+  assert.match(dispatched.spawn.prompt, /Title: guard fixture/);
+  assert.match(dispatched.spawn.prompt, /Where: claim guard fixture/);
   assert.match(dispatched.spawn.prompt, new RegExp(`briefing ${ref} --token ${dispatched.token}`));
   assert.match(dispatched.spawn.prompt, /FIRST action:/);
   assert.doesNotMatch(dispatched.spawn.prompt, /## This ticket/);

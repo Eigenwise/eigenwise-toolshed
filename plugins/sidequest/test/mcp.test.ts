@@ -1975,7 +1975,9 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(instant.spawn.subagent_type, instant.agent);
   assert.equal(instant.tokenPrefix, instant.token.slice(0, 12));
   assert.equal(Object.hasOwn(instant, 'briefing'), false);
-  assert.ok(Buffer.byteLength(instant.spawn.prompt) < 600, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
+  assert.ok(Buffer.byteLength(instant.spawn.prompt) < 1200, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
+  assert.match(instant.spawn.prompt, /Title: instant dispatch/);
+  assert.ok(instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
   assert.match(instant.spawn.prompt, new RegExp(`briefing ${addedInstant.ref} --token ${instant.token}`));
   assert.match(instant.spawn.prompt, /FIRST action:/);
   assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
@@ -2076,7 +2078,7 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
     model: 'fable',
   });
   assert.match(prompt, /briefing SQ-/);
-  assert.match(prompt, /Dispatch board identity: --project/);
+  assert.match(prompt, /FIRST action:.*--project/);
   assert.doesNotMatch(prompt, /## This ticket/);
   assert.doesNotMatch(prompt, /You are a sidequest ticket executor/);
   assert.equal(dispatched.effort, 'xhigh');

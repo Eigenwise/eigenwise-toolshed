@@ -711,10 +711,10 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(briefing, /inspect every entry before implementation/i);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
   assert.ok(stub.startsWith('[sidequest-route model=gpt-5.6-terra effort=high]\n'));
-  assert.ok(Buffer.byteLength(stub) < 16 * 1024, `spawn context is ${Buffer.byteLength(stub)} bytes`);
+  assert.ok(Buffer.byteLength(stub) < 1600, `spawn context is ${Buffer.byteLength(stub)} bytes`);
   assert.match(stub, /Title: Instant dispatch/);
-  assert.match(stub, /Description:\ny{1000}/);
-  assert.match(stub, /Description truncated at 8 KB/);
+  assert.match(stub, /Description:\ny{128}/);
+  assert.match(stub, /Description excerpt capped\. Full body is in briefing\./);
   assert.match(stub, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
   assert.match(stub, /Anchors:\nlib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);

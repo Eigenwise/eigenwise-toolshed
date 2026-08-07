@@ -213,6 +213,12 @@ const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
 const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
 const STORY_DECISION_LOG_PACKET_MAX_BYTES = 16 * 1024;
 const DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES = 1024;
+const DISPATCH_TICKET_CONTEXT_MAX_BYTES = 1200;
+const DISPATCH_TITLE_MAX_BYTES = 96;
+const DISPATCH_DESCRIPTION_MAX_BYTES = 360;
+const DISPATCH_FILES_MAX_BYTES = 180;
+const DISPATCH_ANCHORS_MAX_BYTES = 120;
+const DISPATCH_STORY_HANDOFF_MAX_BYTES = 320;
 function byteLength(value) {
   return Buffer.byteLength(String(value || ""), "utf8");
 }
@@ -411,6 +417,16 @@ function storyDecisionLogPacket(ticket, slug) {
     selected.unshift(entries[index]);
   }
   return render(selected, entries.length - selected.length);
+}
+function storyDecisionLogSpawnPacket(ticket, slug) {
+  const story = ticket && ticket.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
+  const entries = Array.isArray(story && story.decisionLog) ? story.decisionLog.slice().sort((left, right) => Number(right.seq) - Number(left.seq)) : [];
+  if (!entries.length) return null;
+  const revision = Number(story.logRevision) || Number(entries[0].seq) || 0;
+  return boundedPacket([
+    `Story handoff (${story.ref}, newest first through #${revision}):`,
+    ...entries.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
+  ].join("\n"), DISPATCH_STORY_HANDOFF_MAX_BYTES, "\n[Story handoff excerpt capped. Full newest-first window is in briefing.]");
 }
 function ticketContractsPacket(ticket) {
   const contracts = store.normalizeContracts(ticket && ticket.contracts);
@@ -690,7 +706,26 @@ function ensureDispatchLauncher() {
   return filePath;
 }
 function dispatchTicketContext(ticket, projectPath) {
-  const declaredFiles = Array.isArray(ticket?.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const title = boundedPacket(
+    ticket?.title || "(Untitled ticket)",
+    DISPATCH_TITLE_MAX_BYTES,
+    "[Title excerpt capped.]"
+  );
+  const description = boundedPacket(
+    ticket?.description || "(No additional description was recorded.)",
+    DISPATCH_DESCRIPTION_MAX_BYTES,
+    "\n[Description excerpt capped. Full body is in briefing.]"
+  );
+  const declaredFiles = boundedPacket(
+    Array.isArray(ticket?.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)",
+    DISPATCH_FILES_MAX_BYTES,
+    "\n[Declared files excerpt capped. Full scope is in briefing.]"
+  );
+  const anchors = boundedPacket(
+    ticket?.executorAnchors || "(No anchors were recorded.)",
+    DISPATCH_ANCHORS_MAX_BYTES,
+    "\n[Anchors excerpt capped. Full anchors are in briefing.]"
+  );
   let slug = null;
   if (ticket?.storyId) {
     try {
@@ -698,17 +733,17 @@ function dispatchTicketContext(ticket, projectPath) {
     } catch (_) {
     }
   }
-  const decisionLog = storyDecisionLogPacket(ticket, slug);
-  return [
-    `Title: ${ticket?.title || "(Untitled ticket)"}`,
+  const storyHandoff = storyDecisionLogSpawnPacket(ticket, slug);
+  return boundedPacket([
+    `Title: ${title}`,
     `Description:
-${ticketDescriptionPacket(ticket?.description)}`,
+${description}`,
     `Declared files:
 ${declaredFiles}`,
     `Anchors:
-${ticket?.executorAnchors || "(No anchors were recorded.)"}`,
-    ...decisionLog ? [decisionLog] : []
-  ].join("\n\n");
+${anchors}`,
+    ...storyHandoff ? [storyHandoff] : []
+  ].join("\n\n"), DISPATCH_TICKET_CONTEXT_MAX_BYTES, "\n\n[Spawn orientation capped. Full implementation context is in briefing.]");
 }
 function renderDispatchStub(ticket, nonce, projectPath) {
   const project = String(projectPath || "").trim();
@@ -726,14 +761,10 @@ function renderDispatchStub(ticket, nonce, projectPath) {
   ].join(" ");
   return [
     ...marker ? [marker, ""] : [],
-    `Prepared Sidequest executor: ${ticket.dispatchExecutor}.`,
-    `Ticket: ${ticket.ref}.`,
-    `Dispatch board identity: --project ${quotedShellArgument(project)}.`,
-    "",
     "Implementation context:",
     dispatchTicketContext(ticket, project),
     "",
-    "The token-gated briefing adds comments, attachments, claim details, verification, and lifecycle instructions without loading them into the orchestrator transcript.",
+    "Fetch the token-gated briefing for comments, attachments, claim, verification, and lifecycle details.",
     `FIRST action: run \`${command}\` and execute exactly what it prints.`
   ].join("\n");
 }
