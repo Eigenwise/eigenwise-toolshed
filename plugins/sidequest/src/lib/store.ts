@@ -38,7 +38,7 @@ const commitScope = require('./commit-scope.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
-const { routingDisabledMessage } = require('./refusal-guidance.js');
+const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
 const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
@@ -499,6 +499,13 @@ function isTestSidePath(file?: any) {
     || /(?:^|\/)[^/]+\.(?:test|spec)\.[^/]+$/.test(normalized);
 }
 
+function negativeControlFailureKind(body?: unknown) {
+  const text = String(body || '');
+  if (/\bimport\s*error\b/i.test(text)) return 'import_error';
+  if (/\bcollection\s+(?:error|failed|failure)\b/i.test(text)) return 'collection_error';
+  return '';
+}
+
 function negativeControlResult(ticket?: any) {
   const claimHolder = String(ticket?.claim?.by || '').trim();
   if (!claimHolder) return { kind: 'missing' };
@@ -517,7 +524,11 @@ function negativeControlResult(ticket?: any) {
     const waiverReason = waived?.[1]?.trim();
     if (waiverReason) return waiverReason.length >= 20 ? { kind: 'waived' } : { kind: 'short_waiver' };
     const failed = markerLine.match(/^\[sidequest:negative-control\]\s+(.+?)\s+failed=(\d+)/);
-    if (failed) return Number(failed[2]) > 0 ? { kind: 'failed' } : { kind: 'zero_failures' };
+    if (failed) {
+      if (Number(failed[2]) === 0) return { kind: 'zero_failures' };
+      const failureKind = negativeControlFailureKind(body);
+      return failureKind ? { kind: failureKind } : { kind: 'failed' };
+    }
     if (!malformedMarkerLine) malformedMarkerLine = markerLine;
   }
   if (malformedMarkerLine) return { kind: 'malformed_marker', markerLine: malformedMarkerLine };
@@ -525,7 +536,15 @@ function negativeControlResult(ticket?: any) {
 }
 
 function negativeControlRefusal(ticket?: any, result?: any) {
-  const recipe = 'Revert the non-test changes, run the changed tests, post a line beginning [sidequest:negative-control] <command> failed=<n> with n greater than zero, then restore the change and run the declared verify. You may add context after failed=<n>. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.';
+  const recipe = negativeControlRecoveryGuidance();
+  if (result.kind === 'import_error' || result.kind === 'collection_error') {
+    const failure = result.kind === 'import_error' ? 'an ImportError' : 'a collection error';
+    return {
+      ok: false,
+      reason: `negative_control_${result.kind}`,
+      message: `${ticket.ref} completion refused: the recorded negative control failed with ${failure}. ${recipe}`,
+    };
+  }
   if (result.kind === 'zero_failures') {
     return {
       ok: false,

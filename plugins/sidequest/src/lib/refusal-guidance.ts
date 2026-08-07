@@ -60,3 +60,7 @@ export function claimRefusalMessage(reason: string, ref: string, claim: ClaimCon
 export function routingDisabledMessage(ref: string): string {
   return `Routing is disabled on this board, so ${ref} cannot be dispatched. Run \`sidequest routing enabled\` then \`sidequest dispatch ${ref}\`; direct work is limited to the inline-safe allowlist: \`sidequest claim ${ref} --direct --reason "why this is inline-safe"\`.`;
 }
+
+export function negativeControlRecoveryGuidance(): string {
+  return 'Revert the non-test changes, run the changed tests, and keep them importable. Only an assertion failure in the changed tests proves they catch wrong behavior; an ImportError or collection error only proves a symbol vanished. Post a line beginning [sidequest:negative-control] <command> failed=<n> with n greater than zero, then restore the change and run the declared verify. You may add context after failed=<n>. If the control cannot run, post a line beginning [sidequest:negative-control] waived <reason of at least 20 characters>.';
+}

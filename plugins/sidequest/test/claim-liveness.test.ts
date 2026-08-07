@@ -420,6 +420,30 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 (expected ImportError after reverting non-test changes)',
+    source: 'mcp',
+  }).ok, true);
+  const importError = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(importError.reason, 'negative_control_import_error');
+  assert.match(importError.message, /Only an assertion failure in the changed tests proves they catch wrong behavior/);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 collection error after reverting non-test changes',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).reason, 'negative_control_collection_error');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
     body: '[sidequest:negative-control] waived too short',
     source: 'mcp',
   }).ok, true);
