@@ -4,7 +4,7 @@ const path = require('node:path');
 const os = require('node:os');
 const fs = require('node:fs/promises');
 const nativeFs = require('node:fs');
-const { spawn } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 const commitScope = require('./commit-scope.js');
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
@@ -42,6 +42,45 @@ function git(cwd: string, args: string[]): Promise<GitResult> {
       });
     });
   });
+}
+
+function pathIsInside(root: string, candidate: string): boolean {
+  const relative = path.relative(root, candidate);
+  return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
+}
+
+function dependencyCachePath(relativePath: string): boolean {
+  return relativePath.split(/[\\/]+/).includes('node_modules');
+}
+
+function ignoredPathsMissingFromWorktree(repository: string, worktree: string, candidatePaths: string[]): string[] {
+  if (!nativeFs.existsSync(repository) || !nativeFs.existsSync(worktree) || !candidatePaths.length) return [];
+  const scopes = candidatePaths
+    .map((candidate) => path.resolve(repository, candidate))
+    .filter((candidate) => pathIsInside(repository, candidate));
+  if (!scopes.length) return [];
+  let output = '';
+  try {
+    output = execFileSync('git', ['ls-files', '--others', '--ignored', '--exclude-standard', '--directory'], {
+      cwd: repository,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    });
+  } catch (_) {
+    return [];
+  }
+  return output.split(/\r?\n/)
+    .map((entry) => entry.trim().replace(/[\\/]+$/, '').replace(/\\/g, '/'))
+    .filter(Boolean)
+    .filter((relativePath) => !dependencyCachePath(relativePath))
+    .filter((relativePath) => {
+      const repositoryPath = path.resolve(repository, relativePath);
+      if (!pathIsInside(repository, repositoryPath) || !nativeFs.existsSync(repositoryPath)) return false;
+      if (nativeFs.existsSync(path.resolve(worktree, relativePath))) return false;
+      return scopes.some((scope) => pathIsInside(scope, repositoryPath) || pathIsInside(repositoryPath, scope));
+    })
+    .sort();
 }
 
 function canonicalPath(value: unknown): string {
@@ -955,4 +994,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, classifyWorktree, advanceIntegrationBranch, sweep };

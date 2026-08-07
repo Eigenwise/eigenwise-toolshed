@@ -559,6 +559,39 @@ test('worktree dispatch warnings name ignored missing paths without flagging ins
   assert.equal(store.releaseTicket(slug, installed.ref, 'visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
 });
 
+test('worktree dispatch warns when ignored scoped fixtures are absent from the linked worktree', () => {
+  const fixtureDirectory = 'capture-app/data';
+  const linkedWorktree = path.join(PROJECT, '.claude', 'worktrees', `visibility-${Date.now()}`);
+  fs.appendFileSync(path.join(PROJECT, '.git', 'info', 'exclude'), `\ncapture-app/data/\ncapture-app/node_modules/\n`);
+  fs.mkdirSync(path.join(PROJECT, fixtureDirectory), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT, fixtureDirectory, 'capture.json'), '{}\n');
+  fs.mkdirSync(path.join(PROJECT, 'capture-app', 'node_modules'), { recursive: true });
+  fs.mkdirSync(linkedWorktree, { recursive: true });
+  const ticket = store.createTicket(slug, {
+    title: 'linked worktree fixture visibility',
+    category: 'dispatch.lifecycle',
+    files: ['capture-app'],
+    source: 'test',
+  });
+
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `linked-visibility-${Date.now()}` });
+    const dispatched = {
+      ...prepared.ticket,
+      dispatch: { ...prepared.ticket.dispatch, worktree: linkedWorktree },
+    };
+    const warnings = store.dispatchWarnings(dispatched, slug).join('\n');
+
+    assert.match(warnings, /capture-app\/data/);
+    assert.match(warnings, /test results can differ from integration/);
+    assert.doesNotMatch(warnings, /capture-app\/node_modules/);
+  } finally {
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'linked-visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
+    fs.rmSync(path.join(PROJECT, 'capture-app'), { recursive: true, force: true });
+    fs.rmSync(path.join(PROJECT, '.claude', 'worktrees'), { recursive: true, force: true });
+  }
+});
+
 test('dispatch warns when compose bind-mounts the repository root into an isolated worktree', () => {
   const compose = path.join(PROJECT, 'compose.yaml');
   fs.writeFileSync(compose, 'services:\n  app:\n    volumes:\n      - .:/workspace\n');
