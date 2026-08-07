@@ -1381,10 +1381,12 @@ test('peer-guard: an executor between turns accepts steering before and after sc
   const stop = claimStopTicket(ticket, sessionId, 'scope-paused-worker');
   assert.equal(store.requestScope(slug, ticket.ref, 'scope-paused-worker', ['lib/resumed.js']).ok, true);
 
-  assert.equal(
-    runHook(SUBAGENT_STOP, stop),
-    `exec WAITING: ${ticket.ref} has a pending scope request; approve scope, then resume it from the recovery snapshot`,
-  );
+  const expectedBlock = {
+    decision: 'block',
+    reason: `sidequest: ${ticket.ref} still has a scope ruling pending for lib/resumed.js. If main has not been notified, send one blocker message naming the pending files. Then call scopeRequest again with wait: true and the same worktree. Keep the claim held and do not finish until the request is approved or denied.`,
+  };
+  assert.deepEqual(runHookOutput(SUBAGENT_STOP, stop), expectedBlock);
+  assert.deepEqual(runHookOutput(SUBAGENT_STOP, { ...stop, stop_hook_active: true }), expectedBlock);
   const paused = store.getTicket(slug, ticket.ref);
   assert.equal(paused.dispatch.outcome, 'claimed');
   assert.equal(paused.dispatch.terminalAt, null);
@@ -1397,6 +1399,7 @@ test('peer-guard: an executor between turns accepts steering before and after sc
   assert.equal(resumed.dispatch.outcome, 'claimed');
   assert.equal(resumed.dispatch.terminalAt, undefined);
   assert.equal(resumed.dispatch.agentName, stop.agent_name);
+  assert.strictEqual(runHookOutput(SUBAGENT_STOP, { ...stop, stop_hook_active: true }), null);
   assert.strictEqual(runGuardPeer({ tool_input: { to: stop.agent_name, message: 'resume the approved work' } }), null);
 });
 

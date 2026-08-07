@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readStdin, stringField } from './shared/input.js';
-import { writeContext } from './shared/output.js';
+import { writeContext, writeJson } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
@@ -150,6 +150,30 @@ function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null
   return null;
 }
 
+function activeScopeWait(ticket: Ticket): boolean {
+  const dispatch = ticket.dispatch;
+  return Boolean(
+    ticket.claim?.by && ticket.scopeRequest && dispatch && !dispatch.terminalAt
+      && ['prepared', 'launched', 'claimed'].includes(String(dispatch.outcome || '')),
+  );
+}
+
+function activeScopeWaitReason(store: Store, claims: Claim[]): string | null {
+  for (const claim of claims) {
+    if (!claim?.held || claim.status !== 'doing') continue;
+    let ticket: Ticket | null = null;
+    try {
+      ticket = store.getTicket(claim.slug, claim.ticketId);
+    } catch (_) {}
+    if (!ticket || !activeScopeWait(ticket)) continue;
+    const label = ticket.ref || claim.ref || claim.ticketId || 'the claimed ticket';
+    const requested = (ticket.scopeRequest?.files || []).filter(Boolean).join(', ');
+    const paths = requested ? ` for ${requested}` : '';
+    return `sidequest: ${label} still has a scope ruling pending${paths}. If main has not been notified, send one blocker message naming the pending files. Then call scopeRequest again with wait: true and the same worktree. Keep the claim held and do not finish until the request is approved or denied.`;
+  }
+  return null;
+}
+
 function stopVerdict(
   store: Store,
   claims: Claim[],
@@ -217,7 +241,6 @@ function main(): void {
   const agentId = stringField(data, 'agent_id', 'agentId');
   const agentName = stringField(data, 'agent_name', 'agentName', 'name');
   clearNearTurnCapCounter(agentId);
-  if (data.stop_hook_active) return;
 
   const agentType = stringField(data, 'agent_type', 'agentType');
   const classification = classifyExecutor(agentType);
@@ -232,14 +255,6 @@ function main(): void {
     return;
   }
 
-  let dispatchStopped = false;
-  let terminalTickets: Ticket[] = [];
-  try {
-    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null);
-    dispatchStopped = Boolean(result.ok && result.stopped !== false);
-    terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
-  } catch (_) {}
-
   let claims: Claim[];
   try {
     claims = store.sessionClaims(sessionId, {
@@ -251,6 +266,21 @@ function main(): void {
     return;
   }
   if (!Array.isArray(claims)) return;
+
+  const scopeWaitReason = activeScopeWaitReason(store, claims);
+  if (scopeWaitReason) {
+    writeJson({ decision: 'block', reason: scopeWaitReason });
+    return;
+  }
+  if (data.stop_hook_active) return;
+
+  let dispatchStopped = false;
+  let terminalTickets: Ticket[] = [];
+  try {
+    const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null);
+    dispatchStopped = Boolean(result.ok && result.stopped !== false);
+    terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
+  } catch (_) {}
 
   let verdict: string | null;
   try {
