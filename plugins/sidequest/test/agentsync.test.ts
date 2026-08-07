@@ -36,12 +36,23 @@ function readDir(dir?: any) { return fs.readdirSync(dir).filter((file: string) =
 function parseExecutorFrontmatter(source: string) {
   const match = source.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!match || match[1] == null) throw new Error('executor definition must begin with frontmatter');
-  return Object.fromEntries(match[1].split(/\r?\n/)
-    .filter((line: string) => !line.startsWith(' ') && line.includes(':'))
-    .map((line: string) => {
-      const index = line.indexOf(':');
-      return [line.slice(0, index), line.slice(index + 1).trim()];
-    }));
+  const frontmatter = new Map<string, string[]>();
+  let list: string[] | null = null;
+  for (const line of match[1].split(/\r?\n/)) {
+    const property = line.match(/^([A-Za-z][A-Za-z0-9_-]*):(?:\s*(.*))?$/);
+    if (property) {
+      const key = property[1];
+      if (!key) continue;
+      const value = property[2]?.trim() || '';
+      const items = value ? value.split(', ').map((item) => item.trim()) : [];
+      frontmatter.set(key, items);
+      list = value ? null : items;
+      continue;
+    }
+    const listItem = line.match(/^  - (.+)$/)?.[1];
+    if (list && listItem) list.push(listItem);
+  }
+  return Object.fromEntries(frontmatter);
 }
 function seedCatalog(models?: any) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-agentsync-catalog-'));
@@ -403,15 +414,14 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
 // Read-only is a deny list. An allow list had to name all 54 board tools to leave three
 // writers out, which cost ~570 bytes per definition, hid every tool added later, and
 // silently excluded non-board MCP servers — visual-review could not reach Playwright.
-test('read-only stable executors deny the writers and grant everything else', () => {
+test('read-only stable executors deny writers while retaining default non-skill tools', () => {
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
 
   for (const file of ['sidequest-exec-dispatch-readonly.md', 'sidequest-exec-readonly-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    // No allow list at all: anything not denied is available, including tools that do
-    // not exist yet.
-    assert.doesNotMatch(body, /^tools:/m);
+    const frontmatter = parseExecutorFrontmatter(body);
+    assert.deepStrictEqual(frontmatter.tools, ['default', 'Skill(playbook:verify-discipline)']);
     const denied = body.match(/^disallowedTools: (.+)$/m);
     assert.ok(denied, `${file} must carry a disallowedTools line`);
     for (const writer of ['Edit', 'Write', 'NotebookEdit']) {
@@ -426,7 +436,7 @@ test('read-only stable executors deny the writers and grant everything else', ()
 
   for (const file of ['sidequest-exec-dispatch.md', 'sidequest-exec-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.doesNotMatch(body, /^tools:/m);
+    assert.deepStrictEqual(parseExecutorFrontmatter(body).tools, ['default', 'Skill(playbook:verify-discipline)']);
     assert.doesNotMatch(body, /^disallowedTools:/m);
   }
 });
@@ -444,7 +454,7 @@ test('a newly registered board tool needs no agentsync change to reach read-only
 
 test('read-only executor denylists add configured MCP tools without dropping the writers', () => {
   const body = agentsync.renderReadOnlyDispatchAgent('high', ['mcp__notion__search']);
-  assert.doesNotMatch(body, /^tools:/m);
+  assert.deepStrictEqual(parseExecutorFrontmatter(body).tools, ['default', 'Skill(playbook:verify-discipline)']);
   assert.match(body, /^disallowedTools: .*\bEdit\b/m);
   assert.match(body, /^disallowedTools: .*mcp__notion__search/m);
   assert.match(agentsync.renderReadOnlyClaudeAgent('high', ['mcp__plugin_svelte_svelte__*']), /^disallowedTools: .*mcp__plugin_svelte_svelte__\*/m);
@@ -454,7 +464,7 @@ test('read-only executor denylists add configured MCP tools without dropping the
   );
 });
 
-test('stable executors preload verify discipline and the install hash tracks the skill list', () => {
+test('stable executors preload only declared skills', () => {
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
 
@@ -465,8 +475,17 @@ test('stable executors preload verify discipline and the install hash tracks the
     'sidequest-exec-readonly-high.md',
   ]) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /^skills:\n  - playbook:verify-discipline$/m);
+    const frontmatter = parseExecutorFrontmatter(body);
+    assert.deepStrictEqual(frontmatter.skills, ['playbook:verify-discipline']);
+    assert.deepStrictEqual(frontmatter.tools, ['default', 'Skill(playbook:verify-discipline)']);
   }
+
+  const unrestricted = parseExecutorFrontmatter(agentsync.renderExecAgent({
+    name: 'unrestricted-control',
+    effort: 'high',
+    tools: null,
+  }));
+  assert.equal(Object.hasOwn(unrestricted, 'tools'), false);
 
   assert.notEqual(
     agentsync.stableInstallHash(),
