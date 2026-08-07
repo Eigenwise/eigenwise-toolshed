@@ -61,7 +61,15 @@ function persistentStateFile(): string {
   return path.join(home, 'worktree-sweep-failures.json');
 }
 
-type FailureState = Record<string, { fingerprint: string; attempts: number; extendedPathAttempted?: boolean }>;
+type FailureState = Record<string, {
+  fingerprint: string;
+  attempts: number;
+  extendedPathAttempted?: boolean;
+  quarantineAttempted?: boolean;
+  quarantineFailed?: boolean;
+  quarantinedPath?: string;
+  quarantinedAt?: string;
+}>;
 
 function readFailureState(): FailureState {
   try {
@@ -107,9 +115,35 @@ function clearFailure(pathname: string): void {
   writeFailureState(state);
 }
 
+function recordQuarantine(pathname: string, message: string, destination: string): void {
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  const existing = state[key];
+  state[key] = {
+    ...(existing || { fingerprint: failureFingerprint(message), attempts: 1 }),
+    quarantineAttempted: true,
+    quarantinedPath: destination,
+    quarantinedAt: new Date().toISOString(),
+  };
+  writeFailureState(state);
+}
+
+function recordQuarantineFailure(pathname: string, message: string): void {
+  const state = readFailureState();
+  const key = canonicalPath(pathname);
+  const existing = state[key];
+  state[key] = {
+    ...(existing || { fingerprint: failureFingerprint(message), attempts: 1 }),
+    quarantineAttempted: true,
+    quarantineFailed: true,
+  };
+  writeFailureState(state);
+}
+
 function shouldSkipKnownFailure(pathname: string): boolean {
   const state = readFailureState()[canonicalPath(pathname)];
-  return state?.fingerprint === 'filename-too-long' && state.attempts >= 2;
+  return Boolean(state?.quarantineFailed)
+    || (state?.fingerprint === 'filename-too-long' && state.attempts >= 2);
 }
 
 function shouldTryExtendedPath(pathname: string, message: string): boolean {
@@ -681,6 +715,25 @@ async function advanceLocalIntegrationBranch(repo: string, options: any): Promis
   }, common));
 }
 
+function quarantineRoot(options: any): string {
+  return options.quarantineDir || path.join(process.env.SIDEQUEST_HOME || path.join(os.homedir(), '.claude', 'sidequest'), 'worktree-quarantine');
+}
+
+async function quarantineCandidate(entry: any, message: string, options: any): Promise<{ ok: boolean; destination?: string; stderr: string }> {
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const destination = path.join(quarantineRoot(options), `${path.basename(entry.path)}-${timestamp}`);
+  try {
+    await fs.mkdir(path.dirname(destination), { recursive: true });
+    await fs.rename(entry.path, destination);
+    recordQuarantine(entry.path, message, destination);
+    return { ok: true, destination, stderr: '' };
+  } catch (error: any) {
+    const stderr = String((error && error.message) || error);
+    recordQuarantineFailure(entry.path, stderr);
+    return { ok: false, stderr };
+  }
+}
+
 async function removeCandidate(repo: string, entry: any): Promise<{ ok: boolean; stderr: string }> {
   const remove = async (pathname: string): Promise<{ ok: boolean; stderr: string }> => (
     entry.orphanDirectory
@@ -711,7 +764,8 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       backups: [],
       deletedBranches: [],
       prunedOrphanBranches: [],
-      counts: { removedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
+      quarantined: [],
+      counts: { removedWorktrees: 0, quarantinedWorktrees: 0, backedUpWorktrees: 0, deletedBranches: 0, prunedOrphanBranches: 0 },
       failures: [],
       skipped: 'repository_busy',
     };
@@ -740,6 +794,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   const backups: string[] = [];
   const deletedBranches: string[] = [];
   const prunedOrphanBranches: string[] = [];
+  const quarantined: Array<{ path: string; destination: string; message: string }> = [];
   const failures: Array<{ path: string | null; message: string; suppressed?: boolean }> = [];
 
   if (execute) {
@@ -763,8 +818,18 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       const result = await removeCandidate(repo, entry);
       if (!result.ok) {
         const message = result.stderr || 'worktree remove failed';
-        const failure = recordFailure(entry.path, message);
-        failures.push({ path: entry.path, message, suppressed: failure.suppressed });
+        recordFailure(entry.path, message);
+        const quarantine = await quarantineCandidate(entry, message, options);
+        if (!quarantine.ok || !quarantine.destination) {
+          entry.action = 'keep';
+          entry.reason = 'quarantine_failed';
+          failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
+          continue;
+        }
+        entry.action = 'quarantine';
+        entry.reason = 'remove_failed_quarantined';
+        entry.quarantine = quarantine.destination;
+        quarantined.push({ path: entry.path, destination: quarantine.destination, message });
         continue;
       }
       clearFailure(entry.path);
@@ -776,7 +841,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       if (deleted.ok) deletedBranches.push(branch);
       else failures.push({ path: branch, message: deleted.stderr || 'git branch delete failed' });
     }
-    if (removed.length) {
+    if (removed.length || quarantined.length) {
       const prune = await git(repo, ['worktree', 'prune']);
       if (!prune.ok) failures.push({ path: null, message: prune.stderr || 'git worktree prune failed' });
     }
@@ -807,8 +872,10 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     backups,
     deletedBranches,
     prunedOrphanBranches,
+    quarantined,
     counts: {
       removedWorktrees: removed.length,
+      quarantinedWorktrees: quarantined.length,
       backedUpWorktrees: backups.length,
       deletedBranches: deletedBranches.length,
       prunedOrphanBranches: prunedOrphanBranches.length,

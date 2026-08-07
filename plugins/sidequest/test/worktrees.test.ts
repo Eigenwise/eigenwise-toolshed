@@ -403,3 +403,36 @@ test('worktree sweep reclaims old unregistered directories and backs up contents
   assert.ok(!fs.existsSync(empty));
   assert.ok(!fs.existsSync(dirty));
 });
+
+test('worktree sweep quarantines an orphan after its removal fails', async () => {
+  const orphan = path.join(WORKTREES, 'pub-quarantine-orphan');
+  const quarantine = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-quarantine-'));
+  const fsPromises = require('node:fs/promises');
+  const remove = fsPromises.rm;
+  fs.mkdirSync(orphan);
+  fs.writeFileSync(path.join(orphan, 'locked.bin'), 'loaded native artifact\n');
+  makeOld(orphan);
+  fsPromises.rm = async () => {
+    const error: NodeJS.ErrnoException = new Error('access denied');
+    error.code = 'EPERM';
+    throw error;
+  };
+
+  try {
+    const result = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 0,
+      upstream: 'origin/main',
+      quarantineDir: quarantine,
+    });
+
+    assert.equal(result.counts.quarantinedWorktrees, 1);
+    assert.equal(result.quarantined[0].path, orphan);
+    assert.match(result.quarantined[0].destination, new RegExp(`^${quarantine.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}`));
+    assert.equal(fs.existsSync(orphan), false);
+    assert.equal(fs.existsSync(result.quarantined[0].destination), true);
+  } finally {
+    fsPromises.rm = remove;
+    fs.rmSync(quarantine, { recursive: true, force: true });
+  }
+});
