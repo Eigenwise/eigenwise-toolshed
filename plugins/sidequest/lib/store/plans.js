@@ -133,6 +133,19 @@ function createPlans(dependencies) {
     const entries = Array.isArray(value) ? value : [value];
     return entries.map(map).filter(Boolean);
   }
+  function experimentEntryBlock(entry) {
+    return [
+      `## R${entry.round} — ${entry.date} — ${entry.headline}`,
+      `Hypothesis: ${entry.hypothesis}`,
+      `Change: ${entry.change} (commit ${entry.commit}, branch ${entry.branch})`,
+      `Measured: ${entry.measured}`,
+      `Deliverable: ${entry.deliverable}`,
+      `Verdict: "${entry.verdict}" — ${entry.outcome}`,
+      `Why it failed: ${entry.whyItFailed}`,
+      `Constraint bought: ${entry.constraintBought}`,
+      `Status: ${entry.status}`
+    ].join("\n");
+  }
   function appendExperimentEntry(slug, idOrRef, entry) {
     entry = entry || {};
     const round = experimentRound(entry.round);
@@ -168,17 +181,22 @@ function createPlans(dependencies) {
       if (constraints.length) next = next.replace(/(^## Standing constraints\r?\n)([\s\S]*?)(?=^## R\d+\b|\s*$)/m, (_all, heading, body) => `${heading}${body.trimEnd()}${body.trim() ? "\n" : ""}${constraints.join("\n")}
 
 `);
-      const block = [
-        `## R${round} — ${date} — ${headline}`,
-        `Hypothesis: ${hypothesis}`,
-        `Change: ${change} (commit ${commit}, branch ${branch})`,
-        `Measured: ${measured}`,
-        `Deliverable: ${deliverable}`,
-        `Verdict: "${verdict}" — ${outcome}`,
-        `Why it failed: ${whyItFailed}`,
-        `Constraint bought: ${constraintBought}`,
-        `Status: ${status}`
-      ].join("\n");
+      const block = experimentEntryBlock({
+        round,
+        date,
+        headline,
+        hypothesis,
+        change,
+        commit,
+        branch,
+        measured,
+        deliverable,
+        verdict,
+        outcome,
+        whyItFailed,
+        constraintBought,
+        status
+      });
       return { log: `${next}
 
 ${block}
@@ -234,27 +252,39 @@ ${block}
         };
       }
       const existing = readExperimentLog(slug, ticket);
-      if (!existing) {
-        return {
-          ok: false,
-          reason: "round_not_found",
-          message: `${ticket.ref} awaits an oracle verdict for round ${oracle.round}, but its experiment log has no round entry.`
-        };
-      }
-      const entry = experimentEntries(existing.log).find((current) => current.round === oracle.round);
+      let log = existing ? existing.log : experimentLogTemplate(ticket);
+      let entry = experimentEntries(log).find((current) => current.round === oracle.round);
       if (!entry) {
-        return {
-          ok: false,
-          reason: "round_not_found",
-          message: `${ticket.ref} awaits an oracle verdict for round ${oracle.round}, but that round is missing from its experiment log.`
-        };
+        const date = String(oracle.at || (/* @__PURE__ */ new Date()).toISOString()).slice(0, 10);
+        const block2 = experimentEntryBlock({
+          round: oracle.round,
+          date,
+          headline: "Oracle verdict",
+          hypothesis: oracle.ask,
+          change: "",
+          commit: oracle.candidate || "",
+          branch: "",
+          measured: "",
+          deliverable: oracle.deliverable || "",
+          verdict: "",
+          outcome: "",
+          whyItFailed: "",
+          constraintBought: "",
+          status: ""
+        });
+        log = `${String(log).trimEnd()}
+
+${block2}
+`;
+        entry = experimentEntries(log).find((current) => current.round === oracle.round);
       }
+      if (!entry) throw new Error("Oracle verdict round could not be created.");
       let block = replaceExperimentEntryField(entry.block, "Verdict", `"${text}" — ${outcome}`, "Why it failed");
       block = replaceExperimentEntryField(block, "Why it failed", why, "Constraint bought");
       block = replaceExperimentEntryField(block, "Constraint bought", constraint, "Status");
       block = replaceExperimentEntryField(block, "Status", verdictStatus(outcome, oracle.candidate));
-      let log = `${String(existing.log).slice(0, entry.start)}${block}
-${String(existing.log).slice(entry.end).trimStart()}`;
+      log = `${String(log).slice(0, entry.start)}${block}
+${String(log).slice(entry.end).trimStart()}`;
       log = appendStandingConstraint(log, oracle.round, constraint);
       clearOracleMarker(ticket);
       const location = writeExperimentLog(slug, ticket, log);

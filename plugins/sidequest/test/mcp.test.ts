@@ -2793,19 +2793,8 @@ test('MCP release records an oracle handoff without a separate reason', async ()
   assert.equal(pulse.oracle.summary, `awaiting oracle since ${ticket.oracle.at}, round 1, candidate abc1234, ask: Rank the two rendered candidates without reading the measurements.`);
 });
 
-test('MCP verdict records the oracle outcome and refuses a ticket with no oracle marker', async () => {
+test('MCP verdict creates a missing oracle round and refuses a ticket with no oracle marker', async () => {
   const added = await callTool('add', { title: 'oracle verdict fixture', complexity: 2, why: 'exercise the verdict operation through MCP' });
-  assert.equal(store.appendExperimentEntry(added.project, added.ref, {
-    round: 1,
-    headline: 'candidate',
-    hypothesis: 'test the candidate',
-    change: 'rendered it',
-    commit: 'abc1234',
-    branch: `sidequest/experiment/${added.ref}`,
-    measured: 'baseline 1, result 2',
-    deliverable: 'artifacts/comparison.wav',
-    status: '',
-  }).ok, true);
   const prepared = store.prepareDispatch(added.project, added.ref, { sessionId: `mcp-verdict-${Date.now()}` });
   assert.equal(store.claimTicket(added.project, added.ref, 'mcp-verdict-worker', {
     token: prepared.token,
