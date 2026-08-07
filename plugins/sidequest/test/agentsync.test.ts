@@ -941,9 +941,12 @@ test('briefings reject compensating workarounds when the root cause is out of sc
     ref: 'SQ-1138', title: 'Scope wall', model: 'opus', effort: 'high', category: {},
   }, 'scope-wall-token');
   assert.match(briefing, /Always call `scopeRequest` with `wait: true`/);
-  assert.match(briefing, /that is a wait, not a release/);
-  assert.match(briefing, /checkpoint-and-hold work in hand with a commit/);
-  assert.match(briefing, /state exactly which scope ruling is pending/);
+  assert.match(briefing, /A `timeout` state is a wait, not a release/);
+  assert.match(briefing, /checkpoint-and-hold work in hand/);
+  assert.match(briefing, /call `scopeRequest` again with `wait: true` and the same worktree/);
+  assert.match(briefing, /send main one blocker message naming the pending files/);
+  assert.match(briefing, /Do not send a final response while the ruling is pending/);
+  assert.match(briefing, /SubagentStop hook blocks normal executor shutdown/);
   assert.match(briefing, /When the root cause is outside declared scope, request that scope and wait/);
   assert.match(briefing, /record the root-cause finding on the ticket and stop/);
   assert.match(briefing, /Never ship a compensating or downstream workaround inside scope instead/);
