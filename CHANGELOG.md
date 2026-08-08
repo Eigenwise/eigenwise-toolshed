@@ -8,6 +8,30 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.418.0 (2026-08-08)
+
+### sidequest 4.40.9 → 4.41.0
+
+#### Features
+
+- Add attestation verification oracles (SQ-1500)
+  Not every ticket's real oracle is a command. When the board demanded one anyway, executors
+  supplied whatever suite happened to pass, and the gate certified work that suite never
+  touched.
+
+  A ticket can now declare `verifyKind: attestation` with an `attestationArtifact` naming the
+  specific URL, file, frame, or returned count that must be observed. The executor records
+  what it actually saw as `attestation: <artifact> | <evidence produced> | <what it showed>`,
+  and that becomes the reviewable oracle. Briefings say so explicitly, including that an
+  unrelated passing suite is not a substitute.
+
+#### Fixes
+
+- Reject unknown Sidequest MCP arguments (SQ-926)
+  Sidequest MCP tools now reject unknown arguments with the accepted keys, and category edits can update or clear routing fallbacks.
+- Sync new executor worktrees to local integration main (SQ-1502)
+  New isolated executor worktrees now synchronize to integrated local main commits before work starts.
+
 ## v3.417.0 (2026-08-08)
 
 ### observability 0.5.3 → 0.6.0
