@@ -446,11 +446,45 @@ test('warns when a declared module has an undeclared in-package importer', () =>
 
   const omitted = cliJsonAt(project, ['add', '-t', 'warn about consumers', '--category', 'coding.normal', '--file', 'src/scope-warning.ts']);
   assert.deepStrictEqual(omitted.warnings, [
-    'Planning-depth warning: declared scope may omit in-package consumers: src/dispatch.ts. Include the path if this change reaches it.',
+    'Planning-depth warning: declared scope may omit in-package direct importer: src/dispatch.ts. Include the path if this change reaches it.',
   ]);
 
   const included = cliJsonAt(project, ['add', '-t', 'declare consumers', '--category', 'coding.normal', '--file', 'src/scope-warning.ts', '--file', 'src/dispatch.ts']);
   assert.deepStrictEqual(included.warnings, []);
+});
+
+test('warns for transitive consumers in the first scope warning', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'transitive-scope-consumer');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(project, 'src', 'changed.ts'), 'export const changed = true;\n');
+  fs.writeFileSync(path.join(project, 'src', 'direct.ts'), "import { changed } from './changed.js';\nexport { changed };\n");
+  fs.writeFileSync(path.join(project, 'src', 'second.ts'), "import { changed } from './direct.js';\nexport { changed };\n");
+  fs.writeFileSync(path.join(project, 'src', 'third.ts'), "import { changed } from './second.js';\nvoid changed;\n");
+
+  const added = cliJsonAt(project, ['add', '-t', 'warn about transitive consumers', '--category', 'coding.normal', '--file', 'src/changed.ts']);
+  assert.deepStrictEqual(added.warnings, [
+    'Planning-depth warning: declared scope may omit in-package 2-hop transitive consumer: src/second.ts. Include the path if this change reaches it.',
+    'Planning-depth warning: declared scope may omit in-package 3-hop transitive consumer: src/third.ts. Include the path if this change reaches it.',
+    'Planning-depth warning: declared scope may omit in-package direct importer: src/direct.ts. Include the path if this change reaches it.',
+  ]);
+});
+
+test('summarizes large in-package consumer closures', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'large-scope-consumer');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(project, 'src', 'changed.ts'), 'export const changed = true;\n');
+  for (let index = 0; index <= 12; index += 1) {
+    fs.writeFileSync(path.join(project, 'src', `consumer-${index}.ts`), "import { changed } from './changed.js';\nvoid changed;\n");
+  }
+
+  const added = cliJsonAt(project, ['add', '-t', 'summarize consumers', '--category', 'coding.normal', '--file', 'src/changed.ts']);
+  assert.deepStrictEqual(added.warnings, [
+    'Planning-depth warning: declared scope may omit 13 in-package consumers, including 13 direct importers. Include the relevant paths if this change reaches them.',
+  ]);
 });
 
 test('warns about undeclared same-basename sibling paths', () => {
@@ -458,6 +492,7 @@ test('warns about undeclared same-basename sibling paths', () => {
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'lib'), { recursive: true });
   fs.mkdirSync(path.join(project, 'cli'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
   fs.writeFileSync(path.join(project, 'lib', 'plan.mjs'), 'export {};\n');
   fs.writeFileSync(path.join(project, 'cli', 'plan.mjs'), 'export {};\n');
 
@@ -465,6 +500,22 @@ test('warns about undeclared same-basename sibling paths', () => {
   assert.deepStrictEqual(added.warnings, [
     'Planning-depth warning: declared path lib/plan.mjs has undeclared same-basename sibling paths: cli/plan.mjs. Check whether they consume this change before dispatch.',
   ]);
+});
+
+test('does not warn about same-basename siblings outside the package', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'package-basename-sibling');
+  fs.rmSync(project, { recursive: true, force: true });
+  const sidequest = path.join(project, 'plugins', 'sidequest');
+  const observability = path.join(project, 'plugins', 'observability');
+  fs.mkdirSync(path.join(sidequest, 'src'), { recursive: true });
+  fs.mkdirSync(path.join(observability, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(sidequest, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(observability, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(sidequest, 'src', 'store.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(observability, 'lib', 'store.ts'), 'export {};\n');
+
+  const added = cliJsonAt(project, ['add', '-t', 'check package sibling', '--category', 'coding.normal', '--file', 'plugins/sidequest/src/store.ts']);
+  assert.deepStrictEqual(added.warnings, []);
 });
 
 test('discovers bundled hook output from the build script export', () => {
