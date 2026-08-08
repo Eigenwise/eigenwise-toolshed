@@ -62,6 +62,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state,
 } = require('./mcp-shared');
+const { sidequestReloadWarning } = require('./plugin-freshness');
 
 type ToolDefinition = {
   name: string;
@@ -258,6 +259,8 @@ const tools: ToolDefinition[] = [
         spawn,
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
+      const freshnessWarning = sidequestReloadWarning(meta.path);
+      if (freshnessWarning) warnings.push(`dispatch warning: ${freshnessWarning}`);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         // Compact dispatches must keep a bounded spawn payload. Warnings ride only when they fit the MCP ceiling.

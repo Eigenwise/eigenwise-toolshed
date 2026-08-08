@@ -35,7 +35,8 @@ export function stubSidequestInstall(): void {
   try { registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')); } catch (_) {}
   if (!registry.plugins || typeof registry.plugins !== 'object') registry.plugins = {};
   const existing = Array.isArray(registry.plugins['sidequest@eigenwise-toolshed']) ? registry.plugins['sidequest@eigenwise-toolshed'] : [];
-  existing.push({ scope: 'user', installPath, version: '99.99.99' });
+  const currentVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
+  existing.push({ scope: 'user', installPath, version: currentVersion });
   registry.plugins['sidequest@eigenwise-toolshed'] = existing;
 
   fs.mkdirSync(path.dirname(registryPath), { recursive: true });

@@ -13,6 +13,7 @@ const {
   pluginIdParts,
   pluginInstances,
   readJson: readJsonFrom,
+  reportLoadedPluginVersion,
 } = require('./freshness-helpers.js');
 
 const CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000;
@@ -333,12 +334,14 @@ function sessionInput() {
 function main() {
   try {
     const input = sessionInput();
+    const loadedVersion = loadedPluginVersion();
+    reportLoadedPluginVersion(input, 'workbench@eigenwise-toolshed', loadedVersion);
     const result = audit({ currentProject: input.cwd });
     const context = projectWarning(result.projectProblems);
     const notice = systemMessage({
       instances: result.projectInstances,
       updates: result.projectUpdates,
-    }, loadedPluginVersion());
+    }, loadedVersion);
     if (context || notice) {
       const output = {};
       if (context) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: context };

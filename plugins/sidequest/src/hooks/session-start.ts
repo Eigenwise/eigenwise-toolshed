@@ -6,6 +6,7 @@ import { initializeCompactionState, isPrimarySession } from './shared/compaction
 import { runSweep } from './shared/sweep-handoff.js';
 import { registerSweepSession } from './shared/worktree-sweep.js';
 import { diagnosticWorktreeWarning } from './diagnostic-worktree-warning.js';
+import { reportLoadedSidequestVersion, sidequestReloadWarning } from '../lib/plugin-freshness.js';
 
 const MAX_WORKFORCE_BYTES = 1800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
@@ -137,6 +138,8 @@ async function main(): Promise<void> {
   }
 
   const syncResult = provisionExecAgents();
+  reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
+  const freshnessNotice = sidequestReloadWarning(stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
   const lostLaunches = reconcileLostLaunches(data);
   registerSweepSession(data);
   let sweepNotices: string[] = [];
@@ -147,6 +150,7 @@ async function main(): Promise<void> {
   }
   const source = stringField(data, 'source');
   const restartNotice = [
+    freshnessNotice,
     syncResult && syncResult.written > 0 ? (require(runtimeModule('agentsync')) as AgentSync).RESTART_NOTICE : '',
     lostLaunches.length ? `sidequest: ${lostLaunches.join(', ')} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : '',
     source === 'compact' || source === 'resume' ? '' : diagnosticWorktreeWarning(data),

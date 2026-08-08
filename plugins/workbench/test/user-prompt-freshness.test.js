@@ -11,6 +11,7 @@ const {
   decide,
   isMaintenancePrompt,
 } = require('../hooks/user-prompt-freshness.js');
+const { reportLoadedPluginVersion } = require('../hooks/freshness-helpers.js');
 
 function tempDirectory() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'workspace-freshness-'));
@@ -78,6 +79,46 @@ test('loaded workbench older than the installed registry permits the prompt with
 
   fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '2.0.0' }));
   assert.equal(decide({ prompt: 'continue', cwd: project, session_id: 'session-reloaded' }, options), '');
+});
+
+test('warns for a newer installed version reported by another Toolshed plugin', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  const stateDirectory = path.join(directory, 'loaded-plugin-versions');
+  const input = { prompt: 'dispatch SQ-1', cwd: path.join(directory, 'project'), session_id: 'reported-sidequest' };
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: input.cwd, version: '2.0.0' }],
+  } }));
+  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', '1.0.0', { directory: stateDirectory });
+
+  const output = JSON.parse(decide(input, {
+    registryFile,
+    cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [] } },
+    loadedVersionStateDirectory: stateDirectory,
+    warningStateDirectory: path.join(directory, 'warnings'),
+    warnedStates: new Set(),
+  }));
+  assert.match(output.hookSpecificOutput.additionalContext, /sidequest: loaded 1\.0\.0, installed 2\.0\.0/);
+  assert.match(output.hookSpecificOutput.additionalContext, /\/reload-plugins/);
+});
+
+test('ignores absent or malformed reported versions', () => {
+  const directory = tempDirectory();
+  const registryFile = path.join(directory, 'installed_plugins.json');
+  const stateDirectory = path.join(directory, 'loaded-plugin-versions');
+  const input = { prompt: 'dispatch SQ-1', cwd: path.join(directory, 'project'), session_id: 'malformed-sidequest' };
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
+    'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: input.cwd, version: '2.0.0' }],
+  } }));
+  reportLoadedPluginVersion(input, 'sidequest@eigenwise-toolshed', 'not-semver', { directory: stateDirectory });
+
+  assert.doesNotThrow(() => assert.equal(decide(input, {
+    registryFile,
+    cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [] } },
+    loadedVersionStateDirectory: stateDirectory,
+    warningStateDirectory: path.join(directory, 'warnings'),
+    warnedStates: new Set(),
+  }), ''));
 });
 
 test('maintenance and reload prompts are always allowed, even inside the reload window', () => {
