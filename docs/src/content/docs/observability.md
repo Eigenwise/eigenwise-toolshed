@@ -13,4 +13,14 @@ Hook observations are metadata-only. The observer records event type, project id
 
 The Grafana dashboard leads with cost, routing, failures, and source activity, then graphs spend by model, project, and agent role. Project dashboards appear only after that project reports Claude Code metrics and expire after 30 quiet days. Gateway panels stay on the global dashboard because gateway records do not yet carry project attribution.
 
+## Checking CI after a push
+
+The local dashboard cannot tell you whether GitHub Actions finished. Run Workbench's bundled helper after pushing:
+
+```sh
+node "${CLAUDE_PLUGIN_ROOT}/bin/check-ci.js"
+```
+
+Pass a commit SHA to check a different commit. The helper waits for every workflow it finds, prints the verified workflow names, and fails when no run appears, a run fails, GitHub authentication is missing, or the repository has no GitHub remote. It waits for 10 minutes by default; use `--timeout <seconds>` to set a different bound.
+
 Start with [setup](./setup/) to install the plugin, then [per-project opt-in](./project-opt-in/) to turn it on for a repository, then the [dashboard](./dashboard/) guide to read the panels.
