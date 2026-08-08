@@ -554,6 +554,62 @@ test('integration rolls back when post-merge verification fails', () => {
   assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verify_failed_post_merge');
 });
 
+test('integration reports and records merge conflict paths before aborting', () => {
+  cleanBranch();
+  const t = addTicket('merge conflict paths', { files: ['lib/merge-conflict.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'merge-conflict-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'merge-conflict.js'), 'candidate\n');
+  git(['add', 'lib/merge-conflict.js']);
+  git(['commit', '-m', 'merge conflict candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'merge-conflict-worker', '--commit', commit]).status, 0);
+
+  git(['checkout', '-f', '-B', 'merge-conflict-target', 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'merge-conflict.js'), 'target\n');
+  git(['add', 'lib/merge-conflict.js']);
+  git(['commit', '-m', 'merge conflict target']);
+  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
+
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.reason, 'merge_failed');
+  assert.deepStrictEqual(rejected.conflictedPaths, ['lib/merge-conflict.js']);
+  assert.match(rejected.message, /Conflicted paths: lib\/merge-conflict\.js\./);
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.integration.conflictedPaths, ['lib/merge-conflict.js']);
+  assert.strictEqual(git(['status', '--porcelain']), '');
+});
+
+test('integration reports and records replay conflict paths before aborting', () => {
+  cleanBranch();
+  const t = addTicket('replay conflict paths', { files: ['lib/replay-conflict.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'replay-conflict-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'replay-conflict.js'), 'candidate\n');
+  git(['add', 'lib/replay-conflict.js']);
+  git(['commit', '-m', 'replay conflict candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'replay-conflict-worker', '--commit', commit]).status, 0);
+
+  git(['checkout', '-f', '-B', 'replay-conflict-target', 'origin/main']);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'replay-conflict.js'), 'target\n');
+  git(['add', 'lib/replay-conflict.js']);
+  git(['commit', '-m', 'replay conflict target']);
+  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+  const rejected = store.integrateSubmission(slug, t.ref, { mode: 'replay', target });
+
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.reason, 'replay_failed');
+  assert.deepStrictEqual(rejected.conflictedPaths, ['lib/replay-conflict.js']);
+  assert.match(rejected.message, /Conflicted paths: lib\/replay-conflict\.js\./);
+  assert.deepStrictEqual(store.getTicket(slug, t.ref).submission.integration.conflictedPaths, ['lib/replay-conflict.js']);
+  assert.strictEqual(git(['status', '--porcelain']), '');
+});
+
 test('integration closure consumes an in-scope submission with control-plane provenance', () => {
   cleanBranch();
   const t = addTicket('integration consumes submission', { files: ['lib/integrates.js'] });
