@@ -161,7 +161,38 @@ test('submit rejects invalid verify commands without releasing the claim or pin'
   assert.strictEqual(git(['rev-parse', `refs/sidequest/${t.ref}`]), pinnedCommit);
 });
 
+test('submit rejects bare manual prose without releasing the claim', () => {
+  const t = addTicket('bare manual submit verify');
+  const by = 'bare-manual-worker';
+  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+
+  const refused = store.submitTicket(slug, t.ref, by, {
+    commit: COMMIT,
+    verify: 'manual focused verifier',
+  });
+
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'invalid_verify');
+  assert.match(refused.message, /exact prefix `manual: <what you checked>`/);
+  assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
+});
+
+test('integration rejects legacy invalid submission verify before delivery', () => {
+  const t = addTicket('legacy malformed submission');
+  t.submission = { commit: COMMIT, verify: 'manual focused verifier', integratedAt: null };
+  persist(t);
+
+  const refused = store.validateIntegrationSubmission(slug, t.ref);
+
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'invalid_submission_verify');
+  assert.match(refused.message, /submission record verify "manual focused verifier"/);
+  assert.match(refused.message, /submission\.verify, not ticket\.executorVerify/);
+});
+
 test('submit requires the declared executor verify command', () => {
+  fs.mkdirSync(path.join(PROJECT_DIR, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'scoped-surface.test.js'), '');
   const t = addTicket('declared scoped verify', { executorVerify: 'node --test test/scoped-surface.test.js' });
   const by = 'scoped-verify-worker';
   const pinnedCommit = git(['rev-parse', 'origin/main']);

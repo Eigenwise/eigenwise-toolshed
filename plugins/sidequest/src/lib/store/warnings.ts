@@ -106,8 +106,8 @@ function splitVerifyCommands(command?: any) {
 function verifyCommandErrors(value?: any) {
   const command = String(value || '').trim();
   if (!command || manualVerify(command)) return [];
-  if (/^manual:/i.test(command)) {
-    return ['Manual verification must say what was checked: `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.'];
+  if (/^manual\b/i.test(command)) {
+    return ['Manual verification must use the exact prefix `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.'];
   }
   const first = command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[1]
     || command.match(/^\s*(?:["']([^"']+)["']|([^\s;&|]+))/)?.[2]

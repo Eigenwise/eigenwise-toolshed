@@ -15,6 +15,7 @@ const store = require('./store');
 // preserve every supplied anchor/verify character rather than truncating it.
 const NATIVE_PROMPT_MAX = 7600;
 const EXECUTOR_RUN_GUIDANCE = 'Run verify and gate commands in the foreground with a bounded timeout. Never sleep on a monitor for your own work. If a run must be backgrounded, confirm it started, then use a bounded poll that fails loud when the process is gone. A parked executor holds its claim while the board looks healthy, so fail loud and release instead.';
+const EXECUTOR_VERIFY_GUIDANCE = 'Submission verify must be exactly one of: a runnable cmd.exe command, for example `cd plugins/sidequest && npm run test:full`; or a manual check, for example `manual: checked the rendered page`. Windows runs commands through cmd.exe, so chain dependent commands with `&&`, never `;`. Put acceptance prose in the final report, not after a command.';
 
 function executorPrompt(ticket?: any, taskPrompt?: any) {
   const base = String(taskPrompt || '').trim();
@@ -24,7 +25,7 @@ function executorPrompt(ticket?: any, taskPrompt?: any) {
     `Title: ${ticket.title}`,
     ticket.description || '(No additional description was recorded.)',
   ].join('\n');
-  const parts = [base, EXECUTOR_RUN_GUIDANCE, contract];
+  const parts = [base, EXECUTOR_RUN_GUIDANCE, EXECUTOR_VERIFY_GUIDANCE, contract];
   if (ticket.executorAnchors) parts.push(`Anchors:\n${ticket.executorAnchors}`);
   if (ticket.executorVerifyKind === 'attestation') {
     parts.push(`Verify oracle: attestation\nObserved artifact: ${ticket.executorAttestationArtifact}\nRecord evidence as \`attestation: ${ticket.executorAttestationArtifact} | <evidence produced> | <what it showed>\`.`);

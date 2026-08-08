@@ -554,7 +554,7 @@ test('accepts repository-root and subdirectory verify commands', () => {
   assert.deepStrictEqual(subdirectory.warnings, []);
 });
 
-test('dispatch rejects broken npm and node test verifies while add and update only warn', () => {
+test('rejects unrunnable npm verifies when tickets are added or updated', () => {
   const packageDir = path.join(PROJ, 'plugins', 'package-suite');
   const bareDir = path.join(PROJ, 'plugins', 'bare-suite');
   fs.mkdirSync(path.join(packageDir, 'test'), { recursive: true });
@@ -563,16 +563,19 @@ test('dispatch rejects broken npm and node test verifies while add and update on
   fs.writeFileSync(path.join(packageDir, 'test', 'suite.test.js'), '');
   fs.writeFileSync(path.join(bareDir, 'test', 'suite.test.js'), '');
 
-  const npmTest = cliJson(['add', '-t', 'missing npm manifest', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && npm test']);
-  assert.match(npmTest.warnings.join('\n'), /npm test.*package\.json/);
-  assert.match(store.dispatchVerifyCommandError(npmTest.ticket, PROJ), /cd plugins\/bare-suite && node --test --test-timeout=\d+ "test\/\*\.test\.js"/);
+  const npmTest = cliResult(['add', '-t', 'missing npm manifest', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && npm test']);
+  assert.strictEqual(npmTest.status, 1);
+  assert.match(npmTest.stderr + npmTest.stdout, /npm test.*package\.json/);
+  assert.match(npmTest.stderr + npmTest.stdout, /acceptance criteria in a comment/);
 
-  const missingScript = cliJson(['add', '-t', 'missing npm script', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run missing']);
-  assert.match(missingScript.warnings.join('\n'), /npm run missing.*`missing` script/);
-  assert.match(store.dispatchVerifyCommandError(missingScript.ticket, PROJ), /cd plugins\/package-suite && npm run test:full/);
+  const correct = cliJson(['add', '-t', 'working verify', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full']);
+  assert.deepStrictEqual(correct.warnings, []);
+  assert.strictEqual(store.dispatchVerifyCommandError(correct.ticket, PROJ), null);
 
-  const updatedScript = cliJson(['update', missingScript.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
-  assert.match(updatedScript.warnings.join('\n'), /npm run missing.*`missing` script/);
+  const missingScript = cliResult(['update', correct.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
+  assert.strictEqual(missingScript.status, 1);
+  assert.match(missingScript.stderr + missingScript.stdout, /`missing` script/);
+  assert.match(missingScript.stderr + missingScript.stdout, /acceptance criteria in a comment/);
 
   const proseTail = cliResult(['add', '-t', 'prose command tail', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full. Add a test for the dispatch guard.']);
   assert.strictEqual(proseTail.status, 1);
@@ -602,20 +605,12 @@ test('dispatch rejects broken npm and node test verifies while add and update on
   assert.strictEqual(derivedDispatch.status, 1);
   assert.doesNotMatch(derivedDispatch.stderr + derivedDispatch.stdout, /dispatch: verify command cannot run/);
 
-  const correct = cliJson(['add', '-t', 'working verify', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full']);
-  assert.deepStrictEqual(correct.warnings, []);
-  assert.strictEqual(store.dispatchVerifyCommandError(correct.ticket, PROJ), null);
-
   cliJson(['claim', correct.ticket.ref, '--by', 'live-verify-worker', '--direct', '--reason', 'The live verify fixture needs a direct local claim.']);
   const rejectedLiveUpdate = cliResult(['update', correct.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
   assert.strictEqual(rejectedLiveUpdate.status, 1);
   assert.match(rejectedLiveUpdate.stderr + rejectedLiveUpdate.stdout, /dispatch: verify command cannot run/);
   const manualLiveUpdate = cliJson(['update', correct.ticket.ref, '--verify', 'manual: Checked the test plan while the ticket was claimed.']);
   assert.strictEqual(manualLiveUpdate.ticket.executorVerify, 'manual: Checked the test plan while the ticket was claimed.');
-
-  const refusedDispatch = cliResult(['dispatch', npmTest.ticket.ref]);
-  assert.strictEqual(refusedDispatch.status, 1);
-  assert.match(refusedDispatch.stderr + refusedDispatch.stdout, /dispatch: verify command cannot run/);
 
   const correctDispatch = cliResult(['dispatch', correct.ticket.ref]);
   assert.strictEqual(correctDispatch.status, 1);

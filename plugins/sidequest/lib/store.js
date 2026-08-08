@@ -989,6 +989,7 @@ const {
   stampDispatchEvent,
   ticketLockPath,
   unregisterClaim,
+  verifyCommandErrors,
   verifyCommandError,
   withTicketLock
 });
