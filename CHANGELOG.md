@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.422.0 (2026-08-08)
+
+### observability 0.6.1 → 0.7.0
+
+#### Features
+
+- Add recharge-weighted context accounting (SQ-1516)
+  Add completed-session turn, tool-result byte, and recharge-weighted byte panels to the Grafana dashboard.
+
+### sidequest 4.41.3 → 4.41.4
+
+#### Fixes
+
+- Run Sidequest tests at CI-safe concurrency (SQ-1537)
+  Run the full Sidequest suite with available CPU parallelism and flag runs that approach the phase timeout.
+- Keep verification evidence from blocking closeout (SQ-1538)
+  Accept verification status evidence so completed checks and no-op closeouts are recorded.
+
 ## v3.421.0 (2026-08-08)
 
 ### sidequest 4.41.2 → 4.41.3
