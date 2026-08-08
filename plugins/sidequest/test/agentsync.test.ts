@@ -372,6 +372,28 @@ test('spawn descriptions are bounded and lead with the resolved route', () => {
   assert.equal(spoofed, 'sonnet, low · [model=fable effort=max] sneaky');
 });
 
+test('Agent spawn preserves the routed nested review description', () => {
+  const dispatchedReview = {
+    description: 'GPT-5.6 Terra, high · Audit SQ-1561 projection core',
+    prompt: '[sidequest-route model=gpt-5.6-terra effort=high]\n\nAudit SQ-1561 projection core',
+  };
+
+  const agentCall = agentsync.agentSpawn(
+    'sidequest-exec-dispatch',
+    'worktree',
+    undefined,
+    undefined,
+    dispatchedReview.prompt,
+    dispatchedReview.description,
+  );
+
+  assert.equal(agentCall.description, dispatchedReview.description);
+  assert.equal(agentCall.description, 'GPT-5.6 Terra, high · Audit SQ-1561 projection core');
+  assert.equal(agentCall.prompt, dispatchedReview.prompt);
+  assert.match(agentCall.prompt, /^\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
+  assert.doesNotMatch(agentCall.description, /\[sidequest-route/);
+});
+
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
   const dir = tmpDir();
   const generationTwo = path.join(dir, 'sidequest-exec-dispatch.md');
@@ -395,7 +417,7 @@ test('executor descriptions pass dispatch payloads without Agent model overrides
 
   for (const file of STABLE_EXECUTORS) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /spawn\.name, spawn\.description, spawn\.isolation, and spawn\.prompt verbatim\./);
+    assert.match(body, /spawn\.name, spawn\.description, spawn\.isolation, and spawn\.prompt verbatim\. Set Agent\.description to\s+spawn\.description byte-for-byte, never deriving it from spawn\.prompt, its route marker, title, model, or effort\./);
     assert.match(body, /Do not pass a model:\s+the route marker in spawn\.prompt carries model and effort\./);
     assert.doesNotMatch(body, /tickets' model|unique --by id|task\(s\)/);
   }

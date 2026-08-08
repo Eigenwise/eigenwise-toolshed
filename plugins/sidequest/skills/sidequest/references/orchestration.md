@@ -372,8 +372,10 @@ bypass.
 ## Instant ticket executor dispatch
 
 The normal per-ticket path is instant. Call `dispatch <ref>` (CLI) or the matching MCP tool and use
-its returned stable per-model `agent` and `spawn` object immediately. Pass `spawn.prompt`
-unchanged as the Agent prompt. It stays a compact fetch stub with only the claim reference, token,
+its returned stable per-model `agent` and `spawn` object immediately. Pass every `spawn` field
+unchanged: `Agent.description === spawn.description` byte-for-byte. Do not derive it from
+`spawn.prompt`, its route marker, ticket title, model, or effort. `spawn.prompt`
+stays a compact fetch stub with only the claim reference, token,
 board identity, and route marker. The executor's token-gated first action fetches the durable packet:
 full description, category contract and route, anchors, verify command, declared files, labels,
 priority, story and dependency state, every chronological comment, and every attachment as an absolute
@@ -401,7 +403,9 @@ two failures require ticket evidence and a user-visible stop. Never trust a work
 ## Routed Agent dispatch
 
 All routed execution stays in the current conversation. Call `dispatch <ref>` through the CLI or MCP,
-then pass its exact stable executor and complete `spawn` object unchanged to Agent. The
+then pass its exact stable executor and complete `spawn` object unchanged to Agent. Set
+`Agent.description` from `spawn.description` byte-for-byte. It is the human FleetView subtitle;
+never substitute text from the prompt, route marker, title, model, or effort. The
 executor claims using the returned token, its exact executor name, and the stamped effort. The claim guard
 is the proof that the right route ran. For Codex, preserve `spawn.prompt`'s route marker unchanged so the
 gateway receives the resolved model and effort; never add, rewrite, or combine markers. Dispatch is the

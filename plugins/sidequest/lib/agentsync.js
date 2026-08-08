@@ -764,7 +764,7 @@ function renderDispatchStub(ticket, nonce, projectPath) {
 function agentSpawn(name, isolation, model, agentType, prompt, description) {
   return Object.assign(
     { subagent_type: agentType || name, name, mode: "bypassPermissions" },
-    description ? { description } : {},
+    description !== void 0 ? { description } : {},
     isolation ? { isolation } : {},
     model ? { model } : {},
     prompt ? { prompt } : {}

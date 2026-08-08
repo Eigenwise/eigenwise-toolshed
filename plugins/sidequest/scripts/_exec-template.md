@@ -2,8 +2,9 @@
 name: {{NAME}}
 description: >-
   Executes one or more sidequest tickets at {{EFFORT}} reasoning effort. Spawn with the dispatch's
-  spawn.name, spawn.description, spawn.isolation, and spawn.prompt verbatim. Do not pass a model:
-  the route marker in spawn.prompt carries model and effort.
+  spawn.name, spawn.description, spawn.isolation, and spawn.prompt verbatim. Set Agent.description to
+  spawn.description byte-for-byte, never deriving it from spawn.prompt, its route marker, title, model, or effort.
+  Do not pass a model: the route marker in spawn.prompt carries model and effort.
 effort: {{EFFORT}}{{MODEL_FRONTMATTER}}
 permissionMode: bypassPermissions
 ---

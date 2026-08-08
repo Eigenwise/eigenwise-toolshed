@@ -936,7 +936,7 @@ function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
 
 function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, prompt?: any, description?: any) {
   return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions' },
-    description ? { description } : {}, isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
+    description !== undefined ? { description } : {}, isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 
 function createNativeAgent(spec?: any, opts?: any) {
