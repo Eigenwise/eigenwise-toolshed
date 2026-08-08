@@ -7,6 +7,7 @@ const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
+const MCP_TOOLS_LIST_MAX_BYTES = 19500;
 function serverVersion() {
   try {
     return require("../.claude-plugin/plugin.json").version || "0.0.0";
@@ -117,19 +118,24 @@ async function runTool(tool, args) {
   return enqueueMutation(board, () => tool.handler(args));
 }
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
-  add: ["complexity"],
-  comments: ["full", "since"],
-  list: ["detail"],
-  release: ["command", "outputTail"],
-  story_log: ["entry"],
-  category_edit: ["fallbackModel"]
+  add: { complexity: "Legacy score; why required." },
+  comments: {
+    full: "Whole bodies; bypasses elision.",
+    since: "Comment id or ISO timestamp."
+  },
+  list: { detail: "Full comments; default for status." },
+  release: {
+    command: "Required for blocker/contradiction.",
+    outputTail: "Required blocker/contradiction output."
+  },
+  story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes." },
+  category_edit: { fallbackModel: "null clears fallback." }
 };
 function toolDescriptors() {
   return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map((tool) => {
     const inputSchema = compactSchema(tool.inputSchema);
-    for (const property of MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || []) {
-      const description = tool.inputSchema.properties?.[property]?.description;
-      if (description) inputSchema.properties[property].description = description;
+    for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
+      inputSchema.properties[property].description = description;
     }
     return {
       name: tool.name,
@@ -184,6 +190,7 @@ async function handleRequest(msg) {
 module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
+  MCP_TOOLS_LIST_MAX_BYTES,
   TOOLS,
   toolDescriptors,
   resolveProject,

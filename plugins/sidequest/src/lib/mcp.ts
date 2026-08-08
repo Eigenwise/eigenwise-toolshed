@@ -40,6 +40,9 @@ type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any 
 
 const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
+// The listing is loaded into every MCP session. This rounded cap retains 1.5KB
+// for schema growth after compacting the instructions callers still need.
+const MCP_TOOLS_LIST_MAX_BYTES = 19500;
 
 function serverVersion() {
   try {
@@ -134,13 +137,19 @@ async function runTool(tool: ToolDefinition, args: any) {
 }
 
 
-const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, string[]> = {
-  add: ['complexity'],
-  comments: ['full', 'since'],
-  list: ['detail'],
-  release: ['command', 'outputTail'],
-  story_log: ['entry'],
-  category_edit: ['fallbackModel'],
+const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
+  add: { complexity: 'Legacy score; why required.' },
+  comments: {
+    full: 'Whole bodies; bypasses elision.',
+    since: 'Comment id or ISO timestamp.',
+  },
+  list: { detail: 'Full comments; default for status.' },
+  release: {
+    command: 'Required for blocker/contradiction.',
+    outputTail: 'Required blocker/contradiction output.',
+  },
+  story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes.' },
+  category_edit: { fallbackModel: 'null clears fallback.' },
 };
 
 function toolDescriptors() {
@@ -148,9 +157,8 @@ function toolDescriptors() {
     .filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name))
     .map((tool) => {
       const inputSchema = compactSchema(tool.inputSchema);
-      for (const property of MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || []) {
-        const description = tool.inputSchema.properties?.[property]?.description;
-        if (description) inputSchema.properties[property].description = description;
+      for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
+        inputSchema.properties[property].description = description;
       }
       return {
         name: tool.name,
@@ -225,6 +233,7 @@ async function handleRequest(msg?: RpcMessage) {
 module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
+  MCP_TOOLS_LIST_MAX_BYTES,
   TOOLS,
   toolDescriptors,
   resolveProject,
