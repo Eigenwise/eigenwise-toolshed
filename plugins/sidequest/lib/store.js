@@ -1307,12 +1307,14 @@ function claimTicket(slug, idOrRef, by, opts) {
     const directClaimReason = directReason(opts.reason);
     if (opts.direct && isRoutedTicket(t2) && !directClaimReason) return { ok: false, reason: "direct_reason_required", ticket: t2 };
     if (opts.direct && isRoutedTicket(t2) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: "direct_not_allowed", ticket: t2, expectedExecutor: t2.dispatchExecutor || t2.exec?.agent || null };
-    if (opts.direct && t2.dispatchNonce) return { ok: false, reason: "direct_conflict", ticket: t2 };
+    const currentDispatch = dispatchState(t2);
+    const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
+    if (opts.direct && t2.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t2 };
+    if (opts.direct && t2.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t2 };
     if (!opts.direct && t2.dispatchNonce && opts.token !== t2.dispatchNonce) return { ok: false, reason: "token", ticket: t2 };
     if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
     if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
-    const currentDispatch = dispatchState(t2);
     const now = (/* @__PURE__ */ new Date()).toISOString();
     if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || "").trim() && !currentDispatch.boundAt && !bindDispatchClaimToken(currentDispatch, opts.sessionId, opts.executor, now)) {
       return { ok: false, reason: "unbound_dispatch", ticket: t2 };
@@ -1324,6 +1326,18 @@ function claimTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: "claimed", ticket: t2, claim: held2 };
     }
     t2.claim = { by, at: now };
+    if (opts.direct && opts.force && terminalDispatch && held2?.by && held2.by !== by) {
+      t2.claimTakeover = {
+        by,
+        at: now,
+        previousBy: held2.by,
+        evidence: {
+          outcome: currentDispatch.outcome,
+          terminalAt: currentDispatch.terminalAt,
+          terminalSource: currentDispatch.terminalSource || null
+        }
+      };
+    }
     if (t2.storyId) {
       const story = getStory(slug, t2.storyId);
       if (story) t2.storyLogSeenSeq = Number(story.logRevision) || 0;

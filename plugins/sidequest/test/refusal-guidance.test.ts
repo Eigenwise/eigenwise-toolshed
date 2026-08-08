@@ -21,6 +21,12 @@ test('claim refusal guidance always gives an actionable next step', () => {
   }
 });
 
+test('terminal claim takeover guidance names the forced recovery path', () => {
+  const message = claimRefusalMessage('terminal_claim_takeover_required', 'SQ-42');
+  assert.match(message, /--direct --force/);
+  assert.match(message, /existing verified commit/i);
+});
+
 test('not-owner guidance does not tell callers to use the claim holder identity', () => {
   const message = claimRefusalMessage('not_owner', 'SQ-42', { by: 'other-worker' });
   assert.match(message, /ask the claim holder to release/i);

@@ -1291,12 +1291,14 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const directClaimReason = directReason(opts.reason);
     if (opts.direct && isRoutedTicket(t) && !directClaimReason) return { ok: false, reason: 'direct_reason_required', ticket: t };
     if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: t.dispatchExecutor || t.exec?.agent || null };
-    if (opts.direct && t.dispatchNonce) return { ok: false, reason: 'direct_conflict', ticket: t };
+    const currentDispatch = dispatchState(t);
+    const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
+    if (opts.direct && t.dispatchNonce && !terminalDispatch) return { ok: false, reason: 'direct_conflict', ticket: t };
+    if (opts.direct && t.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: 'terminal_claim_takeover_required', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.token !== t.dispatchNonce) return { ok: false, reason: 'token', ticket: t };
     if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
-    const currentDispatch = dispatchState(t);
     const now = new Date().toISOString();
     if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || '').trim() && !currentDispatch.boundAt &&
       !bindDispatchClaimToken(currentDispatch, opts.sessionId, opts.executor, now)) {
@@ -1312,6 +1314,18 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return { ok: false, reason: 'claimed', ticket: t, claim: held };
     }
     t.claim = { by, at: now };
+    if (opts.direct && opts.force && terminalDispatch && held?.by && held.by !== by) {
+      t.claimTakeover = {
+        by,
+        at: now,
+        previousBy: held.by,
+        evidence: {
+          outcome: currentDispatch.outcome,
+          terminalAt: currentDispatch.terminalAt,
+          terminalSource: currentDispatch.terminalSource || null,
+        },
+      };
+    }
     if (t.storyId) {
       const story = getStory(slug, t.storyId);
       if (story) t.storyLogSeenSeq = Number(story.logRevision) || 0;
