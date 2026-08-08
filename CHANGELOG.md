@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.421.0 (2026-08-08)
+
+### sidequest 4.41.2 → 4.41.3
+
+#### Fixes
+
+- Document constrained MCP story log input (SQ-1255)
+  Sidequest MCP schemas now document story-log prefixes and byte limits, with an actionable malformed-entry error.
+- Preserve verified no-op release provenance (SQ-1529)
+  Sidequest records verified no-op releases before isolated worktrees disappear, so they close as no-op work rather than grooming.
+- Fix executor spawn instructions (SQ-1533)
+  Executor definitions now tell orchestrators to pass the dispatch payload unchanged and let its route marker set the model and effort.
+
 ## v3.420.0 (2026-08-08)
 
 ### observability 0.6.0 → 0.6.1
