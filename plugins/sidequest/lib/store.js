@@ -624,7 +624,83 @@ function negativeControlFailureKind(body) {
   if (/\bcollection\s+(?:error|failed|failure)\b/i.test(text)) return "collection_error";
   return "";
 }
-function negativeControlResult(ticket) {
+function changedTestNames(delta, changedPaths) {
+  if (!delta?.workspace) return [];
+  const names = /* @__PURE__ */ new Set();
+  for (const file of changedPaths || []) {
+    if (!isTestSidePath(file)) continue;
+    let source = "";
+    let diff = "";
+    try {
+      source = fs.readFileSync(path.join(delta.workspace.root, file), "utf8");
+    } catch (_) {
+      continue;
+    }
+    try {
+      diff = execFileSync("git", ["diff", "--no-ext-diff", "--unified=0", delta.workspace.base, "--", file], {
+        cwd: delta.workspace.root,
+        encoding: "utf8",
+        windowsHide: true
+      });
+    } catch (_) {
+      continue;
+    }
+    const definitions = source.split(/\r?\n/).map((line, index) => {
+      const match = line.match(/\b(?:test|it|specify)\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+      return match ? { line: index + 1, name: match[2] || match[1] } : null;
+    }).filter(Boolean);
+    try {
+      execFileSync("git", ["cat-file", "-e", `${delta.workspace.base}:${file}`], {
+        cwd: delta.workspace.root,
+        stdio: "ignore",
+        windowsHide: true
+      });
+    } catch (_) {
+      for (const definition of definitions) names.add(definition.name);
+      continue;
+    }
+    let newLine = 0;
+    let changedInHunk = false;
+    const addNearestDefinition = (line) => {
+      const definition = definitions.filter((entry) => entry.line <= line).at(-1);
+      if (definition) names.add(definition.name);
+    };
+    for (const line of diff.split(/\r?\n/)) {
+      const hunk = line.match(/^@@ -\d+(?:,\d+)? \+(\d+)(?:,\d+)? @@/);
+      if (hunk) {
+        if (changedInHunk) addNearestDefinition(newLine);
+        newLine = Number(hunk[1]);
+        changedInHunk = false;
+        continue;
+      }
+      if (line.startsWith("+") && !line.startsWith("+++")) {
+        changedInHunk = true;
+        const addedDefinition = line.match(/\b(?:test|it|specify)(?:\.(?:only|skip|todo))?\s*\(\s*(['"`])((?:\\.|(?!\1).)*)\1/) || line.match(/\bdef\s+(test_[A-Za-z0-9_]+)/);
+        const addedName = addedDefinition?.[2] || addedDefinition?.[1];
+        if (addedName) names.add(addedName);
+        addNearestDefinition(newLine);
+        newLine += 1;
+        continue;
+      }
+      if (line.startsWith("-") && !line.startsWith("---")) {
+        changedInHunk = true;
+        continue;
+      }
+      if (line.startsWith(" ")) newLine += 1;
+    }
+    if (changedInHunk) addNearestDefinition(newLine);
+  }
+  return Array.from(names);
+}
+function negativeControlTestReport(body, expectedTestNames = []) {
+  const details = String(body || "").split(/\r?\n/).map((line) => line.trim().match(/^\[sidequest:negative-control-test\]\s+(.*)$/i)?.[1] || "").filter(Boolean);
+  const unreported = expectedTestNames.filter((name) => !details.some((detail) => {
+    const reportedName = detail.match(/^(failed|unaffected)\s+(.+)$/i)?.[2];
+    return reportedName?.includes(name) === true;
+  }));
+  return unreported;
+}
+function negativeControlResult(ticket, expectedTestNames = []) {
   const claimHolder = String(ticket?.claim?.by || "").trim();
   if (!claimHolder) return { kind: "missing" };
   const comments = Array.isArray(ticket.comments) ? ticket.comments : [];
@@ -645,7 +721,9 @@ function negativeControlResult(ticket) {
     if (failed) {
       if (Number(failed[2]) === 0) return { kind: "zero_failures" };
       const failureKind = negativeControlFailureKind(body);
-      return failureKind ? { kind: failureKind } : { kind: "failed" };
+      if (failureKind) return { kind: failureKind };
+      const unreportedTests = negativeControlTestReport(body, expectedTestNames);
+      return unreportedTests.length ? { kind: "unreported_tests", tests: unreportedTests } : { kind: "failed" };
     }
     if (!malformedMarkerLine) malformedMarkerLine = markerLine;
   }
@@ -667,6 +745,13 @@ function negativeControlRefusal(ticket, result) {
       ok: false,
       reason: "negative_control_zero_failures",
       message: `${ticket.ref} completion refused: failed=0 means tests passed against the pre-change code and do not test the change. ${recipe}`
+    };
+  }
+  if (result.kind === "unreported_tests") {
+    return {
+      ok: false,
+      reason: "negative_control_test_required",
+      message: `${ticket.ref} completion refused: the negative control did not report these added or modified tests: ${result.tests.join(", ")}. ${recipe}`
     };
   }
   if (result.kind === "short_waiver") {
@@ -713,7 +798,7 @@ function completionTreeCheck(slug, ticket, opts) {
     };
   }
   if (changedPaths.some(isTestSidePath) && changedPaths.some((file) => !isTestSidePath(file))) {
-    const negativeControl = negativeControlResult(ticket);
+    const negativeControl = negativeControlResult(ticket, changedTestNames(delta, changedPaths));
     if (negativeControl.kind !== "failed" && negativeControl.kind !== "waived") return negativeControlRefusal(ticket, negativeControl);
   }
   return { ok: true, applicable: true, changedPaths, noOp: !changedPaths.length };
