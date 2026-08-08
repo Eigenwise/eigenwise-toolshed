@@ -222,7 +222,18 @@ Expires: ${checkpoint.expiresAt}`;
     }).trim();
   }
   function integrationGitError(error) {
-    return String(error?.stderr || error?.message || error || "").trim();
+    return String(error?.stderr || error?.stdout || error?.message || error || "").trim();
+  }
+  function unmergedIntegrationPaths(repo) {
+    try {
+      return integrationGit(repo, ["diff", "--name-only", "--diff-filter=U"]).split(/\r?\n/).filter(Boolean);
+    } catch (_) {
+      return [];
+    }
+  }
+  function integrationConflictMessage(error, conflictedPaths) {
+    const failure = integrationGitError(error);
+    return conflictedPaths.length ? `${failure} Conflicted paths: ${conflictedPaths.join(", ")}.` : failure;
   }
   function integrationVerifyLogPath(slug, ticket) {
     const safeRef = String(ticket.ref || ticket.id || "submission").replace(/[^a-zA-Z0-9._-]/g, "_");
@@ -488,17 +499,21 @@ ${verify.outputTail}` : null
         try {
           integrationGit(repo, ["merge", "--no-ff", "--no-edit", pinnedCommit]);
         } catch (error) {
+          const conflictedPaths = unmergedIntegrationPaths(repo);
+          const message = integrationConflictMessage(error, conflictedPaths);
           try {
             integrationGit(repo, ["merge", "--abort"]);
           } catch (_) {
           }
-          return integrationFailure(slug, ticket, { reason: "merge_failed", message: integrationGitError(error), before });
+          return integrationFailure(slug, ticket, { reason: "merge_failed", conflictedPaths, message, before });
         }
       } else if (!submission.noOp) {
         for (const commit of commits) {
           try {
             integrationGit(repo, ["cherry-pick", ...mode === "apply" ? ["--no-commit"] : [], commit]);
           } catch (error) {
+            const conflictedPaths = unmergedIntegrationPaths(repo);
+            const message = integrationConflictMessage(error, conflictedPaths);
             try {
               integrationGit(repo, ["cherry-pick", "--abort"]);
             } catch (_) {
@@ -515,7 +530,8 @@ ${verify.outputTail}` : null
               reason: `${mode}_failed`,
               failedCommit: commit,
               before,
-              message: `${integrationGitError(error)}${rollbackNote}`
+              conflictedPaths,
+              message: `${message}${rollbackNote}`
             });
           }
         }

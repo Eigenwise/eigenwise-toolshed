@@ -251,7 +251,20 @@ function integrationGit(repo: string, args: string[]) {
 }
 
 function integrationGitError(error: any) {
-  return String(error?.stderr || error?.message || error || '').trim();
+  return String(error?.stderr || error?.stdout || error?.message || error || '').trim();
+}
+
+function unmergedIntegrationPaths(repo: string) {
+  try {
+    return integrationGit(repo, ['diff', '--name-only', '--diff-filter=U']).split(/\r?\n/).filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+
+function integrationConflictMessage(error: any, conflictedPaths: string[]) {
+  const failure = integrationGitError(error);
+  return conflictedPaths.length ? `${failure} Conflicted paths: ${conflictedPaths.join(', ')}.` : failure;
 }
 
 function integrationVerifyLogPath(slug: any, ticket: any) {
@@ -537,14 +550,18 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
       try {
         integrationGit(repo, ['merge', '--no-ff', '--no-edit', pinnedCommit]);
       } catch (error: any) {
+        const conflictedPaths = unmergedIntegrationPaths(repo);
+        const message = integrationConflictMessage(error, conflictedPaths);
         try { integrationGit(repo, ['merge', '--abort']); } catch (_) { /* best effort */ }
-        return integrationFailure(slug, ticket, { reason: 'merge_failed', message: integrationGitError(error), before });
+        return integrationFailure(slug, ticket, { reason: 'merge_failed', conflictedPaths, message, before });
       }
     } else if (!submission.noOp) {
       for (const commit of commits) {
         try {
           integrationGit(repo, ['cherry-pick', ...(mode === 'apply' ? ['--no-commit'] : []), commit]);
         } catch (error: any) {
+          const conflictedPaths = unmergedIntegrationPaths(repo);
+          const message = integrationConflictMessage(error, conflictedPaths);
           try { integrationGit(repo, ['cherry-pick', '--abort']); } catch (_) { /* best effort */ }
           let rollbackNote = '';
           if (mode === 'replay') {
@@ -559,7 +576,7 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
             }
           }
           return integrationFailure(slug, ticket, {
-            reason: `${mode}_failed`, failedCommit: commit, before, message: `${integrationGitError(error)}${rollbackNote}`,
+            reason: `${mode}_failed`, failedCommit: commit, before, conflictedPaths, message: `${message}${rollbackNote}`,
           });
         }
       }
