@@ -125,6 +125,40 @@ function submitFixture(ticket: any, worktree: string, commit: string, project: s
 
 void slug;
 
+test('worktree base prefers local main only when it descends from origin/main', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-base-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-base-remote-'));
+  try {
+    const run = (args: string[]) => execFileSync('git', args, { cwd: repository, encoding: 'utf8', windowsHide: true }).trim();
+    run(['init']);
+    run(['config', 'user.name', 'Sidequest Test']);
+    run(['config', 'user.email', 'sidequest-test@example.invalid']);
+    fs.writeFileSync(path.join(repository, 'README.md'), 'fixture\n');
+    run(['add', '.']);
+    run(['commit', '-m', 'base']);
+    run(['branch', '-M', 'main']);
+    execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8', windowsHide: true });
+    run(['remote', 'add', 'origin', remote]);
+    run(['push', '-u', 'origin', 'main']);
+    run(['fetch', 'origin']);
+
+    const ahead = run(['commit-tree', 'HEAD^{tree}', '-p', 'HEAD', '-m', 'local integration']);
+    run(['update-ref', 'refs/heads/main', ahead]);
+    assert.deepEqual(worktrees.preferredWorktreeIntegrationTarget(repository, 'main'), {
+      mode: 'local', upstream: 'main', branch: 'main',
+    });
+
+    const remoteAdvance = run(['commit-tree', 'origin/main^{tree}', '-p', 'origin/main', '-m', 'remote integration']);
+    run(['update-ref', 'refs/remotes/origin/main', remoteAdvance]);
+    assert.deepEqual(worktrees.preferredWorktreeIntegrationTarget(repository, 'main'), {
+      mode: 'remote', upstream: 'origin/main', branch: 'main',
+    });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
 test('worktree sweep matches a submitted 8.3 alias', { skip: process.platform !== 'win32' }, async (context: any) => {
   const worktree = agentWorktree('8dot3-alias');
   try {
