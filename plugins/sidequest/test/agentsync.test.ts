@@ -423,7 +423,7 @@ test('read-only stable executors deny writers while retaining default non-skill 
   for (const file of ['sidequest-exec-dispatch-readonly.md', 'sidequest-exec-readonly-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     const frontmatter = parseExecutorFrontmatter(body);
-    assert.deepStrictEqual(frontmatter.tools, ['default', 'Skill(playbook:verify-discipline)']);
+    assert.equal(Object.hasOwn(frontmatter, 'tools'), false);
     const denied = body.match(/^disallowedTools: (.+)$/m);
     assert.ok(denied, `${file} must carry a disallowedTools line`);
     for (const writer of ['Edit', 'Write', 'NotebookEdit']) {
@@ -438,8 +438,26 @@ test('read-only stable executors deny writers while retaining default non-skill 
 
   for (const file of ['sidequest-exec-dispatch.md', 'sidequest-exec-high.md']) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.deepStrictEqual(parseExecutorFrontmatter(body).tools, ['default', 'Skill(playbook:verify-discipline)']);
+    assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'tools'), false);
     assert.doesNotMatch(body, /^disallowedTools:/m);
+  }
+});
+
+// 4.40.6 emitted `tools: default, Skill(playbook:verify-discipline)` on all twelve
+// definitions. `default` is a --allowedTools CLI sentinel, not a frontmatter tool name, so
+// the line read as an allow-list matching nothing: executors spawned with no Bash and no
+// board MCP tools, and dispatch was dead on every project until 4.40.9. The agent listing
+// rendered those same definitions as "All tools", so nothing upstream of a subagent
+// transcript could show it. No executor may carry a tools line at all.
+test('no executor definition emits a tools allow-list', () => {
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+
+  const definitions = fs.readdirSync(dir).filter((file: string) => file.endsWith('.md'));
+  assert.ok(definitions.length >= 12, `expected the full executor ladder, got ${definitions.length}`);
+  for (const file of definitions) {
+    const body = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.doesNotMatch(body, /^tools:/m, `${file} must not restrict tools; it leaves executors with no Bash and no board tools`);
   }
 });
 
@@ -456,7 +474,7 @@ test('a newly registered board tool needs no agentsync change to reach read-only
 
 test('read-only executor denylists add configured MCP tools without dropping the writers', () => {
   const body = agentsync.renderReadOnlyDispatchAgent('high', ['mcp__notion__search']);
-  assert.deepStrictEqual(parseExecutorFrontmatter(body).tools, ['default', 'Skill(playbook:verify-discipline)']);
+  assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'tools'), false);
   assert.match(body, /^disallowedTools: .*\bEdit\b/m);
   assert.match(body, /^disallowedTools: .*mcp__notion__search/m);
   assert.match(agentsync.renderReadOnlyClaudeAgent('high', ['mcp__plugin_svelte_svelte__*']), /^disallowedTools: .*mcp__plugin_svelte_svelte__\*/m);
@@ -479,7 +497,7 @@ test('stable executors preload only declared skills', () => {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     const frontmatter = parseExecutorFrontmatter(body);
     assert.deepStrictEqual(frontmatter.skills, ['playbook:verify-discipline']);
-    assert.deepStrictEqual(frontmatter.tools, ['default', 'Skill(playbook:verify-discipline)']);
+    assert.equal(Object.hasOwn(frontmatter, 'tools'), false);
   }
 
   const unrestricted = parseExecutorFrontmatter(agentsync.renderExecAgent({
