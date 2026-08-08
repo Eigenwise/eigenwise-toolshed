@@ -424,6 +424,7 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   }
   const MODULE_SOURCE_EXTENSIONS = [".cts", ".cjs", ".mts", ".mjs", ".ts", ".tsx", ".js", ".jsx"];
   const COMMON_MODULE_BASENAMES = /* @__PURE__ */ new Set(["index"]);
+  const MAX_SCOPE_CONSUMER_WARNING_PATHS = 12;
   function sourceModulePath(file) {
     const normalized = String(file).replace(/\\/g, "/");
     return MODULE_SOURCE_EXTENSIONS.includes(path.extname(normalized).toLowerCase()) && !/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)/.test(normalized) && !/\.(?:test|spec)\.[^/]+$/i.test(normalized);
@@ -474,29 +475,6 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     }
     return paths;
   }
-  function exportedSymbols(source) {
-    const symbols = /* @__PURE__ */ new Set();
-    const content = String(source || "");
-    for (const match of content.matchAll(/\bexport\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/g)) symbols.add(match[1] || "");
-    for (const match of content.matchAll(/\bexports\.([A-Za-z_$][\w$]*)\s*=/g)) symbols.add(match[1] || "");
-    for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
-      for (const entry of (match[1] || "").split(",")) {
-        const name = entry.trim().split(/\s+as\s+/i).pop()?.trim();
-        if (/^[A-Za-z_$][\w$]*$/.test(String(name))) symbols.add(String(name));
-      }
-    }
-    return symbols;
-  }
-  function importedSymbols(source) {
-    const symbols = /* @__PURE__ */ new Set();
-    for (const match of String(source || "").matchAll(/\bimport\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"](\.[^'"]+)['"]/g)) {
-      for (const entry of (match[1] || "").split(",")) {
-        const name = entry.trim().split(/\s+as\s+/i)[0]?.trim();
-        if (/^[A-Za-z_$][\w$]*$/.test(String(name))) symbols.add(String(name));
-      }
-    }
-    return symbols;
-  }
   function repositoryFiles(projectPath) {
     try {
       return execFileSync("git", ["ls-files", "-z"], {
@@ -509,42 +487,70 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
       return sourceModuleFiles(projectPath);
     }
   }
+  function packageConsumerHops(packageSources, sourceFiles) {
+    const sources = new Set(packageSources);
+    const importersBySource = /* @__PURE__ */ new Map();
+    for (const sourceFile of packageSources) importersBySource.set(sourceFile, /* @__PURE__ */ new Set());
+    for (const importer of packageSources) {
+      let contents = "";
+      try {
+        contents = fs.readFileSync(importer, "utf8");
+      } catch (_) {
+        continue;
+      }
+      for (const sourceFile of importedModulePaths(contents, importer)) {
+        if (sourceFile !== importer && sources.has(sourceFile)) importersBySource.get(sourceFile)?.add(importer);
+      }
+    }
+    const hops = /* @__PURE__ */ new Map();
+    const pending = sourceFiles.filter((sourceFile) => sources.has(sourceFile));
+    for (const sourceFile of pending) hops.set(sourceFile, 0);
+    for (let index = 0; index < pending.length; index += 1) {
+      const sourceFile = pending[index];
+      if (!sourceFile) continue;
+      const nextHop = (hops.get(sourceFile) || 0) + 1;
+      for (const importer of importersBySource.get(sourceFile) || []) {
+        if (hops.has(importer)) continue;
+        hops.set(importer, nextHop);
+        pending.push(importer);
+      }
+    }
+    return hops;
+  }
   function scopeConsumerWarnings(ticket, projectPath) {
     if (!projectPath || !Array.isArray(ticket?.files)) return [];
     const sourceFiles = normalizeFiles(ticket.files).map((scope) => path.resolve(projectPath, scope)).filter((file) => fs.existsSync(file) && sourceModulePath(file));
     const warnings = /* @__PURE__ */ new Set();
     const declaredPaths = new Set(sourceFiles);
     const packageSources = /* @__PURE__ */ new Map();
-    const loadPackageSources = (packageRoot) => {
-      if (!packageRoot) return [];
-      if (!packageSources.has(packageRoot)) packageSources.set(packageRoot, sourceModuleFiles(packageRoot));
-      return packageSources.get(packageRoot) || [];
-    };
+    const sourceFilesByPackage = /* @__PURE__ */ new Map();
     for (const sourceFile of sourceFiles) {
       const packageRoot = packageRootForScope(projectPath, relativePathWithin(projectPath, sourceFile));
       if (!packageRoot) continue;
-      const sourceSymbols = exportedSymbols(fs.readFileSync(sourceFile, "utf8"));
-      const consumers = /* @__PURE__ */ new Set();
-      for (const importer of loadPackageSources(packageRoot)) {
-        if (importer === sourceFile || scopeIncludesPath(ticket.files, projectPath, importer)) continue;
-        let contents = "";
-        try {
-          contents = fs.readFileSync(importer, "utf8");
-        } catch (_) {
-          continue;
-        }
-        if (importedModulePaths(contents, importer).has(sourceFile)) consumers.add(importer);
-        else if (sourceSymbols.size && [...importedSymbols(contents)].some((symbol) => sourceSymbols.has(symbol))) consumers.add(importer);
+      if (!packageSources.has(packageRoot)) packageSources.set(packageRoot, sourceModuleFiles(packageRoot));
+      const packageFiles = sourceFilesByPackage.get(packageRoot) || [];
+      packageFiles.push(sourceFile);
+      sourceFilesByPackage.set(packageRoot, packageFiles);
+    }
+    for (const [packageRoot, packageFiles] of sourceFilesByPackage) {
+      const consumerHops = [...packageConsumerHops(packageSources.get(packageRoot) || [], packageFiles)].filter(([consumer]) => !scopeIncludesPath(ticket.files, projectPath, consumer)).map(([consumer, hops]) => ({ consumer, hops })).sort((left, right) => left.hops - right.hops || left.consumer.localeCompare(right.consumer));
+      if (consumerHops.length > MAX_SCOPE_CONSUMER_WARNING_PATHS) {
+        warnings.add(`Planning-depth warning: declared scope may omit ${consumerHops.length} in-package consumers, including ${consumerHops.filter(({ hops }) => hops === 1).length} direct importers. Include the relevant paths if this change reaches them.`);
+        continue;
       }
-      for (const consumer of consumers) {
+      for (const { consumer, hops } of consumerHops) {
         const relative = relativePathWithin(projectPath, consumer)?.replace(/\\/g, "/");
-        if (relative) warnings.add(`Planning-depth warning: declared scope may omit in-package consumers: ${relative}. Include the path if this change reaches it.`);
+        if (!relative) continue;
+        const relationship = hops === 1 ? "direct importer" : `${hops}-hop transitive consumer`;
+        warnings.add(`Planning-depth warning: declared scope may omit in-package ${relationship}: ${relative}. Include the path if this change reaches it.`);
       }
     }
     for (const sourceFile of declaredPaths) {
       const basename = path.basename(sourceFile);
       if (COMMON_MODULE_BASENAMES.has(path.parse(basename).name.toLowerCase())) continue;
-      const siblingPaths = repositoryFiles(projectPath).filter((candidate) => candidate !== sourceFile && path.basename(candidate) === basename && !scopeIncludesPath(ticket.files, projectPath, candidate)).map((candidate) => relativePathWithin(projectPath, candidate)?.replace(/\\/g, "/")).filter(Boolean).sort();
+      const packageRoot = packageRootForScope(projectPath, relativePathWithin(projectPath, sourceFile));
+      if (!packageRoot) continue;
+      const siblingPaths = repositoryFiles(projectPath).filter((candidate) => candidate !== sourceFile && relativePathWithin(packageRoot, candidate) !== null && path.basename(candidate) === basename && !scopeIncludesPath(ticket.files, projectPath, candidate)).map((candidate) => relativePathWithin(projectPath, candidate)?.replace(/\\/g, "/")).filter(Boolean).sort();
       if (siblingPaths.length) {
         const sourceRelative = relativePathWithin(projectPath, sourceFile)?.replace(/\\/g, "/");
         warnings.add(`Planning-depth warning: declared path ${sourceRelative} has undeclared same-basename sibling paths: ${siblingPaths.join(", ")}. Check whether they consume this change before dispatch.`);
