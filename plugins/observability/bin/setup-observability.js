@@ -390,10 +390,20 @@ function configuredOptedInProjects(config) {
 function activeDashboardProjects(config, dataDir, options = {}) {
   const now = typeof options.now === 'function' ? options.now() : (options.now ?? Date.now());
   const activityStart = dashboardActivityStart(dataDir, now);
-  const activeNames = grafanaLgtm.activeProjectNames(config?.observability?.sinks?.[DEFAULT_SINK] || {}, {
-    ...options,
-    activityStart,
-  });
+  let activeNames = new Set();
+  try {
+    activeNames = grafanaLgtm.activeProjectNames(config?.observability?.sinks?.[DEFAULT_SINK] || {}, {
+      ...options,
+      activityStart,
+    });
+  } catch (error) {
+    // Which per-project dashboards to provision is cosmetic, but this runs after the
+    // managed processes are already stopped. Letting it throw once left nothing
+    // listening on the observer port and took telemetry from degraded to fully down
+    // (SQ-1525), so degrade to "no per-project dashboards" instead of aborting. Say so
+    // out loud: a silent empty set looks identical to a machine with no active projects.
+    process.stderr.write(`warning: could not determine active dashboard projects, provisioning the global dashboard only: ${error.message}\n`);
+  }
   return projectsWithActivity(configuredOptedInProjects(config), activeNames);
 }
 

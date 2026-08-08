@@ -16,9 +16,20 @@ const VERSION_LABEL = 'dev.eigenwise.workbench.version';
 const CONFIG_VERSION_LABEL = 'dev.eigenwise.workbench.lgtm-config-version';
 const MANAGED_CONFIG_VERSION = '1';
 const PROJECT_ACTIVITY_METRIC = 'claude_code_token_usage_tokens_total';
+const DEFAULT_ACTIVITY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+
+function projectActivityStart(context = {}) {
+  const now = typeof context.now === 'function' ? context.now() : (context.now ?? Date.now());
+  const start = context.activityStart ?? new Date(now - DEFAULT_ACTIVITY_WINDOW_MS).toISOString();
+  if (typeof start !== 'string' || !Number.isFinite(Date.parse(start))) {
+    throw new Error('activityStart must be an ISO-8601 timestamp.');
+  }
+  return start;
+}
 
 function activeProjectNames(config = {}, context = {}) {
   if (context.activeProjectNames) return new Set(context.activeProjectNames);
+  const activityStart = projectActivityStart(context);
   const state = inspect(config, context);
   if (!state?.running) return new Set();
   const docker = context.docker || 'docker';
@@ -27,7 +38,7 @@ function activeProjectNames(config = {}, context = {}) {
   const result = spawn(docker, [
     'exec', runtime.container, 'curl', '--silent', '--show-error', '--fail', '--get',
     '--data-urlencode', `match[]=${PROJECT_ACTIVITY_METRIC}`,
-    '--data-urlencode', `start=${context.activityStart}`,
+    '--data-urlencode', `start=${activityStart}`,
     'http://127.0.0.1:9090/api/v1/series',
   ], { encoding: 'utf8', windowsHide: true });
   if (result.error || result.status !== 0) {

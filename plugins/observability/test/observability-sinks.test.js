@@ -112,18 +112,18 @@ test('prices every active model label and token type from one table', () => {
   assert.match(target.expr, /type="output"/);
   // The advertised ids now share the plain `claude-` prefix with the Anthropic
   // rows, so the gateway panels must still exclude them by name.
-  const gatewayLegends = gatewayModelCostTargets().map(({ legendFormat }) => legendFormat);
-  assert.equal(gatewayLegends.includes('claude-gpt-5.6-terra'), false);
-  assert.equal(gatewayLegends.includes('claude-codex-gpt-5.6-terra'), false);
-  assert.equal(gatewayLegends.includes('claude-opus-5'), true);
-  const gatewayTarget = gatewayModelCostTargets().find(({ legendFormat }) => legendFormat === 'gpt-5.6-terra');
+  const gatewayTargets = gatewayModelCostTargets();
+  assert.equal(gatewayTargets.length, 1);
+  const [gatewayTarget] = gatewayTargets;
+  assert.equal(gatewayTarget.legendFormat, '{{workbench_attribute_model}}');
   assert.match(gatewayTarget.expr, /gateway\.token\.usage/);
-  assert.match(gatewayTarget.expr, /workbench_attribute_model = "gpt-5\.6-terra"/);
+  assert.doesNotMatch(gatewayTarget.expr, /workbench_attribute_model =/);
+  assert.match(gatewayTarget.expr, /workbench_attribute_model "gpt-5\.6-terra"/);
   assert.match(gatewayTarget.expr, /workbench_measurement_input_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_read_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_cache_creation_tokens_value/);
   assert.match(gatewayTarget.expr, /workbench_measurement_output_tokens_value/);
-  assert.ok(gatewayModelCostTargets().every(({ legendFormat }) => !legendFormat.includes('[1m]')));
+  assert.equal((gatewayTarget.expr.match(/sum_over_time/g) || []).length, 4);
   const projectTargets = gatewayProjectCostTargets([{ project_name: 'atlas' }]);
   assert.equal(projectTargets[0].legendFormat, 'atlas');
   assert.match(projectTargets[0].expr, /workbench_attribute_project_name = "atlas"/);
@@ -334,10 +334,10 @@ test('Grafana replaces a stale managed container and can delete its data volume'
   ]);
 });
 
-test('discovers recently active projects from Prometheus series', () => {
+test('discovers recently active projects from Prometheus series with a default start', () => {
   const calls = [];
   const active = grafana.activeProjectNames({}, {
-    activityStart: '2026-07-08T12:00:00.000Z',
+    now: Date.parse('2026-08-07T12:00:00.000Z'),
     spawnSync(command, args) {
       calls.push([command, args]);
       if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}||${grafana.MANAGED_CONFIG_VERSION}|null|null` };
@@ -349,6 +349,7 @@ test('discovers recently active projects from Prometheus series', () => {
   assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'exec']);
   assert.ok(calls[1][1].includes('start=2026-07-08T12:00:00.000Z'));
   assert.ok(calls[1][1].includes('match[]=claude_code_token_usage_tokens_total'));
+  assert.throws(() => grafana.activeProjectNames({}, { activityStart: 'undefined' }), /activityStart must be an ISO-8601 timestamp/);
 });
 
 test('a dashboard reset removes generated files and excludes old activity', (t) => {
@@ -384,10 +385,10 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
   const costByModel = global.panels.find(({ title }) => title === 'Cost by model');
   assert.equal(costByModel.datasource.uid, 'loki');
   assert.equal(costByModel.interval, '$bucket');
-  assert.ok(costByModel.targets.some(({ legendFormat }) => legendFormat === 'gpt-5.6-terra'));
-  assert.ok(costByModel.targets.some(({ legendFormat }) => legendFormat === 'claude-opus-5'));
-  assert.ok(costByModel.targets.every(({ legendFormat }) => !legendFormat.includes('[1m]')));
-  assert.ok(costByModel.targets.every(({ expr }) => expr.includes('gateway.token.usage')));
+  assert.equal(costByModel.targets.length, 1);
+  assert.equal(costByModel.targets[0].legendFormat, '{{workbench_attribute_model}}');
+  assert.match(costByModel.targets[0].expr, /gateway\.token\.usage/);
+  assert.equal((costByModel.targets[0].expr.match(/sum_over_time/g) || []).length, 4);
 
   const totalSpend = global.panels.find(({ title }) => title === 'Total spend');
   assert.equal(totalSpend.datasource.uid, 'loki');

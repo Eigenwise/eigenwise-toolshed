@@ -260,6 +260,43 @@ test('setup mounts generated Grafana dashboards only for active opted-in project
   ]);
 });
 
+test('continues setup when the dashboard activity probe fails', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-lgtm-probe-failure-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const dataDir = path.join(directory, 'data');
+  const projectDir = path.join(directory, 'project');
+  fs.mkdirSync(projectDir, { recursive: true });
+  let ensured = false;
+
+  const result = await setupObservability({
+    projectDir,
+    dataDir,
+    dashboard: true,
+    config: {
+      observability: {
+        dashboard: true,
+        sink: 'grafana-lgtm',
+        projects: [projectDir],
+        optedInProjects: [{ project_id: 'a'.repeat(64), project_name: 'atlas' }],
+      },
+    },
+    dockerAvailable: true,
+    claudeVersion: MIN_CLAUDE_VERSION,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+    applyProjectSettings: false,
+    ensure: async () => { ensured = true; return { enabled: true, started: ['observer', 'collector'] }; },
+    spawnSync(command, args) {
+      if (args[0] === 'exec') return { status: 1, stdout: '' };
+      if (args[0] === 'inspect') return { status: 0, stdout: `true|${LGTM_IMAGE}||${MANAGED_CONFIG_VERSION}|null|null` };
+      return { status: 0, stdout: process.version };
+    },
+  });
+
+  assert.equal(ensured, true);
+  assert.deepEqual(result.runtime.started, ['observer', 'collector']);
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'grafana-dashboards')), ['claude-code-usage.json']);
+});
+
 test('does not generate project dashboards from configured project paths', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-lgtm-setup-empty-registry-'));
   t.after(() => fs.rmSync(directory, { recursive: true, force: true }));

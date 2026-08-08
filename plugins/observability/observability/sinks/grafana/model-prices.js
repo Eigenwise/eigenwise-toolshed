@@ -94,24 +94,39 @@ function escapeLogqlRegex(value) {
   return value.replace(/[\\^$.*+?()[\]{}|]/g, '\\$&');
 }
 
-function gatewayModelCostExpression(model, prices, bucket = '$bucket', extraFilter = '') {
-  const selector = `${GATEWAY_USAGE_SELECTOR}${extraFilter} | workbench_attribute_model = "${model}"`;
-  return Object.entries(prices).map(([type, price]) =>
-    `sum(sum_over_time(${selector} | unwrap workbench_measurement_${GATEWAY_MEASUREMENT_BY_PRICE_TYPE[type]}_value [${bucket}])) * ${price / 1_000_000}`,
+// One leg per token type instead of one per (model, token type). The price moves into a
+// label so a single scan covers every model: 48 legs sharing one unnarrowed selector made
+// Loki reread the whole stream 48 times, measured at 229MB to return one number, against
+// a window holding ~5,500 entries (SQ-1521). Collapsed, the same window reads 18MB.
+function gatewayPriceTemplate(entries, type) {
+  const [first, ...rest] = entries;
+  const priceInCents = ([, prices]) => prices[type] * 100;
+  return `{{ if eq .workbench_attribute_model ${JSON.stringify(first[0])} }}${priceInCents(first)}${rest.map((entry) => `{{ else if eq .workbench_attribute_model ${JSON.stringify(entry[0])} }}${priceInCents(entry)}`).join('')}{{ else }}0{{ end }}`;
+}
+
+function gatewayUsageExpression(entries, type, bucket = '$bucket', extraFilter = '') {
+  const measurement = GATEWAY_MEASUREMENT_BY_PRICE_TYPE[type];
+  const priceTemplate = gatewayPriceTemplate(entries, type);
+  return `sum by (workbench_attribute_model) (sum_over_time(${GATEWAY_USAGE_SELECTOR}${extraFilter} | label_format workbench_price=\`${priceTemplate}\` | workbench_price != "0" | label_format workbench_measurement_priced_value=\`{{ mul .workbench_measurement_${measurement}_value .workbench_price }}\` | unwrap workbench_measurement_priced_value [${bucket}])) / 100000000`;
+}
+
+function gatewayModelCostExpression(entries, bucket = '$bucket', extraFilter = '') {
+  return Object.keys(GATEWAY_MEASUREMENT_BY_PRICE_TYPE).map((type) =>
+    gatewayUsageExpression(entries, type, bucket, extraFilter),
   ).join(' + ');
 }
 
 function gatewayModelCostTargets() {
-  return gatewayModelPriceEntries().map(([model, prices], index) => ({
-    refId: `G${index + 1}`,
+  return [{
+    refId: 'G1',
     datasource: { type: 'loki', uid: 'loki' },
-    expr: gatewayModelCostExpression(model, prices),
-    legendFormat: model,
-  }));
+    expr: gatewayModelCostExpression(gatewayModelPriceEntries()),
+    legendFormat: '{{workbench_attribute_model}}',
+  }];
 }
 
 function gatewayCostExpression(entries, bucket = '$bucket', extraFilter = '') {
-  return entries.map(([model, prices]) => `((${gatewayModelCostExpression(model, prices, bucket, extraFilter)}) or vector(0))`).join(' + ');
+  return `(sum(${gatewayModelCostExpression(entries, bucket, extraFilter)})) or vector(0)`;
 }
 
 function gatewayResolvedCodexCostExpression(bucket = '$bucket') {
