@@ -275,6 +275,22 @@ function integrationVerifyOutputTail(logPath: string) {
   }
 }
 
+function integrationVerifySummary(logPath: string) {
+  const output = fs.readFileSync(logPath, 'utf8');
+  const count = (label: string) => {
+    const match = new RegExp(`^# ${label}[\\t ]+(\\d+)[\\t ]*\\r?$`, 'm').exec(output);
+    return match ? Number(match[1]) : null;
+  };
+  const duration = /^# duration_ms[\t ]+(\d+(?:\.\d+)?)[\t ]*\r?$/m.exec(output);
+  return {
+    total: count('tests'),
+    pass: count('pass'),
+    fail: count('fail'),
+    skipped: count('skipped'),
+    durationMs: duration ? Number(duration[1]) : null,
+  };
+}
+
 function integrationVerifyCommand(slug: any, ticket: any) {
   const recorded = String(ticket.submission?.verify || '').trim();
   const projectPath = String(readMeta(slug)?.path || '').trim();
@@ -314,7 +330,7 @@ function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
   const outputTail = integrationVerifyOutputTail(logPath);
   const timedOut = result?.error?.code === 'ETIMEDOUT';
   if (timedOut) return { status: 'timeout', command, timeoutMs, logPath, outputTail };
-  if (result?.status === 0) return { status: 'passed', command, timeoutMs, logPath, outputTail };
+  if (result?.status === 0) return { status: 'passed', command, timeoutMs, logPath, summary: integrationVerifySummary(logPath) };
   return {
     status: 'failed',
     command,

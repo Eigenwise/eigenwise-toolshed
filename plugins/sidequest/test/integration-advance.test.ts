@@ -458,7 +458,7 @@ test('integrate finalizes after a passing recorded verification command', () => 
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.verify.status, 'passed');
-  assert.match(payload.verify.outputTail, /integration verify passed/);
+  assert.equal(payload.verify.outputTail, undefined);
   assert.ok(fs.existsSync(payload.verify.logPath));
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
 });
