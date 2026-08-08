@@ -65,9 +65,17 @@ function requireVerifyOracle(kind?: any, value?: any, artifact?: any) {
 }
 
 function containsUnquotedSemicolon(command?: any) {
+  return splitVerifyCommands(command).hasSemicolon;
+}
+
+function splitVerifyCommands(command?: any) {
+  const segments: string[] = [];
+  const text = String(command || '');
   let quote = '';
-  for (let index = 0; index < command.length; index += 1) {
-    const character = command[index];
+  let start = 0;
+  let hasSemicolon = false;
+  for (let index = 0; index < text.length; index += 1) {
+    const character = text[index];
     if (character === '\\') {
       index += 1;
       continue;
@@ -80,9 +88,17 @@ function containsUnquotedSemicolon(command?: any) {
       quote = character;
       continue;
     }
-    if (character === ';') return true;
+    const next = text[index + 1];
+    if (character !== ';' && !((character === '&' || character === '|') && next === character)) continue;
+    const segment = text.slice(start, index).trim();
+    if (segment) segments.push(segment);
+    if (character === ';') hasSemicolon = true;
+    start = index + (character === ';' ? 1 : 2);
+    if (character !== ';') index += 1;
   }
-  return false;
+  const segment = text.slice(start).trim();
+  if (segment) segments.push(segment);
+  return { segments, hasSemicolon };
 }
 
 function verifyCommandErrors(value?: any) {
@@ -107,6 +123,9 @@ function verifyCommandErrors(value?: any) {
   }
   if (containsUnquotedSemicolon(command)) {
     errors.push('Verify cannot use `;` command chaining because it behaves differently across shells. Use one command or join dependent steps with `&&`.');
+  }
+  if (/(?:^|(?:&&|\|\|)\s*)npm\s+(?:test|run\s+[^\s;&|]+)\.(?=\s+[A-Z])/.test(command)) {
+    errors.push('Verify cannot append prose after a command. Put the command alone, or use `manual: <what you checked>` for a non-shell check.');
   }
   if (proseStarter || !likelyExecutable) {
     errors.push('Verify must start with a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`. For manual verification, use `manual: <what you checked>` so it is recorded without shell execution.');
@@ -555,27 +574,29 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
       : 'the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.';
   }
 
-  const command = match ? verify.slice(match[0].length).trim() : verify;
+  const commands = splitVerifyCommands(match ? verify.slice(match[0].length) : verify).segments;
   if (!match) return null;
-  const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? 'test' : null;
-  const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
-  const script = npmTest || (npmRun && (npmRun[1] || npmRun[2]));
-  if (script) {
-    let scripts: any;
-    try {
-      scripts = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).scripts;
-    } catch (_) {
-      return `\`${npmTest ? 'npm test' : `npm run ${script}`}\` requires ${path.join(relativePathWithin(projectPath, directory) || '.', 'package.json').replace(/\\/g, '/')}.`;
+  for (const command of commands) {
+    const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? 'test' : null;
+    const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
+    const script = npmTest || (npmRun && (npmRun[1] || npmRun[2]));
+    if (script) {
+      let scripts: any;
+      try {
+        scripts = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).scripts;
+      } catch (_) {
+        return `\`${npmTest ? 'npm test' : `npm run ${script}`}\` requires ${path.join(relativePathWithin(projectPath, directory) || '.', 'package.json').replace(/\\/g, '/')}.`;
+      }
+      if (!scripts || !scripts[script]) {
+        return `\`${npmTest ? 'npm test' : `npm run ${script}`}\` requires a \`${script}\` script in ${path.join(relativePathWithin(projectPath, directory) || '.', 'package.json').replace(/\\/g, '/')}.`;
+      }
+      continue;
     }
-    if (!scripts || !scripts[script]) {
-      return `\`${npmTest ? 'npm test' : `npm run ${script}`}\` requires a \`${script}\` script in ${path.join(relativePathWithin(projectPath, directory) || '.', 'package.json').replace(/\\/g, '/')}.`;
-    }
-    return null;
-  }
 
-  const glob = nodeTestGlob(command);
-  if (glob && !fs.globSync(glob, { cwd: directory }).length) {
-    return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || '.'}.`;
+    const glob = nodeTestGlob(command);
+    if (glob && !fs.globSync(glob, { cwd: directory }).length) {
+      return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || '.'}.`;
+    }
   }
   return null;
 }

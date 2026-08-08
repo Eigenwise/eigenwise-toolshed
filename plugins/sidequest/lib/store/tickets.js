@@ -16,6 +16,7 @@ function createTickets(dependencies) {
     database,
     deleteCachedRow,
     dispatchState,
+    dispatchVerifyCommandError,
     effectiveScope,
     execFileSync,
     executorText,
@@ -734,9 +735,19 @@ function createTickets(dependencies) {
       const nextVerify = patch.executorVerify === void 0 ? t.executorVerify : patch.executorVerify;
       if (patch.executorVerify !== void 0 || patch.executorVerifyKind !== void 0 || patch.executorAttestationArtifact !== void 0) {
         requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
-        t.executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
-        t.executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact");
-        t.executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
+        const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
+        const executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact");
+        const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
+        if (t.claim || dispatchState(t)) {
+          const verifyError = dispatchVerifyCommandError(
+            Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify }),
+            readMeta(slug)?.path
+          );
+          if (verifyError) throw new Error(verifyError);
+        }
+        t.executorVerifyKind = executorVerifyKind;
+        t.executorAttestationArtifact = executorAttestationArtifact;
+        t.executorVerify = executorVerify;
       }
       if (patch.workedBy !== void 0) {
         try {

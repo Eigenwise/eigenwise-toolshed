@@ -836,6 +836,7 @@ const {
   database,
   deleteCachedRow,
   dispatchState,
+  dispatchVerifyCommandError,
   effectiveScope,
   execFileSync,
   executorText,

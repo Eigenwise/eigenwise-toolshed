@@ -4,7 +4,7 @@ function createTickets(dependencies: any) {
   const {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
-    database, deleteCachedRow, dispatchState, effectiveScope, execFileSync, executorText, fs,
+    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, effectiveScope, execFileSync, executorText, fs,
     getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
@@ -802,9 +802,19 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     const nextVerify = patch.executorVerify === undefined ? t.executorVerify : patch.executorVerify;
     if (patch.executorVerify !== undefined || patch.executorVerifyKind !== undefined || patch.executorAttestationArtifact !== undefined) {
       requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
-      t.executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
-      t.executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact');
-      t.executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
+      const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
+      const executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact');
+      const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
+      if (t.claim || dispatchState(t)) {
+        const verifyError = dispatchVerifyCommandError(
+          Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify }),
+          readMeta(slug)?.path,
+        );
+        if (verifyError) throw new Error(verifyError);
+      }
+      t.executorVerifyKind = executorVerifyKind;
+      t.executorAttestationArtifact = executorAttestationArtifact;
+      t.executorVerify = executorVerify;
     }
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
     // ticket). Permissive like the routing fields above: a valid stamp is set, a

@@ -573,6 +573,21 @@ test('dispatch rejects broken npm and node test verifies while add and update on
   const updatedScript = cliJson(['update', missingScript.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
   assert.match(updatedScript.warnings.join('\n'), /npm run missing.*`missing` script/);
 
+  const proseTail = cliResult(['add', '-t', 'prose command tail', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full. Add a test for the dispatch guard.']);
+  assert.strictEqual(proseTail.status, 1);
+  assert.match(proseTail.stderr + proseTail.stdout, /cannot append prose/);
+
+  const semicolon = cliResult(['add', '-t', 'semicolon verify', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full; node --test "test/suite.test.js"']);
+  assert.strictEqual(semicolon.status, 1);
+  assert.match(semicolon.stderr + semicolon.stdout, /cannot use `;` command chaining/);
+
+  const compoundMissingGlob = cliJson(['add', '-t', 'compound missing glob', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full && node --test "test/missing.test.js"']);
+  assert.match(compoundMissingGlob.warnings.join('\n'), /matches no files/);
+  assert.match(store.dispatchVerifyCommandError(compoundMissingGlob.ticket, PROJ), /matches no files/);
+
+  const compound = cliJson(['add', '-t', 'working compound verify', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full && node --test "test/suite.test.js"']);
+  assert.strictEqual(store.dispatchVerifyCommandError(compound.ticket, PROJ), null);
+
   const emptyGlob = cliJson(['add', '-t', 'empty test glob', '--category', 'coding.normal', '--file', 'plugins/bare-suite/test/suite.test.js', '--verify', 'cd plugins/bare-suite && node --test "test/missing.test.js"']);
   assert.match(emptyGlob.warnings.join('\n'), /matches no files/);
   assert.match(store.dispatchVerifyCommandError(emptyGlob.ticket, PROJ), /matches no files/);
@@ -589,6 +604,13 @@ test('dispatch rejects broken npm and node test verifies while add and update on
   const correct = cliJson(['add', '-t', 'working verify', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full']);
   assert.deepStrictEqual(correct.warnings, []);
   assert.strictEqual(store.dispatchVerifyCommandError(correct.ticket, PROJ), null);
+
+  cliJson(['claim', correct.ticket.ref, '--by', 'live-verify-worker', '--direct', '--reason', 'The live verify fixture needs a direct local claim.']);
+  const rejectedLiveUpdate = cliResult(['update', correct.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
+  assert.strictEqual(rejectedLiveUpdate.status, 1);
+  assert.match(rejectedLiveUpdate.stderr + rejectedLiveUpdate.stdout, /dispatch: verify command cannot run/);
+  const manualLiveUpdate = cliJson(['update', correct.ticket.ref, '--verify', 'manual: Checked the test plan while the ticket was claimed.']);
+  assert.strictEqual(manualLiveUpdate.ticket.executorVerify, 'manual: Checked the test plan while the ticket was claimed.');
 
   const refusedDispatch = cliResult(['dispatch', npmTest.ticket.ref]);
   assert.strictEqual(refusedDispatch.status, 1);
