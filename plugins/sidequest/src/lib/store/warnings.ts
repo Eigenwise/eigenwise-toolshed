@@ -662,17 +662,31 @@ function crossTicketStateWarnings(ticket?: any, slug?: any) {
 
 function staleWorktreeCwdWarning(cwd?: any, projectPath?: any, sharedTree?: any) {
   const workingDirectory = String(cwd || '').trim();
-  const normalizedDirectory = workingDirectory.replace(/[\\/]+/g, '/').toLowerCase();
-  const worktreesPath = '/.claude/worktrees/';
-  const containsWorktreesPath = normalizedDirectory.includes(worktreesPath);
-  if (!containsWorktreesPath) return null;
   const projectRoot = String(projectPath || '').trim();
-  const normalizedProjectRoot = projectRoot.replace(/[\\/]+/g, '/').replace(/\/+$/, '').toLowerCase();
-  if (!normalizedProjectRoot || !normalizedDirectory.startsWith(`${normalizedProjectRoot}/.claude/worktrees/`)) return null;
-  if (sharedTree === true) {
-    return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd; it should run from project root ${projectRoot}.`;
+  if (!workingDirectory || !projectRoot) return null;
+  const normalized = (value: string) => {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  };
+  let checkoutRoot = '';
+  let commonDirectory = '';
+  try {
+    checkoutRoot = execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: workingDirectory, encoding: 'utf8', windowsHide: true,
+    }).trim();
+    const commonOutput = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: workingDirectory, encoding: 'utf8', windowsHide: true,
+    }).trim();
+    commonDirectory = path.isAbsolute(commonOutput) ? commonOutput : path.resolve(workingDirectory, commonOutput);
+  } catch (_) {
+    return null;
   }
-  return `Isolated-worktree dispatch: board server cwd ${workingDirectory} is a leftover .claude${path.sep}worktrees cwd, so the dispatch may fail to bind. Restart the session so the board server starts from project root ${projectRoot}.`;
+  if (normalized(checkoutRoot) === normalized(projectRoot)) return null;
+  if (normalized(commonDirectory) !== normalized(path.join(projectRoot, '.git'))) return null;
+  if (sharedTree === true) {
+    return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover linked worktree; it should run from project root ${projectRoot}.`;
+  }
+  return `Isolated-worktree dispatch: board server cwd ${workingDirectory} is a leftover linked worktree, so the dispatch may fail to bind. Restart the session so the board server starts from project root ${projectRoot}.`;
 }
 
 function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {

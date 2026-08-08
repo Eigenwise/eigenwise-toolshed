@@ -180,9 +180,11 @@ sidequest dispatch SQ-3 --allow-repeat-failure
 
 Through MCP, pass `allowRepeatFailure: true` to `dispatch`. The override is recorded on the new dispatch with its timestamp, source, and count of prior no-commit attempts. Use it only after checking why the executor could not see or commit its declared paths. A shared-tree dispatch can be requested with `sharedTree: true` through MCP (or the CLI's `--shared-tree`), and inline work is another supported remedy.
 
-### Stale worktree cwd warnings
+### Worktree placement and stale cwd warnings
 
-If the board server was launched inside a `.claude/worktrees/` path, dispatch warns that spawned executors will inherit that stale working directory. The warning also appears in the executor briefing's flagged-uncertainty packet. It does not block dispatch, and it only covers sessions started inside a worktree, not a later `EnterWorktree` during the session.
+Sidequest creates isolated worktrees under `~/.claude/sidequest/worktrees/<project-id>/` (or `SIDEQUEST_HOME`), outside the project checkout. Project-scoped search, file watching, language servers, and codebase mapping therefore see one copy of the repository. `sidequest worktrees sweep` still lists their absolute paths and removes stale trees. Worktrees created by older Sidequest versions under `<project>/.claude/worktrees/` remain eligible for the same sweep and age out instead of being moved while an executor may still use them.
+
+If the board server was launched inside any linked worktree, dispatch warns that spawned executors will inherit that stale working directory. The warning also appears in the executor briefing's flagged-uncertainty packet. It does not block dispatch, and it only covers sessions started inside a worktree, not a later `EnterWorktree` during the session.
 
 Executors inherit the spawning session's cwd. Shared-tree briefings therefore tell them to bind to the shared checkout before any git or file operation, confirm `git rev-parse --show-toplevel`, and stop to report if the mismatch persists.
 

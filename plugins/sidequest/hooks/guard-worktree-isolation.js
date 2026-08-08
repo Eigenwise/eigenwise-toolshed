@@ -75,16 +75,12 @@ function runtimeModule(name) {
 
 // src/hooks/guard-worktree-isolation.ts
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-var AGENT_WORKTREE = `${import_node_path2.default.sep}.claude${import_node_path2.default.sep}worktrees${import_node_path2.default.sep}agent-`;
 function targetPath(input) {
   const toolInput = input.tool_input;
   if (!isRecord(toolInput)) return "";
   const value = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
   const target = value == null ? "" : String(value);
   return target && import_node_path2.default.isAbsolute(target) ? import_node_path2.default.resolve(target) : "";
-}
-function insideAgentWorktree(target) {
-  return `${target}${import_node_path2.default.sep}`.includes(AGENT_WORKTREE);
 }
 function canonicalPath(value) {
   let candidate = import_node_path2.default.resolve(value);
@@ -144,8 +140,17 @@ function expectation(input, agentId, executor) {
     return null;
   }
 }
+function expectedWorktree(found, repository, agentId) {
+  if (found.expectedWorktree) return found.expectedWorktree;
+  try {
+    const worktrees = require(runtimeModule("worktrees"));
+    return worktrees.agentWorktreePath(repository, agentId || "<agent id>");
+  } catch (_) {
+    return `agent-${agentId || "<agent id>"}`;
+  }
+}
 function refusal(found, target, repoRoot, agentId, cwd) {
-  const expected = found.expectedWorktree || import_node_path2.default.join(repoRoot, ".claude", "worktrees", `agent-${agentId || "<agent id>"}`);
+  const expected = expectedWorktree(found, repoRoot, agentId);
   return [
     `sidequest: refusing this write. ${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
     `  expected worktree: ${expected}`,
@@ -176,6 +181,15 @@ function projectRefusal(found, target) {
     "Do not work around this. End the executor and redispatch the ticket for the correct project."
   ].join("\n");
 }
+function linkedWorktreeRefusal(found, target, actualRoot) {
+  return [
+    `sidequest: refusing this write. ${found.ref} is writing through a different linked worktree.`,
+    `  expected worktree: ${found.expectedWorktree || "(unavailable)"}`,
+    `  actual worktree:   ${actualRoot}`,
+    `  writing to:        ${target}`,
+    "Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket."
+  ].join("\n");
+}
 function main() {
   const input = readStdin();
   if (!input || !WRITE_TOOLS.has(stringField(input, "tool_name"))) return;
@@ -189,14 +203,18 @@ function main() {
     writeDeny("PreToolUse", terminalRefusal(found, target));
     return;
   }
-  if (insideAgentWorktree(target)) return;
   const repo = repoRootFor(target);
   if (!repo) return;
   if (!found) {
     if (!repo.linked) writeDeny("PreToolUse", unknownRefusal(target));
     return;
   }
-  if (repo.linked || found.sharedTree) return;
+  if (found.sharedTree) return;
+  if (repo.linked) {
+    if (found.expectedWorktree && samePath(repo.root, found.expectedWorktree)) return;
+    writeDeny("PreToolUse", linkedWorktreeRefusal(found, target, repo.root));
+    return;
+  }
   if (found.projectPath && !samePath(found.projectPath, repo.root)) {
     writeDeny("PreToolUse", projectRefusal(found, target));
     return;

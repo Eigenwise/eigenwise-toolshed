@@ -8,7 +8,7 @@ const { execFileSync, spawnSync } = require("child_process");
 const db = require("./db.js");
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
-const { preferredWorktreeIntegrationTarget } = require("./worktrees.js");
+const { preferredWorktreeIntegrationTarget, agentWorktreePath } = require("./worktrees.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
@@ -522,6 +522,7 @@ const {
   getStory: (...args) => getStory(...args),
   integrationTarget,
   preferredWorktreeIntegrationTarget,
+  agentWorktreePath,
   legacyCategoryForComplexity: (...args) => legacyCategoryForComplexity(...args),
   listProjects,
   listTickets,

@@ -34,6 +34,7 @@ execFileSync('git', ['add', 'tracked.js'], { cwd: PROJECT });
 execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: PROJECT });
 
 const store = require('../lib/store.js');
+const worktrees = require('../lib/worktrees.js');
 const agentsync = require('../lib/agentsync.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
@@ -389,7 +390,7 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
   assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 0, noAgentId: 0 });
   assert.equal(dispatch.agentId, agentId);
   assert.ok(dispatch.boundAt);
-  assert.equal(dispatch.worktree, path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`));
+  assert.equal(dispatch.worktree, worktrees.agentWorktreePath(PROJECT, agentId));
   assert.equal(dispatch.outcome, 'claimed');
   assert.ok(dispatch.turnEndedAt);
 });
@@ -885,7 +886,7 @@ test('released handbacks carry their committed worktree range into continuation 
   const sessionId = `continuation-${Date.now()}`;
   const agentId = `continuation-${Date.now()}`;
   const branch = `worktree-agent-${agentId}`;
-  const worktree = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
@@ -927,7 +928,7 @@ test('released handbacks carry their committed worktree range into continuation 
       clean: true,
       releasedAt,
       releaseKind: 'handback',
-    });
+    }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     assert.match(briefing, new RegExp(`git cherry-pick ${checkpoint}`));
     assert.match(briefing, /Agent spawns cannot attach a new agent to an existing linked worktree/);
@@ -955,7 +956,7 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
   const sessionId = `continuation-short-path-${Date.now()}`;
   const agentId = `continuation-short-path-${Date.now()}`;
   const branch = `worktree-agent-${agentId}`;
-  const worktree = path.join(projectAlias, '.claude', 'worktrees', `agent-${agentId}`);
+  const worktree = worktrees.agentWorktreePath(projectAlias, agentId);
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(aliasSlug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
@@ -1296,7 +1297,7 @@ test('a prepared dispatch records the commit its run starts from, and where its 
     agentName: 'baseline-agent',
   }).ok, true);
   assert.equal(store.bindDispatchAgent('baseline-session', prepared.ticket.dispatchExecutor, 'a923baseline', 'baseline-agent').ok, true);
-  const worktree = path.join(PROJECT, '.claude', 'worktrees', 'agent-a923baseline');
+  const worktree = worktrees.agentWorktreePath(PROJECT, 'a923baseline');
   assert.equal(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), null, 'a worktree that is not there is not a workspace');
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'agent-a923baseline', worktree, 'HEAD'], { cwd: PROJECT });
   assert.deepEqual(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), { root: worktree, base: head });

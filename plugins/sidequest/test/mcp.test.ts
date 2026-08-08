@@ -3279,7 +3279,8 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
     agentName: agentId,
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
-  const worktree = path.join(repo, '.claude', 'worktrees', `agent-${agentId}`);
+  const worktree = store.getTicket(project, ticket.ref).dispatch.worktree;
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
   gitAt(repo, ['worktree', 'add', '-q', '-b', `agent-${agentId}`, worktree, 'HEAD']);
   assert.equal(store.claimTicket(project, ticket.ref, `by-${agentId}`, {
     token: prepared.token,

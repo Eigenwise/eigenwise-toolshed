@@ -40,6 +40,7 @@ const path = require('path');
 const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('./exec-names.js');
 const crypto = require('crypto');
 const store = require('./store.js');
+const { worktreeRoot } = require('./worktrees.js');
 const { spawnDescription } = store;
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
@@ -651,7 +652,7 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
   if (!sharedTree) return identity;
   return [
     identity,
-    `Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale leftover worktree under ${root}${path.sep}.claude${path.sep}worktrees${path.sep}.`,
+    `Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale linked worktree outside ${root}.`,
     `Before any git or file operation, \`cd "${root}"\` and confirm \`git rev-parse --show-toplevel\` prints \`${root}\`.`,
     'If it still differs after cd, stop and report to the orchestrator. Do not release or write anything in the wrong tree.',
   ].join('\n');
@@ -660,9 +661,11 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
 function ticketIsolationContract(ticket?: any, projectPath?: any) {
   if (!ticket || !ticket.dispatch || ticket.dispatch.sharedTree !== false) return null;
   const root = String(projectPath || '').trim() || '<board project path>';
+  const dispatch = ticket.dispatch;
+  const expected = String(dispatch.worktree || '').trim() || path.join(worktreeRoot(root), 'agent-<your agent id>');
   return [[
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
-    `Expected worktree root: ${root}${path.sep}.claude${path.sep}worktrees${path.sep}agent-<your agent id>`,
+    `Expected worktree root: ${expected}`,
     'Confirm it before your first write, and again after any resume from a coordinator message: `git rev-parse --git-dir` must differ from `git rev-parse --git-common-dir`.',
     `If they match you are in the shared checkout ${root}. Stop. Write nothing, tell the orchestrator this ticket lost its worktree and needs re-dispatch, and name any work you already have staged there so it can be committed out of the shared tree rather than lost.`,
   ].join('\n')];

@@ -859,7 +859,7 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(shared.includes('Worktree identity: shared tree'));
   assert.ok(shared.includes(`Path: ${root}`));
   assert.ok(shared.includes(`Git dir: ${path.join(root, '.git')}`));
-  assert.ok(shared.includes(`Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale leftover worktree under ${root}${path.sep}.claude${path.sep}worktrees${path.sep}.`));
+  assert.ok(shared.includes(`Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale linked worktree outside ${root}.`));
   assert.ok(shared.includes('Before any git or file operation, `cd "' + root + '"` and confirm `git rev-parse --show-toplevel` prints `' + root + '`.'));
   assert.match(shared, /If it still differs after cd, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
 });
@@ -867,8 +867,15 @@ test('briefings surface resolved worktree identities for linked and shared dispa
 test('stale worktree cwd warnings identify dispatch-specific consequences', () => {
   const store = require('../lib/store.js');
   const projectRoot = tmpDir();
+  assert.equal(git(projectRoot, ['init', '--quiet']).status, 0);
+  assert.equal(git(projectRoot, ['config', 'user.email', 'sidequest@example.invalid']).status, 0);
+  assert.equal(git(projectRoot, ['config', 'user.name', 'Sidequest Tests']).status, 0);
+  fs.writeFileSync(path.join(projectRoot, 'README.md'), 'stale cwd fixture\n');
+  assert.equal(git(projectRoot, ['add', '.']).status, 0);
+  assert.equal(git(projectRoot, ['commit', '--quiet', '-m', 'fixture']).status, 0);
   const slug = store.ensureProject(projectRoot, 'stale worktree cwd warning').slug;
-  const staleCwd = path.join(projectRoot, '.CLAUDE', 'WORKTREES', 'SQ-538-river-bluffs');
+  const staleCwd = path.join(os.tmpdir(), `sq-agentsync-stale-${process.pid}-${Date.now()}`);
+  assert.equal(git(projectRoot, ['worktree', 'add', '--detach', staleCwd]).status, 0);
   const originalCwd = process.cwd;
   process.cwd = () => staleCwd;
   try {
@@ -890,6 +897,7 @@ test('stale worktree cwd warnings identify dispatch-specific consequences', () =
     assert.deepStrictEqual(store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: false } }, slug), []);
   } finally {
     process.cwd = originalCwd;
+    assert.equal(git(projectRoot, ['worktree', 'remove', '--force', staleCwd]).status, 0);
   }
 });
 

@@ -1,6 +1,7 @@
 "use strict";
 const path = require("node:path");
 const os = require("node:os");
+const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const nativeFs = require("node:fs");
 const { execFileSync, spawn } = require("node:child_process");
@@ -109,9 +110,44 @@ function canonicalPath(value) {
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   }
 }
+function sidequestHome() {
+  const configured = String(process.env.SIDEQUEST_HOME || "").trim();
+  return configured ? path.resolve(configured) : path.join(os.homedir(), ".claude", "sidequest");
+}
+function worktreeProjectSlug(repository) {
+  const resolved = path.resolve(repository);
+  const normalized = process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  const base = path.basename(resolved).toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40) || "project";
+  const hash = crypto.createHash("sha1").update(normalized).digest("hex").slice(0, 8);
+  return `${base}-${hash}`;
+}
+function worktreeRoot(repository) {
+  const project = canonicalPath(repository);
+  const slug = worktreeProjectSlug(project);
+  const preferred = path.join(sidequestHome(), "worktrees", slug);
+  if (!pathIsInside(project, preferred)) return preferred;
+  const fallback = path.join(os.tmpdir(), "sidequest", "worktrees", slug);
+  if (!pathIsInside(project, fallback)) return fallback;
+  throw new Error(`Sidequest cannot place an isolated worktree outside project root ${project}.`);
+}
+function legacyWorktreeRoot(repository) {
+  return path.join(repository, ".claude", "worktrees");
+}
+function agentWorktreePath(repository, agentId) {
+  return path.join(worktreeRoot(repository), `agent-${String(agentId).trim()}`);
+}
+function namedWorktreePath(repository, name) {
+  const segment = String(name).trim();
+  if (!segment || segment === "." || segment === ".." || path.basename(segment) !== segment) {
+    throw new Error(`invalid worktree name: ${name}`);
+  }
+  return path.join(worktreeRoot(repository), segment);
+}
+function agentWorktreeRoots(repository) {
+  return [worktreeRoot(repository), legacyWorktreeRoot(repository)];
+}
 function persistentStateFile() {
-  const home = String(process.env.SIDEQUEST_HOME || "").trim() || path.join(os.homedir(), ".claude", "sidequest");
-  return path.join(home, "worktree-sweep-failures.json");
+  return path.join(sidequestHome(), "worktree-sweep-failures.json");
 }
 function readFailureState() {
   try {
@@ -207,9 +243,11 @@ function parseWorktreeList(output) {
   }).filter((entry) => entry.worktree);
 }
 function isAgentWorktree(repo, worktree) {
-  const parent = canonicalPath(path.join(repo, ".claude", "worktrees"));
-  const relative = path.relative(parent, canonicalPath(worktree));
-  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) && !relative.includes(path.sep) && path.basename(relative).startsWith("agent-");
+  const candidate = canonicalPath(worktree);
+  return agentWorktreeRoots(repo).some((root) => {
+    const relative = path.relative(canonicalPath(root), candidate);
+    return Boolean(relative) && !relative.startsWith("..") && !path.isAbsolute(relative) && !relative.includes(path.sep) && path.basename(relative).startsWith("agent-");
+  });
 }
 function ticketForWorktree(tickets, entry) {
   const worktree = canonicalPath(entry.worktree);
@@ -383,23 +421,26 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   };
 }
 async function orphanDirectories(repo, registered) {
-  const parent = path.join(repo, ".claude", "worktrees");
-  try {
-    const entries = await fs.readdir(parent, { withFileTypes: true });
-    const directories = entries.filter((entry) => entry.isDirectory()).map((entry) => path.join(parent, entry.name));
-    return Promise.all(directories.filter((directory) => quarantineRetryDue(directory)).filter((directory) => !registered.has(canonicalPath(directory))).map(async (directory) => {
-      try {
-        await fs.lstat(path.join(directory, ".git"));
-        return null;
-      } catch (error) {
-        if (error?.code !== "ENOENT") throw error;
-      }
-      return { worktree: directory, branch: null, orphanDirectory: true };
-    })).then((entries2) => entries2.filter(Boolean));
-  } catch (error) {
-    if (error?.code === "ENOENT") return [];
-    throw error;
-  }
+  const legacyRoot = canonicalPath(legacyWorktreeRoot(repo));
+  const directories = (await Promise.all(agentWorktreeRoots(repo).map(async (parent) => {
+    try {
+      const entries = await fs.readdir(parent, { withFileTypes: true });
+      const legacy = canonicalPath(parent) === legacyRoot;
+      return entries.filter((entry) => entry.isDirectory() && (legacy || entry.name.startsWith("agent-"))).map((entry) => path.join(parent, entry.name));
+    } catch (error) {
+      if (error?.code === "ENOENT") return [];
+      throw error;
+    }
+  }))).flat();
+  return Promise.all(directories.filter((directory) => quarantineRetryDue(directory)).filter((directory) => !registered.has(canonicalPath(directory))).map(async (directory) => {
+    try {
+      await fs.lstat(path.join(directory, ".git"));
+      return null;
+    } catch (error) {
+      if (error?.code !== "ENOENT") throw error;
+    }
+    return { worktree: directory, branch: null, orphanDirectory: true };
+  })).then((entries) => entries.filter(Boolean));
 }
 async function classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) {
   const ticket = ticketForWorktree(tickets, entry);
@@ -430,7 +471,7 @@ async function classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) {
   };
 }
 function backupRoot(options) {
-  return options.backupDir || path.join(process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest"), "worktree-backups");
+  return options.backupDir || path.join(sidequestHome(), "worktree-backups");
 }
 async function backupDirtyWorktree(repo, entry, upstream, options) {
   const agentId = path.basename(entry.path).replace(/^agent-/, "") || "unknown-agent";
@@ -720,7 +761,7 @@ async function advanceLocalIntegrationBranch(repo, options) {
   }, common));
 }
 function quarantineRoot(options) {
-  return options.quarantineDir || path.join(process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest"), "worktree-quarantine");
+  return options.quarantineDir || path.join(sidequestHome(), "worktree-quarantine");
 }
 async function quarantineCandidate(entry, message, options) {
   const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-");
@@ -879,4 +920,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };

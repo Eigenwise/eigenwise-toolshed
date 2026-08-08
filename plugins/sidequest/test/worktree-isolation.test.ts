@@ -106,17 +106,17 @@ test('a write into the shared checkout is refused when the dispatch promised a w
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.ok(reason.includes(ticket.ref), 'names the ticket');
-  assert.ok(reason.includes(path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`)), 'names the expected worktree');
+  assert.ok(reason.includes(ticket.dispatch.worktree), 'names the expected worktree');
   assert.ok(reason.includes(target), 'names the path it refused to write');
   assert.ok(/re-dispatch/.test(reason), 'names the next legal action');
   assert.ok(/did nothing wrong|platform|harness/i.test(reason), 'blames the platform, not the executor');
 });
 
-test('a write inside the agent worktree is allowed', () => {
+test('a write inside the assigned agent worktree is allowed', () => {
   const agentId = 'a2isolated';
-  const { sessionId, executor } = dispatched(agentId);
-  const target = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`, 'README.md');
-  assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, PROJECT)), null);
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const target = path.join(ticket.dispatch.worktree, 'README.md');
+  assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, ticket.dispatch.worktree)), null);
 });
 
 test('a junction alias to the shared checkout is refused', () => {
@@ -134,14 +134,30 @@ test('a junction alias to the shared checkout is refused', () => {
   }
 });
 
-test('a linked worktree remains allowed', () => {
+test('the assigned linked worktree remains allowed', () => {
   const agentId = 'a2linked';
-  const { sessionId, executor } = dispatched(agentId);
-  const linked = path.join(os.tmpdir(), `sq-isolation-linked-${process.pid}-${Date.now()}`);
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = ticket.dispatch.worktree;
   execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
   try {
     const target = path.join(linked, 'README.md');
     assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, linked)), null);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+test('a different linked worktree is refused', () => {
+  const agentId = 'a2foreign';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = path.join(os.tmpdir(), `sq-isolation-foreign-${process.pid}-${Date.now()}`);
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    const target = path.join(linked, 'README.md');
+    const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, linked));
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes(ticket.dispatch.worktree));
+    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes(linked));
   } finally {
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
   }
