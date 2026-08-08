@@ -140,12 +140,21 @@ ${evidence.outputTail}`;
     const dispatch = dispatchState(ticket);
     if (event.kind === "start") {
       claim.verification = { by: claim.by, startedAt: comment.at, command: event.command };
+      delete claim.noOp;
       if (dispatch) delete dispatch.verifyStopAt;
       return;
     }
     if (event.kind !== "complete") return;
+    if (event.noOp) claim.noOp = { by: claim.by, at: comment.at };
+    else delete claim.noOp;
     if (claimVerification(ticket)) delete claim.verification;
     if (dispatch) delete dispatch.verifyStopAt;
+  }
+  function hasNoOpReleaseProof(slug, ticket, by) {
+    const claim = ticket?.claim;
+    if (!claim?.by || claim.by !== by || claim.noOp?.by !== by) return false;
+    const completion = completionTreeCheck(slug, ticket, { explicitNoOp: true });
+    return completion.ok && completion.applicable === true && completion.noOp === true;
   }
   function observedStop(dispatch, claim) {
     if (!dispatch || !["died", "stopped_claimed"].includes(dispatch.outcome) || !dispatch.terminalAt) return false;
@@ -265,6 +274,7 @@ ${evidence.outputTail}`;
     claimReleaseNote,
     claimReleaseVerdict,
     claimVerification,
+    hasNoOpReleaseProof,
     missingIsolatedWorktree,
     observedStop,
     preparedDispatchTtlMs,

@@ -222,7 +222,7 @@ const tools = [
   },
   {
     name: "done",
-    description: "Finish claimed non-repo or active artifact work; repo work submits, released work uses control-plane grooming. body carries the final report. Stamp actual model and effort.",
+    description: "Finish claimed non-repo or active artifact work; repo work submits, while a recorded no-op release can close with done. body carries the final report. Stamp actual model and effort.",
     inputSchema: {
       type: "object",
       properties: {

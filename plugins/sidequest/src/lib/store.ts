@@ -627,6 +627,7 @@ const {
   claimReleaseNote,
   claimReleaseVerdict,
   claimVerification,
+  hasNoOpReleaseProof,
   preparedDispatchTtlMs,
   recordClaimVerification,
   releaseCommentBody,
@@ -1529,7 +1530,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // records readonly:false correctly and then has nothing to hand in. The
     // caller may prove that by inspecting the worktree; a proven no-op closes,
     // anything uncommitted or committed in scope still owes a submission (SQ-923).
-    const provenNoOp = opts.cleanDeclaredScope === true;
+    const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease);
     if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
@@ -1586,6 +1587,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         };
       }
     }
+    const noOpRelease = liveClaim && hasNoOpReleaseProof(slug, t, by);
     const now = new Date().toISOString();
     const previousStatus = t.status;
     let comment = null;
@@ -1599,6 +1601,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       writeOracleExperimentRound(slug, t);
     }
     t.claim = null;
+    if (noOpRelease && dispatch) dispatch.noOpRelease = { by, at: now, claimAt: held?.at || null };
     // Provenance for a claim taken away from its holder rather than handed back,
     // so a later closeout attempt can be refused with an actionable recovery.
     if (opts.claimRelease) {
@@ -1657,6 +1660,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         claimAt: held && held.at ? held.at : null,
         at: now,
         commentId: null,
+        ...(dispatch?.noOpRelease ? { purpose: 'no-op', noOp: dispatch.noOpRelease } : {}),
         ...(opts.completionProvenance || {}),
       };
       if (opts.completionComment) {

@@ -732,6 +732,7 @@ const {
   claimReleaseNote,
   claimReleaseVerdict,
   claimVerification,
+  hasNoOpReleaseProof,
   preparedDispatchTtlMs,
   recordClaimVerification,
   releaseCommentBody,
@@ -1514,7 +1515,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
         claimRelease: t.claimRelease
       };
     }
-    const provenNoOp = opts.cleanDeclaredScope === true;
+    const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch2?.noOpRelease);
     if (executorDone && dispatch2 && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
       return {
         ok: false,
@@ -1569,6 +1570,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
         };
       }
     }
+    const noOpRelease = liveClaim && hasNoOpReleaseProof(slug, t, by);
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const previousStatus = t.status;
     let comment = null;
@@ -1582,6 +1584,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       writeOracleExperimentRound(slug, t);
     }
     t.claim = null;
+    if (noOpRelease && dispatch2) dispatch2.noOpRelease = { by, at: now, claimAt: held?.at || null };
     if (opts.claimRelease) {
       t.claimRelease = Object.assign({ by, at: now, source: opts.source || "store" }, opts.claimRelease);
     }
@@ -1634,6 +1637,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
         claimAt: held && held.at ? held.at : null,
         at: now,
         commentId: null,
+        ...dispatch2?.noOpRelease ? { purpose: "no-op", noOp: dispatch2.noOpRelease } : {},
         ...opts.completionProvenance || {}
       };
       if (opts.completionComment) {

@@ -153,12 +153,22 @@ function createClaims(dependencies: any) {
     const dispatch = dispatchState(ticket);
     if (event.kind === 'start') {
       claim.verification = { by: claim.by, startedAt: comment.at, command: event.command };
+      delete claim.noOp;
       if (dispatch) delete dispatch.verifyStopAt;
       return;
     }
     if (event.kind !== 'complete') return;
+    if (event.noOp) claim.noOp = { by: claim.by, at: comment.at };
+    else delete claim.noOp;
     if (claimVerification(ticket)) delete claim.verification;
     if (dispatch) delete dispatch.verifyStopAt;
+  }
+
+  function hasNoOpReleaseProof(slug?: any, ticket?: any, by?: any) {
+    const claim = ticket?.claim;
+    if (!claim?.by || claim.by !== by || claim.noOp?.by !== by) return false;
+    const completion = completionTreeCheck(slug, ticket, { explicitNoOp: true });
+    return completion.ok && completion.applicable === true && completion.noOp === true;
   }
 
   function observedStop(dispatch?: any, claim?: any) {
@@ -285,6 +295,7 @@ function createClaims(dependencies: any) {
     claimReleaseNote,
     claimReleaseVerdict,
     claimVerification,
+    hasNoOpReleaseProof,
     missingIsolatedWorktree,
     observedStop,
     preparedDispatchTtlMs,

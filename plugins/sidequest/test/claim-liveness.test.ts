@@ -29,6 +29,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.CLAUDE_PROJECT_DIR = PROJECT_DIR;
 
 const store = require('../lib/store.js');
+const worktrees = require('../lib/worktrees.js');
 const db = require('../lib/db.js');
 const { makeCliRunner } = require('./_helpers.js');
 
@@ -62,6 +63,16 @@ function addRouted(title?: any) {
     title,
     description: 'Where: claim liveness fixture. Contract: keep a routed executor claimable and closeable. Verify: inspect persisted board state.',
     category: 'codebase-exploration',
+    files: ['lib/fixture.js'],
+    source: 'cli',
+  });
+}
+
+function addWriteRouted(title?: any) {
+  return store.createTicket(slug, {
+    title,
+    description: 'Where: claim liveness fixture. Contract: keep a routed executor claimable and closeable. Verify: inspect persisted board state.',
+    category: 'coding.normal',
     files: ['lib/fixture.js'],
     source: 'cli',
   });
@@ -360,6 +371,65 @@ test('a shared-tree write dispatch refuses an empty verification completion unle
     body: 'No repository change.',
     cleanDeclaredScope: true,
   }).ok, true);
+});
+
+test('a released no-op dispatch closes after its isolated worktree disappears', () => {
+  const ticket = addWriteRouted('durable no-op release');
+  const agentId = 'no-op-release-agent';
+  const worktree = worktrees.agentWorktreePath(PROJECT_DIR, agentId);
+  claimRouted(ticket, 'no-op-release-executor');
+  git(['worktree', 'add', '--detach', worktree]);
+  const claimed = store.getTicket(slug, ticket.ref);
+  claimed.dispatch.sharedTree = false;
+  claimed.dispatch.agentId = agentId;
+  persist(claimed);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by: 'no-op-release-executor',
+    body: '[sidequest:verify-start] npm run test:full',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by: 'no-op-release-executor',
+    body: '[sidequest:verify-complete] no-op',
+    source: 'mcp',
+  }).ok, true);
+  const verified = store.getTicket(slug, ticket.ref);
+  assert.equal(verified.claim.noOp.by, 'no-op-release-executor');
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'no-op-release-executor', { status: 'todo', source: 'mcp' }).ok, true);
+
+  const released = store.getTicket(slug, ticket.ref);
+  assert.equal(released.dispatch.noOpRelease.by, 'no-op-release-executor');
+  git(['worktree', 'remove', '--force', worktree]);
+  assert.equal(fs.existsSync(worktree), false);
+
+  const completed = store.completeTicket(slug, ticket.ref, 'orchestrator', { body: 'The reported issue was already fixed.', source: 'mcp' });
+  assert.equal(completed.ok, true, completed.message);
+  assert.equal(completed.ticket.completion.purpose, 'no-op');
+  assert.notEqual(completed.ticket.completion.purpose, 'grooming');
+});
+
+test('a changed release cannot use no-op provenance to bypass submission', () => {
+  const ticket = addWriteRouted('changed release still needs submission');
+  claimRouted(ticket, 'changed-release-executor');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = "changed release";\n');
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by: 'changed-release-executor',
+    body: '[sidequest:verify-start] npm run test:full',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by: 'changed-release-executor',
+    body: '[sidequest:verify-complete] no-op',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'changed-release-executor', { status: 'todo', source: 'mcp' }).ok, true);
+
+  const released = store.getTicket(slug, ticket.ref);
+  assert.equal(released.dispatch.noOpRelease, undefined);
+  git(['checkout', '--', 'lib/fixture.js']);
+  const refused = store.completeTicket(slug, ticket.ref, 'orchestrator', { body: 'Repository work was not submitted.', source: 'mcp' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'submission_required');
 });
 
 test('SQ-1328: a shared-tree read-only dispatch closes after a sibling commits in its scope', () => {
