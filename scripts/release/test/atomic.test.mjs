@@ -33,6 +33,54 @@ test('push is the only verb that can change a remote', () => {
   assert.equal(mutatesRemote(['push', '--atomic', 'origin', 'HEAD:main']), true);
 });
 
+test('a held publish lock stops before the local release window changes', async (t) => {
+  const repo = setup(t);
+  const before = repo.remoteRefs();
+  const base = repo.git('rev-parse', 'HEAD');
+  const calls = [];
+  const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
+  const publishLock = {
+    acquire: async () => ({ ok: false, holder: { by: 'another-publisher' } }),
+    release: async () => {
+      throw new Error('a lock that was never acquired must not be released');
+    },
+  };
+
+  await assert.rejects(
+    () => cut({ repoRoot: repo.root, git, push: true, publishLock, skipTests: true, log: () => {} }),
+    /publish lock is held by "another-publisher"/,
+  );
+
+  assert.equal(repo.git('rev-parse', 'HEAD'), base);
+  assert.deepEqual(repo.remoteRefs(), before);
+  assert.deepEqual(calls.filter((call) => call.startsWith('push')), []);
+});
+
+test('--push holds the publish lock across every remote update and releases it afterward', async (t) => {
+  const repo = setup(t);
+  const events = [];
+  const git = createGit({
+    cwd: repo.root,
+    onCommand: (entry) => {
+      if (entry.args[0] === 'push') events.push('push');
+    },
+  });
+  const publishLock = {
+    acquire: async () => {
+      events.push('acquire');
+      return { ok: true };
+    },
+    release: async () => {
+      events.push('release');
+      return { ok: true };
+    },
+  };
+
+  await cut({ repoRoot: repo.root, git, push: true, publishLock, skipTests: true, log: () => {} });
+
+  assert.deepEqual(events, ['acquire', 'push', 'push', 'release']);
+});
+
 test('every remote-changing command happens after the whole release is built', async (t) => {
   const repo = setup(t);
   const calls = [];
@@ -108,13 +156,25 @@ test('a rejected ref rejects the whole push, so the remote never half-publishes'
   repo.git('push', '-q', 'origin', 'refs/tags/v3.208.0');
   repo.git('tag', '-d', 'v3.208.0');
   const before = repo.remoteRefs();
+  const events = [];
+  const publishLock = {
+    acquire: async () => {
+      events.push('acquire');
+      return { ok: true };
+    },
+    release: async () => {
+      events.push('release');
+      return { ok: true };
+    },
+  };
 
   await assert.rejects(
-    () => cut({ repoRoot: repo.root, push: true, skipTests: true, force: true, log: () => {} }),
+    () => cut({ repoRoot: repo.root, push: true, publishLock, skipTests: true, force: true, log: () => {} }),
     /git push .* failed/,
   );
 
   assert.deepEqual(repo.remoteRefs(), before, 'not one ref moved');
+  assert.deepEqual(events, ['acquire', 'release']);
 });
 
 test('a failing suite leaves every remote ref untouched', async (t) => {
