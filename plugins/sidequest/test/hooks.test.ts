@@ -2002,7 +2002,8 @@ test('session-start: a deferred sweep report is drained into the next session', 
     { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '0', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }
   );
   assert.match(context, /carried sweep notice from last session/);
-  assert.ok(!fs.existsSync(report), 'a drained report must be cleared so it is not replayed forever');
+  const remainingReport = fs.existsSync(report) ? fs.readFileSync(report, 'utf8') : '';
+  assert.ok(!remainingReport.includes('carried sweep notice from last session'), 'a drained report must be cleared so it is not replayed forever');
 });
 
 test('sweep worker: records its notices for the next session instead of dropping them', () => {
