@@ -6,6 +6,7 @@ const { randomUUID } = require("node:crypto");
 const { spawn } = require("node:child_process");
 const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60 * 1e3;
 const TERMINATION_GRACE_MS = 1e3;
+const COMMAND_NOT_FOUND_EXIT_CODES = /* @__PURE__ */ new Set([127, 9009]);
 function shellCommand(scriptPath, platform = process.platform) {
   if (platform === "win32") {
     return {
@@ -48,6 +49,12 @@ function markerExitCode(logPath) {
   const matches = [...output.matchAll(/^__SIDEQUEST_VERIFY_EXIT__=(\d+)$/gm)];
   const match = matches.at(-1);
   return match ? Number(match[1]) : null;
+}
+function commandNotFound(logPath, exitCode) {
+  if (COMMAND_NOT_FOUND_EXIT_CODES.has(exitCode)) return true;
+  if (process.platform !== "win32" || exitCode !== 1) return false;
+  const output = fs.readFileSync(logPath, "utf8");
+  return /^'[^']+' is not recognized as an internal or external command,$/m.test(output);
 }
 function closeLog(stream) {
   return new Promise((resolve, reject) => {
@@ -138,6 +145,14 @@ async function runVerifyCapture(command, cwd = process.cwd(), timeoutMillisecond
       exitCode: 2,
       logPath,
       reason: `The command shell exited ${processExitCode ?? "without a code"} before reporting the suite exit code.`
+    };
+  }
+  if (commandNotFound(logPath, exitCode)) {
+    return {
+      status: "could-not-run",
+      exitCode,
+      logPath,
+      reason: `The command shell could not find a command for ${JSON.stringify(command)} (exit code ${exitCode}).`
     };
   }
   return exitCode === 0 ? { status: "passed", exitCode, logPath } : { status: "failed-suite", exitCode, logPath };

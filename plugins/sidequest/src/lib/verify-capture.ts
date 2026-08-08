@@ -24,6 +24,7 @@ type TimeoutOutcome = ChildOutcome | { kind: 'timed-out' };
 
 const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60 * 1_000;
 const TERMINATION_GRACE_MS = 1_000;
+const COMMAND_NOT_FOUND_EXIT_CODES = new Set([127, 9009]);
 
 function shellCommand(scriptPath: string, platform = process.platform) {
   if (platform === 'win32') {
@@ -70,6 +71,14 @@ function markerExitCode(logPath: string) {
   const matches = [...output.matchAll(/^__SIDEQUEST_VERIFY_EXIT__=(\d+)$/gm)];
   const match = matches.at(-1);
   return match ? Number(match[1]) : null;
+}
+
+function commandNotFound(logPath: string, exitCode: number) {
+  if (COMMAND_NOT_FOUND_EXIT_CODES.has(exitCode)) return true;
+  if (process.platform !== 'win32' || exitCode !== 1) return false;
+  // Batch wrappers reduce cmd.exe's usual 9009 to 1, but retain its shell diagnostic.
+  const output = fs.readFileSync(logPath, 'utf8');
+  return /^'[^']+' is not recognized as an internal or external command,$/m.test(output);
 }
 
 function closeLog(stream: WriteStream) {
@@ -174,6 +183,14 @@ async function runVerifyCapture(
       exitCode: 2,
       logPath,
       reason: `The command shell exited ${processExitCode ?? 'without a code'} before reporting the suite exit code.`,
+    };
+  }
+  if (commandNotFound(logPath, exitCode)) {
+    return {
+      status: 'could-not-run',
+      exitCode,
+      logPath,
+      reason: `The command shell could not find a command for ${JSON.stringify(command)} (exit code ${exitCode}).`,
     };
   }
   return exitCode === 0
