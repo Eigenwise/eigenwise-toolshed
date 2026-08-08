@@ -119,6 +119,8 @@ function addPreview(opts, category, complexity) {
     contractWaiver: contractWaiverFromOpts(opts) || false,
     readonly: readonlyFromOpts(opts),
     executorAnchors: opts.anchors || "",
+    executorVerifyKind: opts["verify-kind"],
+    executorAttestationArtifact: opts["attestation-artifact"],
     executorVerify: opts.verify || "",
     storyId: opts.story || null,
     category,
@@ -157,6 +159,8 @@ async function cmdAdd(opts) {
     contractWaiver: contractWaiverFromOpts(opts),
     readonly: readonlyFromOpts(opts),
     executorAnchors: opts.anchors,
+    executorVerifyKind: opts["verify-kind"],
+    executorAttestationArtifact: opts["attestation-artifact"],
     executorVerify: opts.verify,
     storyId: opts.story,
     complexity: opts.complexity,
@@ -268,6 +272,8 @@ async function cmdUpdate(opts, positional) {
   if (opts.readonly !== void 0) patch.readonly = readonlyFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
+  if (opts["verify-kind"] != null) patch.executorVerifyKind = opts["verify-kind"];
+  if (opts["attestation-artifact"] != null) patch.executorAttestationArtifact = opts["attestation-artifact"];
   if (opts.assignee != null) patch.assignee = opts.assignee;
   if (opts.complexity != null) {
     if (!opts.why || String(opts.why).trim().length < WHY_MIN) fail('a changed score needs a fresh motivation — pass --why "<motivation>" (min 20 chars) alongside --complexity');

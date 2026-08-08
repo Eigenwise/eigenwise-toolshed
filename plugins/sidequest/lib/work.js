@@ -13,7 +13,11 @@ function executorPrompt(ticket, taskPrompt) {
   const parts = [base, EXECUTOR_RUN_GUIDANCE, contract];
   if (ticket.executorAnchors) parts.push(`Anchors:
 ${ticket.executorAnchors}`);
-  if (ticket.executorVerify) parts.push(`Verify command:
+  if (ticket.executorVerifyKind === "attestation") {
+    parts.push(`Verify oracle: attestation
+Observed artifact: ${ticket.executorAttestationArtifact}
+Record evidence as \`attestation: ${ticket.executorAttestationArtifact} | <evidence produced> | <what it showed>\`.`);
+  } else if (ticket.executorVerify) parts.push(`Verify command:
 ${ticket.executorVerify}`);
   const prompt = parts.join("\n\n");
   if (prompt.length > NATIVE_PROMPT_MAX) {

@@ -577,9 +577,11 @@ const tools: ToolDefinition[] = [
       const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
       const independentFailures: Array<{ reason: string; message: string }> = [];
       if (!completion.ok) independentFailures.push({ reason: completion.reason, message: completion.message });
-      for (const message of store.verifyCommandErrors(verify)) independentFailures.push({ reason: 'invalid_verify', message });
+      const attestation = ticket.executorVerifyKind === 'attestation';
+      const verifyErrors = attestation ? store.attestationErrors(verify, ticket.executorAttestationArtifact) : store.verifyCommandErrors(verify);
+      for (const message of verifyErrors) independentFailures.push({ reason: 'invalid_verify', message });
       const declaredExecutorVerify = String(ticket.executorVerify || '').trim();
-      if (declaredExecutorVerify && verify !== declaredExecutorVerify) {
+      if (!attestation && declaredExecutorVerify && verify !== declaredExecutorVerify) {
         independentFailures.push({
           reason: 'executor_verify_mismatch',
           message: `submit: refused ${ticket.ref}; verification must match the declared executor verify command.`,

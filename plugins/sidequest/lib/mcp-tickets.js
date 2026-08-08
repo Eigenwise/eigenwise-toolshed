@@ -78,7 +78,9 @@ const tools = [
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
-        verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
+        verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, or the executor attestation evidence at submission." },
+        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification oracle. command runs verify; attestation records observed artifact evidence." },
+        attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required for attestation: the specific URL, file, frame, or returned count observed." },
         storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
         why: { type: "string", description: "Motivation for the complexity score (min 20 chars)." },
@@ -97,7 +99,7 @@ const tools = [
       if (!args.title || !String(args.title).trim()) throw new Error("add: title is required.");
       if (args.model != null || args.effort != null) throw new Error("add: model/effort are not set directly — use category or complexity + why.");
       const { slug, meta } = resolveProject(args.project);
-      const verifyFailures = store.verifyCommandErrors(args.verify);
+      const verifyFailures = store.verifyOracleErrors(args.verifyKind, args.verify, args.attestationArtifact);
       if (verifyFailures.length) {
         return {
           ok: false,
@@ -129,6 +131,8 @@ const tools = [
         contractWaiver: args.contractWaiver,
         readonly: args.readonly,
         executorAnchors: args.anchors,
+        executorVerifyKind: args.verifyKind,
+        executorAttestationArtifact: args.attestationArtifact,
         executorVerify: args.verify,
         storyId: args.storyId,
         complexity: args.complexity,
@@ -166,7 +170,9 @@ const tools = [
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
-        verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, verbatim in the task prompt." },
+        verify: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Exact verify command, or the executor attestation evidence at submission." },
+        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification oracle. command runs verify; attestation records observed artifact evidence." },
+        attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required for attestation: the specific URL, file, frame, or returned count observed." },
         storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },
         why: { type: "string" },
@@ -208,6 +214,8 @@ const tools = [
       if (args.readonly !== void 0) patch.readonly = args.readonly;
       if (args.anchors !== void 0) patch.executorAnchors = args.anchors;
       if (args.verify !== void 0) patch.executorVerify = args.verify;
+      if (args.verifyKind !== void 0) patch.executorVerifyKind = args.verifyKind;
+      if (args.attestationArtifact !== void 0) patch.executorAttestationArtifact = args.attestationArtifact;
       if (args.storyId !== void 0) {
         validateStoryId(args.storyId, true);
         patch.storyId = args.storyId;

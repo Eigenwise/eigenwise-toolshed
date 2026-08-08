@@ -184,6 +184,19 @@ function executorText(...args) {
 function manualVerify(...args) {
   return warningsLayer.manualVerify(...args);
 }
+const VERIFY_ORACLE_KINDS = ["command", "attestation"];
+function normalizeVerifyOracleKind(...args) {
+  return warningsLayer.normalizeVerifyOracleKind(...args);
+}
+function attestationErrors(...args) {
+  return warningsLayer.attestationErrors(...args);
+}
+function verifyOracleErrors(...args) {
+  return warningsLayer.verifyOracleErrors(...args);
+}
+function requireVerifyOracle(...args) {
+  return warningsLayer.requireVerifyOracle(...args);
+}
 function verifyCommandErrors(...args) {
   return warningsLayer.verifyCommandErrors(...args);
 }
@@ -843,7 +856,8 @@ const {
   releaseLock,
   requestedReadonlyOverride,
   requireStatus,
-  requireVerifyCommand,
+  requireVerifyOracle,
+  normalizeVerifyOracleKind,
   saveAssetData,
   ticketLockPath,
   ticketStoryId,
@@ -949,6 +963,11 @@ const {
   getTicket,
   listTickets,
   manualVerify,
+  VERIFY_ORACLE_KINDS,
+  normalizeVerifyOracleKind,
+  attestationErrors,
+  verifyOracleErrors,
+  requireVerifyOracle,
   normalizeDeliveryMode,
   normalizeIntegrationBranch,
   normalizeIntegrationVerifyTimeoutMs,
@@ -2025,6 +2044,10 @@ module.exports = {
   integrateSubmission,
   verifyIntegration,
   effectiveScope,
+  VERIFY_ORACLE_KINDS,
+  normalizeVerifyOracleKind,
+  attestationErrors,
+  verifyOracleErrors,
   verifyCommandErrors,
   verifyCommandError,
   completionTreeCheck,
