@@ -352,11 +352,6 @@ function ticketCloseout(ticket) {
   }
   return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report. For non-repo output, close with done --model ${resolved.runsModel} --effort ${effort}. After submit, keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative. Non-repo done comments still carry the full report. Then stop without a routine SendMessage.`;
 }
-function ticketWorktreeSetup(ticket, slug) {
-  if (!ticket || !ticket.dispatch || ticketIsolation(ticket, ticket.dispatch.sharedTree) !== "worktree") return null;
-  const config = store.boardConfig(slug);
-  return config && config.worktreeSetup ? config.worktreeSetup : null;
-}
 function ticketContinuationPacket(ticket) {
   const continuation = ticket?.dispatch?.continuation;
   if (continuation?.mode === "checkpoint_replay" && Array.isArray(continuation.commits) && continuation.commits.length) {
@@ -536,7 +531,6 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   });
   const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
   const closeout = ticketCloseout(ticket);
-  const worktreeSetup = ticketWorktreeSetup(ticket, slug);
   const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
   const continuation = ticketContinuationPacket(ticket);
@@ -582,7 +576,6 @@ It writes suite output to a temporary file and prints only \`verify=<passed|fail
     ...worktreeIdentity ? [worktreeIdentity] : [],
     ...continuation ? [continuation] : [],
     ...worktreeSync ? [worktreeSync] : [],
-    ...worktreeSetup ? [`Worktree setup (run before verify): ${worktreeSetup}`] : [],
     ...ticketIsolationContract(ticket, project) || [],
     ...experimentLog ? [`Experiment log:
 ${experimentLog}`] : [],

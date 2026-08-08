@@ -227,6 +227,9 @@ async function cmdBoardConfig(opts: any) {
   if (opts['auto-approve-test-scope'] !== undefined) patch.autoApproveTestScope = opts['auto-approve-test-scope'];
   if (opts['auto-approve-scope'] != null) patch.autoApproveScope = opts['auto-approve-scope'];
   if (opts['worktree-setup'] != null) patch.worktreeSetup = opts['worktree-setup'];
+  if (opts['worktree-dependency-paths'] != null) {
+    try { patch.worktreeDependencyPaths = JSON.parse(opts['worktree-dependency-paths']); } catch (_: any) { fail('board-config: --worktree-dependency-paths must be a JSON array of { path, mode } entries.'); }
+  }
   const result = Object.keys(patch).length
     ? store.setBoardConfig(slug, patch)
     : { ok: true, config: store.boardConfig(slug) };
@@ -247,7 +250,8 @@ async function cmdBoardConfig(opts: any) {
   console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
   console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? 'enabled' : 'disabled'}`);
   console.log(`configured scope auto-approval: ${payload.autoApproveScope.length ? payload.autoApproveScope.join(', ') : '(none)'}`);
-  console.log(`worktree setup: ${payload.worktreeSetup || '(none)'}`);
+  console.log(`worktree setup command: ${payload.worktreeSetup || '(none)'}`);
+  console.log(`worktree dependency paths: ${payload.worktreeDependencyPaths.length ? payload.worktreeDependencyPaths.map((dependency: any) => `${dependency.mode} ${dependency.path}`).join(', ') : '(none)'}`);
 }
 
 async function cmdProjects(opts: any) {

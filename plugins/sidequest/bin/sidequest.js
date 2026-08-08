@@ -117,7 +117,7 @@ const HELP_COMMANDS = {
   "cleanup-temp": "sidequest cleanup-temp [--root <path>] [--json]",
   models: "sidequest models [--project <path-or-slug>] [--full] [--json]",
   route: "sidequest route <category> [--ticket SQ-n] [--project <path-or-slug>] --json",
-  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--json]',
+  "board-config": 'sidequest board-config [--always-in-scope path]... [--read-only-denied-tool pattern]... [--auto-approve-scope glob]... [--generated-pairs <json>] [--integration-mode <mode>] [--integration-branch <branch>] [--delivery merge|replay|apply] [--integration-verify-timeout-ms <ms>] [--worktree-isolation|--no-worktree-isolation] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup "command"] [--worktree-dependency-paths <json>] [--json]',
   projects: "sidequest projects [--archived] [--json]",
   routing: "sidequest routing [enabled|disabled] [--project <path-or-slug>] [--json]",
   "archive-board": "sidequest archive-board <board-ref> [--json]",
@@ -298,7 +298,7 @@ Project selection:
     A slug or display name must already be registered. An absolute path to a real
     directory is created on first use, so you can file into another repo's board
     (even one that doesn't exist yet) from anywhere by passing its full path.
-  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>]
+  sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then

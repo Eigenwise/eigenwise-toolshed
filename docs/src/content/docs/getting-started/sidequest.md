@@ -246,6 +246,7 @@ sidequest board-config --no-worktree-isolation
 sidequest board-config --no-auto-approve-test-scope
 sidequest board-config --auto-approve-scope "generated/**"
 sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
+sidequest board-config --worktree-dependency-paths '[{"path":"node_modules","mode":"link"}]'
 ```
 
 A scope request is auto-approved when every requested path sits in a test directory the ticket already reaches: any existing `test/`, `tests/`, `spec/`, `specs/`, or `__tests__/` beside a file the ticket declares, or beside any of its parents up to the repo root. So a ticket owning `plugins/x/src/thing.ts` widens into `plugins/x/test/**` on its own, and one owning `src/synth.cpp` widens into the repo's `tests/**`, but neither reaches the other's. The widening is recorded as a board comment and reviewed at publish. Pass `--no-auto-approve-test-scope` to turn it off. The MCP equivalent is `board_config` with `autoApproveTestScope: false`.
@@ -256,7 +257,7 @@ For opt-in board-specific paths, set one or more `--auto-approve-scope` globs, f
 
 `integrationBranch` defaults to `main`. Set it to the branch your board actually integrates, such as `feat/client-work`; submissions and worktree cleanup then use that branch as their baseline. In local mode it must exist locally. In remote mode `origin/<branch>` must exist locally, so fetch it first. Sidequest refuses a missing configured branch and tells you to create, fetch, or reconfigure it rather than silently falling back to `main`.
 
-`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against the configured local branch without a push. `local` forces that same no-push path. `remote` uses the repository's configured `origin/<branch>` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `integrationBranch: "branch-name"`, `delivery: "merge" | "replay" | "apply"`, `worktreeIsolation: boolean`, and `worktreeSetup: "<one-line command>" | null`.
+`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against the configured local branch without a push. `local` forces that same no-push path. `remote` uses the repository's configured `origin/<branch>` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `integrationBranch: "branch-name"`, `delivery: "merge" | "replay" | "apply"`, `worktreeIsolation: boolean`, `worktreeSetup: "<one-line command>" | null`, and `worktreeDependencyPaths: [{ path: "repo-relative-directory", mode: "link" | "copy" }]`.
 
 ### Delivering submitted work
 
@@ -288,7 +289,7 @@ The refusal lists what would be destroyed and names the only recovery path: firs
 
 :::
 
-`worktreeSetup` is per-project. A nonblank command is retained verbatim and shown in a fresh isolated executor briefing as `Worktree setup (run before verify): ...`; shared-tree dispatches and unset configuration omit it. Sidequest does not execute or shell-escape the command. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it.
+`worktreeSetup` is per-project. Sidequest runs a nonblank command in a new isolated worktree after checkout and before the executor starts, so successful setup output never enters the executor's context. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it. `worktreeDependencyPaths` can also link or copy selected ignored dependency directories from the primary checkout before the command runs. Configure every directory explicitly. A linked or copied dependency tree must be relocatable and safe to share: `node_modules` can work when the lockfile is stable, though each worktree's own install is safer; Python `.venv` directories and CMake build directories embed absolute source paths and must use a per-worktree setup command instead. If any configured path or command fails, Sidequest removes the new worktree and dispatch does not start.
 
 A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
 

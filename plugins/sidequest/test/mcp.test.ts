@@ -627,12 +627,17 @@ test('board_config renames only a board display name', async () => {
   assert.match(rejected.content[0].text, /Board name cannot be empty/);
 });
 
-test('board_config stores and clears a worktree setup command', async () => {
+test('board_config stores and clears worktree provisioning', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-worktree-setup'), 'SQ worktree setup').slug;
   const setup = 'cd plugins/sidequest && npm ci';
-  assert.equal((await callTool('board_config', { project, worktreeSetup: setup })).worktreeSetup, setup);
-  assert.equal((await callTool('board_config', { project })).worktreeSetup, setup);
-  assert.equal((await callTool('board_config', { project, worktreeSetup: null })).worktreeSetup, null);
+  const dependencyPaths = [{ path: 'node_modules', mode: 'copy' }];
+  const configured = await callTool('board_config', { project, worktreeSetup: setup, worktreeDependencyPaths: dependencyPaths });
+  assert.equal(configured.worktreeSetup, setup);
+  assert.deepStrictEqual(configured.worktreeDependencyPaths, dependencyPaths);
+  assert.deepStrictEqual((await callTool('board_config', { project })).worktreeDependencyPaths, dependencyPaths);
+  const cleared = await callTool('board_config', { project, worktreeSetup: null, worktreeDependencyPaths: [] });
+  assert.equal(cleared.worktreeSetup, null);
+  assert.deepStrictEqual(cleared.worktreeDependencyPaths, []);
 });
 
 test('board_config sets the unintegrated worktree salvage age', async () => {

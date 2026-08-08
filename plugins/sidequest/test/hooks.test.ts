@@ -2118,7 +2118,7 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   assert.strictEqual(out.trim(), '', 'should emit nothing when nudge is off');
 });
 
-test('worktree-create places isolated checkouts outside the project and safely reuses them', () => {
+test('worktree-create provisions configured dependencies before dispatch and removes failed worktrees', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-external-worktree-repo-'));
   gitFixture(['init', '--quiet', '-b', 'main'], repo);
   gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
@@ -2126,6 +2126,13 @@ test('worktree-create places isolated checkouts outside the project and safely r
   fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
   gitFixture(['add', 'tracked.txt'], repo);
   gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  fs.mkdirSync(path.join(repo, 'cached-dependency'));
+  fs.writeFileSync(path.join(repo, 'cached-dependency', 'cache.txt'), 'warm\n');
+  const project = store.ensureProject(repo, 'worktree hook provisioning').slug;
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [{ path: 'cached-dependency', mode: 'copy' }],
+    worktreeSetup: 'node -e "require(\'node:fs\').writeFileSync(\'setup-ready.txt\', \'ready\')"',
+  });
   const name = 'agent-hook-test';
   const payload = { hook_event_name: 'WorktreeCreate', session_id: 'hook-test', cwd: repo, name };
   const expected = worktrees.namedWorktreePath(repo, name);
@@ -2137,6 +2144,8 @@ test('worktree-create places isolated checkouts outside the project and safely r
   assert.equal(path.relative(repo, first).startsWith('..'), true);
   assert.equal(worktrees.canonicalPath(gitFixture(['rev-parse', '--show-toplevel'], first)), worktrees.canonicalPath(expected));
   assert.equal(gitFixture(['branch', '--show-current'], first), `worktree-${name}`);
+  assert.equal(fs.readFileSync(path.join(first, 'cached-dependency', 'cache.txt'), 'utf8'), 'warm\n');
+  assert.equal(fs.readFileSync(path.join(first, 'setup-ready.txt'), 'utf8'), 'ready');
 
   const second = execFileSync(process.execPath, [WORKTREE_CREATE], {
     input: JSON.stringify(payload), encoding: 'utf8', env: process.env,
@@ -2144,6 +2153,15 @@ test('worktree-create places isolated checkouts outside the project and safely r
   assert.equal(worktrees.canonicalPath(second), worktrees.canonicalPath(expected));
   gitFixture(['worktree', 'remove', '--force', expected], repo);
   gitFixture(['branch', '-D', `worktree-${name}`], repo);
+
+  store.setBoardConfig(project, { worktreeDependencyPaths: [], worktreeSetup: 'exit 1' });
+  const failingName = 'agent-hook-failure';
+  const failingTarget = worktrees.namedWorktreePath(repo, failingName);
+  assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: 'hook-failure', cwd: repo, name: failingName }),
+    encoding: 'utf8', env: process.env,
+  }), (error: any) => String(error.stderr || '').includes('worktree setup command failed'));
+  assert.equal(fs.existsSync(failingTarget), false);
 });
 
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {

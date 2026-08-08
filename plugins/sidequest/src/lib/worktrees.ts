@@ -114,6 +114,42 @@ function ignoredPathsMissingFromWorktree(repository: string, worktree: string, c
     .sort();
 }
 
+function configuredDependencyDirectory(repository: string, worktree: string, relativePath: string): { source: string; target: string } {
+  const source = path.resolve(repository, relativePath);
+  const target = path.resolve(worktree, relativePath);
+  if (!pathIsInside(repository, source) || !pathIsInside(worktree, target)) {
+    throw new Error(`worktree dependency path must stay inside the repository: ${relativePath}`);
+  }
+  if (!nativeFs.existsSync(source)) throw new Error(`configured worktree dependency path does not exist: ${relativePath}`);
+  if (!nativeFs.statSync(source).isDirectory()) throw new Error(`configured worktree dependency path must be a directory: ${relativePath}`);
+  if (nativeFs.existsSync(target)) throw new Error(`worktree dependency path already exists after checkout: ${relativePath}`);
+  return { source, target };
+}
+
+function provisionDependencyDirectory(repository: string, worktree: string, dependency: { path: string; mode: string }): void {
+  const { source, target } = configuredDependencyDirectory(repository, worktree, dependency.path);
+  nativeFs.mkdirSync(path.dirname(target), { recursive: true });
+  if (dependency.mode === 'copy') {
+    nativeFs.cpSync(source, target, { recursive: true });
+    return;
+  }
+  nativeFs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
+}
+
+function provisionWorktree(repository: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }): void {
+  for (const dependency of config.worktreeDependencyPaths || []) {
+    provisionDependencyDirectory(repository, worktree, dependency);
+  }
+  const setup = String(config.worktreeSetup || '').trim();
+  if (!setup) return;
+  try {
+    execFileSync(setup, { cwd: worktree, encoding: 'utf8', shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch (error: any) {
+    const detail = String(error?.stderr || error?.message || '').trim();
+    throw new Error(`worktree setup command failed: ${setup}${detail ? `\n${detail.slice(0, 1000)}` : ''}`);
+  }
+}
+
 function canonicalPath(value: unknown): string {
   const resolved = path.resolve(String(value));
   const missingSegments: string[] = [];
@@ -1093,4 +1129,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };

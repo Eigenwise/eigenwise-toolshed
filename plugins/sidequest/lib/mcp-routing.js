@@ -407,7 +407,19 @@ const tools = [
         notIntegratedSalvageAgeHours: { type: "integer", minimum: 168, description: "Age before an unintegrated inactive worktree is salvaged and removed (default 168 hours)." },
         autoApproveTestScope: { type: "boolean", description: "Auto-approve reachable test directories (default true)." },
         autoApproveScope: { type: "array", items: { type: "string" }, description: "Repo-relative auto-approved globs." },
-        worktreeSetup: { type: ["string", "null"], description: "One-line isolated-worktree setup; null clears it." }
+        worktreeSetup: { type: ["string", "null"], description: "One-line command Sidequest runs after creating an isolated worktree; null clears it." },
+        worktreeDependencyPaths: {
+          type: "array",
+          description: 'Dependency directories to provision from the primary checkout before dispatch. Each entry is { path: repo-relative directory, mode: "link" | "copy" }.',
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              mode: { type: "string", enum: ["link", "copy"] }
+            },
+            required: ["path", "mode"]
+          }
+        }
       }
     },
     handler(args) {
@@ -426,6 +438,7 @@ const tools = [
       if (args.autoApproveTestScope !== void 0) patch.autoApproveTestScope = args.autoApproveTestScope;
       if (args.autoApproveScope !== void 0) patch.autoApproveScope = args.autoApproveScope;
       if (args.worktreeSetup !== void 0) patch.worktreeSetup = args.worktreeSetup;
+      if (args.worktreeDependencyPaths !== void 0) patch.worktreeDependencyPaths = args.worktreeDependencyPaths;
       const result = Object.keys(patch).length ? store.setBoardConfig(slug, patch) : { ok: true, config: store.boardConfig(slug) };
       if (!result.ok) throw new Error(`board_config: no board "${meta.name}".`);
       return Object.assign({ ok: true, project: slug, projectName: result.config.name }, result.config);

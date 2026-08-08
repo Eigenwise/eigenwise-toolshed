@@ -66,7 +66,7 @@ function toolMutates(name, args) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === "new_board_profile") return args.profile !== void 0;
   if (name === "global_fallback") return args.model !== void 0 || args.effort !== void 0;
-  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0;
+  if (name === "board_config") return args.name !== void 0 || args.alwaysInScope != null || args.generatedPairs !== void 0 || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== void 0 || args.notIntegratedSalvageAgeHours !== void 0 || args.autoApproveTestScope !== void 0 || args.autoApproveScope !== void 0 || args.worktreeSetup !== void 0 || args.worktreeDependencyPaths !== void 0;
   return false;
 }
 function mutationQueueKey(name, args) {

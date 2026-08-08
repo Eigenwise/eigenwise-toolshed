@@ -184,6 +184,30 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     }
     return setup;
   }
+  function normalizeWorktreeDependencyPaths(value) {
+    if (value == null) return [];
+    if (!Array.isArray(value)) throw new Error("worktreeDependencyPaths must be an array of { path, mode } entries.");
+    const seen = /* @__PURE__ */ new Set();
+    const normalized = [];
+    for (const entry of value) {
+      if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+        throw new Error("worktreeDependencyPaths entries must be { path, mode }.");
+      }
+      const dependencyPath = String(entry.path || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
+      if (!dependencyPath || dependencyPath === ".." || dependencyPath.startsWith("../") || dependencyPath.includes("/../") || path.isAbsolute(dependencyPath)) {
+        throw new Error(`worktreeDependencyPaths path must stay inside the board repo: ${entry.path}`);
+      }
+      const mode = String(entry.mode || "").trim().toLowerCase();
+      if (!["link", "copy"].includes(mode)) {
+        throw new Error(`worktreeDependencyPaths mode must be "link" or "copy": ${entry.mode}`);
+      }
+      const key = process.platform === "win32" ? dependencyPath.toLowerCase() : dependencyPath;
+      if (seen.has(key)) throw new Error(`worktreeDependencyPaths cannot configure the same path twice: ${dependencyPath}`);
+      seen.add(key);
+      normalized.push({ path: dependencyPath, mode });
+    }
+    return normalized;
+  }
   function normalizeIntegrationVerifyTimeoutMs(value) {
     if (value == null || value === "") return DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS;
     const timeoutMs = Number(value);
@@ -261,6 +285,7 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
       autoApproveScope: normalizeAutoApproveScope(meta.autoApproveScope),
       worktreeSetup: normalizeWorktreeSetup(meta.worktreeSetup),
+      worktreeDependencyPaths: normalizeWorktreeDependencyPaths(meta.worktreeDependencyPaths),
       profile: {
         id: selected.profile.id,
         name: selected.profile.name,
@@ -320,6 +345,9 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       if (Object.prototype.hasOwnProperty.call(patch, "worktreeSetup")) {
         meta.worktreeSetup = normalizeWorktreeSetup(patch.worktreeSetup);
       }
+      if (Object.prototype.hasOwnProperty.call(patch, "worktreeDependencyPaths")) {
+        meta.worktreeDependencyPaths = normalizeWorktreeDependencyPaths(patch.worktreeDependencyPaths);
+      }
       putProject(slug, meta);
       return { ok: true, config: boardConfig(slug) };
     });
@@ -331,6 +359,6 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
     return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...config && config.alwaysInScope || [], ...paired]));
   }
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeNotIntegratedSalvageAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeNotIntegratedSalvageAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 module.exports = { createConfig };
