@@ -369,23 +369,50 @@ test('story MCP tool rejects missing and invalid identifiers', async () => {
   assert.deepEqual(removed, { ok: false, project, story: null });
 });
 
-test('story contracts are bounded, revisioned, and warn claimed members about drift', async () => {
+test('story contracts keep a durable 256 KiB capacity while reads page with stable metadata', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-contract-'))).slug;
   const story = store.createStory(project, { title: 'Contract packet' });
   const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
   assert.equal(store.claimTicket(project, ticket.ref, 'contract-worker', { direct: true }).ok, true);
 
-  const set = await callTool('story_contract', { project, story: story.ref, contract: 'Decision: preserve briefing order.\nInvariant: no silent rebrief.' });
+  const body = `Decision: ${'測'.repeat(7000)}\nInvariant: retain every byte.`;
+  const set = await callTool('story_contract', { project, story: story.ref, contract: body });
   assert.equal(set.story.contractRevision, 1);
-  const read = await callTool('story_contract', { project, story: story.ref });
-  assert.equal(read.story.executionContract, set.story.executionContract);
+  assert.equal(set.contract.totalBytes, Buffer.byteLength(body, 'utf8'));
+  assert.equal(set.contract.complete, false);
+  assert.ok(set.contract.pageBytes <= 16 * 1024);
+  assert.match(set.contract.sha256, /^[a-f0-9]{64}$/);
+
+  const firstRead = await callTool('story_contract', { project, story: story.ref });
+  const repeatedRead = await callTool('story_contract', { project, story: story.ref });
+  assert.equal(firstRead.contract.revision, repeatedRead.contract.revision);
+  assert.equal(firstRead.contract.sha256, repeatedRead.contract.sha256);
+  assert.equal(firstRead.contract.body, repeatedRead.contract.body);
+
+  let cursor: number | null = 0;
+  let reconstructed = '';
+  while (cursor !== null) {
+    const page = await callTool('story_contract', { project, story: story.ref, cursor });
+    reconstructed += page.contract.body;
+    cursor = page.contract.nextCursor;
+  }
+  assert.equal(reconstructed, body);
+  const ranged = await callTool('story_contract', { project, story: story.ref, cursor: 1, limit: 99 });
+  assert.ok(Buffer.byteLength(ranged.contract.body, 'utf8') <= 99);
+  assert.doesNotMatch(ranged.contract.body, /^�/);
+  const tooSmall = await callToolRaw('story_contract', { project, story: story.ref, limit: 1 });
+  assert.equal(tooSmall.isError, true);
+  assert.match(tooSmall.content[0].text, /at least 4 UTF-8 bytes/);
+
+  const maximum = 'x'.repeat(256 * 1024);
+  assert.equal(store.updateStory(project, story.ref, { executionContract: maximum }).executionContract, maximum);
   assert.throws(
-    () => store.updateStory(project, story.ref, { executionContract: '測'.repeat(2000) }),
-    /4096-byte limit/,
+    () => store.updateStory(project, story.ref, { executionContract: `${maximum}x` }),
+    /durable capacity of 262144 UTF-8 bytes/,
   );
 
   const pulse = await callTool('pulse', { project, ref: ticket.ref });
-  assert.match(pulse.warnings.join('\n'), /execution contract changed from revision 0 to 1/);
+  assert.match(pulse.warnings.join('\n'), /execution contract changed/);
   const changes = await callTool('changes', { project, since: '2000-01-01T00:00:00.000Z' });
   assert.match(changes.tickets.find((entry: any) => entry.ref === ticket.ref).warnings.join('\n'), /execution contract changed/);
 });

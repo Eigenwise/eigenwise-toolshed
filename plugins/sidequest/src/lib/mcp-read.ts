@@ -219,13 +219,16 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'story_contract',
-    description: 'Read or set a story execution contract. Set contract once with frozen decisions, invariants, acceptance evidence, and durable artifact links; omit it to read. Contracts are capped at 4096 UTF-8 bytes.',
+    description: 'Read or set a story execution contract. Durable storage holds 256 KiB UTF-8. Reads return UTF-8-safe pages up to 16 KiB with revision, SHA-256, total bytes, cursor, and completion.',
     inputSchema: {
       type: 'object',
       properties: {
         project: PROJECT_PROP,
         story: { type: 'string', description: 'Story ref or id.' },
-        contract: { type: 'string', description: 'Execution contract body. An empty string clears it.' },
+        contract: { type: 'string', description: 'Execution contract; empty clears. Durable capacity: 256 KiB UTF-8.' },
+        cursor: { type: 'integer', minimum: 0, description: 'Byte cursor from nextCursor; pages do not split UTF-8 characters.' },
+        limit: { type: 'integer', minimum: 4, maximum: 16384, description: 'Page byte limit, 4 bytes through 16 KiB.' },
+        full: { type: 'boolean', description: 'Retains fidelity through pages; never bypasses the 16 KiB ceiling.' },
       },
       required: ['story'],
     },
@@ -235,7 +238,9 @@ const tools: ToolDefinition[] = [
         ? store.getStory(slug, args.story)
         : store.updateStory(slug, args.story, { executionContract: args.contract });
       if (!story) throw new Error(`story_contract: no story "${args.story}" in ${meta.name}`);
-      return { ok: true, project: slug, projectName: meta.name, story };
+      const contract = store.storyExecutionContractPage(story, args);
+      const visibleStory = Object.assign({}, story, { executionContract: contract.body });
+      return { ok: true, project: slug, projectName: meta.name, story: visibleStory, contract };
     },
   },
   {

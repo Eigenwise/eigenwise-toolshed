@@ -52,7 +52,8 @@ function coerceStoryId(slug?: any, val?: any) {
   return story ? story.id : null;
 }
 
-const STORY_EXECUTION_CONTRACT_MAX_BYTES = 4 * 1024;
+const STORY_EXECUTION_CONTRACT_MAX_BYTES = 256 * 1024;
+const STORY_EXECUTION_CONTRACT_PAGE_MAX_BYTES = 16 * 1024;
 const STORY_LOG_ENTRY_TEXT_MAX_BYTES = 16000;
 // Story log entries are durable cross-ticket handoffs. The briefing window fits
 // one maximum-size entry plus its metadata while still bounding older history.
@@ -66,7 +67,7 @@ function normalizeStoryExecutionContract(value?: any) {
   if (!contract) return null;
   const bytes = Buffer.byteLength(contract, 'utf8');
   if (bytes > STORY_EXECUTION_CONTRACT_MAX_BYTES) {
-    throw new Error(`story execution contract exceeds the ${STORY_EXECUTION_CONTRACT_MAX_BYTES}-byte limit.`);
+    throw new Error(`story execution contract exceeds the durable capacity of ${STORY_EXECUTION_CONTRACT_MAX_BYTES} UTF-8 bytes.`);
   }
   return contract;
 }
@@ -76,6 +77,55 @@ function storyExecutionContract(story?: any) {
   return {
     revision: Number(story.contractRevision) || 1,
     body: String(story.executionContract),
+  };
+}
+
+function boundedUtf8Page(body?: any, cursor?: any, limit?: any) {
+  const source = String(body || '');
+  const totalBytes = Buffer.byteLength(source, 'utf8');
+  const requestedCursor = Math.min(Math.max(0, Number(cursor) || 0), totalBytes);
+  const requestedLimit = Math.min(
+    STORY_EXECUTION_CONTRACT_PAGE_MAX_BYTES,
+    Math.max(0, Number(limit) || STORY_EXECUTION_CONTRACT_PAGE_MAX_BYTES),
+  );
+  if (requestedLimit < 4) {
+    throw new RangeError('story execution contract page limit must be at least 4 UTF-8 bytes.');
+  }
+  let byteOffset = 0;
+  let startByte = totalBytes;
+  let text = '';
+  let pageBytes = 0;
+  for (const character of source) {
+    const characterBytes = Buffer.byteLength(character, 'utf8');
+    if (byteOffset < requestedCursor) {
+      byteOffset += characterBytes;
+      continue;
+    }
+    if (startByte === totalBytes) startByte = byteOffset;
+    if (pageBytes + characterBytes > requestedLimit) break;
+    text += character;
+    pageBytes += characterBytes;
+    byteOffset += characterBytes;
+  }
+  const nextCursor = startByte === totalBytes || byteOffset >= totalBytes ? null : byteOffset;
+  return { body: text, startByte, pageBytes, nextCursor, totalBytes };
+}
+
+function storyExecutionContractPage(story?: any, options?: any) {
+  const contract = storyExecutionContract(story);
+  const body = contract?.body || '';
+  const cursor = options?.cursor ?? options?.startByte ?? 0;
+  const rangeLimit = options?.endByte == null ? undefined : Math.max(0, Number(options.endByte) - Number(cursor));
+  const page = boundedUtf8Page(body, cursor, options?.limit ?? rangeLimit);
+  return {
+    revision: contract?.revision || 0,
+    totalBytes: page.totalBytes,
+    sha256: crypto.createHash('sha256').update(body, 'utf8').digest('hex'),
+    cursor: page.startByte,
+    nextCursor: page.nextCursor,
+    complete: page.nextCursor === null,
+    pageBytes: page.pageBytes,
+    body: page.body,
   };
 }
 
@@ -342,6 +392,7 @@ function deleteStory(slug?: any, idOrRef?: any) {
   return {
     STORY_DECISION_LOG_BRIEFING_MAX_BYTES,
     STORY_EXECUTION_CONTRACT_MAX_BYTES,
+    STORY_EXECUTION_CONTRACT_PAGE_MAX_BYTES,
     STORY_LOG_ENTRY_ADVISORY_BYTES,
     STORY_LOG_ENTRY_TEXT_MAX_BYTES,
     appendStoryLogEntry,
@@ -356,6 +407,7 @@ function deleteStory(slug?: any, idOrRef?: any) {
     storyDecisionLog,
     storyDecisionLogWarnings,
     storyExecutionContract,
+    storyExecutionContractPage,
     storyReadPayload,
     updateStory,
   };

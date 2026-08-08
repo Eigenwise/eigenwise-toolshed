@@ -267,6 +267,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   changes: 'Poll ticket changes.',
   ready: 'List ready ticket refs.',
   story: 'Manage stories.',
+  story_contract: 'Read or page a 256 KiB story contract.',
   story_log: 'Read, append, or rotate a story log.',
   checkpoint: 'Record candidate; retain claim.',
   sweepClaims: 'Release dead claims; live claims stay.',
