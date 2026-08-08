@@ -147,6 +147,25 @@ test('the assigned linked worktree remains allowed', () => {
   }
 });
 
+// SQ-1546. Claude Code's own `isolation: worktree` provisions under
+// <project>/.claude/worktrees/agent-<id>, not under sidequest's worktree root,
+// so the guard used to compare the executor's real tree against a path that
+// never existed and deny every write it made once its agent id was bound.
+test('the harness-provisioned agent worktree is allowed even though sidequest would have placed it elsewhere', () => {
+  const agentId = 'a2harnessroot';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const harnessWorktree = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  assert.notEqual(harnessWorktree, ticket.dispatch.worktree, 'fixture must exercise the OTHER root');
+  fs.mkdirSync(path.dirname(harnessWorktree), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', harnessWorktree], { cwd: PROJECT, windowsHide: true });
+  try {
+    const target = path.join(harnessWorktree, 'README.md');
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, harnessWorktree)), null);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', harnessWorktree], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
 test('a different linked worktree is refused', () => {
   const agentId = 'a2foreign';
   const { ticket, sessionId, executor } = dispatched(agentId);

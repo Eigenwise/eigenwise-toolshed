@@ -209,6 +209,21 @@ function agentWorktreePath(repository: string, agentId: string): string {
   return path.join(worktreeRoot(repository), `agent-${String(agentId).trim()}`);
 }
 
+// Sidequest provisions under worktreeRoot(), but Claude Code's own
+// `isolation: worktree` provisions under legacyWorktreeRoot(), and an executor
+// can legitimately be running in either. Anything deciding "is this agent
+// writing where it belongs?" has to accept both, or it refuses a worktree that
+// is present and correct (SQ-1546).
+function agentWorktreeCandidates(repository: string, agentId: string): string[] {
+  const segment = `agent-${String(agentId).trim()}`;
+  return agentWorktreeRoots(repository).map((root) => path.join(root, segment));
+}
+
+function resolvedAgentWorktree(repository: string, agentId: string): string {
+  const existing = agentWorktreeCandidates(repository, agentId).find((candidate) => nativeFs.existsSync(candidate));
+  return existing || agentWorktreePath(repository, agentId);
+}
+
 function namedWorktreePath(repository: string, name: string): string {
   const segment = String(name).trim();
   if (!segment || segment === '.' || segment === '..' || path.basename(segment) !== segment) {
@@ -1134,4 +1149,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };

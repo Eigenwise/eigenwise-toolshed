@@ -120,6 +120,10 @@ function samePath(a, b) {
   };
   return normalize(a) === normalize(b);
 }
+function assignedWorktree(found, actualRoot) {
+  const candidates = found.expectedWorktrees?.length ? found.expectedWorktrees : found.expectedWorktree ? [found.expectedWorktree] : [];
+  return candidates.some((candidate) => samePath(actualRoot, candidate));
+}
 function executorAgent(type) {
   if (!type) return false;
   try {
@@ -144,7 +148,7 @@ function expectedWorktree(found, repository, agentId) {
   if (found.expectedWorktree) return found.expectedWorktree;
   try {
     const worktrees = require(runtimeModule("worktrees"));
-    return worktrees.agentWorktreePath(repository, agentId || "<agent id>");
+    return worktrees.resolvedAgentWorktree(repository, agentId || "<agent id>");
   } catch (_) {
     return `agent-${agentId || "<agent id>"}`;
   }
@@ -211,7 +215,7 @@ function main() {
   }
   if (found.sharedTree) return;
   if (repo.linked) {
-    if (found.expectedWorktree && samePath(repo.root, found.expectedWorktree)) return;
+    if (assignedWorktree(found, repo.root)) return;
     writeDeny("PreToolUse", linkedWorktreeRefusal(found, target, repo.root));
     return;
   }

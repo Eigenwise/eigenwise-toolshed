@@ -11,6 +11,7 @@ interface IsolationExpectation {
   ref: string;
   projectPath: string | null;
   expectedWorktree: string | null;
+  expectedWorktrees?: string[];
   matchedBy: string;
   sharedTree: boolean;
   terminal: boolean;
@@ -65,6 +66,17 @@ function samePath(a: string, b: string): boolean {
   return normalize(a) === normalize(b);
 }
 
+// Sidequest and the harness each provision isolated worktrees under a different
+// root, and an executor may legitimately be in either, so one expected path is
+// not enough to judge by. Falling back to the single path keeps an older store
+// build working (SQ-1546).
+function assignedWorktree(found: IsolationExpectation, actualRoot: string): boolean {
+  const candidates = found.expectedWorktrees?.length
+    ? found.expectedWorktrees
+    : (found.expectedWorktree ? [found.expectedWorktree] : []);
+  return candidates.some((candidate) => samePath(actualRoot, candidate));
+}
+
 function executorAgent(type: string): boolean {
   if (!type) return false;
   try {
@@ -96,8 +108,8 @@ function expectation(input: Record<string, unknown>, agentId: string, executor: 
 function expectedWorktree(found: IsolationExpectation, repository: string, agentId: string): string {
   if (found.expectedWorktree) return found.expectedWorktree;
   try {
-    const worktrees = require(runtimeModule('worktrees')) as { agentWorktreePath: (repo: string, id: string) => string };
-    return worktrees.agentWorktreePath(repository, agentId || '<agent id>');
+    const worktrees = require(runtimeModule('worktrees')) as { resolvedAgentWorktree: (repo: string, id: string) => string };
+    return worktrees.resolvedAgentWorktree(repository, agentId || '<agent id>');
   } catch (_) {
     return `agent-${agentId || '<agent id>'}`;
   }
@@ -171,7 +183,7 @@ function main(): void {
   }
   if (found.sharedTree) return;
   if (repo.linked) {
-    if (found.expectedWorktree && samePath(repo.root, found.expectedWorktree)) return;
+    if (assignedWorktree(found, repo.root)) return;
     writeDeny('PreToolUse', linkedWorktreeRefusal(found, target, repo.root));
     return;
   }

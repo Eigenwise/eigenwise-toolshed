@@ -174,6 +174,14 @@ function legacyWorktreeRoot(repository) {
 function agentWorktreePath(repository, agentId) {
   return path.join(worktreeRoot(repository), `agent-${String(agentId).trim()}`);
 }
+function agentWorktreeCandidates(repository, agentId) {
+  const segment = `agent-${String(agentId).trim()}`;
+  return agentWorktreeRoots(repository).map((root) => path.join(root, segment));
+}
+function resolvedAgentWorktree(repository, agentId) {
+  const existing = agentWorktreeCandidates(repository, agentId).find((candidate) => nativeFs.existsSync(candidate));
+  return existing || agentWorktreePath(repository, agentId);
+}
 function namedWorktreePath(repository, name) {
   const segment = String(name).trim();
   if (!segment || segment === "." || segment === ".." || path.basename(segment) !== segment) {
@@ -958,4 +966,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
