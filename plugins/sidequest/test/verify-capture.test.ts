@@ -38,6 +38,16 @@ test('verify capture executes through the host shell and separates failed suites
     deleteLog(failed);
   }
 
+  const missingCommand = `sidequest-missing-command-${process.pid}-${Date.now()}`;
+  const unavailableCommand = await runVerifyCapture(missingCommand);
+  try {
+    assert.equal(unavailableCommand.status, 'could-not-run');
+    assert.notEqual(unavailableCommand.exitCode, 0);
+    assert.match(unavailableCommand.reason || '', new RegExp(missingCommand));
+  } finally {
+    deleteLog(unavailableCommand);
+  }
+
   const shellEnvironment = process.platform === 'win32' ? 'ComSpec' : 'SHELL';
   const originalShell = process.env[shellEnvironment];
   process.env[shellEnvironment] = path.join(os.tmpdir(), 'sidequest-missing-capture-shell');
