@@ -67,6 +67,10 @@ type ToolDefinition = {
   handler: (args: any) => any | Promise<any>;
 };
 
+function changedCategoryFields(existing: Record<string, unknown>, patch: Record<string, unknown>) {
+  return Object.keys(patch).filter((key) => JSON.stringify(existing[key]) !== JSON.stringify(patch[key]));
+}
+
 const tools: ToolDefinition[] = [
   {
     name: 'profile_list',
@@ -261,10 +265,10 @@ const tools: ToolDefinition[] = [
     inputSchema: {
       type: 'object',
       properties: {
-        project: PROJECT_PROP, profile: { type: 'string' }, id: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
+        id: { type: 'string' }, project: PROJECT_PROP, profile: { type: 'string' }, name: { type: 'string' }, description: { type: 'string' }, contract: { type: 'string' },
         artifactRoots: { type: 'array', items: { type: 'string' }, description: 'Replace shared-tree artifact roots. Empty disables.' },
         routeModel: { type: 'string' }, routeEffort: { type: 'string', enum: store.VALID_EFFORTS },
-        fallbackModel: { type: 'string' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
+        fallbackModel: { type: ['string', 'null'], description: 'Set null to clear the fallback route.' }, fallbackEffort: { type: 'string', enum: store.VALID_EFFORTS }, enabled: { type: 'boolean' }, readonly: { type: 'boolean', description: 'Comment closeout.' },
       },
       required: ['id'],
     },
@@ -277,29 +281,33 @@ const tools: ToolDefinition[] = [
       const localRow = () => layer().rows.find((row: any) => row.id === id) || null;
       if (args.project != null && args.enabled === false) {
         const row = store.setProjectCategory(slug, id, 'DISABLE', {});
-        return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind } };
+        return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind }, changed: ['enabled'] };
       }
       if (args.project != null && args.enabled === true && localRow() && localRow().kind === 'DISABLE') {
         store.removeProjectCategory(slug, id);
-        return { ok: true, project: slug, id, localRow: null };
+        return { ok: true, project: slug, id, localRow: null, changed: ['enabled'] };
       }
       const existing: any = args.project != null ? store.getCategory(id, { project: slug }) : store.routingProfileCategory(args.profile, id);
       if (!existing) throw new Error(`category_edit: no effective category "${args.id}".`);
-      const patch: any = {};
+      const patch: Record<string, unknown> = {};
       for (const key of ['name', 'description', 'contract', 'artifactRoots', 'readonly']) if (args[key] !== undefined) patch[key] = args[key];
       if (args.routeModel !== undefined || args.routeEffort !== undefined) patch.route = { model: args.routeModel === undefined ? existing.route.model : args.routeModel, effort: args.routeEffort === undefined ? existing.route.effort : args.routeEffort };
-      if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
+      if (args.fallbackModel === null) patch.fallback = null;
+      else if (args.fallbackModel !== undefined || args.fallbackEffort !== undefined) patch.fallback = { model: args.fallbackModel === undefined ? existing.fallback && existing.fallback.model : args.fallbackModel, effort: args.fallbackEffort === undefined ? existing.fallback && existing.fallback.effort : args.fallbackEffort };
+      if (args.project == null && args.enabled !== undefined) patch.enabled = args.enabled;
+      const changed = changedCategoryFields(existing, patch);
       if (args.project != null) {
         const prior = localRow();
+        if (!changed.length) return { ok: true, project: slug, id, localRow: prior && { id: prior.id, kind: prior.kind }, changed };
         // Editing a board category forks it into a full, independent copy that no
         // longer follows the shared default (DETACH); a board-only category stays ADD.
         const kind = prior && prior.kind === 'ADD' ? 'ADD' : 'DETACH';
         const row = store.setProjectCategory(slug, id, kind, Object.assign({}, existing, patch, { id }));
-        return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind } };
+        return { ok: true, project: slug, id, localRow: { id: row.id, kind: row.kind }, changed };
       }
-      if (args.enabled !== undefined) patch.enabled = args.enabled;
+      if (!changed.length) return { ok: true, profile: args.profile, id, changed };
       const category = store.setRoutingProfileCategory(args.profile, existing.id, patch);
-      return { ok: true, profile: args.profile, id: category.id, changed: Object.keys(patch) };
+      return { ok: true, profile: args.profile, id: category.id, changed };
     },
   },
   {
