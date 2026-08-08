@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.414.0 (2026-08-08)
+
+### sidequest 4.40.6 → 4.40.7
+
+#### Fixes
+
+- Bind a dispatch to its executor from the claim token (SQ-1413)
+  An isolated dispatch used to bind only when Claude Code's spawn interception could match the launch to a running agent. Concurrent spawns made that match ambiguous and resumed agents never passed through it at all, so the claim was refused as `unbound_dispatch` and the executor died having done nothing. Presenting the prepared dispatch's briefing token at claim now binds the claiming identity directly.
+- Let the declared verify pass before the generated outputs are committed (SQ-1512)
+  `build:check` used to fail on any uncommitted file under `bin`, `lib` or `hooks`, so an executor that edited TypeScript and then ran its declared verify was refused for outputs it had just regenerated correctly. There was no ordering of edit, verify and submit that passed. It now fails only on outputs the build itself changed, which still catches stale committed output in CI while letting correct work through mid-change.
+- Report every independent completion refusal together (SQ-1513)
+  Submit, add, and integrate now report all independently fixable validation failures in one response.
+
 ## v3.413.0 (2026-08-08)
 
 ### sidequest 4.40.5 → 4.40.6
