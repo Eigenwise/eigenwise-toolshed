@@ -14,8 +14,8 @@ function createClaims(dependencies) {
   const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
   const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
   const VERIFY_COMPLETE_COMMENT = "[sidequest:verify-complete]";
-  const VERIFY_COMPLETE_NO_OP_COMMENT = `${VERIFY_COMPLETE_COMMENT} no-op`;
   const VERIFY_COMPLETE_STATUSES = /* @__PURE__ */ new Set(["passed", "failed-suite", "could-not-run"]);
+  const VERIFY_COMPLETE_STATUS_ALIASES = /* @__PURE__ */ new Map([["failed", "failed-suite"]]);
   const NEGATIVE_CONTROL_COMMENT = "[sidequest:negative-control] ";
   const RELEASE_KINDS = /* @__PURE__ */ new Set(["handback"]);
   function technicalBlockerRelease(args) {
@@ -120,12 +120,16 @@ ${evidence.outputTail}`;
       const command = text.slice(VERIFY_START_COMMENT.length).trim();
       return command ? { kind: "start", command } : null;
     }
-    if (text === VERIFY_COMPLETE_COMMENT) return { kind: "complete", noOp: false };
-    if (text === VERIFY_COMPLETE_NO_OP_COMMENT) return { kind: "complete", noOp: true };
-    const status = text.slice(VERIFY_COMPLETE_COMMENT.length).trim();
-    if (VERIFY_COMPLETE_STATUSES.has(status)) return { kind: "complete", noOp: false, status };
     if (text.startsWith(NEGATIVE_CONTROL_COMMENT)) return { kind: "negative-control" };
-    return null;
+    if (!text.startsWith(VERIFY_COMPLETE_COMMENT)) return null;
+    const completion = text.slice(VERIFY_COMPLETE_COMMENT.length);
+    const statusMatch = completion.match(/^\s*([^\s:]+)/);
+    const matchedStatus = statusMatch?.[1];
+    if (!matchedStatus) return { kind: "complete", noOp: false };
+    const status = VERIFY_COMPLETE_STATUS_ALIASES.get(matchedStatus) || matchedStatus;
+    if (status === "no-op") return { kind: "complete", noOp: true };
+    if (VERIFY_COMPLETE_STATUSES.has(status)) return { kind: "complete", noOp: false, status };
+    return { kind: "complete", noOp: false };
   }
   function verificationCompletionCheck(slug, ticket, comment) {
     const event = verificationComment(comment?.body);

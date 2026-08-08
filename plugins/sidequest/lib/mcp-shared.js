@@ -170,7 +170,7 @@ function hasNoOpVerificationEvidence(ticket) {
       verificationStarted = true;
       continue;
     }
-    if (verificationStarted && body === "[sidequest:verify-complete] no-op") return true;
+    if (verificationStarted && /^\[sidequest:verify-complete\]\s+no-op(?=$|[\s:])/.test(body)) return true;
   }
   return false;
 }
@@ -186,7 +186,7 @@ function provenNoOpCloseout(slug, ticket) {
   }
   if (!pending.pending) {
     if (hasNoOpVerificationEvidence(ticket)) return { ok: true, root: workspace.root };
-    return { ok: false, detail: "Post [sidequest:verify-start] <command>, run the declared verify command, then post [sidequest:verify-complete] no-op before closing a no-change dispatch." };
+    return { ok: false, detail: "Post [sidequest:verify-start] <command>, run the declared verify command, then post [sidequest:verify-complete] no-op: <evidence> before closing a no-change dispatch." };
   }
   const detail = [
     pending.working.length ? `uncommitted ${pathList(pending.working)}` : null,

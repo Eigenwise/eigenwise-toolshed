@@ -373,6 +373,30 @@ test('a shared-tree write dispatch refuses an empty verification completion unle
   }).ok, true);
 });
 
+test('verification completions accept statuses, evidence, and the legacy bare marker', () => {
+  const completions = [
+    '[sidequest:verify-complete] passed: 885 tests, 884 passed, 1 skipped, 0 failed (92.7s).',
+    '[sidequest:verify-complete] failed-suite Focused check passed: node --test fixture.test.js (21/21).',
+    '[sidequest:verify-complete] failed: focused suite failed after 21 passing tests.',
+    '[sidequest:verify-complete] pytest: 1720 passed, 25 skipped, 3 deselected, exit 0.',
+    '[sidequest:verify-complete]',
+  ];
+  for (const [index, body] of completions.entries()) {
+    const by = `completion-evidence-${index}`;
+    const ticket = addWriteRouted(`completion evidence ${index}`);
+    claimRouted(ticket, by);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = ${100 + index};\n`);
+    assert.equal(store.addComment(slug, ticket.ref, {
+      by,
+      body: '[sidequest:verify-start] node --test test/fixture.test.js',
+      source: 'mcp',
+    }).ok, true);
+    assert.equal(store.addComment(slug, ticket.ref, { by, body, source: 'mcp' }).ok, true, body);
+    assert.equal(store.getTicket(slug, ticket.ref).claim.verification, undefined, body);
+    git(['checkout', '--', 'lib/fixture.js']);
+  }
+});
+
 test('a released no-op dispatch closes after its isolated worktree disappears', () => {
   const ticket = addWriteRouted('durable no-op release');
   const agentId = 'no-op-release-agent';
@@ -390,7 +414,7 @@ test('a released no-op dispatch closes after its isolated worktree disappears', 
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {
     by: 'no-op-release-executor',
-    body: '[sidequest:verify-complete] no-op',
+    body: '[sidequest:verify-complete] no-op: focused regression passed 1/1, 0 failed, 0 skipped.',
     source: 'mcp',
   }).ok, true);
   const verified = store.getTicket(slug, ticket.ref);

@@ -767,7 +767,8 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(briefing, /integrator owns the merged-tree full gate/);
   assert.match(briefing, /Verify liveness: immediately before running the exact verify command/);
   assert.match(briefing, /\[sidequest:verify-start\] <command>/);
-  assert.match(briefing, /\[sidequest:verify-complete\] could-not-run/);
+  assert.match(briefing, /\[sidequest:verify-complete\] <passed\|failed-suite\|failed\|could-not-run\|no-op>: <evidence>/);
+  assert.match(briefing, /status first and evidence after the colon/);
   assert.match(briefing, /Billable resources: when this work creates a cloud pod, VM, or other billable external resource, comment its id on the ticket immediately and terminate it before every stop, including error paths\./);
   assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report\./);
   assert.match(briefing, /keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative/);

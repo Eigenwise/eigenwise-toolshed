@@ -603,7 +603,7 @@ function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
       ok: false,
       reason: 'empty_declared_scope',
       declaredFiles,
-      message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(', ')}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op; otherwise make and verify the scoped change before completing.`,
+      message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(', ')}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed-suite|failed|could-not-run>: <evidence>.`,
     };
   }
   if (changedPaths.some(isTestSidePath) && changedPaths.some((file: string) => !isTestSidePath(file))) {
