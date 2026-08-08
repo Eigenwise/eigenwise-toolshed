@@ -866,6 +866,7 @@ test('briefings surface resolved worktree identities for linked and shared dispa
 
 test('stale worktree cwd warnings identify dispatch-specific consequences', () => {
   const store = require('../lib/store.js');
+  const worktrees = require('../lib/worktrees.js');
   const projectRoot = tmpDir();
   assert.equal(git(projectRoot, ['init', '--quiet']).status, 0);
   assert.equal(git(projectRoot, ['config', 'user.email', 'sidequest@example.invalid']).status, 0);
@@ -874,30 +875,41 @@ test('stale worktree cwd warnings identify dispatch-specific consequences', () =
   assert.equal(git(projectRoot, ['add', '.']).status, 0);
   assert.equal(git(projectRoot, ['commit', '--quiet', '-m', 'fixture']).status, 0);
   const slug = store.ensureProject(projectRoot, 'stale worktree cwd warning').slug;
-  const staleCwd = path.join(os.tmpdir(), `sq-agentsync-stale-${process.pid}-${Date.now()}`);
-  assert.equal(git(projectRoot, ['worktree', 'add', '--detach', staleCwd]).status, 0);
+  const staleWorktrees = [
+    path.join(os.tmpdir(), `sq-agentsync-stale-${process.pid}-${Date.now()}`),
+    path.join(projectRoot, '.claude', 'worktrees', 'agent-legacy'),
+    worktrees.agentWorktreePath(projectRoot, 'agent-state-root'),
+  ];
+  for (const staleWorktree of staleWorktrees) {
+    fs.mkdirSync(path.dirname(staleWorktree), { recursive: true });
+    assert.equal(git(projectRoot, ['worktree', 'add', '--detach', staleWorktree]).status, 0);
+  }
   const originalCwd = process.cwd;
-  process.cwd = () => staleCwd;
   try {
-    const sharedWarning = store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: true } }, slug).join('\n');
-    assert.match(sharedWarning, /Shared-tree dispatch/);
-    assert.match(sharedWarning, /has no worktree of its own/);
-    assert.match(sharedWarning, /whatever cwd it inherits/);
-    assert.match(sharedWarning, /leftover/);
-    assert.ok(sharedWarning.includes(projectRoot));
+    for (const staleCwd of staleWorktrees) {
+      process.cwd = () => staleCwd;
+      const sharedWarning = store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: true } }, slug).join('\n');
+      assert.match(sharedWarning, /Shared-tree dispatch/);
+      assert.match(sharedWarning, /has no worktree of its own/);
+      assert.match(sharedWarning, /whatever cwd it inherits/);
+      assert.match(sharedWarning, /leftover/);
+      assert.ok(sharedWarning.includes(projectRoot));
 
-    const isolatedWarning = store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: false } }, slug).join('\n');
-    assert.match(isolatedWarning, /Isolated-worktree dispatch/);
-    assert.match(isolatedWarning, /may fail to bind/);
-    assert.match(isolatedWarning, /Restart the session/);
-    assert.doesNotMatch(isolatedWarning, /Shared-tree dispatch/);
+      const isolatedWarning = store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: false } }, slug).join('\n');
+      assert.match(isolatedWarning, /Isolated-worktree dispatch/);
+      assert.match(isolatedWarning, /may fail to bind/);
+      assert.match(isolatedWarning, /Restart the session/);
+      assert.doesNotMatch(isolatedWarning, /Shared-tree dispatch/);
+    }
 
     process.cwd = () => projectRoot;
     assert.deepStrictEqual(store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: true } }, slug), []);
     assert.deepStrictEqual(store.dispatchUncertaintyWarnings({ dispatch: { sharedTree: false } }, slug), []);
   } finally {
     process.cwd = originalCwd;
-    assert.equal(git(projectRoot, ['worktree', 'remove', '--force', staleCwd]).status, 0);
+    for (const staleWorktree of staleWorktrees) {
+      assert.equal(git(projectRoot, ['worktree', 'remove', '--force', staleWorktree]).status, 0);
+    }
   }
 });
 
