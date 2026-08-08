@@ -42,6 +42,8 @@ The documented TypeScript LSP `diagnostics: false` setting is user-scoped and di
 
 Push diagnostics also ignore `tsconfig` scoping. A path filter on the project side is therefore unavailable. We cannot selectively suppress diagnostics for deleted agent worktrees while retaining the diagnostics needed for the active worktree.
 
+Relocating the worktrees is not available either. We checked the shipped binary rather than assuming: `.claude/worktrees` appears as a literal in 23 places, there is no environment variable or settings key that overrides it, and the worktree validation rejects anything that is "not directly under a .claude/worktrees directory". So the location is fixed by design, which is why the lifecycle fix below matters more than any option we could set.
+
 ## Requested fixes
 
 1. **Highest priority:** stop pushing diagnostics for paths that no longer exist, or drop the in-memory TypeScript project when its worktree root is removed. This would remove both the false findings and the repeated context cost without disabling valid diagnostics.
