@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 'use strict';
 
+const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
@@ -93,7 +94,44 @@ function defaultSink() {
   };
 }
 
-function installedPluginVersion() {
+function compareVersions(left, right) {
+  const parts = (value) => String(value || '').match(/\d+/g)?.slice(0, 3).map(Number) || [];
+  const leftParts = parts(left);
+  const rightParts = parts(right);
+  for (let index = 0; index < 3; index += 1) {
+    const difference = (leftParts[index] || 0) - (rightParts[index] || 0);
+    if (difference !== 0) return difference;
+  }
+  return 0;
+}
+
+function installedPluginVersion(home = os.homedir()) {
+  try {
+    const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
+    const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
+    const installations = registry.plugins?.['observability@eigenwise-toolshed'];
+    if (!Array.isArray(installations)) return null;
+    return installations
+      .map((installation) => installation?.version)
+      .filter((version) => typeof version === 'string')
+      .sort((left, right) => compareVersions(right, left))[0] || null;
+  } catch {
+    return null;
+  }
+}
+
+function outboxIsStalled(outboxHealth, retryIntervalMs, now = Date.now()) {
+  if (Number(outboxHealth?.pending_count) <= 0) return false;
+  const lastAttemptAt = Date.parse(outboxHealth?.last_attempt_at || '');
+  return Number.isFinite(lastAttemptAt) && now - lastAttemptAt > retryIntervalMs;
+}
+
+function observerVersionError(pluginVersion, installedVersion) {
+  if (!installedVersion || compareVersions(pluginVersion, installedVersion) >= 0) return null;
+  return new Error(`Observer plugin ${pluginVersion} is older than installed version ${installedVersion}.`);
+}
+
+function ownPluginVersion() {
   return require('../.claude-plugin/plugin.json').version;
 }
 
@@ -102,7 +140,10 @@ function createObserver(options = {}) {
   const port = Number(options.port === undefined ? 14319 : options.port);
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid observer port: ${options.port}`);
   const maxBodyBytes = Math.max(1024, Number(options.maxBodyBytes) || 1024 * 1024);
-  const pluginVersion = options.pluginVersion || installedPluginVersion();
+  const pluginVersion = options.pluginVersion || ownPluginVersion();
+  const getInstalledPluginVersion = options.getInstalledPluginVersion || (() => installedPluginVersion(options.home));
+  const outboxRetryIntervalMs = Math.max(250, Number(options.outboxIntervalMs) || 1000);
+  const staleObserverError = () => observerVersionError(pluginVersion, getInstalledPluginVersion());
   const overriddenOutbox = options.outboxEndpoint
     ? { enabled: true, endpoint: options.outboxEndpoint, headers: options.outboxHeaders || {}, allowRemote: false }
     : null;
@@ -130,20 +171,25 @@ function createObserver(options = {}) {
   });
 
   let maintenanceStatus = { failed: false, lastRunAt: null };
+  let retireOutdatedObserver = () => {};
   const server = http.createServer(async (request, response) => {
     try {
       const url = new URL(request.url, `http://${host}:${port || 80}`);
       if (request.method === 'GET' && url.pathname === '/health') {
         const [outboxHealth] = store.queryView('outbox_health', { limit: 1 });
-        jsonResponse(response, 200, {
-          ok: true,
+        const versionError = staleObserverError();
+        const outboxStalled = outbox.enabled && outboxIsStalled(outboxHealth, outboxRetryIntervalMs);
+        jsonResponse(response, versionError || outboxStalled ? 503 : 200, {
+          ok: !versionError && !outboxStalled,
           pid: process.pid,
           pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
           outbox: outboxHealth,
           storage: store.storageMetrics(),
           maintenance: maintenanceStatus,
+          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : undefined,
         });
+        if (versionError) setImmediate(retireOutdatedObserver);
         return;
       }
 
@@ -206,7 +252,9 @@ function createObserver(options = {}) {
   let outboxTimer = null;
   let maintenanceStartTimer = null;
   let maintenanceTimer = null;
+  let staleVersionTimer = null;
   let maintaining = false;
+  let retiring = false;
   let drainingSpool = false;
   const spoolPath = options.hookSpoolFile || process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath();
   const drainSpool = () => {
@@ -223,6 +271,19 @@ function createObserver(options = {}) {
   const drainOutbox = () => outbox.enabled
     ? outboxDrainer.flush().catch(() => null)
     : Promise.resolve(null);
+  retireOutdatedObserver = () => {
+    if (retiring || !staleObserverError()) return;
+    retiring = true;
+    if (maintenanceStartTimer) clearTimeout(maintenanceStartTimer);
+    if (maintenanceTimer) clearInterval(maintenanceTimer);
+    if (spoolTimer) clearInterval(spoolTimer);
+    if (outboxTimer) clearInterval(outboxTimer);
+    if (staleVersionTimer) clearInterval(staleVersionTimer);
+    if (started && server.listening) {
+      started = false;
+      server.close(() => { if (ownsStore) store.close(); });
+    }
+  };
   const runMaintenance = () => {
     if (maintaining) return null;
     maintaining = true;
@@ -247,6 +308,8 @@ function createObserver(options = {}) {
     store,
     async start() {
       if (started) return server.address();
+      const versionError = staleObserverError();
+      if (versionError) throw versionError;
       await new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen(port, host, () => {
@@ -267,9 +330,11 @@ function createObserver(options = {}) {
       if (typeof spoolTimer.unref === 'function') spoolTimer.unref();
       if (outbox.enabled) {
         void drainOutbox();
-        outboxTimer = setInterval(() => { void drainOutbox(); }, Math.max(250, Number(options.outboxIntervalMs) || 1000));
+        outboxTimer = setInterval(() => { void drainOutbox(); }, outboxRetryIntervalMs);
         if (typeof outboxTimer.unref === 'function') outboxTimer.unref();
       }
+      staleVersionTimer = setInterval(retireOutdatedObserver, outboxRetryIntervalMs);
+      if (typeof staleVersionTimer.unref === 'function') staleVersionTimer.unref();
       return server.address();
     },
     async close() {
@@ -288,6 +353,10 @@ function createObserver(options = {}) {
       if (outboxTimer) {
         clearInterval(outboxTimer);
         outboxTimer = null;
+      }
+      if (staleVersionTimer) {
+        clearInterval(staleVersionTimer);
+        staleVersionTimer = null;
       }
       drainSpool();
       await drainOutbox();
@@ -348,8 +417,11 @@ if (require.main === module) {
 
 module.exports = {
   assertLoopbackHost,
+  compareVersions,
   createObserver,
   defaultDatabaseFile,
+  installedPluginVersion,
   loadConfiguredSink,
+  outboxIsStalled,
   parseArgs,
 };

@@ -97,14 +97,21 @@ async function flushOutbox(store, options = {}) {
   const result = { selected: rows.length, delivered: 0, failed: 0, exhausted: 0 };
   const headers = requestHeaders(options.headers);
   const signal = requestSignal(options.signal, positiveTimeout(options.timeoutMs));
-  const fail = (row, code) => {
-    const nextAttempts = Number(row.attempts) + 1;
+  const fail = (row, code, consumeAttempt = true) => {
+    const nextAttempts = Number(row.attempts) + (consumeAttempt ? 1 : 0);
     store.failOutbox(row.id, code, {
       maxAttempts,
       retryAt: retryTime(now, Number(row.attempts), baseDelayMs, maxDelayMs),
+      consumeAttempt,
     });
     result.failed += 1;
     if (nextAttempts >= maxAttempts) result.exhausted += 1;
+  };
+  const failTransport = (row, error) => {
+    const code = error && typeof error.name === 'string'
+      ? `transport_${error.name.toLowerCase()}`
+      : 'transport_error';
+    fail(row, code, error?.name !== 'TypeError');
   };
   const post = async (body) => sendWithDeadline(send, endpoint, {
     method: 'POST',
@@ -132,10 +139,7 @@ async function flushOutbox(store, options = {}) {
           for (const row of batch) fail(row, `http_${response.status}`);
         }
       } catch (error) {
-        const code = error && typeof error.name === 'string'
-          ? `transport_${error.name.toLowerCase()}`
-          : 'transport_error';
-        for (const row of batch) fail(row, code);
+        for (const row of batch) failTransport(row, error);
       }
     }
     return result;
@@ -151,10 +155,7 @@ async function flushOutbox(store, options = {}) {
         fail(row, `http_${response.status}`);
       }
     } catch (error) {
-      const code = error && typeof error.name === 'string'
-        ? `transport_${error.name.toLowerCase()}`
-        : 'transport_error';
-      fail(row, code);
+      failTransport(row, error);
     }
   }
 

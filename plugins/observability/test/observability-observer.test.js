@@ -6,7 +6,11 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { createObserver, assertLoopbackHost } = require('../bin/observer.js');
+const {
+  assertLoopbackHost,
+  createObserver,
+  installedPluginVersion,
+} = require('../bin/observer.js');
 const { createOutboxDrainer, flushOutbox } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
@@ -346,6 +350,18 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
   assert.match(health.last_error_code, /^transport_/);
   assert.doesNotMatch(JSON.stringify(store.database.prepare('SELECT * FROM otlp_outbox').all()), /credential-value|raw upstream/);
 
+  store.ingest(requestObservation({ source_event_id: 'api-event-type-error', request_id: 'request-type-error' }));
+  const typeError = await flushOutbox(store, {
+    endpoint: 'http://127.0.0.1:45678/v1/logs',
+    maxAttempts: 1,
+    fetch: async () => { throw new TypeError('sender implementation failed'); },
+  });
+  assert.equal(typeError.exhausted, 0);
+  const typeErrorRow = store.database.prepare("SELECT attempts, available_at, last_error_code FROM otlp_outbox WHERE last_error_code = 'transport_typeerror'").get();
+  assert.deepEqual(typeErrorRow.attempts, 0);
+  assert.ok(typeErrorRow.available_at);
+  assert.equal(typeErrorRow.last_error_code, 'transport_typeerror');
+
   await assert.rejects(
     () => flushOutbox(store, { endpoint: 'http://0.0.0.0:4318/v1/logs', fetch: async () => ({ ok: true }) }),
     /loopback/,
@@ -379,6 +395,79 @@ test('outbox transport deadlines release the drainer for the next tick', async (
   const second = await drainer.flush();
   assert.deepEqual(second, { selected: 1, delivered: 0, failed: 1, exhausted: 0 });
   assert.equal(sends, 2);
+});
+
+test('refuses stale observer versions and removes them after the installed version advances', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-home-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const registryDirectory = path.join(home, '.claude', 'plugins');
+  fs.mkdirSync(registryDirectory, { recursive: true });
+  fs.writeFileSync(path.join(registryDirectory, 'installed_plugins.json'), JSON.stringify({
+    plugins: {
+      'observability@eigenwise-toolshed': [{ version: '0.5.2' }, { version: '0.5.3' }],
+    },
+  }));
+  assert.equal(installedPluginVersion(home), '0.5.3');
+
+  const staleObserver = createObserver({
+    databaseFile: path.join(home, 'stale.db'),
+    pluginVersion: '0.5.2',
+    home,
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  await assert.rejects(staleObserver.start(), /older than installed version 0\.5\.3/);
+  await staleObserver.close();
+
+  let installedVersion = '0.5.2';
+  const observer = createObserver({
+    databaseFile: path.join(home, 'active.db'),
+    pluginVersion: '0.5.2',
+    host: '127.0.0.1',
+    port: 0,
+    getInstalledPluginVersion: () => installedVersion,
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+  installedVersion = '0.5.3';
+  const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+  assert.equal(response.status, 503);
+  const health = await response.json();
+  assert.equal(health.ok, false);
+  assert.equal(health.pluginVersion, '0.5.2');
+  assert.equal(health.error, 'plugin_version_outdated');
+});
+
+test('health reports an outbox that stopped attempting delivery', async (t) => {
+  const store = temporaryStore(t);
+  store.ingest(requestObservation({ source_event_id: 'stalled-outbox' }));
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    outboxIntervalMs: 250,
+    hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}-stalled.jsonl`),
+    sink: {
+      id: 'test',
+      egress: 'loopback',
+      outbox: { enabled: true, endpoint: 'http://127.0.0.1:45679/v1/logs', headers: {}, allowRemote: false },
+    },
+    fetch: async () => { throw new TypeError('sender implementation failed'); },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+  while (!store.queryView('outbox_health')[0].last_attempt_at) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
+  await new Promise((resolve) => setTimeout(resolve, 300));
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+  assert.equal(response.status, 503);
+  const health = await response.json();
+  assert.equal(health.ok, false);
+  assert.equal(health.error, 'outbox_stalled');
+  assert.equal(health.outbox.exhausted_count, 0);
+  assert.equal(health.outbox.last_error_code, 'transport_typeerror');
 });
 
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {

@@ -23,7 +23,7 @@ The local observer writes canonical records to SQLite, which works without Docke
 
 Every hook is fail-open with a short timeout.
 
-`SessionStart` (`startup|resume`) runs the ensure worker, which adopts or repairs enabled local observability without prompts and without an OS service. It is a silent no-op until you consent. `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, and `SubagentStop` each record a metadata-only lifecycle observation. `PreToolUse` on `Agent` and `Task` also runs the request-body preflight, which reads the gateway's real per-session peak and warns near the 32 MB body limit before a subagent starts.
+`SessionStart` (`startup|resume`) runs the ensure worker, which adopts or repairs enabled local observability without prompts and without an OS service. It is a silent no-op until you consent. The observer releases its port when its installed plugin version moves ahead, and its health endpoint reports unavailable when pending delivery stops retrying. `SessionStart`, `SessionEnd`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `SubagentStart`, and `SubagentStop` each record a metadata-only lifecycle observation. `PreToolUse` on `Agent` and `Task` also runs the request-body preflight, which reads the gateway's real per-session peak and warns near the 32 MB body limit before a subagent starts.
 
 ## Bundled commands
 

@@ -727,7 +727,7 @@ function openObservabilityStore(databaseFile, options = {}) {
     return transaction(() => {
       const row = database.prepare('SELECT attempts FROM otlp_outbox WHERE id = ?').get(id);
       if (!row) return false;
-      const attempts = Number(row.attempts) + 1;
+      const attempts = Number(row.attempts) + (options.consumeAttempt === false ? 0 : 1);
       const availableAt = attempts >= maxAttempts ? null : (retryAt || isoNow(now));
       database.prepare(`
         UPDATE otlp_outbox
