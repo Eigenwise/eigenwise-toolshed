@@ -259,7 +259,7 @@ const tools: ToolDefinition[] = [
         spawn,
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
-      const freshnessWarning = sidequestReloadWarning(meta.path);
+      const freshnessWarning = sidequestReloadWarning(meta.path, { pluginRoot: path.join(__dirname, '..') });
       if (freshnessWarning) warnings.push(`dispatch warning: ${freshnessWarning}`);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
