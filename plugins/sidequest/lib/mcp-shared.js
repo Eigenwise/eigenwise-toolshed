@@ -1,6 +1,7 @@
 "use strict";
 const path = require("path");
 const fs = require("fs");
+const crypto = require("crypto");
 const store = require("./store");
 const work = require("./work");
 const worktrees = require("./worktrees");
@@ -464,9 +465,26 @@ function listRowsContextRetrieval(project, args, position) {
     arguments: sourceArguments
   }, position);
 }
+function frozenStoryContractBody(source, ticket) {
+  const snapshot = ticket?.dispatch?.storyContract;
+  if (!snapshot || typeof snapshot !== "object") {
+    throw new Error(`context_page: dispatch snapshot for ticket "${source.selector.ref}" no longer exists.`);
+  }
+  const body = String(snapshot.body || "");
+  const revision = Number(snapshot.revision) || 1;
+  const hash = crypto.createHash("sha256").update(body, "utf8").digest("hex");
+  const totalBytes = utf8ByteLength(body);
+  if (Number(source.selector.snapshotRevision) !== revision || String(source.selector.sha256 || "") !== hash || Number(source.selector.totalBytes) !== totalBytes) {
+    throw new Error("context_page: stale dispatch snapshot handle; the frozen contract revision or hash no longer matches.");
+  }
+  return body;
+}
 function resolvedContextBody(source) {
   const ticket = store.getTicket(source.project, source.selector.ref);
   if (!ticket) throw new Error(`context_page: source ticket "${source.selector.ref}" no longer exists.`);
+  if (source.tool === "dispatch" && source.field === "dispatch.storyContract" && source.position === "storyContract") {
+    return frozenStoryContractBody(source, ticket);
+  }
   if (source.field === "description" && source.position === "description") return String(ticket.description || "");
   if (source.field === "comments.body") {
     const comment = (Array.isArray(ticket.comments) ? ticket.comments : []).find((entry) => entry.id === source.selector.comment && entry.id === source.position);
@@ -485,7 +503,7 @@ function assertCurrentContextRevision(source, currentRevision, expectedRevision)
 }
 function resolveContextPage(args) {
   const source = decodeContextHandle(args.handle);
-  if (!["list", "comments"].includes(source.tool)) {
+  if (!["list", "comments", "dispatch"].includes(source.tool)) {
     throw new Error(`context_page: handle belongs to unsupported source tool "${source.tool}".`);
   }
   const position = decodeContextCursor(String(args.handle), args.cursor);

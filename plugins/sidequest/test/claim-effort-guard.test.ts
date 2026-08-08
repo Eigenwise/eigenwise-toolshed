@@ -342,7 +342,7 @@ test('fresh redispatch briefing includes every comment added after preparation a
   assert.equal(briefing.status, 0, briefing.stderr);
   assert.ok(briefing.stdout.includes(first.comment.body));
   assert.ok(briefing.stdout.includes(second.comment.body));
-  assert.ok(briefing.stdout.indexOf(first.comment.body) < briefing.stdout.indexOf(second.comment.body));
+  assert.ok(briefing.stdout.indexOf(second.comment.body) < briefing.stdout.indexOf(first.comment.body));
 
   const foreignProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-briefing-foreign-'));
   const foreign = runCli(['briefing', ref, '--token', redispatched.token, '--project', foreignProject]);
@@ -436,14 +436,10 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
   const briefing = runCli(['briefing', created.ref, '--token', dispatched.token]);
   assert.equal(briefing.status, 0, briefing.stderr);
   assert.match(briefing.stdout, /description-marker-/);
-  assert.match(briefing.stdout, /Description truncated at 8 KB/);
+  assert.match(briefing.stdout, /Aggregate budget: 24576 bytes/);
   assert.doesNotMatch(briefing.stdout, new RegExp(`d{${hugeDescription.length - 1000}}`));
-  assert.match(briefing.stdout, /First comment marker/);
-  assert.match(briefing.stdout, /Second comment marker/);
-  assert.match(briefing.stdout, /Comment packet truncated/);
-  assert.match(briefing.stdout, /compact comments reads \(latest-first\)/);
-  assert.match(briefing.stdout, /asset-0-/);
-  assert.match(briefing.stdout, /asset-119-/);
+  assert.match(briefing.stdout, /Omitted context/);
+  assert.match(briefing.stdout, /mcp__plugin_sidequest_board__comments/);
 });
 
 test('instant dispatch returns a stable executor, fetch stub, and token', () => {

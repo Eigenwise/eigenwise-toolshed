@@ -87,7 +87,7 @@ function readySummary(payload?: any) {
 const tools: ToolDefinition[] = [
   {
     name: 'context_page',
-    description: 'Continue an omitted row set or nested body from a retrieval handle. Cursors are opaque and revision-bound; rerun the source read when stale.',
+    description: 'Continue an omitted row set, nested body, or frozen dispatch-contract snapshot from a retrieval handle. Cursors are opaque and revision-bound; rerun mutable source reads when stale.',
     inputSchema: {
       type: 'object',
       properties: {

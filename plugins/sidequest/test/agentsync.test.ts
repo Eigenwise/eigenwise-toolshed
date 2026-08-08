@@ -1162,7 +1162,9 @@ test('SQ-1562: executor briefings use one deterministic Unicode-safe aggregate p
   assert.match(first, /Executor ContextProjection v1/);
   assert.match(first, /Aggregate budget: 24576 bytes/);
   assert.match(first, /Story execution contract \(revision 9; snapshot revision 9; sha256 [a-f0-9]{64}; totalBytes \d+\)/);
-  assert.match(first, /Required before editing: fetch the paged snapshot with mcp__plugin_sidequest_board__story_contract\(\{"story":"stale-story","cursor":0,"limit":16384,"full":true\}\)/);
+  assert.match(first, /Required before editing: fetch the paged snapshot with mcp__plugin_sidequest_board__context_page\(/);
+  assert.match(first, /"handle":"ctx1\.[^"]+"/);
+  assert.match(first, /"expectedRevision":"ctxr1\.[a-f0-9]{64}"/);
   assert.match(first, /Omitted context/);
   assert.match(first, /Retrieve with mcp__plugin_sidequest_board__/);
   assert.doesNotMatch(first, /契約🧪契約🧪契約🧪契約🧪/);

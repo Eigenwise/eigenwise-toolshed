@@ -42,7 +42,7 @@ const crypto = require('crypto');
 const store = require('./store.js');
 const { worktreeRoot } = require('./worktrees.js');
 const { spawnDescription } = store;
-const { compileContextProjection } = require('./context-packet.js');
+const { compileContextProjection, contextRetrieval, contextRevision } = require('./context-packet.js');
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
@@ -726,11 +726,30 @@ function storySnapshot(ticket?: any, slug?: any) {
   };
 }
 
-function storyContractRetrieval(snapshot?: any, project?: any) {
-  return projectionRetrieval('mcp__plugin_sidequest_board__story_contract', Object.assign(
-    briefingProjectArguments(project),
-    { story: snapshot.story, cursor: 0, limit: 16384, full: true },
-  ));
+function storyContractRetrieval(ticket?: any, snapshot?: any, project?: any, forceHandle = false) {
+  const body = String(snapshot?.body || '');
+  if (!forceHandle && byteLength(body) <= EXECUTOR_CONTRACT_MAX_BYTES) {
+    return projectionRetrieval('mcp__plugin_sidequest_board__story_contract', Object.assign(
+      briefingProjectArguments(project),
+      { story: snapshot.story, cursor: 0, limit: 16384, full: true },
+    ));
+  }
+  const hash = sha256Text(body);
+  return projectionRetrieval('mcp__plugin_sidequest_board__' + 'context_page', contextRetrieval({
+    tool: 'dispatch',
+    project: String(project || ticket?.project || 'unbound'),
+    kind: 'body',
+    field: 'dispatch.storyContract',
+    position: 'storyContract',
+    revision: contextRevision(body),
+    reason: 'frozen-snapshot',
+    selector: {
+      ref: String(ticket?.ref || ''),
+      snapshotRevision: Number(snapshot?.revision) || 1,
+      sha256: hash,
+      totalBytes: byteLength(body),
+    },
+  }).arguments);
 }
 
 function storyContractProjectionBody(snapshot?: any, retrieval?: any, forceHandle = false) {
@@ -748,15 +767,28 @@ function storyContractProjectionBody(snapshot?: any, retrieval?: any, forceHandl
 
 function storyDecisionProjectionBody(ticket?: any, slug?: any) {
   const story = ticket?.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
-  const entries = Array.isArray(story?.decisionLog) ? story.decisionLog.slice() : [];
+  const entries = Array.isArray(story?.decisionLog)
+    ? story.decisionLog.slice().sort((left: any, right: any) => Number(left.seq) - Number(right.seq))
+    : [];
   if (!entries.length) return '(No live story decisions or constraints were recorded.)';
-  const revision = Number(story?.logRevision) || Math.max(...entries.map((entry: any) => Number(entry.seq) || 0));
-  const ordered = entries.slice().sort((left: any, right: any) => Number(left.seq) - Number(right.seq));
-  return [
-    `## Story decision log (${String(story?.ref || ticket?.storyId || '(unknown story)')}, ${entries.length} ${entries.length === 1 ? 'entry' : 'entries'} through #${revision})`,
-    'Live watermark: this log is current at briefing time and is not part of the frozen contract snapshot.',
-    ...ordered.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
-  ].join('\n');
+  const revision = Number(story?.logRevision) || Number(entries[entries.length - 1].seq) || 0;
+  const render = (selected: any[], omitted: number) => {
+    const marker = omitted
+      ? `\n\n[Story decision log briefing window omitted ${omitted} earlier ${omitted === 1 ? 'entry' : 'entries'}. Read the full history with sidequest story log ${story.ref} --full before acting.]`
+      : '';
+    return [
+      `## Story decision log (${String(story?.ref || ticket?.storyId || '(unknown story)')}, ${selected.length} ${omitted ? 'recent ' : ''}${selected.length === 1 ? 'entry' : 'entries'} through #${revision})`,
+      'Live watermark: this log is current at briefing time and is not part of the frozen contract snapshot.',
+      ...selected.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
+    ].join('\n') + marker;
+  };
+  const selected: any[] = [];
+  for (let index = entries.length - 1; index >= 0; index--) {
+    const candidate = [entries[index], ...selected];
+    if (byteLength(render(candidate, entries.length - candidate.length)) > STORY_DECISION_LOG_PACKET_MAX_BYTES) break;
+    selected.unshift(entries[index]);
+  }
+  return render(selected, entries.length - selected.length);
 }
 
 function briefingCommentBody(comments?: any) {
@@ -789,6 +821,12 @@ function executorSafetyBody(ticket?: any, nonce?: any, project?: any, executor?:
   const verify = ticket.executorVerifyKind === 'attestation'
     ? `Verify oracle: attestation. Record actual evidence for ${ticket.executorAttestationArtifact}.`
     : `Verify command: ${ticket.executorVerify || '(No exact verify command was recorded.)'}`;
+  const highStakes = ticket?.highStakes
+    ? [
+      'High-stakes verification:',
+      'Enumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration.',
+    ]
+    : [];
   return [
     '## Dispatch, claim, worktree, lifecycle, and verification safety',
     'Claim first with this exact call. Do not pass direct or replace the prepared executor:',
@@ -800,6 +838,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, project?: any, executor?:
     ticket.executorVerify && ticket.executorVerifyKind !== 'attestation'
       ? 'Run it through ' + capturedVerifyCommand(ticket.executorVerify) + '; post [sidequest:verify-start] before it and [sidequest:verify-complete] with status first after it exits.'
       : '',
+    ...(highStakes.length ? [highStakes.join('\n')] : []),
     closeout || '',
     'Stay within declared scope. If required context is omitted below, fetch it once with its listed retrieval call before editing. Do not guess or silently skip it.',
   ].filter(Boolean).join('\n\n');
@@ -890,7 +929,6 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const findingCheckpoints = findingCheckpointPacket(ticket);
   const continuation = ticketContinuationPacket(ticket);
   const snapshot = storySnapshot(ticket, slug);
-  const contractRetrieval = storyContractRetrieval(snapshot, project);
   const commentsRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const storyLogRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__story_log', Object.assign(briefingProjectArguments(project), { story: snapshot.story }));
   const ticketRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
@@ -901,14 +939,17 @@ ${marker}` : '';
     ? `\n\nArtifact lifecycle exception:\n${ARTIFACT_LIFECYCLE_MARKER}\nThis dispatch deliberately runs in the shared checkout. Write only within the declared artifact scope. Do not apply the linked-worktree self-check, commit, or submit. Close with done after verification.`
     : '';
   const profileBudget = EXECUTOR_BRIEFING_MAX_BYTES - byteLength(suffix);
-  const buildItems = (forceContractHandle = false) => [
+  const buildItems = (forceContractHandle = false) => {
+    const contractRetrieval = storyContractRetrieval(ticket, snapshot, slug || project, forceContractHandle);
+    return [
     { id: 'safety', kind: 'safety', priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
     { id: 'execution-contract', kind: 'contract', priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
     { id: 'live-story-log', kind: 'risk', priority: 400, order: 3, watermark: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0), body: storyDecisionProjectionBody(ticket, slug), retrieval: storyLogRetrieval },
     { id: 'task-and-scope', kind: 'task', priority: 300, order: 4, body: executorTaskBody(ticket, category, scopedFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation), retrieval: ticketRetrieval },
     { id: 'newest-comments', kind: 'evidence', priority: 200, order: 5, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
     { id: 'handles', kind: 'handle', priority: 100, order: 6, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
-  ];
+    ];
+  };
   const watermarks = {
     storyContractSnapshot: `${snapshot.revision}:${sha256Text(snapshot.body)}`,
     storyDecisionLog: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0),

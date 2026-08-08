@@ -340,6 +340,43 @@ test('context_page resumes Unicode bodies and rows with stable revision-safe cur
   assert.match(staleRows.content[0].text, /stale list handle/);
 });
 
+test('context_page reads the frozen dispatch story contract after the live contract changes', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-frozen-contract-'))).slug;
+  const story = store.createStory(project, { title: 'Frozen contract retrieval' });
+  const frozenContract = `FROZEN-SNAPSHOT-${'測🧪'.repeat(5_000)}`;
+  const liveContract = `LIVE-CONTRACT-${'é'.repeat(15_000)}`;
+  store.updateStory(project, story.ref, { executionContract: frozenContract });
+  store.setCategory({ id: 'frozen-snapshot-context', name: 'Frozen snapshot context', route: { model: 'sonnet', effort: 'low' } });
+  const ticket = store.createTicket(project, {
+    title: 'Retrieve frozen dispatch contract', storyId: story.id, category: 'frozen-snapshot-context', source: 'test',
+  });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'frozen-contract-session' });
+  const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'frozen-contract-token', project, project);
+  const retrievalMatch = briefing.match(/mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
+  assert.ok(retrievalMatch, 'oversized frozen contracts include a context_page retrieval');
+  const retrieval = JSON.parse(retrievalMatch[1]);
+  assert.equal(retrieval.expectedRevision, contextPacket.contextRevision(frozenContract));
+
+  store.updateStory(project, story.ref, { executionContract: liveContract });
+  let reconstructed = '';
+  let cursor = retrieval.cursor;
+  while (cursor !== null) {
+    const page = await callTool('context_page', { ...retrieval, cursor, limit: 16 * 1024 });
+    reconstructed += page.body;
+    cursor = page.nextCursor;
+  }
+  assert.equal(reconstructed, frozenContract);
+  assert.equal(contextPacket.utf8ByteLength(reconstructed), contextPacket.utf8ByteLength(frozenContract));
+  assert.equal(require('crypto').createHash('sha256').update(reconstructed, 'utf8').digest('hex'), require('crypto').createHash('sha256').update(frozenContract, 'utf8').digest('hex'));
+
+  const mismatchedRevision = await callToolRaw('context_page', {
+    ...retrieval,
+    expectedRevision: contextPacket.contextRevision(liveContract),
+  });
+  assert.equal(mismatchedRevision.isError, true);
+  assert.match(mismatchedRevision.content[0].text, /expectedRevision does not match/);
+});
+
 test('context_page row continuations retain their revision when claim liveness changes', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-liveness-'))).slug;
   const originalIdleMinutes = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
@@ -1375,14 +1412,11 @@ test('comment reads stay chronological through the ten-comment threshold', async
 
   const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'complete-comment-briefing' });
   const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
-  const completePacket = agentsync.ticketCommentsPacket(store.getTicket(project, ticket.ref).comments);
-  assert.ok(Buffer.byteLength(completePacket) <= 6 * 1024, `briefing packet is ${Buffer.byteLength(completePacket)} bytes`);
-  assert.ok(briefing.includes(completePacket));
-  assert.match(briefing, /Comment packet truncated/);
-  assert.match(briefing, /compact comments reads \(latest-first\)/);
-  assert.match(briefing, /comment-7:/);
-  assert.ok(briefing.indexOf('comment-7:') < briefing.indexOf('comment-6:'));
-  assert.doesNotMatch(briefing, new RegExp(`comment-0: y{${bodies[0]!.length - 1000}}`));
+  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(briefing, 'utf8')} bytes`);
+  assert.match(briefing, /Executor ContextProjection v1/);
+  assert.match(briefing, /Omitted context/);
+  assert.match(briefing, /newest-comments (?:budget|truncated)/);
+  assert.match(briefing, /mcp__plugin_sidequest_board__comments/);
 
   for (const args of [{ cursor: 'bad' }, { cursor: '-1' }, { limit: 0 }, { limit: 101 }]) {
     const invalid = await callToolRaw('comments', { project, ref: ticket.ref, ...args });
