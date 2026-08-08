@@ -96,11 +96,19 @@ function validateToolArguments(tool, args) {
   }
   const allowed = new Set(Object.keys(tool.inputSchema.properties || {}));
   if (tool.name === "dispatch") allowed.add("session");
+  const properties = tool.inputSchema.properties || {};
   const unknown = Object.keys(args).filter((key) => !allowed.has(key));
-  if (!unknown.length) return;
-  const quoted = unknown.map((key) => `"${key}"`).join(", ");
-  const accepted = Object.keys(tool.inputSchema.properties || {}).join(", ");
-  throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? "" : "s"} ${quoted} — ${tool.name} accepts: ${accepted}.`);
+  if (unknown.length) {
+    const quoted = unknown.map((key) => `"${key}"`).join(", ");
+    const accepted = Object.keys(properties).join(", ");
+    throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? "" : "s"} ${quoted} — ${tool.name} accepts: ${accepted}.`);
+  }
+  for (const [key, value] of Object.entries(args)) {
+    const values = properties[key]?.enum;
+    if (value !== void 0 && Array.isArray(values) && !values.includes(value)) {
+      throw new Error(`${tool.name}: ${key} received ${JSON.stringify(value)} — must be one of: ${values.join(", ")}.`);
+    }
+  }
 }
 async function runTool(tool, args) {
   validateToolArguments(tool, args);

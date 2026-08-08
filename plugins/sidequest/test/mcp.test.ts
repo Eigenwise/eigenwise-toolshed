@@ -445,6 +445,12 @@ test('MCP rejects unsupported write and read parameters before they can be ignor
   const rejectedComments = await callToolRaw('comments', { project, ref: ticket.ref, order: 'newest' });
   assert.equal(rejectedComments.isError, true);
   assert.match(rejectedComments.content[0].text, /comments: unknown argument "order" — comments accepts: .*ref/);
+
+  const rejectedEnum = await callToolRaw('category_edit', { project, id: 'coding.normal', routeEffort: 'ultra' });
+  assert.equal(rejectedEnum.isError, true);
+  assert.match(rejectedEnum.content[0].text, /category_edit: routeEffort received "ultra" — must be one of: low, medium, high, xhigh, max\./);
+  const omittedEnum = await callToolRaw('category_edit', { project, id: 'coding.normal', routeEffort: undefined });
+  assert.equal(omittedEnum.isError, undefined);
 });
 
 test('MCP category_edit rejects guessed fields and reports applied routing changes', async () => {
@@ -2315,8 +2321,7 @@ test('status validation fails loudly and directs deletion to remove', async () =
   const added = await callTool('add', { title: 'strict status', complexity: 1, why: 'exercise loud validation for invalid MCP status values' });
   const invalid = await callToolRaw('update', { ref: added.ref, status: 'deleted' });
   assert.ok(invalid.isError);
-  assert.match(invalid.content[0].text, /Valid statuses: todo, doing, done/);
-  assert.match(invalid.content[0].text, /remove tool/i);
+  assert.match(invalid.content[0].text, /must be one of: todo, doing, done/);
   assert.throws(() => store.updateTicket(store.ensureProject(PROJ).slug, added.ref, { status: 'deleted' }), /remove tool/i);
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
