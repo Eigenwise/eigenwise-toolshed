@@ -246,7 +246,7 @@ function registerSweepSession(data) {
 // src/hooks/diagnostic-worktree-warning.ts
 var import_node_fs5 = __toESM(require("node:fs"));
 var import_node_path5 = __toESM(require("node:path"));
-var WARNING = "sidequest: legacy foreign agent worktrees detected. Diagnostics under `.claude/worktrees/agent-*` outside this checkout are not actionable: they can be stale-index or missing-dependency artifacts, including error-severity diagnostics. Keep errors in your own files actionable; do not inspect or act on foreign-worktree diagnostics.";
+var WARNING = "sidequest: foreign agent worktrees detected; diagnostics under `.claude/worktrees/agent-*` are stale and false when their path is gone from disk, otherwise ignore them unless the live worktree belongs to a ticket you are about to integrate, where they are actionable and outweigh an executor's `verify passed` claim. Keep error-severity diagnostics in your own files actionable.";
 function gitDirectory(entry) {
   try {
     if (import_node_fs5.default.statSync(entry).isDirectory()) return entry;
