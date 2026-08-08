@@ -246,8 +246,7 @@ function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
 function writeSystemMessage(hookEventName, systemMessage) {
-  const context = projectedText(hookEventName, systemMessage);
-  writeJson({ systemMessage: context, hookSpecificOutput: { hookEventName, additionalContext: context } });
+  writeJson({ systemMessage: projectedText(hookEventName, systemMessage), hookSpecificOutput: { hookEventName } });
 }
 
 // src/hooks/compaction-suggestion.ts

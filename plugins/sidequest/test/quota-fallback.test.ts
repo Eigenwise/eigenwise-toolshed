@@ -230,8 +230,8 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
     error: "Agent launch failed before start: You've reached your Fable 5 limit",
   });
   assert.equal(hookOutput.hookSpecificOutput.hookEventName, 'PostToolUseFailure');
-  assert.match(hookOutput.hookSpecificOutput.additionalContext, /configured fallback dispatch/);
-  assert.match(hookOutput.hookSpecificOutput.additionalContext, new RegExp(ticket.ref));
+  assert.match(hookOutput.systemMessage, /configured fallback dispatch/);
+  assert.match(hookOutput.systemMessage, new RegExp(ticket.ref));
 
   const cli = spawnSync(process.execPath, [BIN, 'dispatch', ticket.ref, '--project', PROJECT, '--session', 'quota-cli-adopted', '--unverified-transport', '--json'], {
     encoding: 'utf8',
@@ -299,7 +299,7 @@ test('PostToolUseFailure records observed terminal executor failures without rel
     error: 'Prompt is too long',
   });
   const current = store.getTicket(slug, terminal.ref);
-  assert.match(output.hookSpecificOutput.additionalContext, /observed terminal failure/);
+  assert.match(output.systemMessage, /observed terminal failure/);
   assert.equal(current.dispatch.outcome, 'died');
   assert.equal(current.dispatch.failureShape, 'context_overflow');
   assert.equal(current.dispatch.terminalSource, 'agent-terminal-failure');

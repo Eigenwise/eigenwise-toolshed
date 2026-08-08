@@ -65,8 +65,7 @@ export function writeDeny(hookEventName: string, permissionDecisionReason: strin
 }
 
 export function writeSystemMessage(hookEventName: string, systemMessage: string): void {
-  const context = projectedText(hookEventName, systemMessage);
-  writeJson({ systemMessage: context, hookSpecificOutput: { hookEventName, additionalContext: context } });
+  writeJson({ systemMessage: projectedText(hookEventName, systemMessage), hookSpecificOutput: { hookEventName } });
 }
 
 export function writeToolUpdate(updatedInput: Record<string, unknown>, systemMessage?: string | null): void {

@@ -67,6 +67,29 @@ test('PreCompact pinning stays within the prompt budget for crowded boards', () 
   assert.match(result.stdout, /^Preserve verbatim in the summary:/);
 });
 
+test('PreCompact preserves a live claimed ticket before stale doing rows', () => {
+  const crowdedBoardPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-compaction-live-first-'));
+  execFileSync('git', ['init', '--quiet'], { cwd: crowdedBoardPath, windowsHide: true });
+  const { slug: crowdedSlug } = store.ensureProject(crowdedBoardPath);
+  const staleRefs: string[] = [];
+  for (let index = 0; index < 30; index += 1) {
+    const stale = store.createTicket(crowdedSlug, { title: `Stale ${index}: ${'detail '.repeat(40)}`, source: 'test' });
+    store.updateTicket(crowdedSlug, stale.ref, { status: 'doing' });
+    staleRefs.push(stale.ref);
+  }
+  const active = store.createTicket(crowdedSlug, { title: 'Live claim must survive compaction', source: 'test' });
+  assert.equal(store.claimTicket(crowdedSlug, active.ref, 'live-claim').ok, true);
+
+  const result = run({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: crowdedBoardPath, session_id: 'live-first' });
+
+  assert.equal(result.status, 0);
+  assert.ok(Buffer.byteLength(result.stdout, 'utf8') <= 1500);
+  assert.match(result.stdout, new RegExp(active.ref));
+  assert.match(result.stdout, /watermark=/);
+  assert.match(result.stdout, new RegExp(`mcp__plugin_sidequest_board__comments\\(\\{ref:"${active.ref}"\\}\\)`));
+  assert.ok(result.stdout.indexOf(active.ref) < result.stdout.indexOf(staleRefs.at(-1)!));
+});
+
 test('PreCompact veto allows an executor session to compact', () => {
   const sessionId = 'executor-session';
   createDoing('Executor claim permits compaction', sessionId);

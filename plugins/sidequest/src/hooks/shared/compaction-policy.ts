@@ -108,6 +108,23 @@ function shouldAvoidVetoForSession(store: Store, sessionId: string): boolean {
   }
 }
 
+function liveTicketLine(ticket: any, story: Story | undefined): string {
+  const ref = compactText(ticket?.ref, 40);
+  const claim = compactText(ticket?.claim?.by, 80);
+  const storyRef = compactText(story?.ref, 40);
+  const revisions = story
+    ? `contractRevision=${Number(story.contractRevision) || 0} logRevision=${Number(story.logRevision) || 0}`
+    : `watermark=${compactText(ticket?.updatedAt, 32) || 'unavailable'}`;
+  const retrieval = [`mcp__plugin_sidequest_board__comments({ref:"${ref}"})`];
+  if (storyRef) {
+    retrieval.push(
+      `mcp__plugin_sidequest_board__story_contract({story:"${storyRef}"})`,
+      `mcp__plugin_sidequest_board__story_log({story:"${storyRef}"})`,
+    );
+  }
+  return `Keep live ticket ${ref}${claim ? ` claim=${claim}` : ''}${storyRef ? ` story=${storyRef}` : ''} ${revisions}. ${compactText(ticket?.title, 80)}${story ? ` Story: ${compactText(story.title, 60)}.` : ''} Retrieve: ${retrieval.join(' and ')}.`;
+}
+
 async function boardState(cwd: string, store: Store): Promise<{ instruction: string; unsafeReason: string } | null> {
   const found = store.findProject(store.nearestRepoRoot(cwd));
   if (!found.ok || !found.slug || !found.meta?.path) return null;
@@ -118,18 +135,17 @@ async function boardState(cwd: string, store: Store): Promise<{ instruction: str
     .map((ticket) => String(ticket.ref)));
   const doing = tickets.filter((ticket) => ticket?.status === 'doing');
   const fresh = doing.filter((ticket) => liveRefs.has(String(ticket.ref)));
+  const stale = doing.filter((ticket) => !liveRefs.has(String(ticket.ref)));
   const publish = require(runtimeModule('publish')) as { publishLockStatus: (repoPath: string) => Promise<{ locked?: boolean; holder?: any }> };
   const lock = await publish.publishLockStatus(found.meta.path);
   const storyIds = [...new Set(doing.map((ticket) => String(ticket?.storyId || '')).filter(Boolean))];
   const stories = storyIds.map((id) => store.getStory(found.slug!, id)).filter((story): story is Story => Boolean(story));
+  const storiesByRef = new Map(stories.map((story) => [story.ref, story]));
   const lines = [
     'sidequest compaction recovery v1: board history omitted under the 1500B recovery budget.',
-    ...doing.map((ticket) => {
-      const storyId = String(ticket?.storyId || '').trim();
-      const claim = String(ticket?.claim?.by || '').trim();
-      return `Keep this active ticket intact. Ticket ${compactText(ticket?.ref, 40)}${claim ? ` claim=${compactText(claim, 80)}` : ''}${storyId ? ` story=${compactText(storyId, 40)}` : ''}. Retrieve: mcp__plugin_sidequest_board__comments({ref:"${compactText(ticket?.ref, 40)}"}).`;
-    }),
-    ...stories.map((story) => `Compaction policy story ${compactText(story.title, 80)}: id=${compactText(story.ref, 40)} contractRevision=${Number(story.contractRevision) || 0} logRevision=${Number(story.logRevision) || 0}. Retrieve: mcp__plugin_sidequest_board__story_contract({story:"${compactText(story.ref, 40)}"}) and mcp__plugin_sidequest_board__story_log({story:"${compactText(story.ref, 40)}"}).`),
+    ...fresh.map((ticket) => liveTicketLine(ticket, storiesByRef.get(String(ticket?.storyId || '')))),
+    ...stale.map(ticketLine),
+    ...stories.filter((story) => !fresh.some((ticket) => String(ticket?.storyId || '') === story.ref)).map((story) => `Compaction policy story ${compactText(story.title, 80)}: id=${compactText(story.ref, 40)} contractRevision=${Number(story.contractRevision) || 0} logRevision=${Number(story.logRevision) || 0}. Retrieve: mcp__plugin_sidequest_board__story_contract({story:"${compactText(story.ref, 40)}"}) and mcp__plugin_sidequest_board__story_log({story:"${compactText(story.ref, 40)}"}).`),
     ...(lock.locked ? [`Publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || JSON.stringify(lock.holder || 'held'), 260)}`] : []),
   ];
   if (lines.length === 1) return null;

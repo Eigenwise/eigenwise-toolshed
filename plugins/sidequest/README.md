@@ -163,7 +163,7 @@ The shipped hook registry covers the full Claude Code session and executor lifec
 
 `SIDEQUEST_COMPACTION_POLICY` controls the `PreCompact` hook:
 
-- `pin` is the default. For an automatic compaction, it injects a bounded summary of active doing tickets, active stories, and a held publish lock so those facts survive compaction.
+- `pin` is the default. For an automatic compaction, it injects a bounded summary that puts live claimed tickets first, with their revisions and typed retrieval calls, followed by stale doing tickets, active stories, and a held publish lock.
 - `veto` is opt-in. When fresh claims or a publish lock make automatic compaction unsafe, it blocks at most two automatic attempts, then allows compaction with the pinned summary. Manual compaction is never vetoed.
 - `off` disables the policy.
 

@@ -195,45 +195,64 @@ function expectedWorktree(found, repository, agentId) {
     return `agent-${agentId || "<agent id>"}`;
   }
 }
+function boundedText(value, limit) {
+  if (Buffer.byteLength(value, "utf8") <= limit) return value;
+  const suffix = "…";
+  let result = "";
+  let bytes = Buffer.byteLength(suffix, "utf8");
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes > limit) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return `${result}${suffix}`;
+}
+function boundedRefusal(summary, facts, recovery) {
+  const detailLimit = recovery.startsWith("Use the worktree assigned") ? 140 : 100;
+  const factLines = facts.map(([label, value]) => `  ${label}: ${boundedText(value, label === "writing to" ? 60 : detailLimit)}`);
+  return [
+    `sidequest: refusing this write. ${boundedText(summary, 180)}`,
+    ...factLines,
+    `Recovery: ${recovery}`
+  ].join("\n");
+}
 function refusal(found, target, repoRoot, agentId, cwd) {
   const expected = expectedWorktree(found, repoRoot, agentId);
-  return [
-    `sidequest: refusing this write. ${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
-    `  expected worktree: ${expected}`,
-    `  writing to:        ${target}`,
-    `  shared checkout:   ${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ""}`,
+  const sharedCheckout = `${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ""}`;
+  return boundedRefusal(
+    `${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
+    [["expected worktree", expected], ["writing to", target], ["shared checkout", sharedCheckout]],
     `This is a harness worktree-loss failure, not executor behavior. Stop writing, tell the orchestrator "${found.ref} lost its worktree, re-dispatch it", and leave the shared tree untouched. Report any staged work.`
-  ].join("\n");
+  );
 }
 function terminalRefusal(found, target) {
-  return [
-    `sidequest: refusing this write. ${found.ref} already reached a terminal board state, so this executor has no legal write target.`,
-    `  writing to: ${target}`,
+  return boundedRefusal(
+    `${found.ref} already reached a terminal board state, so this executor has no legal write target.`,
+    [["writing to", target]],
     "Do not work around this or re-arm any Monitor. Stop owned background tasks and end this executor. Redispatch the ticket if more work is needed."
-  ].join("\n");
+  );
 }
 function unknownRefusal(target) {
-  return [
-    "sidequest: refusing this shared-checkout write because this executor has no active dispatch record.",
-    `  writing to: ${target}`,
+  return boundedRefusal(
+    "This executor has no active dispatch record for a shared-checkout write.",
+    [["writing to", target]],
     "Do not work around this. Stop any owned background tasks and end the executor. Redispatch before making more changes."
-  ].join("\n");
+  );
 }
 function projectRefusal(found, target) {
-  return [
-    `sidequest: refusing this write. ${found.ref} belongs to a different project than this target.`,
-    `  writing to: ${target}`,
+  return boundedRefusal(
+    `${found.ref} belongs to a different project than this target.`,
+    [["writing to", target]],
     "Do not work around this. End the executor and redispatch the ticket for the correct project."
-  ].join("\n");
+  );
 }
 function linkedWorktreeRefusal(found, target, actualRoot) {
-  return [
-    `sidequest: refusing this write. ${found.ref} is writing through a different linked worktree.`,
-    `  expected worktree: ${found.expectedWorktree || "(unavailable)"}`,
-    `  actual worktree:   ${actualRoot}`,
-    `  writing to:        ${target}`,
+  return boundedRefusal(
+    `${found.ref} is writing through a different linked worktree.`,
+    [["expected worktree", found.expectedWorktree || "(unavailable)"], ["actual worktree", actualRoot], ["writing to", target]],
     "Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket."
-  ].join("\n");
+  );
 }
 function main() {
   const input = readStdin();

@@ -44,9 +44,13 @@ test('denial projections keep the recovery action inside the PreToolUse budget',
   assert.match(reason, /content omitted/);
 });
 
-test('routine system and teammate notifications use their bounded projections', () => {
+test('routine system notices emit once within their aggregate model-facing budget', () => {
   const system = emittedOutput("output.writeSystemMessage('PostToolUseFailure', 'Recover now. ' + '🙂'.repeat(4000))");
-  assert.ok(Buffer.byteLength(outputContext(system), 'utf8') <= 512);
+  const hookOutput = system.hookSpecificOutput as { additionalContext?: string };
+  const aggregateBytes = Buffer.byteLength(String(system.systemMessage || ''), 'utf8') + Buffer.byteLength(String(hookOutput.additionalContext || ''), 'utf8');
+  assert.ok(aggregateBytes <= 512);
+  assert.match(String(system.systemMessage || ''), /Recover now\./);
+  assert.equal(hookOutput.additionalContext, undefined);
   const teammate = emittedOutput("output.writeTeammateStop('End this idle executor. ' + '🙂'.repeat(4000))");
   assert.ok(Buffer.byteLength(String(teammate.stopReason || ''), 'utf8') <= 512);
 });

@@ -106,8 +106,8 @@ test('a write into the shared checkout is refused when the dispatch promised a w
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
   const reason = out.hookSpecificOutput.permissionDecisionReason;
   assert.ok(reason.includes(ticket.ref), 'names the ticket');
-  assert.ok(reason.includes(ticket.dispatch.worktree), 'names the expected worktree');
-  assert.ok(reason.includes(target), 'names the path it refused to write');
+  assert.match(reason, /expected worktree:/);
+  assert.match(reason, /writing to:/);
   assert.ok(/re-dispatch/.test(reason), 'names the next legal action');
   assert.ok(/did nothing wrong|platform|harness/i.test(reason), 'blames the platform, not the executor');
 });
@@ -128,7 +128,7 @@ test('a junction alias to the shared checkout is refused', () => {
     const target = path.join(alias, 'README.md');
     const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, alias));
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes(target));
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /writing to:/);
   } finally {
     fs.rmSync(alias, { recursive: true, force: true });
   }
@@ -168,15 +168,35 @@ test('the harness-provisioned agent worktree is allowed even though sidequest wo
 
 test('a different linked worktree is refused', () => {
   const agentId = 'a2foreign';
-  const { ticket, sessionId, executor } = dispatched(agentId);
+  const { sessionId, executor } = dispatched(agentId);
   const linked = path.join(os.tmpdir(), `sq-isolation-foreign-${process.pid}-${Date.now()}`);
   execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
   try {
     const target = path.join(linked, 'README.md');
     const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, linked));
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes(ticket.dispatch.worktree));
-    assert.ok(out.hookSpecificOutput.permissionDecisionReason.includes(linked));
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /expected worktree:/);
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /actual worktree:/);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+test('a Unicode-sized target preserves linked-worktree recovery facts and action', () => {
+  const agentId = 'a2unicode';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = path.join(os.tmpdir(), `sq-isolation-unicode-${process.pid}-${Date.now()}`);
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    const target = path.join(linked, `${'界'.repeat(1000)}.txt`);
+    const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, linked));
+    const reason = out.hookSpecificOutput.permissionDecisionReason;
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.ok(Buffer.byteLength(reason, 'utf8') <= 768);
+    assert.match(reason, new RegExp(ticket.ref));
+    assert.match(reason, /expected worktree:/);
+    assert.match(reason, /actual worktree:/);
+    assert.match(reason, /If it no longer exists, stop and ask the orchestrator to redispatch the ticket\./);
   } finally {
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
   }
