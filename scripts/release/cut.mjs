@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import path from 'node:path';
 import { parseArgs } from 'node:util';
 
@@ -13,6 +14,9 @@ import { buildPlan, formatPlan, planCommitMessage, planRefspecs } from './lib/pl
 import { createSuiteResolver } from './lib/suites.mjs';
 import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
+
+const require = createRequire(import.meta.url);
+const { acquirePublishLock, releasePublishLock } = require('../../plugins/sidequest/lib/publish.js');
 
 const USAGE = `Usage: node scripts/release/cut.mjs [options]
 
@@ -27,7 +31,7 @@ tag, then pushes the plugin tags separately.
   --publish-branch <name>  Branch the release lands on (default main)
   --remote <name>          Remote to publish to (default origin)
   --dry-run                Plan only: no file writes, no git mutations
-  --push                   Run the atomic push instead of only printing it
+  --push                   Acquire the publish lock and run the atomic push
   --skip-tests             Do not run the changed plugins' suites
   --no-merge               The tree is already prepared; skip the fast-forward merge
   --no-branch-check        Allow cutting from a branch other than --publish-branch
@@ -51,6 +55,37 @@ const SUITE_CREDENTIAL_DENYLIST = [
   'GIT_AUTHOR_NAME', 'GIT_AUTHOR_EMAIL', 'GIT_COMMITTER_NAME', 'GIT_COMMITTER_EMAIL',
   'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'GITLAB_TOKEN', 'CI_JOB_TOKEN',
 ];
+
+function releaseLockOwner() {
+  return process.env.SIDEQUEST_AGENT
+    || process.env.CLAUDE_CODE_SESSION_ID
+    || process.env.CLAUDE_SESSION_ID
+    || `release-cut-${process.pid}`;
+}
+
+function releaseSessionId() {
+  return process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || process.env.SIDEQUEST_SESSION || null;
+}
+
+function createPublishLock(repoRoot) {
+  const options = { by: releaseLockOwner(), sessionId: releaseSessionId() };
+  return {
+    acquire: () => acquirePublishLock(repoRoot, options),
+    release: () => releasePublishLock(repoRoot, options),
+  };
+}
+
+function publishLockRefusal(result) {
+  const holder = result.holder ?? {};
+  const owner = holder.by || holder.sessionId || 'another publisher';
+  return `publish lock is held by "${owner}". Wait for it to release, or use sidequest publish lock --steal only after confirming the holder is dead.`;
+}
+
+function publishLockReleaseFailure(result) {
+  const holder = result?.holder ?? {};
+  const owner = holder.by || holder.sessionId || 'another publisher';
+  return `could not release the publish lock owned by "${owner}". Release it with sidequest publish unlock after confirming the published refs.`;
+}
 
 export function suiteEnvironment(base = process.env) {
   const env = { ...base };
@@ -397,117 +432,133 @@ export async function cut(options = {}) {
     return { status: 'dry-run', plan, pushCommands };
   }
 
-  // The plan was read from the pin, so the tree the writes land on has to BE the pin.
-  if (mode === 'normal') {
-    if (!noMerge && pinned !== basePin) git.mergeFastForward(pinned);
-    const head = git.revParse('HEAD');
-    if (head !== pinned) {
-      throw new Error(`the working tree is at ${head} but the window was planned from ${pinned}; refusing to release a tree nobody planned`);
-    }
-  }
-
-  if (mode === 'hotfix') {
-    for (const fragment of plan.selected) {
-      if (!fragment.commit) throw new Error(`${fragment.ref} has no "commit" field, so a hotfix cannot cherry-pick it`);
-      if (git.isAncestor(fragment.commit, 'HEAD')) continue;
-      git.cherryPick(fragment.commit);
-    }
-  }
-
-  // The tree changed under the plan (merge or cherry-picks), so re-check the two things the plan
-  // assumed about it before writing anything.
-  const disk = diskSource(repoRoot);
-  const current = loadManifest(disk);
-  const moved = plan.plugins.filter((plugin) => current.plugins.get(plugin.name)?.version !== plugin.from);
-  if (moved.length > 0) {
-    throw new Error(
-      `plugin versions moved after the plan was built: ${moved.map((plugin) => plugin.name).join(', ')}. ` +
-      'Only a cut may write a version, so those commits must not be released this way.',
-    );
-  }
-  const releasedNow = releasedFragmentFingerprints(readRepoChangelog(disk));
-  const alreadyOut = plan.selected.filter((fragment) => releasedNow.has(fragmentFingerprint(fragment)));
-  if (alreadyOut.length > 0) {
-    throw new Error(`${alreadyOut.map((fragment) => fragment.ref).join(', ')} became released while this cut was building; nothing was published`);
-  }
-
-  const touched = [
-    ...applyVersions(repoRoot, current, { plugins: plan.plugins, marketplaceVersion: plan.marketplace.to }),
-    ...applyChangelogs(repoRoot, plan),
-  ];
-
-  const consumed = [];
-  for (const fragment of plan.selected) {
-    const relative = fragmentFile(fragment.ref);
-    const absolute = resolveInRepo(repoRoot, relative, `fragment for ${fragment.ref}`);
-    if (existsSync(absolute)) {
-      rmSync(absolute);
-      consumed.push(relative);
-    }
-  }
-
-  const message = planCommitMessage(plan);
-  git.add([...new Set([...touched, ...consumed])].sort());
-  git.commit(message);
-  const commit = git.revParse('HEAD');
-  git.tag(plan.tag, message);
-  for (const plugin of plan.plugins) {
-    git.tag(`${plugin.name}-v${plugin.to}`, `${plugin.name} ${plugin.to} (${plan.tag})`);
-  }
-  plan.commit = commit;
-
-  let marketplacePublished = false;
+  let publishLock = null;
+  let publishLockAcquired = false;
   try {
-    const failures = [];
-    const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log, tag: plan.tag });
-    if (!skipTests) {
-      for (const suite of plan.suites) {
-        const result = runSuite(suite);
-        if (result.code !== 0) {
-          const logNotice = result.logPath ? ` (log: ${result.logPath})` : '';
-          failures.push(`${suite.plugin}: ${result.command} exited ${result.code}${logNotice}`);
-        }
+    if (push) {
+      publishLock = options.publishLock ?? createPublishLock(repoRoot);
+      const acquired = await publishLock.acquire();
+      if (!acquired?.ok) throw new Error(publishLockRefusal(acquired ?? {}));
+      publishLockAcquired = true;
+    }
+
+    // The plan was read from the pin, so the tree the writes land on has to BE the pin.
+    if (mode === 'normal') {
+      if (!noMerge && pinned !== basePin) git.mergeFastForward(pinned);
+      const head = git.revParse('HEAD');
+      if (head !== pinned) {
+        throw new Error(`the working tree is at ${head} but the window was planned from ${pinned}; refusing to release a tree nobody planned`);
       }
     }
-    if (failures.length > 0) {
+
+    if (mode === 'hotfix') {
+      for (const fragment of plan.selected) {
+        if (!fragment.commit) throw new Error(`${fragment.ref} has no "commit" field, so a hotfix cannot cherry-pick it`);
+        if (git.isAncestor(fragment.commit, 'HEAD')) continue;
+        git.cherryPick(fragment.commit);
+      }
+    }
+
+    // The tree changed under the plan (merge or cherry-picks), so re-check the two things the plan
+    // assumed about it before writing anything.
+    const disk = diskSource(repoRoot);
+    const current = loadManifest(disk);
+    const moved = plan.plugins.filter((plugin) => current.plugins.get(plugin.name)?.version !== plugin.from);
+    if (moved.length > 0) {
       throw new Error(
-        `release suites failed, nothing was published:\n  ${failures.join('\n  ')}`,
+        `plugin versions moved after the plan was built: ${moved.map((plugin) => plugin.name).join(', ')}. ` +
+        'Only a cut may write a version, so those commits must not be released this way.',
       );
     }
-    assertReleaseIntact(git, plan, commit);
-
-    const refspecs = planRefspecs(plan, commit);
-    const marketplacePush = marketplaceRefspecs(plan, commit);
-    const pluginPush = pluginTagRefspecs(plan);
-    const pushCommands = publishCommands(plan, { remote, commit });
-    let pushed = false;
-    if (push) {
-      git.pushAtomic(remote, marketplacePush);
-      marketplacePublished = true;
-      if (pluginPush.length > 0) git.pushAtomic(remote, pluginPush);
-      if (githubRemote) {
-        const assertReleasePublished = options.assertGitHubReleasePublished
-          ?? ((repoRoot, tag, releaseCommit) => assertGitHubReleasePublished(repoRoot, tag, releaseCommit));
-        await assertReleasePublished(repoRoot, plan.tag, commit);
-      }
-      pushed = true;
-      log(`published ${plan.tag} (${commit})`);
-    } else {
-      log(`built ${plan.tag} locally as ${commit}; publish it with:`);
-      if (ci?.status === 'passed') {
-        log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) passed.`);
-      } else if (ci?.status === 'overridden') {
-        log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) was overridden: ${ci.reason}`);
-      }
-      for (const command of pushCommands) log(`  ${command}`);
+    const releasedNow = releasedFragmentFingerprints(readRepoChangelog(disk));
+    const alreadyOut = plan.selected.filter((fragment) => releasedNow.has(fragmentFingerprint(fragment)));
+    if (alreadyOut.length > 0) {
+      throw new Error(`${alreadyOut.map((fragment) => fragment.ref).join(', ')} became released while this cut was building; nothing was published`);
     }
 
-    return {
-      status: 'cut', plan, commit, message, pushed, refspecs, marketplacePush, pluginPush,
-      pushCommands, touched, consumed, ci,
-    };
-  } catch (error) {
-    throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`, { cause: error });
+    const touched = [
+      ...applyVersions(repoRoot, current, { plugins: plan.plugins, marketplaceVersion: plan.marketplace.to }),
+      ...applyChangelogs(repoRoot, plan),
+    ];
+
+    const consumed = [];
+    for (const fragment of plan.selected) {
+      const relative = fragmentFile(fragment.ref);
+      const absolute = resolveInRepo(repoRoot, relative, `fragment for ${fragment.ref}`);
+      if (existsSync(absolute)) {
+        rmSync(absolute);
+        consumed.push(relative);
+      }
+    }
+
+    const message = planCommitMessage(plan);
+    git.add([...new Set([...touched, ...consumed])].sort());
+    git.commit(message);
+    const commit = git.revParse('HEAD');
+    git.tag(plan.tag, message);
+    for (const plugin of plan.plugins) {
+      git.tag(`${plugin.name}-v${plugin.to}`, `${plugin.name} ${plugin.to} (${plan.tag})`);
+    }
+    plan.commit = commit;
+
+    let marketplacePublished = false;
+    try {
+      const failures = [];
+      const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log, tag: plan.tag });
+      if (!skipTests) {
+        for (const suite of plan.suites) {
+          const result = runSuite(suite);
+          if (result.code !== 0) {
+            const logNotice = result.logPath ? ` (log: ${result.logPath})` : '';
+            failures.push(`${suite.plugin}: ${result.command} exited ${result.code}${logNotice}`);
+          }
+        }
+      }
+      if (failures.length > 0) {
+        throw new Error(
+          `release suites failed, nothing was published:\n  ${failures.join('\n  ')}`,
+        );
+      }
+      assertReleaseIntact(git, plan, commit);
+
+      const refspecs = planRefspecs(plan, commit);
+      const marketplacePush = marketplaceRefspecs(plan, commit);
+      const pluginPush = pluginTagRefspecs(plan);
+      const pushCommands = publishCommands(plan, { remote, commit });
+      let pushed = false;
+      if (push) {
+        git.pushAtomic(remote, marketplacePush);
+        marketplacePublished = true;
+        if (pluginPush.length > 0) git.pushAtomic(remote, pluginPush);
+        if (githubRemote) {
+          const assertReleasePublished = options.assertGitHubReleasePublished
+            ?? ((repoRoot, tag, releaseCommit) => assertGitHubReleasePublished(repoRoot, tag, releaseCommit));
+          await assertReleasePublished(repoRoot, plan.tag, commit);
+        }
+        pushed = true;
+        log(`published ${plan.tag} (${commit})`);
+      } else {
+        log(`built ${plan.tag} locally as ${commit}; publish it with:`);
+        if (ci?.status === 'passed') {
+          log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) passed.`);
+        } else if (ci?.status === 'overridden') {
+          log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) was overridden: ${ci.reason}`);
+        }
+        for (const command of pushCommands) log(`  ${command}`);
+      }
+
+      return {
+        status: 'cut', plan, commit, message, pushed, refspecs, marketplacePush, pluginPush,
+        pushCommands, touched, consumed, ci,
+      };
+    } catch (error) {
+      throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`, { cause: error });
+    }
+  } finally {
+    if (publishLockAcquired) {
+      const released = await publishLock.release();
+      if (!released?.ok) throw new Error(publishLockReleaseFailure(released));
+    }
   }
 }
 

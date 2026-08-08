@@ -22,19 +22,21 @@ caches plugins by version, so that manifest change is what users install.
 A GitHub Release is notification-only. `.github/workflows/release-cut.yml` reads the marketplace
 version from `main` once a day, does nothing when that version already has a Release, otherwise tags
 that exact `main` commit and creates one GitHub Release with generated notes. It also has a manual
-trigger. It never runs `cut.mjs`, changes a version, or pushes `main`; cuts stay local and human-run
-under the publish lock.
+trigger. It never runs `cut.mjs`, changes a version, or pushes `main`; cuts stay local until a
+human runs them.
 
-Before any publication, acquire the Sidequest lock and keep it until the atomic push completes:
+Preview the window with `--dry-run`. To publish it, use `--push`: it acquires the Sidequest publish
+lock before changing the local release window and releases it after the final push or any failure.
+If another publisher holds the lock, the cut stops before it changes the window.
 
 ```bash
-sidequest publish lock --by <who>
-# run cut.mjs, review its plan and checks, then run its printed git push --atomic command
-sidequest publish unlock --by <who>
+node scripts/release/cut.mjs --sha origin/dev --dry-run
+node scripts/release/cut.mjs --sha origin/dev --push
 ```
 
-The pre-push guard on `main` enforces the lock. If a cut fails before its final push, unlock after
-recording the failure so another window can retry.
+The pre-push guard on `main` still enforces the lock for manual pushes. Do not bypass a held lock;
+wait for its holder to release it, or reclaim it with `sidequest publish lock --steal` only after
+confirming the holder is dead.
 
 ## The shape of a window
 
