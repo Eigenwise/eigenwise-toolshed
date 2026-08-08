@@ -38,7 +38,7 @@ async function withEnvironment(entries, action) {
   }
 }
 
-test('a real push lands the branch and every tag on the remote at once', async (t) => {
+test('a real push atomically lands main and the marketplace tag before plugin tags', async (t) => {
   const repo = setup(t);
   repo.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'minor' });
   repo.writeFragment('SQ-2', { plugins: ['workbench'], bump: 'patch' });
