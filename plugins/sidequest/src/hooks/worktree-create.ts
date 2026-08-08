@@ -54,10 +54,10 @@ function baseRef(repository: string): string {
   }
 }
 
-function createWorktree(repository: string, name: string, target: string): void {
+function createWorktree(repository: string, name: string, target: string): boolean {
   fs.mkdirSync(path.dirname(target), { recursive: true });
   if (fs.existsSync(target)) {
-    if (existingWorktreeMatches(repository, target)) return;
+    if (existingWorktreeMatches(repository, target)) return false;
     if (fs.statSync(target).isDirectory() && fs.readdirSync(target).length === 0) fs.rmdirSync(target);
     else throw new Error(`worktree destination already exists and is not registered to this repository: ${target}`);
   }
@@ -65,9 +65,28 @@ function createWorktree(repository: string, name: string, target: string): void 
   git(repository, ['check-ref-format', '--branch', branch]);
   if (gitSucceeds(repository, ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`])) {
     git(repository, ['worktree', 'add', target, branch]);
-    return;
+    return true;
   }
   git(repository, ['worktree', 'add', '-b', branch, target, baseRef(repository)]);
+  return true;
+}
+
+function provisioningConfig(repository: string): { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null } {
+  const store = require(runtimeModule('store')) as {
+    findProject: (project: string) => { ok: boolean; slug?: string };
+    boardConfig: (slug: string) => { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null } | null;
+  };
+  const project = store.findProject(repository);
+  return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
+}
+
+function removeCreatedWorktree(repository: string, target: string): void {
+  try {
+    git(repository, ['worktree', 'remove', '--force', target]);
+  } catch (_) {
+    fs.rmSync(target, { recursive: true, force: true });
+    git(repository, ['worktree', 'prune']);
+  }
 }
 
 function main(): void {
@@ -79,9 +98,18 @@ function main(): void {
   const repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule('worktrees')) as {
     namedWorktreePath: (repo: string, worktreeName: string) => string;
+    provisionWorktree: (repo: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }) => void;
   };
   const target = worktrees.namedWorktreePath(repository, name);
-  createWorktree(repository, name, target);
+  const created = createWorktree(repository, name, target);
+  if (created) {
+    try {
+      worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
+    } catch (error) {
+      removeCreatedWorktree(repository, target);
+      throw error;
+    }
+  }
   process.stdout.write(`${target}\n`);
 }
 

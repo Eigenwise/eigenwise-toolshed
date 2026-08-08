@@ -107,7 +107,7 @@ function baseRef(repository) {
 function createWorktree(repository, name, target) {
   import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(target), { recursive: true });
   if (import_node_fs2.default.existsSync(target)) {
-    if (existingWorktreeMatches(repository, target)) return;
+    if (existingWorktreeMatches(repository, target)) return false;
     if (import_node_fs2.default.statSync(target).isDirectory() && import_node_fs2.default.readdirSync(target).length === 0) import_node_fs2.default.rmdirSync(target);
     else throw new Error(`worktree destination already exists and is not registered to this repository: ${target}`);
   }
@@ -115,9 +115,23 @@ function createWorktree(repository, name, target) {
   git(repository, ["check-ref-format", "--branch", branch]);
   if (gitSucceeds(repository, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) {
     git(repository, ["worktree", "add", target, branch]);
-    return;
+    return true;
   }
   git(repository, ["worktree", "add", "-b", branch, target, baseRef(repository)]);
+  return true;
+}
+function provisioningConfig(repository) {
+  const store = require(runtimeModule("store"));
+  const project = store.findProject(repository);
+  return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
+}
+function removeCreatedWorktree(repository, target) {
+  try {
+    git(repository, ["worktree", "remove", "--force", target]);
+  } catch (_) {
+    import_node_fs2.default.rmSync(target, { recursive: true, force: true });
+    git(repository, ["worktree", "prune"]);
+  }
 }
 function main() {
   const input = readStdin();
@@ -128,7 +142,15 @@ function main() {
   const repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule("worktrees"));
   const target = worktrees.namedWorktreePath(repository, name);
-  createWorktree(repository, name, target);
+  const created = createWorktree(repository, name, target);
+  if (created) {
+    try {
+      worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
+    } catch (error) {
+      removeCreatedWorktree(repository, target);
+      throw error;
+    }
+  }
   process.stdout.write(`${target}
 `);
 }
