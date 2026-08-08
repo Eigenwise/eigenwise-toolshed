@@ -254,6 +254,62 @@ test('the claim sweep releases a dead executor with a pending scope request', ()
 });
 
 
+test('a terminal dispatch lets the orchestrator take over and submit the existing claim', () => {
+  const ticket = addRouted('terminal claim takeover');
+  const prepared = claimRouted(ticket, 'terminated-executor');
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    error: 'Prompt is too long',
+  }).ok, true);
+
+  const requiresForce = store.claimTicket(slug, ticket.ref, 'orchestrator', {
+    direct: true,
+    reason: 'The executor has a recorded terminal dispatch outcome and cannot submit its verified commit.',
+  });
+  assert.equal(requiresForce.ok, false);
+  assert.equal(requiresForce.reason, 'terminal_claim_takeover_required');
+
+  const takeover = store.claimTicket(slug, ticket.ref, 'orchestrator', {
+    direct: true,
+    force: true,
+    reason: 'The executor has a recorded terminal dispatch outcome and cannot submit its verified commit.',
+  });
+  assert.equal(takeover.ok, true);
+  const claimed = store.getTicket(slug, ticket.ref);
+  assert.equal(claimed.claim.by, 'orchestrator');
+  assert.deepEqual(claimed.claimTakeover, {
+    by: 'orchestrator',
+    at: claimed.claim.at,
+    previousBy: 'terminated-executor',
+    evidence: {
+      outcome: 'died',
+      terminalAt: claimed.claimTakeover.evidence.terminalAt,
+      terminalSource: 'agent-terminal-failure',
+    },
+  });
+
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = "terminal takeover fixture";\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'terminal takeover fixture']);
+  const submitted = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: git(['rev-parse', 'HEAD']) });
+  assert.equal(submitted.ok, true);
+});
+
+test('a non-terminal dispatch still refuses a forced direct takeover', () => {
+  const ticket = addRouted('live claim remains protected');
+  claimRouted(ticket, 'live-executor');
+  const takeover = store.claimTicket(slug, ticket.ref, 'orchestrator', {
+    direct: true,
+    force: true,
+    reason: 'The orchestrator is attempting the terminal-only forced takeover regression check.',
+  });
+  assert.equal(takeover.ok, false);
+  assert.equal(takeover.reason, 'direct_conflict');
+  assert.equal(store.getTicket(slug, ticket.ref).claim.by, 'live-executor');
+});
+
+
 test('a shared-tree write dispatch refuses an empty verification completion unless it declares a no-op', () => {
   const ticket = store.createTicket(slug, {
     title: 'shared-tree completion tree check',
