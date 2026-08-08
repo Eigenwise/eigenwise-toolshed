@@ -2,7 +2,14 @@
 
 The TypeScript language server retains in-memory projects for Claude Code agent worktrees after those worktrees have been deleted, then continues pushing diagnostics for their old paths into the orchestrator's turns. The resulting blocks look like ordinary TypeScript errors, even though they describe files and directories that no longer exist.
 
-This has already caused a real integration error to be waved through in this repository. The false diagnostics trained the integrator to discount injected errors, and that led to a genuine error being missed in SQ-1464. The distinction cannot be made reliably by reading an individual diagnostic block.
+This has already caused a real error to reach our main branch. An agent's worktree carried two genuine TypeScript errors, and the diagnostics reported them correctly before the merge:
+
+```text
+✘ [7:10] Module '"../src/lib/suite-resolver.ts"' declares 'resolveSuite' locally, but it is not exported. [2459]
+✘ [7:30] An import path can only end with a '.ts' extension when 'allowImportingTsExtensions' is enabled. [5097]
+```
+
+Those were skipped, because by then every diagnostic arriving from an `agent-*` worktree had been false. The merge landed and the typecheck failed. The distinction cannot be made reliably by reading an individual diagnostic block: a stale one and a real one are identical in form.
 
 ## Reproduction
 
