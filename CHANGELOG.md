@@ -8,6 +8,41 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.420.0 (2026-08-08)
+
+### observability 0.6.0 → 0.6.1
+
+#### Fixes
+
+- Requeue exhausted observability deliveries (SQ-1526)
+  The observer can requeue exhausted outbox records through its loopback API.
+
+### sidequest 4.41.1 → 4.41.2
+
+#### Fixes
+
+- Move executor worktrees outside project roots (SQ-1425)
+  New isolated worktrees live under the per-project Sidequest state root. Existing in-project worktrees remain sweepable while they drain.
+- Reap stale Sidequest MCP servers (SQ-1491)
+  Sidequest now stops superseded MCP servers from the same Claude process when a replacement starts.
+- Validate MCP enum arguments (SQ-1527)
+  Sidequest MCP tools now reject invalid enum argument values with the accepted values listed in the error.
+- Deduplicate repeated planning warnings (SQ-1528)
+  Planning warnings now appear once per ticket in a Claude session, with large warning sets capped and ranked.
+- Keep executor scratch files in isolated worktrees (SQ-1530)
+  Executor briefings now direct scratch files to the executor's own worktree instead of the shared session scratchpad.
+- Make deferred sweep report draining race-safe (SQ-1531)
+  Prevent deferred sweep reports from being replayed when a new worker writes a fresh report during session startup.
+- Keep stale worktree cwd warnings after worktree relocation (SQ-1532)
+  Stale board-server cwd warnings now recognize linked worktrees in the Sidequest state root, legacy project path, or another registered location.
+
+### workbench 0.83.1 → 0.83.2
+
+#### Fixes
+
+- Make CI checks fail closed (SQ-1499)
+  Workbench now waits for GitHub Actions runs and reports missing, failed, or inaccessible CI instead of treating silence as green.
+
 ## v3.419.0 (2026-08-08)
 
 ### sidequest 4.41.0 → 4.41.1
