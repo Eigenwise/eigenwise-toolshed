@@ -7,8 +7,10 @@ import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
-const testConcurrency = Math.min(8, Math.max(2, Math.floor(os.availableParallelism() / 2)));
+const availableParallelism = os.availableParallelism();
+const testConcurrency = Math.min(8, Math.max(2, availableParallelism));
 const testPhaseTimeoutMilliseconds = 480_000;
+const testPhaseWarningMilliseconds = testPhaseTimeoutMilliseconds * 0.75;
 // Benchmarks live behind `npm run test:perf`. Without this exclusion the glob
 // below sweeps them back into the default suite, which is the 23 seconds
 // SQ-1387 exists to remove.
@@ -18,6 +20,7 @@ const testFiles = (await fs.readdir(testDirectory))
   .map((name) => path.join(testDirectory, name));
 
 function runTests(phase, files, environment) {
+  const phaseStartTime = performance.now();
   const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
     cwd: pluginRoot,
     stdio: 'inherit',
@@ -25,11 +28,19 @@ function runTests(phase, files, environment) {
     env: environment,
     timeout: testPhaseTimeoutMilliseconds,
   });
+  const phaseDurationMilliseconds = performance.now() - phaseStartTime;
   if (result.error?.code === 'ETIMEDOUT') {
-    throw new Error(`Sidequest ${phase} tests timed out after ${testPhaseTimeoutMilliseconds}ms.`);
+    throw new Error(
+      `Sidequest ${phase} tests exceeded their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`,
+    );
   }
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Sidequest ${phase} tests exited ${result.status ?? 1}.`);
+  if (phaseDurationMilliseconds > testPhaseWarningMilliseconds) {
+    throw new Error(
+      `Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`,
+    );
+  }
 }
 
 const suiteTemporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-full-suite-'));
