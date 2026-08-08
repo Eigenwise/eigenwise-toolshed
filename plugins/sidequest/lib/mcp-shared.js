@@ -10,6 +10,19 @@ const publish = require("./publish");
 const execNames = require("./exec-names");
 const { claimRefusalMessage } = require("./refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-preflight");
+const {
+  MAX_CONTEXT_PAGE_BYTES,
+  contextRevision,
+  decodeContextHandle,
+  contextCursor,
+  decodeContextCursor,
+  contextRetrieval,
+  contextPageByteLimit,
+  utf8Slice,
+  rowsWithinByteLimit,
+  utf8ByteLength,
+  utf8Excerpt
+} = require("./context-packet");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
 const CATEGORY_TAXONOMY_WARNING = "Category stamped without reading the taxonomy this session — run category_list and confirm the description matches.";
@@ -200,11 +213,13 @@ const LABELS_PROP = { type: "array", items: { type: "string" } };
 const CONTRACT_PROP = (verb) => ({ type: "array", items: { type: "string" }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: "string", description: "Filter by resolved model slug." };
 const TOOL_DESCRIPTION_OVERRIDES = {
+  context_page: "Continue context.",
+  list: "List; poll via changes/pulse.",
   pulse: "Read ticket liveness.",
   changes: "Poll ticket changes.",
   ready: "List ready ticket refs.",
-  story: "Manage stories.",
-  story_contract: "Read or page a 256 KiB story contract.",
+  story: "Stories.",
+  story_contract: "Read story contract pages.",
   story_log: "Read, append, or rotate a story log.",
   checkpoint: "Record candidate; retain claim.",
   sweepClaims: "Release dead claims; live claims stay.",
@@ -214,24 +229,27 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   submit: "Submit verified work.",
   integrate: "Deliver verified work.",
   comment: "Add a handoff comment.",
+  comments: "Read comments before work.",
   plan: "Set ticket plan.",
   link: "Link tickets.",
   remove: "Delete ticket; claims need force:true.",
-  claim: "Claim before work; pass routed executor and effort, proceed only on ok:true.",
-  dispatch: "Dispatch a ticket to its stable route; returns a token and spawn spec.",
-  done: "Finish report; stamp actual model and effort.",
-  release: "Release claim; oracle handoff retains ticket.",
+  claim: "Claim before work; proceed only on ok:true.",
+  dispatch: "Dispatch; returns a token and spawn spec.",
+  done: "Finish; stamp actual model and effort.",
+  release: "Release claim; retain oracle handoff.",
   groomClose: "Close integrated submission.",
   native_agent: "Get native Agent spawn spec.",
   archive: "Archive ticket(s).",
-  archive_board: "Archive named board.",
+  archive_board: "",
   assign: "Set ticket assignee.",
-  category_add: "Add category.",
-  category_detach: "Pin board category policy.",
-  category_edit: "Edit category.",
-  category_relink: "Reset board category policy.",
-  category_rm: "Remove category policy.",
-  global_fallback: "Read or set routing fallback.",
+  category_add: "",
+  category_list: "Taxonomy.",
+  category_detach: "",
+  category_edit: "",
+  category_relink: "",
+  category_rm: "",
+  route_recipe: "",
+  global_fallback: "",
   profile_list: "",
   profile_get: "",
   profile_create: "",
@@ -241,10 +259,10 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   profile_repoint: "",
   profile_promote: "",
   new_board_profile: "",
-  models: "Read models and routes.",
+  models: "",
   projects: "",
   unarchive: "",
-  unarchive_board: "Restore named board.",
+  unarchive_board: "",
   unlink: "Unlink tickets."
 };
 function conciseDescription(description) {
@@ -337,6 +355,172 @@ function preservesFinalReport(ticket, comment) {
 }
 function compactListRow(ticket) {
   return Object.fromEntries(Object.entries(ticket || {}).filter(([, value]) => value != null && (!Array.isArray(value) || value.length > 0)));
+}
+const TICKET_BODY_EXCERPT_BYTES = 4 * 1024;
+function bodyContextRetrieval(options) {
+  return contextRetrieval({
+    tool: options.tool,
+    project: options.project,
+    kind: "body",
+    field: options.field,
+    position: options.position,
+    revision: contextRevision(options.value),
+    reason: options.reason,
+    selector: options.selector
+  });
+}
+function ticketWithContextHandles(project, ticket) {
+  const visible = Object.assign({}, ticket);
+  const description = String(ticket.description || "");
+  if (utf8ByteLength(description) > TICKET_BODY_EXCERPT_BYTES) {
+    const excerpt = utf8Excerpt(description, TICKET_BODY_EXCERPT_BYTES);
+    Object.assign(visible, {
+      description: excerpt.text,
+      descriptionBytes: utf8ByteLength(description),
+      descriptionTruncated: true,
+      descriptionRetrieval: bodyContextRetrieval({
+        tool: "list",
+        project,
+        field: "description",
+        position: "description",
+        value: description,
+        selector: { ref: ticket.ref },
+        reason: "truncated"
+      })
+    });
+  }
+  if (Array.isArray(ticket.comments)) {
+    visible.comments = ticket.comments.map((comment) => {
+      const body = String(comment.body || "");
+      if (utf8ByteLength(body) <= TICKET_BODY_EXCERPT_BYTES) return comment;
+      const excerpt = utf8Excerpt(body, TICKET_BODY_EXCERPT_BYTES);
+      return Object.assign({}, comment, {
+        body: excerpt.text,
+        bodyBytes: utf8ByteLength(body),
+        bodyTruncated: true,
+        retrieval: bodyContextRetrieval({
+          tool: "list",
+          project,
+          field: "comments.body",
+          position: String(comment.id),
+          value: body,
+          selector: { ref: ticket.ref, comment: comment.id },
+          reason: "truncated"
+        })
+      });
+    });
+  }
+  return visible;
+}
+function compactCommentWithContext(project, ticket, comment, originalComment, preserveBody = false) {
+  const compact = compactComment(comment, preserveBody);
+  if (!compact.bodyOmitted && !compact.bodyTruncated) return compact;
+  const body = String(originalComment?.body || "");
+  compact.retrieval = bodyContextRetrieval({
+    tool: "comments",
+    project,
+    field: "comments.body",
+    position: String(comment.id),
+    value: body,
+    selector: { ref: ticket.ref, comment: comment.id },
+    reason: compact.bodyOmitted ? "elided" : "truncated"
+  });
+  return compact;
+}
+function listContextArguments(args) {
+  return Object.fromEntries(["status", "archived", "detail", "all"].filter((key) => args[key] !== void 0).map((key) => [key, args[key]]));
+}
+function listContextRows(project, args) {
+  const status = args.status == null && !args.all ? ["todo", "doing"] : args.status;
+  const brief = !args.detail;
+  const payload = store.listPayload(project, {
+    status,
+    archived: args.archived,
+    brief,
+    cursor: "0",
+    limit: Number.MAX_SAFE_INTEGER,
+    all: args.all
+  });
+  return brief ? payload.tickets.map(compactListRow) : payload.tickets;
+}
+function listRowsContextRetrieval(project, args, position) {
+  const sourceArguments = listContextArguments(args);
+  const rows = listContextRows(project, sourceArguments);
+  return contextRetrieval({
+    tool: "list",
+    project,
+    kind: "rows",
+    field: "tickets",
+    position,
+    revision: contextRevision(rows),
+    reason: "budget",
+    arguments: sourceArguments
+  }, position);
+}
+function resolvedContextBody(source) {
+  const ticket = store.getTicket(source.project, source.selector.ref);
+  if (!ticket) throw new Error(`context_page: source ticket "${source.selector.ref}" no longer exists.`);
+  if (source.field === "description" && source.position === "description") return String(ticket.description || "");
+  if (source.field === "comments.body") {
+    const comment = (Array.isArray(ticket.comments) ? ticket.comments : []).find((entry) => entry.id === source.selector.comment && entry.id === source.position);
+    if (!comment) throw new Error(`context_page: source comment "${source.selector.comment}" no longer exists.`);
+    return String(comment.body || "");
+  }
+  throw new Error(`context_page: unsupported ${source.tool} field "${source.field}".`);
+}
+function assertCurrentContextRevision(source, currentRevision, expectedRevision) {
+  if (String(expectedRevision || "") !== source.revision) {
+    throw new Error(`context_page: expectedRevision does not match the ${source.tool} handle revision.`);
+  }
+  if (currentRevision !== source.revision) {
+    throw new Error(`context_page: stale ${source.tool} handle; rerun ${source.tool} and use its new retrieval handle.`);
+  }
+}
+function resolveContextPage(args) {
+  const source = decodeContextHandle(args.handle);
+  if (!["list", "comments"].includes(source.tool)) {
+    throw new Error(`context_page: handle belongs to unsupported source tool "${source.tool}".`);
+  }
+  const position = decodeContextCursor(String(args.handle), args.cursor);
+  const limit = contextPageByteLimit(args.limit);
+  if (source.kind === "body") {
+    const body = resolvedContextBody(source);
+    assertCurrentContextRevision(source, contextRevision(body), args.expectedRevision);
+    const page2 = utf8Slice(body, position, limit);
+    return {
+      source: source.tool,
+      field: source.field,
+      position: source.position,
+      reason: source.reason,
+      revision: source.revision,
+      body: page2.body,
+      cursor: args.cursor,
+      pageBytes: page2.pageBytes,
+      totalBytes: page2.totalBytes,
+      nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
+      complete: page2.nextPosition == null
+    };
+  }
+  if (source.tool !== "list" || source.field !== "tickets") {
+    throw new Error(`context_page: handle belongs to the wrong tool for ${source.kind} pages.`);
+  }
+  const rows = listContextRows(source.project, source.arguments);
+  assertCurrentContextRevision(source, contextRevision(rows), args.expectedRevision);
+  const page = rowsWithinByteLimit(rows, position, limit);
+  return {
+    source: source.tool,
+    field: source.field,
+    position: source.position,
+    reason: source.reason,
+    revision: source.revision,
+    rows: page.rows,
+    cursor: args.cursor,
+    pageBytes: page.pageBytes,
+    totalRows: page.totalRows,
+    returned: page.rows.length,
+    nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+    complete: page.nextPosition == null
+  };
 }
 function categoryListEntry(category, localRow, ticketCount, full) {
   if (!full) {
@@ -595,8 +779,13 @@ module.exports = {
   PAGE_LIMIT_MAX,
   boundedExcerpt,
   compactComment,
+  compactCommentWithContext,
   preservesFinalReport,
   compactListRow,
+  ticketWithContextHandles,
+  listRowsContextRetrieval,
+  resolveContextPage,
+  MAX_CONTEXT_PAGE_BYTES,
   categoryListEntry,
   pageArguments,
   pageRows,

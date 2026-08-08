@@ -43,7 +43,7 @@ const {
   PAGED_FULL_DEFAULT_LIMIT,
   PAGE_LIMIT_MAX,
   boundedExcerpt,
-  compactComment,
+  compactCommentWithContext,
   preservesFinalReport,
   categoryListEntry,
   pageArguments,
@@ -122,7 +122,14 @@ const tools = [
       }
       const unreadComments = since == null ? allComments : sinceIndex >= 0 ? allComments.slice(sinceIndex + 1) : allComments.filter((comment) => Date.parse(comment.at) > sinceMs);
       const history = store.commentHistory(unreadComments, full);
-      const comments = full ? history.comments : history.comments.map((comment) => compactComment(comment, preservesFinalReport(t, comment)));
+      const commentsById = new Map(unreadComments.map((comment) => [comment.id, comment]));
+      const comments = full ? history.comments : history.comments.map((comment) => compactCommentWithContext(
+        slug,
+        t,
+        comment,
+        commentsById.get(comment.id),
+        preservesFinalReport(t, comment)
+      ));
       const buildPayload = (page, visibleTotal, nextCursor) => {
         const payload = {
           ref: t.ref,

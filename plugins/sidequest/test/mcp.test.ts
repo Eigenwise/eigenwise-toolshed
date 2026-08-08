@@ -42,6 +42,7 @@ const NO_CATALOG_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-nocatalog-'
 process.env.SIDEQUEST_DISCOVERY_DIRS = NO_CATALOG_DIR;
 
 const mcp = require('../lib/mcp.js');
+const contextPacket = require('../lib/context-packet.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
@@ -221,7 +222,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'commit', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['context_page', 'list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'commit', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -230,6 +231,11 @@ test('tools/list advertises the board tools with input schemas', async () => {
   for (const t of resp.result.tools) {
     assert.strictEqual(t.inputSchema.type, 'object', `${t.name} has an object input schema`);
   }
+  const contextPage = resp.result.tools.find((tool: any) => tool.name === 'context_page');
+  assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
+  assert.equal(contextPage.inputSchema.properties.limit.maximum, 16 * 1024);
+  assert.match(contextPage.inputSchema.properties.cursor.description, /Opaque/);
+  assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
   const submit = resp.result.tools.find((tool: any) => tool.name === 'submit');
   assert.ok(submit.inputSchema.properties.base, 'submit exposes an explicit base');
   // body/commit are enforced by the handler for an ordinary submission, but are
@@ -250,6 +256,88 @@ test('tools/list advertises the board tools with input schemas', async () => {
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
   assert.deepEqual(verdict.inputSchema.properties.outcome.enum, ['accepted', 'rejected', 'inconclusive']);
+});
+
+test('context_page resumes Unicode bodies and rows with stable revision-safe cursors', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-page-'))).slug;
+  const files = ['plugins/sidequest/src/lib/mcp-read.ts', 'plugins/sidequest/src/lib/context-packet.ts'];
+  const description = `Unicode continuation: ${'測'.repeat(1600)}`;
+  const ticket = store.createTicket(project, { title: 'Context page body', description, files, source: 'test' });
+
+  const detail = await callTool('list', { project, ref: ticket.ref });
+  assert.deepEqual(detail.ticket.files, files, 'list(ref).ticket.files keeps its legacy shape');
+  assert.equal(detail.ticket.descriptionTruncated, true);
+  assert.equal(detail.ticket.descriptionRetrieval.tool, 'context_page');
+  const bodyArguments = detail.ticket.descriptionRetrieval.arguments;
+  const firstBodyPage = await callTool('context_page', { ...bodyArguments, limit: 1024 });
+  const repeatedBodyPage = await callTool('context_page', { ...bodyArguments, limit: 1024 });
+  assert.equal(firstBodyPage.nextCursor, repeatedBodyPage.nextCursor, 'unchanged sources produce stable cursors');
+  assert.ok(Buffer.byteLength(firstBodyPage.body, 'utf8') <= 1024);
+  assert.doesNotMatch(firstBodyPage.body, /�/);
+
+  let reconstructed = '';
+  let cursor = bodyArguments.cursor;
+  while (cursor !== null) {
+    const page = await callTool('context_page', { ...bodyArguments, cursor, limit: 1024 });
+    reconstructed += page.body;
+    cursor = page.nextCursor;
+  }
+  assert.equal(reconstructed, description);
+
+  const commentBody = `Nested body: ${'é'.repeat(3000)}`;
+  store.addComment(project, ticket.ref, { body: commentBody, by: 'context-page-test', kind: 'comment', source: 'test' });
+  const comments = await callTool('comments', { project, ref: ticket.ref });
+  const nestedRetrieval = comments.comments[0].retrieval;
+  assert.equal(nestedRetrieval.tool, 'context_page');
+  const nestedPage = await callTool('context_page', { ...nestedRetrieval.arguments, limit: 1024 });
+  assert.equal(nestedPage.body, contextPacket.utf8Excerpt(commentBody, 1024).text);
+  assert.equal(nestedPage.position, comments.comments[0].id);
+
+  const wrongRevision = await callToolRaw('context_page', {
+    ...nestedRetrieval.arguments,
+    expectedRevision: contextPacket.contextRevision('wrong revision'),
+  });
+  assert.equal(wrongRevision.isError, true);
+  assert.match(wrongRevision.content[0].text, /expectedRevision does not match/);
+
+  store.updateTicket(project, ticket.ref, { description: `${description} changed` });
+  const stale = await callToolRaw('context_page', { ...bodyArguments, limit: 1024 });
+  assert.equal(stale.isError, true);
+  assert.match(stale.content[0].text, /stale list handle/);
+
+  const unsupportedRevision = contextPacket.contextRevision('unsupported');
+  const unsupportedHandle = contextPacket.createContextHandle({
+    tool: 'story_contract', project, kind: 'body', field: 'executionContract',
+    position: 'executionContract', revision: unsupportedRevision, reason: 'truncated', selector: { story: 'US-1' },
+  });
+  const wrongTool = await callToolRaw('context_page', {
+    handle: unsupportedHandle,
+    cursor: contextPacket.contextCursor(unsupportedHandle, 0),
+    expectedRevision: unsupportedRevision,
+  });
+  assert.equal(wrongTool.isError, true);
+  assert.match(wrongTool.content[0].text, /unsupported source tool "story_contract"/);
+
+  const rowProject = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-rows-'))).slug;
+  for (let index = 0; index < 45; index += 1) {
+    store.createTicket(rowProject, { title: `Context row ${index}`, source: 'test' });
+  }
+  const listed = await callTool('list', { project: rowProject });
+  assert.equal(listed.returned, 40);
+  assert.equal(listed.retrieval.tool, 'context_page');
+  const rowArguments = listed.retrieval.arguments;
+  const rowPage = await callTool('context_page', { ...rowArguments, limit: 4096 });
+  const repeatedRowPage = await callTool('context_page', { ...rowArguments, limit: 4096 });
+  assert.deepEqual(rowPage, repeatedRowPage);
+  assert.equal(rowPage.source, 'list');
+  assert.equal(rowPage.totalRows, 45);
+  assert.equal(rowPage.returned, 5);
+  assert.equal(rowPage.complete, true);
+
+  store.createTicket(rowProject, { title: 'Revision invalidator', source: 'test' });
+  const staleRows = await callToolRaw('context_page', { ...rowArguments, limit: 4096 });
+  assert.equal(staleRows.isError, true);
+  assert.match(staleRows.content[0].text, /stale list handle/);
 });
 
 test('add and update preserve descriptions and expose storyId explicitly', async () => {

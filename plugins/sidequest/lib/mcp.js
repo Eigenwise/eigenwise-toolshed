@@ -118,6 +118,11 @@ async function runTool(tool, args) {
   return enqueueMutation(board, () => tool.handler(args));
 }
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
+  context_page: {
+    cursor: "Opaque.",
+    limit: "UTF-8 bytes.",
+    expectedRevision: "Required revision."
+  },
   add: { complexity: "Legacy score; why required." },
   comments: {
     full: "Whole bodies; bypasses elision.",

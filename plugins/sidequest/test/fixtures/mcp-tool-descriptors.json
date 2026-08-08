@@ -1,7 +1,38 @@
 [
   {
+    "name": "context_page",
+    "description": "Continue context.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "handle": {
+          "type": "string"
+        },
+        "cursor": {
+          "type": "string",
+          "description": "Opaque."
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 16384,
+          "description": "UTF-8 bytes."
+        },
+        "expectedRevision": {
+          "type": "string",
+          "description": "Required revision."
+        }
+      },
+      "required": [
+        "handle",
+        "cursor",
+        "expectedRevision"
+      ]
+    }
+  },
+  {
     "name": "list",
-    "description": "For liveness/progress polling use changes/pulse, not this.",
+    "description": "List; poll via changes/pulse.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -80,7 +111,7 @@
   },
   {
     "name": "story",
-    "description": "Manage stories.",
+    "description": "Stories.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -117,7 +148,7 @@
   },
   {
     "name": "story_contract",
-    "description": "Read or page a 256 KiB story contract.",
+    "description": "Read story contract pages.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -545,7 +576,7 @@
   },
   {
     "name": "claim",
-    "description": "Claim before work; pass routed executor and effort, proceed only on ok:true.",
+    "description": "Claim before work; proceed only on ok:true.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -701,7 +732,7 @@
   },
   {
     "name": "done",
-    "description": "Finish report; stamp actual model and effort.",
+    "description": "Finish; stamp actual model and effort.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -775,7 +806,7 @@
   },
   {
     "name": "release",
-    "description": "Release claim; oracle handoff retains ticket.",
+    "description": "Release claim; retain oracle handoff.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1079,7 +1110,7 @@
   },
   {
     "name": "comments",
-    "description": "Read comments before work; history is chronological.",
+    "description": "Read comments before work.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1188,7 +1219,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Dispatch a ticket to its stable route; returns a token and spawn spec.",
+    "description": "Dispatch; returns a token and spawn spec.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1403,7 +1434,7 @@
   },
   {
     "name": "route_recipe",
-    "description": "Resolve a category, or one ticket in that category, into a live Workflow agent recipe.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1424,7 +1455,7 @@
   },
   {
     "name": "category_list",
-    "description": "List project taxonomy; compact descriptions are excerpts.",
+    "description": "Taxonomy.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1451,7 +1482,7 @@
   },
   {
     "name": "category_add",
-    "description": "Add category.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1522,7 +1553,7 @@
   },
   {
     "name": "category_edit",
-    "description": "Edit category.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1594,7 +1625,7 @@
   },
   {
     "name": "category_detach",
-    "description": "Pin board category policy.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1613,7 +1644,7 @@
   },
   {
     "name": "category_relink",
-    "description": "Reset board category policy.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1632,7 +1663,7 @@
   },
   {
     "name": "global_fallback",
-    "description": "Read or set routing fallback.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1657,7 +1688,7 @@
   },
   {
     "name": "category_rm",
-    "description": "Remove category policy.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1763,7 +1794,7 @@
   },
   {
     "name": "models",
-    "description": "Read models and routes.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1790,7 +1821,7 @@
   },
   {
     "name": "archive_board",
-    "description": "Archive named board.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1805,7 +1836,7 @@
   },
   {
     "name": "unarchive_board",
-    "description": "Restore named board.",
+    "description": "",
     "inputSchema": {
       "type": "object",
       "properties": {

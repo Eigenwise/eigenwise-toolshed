@@ -71,10 +71,11 @@ Legacy `--complexity` plus `--why` remains accepted for existing intake and maps
 
 The plugin registers one Sidequest MCP server. MCP and CLI use the same store and policy. Routed executors use MCP lifecycle tools, including `commit` and `submit`, with their absolute worktree path.
 
-Routine reads are brief by default. Use the opt-in full/detail fields when you need large payloads. Paged responses include `nextCursor`; follow it until it is `null`.
+Routine reads are brief by default. Omitted rows and nested bodies carry a `context_page` retrieval with a typed handle, opaque cursor, and expected revision. Repeat `context_page` with `nextCursor` until it is `null`; rerun the source read when the revision is stale.
 
 ### Read tools
 
+- `context_page`: continue omitted row sets or nested bodies with the source retrieval arguments. `limit` is an optional UTF-8 byte limit; cursors stay opaque and revision-bound.
 - `list`: active tickets by default, compact rows, paging. `detail: true` returns full ticket bodies and comment threads; `status: "done"` or `all: true` includes completed tickets.
 - `pulse`: compact liveness read. `full: true` includes submission, git, and dispatch lifecycle.
 - `changes`: compact polling delta with `serverTime`; use that value as the next `since` value.

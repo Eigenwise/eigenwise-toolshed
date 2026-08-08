@@ -138,6 +138,11 @@ async function runTool(tool: ToolDefinition, args: any) {
 
 
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
+  context_page: {
+    cursor: 'Opaque.',
+    limit: 'UTF-8 bytes.',
+    expectedRevision: 'Required revision.',
+  },
   add: { complexity: 'Legacy score; why required.' },
   comments: {
     full: 'Whole bodies; bypasses elision.',

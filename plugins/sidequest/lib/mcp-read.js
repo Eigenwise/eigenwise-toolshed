@@ -45,6 +45,10 @@ const {
   boundedExcerpt,
   compactComment,
   compactListRow,
+  ticketWithContextHandles,
+  listRowsContextRetrieval,
+  resolveContextPage,
+  MAX_CONTEXT_PAGE_BYTES,
   categoryListEntry,
   pageArguments,
   pageRows,
@@ -72,6 +76,23 @@ function readySummary(payload) {
 }
 const tools = [
   {
+    name: "context_page",
+    description: "Continue an omitted row set or nested body from a retrieval handle. Cursors are opaque and revision-bound; rerun the source read when stale.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        handle: { type: "string", description: "Typed handle from a source read retrieval." },
+        cursor: { type: "string", description: "Opaque cursor from the retrieval or prior page." },
+        limit: { type: "integer", minimum: 4, maximum: MAX_CONTEXT_PAGE_BYTES, description: "Optional UTF-8 byte limit." },
+        expectedRevision: { type: "string", description: "Revision from the retrieval handle." }
+      },
+      required: ["handle", "cursor", "expectedRevision"]
+    },
+    handler(args) {
+      return resolveContextPage(args);
+    }
+  },
+  {
     name: "list",
     description: 'For liveness/progress polling use changes/pulse, not this. List active tickets (todo + doing) by default, paged with compact rows. Pass status:"done" for completed tickets or all:true for every non-archived status. Follow nextCursor until null. detail:true is audit-only.',
     inputSchema: {
@@ -92,7 +113,7 @@ const tools = [
       if (args.ref !== void 0) {
         const ticket = store.getTicket(slug, args.ref);
         if (!ticket) throw new Error(`list: no ticket "${args.ref}" in ${meta.name}`);
-        return { project: slug, projectName: meta.name, ticket };
+        return { project: slug, projectName: meta.name, ticket: ticketWithContextHandles(slug, ticket) };
       }
       const status = args.status == null && !args.all ? ["todo", "doing"] : args.status;
       const brief = !args.detail;
@@ -110,6 +131,7 @@ const tools = [
       const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(shapedPayload));
       if (payload.nextCursor) {
         out.hint = `Page ${payload.returned}/${payload.total}; continue with cursor:"${payload.nextCursor}" until nextCursor is null.`;
+        out.retrieval = listRowsContextRetrieval(slug, args, Number(payload.nextCursor));
       }
       return out;
     }

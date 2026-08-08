@@ -93,7 +93,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   const descriptors = mcp.toolDescriptors() as Array<{
     name: string;
     description: string;
-    inputSchema: { properties?: Record<string, { description?: string; type?: string | string[] }>; required?: string[] };
+    inputSchema: { properties?: Record<string, { description?: string; type?: string | string[]; maximum?: number }>; required?: string[] };
   }>;
   const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   const categoryEdit = byName.get('category_edit');
@@ -103,6 +103,8 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.has('ask'), false);
   assert.equal(byName.has('await'), false);
   assert.equal(byName.has('native_agent'), false);
+  assert.deepEqual(byName.get('context_page')?.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
+  assert.equal(byName.get('context_page')?.inputSchema.properties?.limit?.maximum, 16384);
   assert.match(byName.get('list')?.description ?? '', /changes\/pulse/);
   assert.equal(byName.get('changes')?.description, 'Poll ticket changes.');
   assert.match(byName.get('claim')?.description ?? '', /Claim before work/);
