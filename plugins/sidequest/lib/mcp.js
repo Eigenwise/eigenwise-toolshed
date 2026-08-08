@@ -112,7 +112,7 @@ async function runTool(tool, args) {
 }
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   add: ["complexity"],
-  comments: ["full"],
+  comments: ["full", "since"],
   list: ["detail"],
   release: ["command", "outputTail"]
 };

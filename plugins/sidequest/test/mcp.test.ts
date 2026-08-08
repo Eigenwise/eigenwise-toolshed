@@ -482,10 +482,11 @@ test('tools/list reports schema size for trend tracking without an arbitrary cei
   const comments = tools.find((tool: any) => tool.name === 'comments');
   assert.match(comments.inputSchema.properties.full.description, /^Recovery read:/);
   assert.match(comments.inputSchema.properties.full.description, /1200 chars\/body/);
+  assert.match(comments.inputSchema.properties.since.description, /comment id.*ISO timestamp/);
   const add = tools.find((tool: any) => tool.name === 'add');
   assert.match(add.inputSchema.properties.complexity.description, /Requires why \(min 20 chars\)/);
   assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
-  assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref']);
+  assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref', 'since']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
   const ready = tools.find((tool: any) => tool.name === 'ready');
   assert.match(ready.description, /ref\/title/);
@@ -1162,6 +1163,35 @@ test('MCP comment reads do not track per-session polling state and changes inclu
   });
   assert.ok(changed.lastComment.body.length <= 200);
   assert.match(changed.lastComment.body, /use full:true/);
+});
+
+test('MCP comments returns only entries appended after a prior comment id', async () => {
+  const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-comment-since-')).slug;
+  const ticket = store.createTicket(project, { title: 'comment since fixture' });
+  assert.equal(store.addComment(project, ticket.ref, { body: 'first handoff', by: 'first-worker', kind: 'comment', source: 'mcp' }).ok, true);
+
+  const firstRead = await callTool('comments', { project, ref: ticket.ref });
+  const firstComment = firstRead.comments.at(-1);
+  assert.ok(firstComment?.id);
+  assert.equal(store.addComment(project, ticket.ref, { body: 'second handoff', by: 'second-worker', kind: 'comment', source: 'mcp' }).ok, true);
+
+  const incremental = await callTool('comments', { project, ref: ticket.ref, since: firstComment.id });
+  assert.deepEqual(incremental.comments.map((comment: any) => comment.body), ['second handoff']);
+  assert.deepEqual(
+    { total: incremental.total, returned: incremental.returned, nextCursor: incremental.nextCursor, order: incremental.order },
+    { total: 2, returned: 1, nextCursor: null, order: 'chronological' },
+  );
+
+  const quiet = await callTool('comments', { project, ref: ticket.ref, since: incremental.comments[0].id });
+  assert.deepEqual(quiet.comments, []);
+  assert.deepEqual(
+    { total: quiet.total, returned: quiet.returned, nextCursor: quiet.nextCursor, order: quiet.order },
+    { total: 2, returned: 0, nextCursor: null, order: 'chronological' },
+  );
+
+  const timestamp = new Date(Date.parse(firstComment.at) - 1).toISOString();
+  const timestampRead = await callTool('comments', { project, ref: ticket.ref, since: timestamp });
+  assert.deepEqual(timestampRead.comments.map((comment: any) => comment.body), ['first handoff', 'second handoff']);
 });
 
 test('MCP commit and submit finish an isolated worktree without a PATH command', async () => {
