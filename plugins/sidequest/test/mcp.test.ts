@@ -769,6 +769,65 @@ test('integrate returns actionable post-merge verification failures', async () =
   }
 });
 
+test('integrate compacts successful verification output', async () => {
+  const repo = committedRepo('sq-mcp-integrate-verify-success-');
+  gitAt(repo, ['config', 'user.name', 'Sidequest Test']);
+  gitAt(repo, ['config', 'user.email', 'sidequest-test@example.invalid']);
+  fs.writeFileSync(path.join(repo, 'verify-summary.cjs'), "console.log('ok 1 - verification'); console.log('1..1'); console.log('# tests 1'); console.log('# pass 1'); console.log('# fail 0'); console.log('# skipped 0'); console.log('# duration_ms 12.5');\n");
+  gitAt(repo, ['add', 'verify-summary.cjs']);
+  gitAt(repo, ['commit', '-m', 'verification fixture']);
+  const project = store.ensureProject(repo).slug;
+  const base = gitAt(repo, ['rev-parse', 'HEAD']);
+  const ticket = store.createTicket(project, {
+    title: 'compact successful integration output',
+    category: 'codebase-exploration',
+    description: 'Verify that successful integration output stays small.',
+    files: ['feature.txt'],
+  });
+  gitAt(repo, ['checkout', '-b', 'submission']);
+  fs.writeFileSync(path.join(repo, 'feature.txt'), 'submitted\n');
+  gitAt(repo, ['add', 'feature.txt']);
+  gitAt(repo, ['commit', '-m', 'submission fixture']);
+  const commit = gitAt(repo, ['rev-parse', 'HEAD']);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  gitAt(repo, ['update-ref', gitRef, commit]);
+  gitAt(repo, ['checkout', 'main']);
+  const verify = `"${process.execPath}" verify-summary.cjs`;
+  const submitted = store.submitTicket(project, ticket.ref, 'fixture-worker', {
+    commit,
+    gitRef,
+    range: {
+      base,
+      upstream: 'main',
+      upstreamCommit: base,
+      commits: [commit],
+      changedPaths: ['feature.txt'],
+      integrationMode: 'local',
+      integrationBranch: 'main',
+    },
+    worktree: repo,
+    verify,
+    force: true,
+  });
+  assert.equal(submitted.ok, true);
+
+  const result = await callHandler('integrate', { project, ref: ticket.ref, by: 'payload-tester' });
+  const payload = JSON.stringify(result);
+  assert.equal(result.ok, true);
+  assert.equal(result.verify.status, 'passed');
+  assert.match(fs.readFileSync(result.verify.logPath, 'utf8'), /^# tests 1$/m);
+  assert.equal(result.verify.summary.total, 1);
+  assert.equal(result.verify.summary.pass, 1);
+  assert.equal(result.verify.summary.fail, 0);
+  assert.equal(result.verify.summary.skipped, 0);
+  assert.equal(typeof result.verify.summary.durationMs, 'number');
+  assert.ok(result.verify.logPath);
+  assert.equal(result.verify.outputTail, undefined);
+  assert.equal(result.delivery.verify, undefined);
+  assert.equal((payload.match(/"verify"\s*:/g) || []).length, 1);
+  assert.equal(payload.includes('ok 1 - verification'), false);
+});
+
 test('verify commands reject direct multi-plugin directory chaining', () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-multi-plugin-verify-')).slug;
   assert.throws(() => store.createTicket(project, {

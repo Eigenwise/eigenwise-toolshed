@@ -60,6 +60,10 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
+function compactIntegrationDelivery(integration) {
+  const { verify: _verify, ...delivery } = integration;
+  return delivery;
+}
 function objectProperties(value) {
   return value && typeof value === "object" ? Object.fromEntries(Object.entries(value)) : {};
 }
@@ -642,7 +646,7 @@ const tools = [
   },
   {
     name: "integrate",
-    description: "Deliver and verify a submitted range.",
+    description: "Deliver and verify a submitted range. Successful responses list changedPaths for the submitted range and deliveredFiles for actual delivery; they can differ for apply mode.",
     inputSchema: {
       type: "object",
       properties: {
@@ -720,7 +724,7 @@ const tools = [
       });
       if (closed.ok) closeDispatchExecutor(delivery.ticket);
       return mutationAck(slug, closed, {
-        delivery: integration,
+        delivery: compactIntegrationDelivery(integration),
         verify: verification.verify,
         ...closed.ok ? { completion: closed.ticket.completion } : {}
       });
