@@ -2293,8 +2293,8 @@ test('update returns a compact acknowledgement', async () => {
   store.setCategory({ id: 'mcp-update-echo', name: 'MCP update echo', route: { model: 'opus', effort: 'high' } });
   const added = await callTool('add', { title: 'MCP update echo', category: 'coding.easy' });
   const updated = await callTool('update', { ref: added.ref, category: 'mcp-update-echo' });
-  // Still no declared files on this ticket, so the no-declared-scope warning rides along.
-  assert.deepStrictEqual(Object.keys(updated).sort(), ['ok', 'project', 'ref', 'status', 'warnings']);
+  // The add already served the no-declared-scope warning in this MCP session.
+  assert.deepStrictEqual(Object.keys(updated).sort(), ['ok', 'project', 'ref', 'status']);
   assert.equal(store.getTicket(added.project, added.ref).categoryId, 'mcp-update-echo');
 });
 
@@ -2304,7 +2304,7 @@ test('add and update warn only for unknown ticket refs introduced by the operati
   assert.deepStrictEqual(added.warnings, ['Unknown ticket refs: SQ-9999.', NO_SCOPE_WARNING]);
 
   const updated = await callTool('update', { ref: added.ref, description: 'now use SQ-9998' });
-  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998.', NO_SCOPE_WARNING]);
+  assert.deepStrictEqual(updated.warnings, ['Unknown ticket refs: SQ-9998.']);
 
   fs.mkdirSync(path.join(PROJ, 'src'), { recursive: true });
   const filesOnly = await callTool('update', { ref: added.ref, files: ['src/changed.ts'] });

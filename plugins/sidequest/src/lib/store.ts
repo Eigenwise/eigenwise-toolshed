@@ -164,6 +164,7 @@ function evidenceShapedBlock(...args: any[]) { return warningsLayer.evidenceShap
 function embedsCompleteEdit(...args: any[]) { return warningsLayer.embedsCompleteEdit(...args); }
 function presolvedRoutingWarnings(...args: any[]) { return warningsLayer.presolvedRoutingWarnings(...args); }
 function ticketPlanningWarnings(...args: any[]) { return warningsLayer.ticketPlanningWarnings(...args); }
+function presentWarnings(...args: any[]) { return warningsLayer.presentWarnings(...args); }
 function normalizeReadonlyOverride(...args: any[]) { return warningsLayer.normalizeReadonlyOverride(...args); }
 function requestedReadonlyOverride(...args: any[]) { return warningsLayer.requestedReadonlyOverride(...args); }
 
@@ -2090,6 +2091,7 @@ module.exports = {
   ticketReferenceWarnings,
   ticketCategoryWarnings,
   ticketPlanningWarnings,
+  presentWarnings,
   coerceComplexity,
   legacyCategoryForComplexity,
   applyDerivedRouting,

@@ -141,7 +141,7 @@ async function cmdClaim(opts: any, positional: any) {
     return;
   }
   const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts), requireBoundAgent: true });
-  const warnings = res.ok ? claimPlanningWarnings(res.ticket, meta.path) : [];
+  const warnings = res.ok ? store.presentWarnings(res.ticket, claimPlanningWarnings(res.ticket, meta.path), sessionId(opts)) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
     if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path);

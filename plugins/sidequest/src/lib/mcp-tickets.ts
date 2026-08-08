@@ -154,7 +154,8 @@ const tools: ToolDefinition[] = [
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       warnings.push(...store.ticketCategoryWarnings(ticket));
       warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
-      return mutationAck(slug, { ok: true, ticket }, warnings.length ? { warnings } : null);
+      const presentedWarnings = store.presentWarnings(ticket, warnings, sessionOf(args));
+      return mutationAck(slug, { ok: true, ticket }, presentedWarnings.length ? { warnings: presentedWarnings } : null);
     },
   },
   {
@@ -245,7 +246,8 @@ const tools: ToolDefinition[] = [
       const t = store.getTicket(slug, updated.ref) || updated;
       const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
-      return mutationAck(slug, { ok: true, ticket: t }, warnings.length ? { warnings } : null);
+      const presentedWarnings = store.presentWarnings(t, warnings, sessionOf(args));
+      return mutationAck(slug, { ok: true, ticket: t }, presentedWarnings.length ? { warnings: presentedWarnings } : null);
     },
   },
   {

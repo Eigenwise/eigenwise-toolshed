@@ -5,6 +5,8 @@ const { ignoredPathsMissingFromWorktree } = require('../worktrees.js');
 
 function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }: any) {
 const DISPATCH_DESCRIPTION_MIN = 80;
+  const WARNING_RETURN_LIMIT = 3;
+  const servedWarnings = new Map<string, Set<string>>();
 const DISPATCH_DESCRIPTION_GUIDANCE = "the executor's entire brief is this ticket; add a description (Where / Contract / Verify) and a verify command, then dispatch";
 
 // Per-ticket executor context stays deliberately small: this data may be passed
@@ -977,8 +979,34 @@ function requestedReadonlyOverride(fields?: any) {
   return normalizeReadonlyOverride(fields?.readonlyOverride === undefined ? fields?.readonly : fields.readonlyOverride);
 }
 
+function warningPriority(warning?: any) {
+  const text = String(warning || '');
+  if (/verify command|no file scope|outside the repo worktree|worktree visibility/i.test(text)) return 3;
+  if (/build output|consumer|anchor|declared file scope|executor context/i.test(text)) return 2;
+  return 1;
+}
 
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+function servedWarningKey(ticket?: any, warning?: any) {
+  const ticketKey = String(ticket?.id || ticket?.ref || 'unknown-ticket');
+  return JSON.stringify([ticketKey, String(warning || '')]);
+}
+
+function presentWarnings(ticket?: any, warnings?: any, sessionId?: any) {
+  const distinct = [...new Set((Array.isArray(warnings) ? warnings : []).map((warning) => String(warning)).filter(Boolean))];
+  const session = String(sessionId || '').trim();
+  const served = session ? (servedWarnings.get(session) || new Set<string>()) : null;
+  if (served && !servedWarnings.has(session)) servedWarnings.set(session, served);
+  const unseen = served ? distinct.filter((warning) => !served.has(servedWarningKey(ticket, warning))) : distinct;
+  const ranked = unseen.length > WARNING_RETURN_LIMIT
+    ? unseen.map((warning, index) => ({ warning, index })).sort((left, right) => warningPriority(right.warning) - warningPriority(left.warning) || left.index - right.index)
+    : unseen.map((warning, index) => ({ warning, index }));
+  const visible = ranked.slice(0, ranked.length > WARNING_RETURN_LIMIT ? WARNING_RETURN_LIMIT - 1 : WARNING_RETURN_LIMIT).map(({ warning }) => warning);
+  for (const warning of visible) served?.add(servedWarningKey(ticket, warning));
+  if (ranked.length <= WARNING_RETURN_LIMIT) return visible;
+  return [...visible, `Warning summary: ${ranked.length - WARNING_RETURN_LIMIT + 1} lower-priority warnings suppressed for this call.`];
+}
+
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
 }
 
 module.exports = { createWarnings };

@@ -3,6 +3,8 @@ const { resolveSuite } = require("../suite-resolver.js");
 const { ignoredPathsMissingFromWorktree } = require("../worktrees.js");
 function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
   const DISPATCH_DESCRIPTION_MIN = 80;
+  const WARNING_RETURN_LIMIT = 3;
+  const servedWarnings = /* @__PURE__ */ new Map();
   const DISPATCH_DESCRIPTION_GUIDANCE = "the executor's entire brief is this ticket; add a description (Where / Contract / Verify) and a verify command, then dispatch";
   function executorText(value, max, label) {
     if (value == null) return "";
@@ -942,6 +944,28 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
   function requestedReadonlyOverride(fields) {
     return normalizeReadonlyOverride(fields?.readonlyOverride === void 0 ? fields?.readonly : fields.readonlyOverride);
   }
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride };
+  function warningPriority(warning) {
+    const text = String(warning || "");
+    if (/verify command|no file scope|outside the repo worktree|worktree visibility/i.test(text)) return 3;
+    if (/build output|consumer|anchor|declared file scope|executor context/i.test(text)) return 2;
+    return 1;
+  }
+  function servedWarningKey(ticket, warning) {
+    const ticketKey = String(ticket?.id || ticket?.ref || "unknown-ticket");
+    return JSON.stringify([ticketKey, String(warning || "")]);
+  }
+  function presentWarnings(ticket, warnings, sessionId) {
+    const distinct = [...new Set((Array.isArray(warnings) ? warnings : []).map((warning) => String(warning)).filter(Boolean))];
+    const session = String(sessionId || "").trim();
+    const served = session ? servedWarnings.get(session) || /* @__PURE__ */ new Set() : null;
+    if (served && !servedWarnings.has(session)) servedWarnings.set(session, served);
+    const unseen = served ? distinct.filter((warning) => !served.has(servedWarningKey(ticket, warning))) : distinct;
+    const ranked = unseen.length > WARNING_RETURN_LIMIT ? unseen.map((warning, index) => ({ warning, index })).sort((left, right) => warningPriority(right.warning) - warningPriority(left.warning) || left.index - right.index) : unseen.map((warning, index) => ({ warning, index }));
+    const visible = ranked.slice(0, ranked.length > WARNING_RETURN_LIMIT ? WARNING_RETURN_LIMIT - 1 : WARNING_RETURN_LIMIT).map(({ warning }) => warning);
+    for (const warning of visible) served?.add(servedWarningKey(ticket, warning));
+    if (ranked.length <= WARNING_RETURN_LIMIT) return visible;
+    return [...visible, `Warning summary: ${ranked.length - WARNING_RETURN_LIMIT + 1} lower-priority warnings suppressed for this call.`];
+  }
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
 }
 module.exports = { createWarnings };

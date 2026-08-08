@@ -229,8 +229,9 @@ const tools: ToolDefinition[] = [
       const { slug, meta } = resolveProject(args.project);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
+      const sessionId = requireDispatchSession();
       const prepared = store.prepareDispatch(slug, args.ref, {
-        sessionId: requireDispatchSession(),
+        sessionId,
         sharedTree: !!args.sharedTree,
         allowRepeatFailure: args.allowRepeatFailure === true,
         allowUnscoped: args.allowUnscoped === true,
@@ -256,7 +257,7 @@ const tools: ToolDefinition[] = [
         ...(prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {}),
         spawn,
       };
-      const warnings = store.dispatchWarnings(prepared.ticket, slug);
+      const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         // Compact dispatches must keep a bounded spawn payload. Warnings ride only when they fit the MCP ceiling.
@@ -274,7 +275,7 @@ const tools: ToolDefinition[] = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         ...(dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {}),
-        warnings: store.dispatchWarnings(prepared.ticket, slug),
+        warnings,
         spawn,
         guidance: prepared.recovery
           ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.`

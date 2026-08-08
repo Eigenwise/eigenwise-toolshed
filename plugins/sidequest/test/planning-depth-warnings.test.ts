@@ -8,6 +8,7 @@ const fs = require('fs');
 const { spawnSync } = require('child_process');
 const store = require('../lib/store');
 const { resolveSuite } = require('../lib/suite-resolver');
+const { tools: mcpTicketTools } = require('../lib/mcp-tickets');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
 const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
@@ -623,6 +624,56 @@ test('dispatch rejects broken npm and node test verifies while add and update on
   const manual = cliJson(['add', '-t', 'manual verify survives dispatch', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'manual: Checked the test plan.']);
   assert.deepStrictEqual(manual.warnings, []);
   assert.strictEqual(store.dispatchVerifyCommandError(manual.ticket, PROJ), null);
+});
+
+test('MCP add returns each planning warning only once per ticket and session', () => {
+  const add = mcpTicketTools.find((tool: any) => tool.name === 'add');
+  assert.ok(add);
+  const originalSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = 'planning-warning-mcp-session';
+  try {
+    const first = add.handler({
+      project: PROJ,
+      title: 'MCP warning deduplication',
+      category: 'coding.normal',
+      description: 'The observed threshold is 75% and needs a change before dispatch.',
+    });
+    assert.equal(first.warnings.length, 2);
+    const update = mcpTicketTools.find((tool: any) => tool.name === 'update');
+    assert.ok(update);
+    const repeated = update.handler({ project: PROJ, ref: first.ref, title: 'MCP warning deduplication, repeated' });
+    assert.equal(repeated.warnings, undefined);
+  } finally {
+    if (originalSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = originalSessionId;
+  }
+});
+
+test('warning presentation deduplicates by ticket and session while preserving new warnings', () => {
+  const warnings = [
+    'Planning-depth warning: routine advisory one.',
+    'Planning-depth warning: declared source scope under ./src omits tracked build output lib.',
+    'Planning-depth warning: routine advisory two.',
+    'Planning-depth warning: verify command cannot run.',
+    'Planning-depth warning: routine advisory three.',
+  ];
+  const ticket = { ref: 'SQ-warning-presentation' };
+  const first = store.presentWarnings(ticket, warnings, 'warning-session');
+  assert.deepStrictEqual(first, [
+    'Planning-depth warning: verify command cannot run.',
+    'Planning-depth warning: declared source scope under ./src omits tracked build output lib.',
+    'Warning summary: 3 lower-priority warnings suppressed for this call.',
+  ]);
+  assert.deepStrictEqual(store.presentWarnings(ticket, warnings, 'warning-session'), [
+    'Planning-depth warning: routine advisory one.',
+    'Planning-depth warning: routine advisory two.',
+    'Planning-depth warning: routine advisory three.',
+  ]);
+  assert.deepStrictEqual(store.presentWarnings(ticket, warnings, 'warning-session'), []);
+  assert.deepStrictEqual(store.presentWarnings({ ref: 'SQ-other-ticket' }, warnings, 'warning-session'), first);
+  assert.deepStrictEqual(store.presentWarnings(ticket, ['Planning-depth warning: newly detected condition.'], 'warning-session'), [
+    'Planning-depth warning: newly detected condition.',
+  ]);
 });
 
 export {};
