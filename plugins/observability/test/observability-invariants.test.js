@@ -134,6 +134,27 @@ function sidequestFixtures(projectId) {
   ];
 }
 
+function rechargeFixtures(projectId) {
+  return [{
+    name: 'recharge-rollup',
+    observation: {
+      source: 'workbench',
+      source_event_id: 'recharge-rollup:session-canonical:all',
+      source_schema: '1',
+      observed_at: NOW.toISOString(),
+      event_name: 'workbench.recharge_rollup',
+      project_id: projectId,
+      session_id: 'session-canonical',
+      attributes: { project_name: 'canonical-project', tool_name: 'Bash' },
+      measurements: [
+        { name: 'assistant_turns', value: 2, unit: 'count', scope: 'session', quality: 'derived_exact' },
+        { name: 'tool_result_bytes', value: 20, unit: 'bytes', scope: 'session', quality: 'derived_exact' },
+        { name: 'recharge_weighted_tool_result_bytes', value: 30, unit: 'bytes', scope: 'session', quality: 'derived_exact' },
+      ],
+    },
+  }];
+}
+
 const EXTERNAL_INGRESS_OR_RESERVED = Object.freeze({
   events: [
     'claude_code.api_request', 'claude_code.api_error', 'claude_code.llm_request', 'claude_code.tool_result', 'claude_code.tool_decision', 'claude_code.mcp_server_connection', 'claude_code.hook_execution_start', 'claude_code.hook_execution_complete',
@@ -161,6 +182,7 @@ test('every local emitter is accepted by the canonical schema', () => {
     ...sdkFixtures(projectId),
     ...gatewayFixtures(projectId),
     ...sidequestFixtures(projectId),
+    ...rechargeFixtures(projectId),
   ];
   assert.ok(fixtures.length >= Object.keys(EVENT_MAP).length + 8);
   for (const fixture of fixtures) assertAccepted(fixture.observation, fixture.name);
@@ -174,6 +196,7 @@ test('declared schema members have a local fixture or an explicit external reser
     ...sdkFixtures(projectId),
     ...gatewayFixtures(projectId),
     ...sidequestFixtures(projectId),
+    ...rechargeFixtures(projectId),
   ];
   const covered = {
     events: new Set(local.map(({ observation }) => observation.event_name)),

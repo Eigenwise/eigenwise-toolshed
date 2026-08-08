@@ -223,6 +223,51 @@ test('PostToolUse measures serialized input and result sizes without retaining c
   accept(observation);
 });
 
+test('session end records exact recharge-weighted result bytes by tool', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-recharge-rollup-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { outboxEnabled: false });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const sessionId = 'session-recharge';
+  const at = (seconds) => new Date(NOW.getTime() + (seconds * 1000));
+  const ingest = (payload, seconds) => store.ingest(buildObservation({
+    ...payload,
+    session_id: sessionId,
+    cwd: 'C:\\dev\\eigenwise-public\\eigenwise-toolshed',
+  }, at(seconds)));
+
+  const bashResult = 'alpha';
+  const readResult = 'beta';
+  ingest({ hook_event_name: 'PostToolUse', tool_name: 'Bash', tool_response: bashResult }, 1);
+  ingest({ hook_event_name: 'Stop', reason: 'end_turn' }, 2);
+  ingest({ hook_event_name: 'PostToolUse', tool_name: 'Read', tool_response: readResult }, 3);
+  ingest({ hook_event_name: 'Stop', reason: 'end_turn' }, 4);
+  const ended = ingest({ hook_event_name: 'SessionEnd', reason: 'logout' }, 5);
+
+  assert.equal(ended.recharge_rollup_event_ids.length, 3);
+  const rollups = store.database.prepare(`
+    SELECT o.attributes_json, m.name, m.value
+    FROM observation AS o
+    JOIN measurement AS m ON m.event_id = o.event_id
+    WHERE o.event_name = 'workbench.recharge_rollup'
+    ORDER BY json_extract(o.attributes_json, '$.tool_name'), m.name
+  `).all();
+  const values = Object.fromEntries(rollups.map((row) => [
+    `${JSON.parse(row.attributes_json).tool_name}:${row.name}`,
+    row.value,
+  ]));
+  const bashBytes = Buffer.byteLength(JSON.stringify(bashResult), 'utf8');
+  const readBytes = Buffer.byteLength(JSON.stringify(readResult), 'utf8');
+
+  assert.equal(values['all:assistant_turns'], 2);
+  assert.equal(values['Bash:tool_result_bytes'], bashBytes);
+  assert.equal(values['Bash:recharge_weighted_tool_result_bytes'], bashBytes * 2);
+  assert.equal(values['Read:tool_result_bytes'], readBytes);
+  assert.equal(values['Read:recharge_weighted_tool_result_bytes'], readBytes);
+});
+
 test('hook observations never carry prompt, tool payloads, cwd, or transcript paths', () => {
   const observation = buildObservation({
     hook_event_name: 'PostToolUse',

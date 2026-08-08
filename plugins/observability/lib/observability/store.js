@@ -203,6 +203,31 @@ function createStatements(database) {
         AND observed_at >= ?
       LIMIT 1
     `),
+    sessionTurnCount: database.prepare(`
+      SELECT COUNT(*) AS count
+      FROM observation
+      WHERE session_id = ?
+        AND event_name = 'hook.stop'
+    `),
+    rechargeByTool: database.prepare(`
+      SELECT
+        json_extract(tool.attributes_json, '$.tool_name') AS tool_name,
+        SUM(result.value) AS tool_result_bytes,
+        SUM(result.value * (
+          SELECT COUNT(*)
+          FROM observation AS later_turn
+          WHERE later_turn.session_id = tool.session_id
+            AND later_turn.event_name = 'hook.stop'
+            AND later_turn.observed_at >= tool.observed_at
+        )) AS recharge_weighted_tool_result_bytes
+      FROM observation AS tool
+      JOIN measurement AS result ON result.event_id = tool.event_id
+      WHERE tool.session_id = ?
+        AND tool.event_name = 'hook.post_tool_use'
+        AND result.name = 'tool_result_bytes'
+      GROUP BY tool_name
+      ORDER BY tool_name
+    `),
   };
 }
 
@@ -374,7 +399,7 @@ function openObservabilityStore(databaseFile, options = {}) {
     return observation.event_id;
   }
 
-  function insertInternal(eventName, sourceEventId, context, fieldNames, measurements = [], links = []) {
+  function insertInternal(eventName, sourceEventId, context, fieldNames, measurements = [], links = [], attributes = {}) {
     const existing = statements.findDedupe.get('workbench', sourceEventId);
     if (existing) return { eventId: existing.event_id, inserted: false };
     const observedAt = context.observed_at || isoNow(now);
@@ -402,7 +427,10 @@ function openObservabilityStore(databaseFile, options = {}) {
       task_id: context.task_id || null,
       ticket_ref: context.ticket_ref || null,
       route_id: context.route_id || null,
-      attributes: { field_names: [...new Set(fieldNames)].sort() },
+      attributes: {
+        ...attributes,
+        field_names: [...new Set(fieldNames)].sort(),
+      },
     };
     const fingerprint = digest(stableStringify({ observation, measurements, links }));
     insertRows(observation, measurements, links, fingerprint);
@@ -523,6 +551,48 @@ function openObservabilityStore(databaseFile, options = {}) {
     return conflicts;
   }
 
+  function recordRechargeRollups(observation) {
+    if (observation.event_name !== 'hook.session_end' || !observation.session_id) return [];
+    const sessionId = observation.session_id;
+    const projectName = observation.attributes?.project_name;
+    const sourcePrefix = `recharge-rollup:${observation.source}:${observation.source_event_id}`;
+    const context = {
+      project_id: observation.project_id,
+      session_id: sessionId,
+      observed_at: observation.observed_at,
+    };
+    const rollupIds = [];
+    const assistantTurns = Number(statements.sessionTurnCount.get(sessionId).count);
+    const sessionRollup = insertInternal(
+      'workbench.recharge_rollup',
+      `${sourcePrefix}:all`,
+      context,
+      [],
+      [{ name: 'assistant_turns', value: assistantTurns, unit: 'count', scope: 'session', quality: 'derived_exact' }],
+      [],
+      { project_name: projectName, tool_name: 'all' },
+    );
+    if (sessionRollup.inserted) rollupIds.push(sessionRollup.eventId);
+
+    for (const row of statements.rechargeByTool.all(sessionId)) {
+      if (!validIdentifier(row.tool_name)) continue;
+      const rollup = insertInternal(
+        'workbench.recharge_rollup',
+        `${sourcePrefix}:${row.tool_name}`,
+        context,
+        [],
+        [
+          { name: 'tool_result_bytes', value: Number(row.tool_result_bytes), unit: 'bytes', scope: 'session', quality: 'derived_exact' },
+          { name: 'recharge_weighted_tool_result_bytes', value: Number(row.recharge_weighted_tool_result_bytes), unit: 'bytes', scope: 'session', quality: 'derived_exact' },
+        ],
+        [],
+        { project_name: projectName, tool_name: row.tool_name },
+      );
+      if (rollup.inserted) rollupIds.push(rollup.eventId);
+    }
+    return rollupIds;
+  }
+
   function ingestNormalized(normalized) {
     const schemaDropEventId = recordSchemaDrop(normalized);
     if (!normalized.accepted) {
@@ -574,6 +644,7 @@ function openObservabilityStore(databaseFile, options = {}) {
       ...recordRequestUsageConflicts(normalized.observation),
       ...recordAggregateCheckConflicts(normalized.observation),
     ];
+    const rechargeRollupEventIds = recordRechargeRollups(normalized.observation);
     return {
       accepted: true,
       committed: true,
@@ -581,6 +652,7 @@ function openObservabilityStore(databaseFile, options = {}) {
       event_id: normalized.observation.event_id,
       schema_drop_event_id: schemaDropEventId,
       conflict_event_ids: conflictEventIds,
+      recharge_rollup_event_ids: rechargeRollupEventIds,
       dropped_fields: normalized.droppedFields,
     };
   }
