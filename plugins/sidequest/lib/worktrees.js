@@ -38,6 +38,34 @@ function pathIsInside(root, candidate) {
   const relative = path.relative(root, candidate);
   return relative === "" || !relative.startsWith("..") && !path.isAbsolute(relative);
 }
+function preferredWorktreeIntegrationTarget(repository, branch) {
+  const local = `refs/heads/${branch}`;
+  const remote = `refs/remotes/origin/${branch}`;
+  try {
+    execFileSync("git", ["rev-parse", "--verify", `${local}^{commit}`], {
+      cwd: repository,
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    execFileSync("git", ["rev-parse", "--verify", `${remote}^{commit}`], {
+      cwd: repository,
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+  } catch (_) {
+    return null;
+  }
+  try {
+    execFileSync("git", ["merge-base", "--is-ancestor", remote, local], {
+      cwd: repository,
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "ignore"]
+    });
+    return { mode: "local", upstream: branch, branch };
+  } catch (_) {
+    return { mode: "remote", upstream: `origin/${branch}`, branch };
+  }
+}
 function dependencyCachePath(relativePath) {
   return relativePath.split(/[\\/]+/).includes("node_modules");
 }
@@ -851,4 +879,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
