@@ -48,6 +48,7 @@ async function cmdDispatch(opts, positional) {
   if (unverifiedTransport) {
     warnings.push("dispatch warning: --unverified-transport was used — this does NOT prove any session will have the Sidequest board MCP connected; a fresh native Agent could still receive zero board tools.");
   }
+  const presentedWarnings = store.presentWarnings(prepared.ticket, warnings, sessionId2);
   process.stdout.write(JSON.stringify({
     project: slug,
     projectPath: meta.path,
@@ -59,7 +60,7 @@ async function cmdDispatch(opts, positional) {
     tokenPrefix: prepared.token.slice(0, 12),
     token: prepared.token,
     recovery: prepared.recovery || null,
-    warnings,
+    warnings: presentedWarnings,
     spawn: spawn2,
     guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`
   }, null, 2) + "\n");

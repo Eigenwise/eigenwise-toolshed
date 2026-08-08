@@ -200,6 +200,7 @@ async function cmdAdd(opts: any) {
   warnings.push(...store.ticketReferenceWarnings(slug, ticket.title, ticket.description));
   warnings.push(...store.ticketCategoryWarnings(ticket));
   warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
+  warnings.splice(0, warnings.length, ...store.presentWarnings(ticket, warnings));
 
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, project: slug, projectName: meta.name, ticket, category: categoryEcho(ticket), warnings }, null, 2) + '\n');
@@ -327,6 +328,7 @@ async function cmdUpdate(opts: any, positional: any) {
     ...store.ticketReferenceWarnings(slug, patch.title, patch.description),
     ...store.ticketPlanningWarnings(updated, meta.path),
   ];
+  warnings.splice(0, warnings.length, ...store.presentWarnings(updated, warnings));
   if (opts.json) {
     process.stdout.write(JSON.stringify({ ok: true, ticket: updated, category: opts.category != null ? categoryEcho(updated) : undefined, warnings }, null, 2) + '\n');
     return;

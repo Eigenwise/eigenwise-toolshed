@@ -216,8 +216,9 @@ const tools = [
       const { slug, meta } = resolveProject(args.project);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
+      const sessionId = requireDispatchSession();
       const prepared = store.prepareDispatch(slug, args.ref, {
-        sessionId: requireDispatchSession(),
+        sessionId,
         sharedTree: !!args.sharedTree,
         allowRepeatFailure: args.allowRepeatFailure === true,
         allowUnscoped: args.allowUnscoped === true,
@@ -240,7 +241,7 @@ const tools = [
         ...prepared.ticket.dispatch?.fallbackReason ? { fallbackReason: prepared.ticket.dispatch.fallbackReason } : {},
         spawn
       };
-      const warnings = store.dispatchWarnings(prepared.ticket, slug);
+      const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         return Buffer.byteLength(JSON.stringify(withWarnings, null, 2)) <= 1200 ? withWarnings : compact;
@@ -257,7 +258,7 @@ const tools = [
         token: prepared.token,
         recovery: prepared.recovery || null,
         ...dispatchState.fallbackReason ? { fallbackReason: dispatchState.fallbackReason } : {},
-        warnings: store.dispatchWarnings(prepared.ticket, slug),
+        warnings,
         spawn,
         guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Instant: pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with executor ${agent} and the token.`,
         // The agent list's own model label always reads claude-codex-auto for gateway

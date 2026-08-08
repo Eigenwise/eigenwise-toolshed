@@ -852,7 +852,7 @@ async function handle(req, res) {
       source: "dashboard"
     });
     const created = store.getTicket(slug, ticket.id) || ticket;
-    sendJson(res, 201, { ticket: created, warnings: store.ticketPlanningWarnings(created, (store.readMeta(slug) || {}).path) });
+    sendJson(res, 201, { ticket: created, warnings: store.presentWarnings(created, store.ticketPlanningWarnings(created, (store.readMeta(slug) || {}).path)) });
     return;
   }
   const m = /^\/api\/tickets\/([^/]+)$/.exec(pathname);
@@ -877,7 +877,7 @@ async function handle(req, res) {
         return;
       }
       updated.reminder = store.getPendingReminder(updated.id);
-      sendJson(res, 200, { ticket: updated, warnings: store.ticketPlanningWarnings(updated, (store.readMeta(slug) || {}).path) });
+      sendJson(res, 200, { ticket: updated, warnings: store.presentWarnings(updated, store.ticketPlanningWarnings(updated, (store.readMeta(slug) || {}).path)) });
       return;
     }
     if (req.method === "DELETE") {
