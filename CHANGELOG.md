@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.416.0 (2026-08-08)
+
+### sidequest 4.40.8 → 4.40.9
+
+#### Fixes
+
+- Read comment updates incrementally (SQ-1515)
+  `comments` can now return only entries added after a prior comment id or timestamp.
+- Restore executor tools (SQ-1523)
+  Executor definitions no longer emit a `tools:` allow-list. Since 4.40.6 every executor
+  carried `tools: default, Skill(playbook:verify-discipline)`, and `default` is a CLI
+  sentinel rather than a frontmatter tool name, so executors spawned with no Bash and no
+  board tools and could not fetch their briefing. Skill preloading stays pinned by `skills:`.
+
 ## v3.415.0 (2026-08-08)
 
 ### sidequest 4.40.7 → 4.40.8
