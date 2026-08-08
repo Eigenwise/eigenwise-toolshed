@@ -202,8 +202,7 @@ function refusal(found, target, repoRoot, agentId, cwd) {
     `  expected worktree: ${expected}`,
     `  writing to:        ${target}`,
     `  shared checkout:   ${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ""}`,
-    "You did nothing wrong: the worktree you were given is gone. The harness deletes an isolated worktree when an agent stops with it unchanged, so a pause-and-resume before your first edit lands you here silently.",
-    `Do not work around this. Stop writing, tell the orchestrator "${found.ref} lost its worktree, re-dispatch it", and leave the shared tree untouched. If you already have staged work here, say so: the orchestrator commits it out of the shared tree, releases the claim, then closes with the shipped commit as evidence.`
+    `This is a harness worktree-loss failure, not executor behavior. Stop writing, tell the orchestrator "${found.ref} lost its worktree, re-dispatch it", and leave the shared tree untouched. Report any staged work.`
   ].join("\n");
 }
 function terminalRefusal(found, target) {
