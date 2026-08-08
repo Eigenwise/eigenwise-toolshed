@@ -7,6 +7,7 @@
  */
 
 const mcp = require('../lib/mcp.js');
+const { reapMcpSiblings } = require('../lib/mcp-process-lifecycle.js');
 
 const pending = new Set<Promise<void>>();
 
@@ -40,6 +41,7 @@ function handleLine(line?: any) {
 }
 
 function main() {
+  reapMcpSiblings();
   let buffer = '';
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk: string) => {
