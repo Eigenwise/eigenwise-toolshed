@@ -63,6 +63,10 @@ function createTickets(dependencies) {
     if (!normalized) throw new Error("Ticket route override requires a valid model and effort.");
     return normalized;
   }
+  function authoringVerifyError(ticket, projectPath) {
+    const error = dispatchVerifyCommandError(ticket, projectPath);
+    return error && /(?:requires .*package\.json|requires a `[^`]+` script)/.test(error) ? error : null;
+  }
   function createTicket(slug, fields) {
     fields = fields || {};
     const status = fields.status === void 0 ? "todo" : requireStatus(fields.status);
@@ -139,6 +143,8 @@ function createTickets(dependencies) {
       referenceUpdatedAt: now,
       order: Date.now()
     };
+    const verifyError = authoringVerifyError(ticket, readMeta(slug)?.path);
+    if (verifyError) throw new Error(`${verifyError} Keep acceptance criteria in a comment, not the verify field.`);
     putTicket(slug, ticket);
     queueEventNotification(slug, ticket, "created", ticket.lastEventSource);
     return ticket;
@@ -738,12 +744,12 @@ function createTickets(dependencies) {
         const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
         const executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact");
         const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, "executor verify command");
+        const verifyTicket = Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify });
+        const verifyError = authoringVerifyError(verifyTicket, readMeta(slug)?.path);
+        if (verifyError) throw new Error(`${verifyError} Keep acceptance criteria in a comment, not the verify field.`);
         if (t.claim || dispatchState(t)) {
-          const verifyError = dispatchVerifyCommandError(
-            Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify }),
-            readMeta(slug)?.path
-          );
-          if (verifyError) throw new Error(verifyError);
+          const verifyError2 = dispatchVerifyCommandError(verifyTicket, readMeta(slug)?.path);
+          if (verifyError2) throw new Error(verifyError2);
         }
         t.executorVerifyKind = executorVerifyKind;
         t.executorAttestationArtifact = executorAttestationArtifact;

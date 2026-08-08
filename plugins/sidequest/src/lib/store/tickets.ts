@@ -31,6 +31,11 @@ function normalizedTicketRoute(route?: any) {
   return normalized;
 }
 
+function authoringVerifyError(ticket?: any, projectPath?: any) {
+  const error = dispatchVerifyCommandError(ticket, projectPath);
+  return error && /(?:requires .*package\.json|requires a `[^`]+` script)/.test(error) ? error : null;
+}
+
 function createTicket(slug?: any, fields?: any) {
   fields = fields || {};
   const status = fields.status === undefined ? 'todo' : requireStatus(fields.status);
@@ -101,6 +106,8 @@ function createTicket(slug?: any, fields?: any) {
     referenceUpdatedAt: now,
     order: Date.now(),
   };
+  const verifyError = authoringVerifyError(ticket, readMeta(slug)?.path);
+  if (verifyError) throw new Error(`${verifyError} Keep acceptance criteria in a comment, not the verify field.`);
   putTicket(slug, ticket);
   queueEventNotification(slug, ticket, 'created', ticket.lastEventSource);
   return ticket;
@@ -805,11 +812,11 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
       const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
       const executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact');
       const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
+      const verifyTicket = Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify });
+      const verifyError = authoringVerifyError(verifyTicket, readMeta(slug)?.path);
+      if (verifyError) throw new Error(`${verifyError} Keep acceptance criteria in a comment, not the verify field.`);
       if (t.claim || dispatchState(t)) {
-        const verifyError = dispatchVerifyCommandError(
-          Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify }),
-          readMeta(slug)?.path,
-        );
+        const verifyError = dispatchVerifyCommandError(verifyTicket, readMeta(slug)?.path);
         if (verifyError) throw new Error(verifyError);
       }
       t.executorVerifyKind = executorVerifyKind;
