@@ -1,6 +1,6 @@
 "use strict";
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
   function dispatchTokenPrefix(token) {
     return token ? String(token).slice(0, 12) : null;
   }
@@ -525,7 +525,7 @@ function createDispatch(dependencies) {
         return { fallback: continuationFallback("checkpoint_is_not_worktree_head", worktree) };
       }
       gitOutput(worktree, ["merge-base", "--is-ancestor", baseCommit, commit]);
-      const commits = gitOutput(worktree, ["rev-list", "--reverse", `${baseCommit}..${commit}`]).split(/\r?\n/).filter(Boolean);
+      const commits = gitOutput(worktree, ["rev-list", "--reverse", `${baseCommit}..${commit}`, "--"]).split(/\r?\n/).filter(Boolean);
       if (!commits.length) return { fallback: continuationFallback("released_worktree_has_no_committed_progress", worktree) };
       if (commits.length > 128) return { fallback: continuationFallback("released_worktree_commit_range_is_too_large", worktree) };
       let sourceBranch = null;
@@ -901,7 +901,7 @@ function createDispatch(dependencies) {
       sharedTree: matched.some((candidate) => candidate.sharedTree),
       terminal: matched.some((candidate) => candidate.terminal),
       matchedBy: byAgent.length ? "agent" : "session",
-      expectedWorktree: agentId && expectation.projectPath ? path.join(expectation.projectPath, ".claude", "worktrees", `agent-${agentId}`) : null
+      expectedWorktree: agentId && expectation.projectPath ? agentWorktreePath(expectation.projectPath, agentId) : null
     };
   }
   function dispatchWorkspace(slug, ticket) {
@@ -912,7 +912,7 @@ function createDispatch(dependencies) {
     if (state.sharedTree !== false) return baseCommit ? { root: projectPath, base: baseCommit } : null;
     const agentId = String(state.agentId || "").trim();
     if (!agentId) return null;
-    const root = path.join(projectPath, ".claude", "worktrees", `agent-${agentId}`);
+    const root = agentWorktreePath(projectPath, agentId);
     if (!fs.existsSync(root)) return null;
     let base = baseCommit;
     if (!base) {
@@ -980,7 +980,7 @@ function createDispatch(dependencies) {
     if (agentName) state.agentName = agentName;
     if (state.sharedTree === false && agentId) {
       const projectPath = readMeta(slug)?.path;
-      if (projectPath) state.worktree = path.join(projectPath, ".claude", "worktrees", `agent-${agentId}`);
+      if (projectPath) state.worktree = agentWorktreePath(projectPath, agentId);
     }
     state.boundAt = state.boundAt || now || (/* @__PURE__ */ new Date()).toISOString();
   }

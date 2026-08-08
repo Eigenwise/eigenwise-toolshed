@@ -550,11 +550,40 @@ function restoresCommittedContent(input: HookInput, target: string): boolean {
   }
 }
 
+function relativeInside(root: string, target: string): string | null {
+  const relative = path.relative(root, target).replace(/\\/g, '/');
+  return relative && relative !== '..' && !relative.startsWith('../') && !path.isAbsolute(relative) ? relative : null;
+}
+
+function linkedWorktreeRelative(target: string, projectPath: string): string | null {
+  let existing = path.dirname(target);
+  while (!fs.existsSync(existing)) {
+    const parent = path.dirname(existing);
+    if (parent === existing) return null;
+    existing = parent;
+  }
+  try {
+    const checkout = canonicalPath(execFileSync('git', ['rev-parse', '--show-toplevel'], {
+      cwd: existing, encoding: 'utf8', windowsHide: true,
+    }).trim());
+    const commonOutput = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: checkout, encoding: 'utf8', windowsHide: true,
+    }).trim();
+    const common = canonicalPath(path.isAbsolute(commonOutput) ? commonOutput : path.resolve(checkout, commonOutput));
+    if (common !== canonicalPath(path.join(projectPath, '.git'))) return null;
+    return relativeInside(checkout, target);
+  } catch (_) {
+    return null;
+  }
+}
+
 function projectRelative(target: string, projectPath: string): string | null {
-  const relative = path.relative(projectPath, target).replace(/\\/g, '/');
-  if (!relative || relative === '..' || relative.startsWith('../') || path.isAbsolute(relative)) return null;
-  const worktree = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(relative);
-  return worktree ? worktree[1] || null : relative;
+  const direct = relativeInside(projectPath, target);
+  if (direct) {
+    const legacyWorktree = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(direct);
+    return legacyWorktree ? legacyWorktree[1] || null : direct;
+  }
+  return linkedWorktreeRelative(target, projectPath);
 }
 
 function inScope(target: string, scope: HelperScope): boolean {

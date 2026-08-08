@@ -19,7 +19,9 @@ const worktrees = require('../lib/worktrees.js');
 
 const PROJECT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-project-'));
 const REMOTE = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-remote-'));
-const WORKTREES = path.join(PROJECT, '.claude', 'worktrees');
+const WORKTREES = worktrees.worktreeRoot(PROJECT);
+const LEGACY_WORKTREES = path.join(PROJECT, '.claude', 'worktrees');
+const EXTERNAL_WORKTREES = WORKTREES;
 const OLD = new Date(Date.now() - 4 * 60 * 60 * 1000);
 
 function git(args: any, cwd?: any) {
@@ -79,6 +81,7 @@ execFileSync('git', ['init', '--bare', REMOTE], { encoding: 'utf8', windowsHide:
 git(['remote', 'add', 'origin', REMOTE]);
 git(['push', '-u', 'origin', 'main']);
 fs.mkdirSync(WORKTREES, { recursive: true });
+fs.mkdirSync(LEGACY_WORKTREES, { recursive: true });
 
 const { slug } = store.ensureProject(PROJECT);
 const exploration = store.getCategory('codebase-exploration');
@@ -124,6 +127,27 @@ function submitFixture(ticket: any, worktree: string, commit: string, project: s
 }
 
 void slug;
+
+test('external agent worktrees are discovered while legacy trees remain eligible', async () => {
+  const external = path.join(EXTERNAL_WORKTREES, 'agent-external-placement');
+  fs.mkdirSync(path.dirname(external), { recursive: true });
+  git(['worktree', 'add', '-b', branchName('external-placement'), external, 'origin/main']);
+  makeOld(external);
+  assert.equal(worktrees.isAgentWorktree(PROJECT, external), true);
+  assert.equal(worktrees.isAgentWorktree(PROJECT, path.join(LEGACY_WORKTREES, 'agent-legacy-placement')), true);
+
+  const result = await worktrees.sweep(PROJECT, [], {
+    minAgeMs: 0,
+    integrationTarget: store.integrationTarget(slug),
+  });
+  assert.equal(entryFor(result, external).action, 'remove');
+  const applied = await worktrees.sweep(PROJECT, [], {
+    execute: true,
+    minAgeMs: 0,
+    integrationTarget: store.integrationTarget(slug),
+  });
+  assert.ok(applied.removed.some((removed: string) => worktrees.canonicalPath(removed) === worktrees.canonicalPath(external)));
+});
 
 test('worktree base prefers local main only when it descends from origin/main', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-base-'));
@@ -502,8 +526,8 @@ test('worktree sweep uses the configured feature integration branch for patch eq
 });
 
 test('worktree sweep reclaims old unregistered directories and backs up contents', () => {
-  const empty = path.join(WORKTREES, 'pub-empty-orphan');
-  const dirty = path.join(WORKTREES, 'pub-dirty-orphan');
+  const empty = path.join(LEGACY_WORKTREES, 'pub-empty-orphan');
+  const dirty = path.join(LEGACY_WORKTREES, 'pub-dirty-orphan');
   fs.mkdirSync(empty);
   fs.mkdirSync(dirty);
   fs.writeFileSync(path.join(dirty, 'recovery.txt'), 'preserve this\n');
@@ -525,7 +549,7 @@ test('worktree sweep reclaims old unregistered directories and backs up contents
 });
 
 test('worktree sweep quarantines an orphan after its removal fails', async () => {
-  const orphan = path.join(WORKTREES, 'pub-quarantine-orphan');
+  const orphan = path.join(LEGACY_WORKTREES, 'pub-quarantine-orphan');
   const quarantine = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-quarantine-'));
   const fsPromises = require('node:fs/promises');
   const remove = fsPromises.rm;
@@ -558,7 +582,7 @@ test('worktree sweep quarantines an orphan after its removal fails', async () =>
 });
 
 test('worktree sweep retries a failed quarantine after the delay', async () => {
-  const orphan = path.join(WORKTREES, 'pub-retry-quarantine-orphan');
+  const orphan = path.join(LEGACY_WORKTREES, 'pub-retry-quarantine-orphan');
   const quarantine = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktrees-quarantine-'));
   const fsPromises = require('node:fs/promises');
   const remove = fsPromises.rm;

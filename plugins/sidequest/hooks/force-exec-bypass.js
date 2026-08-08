@@ -540,11 +540,42 @@ function restoresCommittedContent(input, target) {
     return false;
   }
 }
+function relativeInside(root, target) {
+  const relative = import_node_path2.default.relative(root, target).replace(/\\/g, "/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path2.default.isAbsolute(relative) ? relative : null;
+}
+function linkedWorktreeRelative(target, projectPath) {
+  let existing = import_node_path2.default.dirname(target);
+  while (!import_node_fs2.default.existsSync(existing)) {
+    const parent = import_node_path2.default.dirname(existing);
+    if (parent === existing) return null;
+    existing = parent;
+  }
+  try {
+    const checkout = canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+      cwd: existing,
+      encoding: "utf8",
+      windowsHide: true
+    }).trim());
+    const commonOutput = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--git-common-dir"], {
+      cwd: checkout,
+      encoding: "utf8",
+      windowsHide: true
+    }).trim();
+    const common = canonicalPath(import_node_path2.default.isAbsolute(commonOutput) ? commonOutput : import_node_path2.default.resolve(checkout, commonOutput));
+    if (common !== canonicalPath(import_node_path2.default.join(projectPath, ".git"))) return null;
+    return relativeInside(checkout, target);
+  } catch (_) {
+    return null;
+  }
+}
 function projectRelative(target, projectPath) {
-  const relative = import_node_path2.default.relative(projectPath, target).replace(/\\/g, "/");
-  if (!relative || relative === ".." || relative.startsWith("../") || import_node_path2.default.isAbsolute(relative)) return null;
-  const worktree = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(relative);
-  return worktree ? worktree[1] || null : relative;
+  const direct = relativeInside(projectPath, target);
+  if (direct) {
+    const legacyWorktree = /^\.claude\/worktrees\/[^/]+\/(.+)$/.exec(direct);
+    return legacyWorktree ? legacyWorktree[1] || null : direct;
+  }
+  return linkedWorktreeRelative(target, projectPath);
 }
 function inScope(target, scope) {
   const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));

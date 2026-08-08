@@ -6,7 +6,6 @@ import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-const AGENT_WORKTREE = `${path.sep}.claude${path.sep}worktrees${path.sep}agent-`;
 
 interface IsolationExpectation {
   ref: string;
@@ -23,10 +22,6 @@ function targetPath(input: Record<string, unknown>): string {
   const value = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
   const target = value == null ? '' : String(value);
   return target && path.isAbsolute(target) ? path.resolve(target) : '';
-}
-
-function insideAgentWorktree(target: string): boolean {
-  return `${target}${path.sep}`.includes(AGENT_WORKTREE);
 }
 
 function canonicalPath(value: string): string {
@@ -98,8 +93,18 @@ function expectation(input: Record<string, unknown>, agentId: string, executor: 
 // the ticket, the tree it was promised, the tree it is actually writing to, and
 // the one move that saves the work. Losing the worktree is a platform failure,
 // not executor misbehaviour, so the message must not read like an accusation.
+function expectedWorktree(found: IsolationExpectation, repository: string, agentId: string): string {
+  if (found.expectedWorktree) return found.expectedWorktree;
+  try {
+    const worktrees = require(runtimeModule('worktrees')) as { agentWorktreePath: (repo: string, id: string) => string };
+    return worktrees.agentWorktreePath(repository, agentId || '<agent id>');
+  } catch (_) {
+    return `agent-${agentId || '<agent id>'}`;
+  }
+}
+
 function refusal(found: IsolationExpectation, target: string, repoRoot: string, agentId: string, cwd: string): string {
-  const expected = found.expectedWorktree || path.join(repoRoot, '.claude', 'worktrees', `agent-${agentId || '<agent id>'}`);
+  const expected = expectedWorktree(found, repoRoot, agentId);
   return [
     `sidequest: refusing this write. ${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
     `  expected worktree: ${expected}`,
@@ -134,6 +139,16 @@ function projectRefusal(found: IsolationExpectation, target: string): string {
   ].join('\n');
 }
 
+function linkedWorktreeRefusal(found: IsolationExpectation, target: string, actualRoot: string): string {
+  return [
+    `sidequest: refusing this write. ${found.ref} is writing through a different linked worktree.`,
+    `  expected worktree: ${found.expectedWorktree || '(unavailable)'}`,
+    `  actual worktree:   ${actualRoot}`,
+    `  writing to:        ${target}`,
+    'Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket.',
+  ].join('\n');
+}
+
 function main(): void {
   const input = readStdin();
   if (!input || !WRITE_TOOLS.has(stringField(input, 'tool_name'))) return;
@@ -148,15 +163,18 @@ function main(): void {
     writeDeny('PreToolUse', terminalRefusal(found, target));
     return;
   }
-  if (insideAgentWorktree(target)) return;
-
   const repo = repoRootFor(target);
   if (!repo) return;
   if (!found) {
     if (!repo.linked) writeDeny('PreToolUse', unknownRefusal(target));
     return;
   }
-  if (repo.linked || found.sharedTree) return;
+  if (found.sharedTree) return;
+  if (repo.linked) {
+    if (found.expectedWorktree && samePath(repo.root, found.expectedWorktree)) return;
+    writeDeny('PreToolUse', linkedWorktreeRefusal(found, target, repo.root));
+    return;
+  }
   if (found.projectPath && !samePath(found.projectPath, repo.root)) {
     writeDeny('PreToolUse', projectRefusal(found, target));
     return;

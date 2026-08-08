@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { stringField, type HookInput } from './shared/input.js';
 
-const WARNING = 'sidequest: foreign agent worktrees detected. Diagnostics under `.claude/worktrees/agent-*` outside this checkout are not actionable: they can be stale-index or missing-dependency artifacts, including error-severity diagnostics. Keep errors in your own files actionable; do not inspect or act on foreign-worktree diagnostics.';
+const WARNING = 'sidequest: legacy foreign agent worktrees detected. Diagnostics under `.claude/worktrees/agent-*` outside this checkout are not actionable: they can be stale-index or missing-dependency artifacts, including error-severity diagnostics. Keep errors in your own files actionable; do not inspect or act on foreign-worktree diagnostics.';
 
 interface CheckoutLocation {
   checkoutRoot: string;

@@ -30,6 +30,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
+const worktrees = require('../lib/worktrees.js');
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
@@ -54,6 +55,7 @@ const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
+const WORKTREE_CREATE = path.join(HOOKS, 'worktree-create.js');
 
 // Budget tests pin the plugin root because the nudge embeds it in CLI fallbacks.
 const BUDGET = {
@@ -713,6 +715,47 @@ test('pre-tool hook: helper writes use the bound agent scope in linked worktrees
   assert.equal(read, null);
 });
 
+test('pre-tool hook: external linked worktrees preserve helper scope enforcement', () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-external-'));
+  fs.mkdirSync(path.join(projectPath, 'lib'));
+  fs.writeFileSync(path.join(projectPath, 'lib', 'allowed.js'), 'export const allowed = true;\n');
+  fs.writeFileSync(path.join(projectPath, 'lib', 'outside.js'), 'export const outside = true;\n');
+  gitFixture(['init', '--quiet'], projectPath);
+  gitFixture(['config', 'user.email', 'sidequest@example.invalid'], projectPath);
+  gitFixture(['config', 'user.name', 'Sidequest Tests'], projectPath);
+  gitFixture(['add', '.'], projectPath);
+  gitFixture(['commit', '--quiet', '-m', 'fixture'], projectPath);
+
+  const projectSlug = store.ensureProject(projectPath).slug;
+  const ticket = addStopTicket('external helper scope', { files: ['lib/allowed.js'] }, projectSlug);
+  const sessionId = `helper-external-${++sqSeq}`;
+  const parent = claimStopTicket(ticket, sessionId, 'helper-external-parent', projectSlug);
+  const assignedWorktree = store.getTicket(projectSlug, ticket.ref).dispatch.worktree;
+  fs.rmSync(assignedWorktree, { recursive: true, force: true });
+  gitFixture(['worktree', 'add', '--detach', assignedWorktree], projectPath);
+
+  try {
+    const helper = { ...parent, agent_type: 'general-purpose', cwd: assignedWorktree };
+    assert.equal(runHookOutput(FORCE_BYPASS, {
+      ...helper,
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(assignedWorktree, 'lib', 'allowed.js') },
+    }), null);
+
+    const outside = runHookOutput(FORCE_BYPASS, {
+      ...helper,
+      tool_name: 'Write',
+      tool_input: { file_path: path.join(assignedWorktree, 'lib', 'outside.js') },
+    });
+    assert.equal(outside.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(outside.hookSpecificOutput.permissionDecisionReason, /lib[\\/]outside\.js/);
+    assert.match(outside.hookSpecificOutput.permissionDecisionReason, /effective scope/);
+  } finally {
+    gitFixture(['worktree', 'remove', '--force', assignedWorktree], projectPath);
+    fs.rmSync(projectPath, { recursive: true, force: true });
+  }
+});
+
 test('pre-tool hook: an unbound helper can restore only one declared file to HEAD', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-revert-'));
   fs.mkdirSync(path.join(projectPath, 'lib'));
@@ -1304,7 +1347,7 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
     executor: prepared.ticket.dispatchExecutor,
     agentName: isolatedName,
   }).ok, true);
-  const worktree = path.join(isolatedRoot, '.claude', 'worktrees', `agent-${agentId}`);
+  const worktree = worktrees.agentWorktreePath(isolatedRoot, agentId);
   fs.mkdirSync(worktree, { recursive: true });
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, isolatedName).ok, true);
   assert.strictEqual(runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }), null);
@@ -2074,6 +2117,34 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   assert.strictEqual(out.trim(), '', 'should emit nothing when nudge is off');
 });
 
+test('worktree-create places isolated checkouts outside the project and safely reuses them', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-external-worktree-repo-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Hook Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  const name = 'agent-hook-test';
+  const payload = { hook_event_name: 'WorktreeCreate', session_id: 'hook-test', cwd: repo, name };
+  const expected = worktrees.namedWorktreePath(repo, name);
+
+  const first = execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify(payload), encoding: 'utf8', env: process.env,
+  }).trim();
+  assert.equal(worktrees.canonicalPath(first), worktrees.canonicalPath(expected));
+  assert.equal(path.relative(repo, first).startsWith('..'), true);
+  assert.equal(worktrees.canonicalPath(gitFixture(['rev-parse', '--show-toplevel'], first)), worktrees.canonicalPath(expected));
+  assert.equal(gitFixture(['branch', '--show-current'], first), `worktree-${name}`);
+
+  const second = execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify(payload), encoding: 'utf8', env: process.env,
+  }).trim();
+  assert.equal(worktrees.canonicalPath(second), worktrees.canonicalPath(expected));
+  gitFixture(['worktree', 'remove', '--force', expected], repo);
+  gitFixture(['branch', '-D', `worktree-${name}`], repo);
+});
+
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-diagnostic-worktrees-'));
   gitFixture(['init'], repo);
@@ -2113,6 +2184,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   }
 
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+  assert.ok(config.hooks.WorktreeCreate.some((entry?: any) => entry.hooks
+    .some((hook?: any) => hook.command.includes('worktree-create.js'))), 'isolated worktrees must use the external placement hook');
   assert.ok(config.hooks.UserPromptSubmit.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('board-first-reminder.js'))), 'the board-first reminder must run for user prompts');
   assert.ok(config.hooks.Stop.some((entry?: any) => entry.hooks
@@ -2166,7 +2239,7 @@ function addTicket(title?: any) {
   return addStopTicket(title);
 }
 
-function addStopTicket(title?: any, fields?: any) {
+function addStopTicket(title?: any, fields?: any, projectSlug: string = slug) {
   const category = `hooks-stop-${++fixtureSeq}`;
   store.setCategory({
     id: category,
@@ -2175,7 +2248,7 @@ function addStopTicket(title?: any, fields?: any) {
     fallback: null,
     enabled: true,
   });
-  return store.createTicket(slug, Object.assign({
+  return store.createTicket(projectSlug, Object.assign({
     title,
     category,
     source: 'cli',
@@ -2198,20 +2271,20 @@ function addEffortTicket(title?: any, effort?: any) {
   });
 }
 
-function claimStopTicket(ticket?: any, sessionId?: any, by?: any) {
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+function claimStopTicket(ticket?: any, sessionId?: any, by?: any, projectSlug: string = slug) {
+  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId });
   const agentId = `stop-agent-${ticket.id}-${++sqSeq}`;
   const agentName = `stop-executor-${ticket.id}-${sqSeq}`;
-  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+  assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, {
     sessionId,
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
     agentName,
   }).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
-  const worktree = store.getTicket(slug, ticket.ref).dispatch?.worktree;
+  const worktree = store.getTicket(projectSlug, ticket.ref).dispatch?.worktree;
   if (worktree) fs.mkdirSync(worktree, { recursive: true });
-  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+  assert.equal(store.claimTicket(projectSlug, ticket.ref, by, {
     sessionId,
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -2247,7 +2320,7 @@ test('subagent-stop: a terminal Agent failure reports durable death evidence wit
   backdateSessionClaims(sess, 28);
   assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
   const ctx = runHookForBudget(SUBAGENT_STOP, stop);
-  const expectedWorktree = path.join(BOARD_PATH, '.claude', 'worktrees', `agent-${stop.agent_id}`);
+  const expectedWorktree = worktrees.agentWorktreePath(BOARD_PATH, stop.agent_id);
   assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
   assert.match(ctx, /board quiet since .*; checkpoint none; commit none; comment none/);
   assert.ok(ctx.includes(`worktree ${expectedWorktree}`));
