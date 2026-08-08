@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.419.0 (2026-08-08)
+
+### sidequest 4.41.0 → 4.41.1
+
+#### Fixes
+
+- Validate complete verify commands (SQ-1306)
+  Verify commands now reject unsafe tails, check each compound step, and cannot be changed to an unrunnable command while work is live.
+- Classify unavailable verify commands (SQ-1487)
+  Unavailable verify commands now report `could-not-run` instead of a failed test suite.
+- Keep Sidequest tests off local services (SQ-1503)
+  The full Sidequest suite now uses isolated home, board, and model-discovery state, so tests must provide any local service configuration they need.
+
 ## v3.418.0 (2026-08-08)
 
 ### sidequest 4.40.9 → 4.41.0
