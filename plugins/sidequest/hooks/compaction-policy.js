@@ -67,34 +67,37 @@ function stateFile(sessionId) {
 function readCounter(sessionId) {
   try {
     const parsed = JSON.parse(import_node_fs2.default.readFileSync(stateFile(sessionId), "utf8"));
-    return { blocks: Number.isInteger(parsed.blocks) && parsed.blocks > 0 ? parsed.blocks : 0 };
+    return {
+      blocks: Number.isInteger(parsed.blocks) && parsed.blocks > 0 ? parsed.blocks : 0,
+      instruction: typeof parsed.instruction === "string" ? parsed.instruction : ""
+    };
   } catch (_) {
     return { blocks: 0 };
   }
 }
-function writeCounter(sessionId, blocks) {
+function writeCounter(sessionId, blocks, instruction = "") {
   if (!sessionId) return;
   try {
     const file = stateFile(sessionId);
     import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
-    import_node_fs2.default.writeFileSync(file, JSON.stringify({ blocks }));
+    import_node_fs2.default.writeFileSync(file, JSON.stringify({ blocks, instruction }));
   } catch (error) {
     console.error(`sidequest: could not persist compaction veto counter: ${String(error)}`);
   }
 }
 function compactText(value, limit) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
-  return text.length <= limit ? text : `${text.slice(0, Math.max(0, limit - 1)).trimEnd()}…`;
-}
-function ticketLine(ticket) {
-  const claim = ticket?.claim || {};
-  const dispatch = ticket?.dispatch || {};
-  const details = claim.by ? [
-    `claim ${compactText(claim.by, 100)}`,
-    dispatch.executor || ticket?.dispatchExecutor ? `executor ${compactText(dispatch.executor || ticket.dispatchExecutor, 100)}` : "",
-    dispatch.token || ticket?.dispatchToken ? `dispatch token ${compactText(dispatch.token || ticket.dispatchToken, 160)}` : ""
-  ].filter(Boolean).join("; ") : "";
-  return `- ${compactText(ticket?.ref, 40)} — ${compactText(ticket?.title, 220)}${details ? ` (${details})` : ""}`;
+  if (Buffer.byteLength(text, "utf8") <= limit) return text;
+  const marker = "…";
+  let result = "";
+  let bytes = 0;
+  for (const character of text) {
+    const characterBytes = Buffer.byteLength(character, "utf8");
+    if (bytes + characterBytes + Buffer.byteLength(marker, "utf8") > limit) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return `${result}${marker}`;
 }
 function boundedInstruction(lines) {
   const kept = ["Preserve verbatim in the summary:"];
@@ -126,13 +129,18 @@ async function boardState(cwd, store) {
   const publish = require(runtimeModule("publish"));
   const lock = await publish.publishLockStatus(found.meta.path);
   const storyIds = [...new Set(doing.map((ticket) => String(ticket?.storyId || "")).filter(Boolean))];
-  const stories = storyIds.map((id) => store.getStory(found.slug, id)).filter(Boolean);
+  const stories = storyIds.map((id) => store.getStory(found.slug, id)).filter((story) => Boolean(story));
   const lines = [
-    ...doing.map(ticketLine),
-    ...lock.locked ? [`Publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || JSON.stringify(lock.holder || "held"), 260)}`] : [],
-    ...stories.map((story) => `Active story: ${compactText(story.ref, 40)} — ${compactText(story.title, 220)}`)
+    "sidequest compaction recovery v1: board history omitted under the 1500B recovery budget.",
+    ...doing.map((ticket) => {
+      const storyId = String(ticket?.storyId || "").trim();
+      const claim = String(ticket?.claim?.by || "").trim();
+      return `Keep this active ticket intact. Ticket ${compactText(ticket?.ref, 40)}${claim ? ` claim=${compactText(claim, 80)}` : ""}${storyId ? ` story=${compactText(storyId, 40)}` : ""}. Retrieve: mcp__plugin_sidequest_board__comments({ref:"${compactText(ticket?.ref, 40)}"}).`;
+    }),
+    ...stories.map((story) => `Compaction policy story ${compactText(story.title, 80)}: id=${compactText(story.ref, 40)} contractRevision=${Number(story.contractRevision) || 0} logRevision=${Number(story.logRevision) || 0}. Retrieve: mcp__plugin_sidequest_board__story_contract({story:"${compactText(story.ref, 40)}"}) and mcp__plugin_sidequest_board__story_log({story:"${compactText(story.ref, 40)}"}).`),
+    ...lock.locked ? [`Publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || JSON.stringify(lock.holder || "held"), 260)}`] : []
   ];
-  if (!lines.length) return null;
+  if (lines.length === 1) return null;
   const freshRefs = compactText(fresh.map((ticket) => String(ticket.ref)).join(", "), 300);
   const unsafe = [
     fresh.length ? `fresh claims: ${freshRefs}` : "",
@@ -152,20 +160,18 @@ async function compactionPolicyOutput(input) {
       writeCounter(sessionId, 0);
       return "";
     }
-    if (mode !== "veto" || !state.unsafeReason) {
-      writeCounter(sessionId, 0);
-      return state.instruction;
-    }
-    if (shouldAvoidVetoForSession(store, sessionId)) {
-      writeCounter(sessionId, 0);
-      return state.instruction;
-    }
     const counter = readCounter(sessionId);
-    if (counter.blocks >= 2) {
-      writeCounter(sessionId, 0);
+    if (mode !== "veto" || !state.unsafeReason || shouldAvoidVetoForSession(store, sessionId)) {
+      if (counter.instruction === state.instruction) return "";
+      writeCounter(sessionId, 0, state.instruction);
       return state.instruction;
     }
-    writeCounter(sessionId, counter.blocks + 1);
+    if (counter.blocks >= 2) {
+      if (counter.instruction === state.instruction) return "";
+      writeCounter(sessionId, 0, state.instruction);
+      return state.instruction;
+    }
+    writeCounter(sessionId, counter.blocks + 1, "");
     return JSON.stringify({ decision: "block", reason: `sidequest compaction delayed: ${state.unsafeReason}` });
   } catch (error) {
     console.error(`sidequest: compaction policy could not read board state: ${String(error)}`);

@@ -1,5 +1,5 @@
 import { isRecord, readStdin, stringField } from './shared/input.js';
-import { writeJson } from './shared/output.js';
+import { writeSystemMessage } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
 interface Launch {
@@ -76,10 +76,7 @@ function main(): void {
     const routes = recovered.map(({ ref, recovery }) => `${ref} → ${recovery.model}·${recovery.effort}`).join(', ');
     const refs = recovered.map(({ ref }) => ref).join(', ');
     const message = `sidequest: Claude quota blocked ${refs} before claim. Prepared the configured fallback dispatch (${routes}) with a fresh token and kept the failed primary attempt in the dispatch ledger. Run dispatch again for each ref and spawn the returned spec. Category policy is unchanged.`;
-    writeJson({
-      systemMessage: message,
-      hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: message },
-    });
+    writeSystemMessage('PostToolUseFailure', message);
     return;
   }
 
@@ -99,10 +96,7 @@ function main(): void {
 
   const outcomes = failed.map(({ ref, failureShape }) => `${ref} (${failureShape})`).join(', ');
   const message = `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. The dispatch now records died, so its claimed work can be reclaimed safely.`;
-  writeJson({
-    systemMessage: message,
-    hookSpecificOutput: { hookEventName: 'PostToolUseFailure', additionalContext: message },
-  });
+  writeSystemMessage('PostToolUseFailure', message);
 }
 
 try {

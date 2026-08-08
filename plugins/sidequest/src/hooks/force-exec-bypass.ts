@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { isRecord, readStdin, stringField, type HookInput } from './shared/input.js';
-import { writeDeny, writeJson } from './shared/output.js';
+import { writeDeny, writeToolUpdate } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
@@ -166,10 +166,7 @@ function rewriteExecutorHelper(input: HookInput, toolInput: Record<string, unkno
     run_in_background: true,
   };
   delete updatedInput.isolation;
-  writeJson({
-    systemMessage: 'sidequest: executor helpers run in the background from the parent working tree. If the target is unavailable there, report the visibility block instead of returning clean findings.',
-    hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
-  });
+  writeToolUpdate(updatedInput, 'sidequest: executor helpers run in the background from the parent working tree. If the target is unavailable there, report the visibility block instead of returning clean findings.');
 }
 
 function agentDenyReason(type: string, classification: ExecutorClassification): string {
@@ -792,10 +789,7 @@ function main(): void {
       preparedCorrection,
       hadModel ? `sidequest: removed the Agent model override for ${type}; its frontmatter pin selects the routed backend.` : null,
     ].filter((message): message is string => Boolean(message));
-    writeJson({
-      ...(messages.length ? { systemMessage: messages.join(' ') } : {}),
-      hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
-    });
+    writeToolUpdate(updatedInput, messages.join(' '));
     return;
   }
 
@@ -805,13 +799,10 @@ function main(): void {
     if (result.status === 'ok' && result.model) {
       updatedInput.model = result.model;
       recordAuthoritativeLaunch(input, type, launchAgentName);
-      writeJson({
-        systemMessage: [
-          preparedCorrection,
-          `sidequest: ${type} spawned without a model — injected "${result.model}" from ${result.refs.join(', ')}'s resolved category route. Always pass model: exec.model on Claude routes.`,
-        ].filter(Boolean).join(' '),
-        hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
-      });
+      writeToolUpdate(updatedInput, [
+        preparedCorrection,
+        `sidequest: ${type} spawned without a model — injected "${result.model}" from ${result.refs.join(', ')}'s resolved category route. Always pass model: exec.model on Claude routes.`,
+      ].filter(Boolean).join(' '));
       return;
     }
     writeDeny('PreToolUse', denyReason(result, type));
@@ -821,20 +812,14 @@ function main(): void {
   const result = resolveStampedModel(input);
   if (result.status === 'ok' && result.model !== toolInput.model) {
     recordAuthoritativeLaunch(input, type, launchAgentName);
-    writeJson({
-      systemMessage: [
-        preparedCorrection,
-        `sidequest: ${type} was spawned with model "${String(toolInput.model)}" but ${result.refs.join(', ')} resolves to "${result.model}" — kept the caller's value; confirm the cap is deliberate.`,
-      ].filter(Boolean).join(' '),
-      hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
-    });
+    writeToolUpdate(updatedInput, [
+      preparedCorrection,
+      `sidequest: ${type} was spawned with model "${String(toolInput.model)}" but ${result.refs.join(', ')} resolves to "${result.model}" — kept the caller's value; confirm the cap is deliberate.`,
+    ].filter(Boolean).join(' '));
     return;
   }
   recordAuthoritativeLaunch(input, type, launchAgentName);
-  writeJson({
-    ...(preparedCorrection ? { systemMessage: preparedCorrection } : {}),
-    hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
-  });
+  writeToolUpdate(updatedInput, preparedCorrection);
 }
 
 try {

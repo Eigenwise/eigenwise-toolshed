@@ -46,8 +46,54 @@ function stringField(input, ...names) {
 }
 
 // src/hooks/shared/output.ts
+var import_node_crypto = __toESM(require("node:crypto"));
+var CONTEXT_BUDGETS = Object.freeze({
+  SessionStart: 2 * 1024,
+  UserPromptSubmit: 1024,
+  PreToolUse: 768,
+  PreCompact: 1500,
+  PostCompact: 1500,
+  SubagentStart: 512,
+  SubagentStop: 512,
+  Stop: 512,
+  PostToolUseFailure: 512,
+  TeammateIdle: 512
+});
+function byteLength(value) {
+  return Buffer.byteLength(value, "utf8");
+}
+function contextBudget(hookEventName) {
+  return CONTEXT_BUDGETS[hookEventName] || 512;
+}
+function stableWatermark(value) {
+  return import_node_crypto.default.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+function truncateUtf8(value, maxBytes) {
+  if (byteLength(value) <= maxBytes) return value;
+  let truncated = "";
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    truncated += character;
+    bytes += characterBytes;
+  }
+  return truncated;
+}
+function projectedText(hookEventName, value) {
+  const budget = contextBudget(hookEventName);
+  if (byteLength(value) <= budget) return value;
+  const watermark = stableWatermark(value);
+  const omission = `
+[sidequest context v1 id=${hookEventName} revision=${watermark} watermark=${watermark}; content omitted for ${budget}B budget. Retrieve current board state with mcp__plugin_sidequest_board__comments({ref:"<ticket-ref>"}).]`;
+  return `${truncateUtf8(value, Math.max(0, budget - byteLength(omission)))}${omission}`;
+}
 function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
+}
+function writeSystemMessage(hookEventName, systemMessage) {
+  const context = projectedText(hookEventName, systemMessage);
+  writeJson({ systemMessage: context, hookSpecificOutput: { hookEventName, additionalContext: context } });
 }
 
 // src/hooks/shared/paths.ts
@@ -112,10 +158,7 @@ function main() {
     const routes = recovered.map(({ ref, recovery }) => `${ref} → ${recovery.model}·${recovery.effort}`).join(", ");
     const refs = recovered.map(({ ref }) => ref).join(", ");
     const message2 = `sidequest: Claude quota blocked ${refs} before claim. Prepared the configured fallback dispatch (${routes}) with a fresh token and kept the failed primary attempt in the dispatch ledger. Run dispatch again for each ref and spawn the returned spec. Category policy is unchanged.`;
-    writeJson({
-      systemMessage: message2,
-      hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: message2 }
-    });
+    writeSystemMessage("PostToolUseFailure", message2);
     return;
   }
   const failed = [];
@@ -133,10 +176,7 @@ function main() {
   if (!failed.length) return;
   const outcomes = failed.map(({ ref, failureShape }) => `${ref} (${failureShape})`).join(", ");
   const message = `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. The dispatch now records died, so its claimed work can be reclaimed safely.`;
-  writeJson({
-    systemMessage: message,
-    hookSpecificOutput: { hookEventName: "PostToolUseFailure", additionalContext: message }
-  });
+  writeSystemMessage("PostToolUseFailure", message);
 }
 try {
   main();

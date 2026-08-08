@@ -1,5 +1,5 @@
 {
-  "description": "sidequest session lifecycle and executor safety hooks",
+  "description": "sidequest lifecycle and executor safety hooks emit UTF-8-bounded context: SessionStart <=2 KiB, prompts <=1 KiB, denials/guidance <=768 B, routine notices <=512 B, and compaction recovery <=1500 B with omission and retrieval guidance",
   "hooks": {
     "WorktreeCreate": [
       {

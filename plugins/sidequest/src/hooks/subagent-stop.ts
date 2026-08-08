@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { readStdin, stringField } from './shared/input.js';
-import { writeContext, writeJson } from './shared/output.js';
+import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';

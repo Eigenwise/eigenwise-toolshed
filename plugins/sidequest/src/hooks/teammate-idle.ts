@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { readStdin, stringField } from './shared/input.js';
-import { writeJson } from './shared/output.js';
+import { writeTeammateStop } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 
 interface TerminalDispatch {
@@ -32,10 +32,7 @@ function main(): void {
 
   const terminal = terminalDispatchForIdle(identity);
   if (!terminal) return;
-  writeJson({
-    continue: false,
-    stopReason: `sidequest: ${terminal.ref} is terminal (${terminal.outcome}); end this idle executor.`,
-  });
+  writeTeammateStop(`sidequest: ${terminal.ref} is terminal (${terminal.outcome}); end this idle executor.`);
 }
 
 try {

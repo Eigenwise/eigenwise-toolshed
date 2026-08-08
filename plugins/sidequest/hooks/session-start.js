@@ -53,11 +53,53 @@ function isSubagent(input) {
 }
 
 // src/hooks/shared/output.ts
+var import_node_crypto = __toESM(require("node:crypto"));
+var CONTEXT_BUDGETS = Object.freeze({
+  SessionStart: 2 * 1024,
+  UserPromptSubmit: 1024,
+  PreToolUse: 768,
+  PreCompact: 1500,
+  PostCompact: 1500,
+  SubagentStart: 512,
+  SubagentStop: 512,
+  Stop: 512,
+  PostToolUseFailure: 512,
+  TeammateIdle: 512
+});
+function byteLength(value) {
+  return Buffer.byteLength(value, "utf8");
+}
+function contextBudget(hookEventName) {
+  return CONTEXT_BUDGETS[hookEventName] || 512;
+}
+function stableWatermark(value) {
+  return import_node_crypto.default.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+function truncateUtf8(value, maxBytes) {
+  if (byteLength(value) <= maxBytes) return value;
+  let truncated = "";
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    truncated += character;
+    bytes += characterBytes;
+  }
+  return truncated;
+}
+function projectedText(hookEventName, value) {
+  const budget = contextBudget(hookEventName);
+  if (byteLength(value) <= budget) return value;
+  const watermark = stableWatermark(value);
+  const omission = `
+[sidequest context v1 id=${hookEventName} revision=${watermark} watermark=${watermark}; content omitted for ${budget}B budget. Retrieve current board state with mcp__plugin_sidequest_board__comments({ref:"<ticket-ref>"}).]`;
+  return `${truncateUtf8(value, Math.max(0, budget - byteLength(omission)))}${omission}`;
+}
 function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
 function writeContext(hookEventName, additionalContext) {
-  writeJson({ hookSpecificOutput: { hookEventName, additionalContext } });
+  writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
 }
 
 // src/hooks/shared/paths.ts
@@ -116,7 +158,7 @@ function initializeCompactionState(sessionId3, transcriptPath) {
 
 // src/hooks/shared/sweep-handoff.ts
 var import_node_child_process = require("node:child_process");
-var import_node_crypto = __toESM(require("node:crypto"));
+var import_node_crypto2 = __toESM(require("node:crypto"));
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path3 = __toESM(require("node:path"));
@@ -132,7 +174,7 @@ function stateDirectory2() {
   return import_node_path3.default.join(home, "sweep-reports");
 }
 function reportFile(cwd) {
-  const key = import_node_crypto.default.createHash("sha1").update(import_node_path3.default.resolve(cwd || ".")).digest("hex").slice(0, 16);
+  const key = import_node_crypto2.default.createHash("sha1").update(import_node_path3.default.resolve(cwd || ".")).digest("hex").slice(0, 16);
   return import_node_path3.default.join(stateDirectory2(), `${key}.json`);
 }
 function drainReport(cwd) {
@@ -289,7 +331,7 @@ function diagnosticWorktreeWarning(input) {
 }
 
 // src/lib/plugin-freshness.ts
-var import_node_crypto2 = __toESM(require("node:crypto"));
+var import_node_crypto3 = __toESM(require("node:crypto"));
 var import_node_fs6 = __toESM(require("node:fs"));
 var import_node_os4 = __toESM(require("node:os"));
 var import_node_path6 = __toESM(require("node:path"));
@@ -381,7 +423,7 @@ function sessionId2(input) {
 function loadedVersionStateFile(input, pluginId = SIDEQUEST_PLUGIN_ID, options = {}) {
   const id = sessionId2(input);
   if (!id) return null;
-  const digest = import_node_crypto2.default.createHash("sha256").update(`${id}\0${pluginId}`).digest("hex");
+  const digest = import_node_crypto3.default.createHash("sha256").update(`${id}\0${pluginId}`).digest("hex");
   return import_node_path6.default.join(stateDirectory3(options), `${digest}.json`);
 }
 function reportLoadedSidequestVersion(input, options = {}) {
@@ -397,7 +439,7 @@ function reportLoadedSidequestVersion(input, options = {}) {
 }
 
 // src/hooks/session-start.ts
-var MAX_WORKFORCE_BYTES = 1800;
+var MAX_WORKFORCE_BYTES = 800;
 var MAX_WORKFORCE_DESCRIPTION = 90;
 function truncateText(value, max) {
   const text = String(value || "").replace(/\s+/g, " ").trim();
@@ -438,7 +480,7 @@ function workforceSection() {
       const lines = entries.map((candidate) => `${candidate.id} — ${descriptions.get(candidate.id) ? descriptions.get(candidate.id) + " " : ""}${candidate.route}`);
       if (bytesFor(lines) > MAX_WORKFORCE_BYTES) descriptions.delete(entry.id);
     }
-    return [header, ...entries.map((entry) => `${entry.id} — ${descriptions.get(entry.id) ? descriptions.get(entry.id) + " " : ""}${entry.route}`)].join("\n");
+    return [header, ...entries.map((entry) => `${entry.id} — ${descriptions.get(entry.id) || "enabled"} ${entry.route}`)].join("\n");
   } catch (_) {
     return "";
   }
@@ -476,10 +518,11 @@ function checkpointingGuidance(data) {
   const model = stringField(data, "model").toLowerCase();
   const tier = model.includes("haiku") ? "Haiku" : model.includes("sonnet") ? "Sonnet" : "";
   if (!tier) return "";
-  return "\nCHECKPOINT MODE (" + tier + "): state your read and proceed on cheap-to-reverse config, category, or route edits. Ask only before an incomplete-evidence judgment ships, deletes data or refs, spends irreversible quota, or locks in work others build on. Do not ask for routine ticket filing, an exact user spec, or mechanical single-project work. `references/orchestrator-checkpointing.md`.";
+  return ` CHECKPOINT MODE (${tier}): proceed on cheap reversible config and route edits; ask before irreversible spend, deletion, or an incomplete-evidence judgment.`;
 }
 function emit(context, notice) {
-  const output = notice ? context + "\n" + notice : context;
+  const output = notice ? `${notice}
+${context}` : context;
   writeContext("SessionStart", withWorkforce(output));
 }
 async function main() {
@@ -498,30 +541,35 @@ async function main() {
   try {
     sweepNotices = await runSweep(data);
   } catch (error) {
-    sweepNotices = [`sidequest: worktree sweep failed: ${error && error.message || error}`];
+    sweepNotices = [`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`];
   }
   const source = stringField(data, "source");
   const restartNotice = [
     freshnessNotice,
     syncResult && syncResult.written > 0 ? require(runtimeModule("agentsync")).RESTART_NOTICE : "",
-    lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : "",
+    lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed. Re-dispatch and spawn the returned spec.` : "",
     source === "compact" || source === "resume" ? "" : diagnosticWorktreeWarning(data),
     ...sweepNotices
   ].filter(Boolean).join("\n");
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
+  const recovery = "Context is UTF-8 bounded. Omitted details name a typed board retrieval call.";
   if (source === "compact" || source === "resume") {
     emit(
-      '=== sidequest (active — context restored) ===\nROLE: ORCHESTRATOR. Reload Sidequest. Use dispatch executor/spawn verbatim. Ticket + dispatch BEFORE multi-file exploration. Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. `direct:true` needs a 20+ character inline-safe reason, not `direct-ok`; only pinpointed integration mechanical fixes, release bookkeeping, or the user-directed 1–2 named-file carve-out qualify. Work needing investigation or other-file reading, new behavior/API, or an unpinpointed failing test is never inline. "context already loaded", "small change", and "faster myself" do not; mcp__plugin_sidequest_board__list status=doing FIRST; `' + cli + " list --status=doing`; mcp__plugin_sidequest_board__* absent (not errors)? Ask USER to `/reload-plugins`.\nnever TaskOutput; pulse ref/changes --since; TaskStop only after terminal board evidence. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND dispatch→submission: no unprompted reads/pulses/peeks; oracle=verify+wave suite+submit report; never re-review diffs/source.\n" + checkpointingGuidance(data),
+      `=== sidequest (active — context restored) ===
+${recovery}
+ROLE: ORCHESTRATOR. Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Use pulse/changes for liveness; TaskStop only after terminal board evidence. mcp__plugin_sidequest_board__* first; ${cli} list --status=doing only if MCP is absent.${checkpointingGuidance(data)}`,
       restartNotice
     );
     return;
   }
   emit(
-    "=== sidequest (active) ===\nREQUIRED: Substantive changes/investigations need tickets; fresh `dispatch` returns executor/spawn/token. Every Agent uses it.\nOperational requests (run/build/test app; start/stop dev server; open dashboard; answer from visible context): act inline, without the Sidequest skill, category_list, or board reads.\nROLE: you are this project's ORCHESTRATOR.\n" + checkpointingGuidance(data) + "\nReload the Sidequest skill before board work. SOLO-FIT picks one-executor vs wave; it NEVER means you implement inline. Small coherent work, or work whose contract cannot be pinned without doing it: ONE ticket, ONE executor. If spec pins shared types/interfaces, file bounds, and per-piece verifies, 3+ independently checkable pieces use contract-first: pin contract, one parallel wave to category-appropriate cheaper models, integrate once. Unpinnable only after a completed planning ticket that tried and names the specific resisting interface, or with no written contract surface; “feels coupled” is not evidence. Plan first when unsure. Wave mode: pre-dispatch, file COMPLETE backlog under a story; pin its contract: all tickets, declared files, dependencies, per-ticket verify. Dispatch every dependency-ready ticket in parallel; same-file overlap in isolated worktrees needs assessment, not auto-serialization; never drip-file/dispatch/wait. Discoveries still file mid-run. Otherwise use checkable ATOMIC tickets; several deliverables are a smell. Passing done-oracle skips audit/fix unless high-stakes; full suite once/wave. An external tracker like Jira still uses Sidequest.\n• Tiny lookup: Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. USER-DIRECTED TRIVIAL EDIT: 1–2 exact user-named files, no investigation: Edit inline, no ticket/dispatch. Need other-file reading? Ticket it. Ticket + dispatch MUST precede multi-file exploration. `Explore`/`claude-code-guide`/`statusline-setup`: narrow harness recon. Native results: never TaskOutput. pulse ref / changes --since; TaskStop only after terminal board evidence; never proxy-wait via shell/Monitor/cron polls or blocking TaskOutput. ONE diagnose-first retry, never blind respawn. Two failures: comment evidence + surface user. BOOKEND: between dispatch and submission, no unprompted ticket reads, pulses, or worktree peeks. Integrate by oracle: verify + wave suite + submit report; never re-review diffs or source. substantive actions are BLOCKED until claim. Use `bypassPermissions`; never `native_agent`.\n• Batch small same-model tickets into ONE executor.\n• Before each wave, assess shared runtime resources: fixed ports, domains, shared DBs, servers, and files outside declared scope. Serialize tickets that touch the same resource even across worktrees.\n• Workers own their ticket and report conflicts, server lifecycle, files changed, blockers, and cleanup.\nmcp__plugin_sidequest_board__ MCP tools FIRST; CLI fallback. If those tools are absent (not errors), ask USER to run `/reload-plugins`.",
+    `=== sidequest (active) ===
+${recovery}
+ROLE: ORCHESTRATOR. Substantive changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. Workers own claimed work and report conflicts, verification, and cleanup.${checkpointingGuidance(data)}`,
     restartNotice
   );
 }
 main().catch((error) => {
-  console.error(`sidequest: session-start failed: ${error && error.message || error}`);
+  console.error(`sidequest: session-start failed: ${error instanceof Error ? error.message : String(error)}`);
 });
