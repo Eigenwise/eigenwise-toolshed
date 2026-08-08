@@ -3,6 +3,12 @@ name: Publish GitHub Release
 on:
   push:
     tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Marketplace tag to publish
+        required: true
+        type: string
 
 permissions:
   contents: write
@@ -20,8 +26,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           # No checkout here, so gh cannot infer the repo from a git remote.
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ inputs.tag || github.ref_name }}
         run: |
+          case "$TAG" in
+            v*) ;;
+            *) echo "tag must start with v: $TAG" >&2; exit 1 ;;
+          esac
           if gh release view "$TAG" >/dev/null 2>&1; then
             exit 0
           fi

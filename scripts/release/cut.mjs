@@ -9,7 +9,7 @@ import { createGit } from './lib/git.mjs';
 import { fragmentFile, fragmentFingerprint, HOLD_FILE, isHeld, readFragments } from './lib/fragments.mjs';
 import { applyVersions, checkManifest, readManifest } from './lib/manifests.mjs';
 import { resolveInRepo } from './lib/paths.mjs';
-import { buildPlan, formatPlan, planCommitMessage, planPushCommand, planRefspecs } from './lib/plan.mjs';
+import { buildPlan, formatPlan, planCommitMessage, planRefspecs } from './lib/plan.mjs';
 import { createSuiteResolver } from './lib/suites.mjs';
 import { commitSource, diskSource } from './lib/treesource.mjs';
 import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
@@ -17,8 +17,8 @@ import { repoRootFrom, runCli, splitList, UsageError } from './lib/cli.mjs';
 const USAGE = `Usage: node scripts/release/cut.mjs [options]
 
 Builds a release window in the working tree and stops just short of publishing it. Everything is
-local until --push, and the publish itself is a single atomic ref update of the exact commit whose
-suites passed.
+local until --push. Publishing atomically pairs the verified release commit with the marketplace
+tag, then pushes the plugin tags separately.
 
   --sha <rev>              Pin the window to this commit (default HEAD). Every input is read from it
   --mode <normal|hotfix>   Window kind (default normal)
@@ -40,6 +40,10 @@ suites passed.
 // Anything that lets a suite authenticate to a remote, or reconfigure git underneath the engine,
 // is removed before the suite runs. The engine still re-verifies every ref afterwards, because
 // stripping credentials is a reduction in reach, not a proof.
+const GITHUB_RELEASE_WORKFLOW = 'Publish GitHub Release';
+const GITHUB_RELEASE_POLL_INTERVAL_MS = 2_000;
+const GITHUB_RELEASE_TIMEOUT_MS = 10 * 60 * 1_000;
+
 const SUITE_CREDENTIAL_DENYLIST = [
   'GITHUB_TOKEN', 'GH_TOKEN', 'GH_ENTERPRISE_TOKEN', 'RELEASE_TOKEN', 'GITHUB_ACTIONS_TOKEN',
   'NPM_TOKEN', 'NODE_AUTH_TOKEN', 'NPM_CONFIG__AUTH', 'NPM_CONFIG__AUTHTOKEN',
@@ -107,13 +111,43 @@ function assertNoStaleTags(git, plan, { remote, force }) {
   );
 }
 
-function releaseRecoveryInstructions(plan, originalHead) {
+function releaseRecoveryInstructions(plan, originalHead, remote, marketplacePublished) {
+  if (marketplacePublished) {
+    return [
+      `The marketplace commit and tag ${plan.tag} are already published.`,
+      `Inspect ${plan.pluginTags.join(', ')} on the remote, then publish any missing plugin tags with:`,
+      `  ${pushCommand(remote, pluginTagRefspecs(plan))}`,
+    ].join('\n');
+  }
   return [
     'The release commit and tags are local only. To undo this local window:',
     `  git reset --hard ${originalHead}`,
     `  git tag -d ${plan.tags.join(' ')}`,
     'A reset does not delete local tags, so run both commands before retrying.',
   ].join('\n');
+}
+
+function marketplaceRefspecs(plan, commit) {
+  const sha = commit ?? plan.commit ?? '<release-sha>';
+  return [
+    `${sha}:refs/heads/${plan.publishBranch}`,
+    `refs/tags/${plan.tag}:refs/tags/${plan.tag}`,
+  ];
+}
+
+function pluginTagRefspecs(plan) {
+  return plan.pluginTags.map((tag) => `refs/tags/${tag}:refs/tags/${tag}`);
+}
+
+function pushCommand(remote, refspecs) {
+  return ['git', 'push', '--atomic', remote, ...refspecs].join(' ');
+}
+
+function publishCommands(plan, { remote, commit }) {
+  const commands = [pushCommand(remote, marketplaceRefspecs(plan, commit))];
+  const pluginRefs = pluginTagRefspecs(plan);
+  if (pluginRefs.length > 0) commands.push(pushCommand(remote, pluginRefs));
+  return commands;
 }
 
 function quoteForSh(command) {
@@ -167,6 +201,57 @@ export function assertParentCiPassed(repoRoot, commit, runner = spawnSync, suite
 function isGitHubRemote(remoteUrl) {
   return /(?:^|[@/:])github\.com(?::|\/|$)/i.test(remoteUrl);
 }
+
+export async function assertGitHubReleasePublished(
+  repoRoot,
+  tag,
+  commit,
+  {
+    runner = spawnSync,
+    sleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
+    now = Date.now,
+    timeoutMs = GITHUB_RELEASE_TIMEOUT_MS,
+  } = {},
+) {
+  const deadline = now() + timeoutMs;
+  for (;;) {
+    const release = runner('gh', ['release', 'view', tag], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (release.error) throw new Error(`cannot check GitHub Release ${tag}: ${release.error.message}`);
+    if (release.status === 0) return { tag };
+
+    const workflow = runner('gh', [
+      'run', 'list', '--workflow', GITHUB_RELEASE_WORKFLOW, '--commit', commit,
+      '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha',
+    ], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+    });
+    if (workflow.error) throw new Error(`cannot check ${GITHUB_RELEASE_WORKFLOW} for ${tag}: ${workflow.error.message}`);
+    if (workflow.status !== 0) {
+      const detail = String(workflow.stderr || '').trim();
+      throw new Error(`cannot check ${GITHUB_RELEASE_WORKFLOW} for ${tag}${detail ? `: ${detail}` : ''}`);
+    }
+    let runs;
+    try {
+      runs = JSON.parse(workflow.stdout || '[]');
+    } catch (_) {
+      throw new Error(`cannot read ${GITHUB_RELEASE_WORKFLOW} status for ${tag}: gh returned invalid JSON`);
+    }
+    const run = Array.isArray(runs) && runs.find((candidate) => candidate?.headSha === commit);
+    if (run?.conclusion && run.conclusion !== 'success') {
+      throw new Error(`${GITHUB_RELEASE_WORKFLOW} for ${tag} concluded ${run.conclusion}; GitHub Release was not published`);
+    }
+    if (now() >= deadline) {
+      throw new Error(`GitHub Release ${tag} was not found within ${Math.round(timeoutMs / 60_000)} minutes after publish`);
+    }
+    await sleep(GITHUB_RELEASE_POLL_INTERVAL_MS);
+  }
+}
 /**
  * The release commit and its tags are the verified artefact. Suites run arbitrary repository code,
  * so nothing they could have done to the local refs is allowed to reach the remote.
@@ -189,10 +274,9 @@ function assertReleaseIntact(git, plan, commit) {
 }
 
 /**
- * Builds the whole release locally, then publishes it with one atomic ref update. Everything
- * before that push stays local. Later failures print the commands that restore the original
- * commit and remove the local tags, rather than attempting a reset that could discard allowed
- * working-tree changes or suite output.
+ * Builds the whole release locally, then atomically publishes its commit and marketplace tag.
+ * Plugin tags follow in a separate atomic update, so the tag that triggers the GitHub Release
+ * workflow never shares a push with more than three tags. Everything before that stays local.
  */
 export async function cut(options = {}) {
   const {
@@ -292,8 +376,9 @@ export async function cut(options = {}) {
 
   assertNoStaleTags(git, plan, { remote, force });
 
+  const githubRemote = !dryRun && isGitHubRemote(git.remoteUrl(remote));
   let ci = null;
-  if (!dryRun && (options.assertParentCiPassed || isGitHubRemote(git.remoteUrl(remote)))) {
+  if (!dryRun && (options.assertParentCiPassed || githubRemote)) {
     const parent = git.remoteBranchHead(remote, publishBranch);
     const assertCiPassed = options.assertParentCiPassed
       ?? ((repoRoot, commit, suites) => assertParentCiPassed(repoRoot, commit, spawnSync, suites));
@@ -307,8 +392,9 @@ export async function cut(options = {}) {
   }
 
   if (dryRun) {
-    log(formatPlan(plan));
-    return { status: 'dry-run', plan, pushCommand: planPushCommand(plan, { remote }) };
+    const pushCommands = publishCommands(plan, { remote, commit: null });
+    log(formatPlan(plan).replace(/^publish:.*$/m, `publish:     ${pushCommands.join('\n             ')}`));
+    return { status: 'dry-run', plan, pushCommands };
   }
 
   // The plan was read from the pin, so the tree the writes land on has to BE the pin.
@@ -370,6 +456,7 @@ export async function cut(options = {}) {
   }
   plan.commit = commit;
 
+  let marketplacePublished = false;
   try {
     const failures = [];
     const runSuite = options.runSuite ?? defaultSuiteRunner(repoRoot, { log, tag: plan.tag });
@@ -390,10 +477,19 @@ export async function cut(options = {}) {
     assertReleaseIntact(git, plan, commit);
 
     const refspecs = planRefspecs(plan, commit);
-    const pushCommand = planPushCommand(plan, { remote, commit });
+    const marketplacePush = marketplaceRefspecs(plan, commit);
+    const pluginPush = pluginTagRefspecs(plan);
+    const pushCommands = publishCommands(plan, { remote, commit });
     let pushed = false;
     if (push) {
-      git.pushAtomic(remote, refspecs);
+      git.pushAtomic(remote, marketplacePush);
+      marketplacePublished = true;
+      if (pluginPush.length > 0) git.pushAtomic(remote, pluginPush);
+      if (githubRemote) {
+        const assertReleasePublished = options.assertGitHubReleasePublished
+          ?? ((repoRoot, tag, releaseCommit) => assertGitHubReleasePublished(repoRoot, tag, releaseCommit));
+        await assertReleasePublished(repoRoot, plan.tag, commit);
+      }
       pushed = true;
       log(`published ${plan.tag} (${commit})`);
     } else {
@@ -403,12 +499,15 @@ export async function cut(options = {}) {
       } else if (ci?.status === 'overridden') {
         log(`Test CI on ${remote}/${publishBranch} (${ci.commit}) was overridden: ${ci.reason}`);
       }
-      log(`  ${pushCommand}`);
+      for (const command of pushCommands) log(`  ${command}`);
     }
 
-    return { status: 'cut', plan, commit, message, pushed, pushCommand, refspecs, touched, consumed, ci };
+    return {
+      status: 'cut', plan, commit, message, pushed, refspecs, marketplacePush, pluginPush,
+      pushCommands, touched, consumed, ci,
+    };
   } catch (error) {
-    throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin)}`, { cause: error });
+    throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`, { cause: error });
   }
 }
 

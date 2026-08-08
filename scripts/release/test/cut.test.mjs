@@ -5,7 +5,7 @@ import { existsSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import test from 'node:test';
 
-import { assertParentCiPassed, cut, defaultSuiteRunner } from '../cut.mjs';
+import { assertGitHubReleasePublished, assertParentCiPassed, cut, defaultSuiteRunner } from '../cut.mjs';
 import { readValue } from '../lib/jsonedit.mjs';
 import { makeGitRepo } from './realrepo.mjs';
 
@@ -320,6 +320,38 @@ test('a failed Test workflow refuses before suites or release mutations', async 
   assert.deepEqual(context.remoteRefs(), before);
 });
 
+test('a published GitHub Release is checked after its workflow completes', async () => {
+  let releaseChecks = 0;
+  const calls = [];
+  const runner = (command, args) => {
+    calls.push([command, ...args]);
+    if (args[0] === 'release') {
+      releaseChecks += 1;
+      return releaseChecks === 1
+        ? { status: 1, stdout: '', stderr: 'release not found' }
+        : { status: 0, stdout: 'v3.208.0', stderr: '' };
+    }
+    return {
+      status: 0,
+      stdout: JSON.stringify([{ headSha: 'release-commit', conclusion: 'success' }]),
+      stderr: '',
+    };
+  };
+
+  const release = await assertGitHubReleasePublished('/repo', 'v3.208.0', 'release-commit', {
+    runner,
+    sleep: async () => {},
+    now: () => 0,
+  });
+
+  assert.deepEqual(release, { tag: 'v3.208.0' });
+  assert.deepEqual(calls, [
+    ['gh', 'release', 'view', 'v3.208.0'],
+    ['gh', 'run', 'list', '--workflow', 'Publish GitHub Release', '--commit', 'release-commit', '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha'],
+    ['gh', 'release', 'view', 'v3.208.0'],
+  ]);
+});
+
 test('a local cut prints the passing remote CI verdict with its push command', async (t) => {
   const context = setup(t);
   context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
@@ -339,7 +371,7 @@ test('a local cut prints the passing remote CI verdict with its push command', a
 
   assert.deepEqual(result.ci, { status: 'passed', commit: remoteParent, conclusion: 'success' });
   assert.ok(logs.includes(`Test CI on origin/main (${remoteParent}) passed.`));
-  assert.ok(logs.includes(`  ${result.pushCommand}`));
+  for (const command of result.pushCommands) assert.ok(logs.includes(`  ${command}`));
 });
 
 test('a CI override records its reason for a local cut', async (t) => {

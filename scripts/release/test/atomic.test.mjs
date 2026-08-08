@@ -41,31 +41,64 @@ test('every remote-changing command happens after the whole release is built', a
   const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
 
   const mutations = calls.filter((call) => call.startsWith('push'));
-  assert.equal(mutations.length, 1, 'exactly one command can touch a remote');
-  assert.equal(calls.at(-1), mutations[0], 'the atomic push is the last thing that runs');
+  assert.equal(mutations.length, 2, 'the marketplace ref and plugin tags publish separately');
+  assert.equal(calls.at(-1), mutations[1], 'the plugin-tag push is the last thing that runs');
 
-  const pushIndex = calls.indexOf(mutations[0]);
+  const marketplacePushIndex = calls.indexOf(mutations[0]);
   for (const verb of ['commit -m', 'tag -a v3.208.0', 'add --']) {
     const index = calls.findIndex((call) => call.startsWith(verb));
-    assert.ok(index !== -1 && index < pushIndex, `${verb} must run before the push`);
+    assert.ok(index !== -1 && index < marketplacePushIndex, `${verb} must run before the push`);
   }
+  assert.match(mutations[0], /refs\/heads\/main/);
+  assert.match(mutations[0], /refs\/tags\/v3\.208\.0:refs\/tags\/v3\.208\.0/);
+  assert.doesNotMatch(mutations[0], /sidequest-v3\.7\.0|workbench-v0\.63\.7/);
+  assert.match(mutations[1], /sidequest-v3\.7\.0/);
+  assert.match(mutations[1], /workbench-v0\.63\.7/);
   assert.equal(repo.remoteRefs()['refs/heads/main'], result.commit);
 });
 
-test('one push carries the branch and every tag by explicit sha, so no ref can land alone', async (t) => {
+test('the marketplace tag shares an atomic push with main while plugin tags follow separately', async (t) => {
   const repo = setup(t);
   const logged = [];
 
   const result = await cut({ repoRoot: repo.root, push: true, skipTests: true, log: (line) => logged.push(line) });
 
+  assert.deepEqual(result.marketplacePush, [
+    `${result.commit}:refs/heads/main`,
+    'refs/tags/v3.208.0:refs/tags/v3.208.0',
+  ]);
+  assert.deepEqual(result.pluginPush, [
+    'refs/tags/sidequest-v3.7.0:refs/tags/sidequest-v3.7.0',
+    'refs/tags/workbench-v0.63.7:refs/tags/workbench-v0.63.7',
+  ]);
   assert.equal(result.refspecs[0], `${result.commit}:refs/heads/main`, 'the branch moves to the verified commit, not to whatever HEAD is');
   assert.equal(result.refspecs.length, result.plan.tags.length + 1);
   for (const tag of result.plan.tags) assert.ok(result.refspecs.includes(`refs/tags/${tag}:refs/tags/${tag}`));
 
   const remote = repo.remoteRefs();
   assert.equal(remote['refs/heads/main'], result.commit);
-  for (const tag of result.plan.tags) assert.ok(remote[`refs/tags/${tag}`], `${tag} rode the same push`);
+  for (const tag of result.plan.tags) assert.ok(remote[`refs/tags/${tag}`], `${tag} was published`);
   assert.doesNotMatch(logged.join('\n'), /restore the invariant/);
+});
+
+test('a three-plugin release puts only the marketplace tag in the workflow-triggering push', async (t) => {
+  const repo = makeGitRepo({ plugins: { 'codex-gateway': '0.33.4', sidequest: '3.6.17', workbench: '0.63.6' } });
+  t.after(repo.cleanup);
+  repo.writeFragment('SQ-1', { plugins: ['codex-gateway'], bump: 'patch' });
+  repo.writeFragment('SQ-2', { plugins: ['sidequest'], bump: 'patch' });
+  repo.writeFragment('SQ-3', { plugins: ['workbench'], bump: 'patch' });
+  repo.commit('integrate');
+  const calls = [];
+  const git = createGit({ cwd: repo.root, onCommand: (entry) => calls.push(entry.args.join(' ')) });
+
+  const result = await cut({ repoRoot: repo.root, git, push: true, skipTests: true, log: () => {} });
+
+  const mutations = calls.filter((call) => call.startsWith('push'));
+  assert.equal(result.pluginPush.length, 3);
+  assert.equal(mutations.length, 2);
+  assert.match(mutations[0], /refs\/tags\/v3\.208\.0:refs\/tags\/v3\.208\.0/);
+  assert.doesNotMatch(mutations[0], /codex-gateway-v|sidequest-v|workbench-v/);
+  assert.match(mutations[1], /codex-gateway-v.*sidequest-v.*workbench-v/);
 });
 
 test('a rejected ref rejects the whole push, so the remote never half-publishes', async (t) => {
