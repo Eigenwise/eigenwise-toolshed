@@ -94,13 +94,14 @@ const tools = [
   },
   {
     name: "comments",
-    description: "Read comments before work; history is chronological. Past 10 comments, oldest bodies are omitted unless full:true. Follow nextCursor when paging.",
+    description: "Read comments before work; history is chronological. Pass since with a prior comment id or exclusive ISO timestamp to read only new comments. Past 10 comments, oldest bodies are omitted unless full:true. Follow nextCursor when paging.",
     inputSchema: {
       type: "object",
       properties: {
         ref: { type: "string" },
         project: PROJECT_PROP,
         full: { type: "boolean", description: "Recovery read: whole bodies, uncapped, bypasses elision. Default reads return capped excerpts (1200 chars/body) with full metadata; use defaults for closeout and status reads." },
+        since: { type: "string", description: "Exclusive comment id from a prior read, or ISO timestamp. Incremental reads retain total for the whole thread." },
         cursor: { type: "string", pattern: "^(0|[1-9]\\d*)$" },
         limit: { type: "integer", minimum: 1, maximum: PAGE_LIMIT_MAX }
       },
@@ -111,13 +112,21 @@ const tools = [
       const t = store.getTicket(slug, args.ref);
       if (!t) throw new Error(`comments: no ticket "${args.ref}".`);
       const full = !!args.full;
-      const history = store.commentHistory(t.comments || [], full);
+      const allComments = Array.isArray(t.comments) ? t.comments : [];
+      const since = args.since == null ? null : String(args.since);
+      const sinceIndex = since == null ? -1 : allComments.findIndex((comment) => comment.id === since);
+      const sinceMs = sinceIndex >= 0 || since == null ? null : Date.parse(since);
+      if (since != null && sinceIndex < 0 && !Number.isFinite(sinceMs)) {
+        throw new Error("comments: since must be an ISO timestamp or a comment id from this thread.");
+      }
+      const unreadComments = since == null ? allComments : sinceIndex >= 0 ? allComments.slice(sinceIndex + 1) : allComments.filter((comment) => Date.parse(comment.at) > sinceMs);
+      const history = store.commentHistory(unreadComments, full);
       const comments = full ? history.comments : history.comments.map((comment) => compactComment(comment, preservesFinalReport(t, comment)));
-      const buildPayload = (page, total, nextCursor) => {
+      const buildPayload = (page, visibleTotal, nextCursor) => {
         const payload = {
           ref: t.ref,
           comments: page,
-          total,
+          total: since == null ? visibleTotal : allComments.length,
           returned: page.length,
           nextCursor,
           order: "chronological"
@@ -127,7 +136,7 @@ const tools = [
       };
       const explicitlyPaged = args.cursor != null || args.limit != null;
       if (explicitlyPaged) return pageRows(comments, args, "comments", buildPayload, null);
-      if (full) return { ref: t.ref, comments };
+      if (full && since == null) return { ref: t.ref, comments };
       return buildPayload(comments, comments.length, null);
     }
   },
