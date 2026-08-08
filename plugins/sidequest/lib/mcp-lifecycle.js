@@ -115,6 +115,9 @@ function submissionRangeFailureMessage(ticket, range, gitRef) {
   const detail = String(range.message || range.reason).trim();
   return `submit: refused ${ticket.ref}; ${detail}. Rebase onto the current integration target, update ${gitRef}, and resubmit.`;
 }
+function uncommittedScopeFailureMessage(ticket, paths) {
+  return `submit: refused ${ticket.ref}; uncommitted changes fall inside this ticket's declared scope: ${paths.join(", ")}. Commit these paths, or explain why they are deliberately excluded before resubmitting.`;
+}
 const tools = [
   {
     name: "claim",
@@ -482,7 +485,7 @@ const tools = [
   },
   {
     name: "submit",
-    description: "Submit a verified scoped commit range for integration and release the claim. body carries the final report: paths, verification, and skips. Pass clear:true instead to reject a pending submission without integrating it (drops commit/body/etc, optionally moves status).",
+    description: "Submit a verified scoped commit range for integration and release the claim. Refuses declared-scope paths still uncommitted in the verified worktree. body carries the final report: paths, verification, and skips. Pass clear:true instead to reject a pending submission without integrating it (drops commit/body/etc, optionally moves status).",
     inputSchema: {
       type: "object",
       properties: {
@@ -587,6 +590,20 @@ const tools = [
         message: submissionRangeFailureMessage(ticket, range, gitRef)
       });
       if (range.ok) {
+        const pending = commitScope.scopedWorkPending(root, scope, { base: range.base });
+        if (!pending.ok) {
+          submissionFailures.push({
+            reason: pending.reason,
+            message: `submit: could not inspect the declared scope in ${root}: ${pending.message || pending.reason}`
+          });
+        } else if (pending.working.length) {
+          submissionFailures.push({
+            reason: "dirty_scope",
+            message: uncommittedScopeFailureMessage(ticket, pending.working)
+          });
+        }
+      }
+      if (range.ok) {
         const duplicate = store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).find((entry) => {
           const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit];
           return commits.some((entryCommit) => range.commits.includes(entryCommit));
@@ -630,7 +647,7 @@ const tools = [
         }));
       }
       if (failures.length) return mutationAck(slug, combinedRefusal(ticket, failures));
-      const unscopedPaths = commitScope.unscopedWorkingPaths(root, scope);
+      const unscopedPaths = ticket.dispatch?.sharedTree === true ? commitScope.unscopedWorkingPaths(root, scope) : [];
       const res = store.submitTicket(slug, args.ref, by, {
         commit: range.commit,
         gitRef,

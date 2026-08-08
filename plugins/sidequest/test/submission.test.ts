@@ -318,6 +318,73 @@ test('SQ-971: rejected range submission is quarantined and clean rebase resubmit
   assert.equal(after.submission.base, git(['rev-parse', 'origin/main']));
 });
 
+test('SQ-822: MCP submit refuses uncommitted declared work, then accepts it once committed', async () => {
+  cleanBranch();
+  const t = addTicket('declared work must be committed', { files: ['lib/committed.js'] });
+  const by = 'committed-work-worker';
+  assert.equal(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'committed.js'), 'first version\n');
+  git(['add', 'lib/committed.js']);
+  git(['commit', '-m', 'first declared version']);
+  const firstCommit = git(['rev-parse', 'HEAD']);
+  pin(t, firstCommit);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'committed.js'), 'second version\n');
+
+  const refused = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit: firstCommit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/committed.js. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'dirty_scope');
+  assert.match(refused.message, /uncommitted changes fall inside this ticket's declared scope: lib\/committed\.js/);
+  assert.match(refused.message, /Commit these paths, or explain why they are deliberately excluded/);
+  assert.equal(store.getTicket(slug, t.ref).claim.by, by, 'refusal retains the claim so the executor can commit its work');
+
+  git(['add', 'lib/committed.js']);
+  git(['commit', '-m', 'second declared version']);
+  const committed = git(['rev-parse', 'HEAD']);
+  pin(t, committed);
+  const submitted = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit: committed,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/committed.js. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(submitted.ok, true, submitted.message);
+
+  cleanBranch();
+  const outsideScope = addTicket('outside dirty work does not block submit', { files: ['lib/declared.js'] });
+  const outsideBy = 'outside-work-worker';
+  assert.equal(store.claimTicket(slug, outsideScope.ref, outsideBy, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'declared.js'), 'declared work\n');
+  git(['add', 'lib/declared.js']);
+  git(['commit', '-m', 'declared work']);
+  const outsideCommit = git(['rev-parse', 'HEAD']);
+  pin(outsideScope, outsideCommit);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'notes'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'notes', 'noise.md'), 'out of scope\n');
+  const outsideSubmitted = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: outsideScope.ref,
+    by: outsideBy,
+    commit: outsideCommit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/declared.js. Scoped submission test passed. Nothing skipped.',
+  });
+  assert.equal(outsideSubmitted.ok, true, outsideSubmitted.message);
+});
+
 test('SQ-971: an unavailable recorded integration target still quarantines verified work', async () => {
   cleanBranch();
   const t = addTicket('missing integration target preservation', { files: ['lib/missing-target.js'] });
