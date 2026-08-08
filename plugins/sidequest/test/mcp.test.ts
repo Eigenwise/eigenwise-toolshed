@@ -3315,7 +3315,7 @@ function recordNoOpVerification(fixture: any) {
   assert.equal(store.addComment(fixture.project, fixture.ref, {
     by: fixture.by,
     source: 'mcp',
-    body: '[sidequest:verify-complete] no-op',
+    body: '[sidequest:verify-complete] no-op: focused regression passed 1/1, 0 failed, 0 skipped.',
   }).ok, true);
 }
 

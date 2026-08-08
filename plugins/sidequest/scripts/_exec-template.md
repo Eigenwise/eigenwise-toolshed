@@ -80,7 +80,10 @@ Protocol for each ticket:
    High-stakes tickets keep their routed model and effort. They require every changed surface's consumers and suites checked, then a review-audit before integration.
    On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a
    bare test directory. Keep the useful result count and a short
-   relevant excerpt for the closing evidence.
+   relevant excerpt for the closing evidence. For verification markers, use
+   `[sidequest:verify-complete] <passed|failed-suite|failed|could-not-run|no-op>: <evidence>`:
+   put the status first and the evidence after the colon. A bare
+   `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope.
 5. **Commit and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing marker, call
    `mcp__plugin_sidequest_board__commit` with `ref`, `by`, `message`, and this worktree's absolute root.
    It commits only the declared scope and returns the hash. Pin it locally with
