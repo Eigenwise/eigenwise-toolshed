@@ -70,6 +70,7 @@ function writeDeny(hookEventName, permissionDecisionReason) {
 var runtimeRequire = (0, import_node_module.createRequire)(__filename);
 var store = runtimeRequire(["..", "lib", "store"].join("/"));
 var publish = runtimeRequire(["..", "lib", "publish"].join("/"));
+var worktrees = runtimeRequire(["..", "lib", "worktrees"].join("/"));
 var GIT = String.raw`git\s+(?:-C\s+(?:"[^"]+"|'[^']+'|\S+)\s+)?`;
 var DESTRUCTIVE = [
   { pattern: new RegExp(`${GIT}reset\\s+[^\\n;|&]*--hard`, "i"), label: "git reset --hard" },
@@ -89,14 +90,17 @@ function destructive(command) {
 function unquote(value) {
   return value.replace(/^["']|["']$/g, "");
 }
+function resolvedShellPath(cwd, value) {
+  return import_node_path.default.resolve(worktrees.gitBashPath(cwd || "."), worktrees.gitBashPath(value));
+}
 function targetRepo(command, cwd) {
   const dashCs = Array.from(command.matchAll(/git\s+-C\s+("[^"]+"|'[^']+'|\S+)/gi));
   const dashC = dashCs.at(-1);
-  if (dashC?.[1]) return import_node_path.default.resolve(cwd || ".", unquote(dashC[1]));
+  if (dashC?.[1]) return resolvedShellPath(cwd, unquote(dashC[1]));
   const cds = Array.from(command.matchAll(/(?:^|[\n;&|])\s*cd\s+("[^"]+"|'[^']+'|\S+)/gi));
   const cd = cds.at(-1);
-  if (cd?.[1]) return import_node_path.default.resolve(cwd || ".", unquote(cd[1]));
-  return import_node_path.default.resolve(cwd || ".");
+  if (cd?.[1]) return resolvedShellPath(cwd, unquote(cd[1]));
+  return resolvedShellPath(cwd, ".");
 }
 function quotedAt(command, index) {
   let quote = "";
@@ -117,18 +121,18 @@ function actionRepo(command, cwd, index, options) {
   const base = targetRepo(beforeAction, cwd);
   const paths = Array.from(options.matchAll(/(?:^|\s)-C\s+("[^"]+"|'[^']+'|\S+)/gi));
   const selected = paths.at(-1);
-  return repoRoot(selected?.[1] ? import_node_path.default.resolve(base, unquote(selected[1])) : base);
+  return repoRoot(selected?.[1] ? resolvedShellPath(base, unquote(selected[1])) : base);
 }
 function repoRoot(repo) {
   try {
-    return (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
+    return worktrees.canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
       cwd: repo,
       encoding: "utf8",
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
+    }).trim());
   } catch {
-    return repo;
+    return worktrees.canonicalPath(repo);
   }
 }
 function sharedCheckout(repo) {
@@ -252,6 +256,7 @@ function publicationRefusal(label, repo) {
     `sidequest: refusing ${label} without the current session's publish lock.`,
     `  repo: ${repo}`,
     "Acquire it with `sidequest publish lock` before a deliberate release cut, then retry.",
+    "This blocks the entire shell invocation, including earlier compound-command segments.",
     "This is a local early warning. Server-side GitHub rules remain the guarantee."
   ].join("\n");
 }
