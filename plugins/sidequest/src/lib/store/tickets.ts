@@ -7,7 +7,7 @@ function createTickets(dependencies: any) {
     database, deleteCachedRow, dispatchState, effectiveScope, execFileSync, executorText, fs,
     getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
-    requestedReadonlyOverride, requireStatus, requireVerifyCommand, saveAssetData, stripLinksTo,
+    requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
     ticketLockPath, ticketStoryId, touchClaimActivity, upperRef, withTicketLock,
   } = dependencies;
   const coerceStoryId = ticketStoryId;
@@ -56,7 +56,7 @@ function createTicket(slug?: any, fields?: any) {
     }
   }
 
-  requireVerifyCommand(fields.executorVerify);
+  requireVerifyOracle(fields.executorVerifyKind, fields.executorVerify, fields.executorAttestationArtifact);
   const ticket = {
     id,
     ref: `SQ-${seq}`,
@@ -76,6 +76,8 @@ function createTicket(slug?: any, fields?: any) {
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
+    executorVerifyKind: normalizeVerifyOracleKind(fields.executorVerifyKind),
+    executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact'),
     executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command'),
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment', at }]
@@ -795,9 +797,14 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
-    if (patch.executorVerify !== undefined) {
-      requireVerifyCommand(patch.executorVerify);
-      t.executorVerify = executorText(patch.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
+    const nextVerifyKind = patch.executorVerifyKind === undefined ? t.executorVerifyKind : patch.executorVerifyKind;
+    const nextAttestationArtifact = patch.executorAttestationArtifact === undefined ? t.executorAttestationArtifact : patch.executorAttestationArtifact;
+    const nextVerify = patch.executorVerify === undefined ? t.executorVerify : patch.executorVerify;
+    if (patch.executorVerify !== undefined || patch.executorVerifyKind !== undefined || patch.executorAttestationArtifact !== undefined) {
+      requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
+      t.executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
+      t.executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact');
+      t.executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
     }
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
     // ticket). Permissive like the routing fields above: a valid stamp is set, a

@@ -880,6 +880,8 @@ async function handle(req?: any, res?: any) {
       complexityWhy: body.complexityWhy,
       files: body.files,
       executorAnchors: body.executorAnchors,
+      executorVerifyKind: body.executorVerifyKind,
+      executorAttestationArtifact: body.executorAttestationArtifact,
       executorVerify: body.executorVerify,
       assignee: body.assignee,
       imagesData: body.imagesData,

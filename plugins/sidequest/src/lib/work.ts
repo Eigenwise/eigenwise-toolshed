@@ -26,7 +26,9 @@ function executorPrompt(ticket?: any, taskPrompt?: any) {
   ].join('\n');
   const parts = [base, EXECUTOR_RUN_GUIDANCE, contract];
   if (ticket.executorAnchors) parts.push(`Anchors:\n${ticket.executorAnchors}`);
-  if (ticket.executorVerify) parts.push(`Verify command:\n${ticket.executorVerify}`);
+  if (ticket.executorVerifyKind === 'attestation') {
+    parts.push(`Verify oracle: attestation\nObserved artifact: ${ticket.executorAttestationArtifact}\nRecord evidence as \`attestation: ${ticket.executorAttestationArtifact} | <evidence produced> | <what it showed>\`.`);
+  } else if (ticket.executorVerify) parts.push(`Verify command:\n${ticket.executorVerify}`);
   const prompt = parts.join('\n\n');
   if (prompt.length > NATIVE_PROMPT_MAX) {
     throw new Error(`native_agent: task prompt plus ticket context exceeds the ${NATIVE_PROMPT_MAX}-character Windows-safe limit.`);

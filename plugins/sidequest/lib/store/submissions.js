@@ -1,7 +1,7 @@
 "use strict";
 const { resolveSuite } = require("../suite-resolver.js");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, effectiveScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandError, withTicketLock } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -271,6 +271,7 @@ Expires: ${checkpoint.expiresAt}`;
   }
   function verifyDeliveredSubmission(slug, ticket, opts) {
     const command = integrationVerifyCommand(slug, ticket);
+    if (ticket.executorVerifyKind === "attestation") return { status: "attestation", artifact: ticket.executorAttestationArtifact || null, evidence: String(ticket.submission?.verify || "").trim() };
     if (opts?.skipVerify === true) return { status: "skipped", skippedByChoice: true, command: command || null };
     if (!command) return { status: "none", command: null };
     const validationError = verifyCommandError(command);
@@ -320,7 +321,7 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "delivery_required", ticket };
     }
     const verify = ticket.submission.integration?.verify || verifyDeliveredSubmission(slug, ticket, opts);
-    const accepted = ["passed", "none", "skipped", "manual"].includes(verify.status);
+    const accepted = ["passed", "none", "skipped", "manual", "attestation"].includes(verify.status);
     const stored = updateSubmissionIntegration(slug, ticket.id, { verify, outcome: accepted ? "verified" : "verify_failed" });
     if (!stored.ok) return stored;
     if (accepted) return { ok: true, ticket: stored.ticket, verify };
@@ -564,12 +565,13 @@ ${verify.outputTail}` : null
       }
       const completion = completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
       if (!completion.ok) return Object.assign({ ticket: t }, completion);
-      const validationError = verifyCommandError(verify);
+      const attestation = t.executorVerifyKind === "attestation";
+      const validationError = attestation ? attestationErrors(verify, t.executorAttestationArtifact)[0] : verifyCommandError(verify);
       if (validationError) {
         return { ok: false, reason: "invalid_verify", ticket: t, message: validationError };
       }
       const declaredExecutorVerify = String(t.executorVerify || "").trim();
-      if (declaredExecutorVerify && verify !== declaredExecutorVerify) {
+      if (!attestation && declaredExecutorVerify && verify !== declaredExecutorVerify) {
         return {
           ok: false,
           reason: "executor_verify_mismatch",

@@ -142,6 +142,8 @@ function addPreview(opts: any, category: any, complexity: any) {
     contractWaiver: contractWaiverFromOpts(opts) || false,
     readonly: readonlyFromOpts(opts),
     executorAnchors: opts.anchors || '',
+    executorVerifyKind: opts['verify-kind'],
+    executorAttestationArtifact: opts['attestation-artifact'],
     executorVerify: opts.verify || '',
     storyId: opts.story || null,
     category,
@@ -181,6 +183,8 @@ async function cmdAdd(opts: any) {
     contractWaiver: contractWaiverFromOpts(opts),
     readonly: readonlyFromOpts(opts),
     executorAnchors: opts.anchors,
+    executorVerifyKind: opts['verify-kind'],
+    executorAttestationArtifact: opts['attestation-artifact'],
     executorVerify: opts.verify,
     storyId: opts.story,
     complexity: opts.complexity,
@@ -299,6 +303,8 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts.readonly !== undefined) patch.readonly = readonlyFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
+  if (opts['verify-kind'] != null) patch.executorVerifyKind = opts['verify-kind'];
+  if (opts['attestation-artifact'] != null) patch.executorAttestationArtifact = opts['attestation-artifact'];
   if (opts.assignee != null) patch.assignee = opts.assignee;
   if (opts.complexity != null) {
     // A changed score must arrive with a fresh justification — routing derives
