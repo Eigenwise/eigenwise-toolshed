@@ -235,7 +235,8 @@ test('MCP category edit forks a board category; category_relink resets it to the
   fs.mkdirSync(scoped, { recursive: true });
 
   let result = await call(mcp, 'category_edit', { project: scoped, id: 'coding.easy', name: 'Local coding.easy' });
-  assert.deepEqual(Object.keys(result).sort(), ['id', 'localRow', 'ok', 'project']);
+  assert.deepEqual(Object.keys(result).sort(), ['changed', 'id', 'localRow', 'ok', 'project']);
+  assert.deepEqual(result.changed, ['name']);
   assert.equal(result.localRow.kind, 'DETACH');
 
   result = await call(mcp, 'category_list', { project: scoped, full: true });
