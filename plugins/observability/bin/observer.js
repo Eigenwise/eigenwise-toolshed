@@ -233,6 +233,11 @@ function createObserver(options = {}) {
         return;
       }
 
+      if (request.method === 'POST' && url.pathname === '/v1/outbox/requeue') {
+        jsonResponse(response, 200, { requeued: store.requeueExhaustedOutbox() });
+        return;
+      }
+
       if (request.method === 'POST' && url.pathname === '/v1/outbox/flush') {
         const result = await drainOutbox();
         jsonResponse(response, 200, result);

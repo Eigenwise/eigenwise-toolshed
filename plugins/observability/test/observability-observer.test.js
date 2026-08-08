@@ -372,6 +372,37 @@ test('exports sanitized OTLP only after acknowledgement and bounds retries witho
   );
 });
 
+test('requeues exhausted outbox records through the observer', async (t) => {
+  const store = temporaryStore(t);
+  store.ingest(requestObservation({ source_event_id: 'exhausted-outbox' }));
+  await flushOutbox(store, {
+    endpoint: 'http://127.0.0.1:45678/v1/logs',
+    maxAttempts: 1,
+    fetch: async () => { throw new Error('sink unavailable'); },
+  });
+  const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-spool-'));
+  t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    hookSpoolFile: path.join(spoolDirectory, 'spool.jsonl'),
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/v1/outbox/requeue`, { method: 'POST' });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { requeued: 1 });
+  assert.equal(store.pendingOutbox().length, 1);
+  const outboxRow = store.database.prepare('SELECT attempts, last_attempt_at, last_error_code FROM otlp_outbox').get();
+  assert.deepEqual({ ...outboxRow }, { attempts: 0, last_attempt_at: null, last_error_code: null });
+  assert.equal(store.queryView('outbox_health')[0].exhausted_count, 0);
+  const secondResponse = await fetch(`http://127.0.0.1:${address.port}/v1/outbox/requeue`, { method: 'POST' });
+  assert.deepEqual(await secondResponse.json(), { requeued: 0 });
+});
+
 test('outbox transport deadlines release the drainer for the next tick', async (t) => {
   const store = temporaryStore(t);
   store.ingest(requestObservation({ source_event_id: 'hanging-outbox' }));
