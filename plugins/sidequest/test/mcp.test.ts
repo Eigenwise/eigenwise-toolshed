@@ -438,13 +438,51 @@ test('MCP rejects unsupported write and read parameters before they can be ignor
       project, story: story.ref, ref: ticket.ref, by: 'argument-worker',
     }, invalidArguments));
     assert.equal(rejected.isError, true);
-    assert.match(rejected.content[0].text, new RegExp(`story_log: unexpected parameter \"${parameter}\"`));
+    assert.match(rejected.content[0].text, new RegExp(`story_log: unknown argument \"${parameter}\" — story_log accepts: .*entry`));
   }
   assert.deepEqual(store.storyDecisionLog(store.getStory(project, story.ref)).entries, []);
 
   const rejectedComments = await callToolRaw('comments', { project, ref: ticket.ref, order: 'newest' });
   assert.equal(rejectedComments.isError, true);
-  assert.match(rejectedComments.content[0].text, /comments: unexpected parameter "order"/);
+  assert.match(rejectedComments.content[0].text, /comments: unknown argument "order" — comments accepts: .*ref/);
+});
+
+test('MCP category_edit rejects guessed fields and reports applied routing changes', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-category-edit-'))).slug;
+  const rejectedEffort = await callToolRaw('category_edit', { project, id: 'coding.normal', effort: 'medium' });
+  assert.equal(rejectedEffort.isError, true);
+  assert.match(rejectedEffort.content[0].text, /category_edit: unknown argument "effort" — category_edit accepts: id, project, profile, name, description, contract, artifactRoots, routeModel, routeEffort, fallbackModel, fallbackEffort, enabled, readonly\./);
+
+  const rejectedRoute = await callToolRaw('category_edit', { project, id: 'coding.normal', route: { model: 'codex-gpt-5-6-luna', effort: 'medium' } });
+  assert.equal(rejectedRoute.isError, true);
+  assert.match(rejectedRoute.content[0].text, /category_edit: unknown argument "route" — category_edit accepts:/);
+
+  const edited = await callTool('category_edit', {
+    project,
+    id: 'coding.normal',
+    routeModel: 'codex-gpt-5-6-luna',
+    routeEffort: 'medium',
+    fallbackModel: 'codex-gpt-5-6-terra',
+    fallbackEffort: 'low',
+    readonly: true,
+  });
+  assert.deepEqual(edited.changed.sort(), ['fallback', 'readonly', 'route']);
+  assert.equal(edited.localRow.kind, 'DETACH');
+
+  const unchanged = await callTool('category_edit', {
+    project,
+    id: 'coding.normal',
+    routeModel: 'codex-gpt-5-6-luna',
+    routeEffort: 'medium',
+    fallbackModel: 'codex-gpt-5-6-terra',
+    fallbackEffort: 'low',
+    readonly: true,
+  });
+  assert.deepEqual(unchanged.changed, []);
+
+  const clearedFallback = await callTool('category_edit', { project, id: 'coding.normal', fallbackModel: null });
+  assert.deepEqual(clearedFallback.changed, ['fallback']);
+  assert.equal(store.getCategory('coding.normal', { project }).fallback, null);
 });
 
 test('list returns verify while retaining executorVerify for compatibility', async () => {

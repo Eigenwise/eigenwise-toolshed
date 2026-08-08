@@ -114,10 +114,8 @@ function validateToolArguments(tool: ToolDefinition, args: any) {
   const unknown = Object.keys(args).filter((key) => !allowed.has(key));
   if (!unknown.length) return;
   const quoted = unknown.map((key) => `"${key}"`).join(', ');
-  if (tool.name === 'link') {
-    throw new Error(`link: unexpected parameter${unknown.length === 1 ? '' : 's'} ${quoted}. Use from/verb/to. Valid verbs: blocks, depends-on, related.`);
-  }
-  throw new Error(`${tool.name}: unexpected parameter${unknown.length === 1 ? '' : 's'} ${quoted}.`);
+  const accepted = Object.keys(tool.inputSchema.properties || {}).join(', ');
+  throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? '' : 's'} ${quoted} — ${tool.name} accepts: ${accepted}.`);
 }
 
 async function runTool(tool: ToolDefinition, args: any) {
@@ -133,6 +131,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, string[]> = {
   comments: ['full', 'since'],
   list: ['detail'],
   release: ['command', 'outputTail'],
+  category_edit: ['fallbackModel'],
 };
 
 function toolDescriptors() {
