@@ -70,6 +70,13 @@ function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
+test('read-only executor briefings keep scratch files in the isolated worktree', () => {
+  const briefing = agentsync.renderReadOnlyClaudeAgent('medium');
+  assert.match(briefing, /Put scratch files in your own worktree, not the session scratchpad/);
+  assert.match(briefing, /shared with every other agent in the session, including the orchestrator/);
+  assert.doesNotMatch(briefing, /Put scratch files in the session scratchpad, never the repo/);
+});
+
 test('briefings surface tracked generated outputs paired into effective scope', () => {
   const root = tmpDir();
   assert.equal(git(root, ['init']).status, 0);
