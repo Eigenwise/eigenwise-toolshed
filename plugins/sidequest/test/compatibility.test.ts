@@ -10,7 +10,9 @@ import { spawnSync } from 'node:child_process';
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 const FIXTURES = path.join(__dirname, 'fixtures');
-const mcp = require('../lib/mcp.js') as { toolDescriptors(): unknown[] };
+const mcp = require('../lib/mcp.js') as { toolDescriptors(): unknown[]; MCP_TOOLS_LIST_MAX_BYTES: number };
+const MCP_DESCRIPTOR_GOLDEN = path.join(FIXTURES, 'mcp-tool-descriptors.json');
+const MINIMUM_MCP_TOOLS_LIST_HEADROOM = 1500;
 
 type RunResult = { status: number | null; stdout: string; stderr: string };
 
@@ -91,18 +93,18 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   const descriptors = mcp.toolDescriptors() as Array<{
     name: string;
     description: string;
-    inputSchema: { properties?: Record<string, { description?: string }>; required?: string[] };
+    inputSchema: { properties?: Record<string, { description?: string; type?: string | string[] }>; required?: string[] };
   }>;
   const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   const categoryEdit = byName.get('category_edit');
   assert.deepEqual(Object.keys(categoryEdit?.inputSchema.properties ?? {}), ['id', 'project', 'profile', 'name', 'description', 'contract', 'artifactRoots', 'routeModel', 'routeEffort', 'fallbackModel', 'fallbackEffort', 'enabled', 'readonly']);
-  assert.deepEqual(categoryEdit?.inputSchema.properties?.fallbackModel, { type: ['string', 'null'], description: 'Set null to clear the fallback route.' });
+  assert.deepEqual(categoryEdit?.inputSchema.properties?.fallbackModel, { type: ['string', 'null'], description: 'null clears fallback.' });
   assert.equal(byName.size, descriptors.length);
   assert.equal(byName.has('ask'), false);
   assert.equal(byName.has('await'), false);
   assert.equal(byName.has('native_agent'), false);
   assert.match(byName.get('list')?.description ?? '', /changes\/pulse/);
-  assert.equal(byName.get('changes')?.description, 'THE polling read.');
+  assert.equal(byName.get('changes')?.description, 'Poll ticket changes.');
   assert.match(byName.get('claim')?.description ?? '', /Claim before work/);
   assert.deepEqual(
     Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token'].includes(name)).sort(),
@@ -112,9 +114,19 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
     Object.keys(byName.get('submit')?.inputSchema.properties ?? {}).filter((name) => ['commit', 'verify', 'worktree'].includes(name)).sort(),
     ['commit', 'verify', 'worktree'],
   );
-  assert.match(byName.get('comments')?.inputSchema.properties?.full?.description as string, /whole bodies/);
-  assert.match(byName.get('release')?.inputSchema.properties?.command?.description as string, /blocker\/contradiction/);
-  assert.match(byName.get('release')?.inputSchema.properties?.outputTail?.description as string, /blocker\/contradiction/);
+  assert.match(byName.get('comments')?.inputSchema.properties?.full?.description as string, /Whole bodies/);
+  assert.match(byName.get('release')?.inputSchema.properties?.command?.description as string, /Required for blocker\/contradiction/);
+  assert.match(byName.get('release')?.inputSchema.properties?.outputTail?.description as string, /Required blocker\/contradiction/);
+  assert.equal(byName.get('release')?.inputSchema.properties?.candidate?.type, 'string');
+  assert.equal(byName.get('release')?.inputSchema.properties?.deliverable?.type, 'string');
+  assert.match(byName.get('release')?.description ?? '', /oracle handoff/);
+
+  const payload = JSON.stringify(descriptors);
+  const payloadBytes = Buffer.byteLength(payload, 'utf8');
+  const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
+  assert.equal(`${JSON.stringify(descriptors, null, 2)}\n`, fs.readFileSync(MCP_DESCRIPTOR_GOLDEN, 'utf8'));
+  assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
+  assert.ok(headroom >= MINIMUM_MCP_TOOLS_LIST_HEADROOM, `tools/list headroom is ${headroom} bytes, below ${MINIMUM_MCP_TOOLS_LIST_HEADROOM}`);
 });
 
 test('CLI representative bytes, statuses, and removed commands match goldens', () => {

@@ -1,0 +1,1809 @@
+[
+  {
+    "name": "list",
+    "description": "For liveness/progress polling use changes/pulse, not this.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "doing",
+            "done"
+          ]
+        },
+        "archived": {
+          "type": "boolean"
+        },
+        "detail": {
+          "type": "boolean",
+          "description": "Full comments; default for status."
+        },
+        "cursor": {
+          "type": "string"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "all": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "pulse",
+    "description": "Read ticket liveness.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "ref": {
+          "type": "string"
+        },
+        "detail": {
+          "type": "boolean"
+        },
+        "full": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "changes",
+    "description": "Poll ticket changes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "since": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "story",
+    "description": "Manage stories.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "action": {
+          "type": "string",
+          "enum": [
+            "add",
+            "list",
+            "show",
+            "update",
+            "rm"
+          ]
+        },
+        "project": {
+          "type": "string"
+        },
+        "story": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "color": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action"
+      ]
+    }
+  },
+  {
+    "name": "story_contract",
+    "description": "Read or set a story execution contract.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "story": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "story"
+      ]
+    }
+  },
+  {
+    "name": "story_log",
+    "description": "Read, append, or rotate a story log.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "story": {
+          "type": "string"
+        },
+        "entry": {
+          "type": "string",
+          "pattern": "^(DECISION|CONSTRAINT|DISCOVERY)\\s*:",
+          "description": "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes."
+        },
+        "ref": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "rotate": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "story"
+      ]
+    }
+  },
+  {
+    "name": "ready",
+    "description": "List ready ticket refs.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "brief": {
+          "type": "boolean"
+        },
+        "full": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "add",
+    "description": "File a new ticket.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "highStakes": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "produces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "consumes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "contractWaiver": {
+          "type": "boolean"
+        },
+        "readonly": {
+          "type": "boolean"
+        },
+        "anchors": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "verify": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "verifyKind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "attestation"
+          ]
+        },
+        "attestationArtifact": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "storyId": {
+          "type": "string",
+          "pattern": "^US-\\d+$"
+        },
+        "complexity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10,
+          "description": "Legacy score; why required."
+        },
+        "why": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "route": {
+          "type": "object",
+          "properties": {
+            "model": {
+              "type": "string"
+            },
+            "effort": {
+              "type": "string",
+              "enum": [
+                "low",
+                "medium",
+                "high",
+                "xhigh",
+                "max"
+              ]
+            }
+          },
+          "required": [
+            "model",
+            "effort"
+          ]
+        },
+        "unclassified": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "title"
+      ]
+    }
+  },
+  {
+    "name": "update",
+    "description": "Update ticket fields by scope.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "doing",
+            "done"
+          ]
+        },
+        "highStakes": {
+          "type": "boolean"
+        },
+        "labels": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "by": {
+          "type": "string"
+        },
+        "produces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "changes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "consumes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "contractWaiver": {
+          "type": "boolean"
+        },
+        "readonly": {
+          "type": "boolean"
+        },
+        "anchors": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "verify": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "verifyKind": {
+          "type": "string",
+          "enum": [
+            "command",
+            "attestation"
+          ]
+        },
+        "attestationArtifact": {
+          "type": "string",
+          "maxLength": 1000
+        },
+        "storyId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "pattern": "^US-\\d+$"
+            },
+            {
+              "const": "none"
+            }
+          ]
+        },
+        "complexity": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        },
+        "why": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "route": {
+          "anyOf": [
+            {
+              "type": "object",
+              "properties": {
+                "model": {
+                  "type": "string"
+                },
+                "effort": {
+                  "type": "string",
+                  "enum": [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ]
+                }
+              },
+              "required": [
+                "model",
+                "effort"
+              ]
+            },
+            {
+              "const": "none"
+            }
+          ]
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "remove",
+    "description": "Delete ticket; claims need force:true.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "force": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "archive",
+    "description": "Archive ticket(s).",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "done": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "unarchive",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "claim",
+    "description": "Claim before work; pass routed executor and effort, proceed only on ok:true.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "executor": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "direct": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "force": {
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "by"
+      ]
+    }
+  },
+  {
+    "name": "checkpoint",
+    "description": "Record candidate; retain claim.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "worktree": {
+          "type": "string"
+        },
+        "verify": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 4000
+        },
+        "ttlMinutes": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 1440
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "verify"
+      ],
+      "anyOf": [
+        {
+          "required": [
+            "commit"
+          ]
+        },
+        {
+          "required": [
+            "worktree"
+          ]
+        }
+      ]
+    }
+  },
+  {
+    "name": "sweepClaims",
+    "description": "Release dead claims; live claims stay.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "next",
+    "description": "Claim next ticket.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "category": {
+          "type": "string"
+        },
+        "priority": {
+          "type": "string",
+          "enum": [
+            "low",
+            "normal",
+            "high",
+            "urgent"
+          ]
+        },
+        "direct": {
+          "type": "boolean"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "by"
+      ]
+    }
+  },
+  {
+    "name": "done",
+    "description": "Finish report; stamp actual model and effort.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "body": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "body"
+      ]
+    }
+  },
+  {
+    "name": "groomClose",
+    "description": "Close integrated submission.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "integration": {
+          "type": "boolean"
+        },
+        "overrideLegacyScope": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "reason"
+      ]
+    }
+  },
+  {
+    "name": "release",
+    "description": "Release claim; oracle handoff retains ticket.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "kind": {
+          "type": "string",
+          "enum": [
+            "technical_blocker",
+            "contradiction",
+            "handback"
+          ]
+        },
+        "command": {
+          "type": "string",
+          "description": "Required for blocker/contradiction."
+        },
+        "exitCode": {
+          "type": "integer"
+        },
+        "outputTail": {
+          "type": "string",
+          "description": "Required blocker/contradiction output."
+        },
+        "oracle": {
+          "type": "string"
+        },
+        "candidate": {
+          "type": "string"
+        },
+        "deliverable": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "doing",
+            "done"
+          ]
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "by"
+      ]
+    }
+  },
+  {
+    "name": "verdict",
+    "description": "Record an oracle verdict.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "text": {
+          "type": "string"
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "rejected",
+            "inconclusive"
+          ]
+        },
+        "why": {
+          "type": "string"
+        },
+        "constraint": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "text",
+        "outcome"
+      ]
+    }
+  },
+  {
+    "name": "scopeRequest",
+    "description": "Request scope.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "files": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "files"
+      ]
+    }
+  },
+  {
+    "name": "commit",
+    "description": "Commit declared worktree paths.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "message": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "message",
+        "worktree"
+      ]
+    }
+  },
+  {
+    "name": "submit",
+    "description": "Submit verified work.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "commit": {
+          "type": "string"
+        },
+        "base": {
+          "type": "string"
+        },
+        "verify": {
+          "type": "string"
+        },
+        "gitRef": {
+          "type": "string"
+        },
+        "worktree": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "session": {
+          "type": "string"
+        },
+        "clear": {
+          "type": "boolean"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "todo",
+            "doing",
+            "done"
+          ]
+        }
+      },
+      "required": [
+        "ref",
+        "by"
+      ]
+    }
+  },
+  {
+    "name": "integrate",
+    "description": "Deliver verified work.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "mode": {
+          "type": "string",
+          "enum": [
+            "merge",
+            "replay",
+            "apply"
+          ]
+        },
+        "skipVerify": {
+          "type": "boolean"
+        },
+        "overrideLegacyScope": {
+          "type": "boolean"
+        },
+        "session": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "by"
+      ]
+    }
+  },
+  {
+    "name": "comment",
+    "description": "Add a handoff comment.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "body"
+      ]
+    }
+  },
+  {
+    "name": "plan",
+    "description": "Set ticket plan.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "body": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "body"
+      ]
+    }
+  },
+  {
+    "name": "comments",
+    "description": "Read comments before work; history is chronological.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "full": {
+          "type": "boolean",
+          "description": "Whole bodies; bypasses elision."
+        },
+        "since": {
+          "type": "string",
+          "description": "Comment id or ISO timestamp."
+        },
+        "cursor": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)$"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "link",
+    "description": "Link tickets.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "verb": {
+          "type": "string",
+          "enum": [
+            "blocks",
+            "depends-on",
+            "related"
+          ]
+        },
+        "to": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "verb",
+        "to"
+      ]
+    }
+  },
+  {
+    "name": "unlink",
+    "description": "Unlink tickets.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "a": {
+          "type": "string"
+        },
+        "b": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "a",
+        "b"
+      ]
+    }
+  },
+  {
+    "name": "assign",
+    "description": "Set ticket assignee.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "dispatch",
+    "description": "Dispatch a ticket to its stable route; returns a token and spawn spec.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "sharedTree": {
+          "type": "boolean"
+        },
+        "allowRepeatFailure": {
+          "type": "boolean"
+        },
+        "allowUnscoped": {
+          "type": "boolean"
+        },
+        "integrationBranch": {
+          "type": "string"
+        },
+        "full": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "ref"
+      ]
+    }
+  },
+  {
+    "name": "profile_list",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "retired": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "profile_get",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    }
+  },
+  {
+    "name": "profile_create",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "from": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    }
+  },
+  {
+    "name": "profile_edit",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    }
+  },
+  {
+    "name": "profile_retire",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile"
+      ]
+    }
+  },
+  {
+    "name": "profile_use",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "project"
+      ]
+    }
+  },
+  {
+    "name": "profile_repoint",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "from": {
+          "type": "string"
+        },
+        "to": {
+          "type": "string"
+        },
+        "dryRun": {
+          "type": "boolean"
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ]
+    }
+  },
+  {
+    "name": "profile_promote",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        },
+        "fromProject": {
+          "type": "string"
+        },
+        "projects": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "minItems": 1
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "profile",
+        "fromProject",
+        "projects"
+      ]
+    }
+  },
+  {
+    "name": "new_board_profile",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "profile": {
+          "type": "string"
+        }
+      }
+    }
+  },
+  {
+    "name": "route_recipe",
+    "description": "Resolve a category, or one ticket in that category, into a live Workflow agent recipe.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "category": {
+          "type": "string"
+        },
+        "ticket": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "category"
+      ]
+    }
+  },
+  {
+    "name": "category_list",
+    "description": "List project taxonomy; compact descriptions are excerpts.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "full": {
+          "type": "boolean"
+        },
+        "cursor": {
+          "type": "string",
+          "pattern": "^(0|[1-9]\\d*)$"
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 100
+        }
+      }
+    }
+  },
+  {
+    "name": "category_add",
+    "description": "Add category.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "artifactRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "routeModel": {
+          "type": "string"
+        },
+        "routeEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "fallbackModel": {
+          "type": "string"
+        },
+        "fallbackEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "readonly": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "routeModel",
+        "routeEffort"
+      ]
+    }
+  },
+  {
+    "name": "category_edit",
+    "description": "Edit category.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "contract": {
+          "type": "string"
+        },
+        "artifactRoots": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "routeModel": {
+          "type": "string"
+        },
+        "routeEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "fallbackModel": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "description": "null clears fallback."
+        },
+        "fallbackEffort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        },
+        "enabled": {
+          "type": "boolean"
+        },
+        "readonly": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "category_detach",
+    "description": "Pin board category policy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "category_relink",
+    "description": "Reset board category policy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project",
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "global_fallback",
+    "description": "Read or set routing fallback.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "model": {
+          "type": "string"
+        },
+        "effort": {
+          "type": "string",
+          "enum": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "category_rm",
+    "description": "Remove category policy.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "profile": {
+          "type": "string"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id"
+      ]
+    }
+  },
+  {
+    "name": "board_config",
+    "description": "Board settings.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "alwaysInScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "readOnlyDeniedTools": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "generatedPairs": {},
+        "integrationMode": {
+          "type": "string"
+        },
+        "integrationBranch": {
+          "type": "string",
+          "minLength": 1
+        },
+        "delivery": {
+          "type": "string"
+        },
+        "integrationVerifyTimeoutMs": {
+          "type": "integer"
+        },
+        "worktreeIsolation": {
+          "type": "boolean"
+        },
+        "notIntegratedSalvageAgeHours": {
+          "type": "integer",
+          "minimum": 168
+        },
+        "autoApproveTestScope": {
+          "type": "boolean"
+        },
+        "autoApproveScope": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "worktreeSetup": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "worktreeDependencyPaths": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "link",
+                  "copy"
+                ]
+              }
+            },
+            "required": [
+              "path",
+              "mode"
+            ]
+          }
+        }
+      }
+    }
+  },
+  {
+    "name": "models",
+    "description": "Read models and routes.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        },
+        "full": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "projects",
+    "description": "",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "archived": {
+          "type": "boolean"
+        }
+      }
+    }
+  },
+  {
+    "name": "archive_board",
+    "description": "Archive named board.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ]
+    }
+  },
+  {
+    "name": "unarchive_board",
+    "description": "Restore named board.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "project": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "project"
+      ]
+    }
+  }
+]

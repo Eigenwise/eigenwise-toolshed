@@ -324,8 +324,8 @@ const tools = [
         exitCode: { type: "integer" },
         outputTail: { type: "string", description: "Required blocker/contradiction output." },
         oracle: { type: "string" },
-        candidate: {},
-        deliverable: {},
+        candidate: { type: "string" },
+        deliverable: { type: "string" },
         status: { type: "string", enum: store.VALID_STATUS },
         session: { type: "string" }
       },

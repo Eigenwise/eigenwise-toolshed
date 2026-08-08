@@ -515,38 +515,28 @@ test('list returns verify while retaining executorVerify for compatibility', asy
   assert.equal(row.executorVerify, ticket.executorVerify);
 });
 
-test('tools/list reports schema size for trend tracking without an arbitrary ceiling', async (context: { diagnostic(message: string): void }) => {
+test('tools/list preserves MCP contracts within the payload budget', async (context: { diagnostic(message: string): void }) => {
   const tools = mcp.toolDescriptors();
-  const descriptionBytes = (value: any): number => {
-    if (Array.isArray(value)) return value.reduce((total, entry) => total + descriptionBytes(entry), 0);
-    if (!value || typeof value !== 'object') return 0;
-    return Object.entries(value).reduce((total, [key, entry]) =>
-      total + (key === 'description' && typeof entry === 'string' ? Buffer.byteLength(entry) : descriptionBytes(entry)), 0);
-  };
-  const total = descriptionBytes(tools);
-  const payload = JSON.stringify({ tools });
-  const baseline = { descriptionBytes: 2047, payloadBytes: 17492 };
-  context.diagnostic(`tools/list size: ${tools.length} tools, ${total} description bytes (baseline ${baseline.descriptionBytes}), ${Buffer.byteLength(payload)} payload bytes (baseline ${baseline.payloadBytes})`);
+  const payloadBytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
+  const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
+  context.diagnostic(`tools/list size: ${tools.length} tools, ${payloadBytes} payload bytes, ${headroom} bytes headroom`);
+  assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
+  assert.ok(headroom >= 1500, `tools/list headroom is ${headroom} bytes, below 1500`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /returns a token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
-  assert.match(tools.find((tool: any) => tool.name === 'list').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
+  assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
-  assert.match(list.inputSchema.properties.detail.description, /^Audit only:/);
-  assert.match(list.inputSchema.properties.detail.description, /liveness uses changes\/pulse/);
-  assert.match(tools.find((tool: any) => tool.name === 'comments').description, /^Read comments before work; history is chronological/);
+  assert.match(list.inputSchema.properties.detail.description, /Full comments/);
   const comments = tools.find((tool: any) => tool.name === 'comments');
-  assert.match(comments.inputSchema.properties.full.description, /^Recovery read:/);
-  assert.match(comments.inputSchema.properties.full.description, /1200 chars\/body/);
-  assert.match(comments.inputSchema.properties.since.description, /comment id.*ISO timestamp/);
+  assert.match(comments.inputSchema.properties.full.description, /Whole bodies/);
+  assert.match(comments.inputSchema.properties.since.description, /Comment id.*ISO timestamp/);
   const add = tools.find((tool: any) => tool.name === 'add');
-  assert.match(add.inputSchema.properties.complexity.description, /Requires why \(min 20 chars\)/);
-  assert.match(tools.find((tool: any) => tool.name === 'changes').description, /^THE polling read/);
+  assert.match(add.inputSchema.properties.complexity.description, /why required/);
+  assert.equal(tools.find((tool: any) => tool.name === 'changes').description, 'Poll ticket changes.');
+  assert.equal(tools.find((tool: any) => tool.name === 'ready').description, 'List ready ticket refs.');
   assert.deepEqual(Object.keys(comments.inputSchema.properties).sort(), ['cursor', 'full', 'limit', 'project', 'ref', 'since']);
   assert.equal(comments.inputSchema.properties.full.type, 'boolean');
-  const ready = tools.find((tool: any) => tool.name === 'ready');
-  assert.match(ready.description, /ref\/title/);
-  assert.equal(ready.inputSchema.properties.full.type, 'boolean');
   assert.equal(Object.hasOwn(tools.find((tool: any) => tool.name === 'unarchive').inputSchema.properties, 'full'), false);
   for (const tool of tools) {
     const source = mcp.TOOLS.find((candidate: any) => candidate.name === tool.name);
