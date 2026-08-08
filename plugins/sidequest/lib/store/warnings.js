@@ -1,6 +1,6 @@
 "use strict";
 const { resolveSuite } = require("../suite-resolver.js");
-const { ignoredPathsMissingFromWorktree } = require("../worktrees.js");
+const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require("../worktrees.js");
 function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
   const DISPATCH_DESCRIPTION_MIN = 80;
   const WARNING_RETURN_LIMIT = 3;
@@ -683,29 +683,24 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     const workingDirectory = String(cwd || "").trim();
     const projectRoot = String(projectPath || "").trim();
     if (!workingDirectory || !projectRoot) return null;
-    const normalized = (value) => {
-      const resolved = path.resolve(value);
-      return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-    };
     let checkoutRoot = "";
-    let commonDirectory = "";
+    let projectWorktrees = [];
     try {
       checkoutRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
         cwd: workingDirectory,
         encoding: "utf8",
         windowsHide: true
       }).trim();
-      const commonOutput = execFileSync("git", ["rev-parse", "--git-common-dir"], {
-        cwd: workingDirectory,
+      projectWorktrees = parseWorktreeList(execFileSync("git", ["worktree", "list", "--porcelain"], {
+        cwd: projectRoot,
         encoding: "utf8",
         windowsHide: true
-      }).trim();
-      commonDirectory = path.isAbsolute(commonOutput) ? commonOutput : path.resolve(workingDirectory, commonOutput);
+      }));
     } catch (_) {
       return null;
     }
-    if (normalized(checkoutRoot) === normalized(projectRoot)) return null;
-    if (normalized(commonDirectory) !== normalized(path.join(projectRoot, ".git"))) return null;
+    if (canonicalPath(checkoutRoot) === canonicalPath(projectRoot)) return null;
+    if (!projectWorktrees.some((worktree) => canonicalPath(worktree.worktree) === canonicalPath(checkoutRoot))) return null;
     if (sharedTree === true) {
       return `Shared-tree dispatch: the executor has no worktree of its own and will work in whatever cwd it inherits. Board server cwd ${workingDirectory} is a leftover linked worktree; it should run from project root ${projectRoot}.`;
     }
