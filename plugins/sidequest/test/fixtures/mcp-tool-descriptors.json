@@ -117,7 +117,7 @@
   },
   {
     "name": "story_contract",
-    "description": "Read or set a story execution contract.",
+    "description": "Read or page a 256 KiB story contract.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -129,6 +129,18 @@
         },
         "contract": {
           "type": "string"
+        },
+        "cursor": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "limit": {
+          "type": "integer",
+          "minimum": 4,
+          "maximum": 16384
+        },
+        "full": {
+          "type": "boolean"
         }
       },
       "required": [
