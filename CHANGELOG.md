@@ -8,6 +8,16 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.415.0 (2026-08-08)
+
+### sidequest 4.40.7 → 4.40.8
+
+#### Fixes
+
+- Compact successful integration verification results (SQ-1514)
+- Recover terminal executor claims without redispatching (SQ-1518)
+- Warn when ticket file scope omits likely module consumers (SQ-1519)
+
 ## v3.414.0 (2026-08-08)
 
 ### sidequest 4.40.6 → 4.40.7
