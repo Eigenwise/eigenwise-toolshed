@@ -21,7 +21,7 @@ curl -X POST http://127.0.0.1:14319/v1/outbox/requeue
 
 The response reports the number moved, for example `{"requeued":6929}`. It resets only exhausted records, then the observer retries them on its next outbox interval. You can call it again safely when the response is `{"requeued":0}`.
 
-The Grafana dashboard leads with cost, routing, failures, and source activity, then graphs spend by model, project, and agent role. Project dashboards appear only after that project reports Claude Code metrics and expire after 30 quiet days. Gateway panels stay on the global dashboard because gateway records do not yet carry project attribution.
+The Grafana dashboard leads with cost, routing, failures, source activity, and context recharge. The Context recharge row shows completed assistant turns by project, raw tool-result bytes by tool, and recharge-weighted result bytes, where each result is multiplied by the assistant turns that followed it. Those rollups appear when a session ends and keep result content out of telemetry. Project dashboards appear only after that project reports Claude Code metrics and expire after 30 quiet days. Gateway panels stay on the global dashboard because gateway records do not yet carry project attribution.
 
 ## Checking CI after a push
 

@@ -560,16 +560,17 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   const dashboard = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'observability', 'sinks', 'grafana', 'dashboards', 'claude-code-usage.json'), 'utf8'));
   const byTitle = new Map(dashboard.panels.map((panel) => [panel.title, panel]));
 
-  assert.equal(dashboard.panels.length, 14);
+  assert.equal(dashboard.panels.length, 18);
   assert.deepEqual(
     dashboard.panels.filter(({ type }) => type === 'row').map(({ title }) => title),
-    ['At a glance', 'Where the spend goes', 'Failures and source activity'],
+    ['At a glance', 'Where the spend goes', 'Failures and source activity', 'Context recharge'],
   );
   assert.equal(dashboard.panels.some(({ type }) => type === 'table'), false);
 
   for (const title of [
     'Cost by model', 'Cost by project',
     'Context by orchestrator vs executor', 'Hook failures over time', 'Gateway errors and throttles',
+    'Assistant turns by project', 'Tool-result bytes by tool', 'Recharge-weighted result bytes by tool',
   ]) {
     assert.equal(byTitle.get(title)?.type, 'timeseries', 'missing graphical panel: ' + title);
     assert.equal(byTitle.get(title).interval, '$bucket');
@@ -597,6 +598,11 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
   assert.match(byTitle.get('Context by orchestrator vs executor').targets[0].expr, /workbench_attribute_agent_role/);
   assert.match(byTitle.get('Hook failures over time').targets[0].expr, /workbench_attribute_status =~ \"error\|failed\"/);
   assert.match(byTitle.get('Gateway errors and throttles').targets[0].expr, /throttl\|rate\.\?limit\|429/);
+  for (const title of ['Assistant turns by project', 'Tool-result bytes by tool', 'Recharge-weighted result bytes by tool']) {
+    const expression = byTitle.get(title).targets[0].expr;
+    assert.match(expression, /workbench\.recharge_rollup/);
+    assert.equal((expression.match(/sum_over_time/g) || []).length, 1);
+  }
 
   const lokiExpressions = dashboard.panels
     .flatMap((panel) => panel.targets || [])

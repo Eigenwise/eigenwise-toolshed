@@ -52,7 +52,7 @@ The observer's OpenTelemetry service name is `workbench-observer` and its attrib
 - **SessionStart (all matches)**, **SessionEnd**, **UserPromptSubmit**, **PreToolUse**, **PostToolUse**, **Stop**, **SubagentStart**, and **SubagentStop** each run `observability.js` and record metadata-only lifecycle observations.
 - **PreToolUse (`Agent|Task`)** also runs `request-body-preflight.js`, which reads the gateway's per-session request high-water record and warns near the 32 MB request limit before spawning a subagent.
 
-The observer records event type and bounded metadata such as project identity, permission mode, effort, tool facets, recipient, status, and error type.
+The observer records event type and bounded metadata such as project identity, permission mode, effort, tool facets, recipient, status, and error type. At session end it also derives assistant-turn counts, per-tool result byte totals, and recharge-weighted result bytes, without retaining any result content.
 
 ## Local telemetry
 
