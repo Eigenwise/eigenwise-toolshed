@@ -340,6 +340,61 @@ test('context_page resumes Unicode bodies and rows with stable revision-safe cur
   assert.match(staleRows.content[0].text, /stale list handle/);
 });
 
+test('context_page row continuations retain their revision when claim liveness changes', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-liveness-'))).slug;
+  const originalIdleMinutes = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+  process.env.SIDEQUEST_CLAIM_IDLE_MIN = '60';
+  try {
+    const tickets = Array.from({ length: 45 }, (_, index) => store.createTicket(project, { title: `Liveness row ${index}`, source: 'test' }));
+    const claimed = tickets[tickets.length - 1];
+    assert.equal(store.claimTicket(project, claimed.ref, 'liveness-worker', {
+      direct: true,
+      reason: 'The continuation fixture needs a live claim.',
+    }).ok, true);
+
+    const listed = await callTool('list', { project, limit: 0 });
+    assert.equal(listed.returned, 0);
+    assert.equal(listed.retrieval.tool, 'context_page');
+    const rowArguments = listed.retrieval.arguments;
+
+    process.env.SIDEQUEST_CLAIM_IDLE_MIN = '0.000001';
+    const resumed = await callTool('context_page', { ...rowArguments, limit: 4096 });
+    const claimedRow = resumed.rows.find((row: any) => row.ref === claimed.ref);
+    assert.equal(resumed.revision, rowArguments.expectedRevision);
+    assert.equal(resumed.totalRows, 45);
+    assert.equal(claimedRow.claim.stale, true);
+  } finally {
+    if (originalIdleMinutes === undefined) delete process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+    else process.env.SIDEQUEST_CLAIM_IDLE_MIN = originalIdleMinutes;
+  }
+});
+
+test('context_page row continuations project oversized detail bodies into nested pages', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-oversized-row-'))).slug;
+  for (let index = 0; index < 44; index += 1) {
+    store.createTicket(project, { title: `Detail row ${index}`, source: 'test' });
+  }
+  const description = '測'.repeat(6000);
+  const newest = store.createTicket(project, { title: 'Oversized detail row', description, source: 'test' });
+
+  const listed = await callTool('list', { project, detail: true, limit: 0 });
+  assert.equal(listed.returned, 0);
+  assert.equal(listed.retrieval.tool, 'context_page');
+  const rowsPage = await callTool('context_page', { ...listed.retrieval.arguments, limit: 16384 });
+  const recoveredRow = rowsPage.rows.find((row: any) => row.ref === newest.ref);
+  assert.equal(recoveredRow.descriptionTruncated, true);
+  assert.equal(recoveredRow.descriptionRetrieval.tool, 'context_page');
+
+  let reconstructed = '';
+  let cursor = recoveredRow.descriptionRetrieval.arguments.cursor;
+  while (cursor !== null) {
+    const page = await callTool('context_page', { ...recoveredRow.descriptionRetrieval.arguments, cursor, limit: 16384 });
+    reconstructed += page.body;
+    cursor = page.nextCursor;
+  }
+  assert.equal(reconstructed, description);
+});
+
 test('add and update preserve descriptions and expose storyId explicitly', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-description-'))).slug;
   const story = store.createStory(project, { title: 'Description contract' });

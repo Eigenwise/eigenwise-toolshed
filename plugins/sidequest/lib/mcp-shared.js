@@ -441,7 +441,14 @@ function listContextRows(project, args) {
     limit: Number.MAX_SAFE_INTEGER,
     all: args.all
   });
-  return brief ? payload.tickets.map(compactListRow) : payload.tickets;
+  return brief ? payload.tickets.map(compactListRow) : payload.tickets.map((ticket) => ticketWithContextHandles(project, ticket));
+}
+function listContextRevision(rows) {
+  return contextRevision(rows.map((row) => {
+    if (!row?.claim || typeof row.claim !== "object" || !Object.prototype.hasOwnProperty.call(row.claim, "stale")) return row;
+    const claim = Object.fromEntries(Object.entries(row.claim).filter(([key]) => key !== "stale"));
+    return Object.assign({}, row, { claim });
+  }));
 }
 function listRowsContextRetrieval(project, args, position) {
   const sourceArguments = listContextArguments(args);
@@ -452,7 +459,7 @@ function listRowsContextRetrieval(project, args, position) {
     kind: "rows",
     field: "tickets",
     position,
-    revision: contextRevision(rows),
+    revision: listContextRevision(rows),
     reason: "budget",
     arguments: sourceArguments
   }, position);
@@ -505,7 +512,7 @@ function resolveContextPage(args) {
     throw new Error(`context_page: handle belongs to the wrong tool for ${source.kind} pages.`);
   }
   const rows = listContextRows(source.project, source.arguments);
-  assertCurrentContextRevision(source, contextRevision(rows), args.expectedRevision);
+  assertCurrentContextRevision(source, listContextRevision(rows), args.expectedRevision);
   const page = rowsWithinByteLimit(rows, position, limit);
   return {
     source: source.tool,

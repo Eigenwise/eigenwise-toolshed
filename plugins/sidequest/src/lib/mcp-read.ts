@@ -137,7 +137,11 @@ const tools: ToolDefinition[] = [
         status, archived: args.archived, brief,
         cursor: args.cursor, limit: args.limit, all: args.all, maxChars,
       });
-      const shapedPayload = brief ? Object.assign({}, payload, { tickets: payload.tickets.map(compactListRow) }) : payload;
+      const shapedPayload = Object.assign({}, payload, {
+        tickets: brief
+          ? payload.tickets.map(compactListRow)
+          : payload.tickets.map((ticket: any) => ticketWithContextHandles(slug, ticket)),
+      });
       const out = Object.assign({ project: slug, projectName: meta.name }, withoutCategories(shapedPayload));
       if (payload.nextCursor) {
         out.hint = `Page ${payload.returned}/${payload.total}; continue with cursor:"${payload.nextCursor}" until nextCursor is null.`;
