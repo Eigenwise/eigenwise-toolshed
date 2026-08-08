@@ -33,11 +33,22 @@ function runTests(phase, files, environment) {
 }
 
 const suiteTemporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-full-suite-'));
+const suiteHomeDirectory = path.join(suiteTemporaryDirectory, 'home');
+const suiteClaudeDirectory = path.join(suiteHomeDirectory, '.claude');
+const suiteSidequestDirectory = path.join(suiteClaudeDirectory, 'sidequest');
+const emptyDiscoveryDirectory = path.join(suiteTemporaryDirectory, 'empty-discovery');
+await fs.mkdir(suiteSidequestDirectory, { recursive: true });
+await fs.mkdir(emptyDiscoveryDirectory);
 const suiteTestEnvironment = {
   ...suiteEnvironment(),
+  HOME: suiteHomeDirectory,
+  USERPROFILE: suiteHomeDirectory,
+  SIDEQUEST_HOME: suiteSidequestDirectory,
+  SIDEQUEST_CLAUDE_HOME: suiteClaudeDirectory,
   TMPDIR: suiteTemporaryDirectory,
   TMP: suiteTemporaryDirectory,
   TEMP: suiteTemporaryDirectory,
+  SIDEQUEST_DISCOVERY_DIRS: emptyDiscoveryDirectory,
 };
 
 try {
