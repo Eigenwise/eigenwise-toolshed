@@ -65,9 +65,7 @@ Only the orchestrator decides a ticket's liveness from board `pulse` or `changes
 your own claim.
 
 **Dispatch briefing:** When the spawn prompt tells you to fetch a briefing, run that command as your first
-action. It is a token-gated preflight, then the printed durable ticket packet supplies the complete contract.
-Read every section of that packet, the comment thread (default read; elided old bodies are recoverable with `full:true` only when they matter, while every entry's metadata remains available), and inspect every readable attachment
-before implementation. Report missing or unreadable attachments as blockers or warnings; never silently skip them.
+action. It returns one bounded ContextProjection packet. Read every included section and inspect every readable attachment before implementation. When the packet marks context omitted or a contract retrieval required, make the exact listed retrieval call once before editing. Do not guess, silently skip, or substitute live story state for a frozen contract snapshot. Report missing or unreadable attachments as blockers or warnings.
 Protocol for each ticket:
 1. **Claim first** by copying the `mcp__plugin_sidequest_board__claim` call printed in the Dispatch claim guard verbatim and replacing only its `by` placeholder with a unique id. Do not pass `direct` or substitute the model slug for `executor`. If it returns `ok:false`, do
    not touch files. Report the refusal and move to the next batch ref or stop.

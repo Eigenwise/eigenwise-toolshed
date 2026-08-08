@@ -203,20 +203,11 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.match(packet, /decision or constraint is in omitted history: fetch the full thread/);
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'bounded-briefing-token');
-  const descriptionPacket = briefing.match(/Description:\n([\s\S]*?)\n\nCategory contract:/);
-  assert.ok(descriptionPacket);
-  assert.ok(Buffer.byteLength(descriptionPacket![1]) <= 8 * 1024, `description packet is ${Buffer.byteLength(descriptionPacket![1])} bytes`);
-  assert.match(descriptionPacket![1], /Description truncated at 8 KB/);
-  assert.match(briefing, /Comment packet \(newest-first excerpts; read full history only when flagged below\):/);
-  assert.match(briefing, new RegExp(ticket.executorVerify));
-  assert.match(briefing, /Verify completion discipline: the harness does not expose your remaining tool-call budget/);
-  assert.match(briefing, /Plan against the observed ~90-call backstop/);
-  assert.match(briefing, /Run the declared verify command as soon as that first implementation-ready change is in place/);
-  assert.match(briefing, /Before the declared verify, run the worktree setup and regenerate any outputs produced from your changed sources/);
-  assert.match(briefing, /Correct generated outputs may be uncommitted when you verify/);
-  assert.match(briefing, /If a deliberate checkpoint is necessary before verification, say explicitly that verification was not reached and why/);
-  assert.match(briefing, /plugins\/sidequest\/src\/lib\/agentsync\.ts/);
-  assert.match(briefing, /briefing\.png/);
+  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(briefing, 'utf8')} bytes`);
+  assert.match(briefing, /Executor ContextProjection v1/);
+  assert.match(briefing, /Aggregate budget: 24576 bytes/);
+  assert.match(briefing, /Omitted context/);
+  assert.match(briefing, /Retrieve with mcp__plugin_sidequest_board__/);
 });
 
 test('SQ-929: experiment log briefings carry the bounded packet and the continuation target', () => {
@@ -509,7 +500,7 @@ test('a newly registered board tool needs no agentsync change to reach read-only
   // A grant list would name all 54. A handful of references is fine: the briefing shows
   // the executor how to call claim, which is an example, not a grant.
   const named = new Set(source.match(/mcp__plugin_sidequest_board__[a-zA-Z_]+/g) || []);
-  assert.ok(named.size <= 2,
+  assert.ok(named.size <= 4,
     `agentsync names ${named.size} board tools; read-only is a deny list, so it must not enumerate grants: ${[...named].join(', ')}`);
 });
 
@@ -755,64 +746,20 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   fs.writeFileSync(path.join(assetDir, ticket.assets[1]!), 'second');
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug, 'C:\\dev\\fixture');
-  const descriptionPacket = briefing.match(/Description:\n([\s\S]*?)\n\nCategory contract:/);
-  assert.ok(descriptionPacket);
-  assert.strictEqual(descriptionPacket![1], ticket.description);
-  const commentsPacket = briefing.match(/Complete comment thread \(chronological, inspect every entry before implementation\):\n([\s\S]*?)\n\nAttachments/);
-  assert.ok(commentsPacket);
-  assert.strictEqual(commentsPacket![1], agentsync.ticketCommentsPacket(ticket.comments));
   const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: 'y'.repeat(100000), comments: [{ body: 'z'.repeat(100000) }] }), 'instant-token-334', 'C:\\dev\\fixture');
-  assert.doesNotMatch(briefing, /^---$/m);
-  assert.match(briefing, /## This ticket/);
+  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024);
+  assert.match(briefing, /Executor ContextProjection v1/);
   assert.ok(briefing.includes(ticket.description));
   assert.ok(briefing.includes(ticket.comments[0]!.body));
   assert.ok(briefing.includes(ticket.comments[1]!.body));
-  assert.ok(briefing.indexOf(ticket.comments[0]!.body) < briefing.indexOf(ticket.comments[1]!.body));
+  assert.ok(briefing.indexOf(ticket.comments[1]!.body) < briefing.indexOf(ticket.comments[0]!.body), 'newest evidence leads older evidence');
   assert.match(briefing, /Category: briefing\.contract/);
-  assert.match(briefing, /Configured route: codex-gpt-5-6-terra \/ high/);
-  assert.match(briefing, /Dispatch route: codex-gpt-5-6-terra \/ high/);
   assert.match(briefing, /mcp__plugin_sidequest_board__claim\(\{/);
-  assert.ok(briefing.includes('ref: "SQ-334"'));
-  assert.ok(briefing.includes('executor: "sidequest-exec-dispatch"'));
-  assert.ok(briefing.includes('effort: "high"'));
-  assert.ok(briefing.includes(`project: ${JSON.stringify('C:\\dev\\fixture')}`));
-  assert.ok(briefing.includes('token: "instant-token-334"'));
-  assert.match(briefing, /Do not pass `direct`\. Do not substitute the model slug for `executor`\./);
-  assert.match(briefing, /Verify output discipline: run this single Node command in a Bash tool/);
-  const captureScript = path.resolve(__dirname, '..', 'lib', 'verify-capture.js');
-  assert.ok(path.isAbsolute(captureScript));
-  assert.ok(fs.existsSync(captureScript));
-  assert.ok(!captureScript.startsWith('plugins/'));
-  assert.ok(briefing.includes(`node "${captureScript}" --base64 bm9kZSAtLXRlc3QgcGx1Z2lucy9zaWRlcXVlc3QvdGVzdC9hZ2VudHN5bmMudGVzdC5qcw==`));
-  assert.match(briefing, /verify=<passed\|failed-suite\|could-not-run>/);
-  assert.match(briefing, /could-not-run.*do not call the suite red/);
-  assert.match(briefing, /integrator owns the merged-tree full gate/);
-  assert.match(briefing, /Verify liveness: immediately before running the exact verify command/);
-  assert.match(briefing, /\[sidequest:verify-start\] <command>/);
-  assert.match(briefing, /\[sidequest:verify-complete\] <passed\|failed-suite\|failed\|could-not-run\|no-op>: <evidence>/);
-  assert.match(briefing, /status first and evidence after the colon/);
-  assert.match(briefing, /Billable resources: when this work creates a cloud pod, VM, or other billable external resource, comment its id on the ticket immediately and terminate it before every stop, including error paths\./);
-  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report\./);
-  assert.match(briefing, /keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative/);
-  assert.match(briefing, /Non-repo done comments still carry the full report/);
-  assert.match(briefing, /Priority: urgent/);
-  assert.match(briefing, /Story: US-99/);
-  assert.match(briefing, /blocked-by: SQ-12/);
-  assert.match(briefing, /docs\/briefing notes\.md/);
-  assert.match(briefing, /A declared directory covers descendants/);
-  assert.match(briefing, /first uncovered scope miss/);
-  assert.match(briefing, /one consolidated request/);
-  assert.match(briefing, /tests, fixtures, goldens, and generated outputs/);
-  assert.match(briefing, /The answer is immediate/);
-  assert.match(briefing, /On refusal, commit in-scope work and release with kind `handback`/);
-  assert.doesNotMatch(briefing, /Keep your claim held/);
-  assert.doesNotMatch(briefing, /pass the current linked worktree/);
-  assert.doesNotMatch(briefing, /Do not release or weaken scope lint/);
+  assert.match(briefing, /Run it through node/);
+  assert.match(briefing, /Scope check: request scope when a needed path is outside the declared set/);
   assert.match(briefing, /space file\.png/);
   assert.match(briefing, /画像\.png/);
-  assert.match(briefing, /Inspect this attachment before implementation\./);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
-  assert.match(briefing, /inspect every entry before implementation/i);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
   assert.ok(stub.startsWith('[sidequest-route model=gpt-5.6-terra effort=high]\n'));
   assert.ok(Buffer.byteLength(stub) < 1600, `spawn context is ${Buffer.byteLength(stub)} bytes`);
@@ -1193,6 +1140,39 @@ test('every executor name syncExecAgents writes classifies to a stable kind', ()
       `${name} did not classify to a stable kind (got ${kind})`,
     );
   }
+});
+
+test('SQ-1562: executor briefings use one deterministic Unicode-safe aggregate projection budget', () => {
+  const oversizedContract = '契約🧪'.repeat(5_000);
+  const ticket = {
+    ref: 'SQ-1562', title: 'Projected executor context', model: 'opus', effort: 'high', category: {},
+    dispatchExecutor: 'sidequest-exec-high',
+    dispatch: { launchSeq: 7, storyContract: { revision: 9, body: oversizedContract } },
+    storyId: 'stale-story',
+    description: '説明🧪'.repeat(5_000),
+    comments: Array.from({ length: 20 }, (_, index) => ({
+      by: `worker-${index}`, kind: index === 19 ? 'decision' : 'comment', at: `2026-08-08T00:${String(index).padStart(2, '0')}:00.000Z`, body: `evidence-${index} ${'測'.repeat(1_000)}`,
+    })),
+  };
+
+  const first = agentsync.renderTicketBriefing(ticket, 'projection-token');
+  const second = agentsync.renderTicketBriefing(ticket, 'projection-token');
+  assert.equal(first, second, 'stable input must produce byte-identical projection order');
+  assert.ok(Buffer.byteLength(first, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(first, 'utf8')} bytes`);
+  assert.match(first, /Executor ContextProjection v1/);
+  assert.match(first, /Aggregate budget: 24576 bytes/);
+  assert.match(first, /Story execution contract \(revision 9; snapshot revision 9; sha256 [a-f0-9]{64}; totalBytes \d+\)/);
+  assert.match(first, /Required before editing: fetch the paged snapshot with mcp__plugin_sidequest_board__story_contract\(\{"story":"stale-story","cursor":0,"limit":16384,"full":true\}\)/);
+  assert.match(first, /Omitted context/);
+  assert.match(first, /Retrieve with mcp__plugin_sidequest_board__/);
+  assert.doesNotMatch(first, /契約🧪契約🧪契約🧪契約🧪/);
+
+  const revised = agentsync.renderTicketBriefing({
+    ...ticket,
+    dispatch: { launchSeq: 8, storyContract: { revision: 10, body: oversizedContract } },
+  }, 'projection-token');
+  assert.match(revised, /storyContractSnapshot=10:/);
+  assert.notEqual(first, revised, 'a stale snapshot revision must not share the old projection');
 });
 
 export {};

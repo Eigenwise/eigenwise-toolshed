@@ -7,6 +7,7 @@ const crypto = require("crypto");
 const store = require("./store.js");
 const { worktreeRoot } = require("./worktrees.js");
 const { spawnDescription } = store;
+const { compileContextProjection } = require("./context-packet.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
@@ -502,10 +503,77 @@ ${warnings.map((warning) => `- ${warning}`).join("\n")}`,
     "\n[Additional dispatch uncertainty warnings truncated.]"
   );
 }
-function ticketBrief(ticket, nonce, marker, slug, projectPath) {
-  const category = ticket.category || {};
-  const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
-  const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || "").trim();
+const EXECUTOR_BRIEFING_MAX_BYTES = 24 * 1024;
+const EXECUTOR_CONTRACT_MAX_BYTES = 12 * 1024;
+function sha256Text(value) {
+  return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
+}
+function projectionRetrieval(tool, argumentsValue) {
+  return { tool: String(tool), arguments: argumentsValue || {} };
+}
+function projectionCall(retrieval) {
+  return `${retrieval.tool}(${JSON.stringify(retrieval.arguments)})`;
+}
+function briefingProjectArguments(project) {
+  return project ? { project } : {};
+}
+function storySnapshot(ticket, slug) {
+  const snapshot = ticket?.dispatch?.storyContract || store.storyExecutionContract(ticket?.storyId ? store.getStory(slug, ticket.storyId) : null);
+  const story = ticket?.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
+  return {
+    body: String(snapshot?.body || ""),
+    revision: Number(snapshot?.revision) || 1,
+    story: String(story?.ref || ticket?.storyId || "")
+  };
+}
+function storyContractRetrieval(snapshot, project) {
+  return projectionRetrieval("mcp__plugin_sidequest_board__story_contract", Object.assign(
+    briefingProjectArguments(project),
+    { story: snapshot.story, cursor: 0, limit: 16384, full: true }
+  ));
+}
+function storyContractProjectionBody(snapshot, retrieval, forceHandle = false) {
+  const totalBytes = byteLength(snapshot.body);
+  const hash = sha256Text(snapshot.body);
+  const metadata = `snapshot revision ${snapshot.revision}; sha256 ${hash}; totalBytes ${totalBytes}`;
+  if (forceHandle || totalBytes > EXECUTOR_CONTRACT_MAX_BYTES) {
+    return [
+      `## Story execution contract (revision ${snapshot.revision}; ${metadata})`,
+      "Required before editing: fetch the paged snapshot with " + projectionCall(retrieval) + ". Continue with its nextCursor until complete; do not replace this frozen snapshot with a live contract."
+    ].join("\n");
+  }
+  return `## Story execution contract (revision ${snapshot.revision})
+Snapshot ${metadata}.
+${snapshot.body}`;
+}
+function storyDecisionProjectionBody(ticket, slug) {
+  const story = ticket?.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
+  const entries = Array.isArray(story?.decisionLog) ? story.decisionLog.slice() : [];
+  if (!entries.length) return "(No live story decisions or constraints were recorded.)";
+  const revision = Number(story?.logRevision) || Math.max(...entries.map((entry) => Number(entry.seq) || 0));
+  const ordered = entries.slice().sort((left, right) => Number(left.seq) - Number(right.seq));
+  return [
+    `## Story decision log (${String(story?.ref || ticket?.storyId || "(unknown story)")}, ${entries.length} ${entries.length === 1 ? "entry" : "entries"} through #${revision})`,
+    "Live watermark: this log is current at briefing time and is not part of the frozen contract snapshot.",
+    ...ordered.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
+  ].join("\n");
+}
+function briefingCommentBody(comments) {
+  const entries = Array.isArray(comments) ? comments.slice().reverse() : [];
+  if (!entries.length) return "(No ticket comments were recorded.)";
+  return [
+    "## Newest ticket evidence and comments (newest first)",
+    ...entries.map((comment, index) => [
+      `### Comment ${entries.length - index}`,
+      `Author: ${comment.by || "unknown"}`,
+      `Kind: ${comment.kind || "comment"}`,
+      `Recorded: ${comment.at || "(timestamp unavailable)"}`,
+      "Body:",
+      commentBody(comment)
+    ].join("\n"))
+  ].join("\n\n");
+}
+function executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
     `  ref: ${JSON.stringify(ticket.ref)},`,
@@ -516,39 +584,27 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
     `  token: ${JSON.stringify(nonce)}`,
     "})"
   ].join("\n");
-  const comments = ticketCommentsPacket(ticket.comments);
-  const commentHeading = comments.includes("[Comment packet truncated.") ? "Comment packet (newest-first excerpts; read full history only when flagged below):" : "Complete comment thread (chronological, inspect every entry before implementation):";
-  const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
-  const declared = Array.isArray(ticket.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
-  const effectiveFiles = store.effectiveScope(slug, declared);
-  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const alwaysInScope = store.boardConfig(slug)?.alwaysInScope || [];
-  const alwaysKeys = new Set(alwaysInScope.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const generatedFiles = effectiveFiles.filter((file) => {
-    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
-    return !declaredKeys.has(key) && !alwaysKeys.has(key);
-  });
-  const labels = Array.isArray(ticket.labels) && ticket.labels.length ? ticket.labels.join(", ") : "(No labels were recorded.)";
-  const closeout = ticketCloseout(ticket);
-  const worktreeSync = ticketWorktreeSync(ticket, project);
-  const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
-  const continuation = ticketContinuationPacket(ticket);
-  const experimentLog = experimentLogPacket(ticket, slug);
-  const planDocument = planDocumentPacket(ticket, slug);
-  const contract = storyContractPacket(ticket, slug);
-  const decisionLog = storyDecisionLogPacket(ticket, slug);
-  const findingCheckpoints = findingCheckpointPacket(ticket);
-  const uncertainty = dispatchUncertaintyPacket(ticket, slug);
-  const parts = [
-    "",
-    ...contract ? [contract] : [],
-    ...decisionLog ? [decisionLog] : [],
+  const verify = ticket.executorVerifyKind === "attestation" ? `Verify oracle: attestation. Record actual evidence for ${ticket.executorAttestationArtifact}.` : `Verify command: ${ticket.executorVerify || "(No exact verify command was recorded.)"}`;
+  return [
+    "## Dispatch, claim, worktree, lifecycle, and verification safety",
+    "Claim first with this exact call. Do not pass direct or replace the prepared executor:",
+    ["```javascript", claimCall, "```"].join("\n"),
+    ...worktreeIdentity ? [worktreeIdentity] : [],
+    ...worktreeSync ? [worktreeSync] : [],
+    ...ticketIsolationContract(ticket, project) || [],
+    verify,
+    ticket.executorVerify && ticket.executorVerifyKind !== "attestation" ? "Run it through " + capturedVerifyCommand(ticket.executorVerify) + "; post [sidequest:verify-start] before it and [sidequest:verify-complete] with status first after it exits." : "",
+    closeout || "",
+    "Stay within declared scope. If required context is omitted below, fetch it once with its listed retrieval call before editing. Do not guess or silently skip it."
+  ].filter(Boolean).join("\n\n");
+}
+function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation) {
+  return [
     "## This ticket",
     `Ref: ${ticket.ref}`,
     `Title: ${ticket.title || "(Untitled ticket)"}`,
     `Description:
-${ticketDescriptionPacket(ticket.description)}`,
+${ticket.description || "(No additional description was recorded.)"}`,
     `Category contract:
 Category: ${category.id || ticket.categoryId || "(Unclassified)"}
 Configured route: ${category.route?.model || "(No configured route)"} / ${category.route?.effort || "(No configured effort)"}
@@ -558,67 +614,112 @@ ${category.contract || "(No category-specific executor instructions were recorde
     EXECUTOR_CONTRADICTION_RULE,
     ...findingCheckpoints ? [`Durable finding checkpoints:
 ${findingCheckpoints}`] : [],
-    `Anchors:
-${ticket.executorAnchors || "(No anchors were recorded.)"}`,
-    ...ticket.executorVerifyKind === "attestation" ? [`Verify oracle: attestation
-Observed artifact: ${ticket.executorAttestationArtifact}
-Record the actual evidence at submission as \`attestation: ${ticket.executorAttestationArtifact} | <evidence produced> | <what it showed>\`. Do not substitute an unrelated passing suite or invent a negative control; the attestation itself is the reviewable oracle.`] : [`Verify command:
-${ticket.executorVerify || "(No exact verify command was recorded.)"}`],
-    ...ticket.executorVerify && ticket.executorVerifyKind !== "attestation" ? [`Verify output discipline: run this single Node command in a Bash tool. It captures the declared command without giving Windows cmd any wrapper syntax to parse:
-\`\`\`bash
-${capturedVerifyCommand(ticket.executorVerify)}
-\`\`\`
-It writes suite output to a temporary file and prints only \`verify=<passed|failed-suite|could-not-run>\`, the exit code, and the log path. \`failed-suite\` means the command ran and its suite failed. \`could-not-run\` means the capture shell could not execute or report the command, so do not call the suite red: post that status and release with the log path and direct execution as the next step. The declared command verifies this worktree's changed surface; the integrator owns the merged-tree full gate, so do not rerun it here unless the ticket is high-stakes or explicitly declares it.`] : [],
-    ...ticket.executorVerify && ticket.executorVerifyKind !== "attestation" ? ["Verify liveness: immediately before running the exact verify command, add a board comment whose body is `[sidequest:verify-start] <command>`. Immediately after it exits, including on failure, post `[sidequest:verify-complete] <passed|failed-suite|failed|could-not-run|no-op>: <evidence>` with the status first and evidence after the colon. A bare `[sidequest:verify-complete]` also remains valid. Use `no-op` only when the declared write scope intentionally has no change. A could-not-run outcome requires a release, not a red-suite report. These paired markers keep an in-flight long verify from being reclaimed."] : [],
-    ...ticket.executorVerify && ticket.executorVerifyKind !== "attestation" ? ["Verify completion discipline: the harness does not expose your remaining tool-call budget. Plan against the observed ~90-call backstop, reserving enough calls to run verification. Before the declared verify, run the worktree setup and regenerate any outputs produced from your changed sources, such as `npm run build`. Correct generated outputs may be uncommitted when you verify. Run the declared verify command as soon as that first implementation-ready change is in place, rather than saving it for a final phase: a long suite started near the cap may never begin. Run it once early; if it fails, make the focused fix and rerun only when that fix or later code changes could affect the result. Run the declared verify command in the foreground with a timeout sized to the command, up to the tool maximum, never backgrounded. Kill any earlier backgrounded verify before starting it so two builds never race in one tree. Do not end the turn between the suite finishing and its verify-complete marker. If verification completes before later changes, rerun it before submitting only if those changes could affect the verified behavior. If a deliberate checkpoint is necessary before verification, say explicitly that verification was not reached and why. When the final verification completes, run the negative control, submit, and write the final report in that same turn."] : [],
-    "Billable resources: when this work creates a cloud pod, VM, or other billable external resource, comment its id on the ticket immediately and terminate it before every stop, including error paths.",
-    ...ticket.highStakes ? ["High-stakes verification:\nEnumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."] : [],
-    ...worktreeIdentity ? [worktreeIdentity] : [],
     ...continuation ? [continuation] : [],
-    ...worktreeSync ? [worktreeSync] : [],
-    ...ticketIsolationContract(ticket, project) || [],
     ...experimentLog ? [`Experiment log:
 ${experimentLog}`] : [],
-    ...planDocument ? [planDocument] : [],
     `Declared files:
 ${declaredFiles}`,
-    ...generatedFiles.length ? [`Auto-paired tracked generated files (regenerate before verifying):
-${generatedFiles.map((file) => `- ${file}`).join("\n")}`] : [],
-    "Scope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch, or redispatch without expansion. A declared directory covers descendants, so a covered response means continue without a request. On the first uncovered scope miss, sweep every remaining suspected surface now: find consumers and check tests, fixtures, goldens, and generated outputs, then make one consolidated request. Serial requests are for surfaces genuinely undiscoverable earlier. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix. Report every refused or unscoped path in the final report; never call partial work ready for integration.",
+    ...planDocument ? [planDocument] : [],
+    "Scope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix."
+  ].join("\n\n");
+}
+function executorHandlesBody(ticket, slug) {
+  const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
+  return [
+    "## Context handles and summaries",
     `Contract metadata:
 ${ticketContractsPacket(ticket)}`,
     `Readiness contract edges:
 ${ticketReadinessContractPacket(ticket, slug)}`,
-    `Ticket state:
-Status: ${ticket.status || "(Unknown)"}
-Priority: ${ticket.priority || "(Unknown)"}
-Labels: ${labels}
-Story: ${ticket.storyId || "(No story)"}
-Dependencies:
+    `Dependencies:
 ${links}`,
-    `${commentHeading}
-${comments}`,
     `Attachments (inspect every readable attachment before implementation):
-${ticketAssetsPacket(ticket, slug)}`,
-    ...closeout ? [closeout] : [],
-    "Dispatch claim guard:",
-    "Copy this claim call verbatim, replacing only the `by` placeholder with a unique id:",
-    `\`\`\`javascript
-${claimCall}
-\`\`\``,
-    "Do not pass `direct`. Do not substitute the model slug for `executor`. A token refusal means this dispatch was superseded or you are not its prepared executor. Stop and report that refusal."
+${ticketAssetsPacket(ticket, slug)}`
+  ].join("\n\n");
+}
+function renderExecutorProjection(packet) {
+  const items = packet.items.map((item) => item.body).filter(Boolean);
+  const omissions = packet.omissions.length ? [
+    "## Omitted context",
+    ...packet.omissions.map((item) => {
+      const required = item.id === "execution-contract" ? " Required before editing." : "";
+      return "- " + item.id + " " + item.reason + " (originalBytes " + item.originalBytes + "). Retrieve with " + projectionCall(item.retrieval) + "." + required;
+    })
+  ].join("\n") : "";
+  return [
+    "## Executor ContextProjection v1",
+    `Aggregate budget: ${EXECUTOR_BRIEFING_MAX_BYTES} bytes. Projection revision: ${packet.revision}. Projection hash: ${packet.hash}. Serialized bytes: ${packet.serializedBytes}.`,
+    `Watermarks: ${Object.entries(packet.watermarks).map(([key, value]) => `${key}=${value}`).join(", ") || "(none)"}.`,
+    ...items,
+    ...omissions ? [omissions] : []
+  ].join("\n\n");
+}
+function ticketBrief(ticket, nonce, marker, slug, projectPath) {
+  const category = ticket.category || {};
+  const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
+  const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || "").trim();
+  const declared = Array.isArray(ticket.files) ? ticket.files : [];
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const effectiveFiles = store.effectiveScope(slug, declared);
+  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
+  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
+  const generatedFiles = effectiveFiles.filter((file) => {
+    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
+    return !declaredKeys.has(key) && !alwaysKeys.has(key);
+  });
+  const scopedFiles = generatedFiles.length ? `${declaredFiles}
+
+Auto-paired tracked generated files (regenerate before verifying):
+${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
+  const closeout = ticketCloseout(ticket);
+  const worktreeSync = ticketWorktreeSync(ticket, project);
+  const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
+  const uncertainty = dispatchUncertaintyPacket(ticket, slug);
+  const planDocument = planDocumentPacket(ticket, slug);
+  const experimentLog = experimentLogPacket(ticket, slug);
+  const findingCheckpoints = findingCheckpointPacket(ticket);
+  const continuation = ticketContinuationPacket(ticket);
+  const snapshot = storySnapshot(ticket, slug);
+  const contractRetrieval = storyContractRetrieval(snapshot, project);
+  const commentsRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__comments", Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
+  const storyLogRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__story_log", Object.assign(briefingProjectArguments(project), { story: snapshot.story }));
+  const ticketRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__comments", Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
+  const suffix = marker ? `
+
+${marker}` : "";
+  const artifactSafety = store.sharedTreeArtifactMode(ticket) ? `
+
+Artifact lifecycle exception:
+${ARTIFACT_LIFECYCLE_MARKER}
+This dispatch deliberately runs in the shared checkout. Write only within the declared artifact scope. Do not apply the linked-worktree self-check, commit, or submit. Close with done after verification.` : "";
+  const profileBudget = EXECUTOR_BRIEFING_MAX_BYTES - byteLength(suffix);
+  const buildItems = (forceContractHandle = false) => [
+    { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
+    { id: "execution-contract", kind: "contract", priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
+    { id: "live-story-log", kind: "risk", priority: 400, order: 3, watermark: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0), body: storyDecisionProjectionBody(ticket, slug), retrieval: storyLogRetrieval },
+    { id: "task-and-scope", kind: "task", priority: 300, order: 4, body: executorTaskBody(ticket, category, scopedFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation), retrieval: ticketRetrieval },
+    { id: "newest-comments", kind: "evidence", priority: 200, order: 5, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
+    { id: "handles", kind: "handle", priority: 100, order: 6, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval }
   ];
-  if (store.sharedTreeArtifactMode(ticket)) {
-    parts.push(
-      "Artifact lifecycle exception:",
-      `${ARTIFACT_LIFECYCLE_MARKER}
-This dispatch deliberately runs in the shared checkout. You may write only within the declared artifact scope under its approved artifact root. Do not apply the linked-worktree self-check, commit, or submit. Close with done after verification.`
-    );
+  const watermarks = {
+    storyContractSnapshot: `${snapshot.revision}:${sha256Text(snapshot.body)}`,
+    storyDecisionLog: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0)
+  };
+  const compile = (forceContractHandle = false) => compileContextProjection({
+    profile: { id: "executor-briefing", budgetBytes: profileBudget },
+    revision: Number(ticket?.dispatch?.launchSeq) || 1,
+    watermarks,
+    items: buildItems(forceContractHandle)
+  });
+  let packet = compile();
+  const contract = packet.items.find((item) => item.id === "execution-contract");
+  if (!contract || contract.truncated || packet.omissions.some((item) => item.id === "execution-contract")) packet = compile(true);
+  const rendered = renderExecutorProjection(packet);
+  const result = `${rendered}${suffix}`;
+  if (byteLength(result) > EXECUTOR_BRIEFING_MAX_BYTES) {
+    throw new RangeError(`executor ContextProjection exceeded its ${EXECUTOR_BRIEFING_MAX_BYTES}-byte aggregate budget`);
   }
-  if (marker) {
-    parts.push("Model route (gateway dispatch marker — never write another):", marker);
-  }
-  return parts.join("\n\n");
+  return result;
 }
 function renderTicketBriefing(ticket, nonce, slug, projectPath) {
   if (typeof nonce !== "string" || !nonce.trim() || /[\r\n]/.test(nonce)) {
