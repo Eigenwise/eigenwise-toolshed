@@ -601,6 +601,89 @@ test('negative-control marker refusals quote malformed marker lines', () => {
   git(['commit', '-m', 'negative control malformed marker fixture']);
 });
 
+test('negative controls account for every added named test', () => {
+  const by = 'negative-control-per-test-executor';
+  const ticket = addNegativeControlTicket('negative control names every changed test', by);
+  const testName = 'a new assertion catches the reverted source';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `test('${testName}', () => {});\n`);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 exit=1\n[sidequest:negative-control-test] failed a different test',
+    source: 'mcp',
+  }).ok, true);
+  const missingTest = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(missingTest.reason, 'negative_control_test_required');
+  assert.match(missingTest.message, new RegExp(testName));
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 trailing context\n[sidequest:negative-control-test] failed ${testName}`,
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control per test fixture']);
+});
+
+test('negative controls account for tests in added files', () => {
+  const by = 'negative-control-added-file-executor';
+  const testName = 'a test in a newly added file catches the revert';
+  const ticket = store.createTicket(slug, {
+    title: 'negative control checks added test files',
+    description: 'Where: negative-control fixture. Contract: account for added test files. Verify: inspect the refusal.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js', 'test/added-fixture.test.js'],
+    source: 'cli',
+  });
+  claimRouted(ticket, by);
+  negativeControlVersion += 1;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), `module.exports = ${negativeControlVersion};\n`);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'added-fixture.test.js'), `test('${testName}', () => {});\n`);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] npm run test:files test/added-fixture.test.js failed=1',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).reason, 'negative_control_test_required');
+
+  git(['add', 'lib/fixture.js', 'test/added-fixture.test.js']);
+  git(['commit', '-m', 'negative control added test file fixture']);
+});
+
+test('negative controls allow a plainly identified unaffected test', () => {
+  const by = 'negative-control-unaffected-test-executor';
+  const ticket = addNegativeControlTicket('negative control identifies unaffected tests', by);
+  const testName = 'a new unrelated assertion remains green';
+  fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `test('${testName}', () => {});\n`);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: `[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1\n[sidequest:negative-control-test] unaffected ${testName} because it verifies an independent formatter`,
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  }).ok, true);
+
+  git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
+  git(['commit', '-m', 'negative control unaffected test fixture']);
+});
+
 test('a valid negative-control waiver accepts a mixed source and test diff', () => {
   const by = 'negative-control-waiver-executor';
   const ticket = addNegativeControlTicket('negative control waiver', by);
