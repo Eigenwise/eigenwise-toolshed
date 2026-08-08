@@ -391,6 +391,12 @@ test('story contracts are bounded, revisioned, and warn claimed members about dr
 });
 
 test('story_log reads, appends from a claimed member, and rotates after promotion', async () => {
+  const storyLog = mcp.toolDescriptors().find((tool: any) => tool.name === 'story_log');
+  assert.match(storyLog.description, /Read, append, or rotate a story log/);
+  assert.equal(storyLog.inputSchema.properties.entry.pattern, '^(DECISION|CONSTRAINT|DISCOVERY)\\s*:');
+  assert.match(storyLog.inputSchema.properties.entry.description, /Must begin DECISION:, CONSTRAINT:, or DISCOVERY:/);
+  assert.match(storyLog.inputSchema.properties.entry.description, /16,000 UTF-8 bytes/);
+
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-story-log-'))).slug;
   const story = store.createStory(project, { title: 'Decision log packet' });
   const ticket = store.createTicket(project, { title: 'Member ticket', storyId: story.ref, source: 'test' });
@@ -410,6 +416,12 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
     { ref: appended.story.entries[0].ref, by: appended.story.entries[0].by, kind: appended.story.entries[0].kind, text: appended.story.entries[0].text },
     { ref: ticket.ref, by: 'log-worker', kind: 'DISCOVERY', text: 'CLI and MCP share the same store API.' },
   );
+
+  const malformed = await callToolRaw('story_log', {
+    project, story: story.ref, ref: ticket.ref, by: 'log-worker', entry: 'missing prefix',
+  });
+  assert.equal(malformed.isError, true);
+  assert.match(malformed.content[0].text, /story log entry must begin with DECISION:, CONSTRAINT:, or DISCOVERY:/);
 
   const rotated = await callTool('story_log', { project, story: story.ref, rotate: true, by: 'orchestrator' });
   assert.equal(rotated.story.logBytes, 0);
@@ -516,7 +528,7 @@ test('tools/list reports schema size for trend tracking without an arbitrary cei
   const baseline = { descriptionBytes: 2047, payloadBytes: 17492 };
   context.diagnostic(`tools/list size: ${tools.length} tools, ${total} description bytes (baseline ${baseline.descriptionBytes}), ${Buffer.byteLength(payload)} payload bytes (baseline ${baseline.payloadBytes})`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /stable route/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /returns a token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /^For liveness\/progress polling use changes\/pulse, not this\./);
   const list = tools.find((tool: any) => tool.name === 'list');

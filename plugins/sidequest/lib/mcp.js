@@ -121,6 +121,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   comments: ["full", "since"],
   list: ["detail"],
   release: ["command", "outputTail"],
+  story_log: ["entry"],
   category_edit: ["fallbackModel"]
 };
 function toolDescriptors() {
@@ -132,7 +133,7 @@ function toolDescriptors() {
     }
     return {
       name: tool.name,
-      description: TOOL_DESCRIPTION_OVERRIDES[tool.name] || conciseDescription(tool.description),
+      description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description),
       inputSchema
     };
   });

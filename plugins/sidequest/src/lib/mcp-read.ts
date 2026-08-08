@@ -246,7 +246,7 @@ const tools: ToolDefinition[] = [
       properties: {
         project: PROJECT_PROP,
         story: { type: 'string', description: 'Story ref or id.' },
-        entry: { type: 'string', description: 'Decision log entry, prefixed with DECISION, CONSTRAINT, or DISCOVERY.' },
+        entry: { type: 'string', pattern: '^(DECISION|CONSTRAINT|DISCOVERY)\\s*:', description: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes.' },
         ref: { type: 'string', description: 'Claimed member ticket ref for an append.' },
         by: { type: 'string', description: 'Claim owner for an append, or orchestrator to clear.' },
         rotate: { type: 'boolean', description: 'Archive current entries before starting a new log.' },

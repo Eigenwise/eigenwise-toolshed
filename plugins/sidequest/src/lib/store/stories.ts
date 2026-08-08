@@ -90,7 +90,7 @@ function normalizeStoryLogEntry(value?: any) {
     : null;
   const kind = explicitKind || (prefixed?.[1]?.toUpperCase() ?? null);
   if (!kind || !STORY_LOG_KINDS.has(kind)) {
-    throw new Error('story log entry kind must be DECISION, CONSTRAINT, or DISCOVERY.');
+    throw new Error('story log entry must begin with DECISION:, CONSTRAINT:, or DISCOVERY:.');
   }
   if (prefixed && (!explicitKind || explicitKind === prefixed?.[1]?.toUpperCase())) {
     text = text.slice(prefixed[0].length).trim();
