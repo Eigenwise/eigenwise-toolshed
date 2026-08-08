@@ -114,8 +114,13 @@ function ignoredPathsMissingFromWorktree(repository: string, worktree: string, c
     .sort();
 }
 
+function gitBashPath(value: string): string {
+  const drive = process.platform === 'win32' ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
+  return drive ? `${drive[1]}:${value.slice(2)}` : value;
+}
+
 function canonicalPath(value: unknown): string {
-  const resolved = path.resolve(String(value));
+  const resolved = path.resolve(gitBashPath(String(value)));
   const missingSegments: string[] = [];
   let existingAncestor = resolved;
   while (!nativeFs.existsSync(existingAncestor)) {
@@ -1093,4 +1098,4 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   };
 }
 
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };

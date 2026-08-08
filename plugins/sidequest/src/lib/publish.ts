@@ -5,6 +5,7 @@ const os = require('node:os');
 const path = require('node:path');
 const { execFile } = require('node:child_process');
 const { promisify } = require('node:util');
+const { canonicalPath } = require('./worktrees.js') as { canonicalPath: (value: unknown) => string };
 
 const execFileAsync = promisify(execFile);
 const LOCK_BASENAME = 'sidequest-publish.lock';
@@ -77,6 +78,10 @@ function sameOwner(holder: any, opts: any): boolean {
   return holder.host === os.hostname() && Number(holder.pid) === process.pid;
 }
 
+function lockTargetsRepository(holder: any, repoPath: string): boolean {
+  return !holder?.repo || canonicalPath(holder.repo) === canonicalPath(repoPath);
+}
+
 async function acquirePublishLock(repoPath: string, opts: any = {}): Promise<any> {
   const file = await lockFile(repoPath);
   const info = {
@@ -86,7 +91,7 @@ async function acquirePublishLock(repoPath: string, opts: any = {}): Promise<any
     sessionId: opts.sessionId != null && String(opts.sessionId).trim() ? String(opts.sessionId).trim() : null,
     host: os.hostname(),
     at: new Date().toISOString(),
-    repo: path.resolve(repoPath),
+    repo: canonicalPath(repoPath),
   };
   for (let attempt = 0; attempt < 3; attempt++) {
     try {
@@ -158,7 +163,7 @@ function publishLockOwnedBySession(repoPath: string, sessionId: unknown): boolea
     }).trim();
     const file = path.join(path.resolve(repoPath, commonDir), LOCK_BASENAME);
     const holder = JSON.parse(require('node:fs').readFileSync(file, 'utf8'));
-    return sameOwner(holder, { sessionId: owner });
+    return sameOwner(holder, { sessionId: owner }) && lockTargetsRepository(holder, repoPath);
   } catch {
     return false;
   }

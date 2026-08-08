@@ -304,8 +304,8 @@ test('published-branch pushes and manual tags need the current session publish l
   const project = store.ensureProject(repo);
   store.setBoardConfig(project.slug, { integrationBranch: 'dev' });
   const sessionId = `release-owner-${Date.now()}`;
-  const payload = (command: string, tool_name: string = 'Bash', owner: string = 'other-session') => ({
-    cwd: repo,
+  const payload = (command: string, tool_name: string = 'Bash', owner: string = 'other-session', cwd: string = repo) => ({
+    cwd,
     session_id: owner,
     tool_name,
     tool_input: { command },
@@ -335,13 +335,19 @@ test('published-branch pushes and manual tags need the current session publish l
   fs.writeFileSync(path.join(repo, '.git', 'sidequest-publish.lock'), JSON.stringify({
     transient: true,
     sessionId,
+    repo,
     at: new Date().toISOString(),
   }));
   const other = initRepo('sq-published-branch-other-');
   const crossRepo = runHook(GUARD_DESTRUCTIVE, payload(`git -C "${repo}" status; git -C "${other}" tag v3.208.0`, 'Bash', sessionId));
   assert.equal(crossRepo.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(crossRepo.hookSpecificOutput.permissionDecisionReason, /entire shell invocation/);
   for (const command of denied) {
     assert.equal(runHook(GUARD_DESTRUCTIVE, payload(command, 'PowerShell', sessionId)), null, command);
+  }
+  if (process.platform === 'win32') {
+    const gitBashCwd = repo.replace(/^([a-zA-Z]):/, '/$1').replace(/\\/g, '/');
+    assert.equal(runHook(GUARD_DESTRUCTIVE, payload('git tag -d v3.208.0', 'Bash', sessionId, gitBashCwd)), null);
   }
 });
 
