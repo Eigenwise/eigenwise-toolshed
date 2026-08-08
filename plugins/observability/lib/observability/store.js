@@ -720,6 +720,15 @@ function openObservabilityStore(databaseFile, options = {}) {
     });
   }
 
+  function requeueExhaustedOutbox() {
+    assertOpen();
+    return transaction(() => Number(database.prepare(`
+      UPDATE otlp_outbox
+      SET attempts = 0, available_at = ?, last_attempt_at = NULL, last_error_code = NULL
+      WHERE available_at IS NULL
+    `).run(isoNow(now)).changes));
+  }
+
   function failOutbox(id, errorCode, options = {}) {
     const code = validIdentifier(errorCode) ? errorCode : 'transport_error';
     const maxAttempts = Math.max(1, Number(options.maxAttempts) || 8);
@@ -756,6 +765,7 @@ function openObservabilityStore(databaseFile, options = {}) {
     pendingOutbox,
     prune,
     queryView,
+    requeueExhaustedOutbox,
     storageMetrics,
     transaction,
   };

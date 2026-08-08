@@ -11,6 +11,16 @@ The local observer stores canonical records in SQLite. It prunes records older t
 
 Hook observations are metadata-only. The observer records event type, project identity, permission mode, effort, tool facets, recipient, status, and error type. It never records prompt or response text, file contents, credentials, tool inputs or results, raw request bodies, or environment values. The request high-water guard uses the gateway's actual per-session peak and warns near the 32 MB body limit before an executor starts.
 
+## Recovering an exhausted outbox
+
+When the observer health endpoint reports `outbox_stalled`, exhausted records stay in its local outbox until you deliberately requeue them. Requeue them with the loopback observer:
+
+```sh
+curl -X POST http://127.0.0.1:14319/v1/outbox/requeue
+```
+
+The response reports the number moved, for example `{"requeued":6929}`. It resets only exhausted records, then the observer retries them on its next outbox interval. You can call it again safely when the response is `{"requeued":0}`.
+
 The Grafana dashboard leads with cost, routing, failures, and source activity, then graphs spend by model, project, and agent role. Project dashboards appear only after that project reports Claude Code metrics and expire after 30 quiet days. Gateway panels stay on the global dashboard because gateway records do not yet carry project attribution.
 
 ## Checking CI after a push
