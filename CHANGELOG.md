@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.424.0 (2026-08-08)
+
+### sidequest 4.41.5 → 4.41.6
+
+#### Fixes
+
+- Leave room for future Sidequest MCP tool arguments (SQ-936)
+  Keep the MCP tool list compact while preserving its useful instructions and argument schemas.
+- Report paths that block submission integration (SQ-1541)
+  Show conflicted paths when a submission merge or replay fails.
+- Warn about transitive in-package consumers together (SQ-1542)
+  Show direct and transitive package consumers in one capped planning warning so ticket scope converges in one edit.
+
 ## v3.423.0 (2026-08-08)
 
 ### sidequest 4.41.4 → 4.41.5
