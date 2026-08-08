@@ -9,7 +9,9 @@ const {
   activeInstances,
   compareSemver,
   parseSemver,
+  pluginIdParts,
   readJson,
+  reportedLoadedPluginVersion,
 } = require('./freshness-helpers.js');
 const { cacheIsCurrent, readCache } = require('./marketplace-freshness-cache.js');
 
@@ -40,6 +42,24 @@ function warningOutput(message) {
 
 function reloadWarning(installedVersion, loadedVersion) {
   return `Workbench ${installedVersion} is installed, but this session loaded ${loadedVersion}. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.`;
+}
+
+function reportedReloads(instances, input, options) {
+  const updates = [];
+  for (const instance of instances) {
+    const parts = pluginIdParts(instance.id);
+    const loadedVersion = parts && reportedLoadedPluginVersion(input, instance.id, {
+      directory: options.loadedVersionStateDirectory,
+      fileSystem: options.fileSystem,
+    });
+    if (!parts || !loadedVersion || compareSemver(loadedVersion, instance.version) !== -1) continue;
+    updates.push({ name: parts.name, loadedVersion, installedVersion: instance.version });
+  }
+  return updates;
+}
+
+function reportedReloadWarning(updates) {
+  return `Toolshed plugins need reload: ${updates.map((update) => `${update.name}: loaded ${update.loadedVersion}, installed ${update.installedVersion}`).join('; ')}. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.`;
 }
 
 function warningKey(input, kind) {
@@ -106,8 +126,10 @@ function decide(input, options = {}) {
   if (remoteMessage && warnOnce(input, 'remote', options)) return warningOutput(remoteMessage);
   const loadedVersion = loadedPluginVersion(fileSystem, options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT);
   const installedVersion = newerInstalledVersion(instances, loadedVersion);
-  if (!installedVersion) return '';
-  return warnOnce(input, 'reload', options) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
+  if (installedVersion) return warnOnce(input, 'reload', options) ? warningOutput(reloadWarning(installedVersion, loadedVersion)) : '';
+  const reportedUpdates = reportedReloads(instances, input, options);
+  if (!reportedUpdates.length) return '';
+  return warnOnce(input, 'reload', options) ? warningOutput(reportedReloadWarning(reportedUpdates)) : '';
 }
 
 function main() {
@@ -134,5 +156,7 @@ module.exports = {
   reloadWarning,
   remoteUpdates,
   remoteWarning,
+  reportedReloads,
+  reportedReloadWarning,
   warnOnce,
 };

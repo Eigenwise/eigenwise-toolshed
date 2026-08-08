@@ -61,6 +61,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
+const { sidequestReloadWarning } = require("./plugin-freshness");
 const tools = [
   {
     name: "comment",
@@ -242,6 +243,8 @@ const tools = [
         spawn
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
+      const freshnessWarning = sidequestReloadWarning(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      if (freshnessWarning) warnings.push(`dispatch warning: ${freshnessWarning}`);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         return Buffer.byteLength(JSON.stringify(withWarnings, null, 2)) <= 1200 ? withWarnings : compact;

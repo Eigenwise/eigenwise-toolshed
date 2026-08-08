@@ -892,6 +892,82 @@ test('verify commands reject direct multi-plugin directory chaining', () => {
   }));
 });
 
+test('dispatch warns when this Sidequest process loaded an older plugin version', async () => {
+  const projectPath = committedRepo('sq-mcp-dispatch-freshness-');
+  const project = store.ensureProject(projectPath).slug;
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-dispatch-freshness-home-'));
+  const installPath = path.join(claudeHome, 'sidequest-install');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const originalClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  const originalPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  const loadedPluginRoot = path.join(__dirname, '..');
+  try {
+    fs.mkdirSync(installPath, { recursive: true });
+    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+    fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+    fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath, installPath, version: '99.99.99' }],
+    } }));
+    process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+    process.env.CLAUDE_PLUGIN_ROOT = loadedPluginRoot;
+
+    const ticket = await callTool('add', {
+      project,
+      title: 'dispatch freshness warning',
+      description: DISPATCH_DESCRIPTION,
+      category: 'general',
+      files: ['src'],
+    });
+    const dispatched = await callTool('dispatch', { project, ref: ticket.ref, full: true });
+    assert.match(dispatched.warnings.join('\n'), /dispatch warning: Sidequest: loaded \d+\.\d+\.\d+, installed 99\.99\.99/);
+    assert.match(dispatched.warnings.join('\n'), /\/reload-plugins/);
+  } finally {
+    if (originalClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = originalClaudeHome;
+    if (originalPluginRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = originalPluginRoot;
+  }
+});
+
+test('dispatch keeps freshness silent with an isolated matching install', async () => {
+  const projectPath = committedRepo('sq-mcp-dispatch-freshness-current-');
+  const project = store.ensureProject(projectPath).slug;
+  const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-dispatch-freshness-current-home-'));
+  const installPath = path.join(claudeHome, 'sidequest-install');
+  const stalePluginRoot = path.join(claudeHome, 'stale-plugin-root');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const originalClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  const originalPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  const loadedVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
+  try {
+    fs.mkdirSync(path.join(stalePluginRoot, '.claude-plugin'), { recursive: true });
+    fs.mkdirSync(installPath, { recursive: true });
+    fs.mkdirSync(path.dirname(registryPath), { recursive: true });
+    fs.writeFileSync(path.join(stalePluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '1.0.0' }));
+    fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+    fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath, installPath, version: loadedVersion }],
+    } }));
+    process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+    process.env.CLAUDE_PLUGIN_ROOT = stalePluginRoot;
+
+    const ticket = await callTool('add', {
+      project,
+      title: 'dispatch freshness stays silent',
+      description: DISPATCH_DESCRIPTION,
+      category: 'general',
+      files: ['src'],
+    });
+    const dispatched = await callTool('dispatch', { project, ref: ticket.ref, full: true });
+    assert.deepEqual(dispatched.warnings, []);
+  } finally {
+    if (originalClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = originalClaudeHome;
+    if (originalPluginRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = originalPluginRoot;
+  }
+});
+
 test('dispatch warns about external output outside the repo worktree', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-dispatch-external-')).slug;
   const outside = path.join(os.tmpdir(), `sq-mcp-dispatch-audition-${process.pid}.html`);

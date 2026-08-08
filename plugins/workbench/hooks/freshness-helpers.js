@@ -1,6 +1,8 @@
 'use strict';
 
+const crypto = require('node:crypto');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 function readJson(fileSystem, file) {
@@ -94,6 +96,31 @@ function activeInstances(registry, cwd, marketplace, platform = process.platform
   });
 }
 
+function loadedVersionStateFile(input, pluginId, directory = path.join(os.tmpdir(), 'eigenwise-toolshed', 'freshness-warnings', 'loaded-plugin-versions')) {
+  const sessionId = input?.session_id || input?.sessionId;
+  if (!sessionId || !pluginId) return null;
+  const digest = crypto.createHash('sha256').update(`${sessionId}\0${pluginId}`).digest('hex');
+  return path.join(directory, `${digest}.json`);
+}
+
+function reportLoadedPluginVersion(input, pluginId, version, options = {}) {
+  const file = loadedVersionStateFile(input, pluginId, options.directory);
+  if (!file || !version) return false;
+  try {
+    (options.fileSystem || fs).mkdirSync(path.dirname(file), { recursive: true });
+    (options.fileSystem || fs).writeFileSync(file, JSON.stringify({ pluginId, version }));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function reportedLoadedPluginVersion(input, pluginId, options = {}) {
+  const file = loadedVersionStateFile(input, pluginId, options.directory);
+  const state = file ? readJson(options.fileSystem || fs, file) : null;
+  return typeof state?.version === 'string' ? state.version : null;
+}
+
 module.exports = {
   activeInstances,
   canonicalPath,
@@ -101,5 +128,8 @@ module.exports = {
   parseSemver,
   pluginIdParts,
   pluginInstances,
+  loadedVersionStateFile,
+  reportLoadedPluginVersion,
+  reportedLoadedPluginVersion,
   readJson,
 };

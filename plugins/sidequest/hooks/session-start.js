@@ -87,8 +87,8 @@ function stateDirectory() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
   return import_node_path2.default.join(home, "compaction-suggestions");
 }
-function stateFile(sessionId2) {
-  return import_node_path2.default.join(stateDirectory(), `${encodeURIComponent(sessionId2)}.json`);
+function stateFile(sessionId3) {
+  return import_node_path2.default.join(stateDirectory(), `${encodeURIComponent(sessionId3)}.json`);
 }
 function transcriptBytes(transcriptPath) {
   try {
@@ -97,21 +97,21 @@ function transcriptBytes(transcriptPath) {
     return 0;
   }
 }
-function writeState(sessionId2, state) {
+function writeState(sessionId3, state) {
   try {
     import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
-    import_node_fs2.default.writeFileSync(stateFile(sessionId2), JSON.stringify(state));
+    import_node_fs2.default.writeFileSync(stateFile(sessionId3), JSON.stringify(state));
     return true;
   } catch (_) {
     return false;
   }
 }
-function initializeCompactionState(sessionId2, transcriptPath) {
-  if (!sessionId2 || !compactionSuggestionsEnabled()) return;
-  const file = stateFile(sessionId2);
+function initializeCompactionState(sessionId3, transcriptPath) {
+  if (!sessionId3 || !compactionSuggestionsEnabled()) return;
+  const file = stateFile(sessionId3);
   if (import_node_fs2.default.existsSync(file)) return;
   const now = (/* @__PURE__ */ new Date()).toISOString();
-  writeState(sessionId2, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
+  writeState(sessionId3, { resetAt: now, ticketBaselineAt: now, transcriptBytes: transcriptBytes(transcriptPath) });
 }
 
 // src/hooks/shared/sweep-handoff.ts
@@ -288,6 +288,114 @@ function diagnosticWorktreeWarning(input) {
   }
 }
 
+// src/lib/plugin-freshness.ts
+var import_node_crypto2 = __toESM(require("node:crypto"));
+var import_node_fs6 = __toESM(require("node:fs"));
+var import_node_os4 = __toESM(require("node:os"));
+var import_node_path6 = __toESM(require("node:path"));
+var SIDEQUEST_PLUGIN_ID = "sidequest@eigenwise-toolshed";
+function claudeHome(options = {}) {
+  return options.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path6.default.join(import_node_os4.default.homedir(), ".claude");
+}
+function normalizedPath(value) {
+  if (typeof value !== "string" || !value.trim()) return null;
+  return import_node_path6.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+}
+function pathsOverlap(left, right) {
+  return left === right || left.startsWith(`${right}/`) || right.startsWith(`${left}/`);
+}
+function parseSemver(value) {
+  const match = String(value || "").match(/^v?(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9A-Za-z-]+)(?:\.(?:0|[1-9]\d*|[0-9A-Za-z-]+))*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+  if (!match) return null;
+  return { core: match.slice(1, 4).map(Number), prerelease: match[4] ? match[4].split(".") : [] };
+}
+function compareSemver(left, right) {
+  const first = parseSemver(left);
+  const second = parseSemver(right);
+  if (!first || !second) return null;
+  for (let index = 0; index < first.core.length; index += 1) {
+    if (first.core[index] !== second.core[index]) return first.core[index] < second.core[index] ? -1 : 1;
+  }
+  if (!first.prerelease.length || !second.prerelease.length) {
+    return first.prerelease.length === second.prerelease.length ? 0 : first.prerelease.length ? -1 : 1;
+  }
+  const length = Math.max(first.prerelease.length, second.prerelease.length);
+  for (let index = 0; index < length; index += 1) {
+    if (first.prerelease[index] === void 0) return -1;
+    if (second.prerelease[index] === void 0) return 1;
+    if (first.prerelease[index] === second.prerelease[index]) continue;
+    const firstNumber = /^\d+$/.test(first.prerelease[index]);
+    const secondNumber = /^\d+$/.test(second.prerelease[index]);
+    if (firstNumber && secondNumber) return Number(first.prerelease[index]) < Number(second.prerelease[index]) ? -1 : 1;
+    if (firstNumber !== secondNumber) return firstNumber ? -1 : 1;
+    return first.prerelease[index] < second.prerelease[index] ? -1 : 1;
+  }
+  return 0;
+}
+function registryInstalls(projectPath, options = {}) {
+  let registry;
+  try {
+    registry = JSON.parse(import_node_fs6.default.readFileSync(import_node_path6.default.join(claudeHome(options), "plugins", "installed_plugins.json"), "utf8"));
+  } catch (_) {
+    return [];
+  }
+  const installs = registry.plugins?.[SIDEQUEST_PLUGIN_ID];
+  if (!Array.isArray(installs)) return [];
+  const currentPath = normalizedPath(projectPath);
+  if (!currentPath) return [];
+  return installs.filter((install) => {
+    if (!install || typeof install !== "object") return false;
+    if (install.scope === "user") return true;
+    const installedProject = normalizedPath(install.projectPath);
+    return installedProject !== null && pathsOverlap(currentPath, installedProject);
+  });
+}
+function loadedPluginVersion(pluginRoot2 = process.env.CLAUDE_PLUGIN_ROOT) {
+  if (!pluginRoot2) return null;
+  try {
+    const manifest = JSON.parse(import_node_fs6.default.readFileSync(import_node_path6.default.join(pluginRoot2, ".claude-plugin", "plugin.json"), "utf8"));
+    return typeof manifest.version === "string" ? manifest.version : null;
+  } catch (_) {
+    return null;
+  }
+}
+function installedSidequestVersion(projectPath, options = {}) {
+  const installs = registryInstalls(projectPath, options);
+  const projectInstall = installs.find((install) => install.scope === "project" || install.scope === "local");
+  const selected = projectInstall || installs.find((install) => install.scope === "user");
+  return typeof selected?.version === "string" ? selected.version : null;
+}
+function sidequestReloadWarning(projectPath, options = {}) {
+  const loadedVersion = loadedPluginVersion(options.pluginRoot);
+  const installedVersion = installedSidequestVersion(projectPath, options);
+  if (!loadedVersion || !installedVersion || compareSemver(loadedVersion, installedVersion) !== -1) return "";
+  return `Sidequest: loaded ${loadedVersion}, installed ${installedVersion}. Run /reload-plugins or restart Claude Code before dispatching work.`;
+}
+function stateDirectory3(options = {}) {
+  return options.stateDirectory || import_node_path6.default.join(import_node_os4.default.tmpdir(), "eigenwise-toolshed", "freshness-warnings", "loaded-plugin-versions");
+}
+function sessionId2(input) {
+  const value = input.session_id ?? input.sessionId;
+  return value == null ? "" : String(value);
+}
+function loadedVersionStateFile(input, pluginId = SIDEQUEST_PLUGIN_ID, options = {}) {
+  const id = sessionId2(input);
+  if (!id) return null;
+  const digest = import_node_crypto2.default.createHash("sha256").update(`${id}\0${pluginId}`).digest("hex");
+  return import_node_path6.default.join(stateDirectory3(options), `${digest}.json`);
+}
+function reportLoadedSidequestVersion(input, options = {}) {
+  const version = loadedPluginVersion(options.pluginRoot);
+  const stateFile3 = loadedVersionStateFile(input, SIDEQUEST_PLUGIN_ID, options);
+  if (!version || !stateFile3) return version;
+  try {
+    import_node_fs6.default.mkdirSync(import_node_path6.default.dirname(stateFile3), { recursive: true });
+    import_node_fs6.default.writeFileSync(stateFile3, JSON.stringify({ pluginId: SIDEQUEST_PLUGIN_ID, version }));
+  } catch (_) {
+  }
+  return version;
+}
+
 // src/hooks/session-start.ts
 var MAX_WORKFORCE_BYTES = 1800;
 var MAX_WORKFORCE_DESCRIPTION = 90;
@@ -352,9 +460,9 @@ function provisionExecAgents() {
 }
 function reconcileLostLaunches(data) {
   try {
-    const sessionId2 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+    const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
     const store = require(runtimeModule("store"));
-    const result = store.reconcileLaunchedDispatches(sessionId2, { source: "session-start" });
+    const result = store.reconcileLaunchedDispatches(sessionId3, { source: "session-start" });
     return result && Array.isArray(result.reconciled) ? result.reconciled : [];
   } catch (_) {
     return [];
@@ -378,10 +486,12 @@ async function main() {
   const data = readStdin();
   if (!data) return;
   if (isPrimarySession(data)) {
-    const sessionId2 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
-    initializeCompactionState(sessionId2, data.transcript_path || data.transcriptPath);
+    const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+    initializeCompactionState(sessionId3, data.transcript_path || data.transcriptPath);
   }
   const syncResult = provisionExecAgents();
+  reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
+  const freshnessNotice = sidequestReloadWarning(stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
   const lostLaunches = reconcileLostLaunches(data);
   registerSweepSession(data);
   let sweepNotices = [];
@@ -392,6 +502,7 @@ async function main() {
   }
   const source = stringField(data, "source");
   const restartNotice = [
+    freshnessNotice,
     syncResult && syncResult.written > 0 ? require(runtimeModule("agentsync")).RESTART_NOTICE : "",
     lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed before this reload. Their native task is gone; re-dispatch and spawn them, then pulse to confirm the token claim.` : "",
     source === "compact" || source === "resume" ? "" : diagnosticWorktreeWarning(data),
