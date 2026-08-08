@@ -41,6 +41,7 @@ The programs are under `${CLAUDE_PLUGIN_ROOT}/bin` and can be run with Node.
 | --- | --- |
 | `update-toolshed.js` | Performs the updater. `--check` is read-only, `--dry-run` prints commands, and `--migrate-model-gateway --confirm-sessions-closed` migrates retired `codex-gateway` installs after every Codex session is closed. `--claude <command>` selects the Claude Code executable. |
 | `install-workspace-plugins.js` | Applies the JSON plan built by `init-workspace`. `--plan <file>` is required; `--check` inventories without mutation and `--dry-run` prints planned mutations. `--claude <command>` selects the executable. |
+| `check-ci.js` | Waits for the GitHub Actions runs on a commit. Pass a SHA or use `HEAD`; `--timeout <seconds>` bounds the wait (10 minutes by default) and `--interval <seconds>` sets the poll interval. It fails when no runs appear, a workflow fails, GitHub authentication is missing, or the current repository has no GitHub remote. |
 
 The updater also heals stale statusline settings, but only when the observability plugin is installed. It resolves that plugin's setup module from the install registry rather than importing it, so Workbench works on its own.
 
