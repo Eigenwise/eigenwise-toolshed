@@ -389,6 +389,18 @@ test('sync protects generation-two executors from legacy marker GC and prunes le
   assert.ok(!fs.existsSync(legacy));
 });
 
+test('executor descriptions pass dispatch payloads without Agent model overrides', () => {
+  const dir = tmpDir();
+  agentsync.syncExecAgents(null, { dir });
+
+  for (const file of STABLE_EXECUTORS) {
+    const body = fs.readFileSync(path.join(dir, file), 'utf8');
+    assert.match(body, /spawn\.name, spawn\.description, spawn\.isolation, and spawn\.prompt verbatim\./);
+    assert.match(body, /Do not pass a model:\s+the route marker in spawn\.prompt carries model and effort\./);
+    assert.doesNotMatch(body, /tickets' model|unique --by id|task\(s\)/);
+  }
+});
+
 test('sync writes the complete stable executor ladder with the smallest valid taxonomy', () => {
   clearCatalog();
   const store = require('../lib/store.js');
