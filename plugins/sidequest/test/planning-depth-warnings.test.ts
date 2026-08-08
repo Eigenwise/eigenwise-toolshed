@@ -435,6 +435,37 @@ test('warns when tracked package build output is omitted from source scope', () 
   assert.deepStrictEqual(included.warnings, []);
 });
 
+test('warns when a declared module has an undeclared in-package importer', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'scope-consumer');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(project, 'src', 'scope-warning.ts'), 'export function warnForScope() {}\n');
+  fs.writeFileSync(path.join(project, 'src', 'dispatch.ts'), "import { warnForScope } from './scope-warning.js';\nwarnForScope();\n");
+
+  const omitted = cliJsonAt(project, ['add', '-t', 'warn about consumers', '--category', 'coding.normal', '--file', 'src/scope-warning.ts']);
+  assert.deepStrictEqual(omitted.warnings, [
+    'Planning-depth warning: declared scope may omit in-package consumers: src/dispatch.ts. Include the path if this change reaches it.',
+  ]);
+
+  const included = cliJsonAt(project, ['add', '-t', 'declare consumers', '--category', 'coding.normal', '--file', 'src/scope-warning.ts', '--file', 'src/dispatch.ts']);
+  assert.deepStrictEqual(included.warnings, []);
+});
+
+test('warns about undeclared same-basename sibling paths', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'basename-sibling');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'cli'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'lib', 'plan.mjs'), 'export {};\n');
+  fs.writeFileSync(path.join(project, 'cli', 'plan.mjs'), 'export {};\n');
+
+  const added = cliJsonAt(project, ['add', '-t', 'check sibling', '--category', 'coding.normal', '--file', 'lib/plan.mjs']);
+  assert.deepStrictEqual(added.warnings, [
+    'Planning-depth warning: declared path lib/plan.mjs has undeclared same-basename sibling paths: cli/plan.mjs. Check whether they consume this change before dispatch.',
+  ]);
+});
+
 test('discovers bundled hook output from the build script export', () => {
   const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'bundled-hook-output');
   fs.rmSync(project, { recursive: true, force: true });

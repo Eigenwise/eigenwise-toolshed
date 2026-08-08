@@ -341,6 +341,153 @@ function sourceBuildOutputWarnings(ticket?: any, projectPath?: any) {
   return [...warnings];
 }
 
+const MODULE_SOURCE_EXTENSIONS = ['.cts', '.cjs', '.mts', '.mjs', '.ts', '.tsx', '.js', '.jsx'];
+const COMMON_MODULE_BASENAMES = new Set(['index']);
+
+function sourceModulePath(file?: any) {
+  const normalized = String(file).replace(/\\/g, '/');
+  return MODULE_SOURCE_EXTENSIONS.includes(path.extname(normalized).toLowerCase())
+    && !/(?:^|\/)(?:test|tests|__tests__)(?:\/|$)/.test(normalized)
+    && !/\.(?:test|spec)\.[^/]+$/i.test(normalized);
+}
+
+function sourceModuleFiles(packageRoot?: any) {
+  const files: string[] = [];
+  const visit = (directory?: any) => {
+    let entries: any[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (_) {
+      return;
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const absolute = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(absolute);
+      else if (entry.isFile() && sourceModulePath(absolute)) files.push(absolute);
+    }
+  };
+  visit(packageRoot);
+  return files;
+}
+
+function resolveRelativeModule(importer?: any, specifier?: any) {
+  if (!String(specifier).startsWith('.')) return null;
+  const requested = path.resolve(path.dirname(importer), String(specifier).replace(/[?#].*$/, ''));
+  const candidates = [requested];
+  if (MODULE_SOURCE_EXTENSIONS.includes(path.extname(requested).toLowerCase())) {
+    candidates.push(...MODULE_SOURCE_EXTENSIONS.map((extension) => requested.slice(0, -path.extname(requested).length) + extension));
+  } else {
+    candidates.push(...MODULE_SOURCE_EXTENSIONS.map((extension) => requested + extension));
+    candidates.push(...MODULE_SOURCE_EXTENSIONS.map((extension) => path.join(requested, `index${extension}`)));
+  }
+  return candidates.find((candidate) => fs.existsSync(candidate)) || null;
+}
+
+function importedModulePaths(source?: any, importer?: any) {
+  const paths = new Set<string>();
+  const content = String(source || '');
+  const patterns = [
+    /\b(?:import|export)\s+(?:[^'";\n]*?\s+from\s+)?['"]([^'"]+)['"]/g,
+    /\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g,
+  ];
+  for (const pattern of patterns) {
+    for (const match of content.matchAll(pattern)) {
+      const target = resolveRelativeModule(importer, match[1] || '');
+      if (target) paths.add(target);
+    }
+  }
+  return paths;
+}
+
+function exportedSymbols(source?: any) {
+  const symbols = new Set<string>();
+  const content = String(source || '');
+  for (const match of content.matchAll(/\bexport\s+(?:default\s+)?(?:async\s+)?(?:function|class|const|let|var)\s+([A-Za-z_$][\w$]*)/g)) symbols.add(match[1] || '');
+  for (const match of content.matchAll(/\bexports\.([A-Za-z_$][\w$]*)\s*=/g)) symbols.add(match[1] || '');
+  for (const match of content.matchAll(/\bexport\s*\{([^}]+)\}/g)) {
+    for (const entry of (match[1] || '').split(',')) {
+      const name = entry.trim().split(/\s+as\s+/i).pop()?.trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(String(name))) symbols.add(String(name));
+    }
+  }
+  return symbols;
+}
+
+function importedSymbols(source?: any) {
+  const symbols = new Set<string>();
+  for (const match of String(source || '').matchAll(/\bimport\s+(?:type\s+)?\{([^}]+)\}\s+from\s+['"](\.[^'"]+)['"]/g)) {
+    for (const entry of (match[1] || '').split(',')) {
+      const name = entry.trim().split(/\s+as\s+/i)[0]?.trim();
+      if (/^[A-Za-z_$][\w$]*$/.test(String(name))) symbols.add(String(name));
+    }
+  }
+  return symbols;
+}
+
+function repositoryFiles(projectPath?: any) {
+  try {
+    return execFileSync('git', ['ls-files', '-z'], {
+      cwd: projectPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).split('\0').filter(Boolean).map((file?: any) => path.resolve(projectPath, file));
+  } catch (_) {
+    return sourceModuleFiles(projectPath);
+  }
+}
+
+function scopeConsumerWarnings(ticket?: any, projectPath?: any) {
+  if (!projectPath || !Array.isArray(ticket?.files)) return [];
+  const sourceFiles = normalizeFiles(ticket.files)
+    .map((scope?: any) => path.resolve(projectPath, scope))
+    .filter((file?: any) => fs.existsSync(file) && sourceModulePath(file));
+  const warnings = new Set<string>();
+  const declaredPaths = new Set(sourceFiles);
+  const packageSources = new Map<string, string[]>();
+  const loadPackageSources = (packageRoot?: any) => {
+    if (!packageRoot) return [];
+    if (!packageSources.has(packageRoot)) packageSources.set(packageRoot, sourceModuleFiles(packageRoot));
+    return packageSources.get(packageRoot) || [];
+  };
+  for (const sourceFile of sourceFiles) {
+    const packageRoot = packageRootForScope(projectPath, relativePathWithin(projectPath, sourceFile));
+    if (!packageRoot) continue;
+    const sourceSymbols = exportedSymbols(fs.readFileSync(sourceFile, 'utf8'));
+    const consumers = new Set<string>();
+    for (const importer of loadPackageSources(packageRoot)) {
+      if (importer === sourceFile || scopeIncludesPath(ticket.files, projectPath, importer)) continue;
+      let contents = '';
+      try {
+        contents = fs.readFileSync(importer, 'utf8');
+      } catch (_) {
+        continue;
+      }
+      if (importedModulePaths(contents, importer).has(sourceFile)) consumers.add(importer);
+      else if (sourceSymbols.size && [...importedSymbols(contents)].some((symbol) => sourceSymbols.has(symbol))) consumers.add(importer);
+    }
+    for (const consumer of consumers) {
+      const relative = relativePathWithin(projectPath, consumer)?.replace(/\\/g, '/');
+      if (relative) warnings.add(`Planning-depth warning: declared scope may omit in-package consumers: ${relative}. Include the path if this change reaches it.`);
+    }
+  }
+  for (const sourceFile of declaredPaths) {
+    const basename = path.basename(sourceFile);
+    if (COMMON_MODULE_BASENAMES.has(path.parse(basename).name.toLowerCase())) continue;
+    const siblingPaths = repositoryFiles(projectPath)
+      .filter((candidate?: any) => candidate !== sourceFile && path.basename(candidate) === basename && !scopeIncludesPath(ticket.files, projectPath, candidate))
+      .map((candidate?: any) => relativePathWithin(projectPath, candidate)?.replace(/\\/g, '/'))
+      .filter(Boolean)
+      .sort();
+    if (siblingPaths.length) {
+      const sourceRelative = relativePathWithin(projectPath, sourceFile)?.replace(/\\/g, '/');
+      warnings.add(`Planning-depth warning: declared path ${sourceRelative} has undeclared same-basename sibling paths: ${siblingPaths.join(', ')}. Check whether they consume this change before dispatch.`);
+    }
+  }
+  return [...warnings].sort();
+}
+
 const NODE_TEST_FLAGS_WITH_VALUES = new Set([
   '--test-concurrency', '--test-name-pattern', '--test-reporter', '--test-reporter-destination',
   '--test-shard', '--test-skip-pattern', '--test-timeout',
@@ -591,6 +738,9 @@ function dispatchWarnings(ticket?: any, slug?: any) {
     for (const warning of sourceBuildOutputWarnings(ticket, projectPath)) {
       warnings.push(`Dispatch warning: ${warning.replace('Planning-depth warning: ', '')}`);
     }
+    for (const warning of scopeConsumerWarnings(ticket, projectPath)) {
+      warnings.push(`Dispatch warning: ${warning.replace('Planning-depth warning: ', '')}`);
+    }
   }
   if (claudeWebSearchUnavailable(ticket)) {
     warnings.push('Dispatch warning: WebSearch is unavailable on this Claude xhigh/max route. Put web research in a research-category ticket.');
@@ -754,6 +904,7 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   warnings.push(...executorAnchorWarnings(ticket, projectPath));
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
+  warnings.push(...scopeConsumerWarnings(ticket, projectPath));
   const absent = ticket.files.filter((file?: any) => {
     const declared = path.resolve(projectPath, file);
     return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
