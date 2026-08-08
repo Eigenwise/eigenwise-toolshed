@@ -36,9 +36,12 @@ function runTests(phase, files, environment) {
   }
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Sidequest ${phase} tests exited ${result.status ?? 1}.`);
+  // Warn, never throw: a passing run that is merely close to its budget must not
+  // become a red build. Turning slowness into a failure is the false red SQ-1537
+  // exists to remove.
   if (phaseDurationMilliseconds > testPhaseWarningMilliseconds) {
-    throw new Error(
-      `Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`,
+    console.error(
+      `WARNING: Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`,
     );
   }
 }
