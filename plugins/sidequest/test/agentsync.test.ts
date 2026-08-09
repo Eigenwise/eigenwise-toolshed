@@ -940,8 +940,41 @@ test('briefings synchronize stale worktrees to their recorded integration target
   assert.ok(briefing.includes(`git merge-base --is-ancestor ${commit} HEAD`));
   assert.ok(briefing.includes(`git fetch "${root}" "main"`));
   assert.ok(briefing.includes(`git reset --hard ${commit}`));
-  assert.ok(briefing.includes(`[sidequest:worktree-sync] synced to ${commit}`));
+  assert.doesNotMatch(briefing, /\[sidequest:worktree-sync\]/);
   assert.ok(briefing.includes('If fetching or resetting fails, stop and report the failure instead of working from the stale base.'));
+});
+
+test('small-ticket lifecycle retires three optional board round trips', () => {
+  clearCatalog();
+  const root = tmpDir();
+  const commit = 'b'.repeat(40);
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-1619', title: 'Small ticket', model: 'opus', effort: 'high', category: {},
+    executorVerify: 'node --test plugins/sidequest/test/agentsync.test.ts',
+    dispatch: {
+      sharedTree: false,
+      baseCommit: commit,
+      integrationTarget: { mode: 'local', branch: 'main' },
+    },
+  }, 'small-ticket-token', undefined, root);
+  const generatedExecutor = agentsync.renderDispatchAgent();
+  const lifecycleInstructions = [briefing, generatedExecutor].join('\n');
+  const retiredRoundTrips = [
+    briefing.includes('[sidequest:worktree-sync]'),
+    briefing.includes('post [sidequest:verify-start] before it and'),
+    lifecycleInstructions.includes('After submit, keep the terminal board comment'),
+  ].filter(Boolean);
+
+  assert.equal(retiredRoundTrips.length, 0, 'stale-worktree, foreground verify-start, and duplicate closeout comments stay retired');
+  assert.match(briefing, /git merge-base --is-ancestor/);
+  assert.match(briefing, /git reset --hard/);
+  assert.match(briefing, /verify-start\] before it only for background verification or an expected no-op/);
+  assert.match(briefing, /always post \[sidequest:verify-complete\]/);
+  assert.match(generatedExecutor, /Use focused tests while editing/);
+  assert.match(generatedExecutor, /Run one final broad gate after all edits and generated output are current/);
+  assert.match(generatedExecutor, /Do not run a temporary negative-control/);
+  assert.match(generatedExecutor, /canonical full final report/);
+  assert.match(generatedExecutor, /Do not post a separate pre-submit final-report comment/);
 });
 
 test('renderTicketBriefing embeds no route marker for a Claude-backed route', () => {
@@ -951,8 +984,9 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
     dispatchExecutor: 'sidequest-exec-high', category: {},
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[sidequest-route model=/);
-  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report\./);
-  assert.match(briefing, /reference to the submission instead of repeating its narrative/);
+  assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then put the full final report in submit\.body/);
+  assert.match(briefing, /Submit writes the short terminal submission marker/);
+  assert.doesNotMatch(briefing, /After submit, keep the terminal board comment/);
 });
 
 test('renderTicketBriefing makes the prepared read-only closeout path explicit', () => {

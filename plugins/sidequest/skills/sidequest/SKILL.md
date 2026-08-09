@@ -165,7 +165,7 @@ optionally `--status todo`).
   executor or polling for its artifact (a one-shot local readiness watch is fine).
 
 **Repository publishing is the orchestrator's, alone.** Executors stop at verified local commits and
-`submit` (claim released, parked in `doing`); the submission holds the full report, and the
+`submit` (claim released, parked in `doing`); `submit.body` holds the canonical full report, so do not post a separate pre-submit report comment. The
 terminal comment keeps only the commit hash + verification. **Submit is terminal for the executor:** a
 submitted ticket cannot be amended by messaging the executor that produced it, however small the
 follow-up looks. File a follow-up ticket for changes. Redispatch the existing ticket only when it was

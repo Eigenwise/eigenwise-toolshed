@@ -507,7 +507,7 @@ function ticketCloseout(ticket?: any) {
   if (ticket?.dispatch?.readonly === true) {
     return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
   }
-  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then submit with the commit hash, verification evidence, and final report. For non-repo output, close with done --model ${resolved.runsModel} --effort ${effort}. After submit, keep the terminal board comment to the commit hash, verify evidence, and a reference to the submission instead of repeating its narrative. Non-repo done comments still carry the full report. Then stop without a routine SendMessage.`;
+  return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification evidence. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. For non-repo output, close with done --model ${resolved.runsModel} --effort ${effort}; its completion comment still carries the full report. Then stop without a routine SendMessage.`;
 }
 
 function ticketContinuationPacket(ticket?: any) {
@@ -554,7 +554,6 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   return [
     `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
     `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git reset --hard ${commit}\`.`,
-    `After a successful reset, post one board comment: \`[sidequest:worktree-sync] synced to ${commit}\`.`,
     'If fetching or resetting fails, stop and report the failure instead of working from the stale base.',
   ].join(' ');
 }
@@ -797,7 +796,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, project?: any, executor?:
     ...(ticketIsolationContract(ticket, project) || []),
     verify,
     ticket.executorVerify && ticket.executorVerifyKind !== 'attestation'
-      ? 'Run it through ' + capturedVerifyCommand(ticket.executorVerify) + '; post [sidequest:verify-start] before it and [sidequest:verify-complete] with status first after it exits.'
+      ? 'Run it through ' + capturedVerifyCommand(ticket.executorVerify) + '; post [sidequest:verify-start] before it only for background verification or an expected no-op, and always post [sidequest:verify-complete] with status first after it exits.'
       : '',
     ...(highStakes.length ? [highStakes.join('\n')] : []),
     closeout || '',
