@@ -1060,7 +1060,7 @@
   },
   {
     "name": "supersede_submission",
-    "description": "Close a pending submission delivered by an integrated repair.",
+    "description": "Close a pending submission with an integrated repair and reviewed retirements.",
     "inputSchema": {
       "type": "object",
       "properties": {

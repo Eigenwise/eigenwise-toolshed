@@ -22,7 +22,7 @@ See [CLI basics](#cli-basics) for command details and [Work a ticket](#work-a-ti
 
 ### Repaired submissions
 
-A submitted range can stay parked after a repair ticket delivered the same work with a conflict fix. Use the MCP `supersede_submission` tool to close the earlier ticket without replaying stale code. It requires the later repair ticket to be integrated, requires its delivery record to cover every original changed path, and requires reviewed evidence for any intentionally replaced content. The earlier submission keeps its delivery lineage under `supersededBy`, then leaves pending-integration warnings and unblocks dependents.
+A submitted range can stay parked after a repair ticket delivered the same work with a conflict fix. Use the MCP `supersede_submission` tool to close the earlier ticket without replaying stale code. It requires the later repair ticket to be integrated and requires reviewed evidence for every original path the repair intentionally changes or retires from its recorded delivery. Each `reviewedReplacements` entry keeps the path, reviewer, and reason under `supersededBy`; original paths omitted without that exact evidence still refuse closure. The earlier submission then leaves pending-integration warnings and unblocks dependents.
 
 ### Verification during ticket work
 

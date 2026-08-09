@@ -74,7 +74,7 @@ type ToolDefinition = {
 const tools: ToolDefinition[] = [
   {
     name: 'supersede_submission',
-    description: 'Close a pending submission delivered by an integrated repair.',
+    description: 'Close a pending submission with an integrated repair and reviewed retirements.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -85,7 +85,7 @@ const tools: ToolDefinition[] = [
         reason: { type: 'string', description: 'Concise delivery evidence retained on the closed submission.' },
         reviewedReplacements: {
           type: 'array',
-          description: 'Required only where the repair intentionally changes original submitted content.',
+          description: 'Required for intentionally changed or retired submitted paths.',
           items: {
             type: 'object',
             properties: {

@@ -840,13 +840,14 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       : [];
     const delivered = new Set(deliveredFiles);
     const missingPaths = changedPaths.filter((file) => !delivered.has(file));
-    if (missingPaths.length) {
+    const unreviewedMissingPaths = missingPaths.filter((file) => !replacements.has(file));
+    if (unreviewedMissingPaths.length) {
       return {
         ok: false,
         reason: 'lineage_paths_missing',
         ticket: source,
-        missingPaths,
-        message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery does not include every submitted path: ${missingPaths.join(', ')}. Keep the submission parked or integrate a repair that delivers the full path lineage.`,
+        missingPaths: unreviewedMissingPaths,
+        message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery omits submitted paths without reviewed retirement evidence: ${unreviewedMissingPaths.join(', ')}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentionally retired path, or integrate a repair that delivers the full path lineage.`,
       };
     }
     let divergentPaths: string[];
@@ -871,7 +872,10 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
       };
     }
     const now = new Date().toISOString();
-    const reviewedReplacements = divergentPaths.map((file) => replacements.get(file)!);
+    const reviewedReplacementPaths = new Set(missingPaths.concat(divergentPaths));
+    const reviewedReplacements = changedPaths
+      .filter((file) => reviewedReplacementPaths.has(file))
+      .map((file) => replacements.get(file)!);
     const supersededBy = {
       ref: repaired.repair.ref,
       commit: repaired.repair.submission.commit,

@@ -20,9 +20,17 @@ function git(repository: string, args: string[]) {
 }
 
 function commit(repository: string, filename: string, contents: string) {
+  fs.mkdirSync(path.dirname(path.join(repository, filename)), { recursive: true });
   fs.writeFileSync(path.join(repository, filename), contents);
   git(repository, ['add', filename]);
   git(repository, ['commit', '-m', filename]);
+  return git(repository, ['rev-parse', 'HEAD']);
+}
+
+function remove(repository: string, filename: string) {
+  fs.unlinkSync(path.join(repository, filename));
+  git(repository, ['add', filename]);
+  git(repository, ['commit', '-m', `remove ${filename}`]);
   return git(repository, ['rev-parse', 'HEAD']);
 }
 
@@ -39,14 +47,16 @@ function persist(slug: string, ticket: any) {
   });
 }
 
-function fixture(label: string) {
+function fixture(label: string, retiredPaths: string[] = []) {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), `sq-supersession-${label}-`));
   git(repository, ['init']);
   git(repository, ['config', 'user.name', 'Sidequest Test']);
   git(repository, ['config', 'user.email', 'sidequest-test@example.invalid']);
   const base = commit(repository, 'README.md', 'base\n');
-  const submitted = commit(repository, 'feature.txt', 'original delivery\n');
-  const repaired = commit(repository, 'feature.txt', 'reviewed repair\n');
+  let submitted = commit(repository, 'feature.txt', 'original delivery\n');
+  for (const filename of retiredPaths) submitted = commit(repository, filename, 'obsolete delivery\n');
+  let repaired = commit(repository, 'feature.txt', 'reviewed repair\n');
+  for (const filename of retiredPaths) repaired = remove(repository, filename);
   const { slug } = store.ensureProject(repository);
   const source = store.createTicket(slug, {
     title: `source ${label}`,
@@ -60,7 +70,7 @@ function fixture(label: string) {
     commit: submitted,
     base,
     commits: [submitted],
-    changedPaths: ['feature.txt'],
+    changedPaths: ['feature.txt'].concat(retiredPaths),
     verify: 'manual: fixture',
     integratedAt: null,
   };
@@ -165,4 +175,79 @@ test('content changes require reviewed replacement evidence', async () => {
   assert.equal(result.reason, 'lineage_content_diverged');
   assert.match(result.message, /feature\.txt/);
   assert.equal(store.getTicket(slug, source.ref).status, 'doing');
+});
+
+test('reviewed retirement closes a submission with obsolete fragment and non-fragment paths', async () => {
+  const retiredPaths = ['.release/unreleased/SQ-obsolete.md', 'obsolete-path.txt'];
+  const { repository, slug, source, repair } = fixture('reviewed-retirement', retiredPaths);
+  const reviewedReplacements = [
+    { path: 'feature.txt', reviewedBy: 'SQ-review', reason: 'The repair content replaces the original implementation.' },
+    { path: '.release/unreleased/SQ-obsolete.md', reviewedBy: 'SQ-review', reason: 'The integrated repair supersedes this obsolete release fragment.' },
+    { path: 'obsolete-path.txt', reviewedBy: 'SQ-review', reason: 'The integrated repair intentionally retires this obsolete path.' },
+  ];
+
+  const result = await supersede({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: repair.ref,
+    reason: 'The reviewed integrated repair replaces and retires the original delivery paths.',
+    reviewedReplacements,
+  });
+
+  assert.equal(result.ok, true, result.message);
+  assert.deepEqual(store.getTicket(slug, source.ref).submission.supersededBy.reviewedReplacements, reviewedReplacements);
+});
+
+test('retirement evidence must match every omitted original path', async () => {
+  const retiredPaths = ['.release/unreleased/SQ-obsolete.md', 'obsolete-path.txt'];
+  const { repository, slug, source, repair } = fixture('retirement-wrong-path', retiredPaths);
+
+  const result = await supersede({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: repair.ref,
+    reason: 'Attempting a closure with evidence for the wrong omitted path.',
+    reviewedReplacements: [
+      { path: '.release/unreleased/SQ-obsolete.md', reviewedBy: 'SQ-review', reason: 'This fragment is intentionally retired.' },
+      { path: 'wrong-path.txt', reviewedBy: 'SQ-review', reason: 'This does not authorize the omitted original path.' },
+    ],
+  });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'lineage_paths_missing');
+  assert.match(result.message, /obsolete-path\.txt/);
+  assert.equal(store.getTicket(slug, source.ref).status, 'doing');
+});
+
+test('replacement evidence rejects empty review details and unintegrated repairs', async () => {
+  const { repository, source, repair } = fixture('retirement-validation');
+  const emptyReview = await supersede({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: repair.ref,
+    reason: 'Attempting a closure with incomplete review evidence.',
+    reviewedReplacements: [{ path: 'feature.txt', reviewedBy: '', reason: 'A reviewer is required.' }],
+  });
+
+  assert.equal(emptyReview.ok, false);
+  assert.equal(emptyReview.reason, 'invalid_replacements');
+
+  const { repository: unintegratedRepository, slug, source: unintegratedSource, repair: unintegratedRepairTicket } = fixture('unintegrated-repair');
+  const storedRepair = store.getTicket(slug, unintegratedRepairTicket.ref);
+  storedRepair.status = 'doing';
+  persist(slug, storedRepair);
+  const unintegratedResult = await supersede({
+    project: unintegratedRepository,
+    ref: unintegratedSource.ref,
+    by: 'orchestrator',
+    supersededBy: unintegratedRepairTicket.ref,
+    reason: 'Attempting a closure before the repair is integrated.',
+    reviewedReplacements: [{ path: 'feature.txt', reviewedBy: 'SQ-review', reason: 'The repair is reviewed but not yet integrated.' }],
+  });
+
+  assert.equal(unintegratedResult.ok, false);
+  assert.equal(unintegratedResult.reason, 'repair_not_integrated');
 });
