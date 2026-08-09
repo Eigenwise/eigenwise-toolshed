@@ -17,8 +17,8 @@ const docsDir = path.resolve(here, '..');
 const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
-const grafanaProvisioning = path.join(repoDir, 'plugins', 'workbench', 'observability', 'sinks', 'grafana', 'provisioning');
-const grafanaDashboards = path.join(repoDir, 'plugins', 'workbench', 'observability', 'sinks', 'grafana', 'dashboards');
+const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
+const grafanaDashboards = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'dashboards');
 
 const FIXTURE = Object.freeze({
   project: 'acme-webshop',
@@ -159,12 +159,13 @@ function grafanaMock(title, caption, headers, rows) {
     .card { padding: 18px; min-height: 112px; } .label { color: #a8bad1; font-size: 13px; } .value { font-size: 30px; font-weight: 650; padding-top: 12px; } .orange { color: #f59e0b; } .green { color: #4ade80; } .blue { color: #60a5fa; }
     .panel { padding: 20px; } h2 { font-size: 17px; margin: 0 0 6px; } .panel p { font-size: 13px; } table { border-collapse: collapse; width: 100%; margin-top: 16px; } th { color: #9fb0ca; font-weight: 500; text-align: left; border-bottom: 1px solid #41536c; padding: 11px 12px; } td { border-bottom: 1px solid #2c3b52; padding: 13px 12px; } tr:last-child td { border: 0; }
     .tag { padding: 3px 8px; border-radius: 999px; background: #243a56; color: #b9d4ff; font-size: 12px; } .note { padding-top: 20px; color: #71839f; font-size: 12px; }
-  </style></head><body><header><span class="mark">◢</span><strong>Grafana</strong><span class="crumb">Dashboards / Workbench / Claude Code Usage</span></header><main><h1>Claude Code Usage</h1><p>Acme Webshop synthetic observability data</p><div class="tabs"><span class="active">${htmlEscape(title)}</span><span>Tool activity</span><span>MCP</span><span>Sessions & agents</span><span>Sidequest costs</span></div><div class="cards"><div class="card"><div class="label">Input tokens</div><div class="value orange">3.90M</div></div><div class="card"><div class="label">Output tokens</div><div class="value green">642K</div></div><div class="card"><div class="label">Synthetic cost</div><div class="value blue">$8.72</div></div></div><section class="panel"><h2>${htmlEscape(title)}</h2><p>${htmlEscape(caption)}</p>${table(rows, headers)}</section><div class="note">Demo only. Fixed synthetic records, captured by docs/screenshots/capture.mjs.</div></main></body></html>`;
+  </style></head><body><header><span class="mark">◢</span><strong>Grafana</strong><span class="crumb">Dashboards / Observability / Claude Code Usage</span></header><main><h1>Claude Code Usage</h1><p>Acme Webshop synthetic observability data</p><div class="tabs"><span class="active">${htmlEscape(title)}</span><span>Tool activity</span><span>MCP</span><span>Sessions & agents</span><span>Sidequest costs</span></div><div class="cards"><div class="card"><div class="label">Input tokens</div><div class="value orange">3.90M</div></div><div class="card"><div class="label">Output tokens</div><div class="value green">642K</div></div><div class="card"><div class="label">Synthetic cost</div><div class="value blue">$8.72</div></div></div><section class="panel"><h2>${htmlEscape(title)}</h2><p>${htmlEscape(caption)}</p>${table(rows, headers)}</section><div class="note">Demo only. Fixed synthetic records, captured by docs/screenshots/capture.mjs.</div></main></body></html>`;
 }
 
 async function captureGrafana(browser, grafanaPort) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', deviceScaleFactor: 1 });
   await page.goto(`http://127.0.0.1:${grafanaPort}/d/claude-code-usage`, { waitUntil: 'domcontentloaded' });
+  await page.goto('about:blank');
   const captures = [
     ['observability-tokens-models.png', 'Tokens & models', 'Fixed token totals by model for the Acme Webshop demo.', ['Model', 'Context tokens', 'Role'], FIXTURE.models],
     ['observability-mcp.png', 'MCP', 'Tool-definition footprint and activity from the fixed demo dataset.', ['MCP server', 'Definition tokens', 'Activity'], FIXTURE.mcp],
@@ -178,17 +179,22 @@ async function captureGrafana(browser, grafanaPort) {
   await page.close();
 }
 
-// The dashboard renders each board's filesystem path in the sidebar; the seeded
-// board lives under the OS temp dir, which embeds the local username. Replace
-// any path-looking sidebar text with a neutral fake path before capturing —
-// the privacy gate forbids environment-derived strings in committed imagery.
-async function maskEnvironmentPaths(page) {
+async function maskGeneratedBoardText(page) {
   await page.evaluate(() => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
     const pathLike = /^[A-Za-z]:[\\/]|^\/(home|Users|tmp)\//;
+    const generatedWorkspace = /toolshed-docs-screenshots-[^ /]+/g;
+    const generatedTimestamp = /\d{1,2}\/\d{1,2}\/\d{4}, \d{1,2}:\d{2}:\d{2} [AP]M/g;
     while (walker.nextNode()) {
       const node = walker.currentNode;
-      if (pathLike.test(node.textContent.trim())) node.textContent = '~/projects/acme-webshop';
+      const text = node.textContent.trim();
+      if (pathLike.test(text)) {
+        node.textContent = '~/projects/acme-webshop';
+        continue;
+      }
+      node.textContent = node.textContent
+        .replace(generatedWorkspace, 'demo-workspace')
+        .replace(generatedTimestamp, 'Demo timestamp');
     }
   });
 }
@@ -196,12 +202,14 @@ async function maskEnvironmentPaths(page) {
 async function captureSidequest(browser, port) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', deviceScaleFactor: 1 });
   await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' });
-  await maskEnvironmentPaths(page);
+  const skipTour = page.getByRole('button', { name: 'Skip', exact: true });
+  if (await skipTour.isVisible()) await skipTour.click();
+  await maskGeneratedBoardText(page);
   await page.screenshot({ path: path.join(outputDir, 'sidequest-kanban.png'), fullPage: true });
   const card = page.getByText('Build cart summary', { exact: true });
   await card.click();
   await page.waitForTimeout(200);
-  await maskEnvironmentPaths(page);
+  await maskGeneratedBoardText(page);
   await page.screenshot({ path: path.join(outputDir, 'sidequest-ticket-detail.png'), fullPage: true });
   await page.close();
 }
