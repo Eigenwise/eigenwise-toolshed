@@ -1109,7 +1109,7 @@ test('workflow recipes use the Claude runtime alias without a prompt prefix', ()
     categoryName: 'workflow-claude',
     backend: 'claude',
     route: { model: 'opus', effort: 'high' },
-    runsLabel: 'Claude Opus',
+    runsLabel: 'Claude Opus 5',
     agent: { model: 'opus', promptPrefix: '' },
     effortCarrier: 'none',
     warnings: [],

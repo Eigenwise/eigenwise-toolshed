@@ -24,7 +24,7 @@ function createRouting(dependencies) {
   const CLAUDE_RUNTIME_LABELS = {
     haiku: "Claude Haiku",
     sonnet: "Claude Sonnet",
-    opus: "Claude Opus",
+    opus: "Claude Opus 5",
     fable: "Claude Fable"
   };
   const VALID_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
