@@ -1561,6 +1561,10 @@ function releaseTicket(slug, idOrRef, by, opts) {
       }
       return { ok: false, reason: "done", ticket: t };
     }
+    const held = t.claim;
+    const heldOwner = String(held?.by || "").trim();
+    const submissionOwner = String(t.submission?.by || "").trim();
+    const controlPlaneDone = opts.status === "done" && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
     let reopenedSubmission = null;
     if (opts.status && pendingSubmission(t)) {
       const reopenStatus = coerceStatus(opts.status, t.status);
@@ -1571,18 +1575,16 @@ function releaseTicket(slug, idOrRef, by, opts) {
             reason: "pending_submission",
             ticket: t,
             submission: t.submission,
-            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
+            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
           };
         }
         reopenedSubmission = t.submission;
       }
     }
-    const controlPlaneDone = opts.status === "done" && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
     const executorDone = opts.status === "done" && !controlPlaneDone;
     const dispatch2 = dispatchState(t);
     const artifactDispatch = sharedTreeArtifactMode(t);
     const declaredFiles = dispatch2 && Array.isArray(dispatch2.declaredFiles) ? dispatch2.declaredFiles : normalizeFiles(t.files);
-    const held = t.claim;
     const liveClaim = Boolean(held && held.by);
     const activeDispatch = Boolean(t.dispatchNonce || dispatch2 && !dispatch2.terminalAt);
     if (!liveClaim && activeDispatch && !opts.force) {
@@ -1657,7 +1659,10 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (expectedClaim && (!held?.by || held.by !== expectedClaim.by || held.at !== expectedClaim.at)) {
       return { ok: false, reason: "claim_changed", ticket: t, claim: held || null };
     }
-    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
+    if (!controlPlaneDone && submissionOwner && submissionOwner !== by) {
+      return { ok: false, reason: "not_owner", ticket: t, submission: t.submission, ...held ? { claim: held } : {} };
+    }
+    if (!controlPlaneDone && heldOwner && heldOwner !== by && !claimReclaimable(t)) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
     }
     const oracleRequested = nullableText(opts.oracle);

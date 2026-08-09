@@ -38,11 +38,20 @@ function dispatchedClaimGuidance(ref, ticket, projectPath) {
   }
   return `Expected executor: \`${expected}\`. ${correctedMcpClaim(ref, ticket, projectPath)}`;
 }
+function refusalOwner(context) {
+  return context.by || context.claim?.by || context.submission?.by || "another executor";
+}
+function notOwnerRecovery(ref, context) {
+  if (context.submission?.by && !context.claim?.by) {
+    return `Ask the candidate owner to perform the action or run \`sidequest release ${ref}\` themselves.`;
+  }
+  return `Ask the claim holder to release it with \`sidequest release ${ref}\`.`;
+}
 const CLAIM_REFUSAL_MESSAGES = Object.freeze({
   not_found: (ref) => `${ref} does not exist on this board. Run \`sidequest list\` and claim a listed ticket.`,
   done: (ref) => `${ref} is already done. Choose another ticket with \`sidequest ready\`.`,
   claimed: (ref, claim) => `${ref} is already claimed by "${claim.by}"${claim.at ? ` since ${claim.at}` : ""}. Run \`sidequest pulse ${ref}\` and do not work it unless you deliberately use \`--force\`.`,
-  not_owner: (ref, claim) => `${ref} is claimed by "${claim.by}" rather than you. Ask the claim holder to release it, or add \`--force\` only when you are certain.`,
+  not_owner: (ref, claim) => `${ref} is owned by "${refusalOwner(claim)}" rather than you. ${notOwnerRecovery(ref, claim)}`,
   busy: (ref) => `${ref} is temporarily locked by another claim attempt. Retry \`sidequest claim ${ref}\` in a moment.`,
   empty: () => "No tickets are available on this board. Run `sidequest ready` to inspect the queue.",
   submitted: (ref) => `${ref} is READY_FOR_INTEGRATION with a submitted commit. Run the orchestrator publish flow. If a review rejects it, use \`sidequest rework ${ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the same ticket for a normal repair claim; the old candidate remains recorded until replacement submission. \`submit --clear\` intentionally drops a candidate and is only for an integration bounce. \`release\`/\`update\` alone refuse rather than silently leaving it wedged (SQ-1010).`,

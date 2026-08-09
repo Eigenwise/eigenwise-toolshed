@@ -549,6 +549,54 @@ test('release --status todo on a pending submission refuses instead of silently 
   assert.strictEqual(stillRefused.reason, 'submitted');
 });
 
+test('store force cannot release a foreign live claim or mutate its status (SQ-1711)', () => {
+  const ticket = addClaimedTicket('store foreign forced claim release', 'victim-worker');
+  const result = store.releaseTicket(slug, ticket.ref, 'attacker-worker', { status: 'todo', force: true });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'not_owner');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim.by, 'victim-worker');
+  assert.strictEqual(stored.status, 'doing');
+  assert.strictEqual(stored.reworkEvents, undefined);
+});
+
+test('CLI force cannot release a foreign live claim or mutate its status (SQ-1711)', () => {
+  const ticket = addClaimedTicket('CLI foreign forced claim release', 'victim-worker');
+  const result = runCli(['release', ticket.ref, '--by', 'attacker-worker', '--status', 'todo', '--force']);
+  assert.strictEqual(result.status, 1);
+  assert.doesNotMatch(result.stderr + result.stdout, /add `?--force|pass --force/i);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim.by, 'victim-worker');
+  assert.strictEqual(stored.status, 'doing');
+  assert.strictEqual(stored.reworkEvents, undefined);
+});
+
+test('store force cannot clear a foreign pending submission or write rework history (SQ-1711)', () => {
+  const ticket = addClaimedTicket('store foreign forced submission release', 'victim-worker');
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, 'victim-worker', { commit: COMMIT }).ok, true);
+  const result = store.releaseTicket(slug, ticket.ref, 'attacker-worker', { status: 'todo', force: true });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'not_owner');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim, null);
+  assert.strictEqual(stored.submission.by, 'victim-worker');
+  assert.strictEqual(stored.status, 'doing');
+  assert.strictEqual(stored.reworkEvents, undefined);
+});
+
+test('CLI force cannot clear a foreign pending submission or write rework history (SQ-1711)', () => {
+  const ticket = addClaimedTicket('CLI foreign forced submission release', 'victim-worker');
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, 'victim-worker', { commit: COMMIT }).ok, true);
+  const result = runCli(['release', ticket.ref, '--by', 'attacker-worker', '--status', 'todo', '--force']);
+  assert.strictEqual(result.status, 1);
+  assert.doesNotMatch(result.stderr + result.stdout, /add `?--force|pass --force/i);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim, null);
+  assert.strictEqual(stored.submission.by, 'victim-worker');
+  assert.strictEqual(stored.status, 'doing');
+  assert.strictEqual(stored.reworkEvents, undefined);
+});
+
 test('release --status todo --force rejects the pending submission and reopens in one step (SQ-1010)', () => {
   const t = addTicket('release force reopen clears submission');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
