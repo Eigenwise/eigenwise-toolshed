@@ -53,7 +53,13 @@ test.before(async () => {
   await cp(runtimeManifestDirectory, fixtureManifestDirectory, { recursive: true });
   const manifestPath = path.join(fixtureManifestDirectory, 'integrity.json');
   const manifest = await readFile(manifestPath, 'utf8');
-  await writeFile(manifestPath, manifest.replace(/"moduleIntegrity": "[^"]+"/, `"moduleIntegrity": "${await fixtureModuleIntegrity()}"`), 'utf8');
+  await writeFile(
+    manifestPath,
+    manifest
+      .replace(/"moduleIntegrity": "[^"]+"/, `"moduleIntegrity": "${await fixtureModuleIntegrity()}"`)
+      .replace(/"installedTreeIntegrity": \{[\s\S]*?\n  \},\n  "packages"/, '"installedTreeIntegrity": {\n    "win32-x64": "sha512-JijYZfgG9Rs9+ZIwmYWZ6ZWUORj+2bAl+rDdKZa0PSie6xD2ryUM9YrH/YE/lMGUg5zJMRp9Bgfiu8Czo0TRMA=="\n  },\n  "packages"'),
+    'utf8',
+  );
 });
 
 test.after(async () => {
@@ -121,6 +127,24 @@ test('repairs a cached runtime whose ESM entrypoint content was changed', async 
   }
 });
 
+test('repairs a cached runtime after a TypeScript import-map tamper', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const installer = new FixtureInstaller();
+  try {
+    await createAcquirer(stateDirectory, installer).acquire();
+    const packagePath = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64', 'node_modules', 'typescript', 'package.json');
+    const packageMetadata = await readFile(packagePath, 'utf8');
+    await writeFile(packagePath, packageMetadata.replace('./dist/api/sync/api.js', '#enums/completionItemKind'), 'utf8');
+
+    await createAcquirer(stateDirectory, installer).acquire();
+
+    assert.equal(installer.calls, 2);
+    assert.match(await readFile(packagePath, 'utf8'), /dist\/api\/sync\/api\.js/);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
 test('rejects a runtime lock whose integrity differs from the committed manifest', async () => {
   const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
   const manifestDirectory = await temporaryDirectory('codegraph-runtime-manifest-');
@@ -168,6 +192,7 @@ test('maps supported platforms and rejects unsupported combinations before insta
       moduleIntegrity: 'sha512-test',
       version: '7.0.2',
     },
+    installedTreeIntegrity: {},
     packages: {},
     platformPackages: {
       'darwin-arm64': '@typescript/typescript-darwin-arm64',

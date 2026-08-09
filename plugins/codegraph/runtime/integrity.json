@@ -14,6 +14,14 @@
     "win32-arm64": "@typescript/typescript-win32-arm64",
     "win32-x64": "@typescript/typescript-win32-x64"
   },
+  "installedTreeIntegrity": {
+    "darwin-arm64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
+    "darwin-x64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
+    "linux-arm64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
+    "linux-x64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
+    "win32-arm64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
+    "win32-x64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw=="
+  },
   "packages": {
     "typescript": {
       "version": "7.0.2",
