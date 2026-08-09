@@ -48,6 +48,7 @@ const {
   pageArguments,
   pageRows,
   pagedPayload,
+  snapshotRowsContextRetrieval,
   compactPulse,
   requiredText,
   requiredFinalReport,
@@ -193,19 +194,46 @@ const tools = [
         source = store.getCategories({ project: slug, withState: true });
       }
       const usage = (id) => slug ? store.listTickets(slug).filter((ticket) => (ticket.categoryId || ticket.category && ticket.category.id) === id).length : 0;
-      const categories = source.map((category) => {
+      const categoryProject = String(slug || `<profile:${profile.id}>`);
+      const preferredCategoryOrder = new Map(["general", "coding.easy", "coding.normal", "coding.hard"].map((id, index) => [id, index]));
+      const orderedCategories = source.slice().sort((left, right) => {
+        const priority = (preferredCategoryOrder.get(left.id) ?? preferredCategoryOrder.size) - (preferredCategoryOrder.get(right.id) ?? preferredCategoryOrder.size);
+        return priority || String(left.id).localeCompare(String(right.id));
+      });
+      const categoryDetails = orderedCategories.map((category) => {
         const localRow = layer.rows.find((row) => row.id === category.id) || null;
-        return categoryListEntry(category, localRow, usage(category.id), full);
+        return Object.assign({}, category, {
+          origin: localRow ? localRow.kind === "ADD" ? "project" : category.linkState : "global",
+          localRow: localRow ? { id: localRow.id, kind: localRow.kind } : null,
+          ticketCount: usage(category.id)
+        });
+      });
+      const categories = orderedCategories.map((category) => {
+        const localRow = layer.rows.find((row) => row.id === category.id) || null;
+        return categoryListEntry(category, localRow, usage(category.id), full, categoryProject);
       });
       if (full) {
         for (const localRow of layer.rows.filter((row) => row.kind === "DISABLE")) {
-          categories.push({ id: localRow.id, origin: "disabled", localRow: { id: localRow.id, kind: localRow.kind }, effective: null, ticketCount: usage(localRow.id) });
+          const disabledCategory = { id: localRow.id, origin: "disabled", localRow: { id: localRow.id, kind: localRow.kind }, effective: null, ticketCount: usage(localRow.id) };
+          categories.push(disabledCategory);
+          categoryDetails.push(disabledCategory);
         }
       }
       const identity = { id: profile.id, name: profile.name, revision: profile.revision };
       const buildPayload = (page, total, nextCursor) => full ? Object.assign(args.profile != null ? { profile: identity } : { project: slug, projectName: meta.name, profile: identity }, { localRowCount: layer.rows.length, categories: page, warnings: layer.warnings, total, returned: page.length, nextCursor }) : { profile: identity, localRowCount: layer.rows.length, categories: page, total, returned: page.length, nextCursor };
       const paged = pagedPayload(categories, args, "category_list", buildPayload, full);
-      if (paged) return paged;
+      if (paged) {
+        if (paged.nextCursor || full && categories.some((category) => category.descriptionTruncated || category.contractTruncated)) {
+          paged.retrieval = snapshotRowsContextRetrieval(
+            "category_list",
+            categoryProject,
+            "categories",
+            categoryDetails,
+            0
+          );
+        }
+        return paged;
+      }
       const complete = buildPayload(categories, categories.length, null);
       delete complete.total;
       delete complete.returned;

@@ -59,6 +59,17 @@ async function callMcp(name: string, args: Record<string, unknown>): Promise<any
   return JSON.parse(response.result.content[0].text);
 }
 
+async function contextRows(retrieval: any): Promise<any[]> {
+  const rows: any[] = [];
+  let cursor = retrieval.arguments.cursor;
+  do {
+    const page = await callMcp('context_page', { ...retrieval.arguments, cursor });
+    rows.push(...page.rows);
+    cursor = page.nextCursor;
+  } while (cursor);
+  return rows;
+}
+
 function requestJson(port: number, endpoint: string): Promise<any> {
   return new Promise((resolve, reject) => {
     const request = http.request({ host: '127.0.0.1', port, path: endpoint, method: 'GET' }, (response) => {
@@ -202,7 +213,10 @@ test('DETACH provenance remains visible and CLI, MCP, and REST agree on effectiv
   assert.equal(cliPinned.name, base.name);
 
   const mcpPayload = await callMcp('category_list', { project: pinned, full: true });
-  const mcpPinned = mcpPayload.categories.find((entry: any) => entry.id === 'coding.easy');
+  const mcpCategories = mcpPayload.retrieval
+    ? await contextRows(mcpPayload.retrieval)
+    : mcpPayload.categories;
+  const mcpPinned = mcpCategories.find((entry: any) => entry.id === 'coding.easy');
   assert.equal(mcpPinned.origin, 'detached');
   assert.equal(mcpPinned.baseProfileId, 'coding');
 
@@ -216,7 +230,7 @@ test('DETACH provenance remains visible and CLI, MCP, and REST agree on effectiv
   assert.equal(restPinned.layer.base.id, 'coding.easy');
 
   const normalize = (entry: any) => ({ id: entry.id, name: entry.name, description: entry.description, route: entry.route, fallback: entry.fallback, contract: entry.contract, artifactRoots: entry.artifactRoots, enabled: entry.enabled });
-  assert.deepEqual(categoryTaxonomy(cli.categories.map(normalize)), categoryTaxonomy(mcpPayload.categories.map(normalize)));
+  assert.deepEqual(categoryTaxonomy(cli.categories.map(normalize)), categoryTaxonomy(mcpCategories.map(normalize)));
   assert.deepEqual(categoryTaxonomy(cli.categories.map(normalize)), categoryTaxonomy(rest.body.categories.filter((entry: any) => !entry.disabled).map(normalize)));
 
   const models = store.modelsPayload({ project: pinned, full: true });

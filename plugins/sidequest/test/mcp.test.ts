@@ -458,6 +458,23 @@ test('context_page row continuations retain their revision when claim liveness c
   }
 });
 
+test('every oversized read carries a universal continuation handle', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-universal-page-'))).slug;
+  for (let index = 0; index < 750; index += 1) {
+    store.createTicket(project, { title: `Oversized change ${index} ${'x'.repeat(500)}`, source: 'test' });
+  }
+
+  const changes = await callTool('changes', { project, since: '2000-01-01T00:00:00.000Z' });
+  assert.ok(Buffer.byteLength(JSON.stringify(changes), 'utf8') <= 12 * 1024);
+  assert.equal(changes.ticketsRetrieval.tool, 'context_page');
+  assert.equal(changes.ticketsTotal, 750);
+
+  const resumed = await callTool('context_page', { ...changes.ticketsRetrieval.arguments, limit: 4096 });
+  assert.equal(resumed.source, 'changes');
+  assert.ok(resumed.returned > 0);
+  assert.ok(resumed.totalRows === 750);
+});
+
 test('context_page row continuations project oversized detail bodies into nested pages', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-oversized-row-'))).slug;
   for (let index = 0; index < 44; index += 1) {
@@ -1031,7 +1048,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(localCategory.localRow, undefined);
   assert.deepEqual(localCategory.route, { model: 'sonnet', effort: 'low' });
   const fullCategories = await callTool('category_list', { project, full: true });
-  assert.equal(fullCategories.categories.find((category: any) => category.id === 'payload-0').localRow.data, undefined);
+  assert.equal(fullCategories.retrieval.tool, 'context_page');
 
   const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
   const dispatched = await callToolRaw('dispatch', { project, ref: ticket.ref });
@@ -1398,17 +1415,24 @@ test('compact category pages stay bounded and recover complete taxonomy rows', a
   const recovered = new Map();
   cursor = undefined;
   do {
-    const page = await callTool('category_list', { project, full: true, limit: 4, ...(cursor ? { cursor } : {}) });
+    const page = await callTool('category_list', { project, full: true, limit: 1, ...(cursor ? { cursor } : {}) });
     for (const category of page.categories) {
-      if (expectedDescriptions.has(category.id)) recovered.set(category.id, category.description);
+      if (!expectedDescriptions.has(category.id)) continue;
+      let body = category.descriptionRetrieval ? '' : category.description;
+      let bodyCursor = category.descriptionRetrieval?.arguments.cursor || null;
+      while (bodyCursor !== null) {
+        const bodyPage = await callTool('context_page', { ...category.descriptionRetrieval.arguments, cursor: bodyCursor, limit: 12 * 1024 });
+        body += bodyPage.body;
+        bodyCursor = bodyPage.nextCursor;
+      }
+      recovered.set(category.id, body);
     }
     cursor = page.nextCursor || undefined;
   } while (cursor);
   assert.deepEqual(recovered, expectedDescriptions);
 
   const legacyFull = await callTool('category_list', { project, full: true });
-  assert.equal(Object.hasOwn(legacyFull, 'nextCursor'), false);
-  assert.equal(legacyFull.categories.find((category: any) => category.id === 'bounded-00').description, expectedDescriptions.get('bounded-00'));
+  assert.equal(legacyFull.retrieval.tool, 'context_page');
   const cliCategories = runCli(['category', 'list', '--project', project, '--json']);
   assert.deepEqual(Object.keys(cliCategories).sort(), ['categories', 'localRowCount', 'profile', 'project', 'projectName', 'warnings']);
   assert.equal(cliCategories.categories.find((category: any) => category.id === 'bounded-00').description, expectedDescriptions.get('bounded-00'));
@@ -1456,19 +1480,33 @@ test('comment reads stay chronological through the ten-comment threshold', async
   assert.equal(Object.hasOwn(defaultRead, 'notice'), false);
   t.diagnostic(`comments: ${defaultRead.returned}/${defaultRead.total} exact rows in ${defaultBytes} bytes`);
 
-  const recovered: string[] = [];
-  let cursor: string | undefined;
-  do {
-    const page = await callTool('comments', { project, ref: ticket.ref, full: true, limit: 2, ...(cursor ? { cursor } : {}) });
-    assert.equal(page.order, 'chronological');
-    recovered.push(...page.comments.map((comment: any) => comment.body));
-    cursor = page.nextCursor || undefined;
-  } while (cursor);
-  assert.deepEqual(recovered, bodies);
+  const recoverBody = async (retrieval: any) => {
+    let body = '';
+    let bodyCursor = retrieval.arguments.cursor;
+    while (bodyCursor !== null) {
+      const page = await callTool('context_page', { ...retrieval.arguments, cursor: bodyCursor, limit: 4096 });
+      body += page.body;
+      bodyCursor = page.nextCursor;
+    }
+    return body;
+  };
+  const recoverPageBodies = async (read: any) => {
+    const comments = [...read.comments];
+    let rowCursor = read.commentsRetrieval?.arguments.cursor || null;
+    while (rowCursor !== null) {
+      const page = await callTool('context_page', { ...read.commentsRetrieval.arguments, cursor: rowCursor, limit: 12 * 1024 });
+      comments.push(...page.rows);
+      rowCursor = page.nextCursor;
+    }
+    return Promise.all(comments.map((comment: any) => comment.bodyRetrieval ? recoverBody(comment.bodyRetrieval) : comment.body));
+  };
+
+  const pagedFull = await callTool('comments', { project, ref: ticket.ref, full: true, limit: 2 });
+  assert.deepEqual(await recoverPageBodies(pagedFull), bodies.slice(0, 2));
 
   const legacyFull = await callTool('comments', { project, ref: ticket.ref, full: true });
-  assert.equal(Object.hasOwn(legacyFull, 'nextCursor'), false);
-  assert.deepEqual(legacyFull.comments.map((comment: any) => comment.body), bodies);
+  assert.equal(legacyFull.commentsRetrieval.tool, 'context_page');
+  assert.deepEqual(await recoverPageBodies(legacyFull), bodies);
   assert.equal(legacyFull.comments[0].source, 'mcp');
   const cliComments = runCli(['comments', ticket.ref, '--project', project, '--json']);
   assert.deepEqual(Object.keys(cliComments).sort(), ['comments', 'project', 'ticket']);
@@ -2870,7 +2908,8 @@ test('MCP admin/config tools share CLI state transitions', async () => {
     assert.equal(store.getTicket(project, a.ref).links.length, 0);
 
     assert.deepEqual(await callTool('models', { project }), runCli(['models', '--project', project, '--json']));
-    assert.deepEqual(await callTool('projects', {}), runCli(['projects', '--json']));
+    const projects = await callTool('projects', {});
+    assert.ok(projects.projects.some((entry: any) => entry.slug === project) || projects.projectsRetrieval?.tool === 'context_page');
     assert.equal((await callTool('category_rm', { profile: 'coding', id: categoryId })).ok, true);
 
     const mcpCategoryId = `${categoryId}-mcp`;
@@ -3650,11 +3689,17 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   // bug) it serializes far past the tool-result ceiling. total/returned agree.
   const allRes = await callTool('list', { project: big.slug, all: true });
   assert.strictEqual(allRes.total, N, 'all:true reports the true total');
-  assert.strictEqual(allRes.returned, N, 'all:true returns every ticket');
-  assert.strictEqual(allRes.tickets.length, N, 'all 500 present under all:true');
-  assert.strictEqual(allRes.nextCursor, null, 'all:true has no next page');
+  assert.equal(allRes.ticketsRetrieval.tool, 'context_page');
+  const allRows = [...allRes.tickets];
+  let allCursor = allRes.ticketsRetrieval.arguments.cursor;
+  while (allCursor !== null) {
+    const page = await callTool('context_page', { ...allRes.ticketsRetrieval.arguments, cursor: allCursor, limit: 12 * 1024 });
+    allRows.push(...page.rows);
+    allCursor = page.nextCursor;
+  }
+  assert.strictEqual(allRows.length, N, 'all 500 remain retrievable through the continuation');
   const allChars = await resultChars('list', { project: big.slug, all: true });
-  assert.ok(allChars < 100000, `compact all:true stays under the result ceiling (${allChars} chars)`);
+  assert.ok(allChars <= 12 * 1024, `compact all:true stays under the result ceiling (${allChars} chars)`);
 
   // Page 1 (default): bounded well under the ceiling, reports the true total, and
   // hands back a cursor because there's more.

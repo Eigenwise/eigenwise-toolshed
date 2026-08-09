@@ -250,8 +250,15 @@ const tools = [
       const { slug, meta } = resolveProject(args.project);
       const story = args.contract === void 0 ? store.getStory(slug, args.story) : store.updateStory(slug, args.story, { executionContract: args.contract });
       if (!story) throw new Error(`story_contract: no story "${args.story}" in ${meta.name}`);
-      const contract = store.storyExecutionContractPage(story, args);
-      const visibleStory = Object.assign({}, story, { executionContract: contract.body });
+      const contract = store.storyExecutionContractPage(story, Object.assign({}, args, { limit: args.limit ?? 10 * 1024 }));
+      const visibleStory = {
+        id: story.id,
+        ref: story.ref,
+        title: story.title,
+        color: story.color,
+        revision: story.revision,
+        contractRevision: story.contractRevision
+      };
       return { ok: true, project: slug, projectName: meta.name, story: visibleStory, contract };
     }
   },

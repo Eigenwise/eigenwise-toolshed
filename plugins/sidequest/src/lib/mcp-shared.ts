@@ -428,7 +428,10 @@ function outOfScopeComment(paths: any[]) {
   return `${prefix}… +${paths.length} more (run git status in the worktree for the full list)`;
 }
 
-const COMPACT_RESULT_MAX_BYTES = 13000;
+const COMPACT_RESULT_MAX_BYTES = 12 * 1024;
+const CONTEXT_PAGE_PAYLOAD_MAX_BYTES = MAX_CONTEXT_PAGE_BYTES - 2048;
+const CONTEXT_ROW_EXCERPT_BYTES = 4 * 1024;
+const contextSnapshots = new Map<string, { revision: string; value: any; kind: string }>();
 const COMPACT_PULSE_BODY_MAX_CHARS = 280;
 const PAGED_FULL_DEFAULT_LIMIT = 10;
 const PAGE_LIMIT_MAX = 100;
@@ -571,6 +574,19 @@ function listRowsContextRetrieval(project: string, args: any, position: number) 
   }, position);
 }
 
+function snapshotRowsContextRetrieval(tool: string, project: string, field: string, rows: any[], position: number) {
+  return snapshotContextRetrieval({
+    tool,
+    project,
+    kind: 'rows',
+    field,
+    position,
+    value: rows,
+    reason: 'budget',
+    cursor: position,
+  });
+}
+
 function frozenStoryContractBody(source: any, ticket: any) {
   const snapshot = ticket?.dispatch?.storyContract;
   if (source.selector.frozenAbsent === true) {
@@ -622,13 +638,71 @@ function assertCurrentContextRevision(source: any, currentRevision: string, expe
   }
 }
 
+function snapshotContextRetrieval(options: {
+  tool: string;
+  project: string;
+  kind: 'body' | 'rows';
+  field: string;
+  position: string | number;
+  value: any;
+  reason: string;
+  cursor?: number;
+}) {
+  const revision = contextRevision(options.value);
+  const key = crypto.randomUUID();
+  contextSnapshots.set(key, { revision, value: options.value, kind: options.kind });
+  return contextRetrieval({
+    tool: options.tool,
+    project: options.project,
+    kind: options.kind,
+    field: options.field,
+    position: options.position,
+    revision,
+    reason: options.reason,
+    selector: { contextSnapshot: key },
+  }, options.cursor || 0);
+}
+
+function contextSnapshot(source: any) {
+  const key = String(source.selector.contextSnapshot || '');
+  const snapshot = contextSnapshots.get(key);
+  if (!snapshot || snapshot.kind !== source.kind || snapshot.revision !== source.revision) {
+    throw new Error(`context_page: stale ${source.tool} continuation; rerun ${source.tool} and use its new retrieval handle.`);
+  }
+  return snapshot.value;
+}
+
 function resolveContextPage(args: any) {
   const source = decodeContextHandle(args.handle);
+  if (source.selector.contextSnapshot) {
+    const value = contextSnapshot(source);
+    assertCurrentContextRevision(source, contextRevision(value), args.expectedRevision);
+    const position = decodeContextCursor(String(args.handle), args.cursor);
+    const limit = Math.min(contextPageByteLimit(args.limit), CONTEXT_PAGE_PAYLOAD_MAX_BYTES);
+    if (source.kind === 'body') {
+      const page = utf8Slice(value, position, limit);
+      return {
+        source: source.tool, field: source.field, position: source.position, reason: source.reason,
+        revision: source.revision, body: page.body, cursor: args.cursor, pageBytes: page.pageBytes,
+        totalBytes: page.totalBytes,
+        nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+        complete: page.nextPosition == null,
+      };
+    }
+    const page = rowsWithinByteLimit(value, position, limit);
+    return {
+      source: source.tool, field: source.field, position: source.position, reason: source.reason,
+      revision: source.revision, rows: page.rows, cursor: args.cursor, pageBytes: page.pageBytes,
+      totalRows: page.totalRows, returned: page.rows.length,
+      nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+      complete: page.nextPosition == null,
+    };
+  }
   if (!['list', 'comments', 'dispatch', 'briefing'].includes(source.tool)) {
     throw new Error(`context_page: handle belongs to unsupported source tool "${source.tool}".`);
   }
   const position = decodeContextCursor(String(args.handle), args.cursor);
-  const limit = contextPageByteLimit(args.limit);
+  const limit = Math.min(contextPageByteLimit(args.limit), CONTEXT_PAGE_PAYLOAD_MAX_BYTES);
   if (source.kind === 'body') {
     const body = resolvedContextBody(source);
     assertCurrentContextRevision(source, contextRevision(body), args.expectedRevision);
@@ -669,7 +743,125 @@ function resolveContextPage(args: any) {
   };
 }
 
-function categoryListEntry(category?: any, localRow?: any, ticketCount?: any, full?: any) {
+function contextRowProjection(value: any, tool: string, project: string, field: string, position: string): unknown {
+  if (typeof value === 'string') {
+    if (utf8ByteLength(value) <= CONTEXT_ROW_EXCERPT_BYTES) return value;
+    const excerpt = utf8Excerpt(value, CONTEXT_ROW_EXCERPT_BYTES);
+    return {
+      text: excerpt.text,
+      totalBytes: utf8ByteLength(value),
+      truncated: true,
+      retrieval: snapshotContextRetrieval({ tool, project, kind: 'body', field, position, value, reason: 'truncated' }),
+    };
+  }
+  if (Array.isArray(value)) {
+    const entries: unknown[] = value.map((entry: any, index: number) => contextRowProjection(entry, tool, project, `${field}[]`, `${position}.${index}`));
+    if (utf8ByteLength(JSON.stringify(entries)) <= CONTEXT_ROW_EXCERPT_BYTES) return entries;
+    return {
+      totalItems: value.length,
+      omittedItems: value.length,
+      retrieval: snapshotContextRetrieval({ tool, project, kind: 'rows', field, position, value: entries, reason: 'budget' }),
+    };
+  }
+  if (!value || typeof value !== 'object') return value;
+  const visible: any = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry === 'string' && utf8ByteLength(entry) > CONTEXT_ROW_EXCERPT_BYTES) {
+      const excerpt = utf8Excerpt(entry, CONTEXT_ROW_EXCERPT_BYTES);
+      visible[key] = excerpt.text;
+      visible[`${key}Bytes`] = utf8ByteLength(entry);
+      visible[`${key}Truncated`] = true;
+      visible[`${key}Retrieval`] = snapshotContextRetrieval({
+        tool, project, kind: 'body', field: `${field}.${key}`, position: `${position}.${key}`, value: entry, reason: 'truncated',
+      });
+    } else {
+      visible[key] = entry;
+    }
+  }
+  return visible;
+}
+
+function mcpPayloadBytes(value: any) {
+  return utf8ByteLength(JSON.stringify(value, null, 2));
+}
+
+function payloadFieldExcerptBudget(payload: any, field: string) {
+  const remaining = Object.assign({}, payload);
+  delete remaining[field];
+  return Math.max(256, COMPACT_RESULT_MAX_BYTES - 2048 - mcpPayloadBytes(remaining));
+}
+
+function boundedReadPayload(tool: string, payload: any) {
+  if (!payload || typeof payload !== 'object' || mcpPayloadBytes(payload) <= COMPACT_RESULT_MAX_BYTES) return payload;
+  const project = String(payload.project || '<global>');
+  const visible: any = Object.assign({}, payload);
+  const fields = Object.keys(payload).sort((left, right) => {
+    const arrayDifference = Number(Array.isArray(payload[left])) - Number(Array.isArray(payload[right]));
+    return arrayDifference || utf8ByteLength(JSON.stringify(payload[right])) - utf8ByteLength(JSON.stringify(payload[left]));
+  });
+  for (const field of fields) {
+    if (mcpPayloadBytes(visible) <= COMPACT_RESULT_MAX_BYTES) break;
+    const value = payload[field];
+    if (Array.isArray(value)) {
+      const rows = value.map((row, index) => contextRowProjection(row, tool, project, field, String(index)));
+      const retained: any[] = [];
+      for (const row of rows) {
+        if (mcpPayloadBytes(Object.assign({}, visible, { [field]: [...retained, row] })) > COMPACT_RESULT_MAX_BYTES - 2048) break;
+        retained.push(row);
+      }
+      visible[field] = retained;
+      visible[`${field}Total`] = value.length;
+      visible[`${field}Returned`] = retained.length;
+      visible[`${field}Omitted`] = Math.max(0, value.length - retained.length);
+      if (retained.length < rows.length) {
+        visible[`${field}Retrieval`] = snapshotContextRetrieval({
+          tool, project, kind: 'rows', field, position: retained.length, value: rows, reason: 'budget', cursor: retained.length,
+        });
+      }
+      continue;
+    }
+    if (typeof value === 'string') {
+      const excerpt = utf8Excerpt(value, payloadFieldExcerptBudget(visible, field));
+      visible[field] = excerpt.text;
+      visible[`${field}Bytes`] = utf8ByteLength(value);
+      visible[`${field}Truncated`] = true;
+      visible[`${field}Retrieval`] = snapshotContextRetrieval({ tool, project, kind: 'body', field, position: field, value, reason: 'truncated' });
+      continue;
+    }
+    if (value && typeof value === 'object') {
+      const serialized = JSON.stringify(value);
+      const excerpt = utf8Excerpt(serialized, payloadFieldExcerptBudget(visible, field));
+      visible[field] = { excerpt: excerpt.text, totalBytes: utf8ByteLength(serialized), truncated: true };
+      visible[`${field}Retrieval`] = snapshotContextRetrieval({ tool, project, kind: 'body', field, position: field, value: serialized, reason: 'truncated' });
+    }
+  }
+  if (mcpPayloadBytes(visible) > COMPACT_RESULT_MAX_BYTES) {
+    throw new Error(`${tool}: result exceeds the ${COMPACT_RESULT_MAX_BYTES}-byte MCP ceiling after projection (${mcpPayloadBytes(visible)} bytes).`);
+  }
+  return visible;
+}
+
+function compactCategoryBody(category: any, field: string, project: string) {
+  const value = String(category[field] || '');
+  if (utf8ByteLength(value) <= CONTEXT_ROW_EXCERPT_BYTES) return { [field]: value };
+  const excerpt = utf8Excerpt(value, CONTEXT_ROW_EXCERPT_BYTES);
+  return {
+    [field]: excerpt.text,
+    [`${field}Bytes`]: utf8ByteLength(value),
+    [`${field}Truncated`]: true,
+    [`${field}Retrieval`]: snapshotContextRetrieval({
+      tool: 'category_list',
+      project,
+      kind: 'body',
+      field: `categories.${field}`,
+      position: String(category.id),
+      value,
+      reason: 'truncated',
+    }),
+  };
+}
+
+function categoryListEntry(category?: any, localRow?: any, ticketCount?: any, full?: any, project = '<global>') {
   if (!full) {
     const description = boundedExcerpt(String(category.description || '').replace(/\s+/g, ' ').trim());
     return {
@@ -681,7 +873,7 @@ function categoryListEntry(category?: any, localRow?: any, ticketCount?: any, fu
       descriptionTruncated: description.truncated,
     };
   }
-  return Object.assign({}, category, {
+  return Object.assign({}, category, compactCategoryBody(category, 'description', project), compactCategoryBody(category, 'contract', project), {
     origin: localRow ? (localRow.kind === 'ADD' ? 'project' : category.linkState) : 'global',
     localRow: localRow ? { id: localRow.id, kind: localRow.kind } : null,
     ticketCount,
@@ -728,12 +920,7 @@ function pageRows(rows: any[], args: any, action: string, buildPayload: any, max
 }
 
 function pagedPayload(rows: any[], args: any, action: string, buildPayload: any, full: boolean) {
-  const explicitlyPaged = args.cursor != null || args.limit != null;
-  if (full && !explicitlyPaged) return null;
-  const pagingArgs = full && args.limit == null
-    ? Object.assign({}, args, { limit: PAGED_FULL_DEFAULT_LIMIT })
-    : args;
-  return pageRows(rows, pagingArgs, action, buildPayload, full ? null : COMPACT_RESULT_MAX_BYTES);
+  return pageRows(rows, args, action, buildPayload, COMPACT_RESULT_MAX_BYTES - 1024);
 }
 
 function compactPulse(pulse?: any) {
@@ -945,7 +1132,9 @@ module.exports = {
   compactListRow,
   ticketWithContextHandles,
   listRowsContextRetrieval,
+  snapshotRowsContextRetrieval,
   resolveContextPage,
+  boundedReadPayload,
   MAX_CONTEXT_PAGE_BYTES,
   categoryListEntry,
   pageArguments,

@@ -22,7 +22,7 @@
  * on the same store.
  */
 
-const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES } = require('./mcp-shared');
+const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
 const { tools: readTools } = require('./mcp-read');
 const { tools: ticketTools } = require('./mcp-tickets');
 const { tools: lifecycleTools } = require('./mcp-lifecycle');
@@ -131,7 +131,10 @@ function validateToolArguments(tool: ToolDefinition, args: any) {
 
 async function runTool(tool: ToolDefinition, args: any) {
   validateToolArguments(tool, args);
-  if (!toolMutates(tool.name, args)) return await tool.handler(args);
+  if (!toolMutates(tool.name, args)) {
+    const output = await tool.handler(args);
+    return tool.name === 'context_page' ? output : boundedReadPayload(tool.name, output);
+  }
   const board = mutationQueueKey(tool.name, args);
   return enqueueMutation(board, () => tool.handler(args));
 }

@@ -175,6 +175,7 @@ test('models detail is opt-in and default list pages are capped', async () => {
   assert.equal(compact.warnings, undefined);
 
   const full = await callTool('models', { full: true });
+  assert.ok(Buffer.byteLength(JSON.stringify(full), 'utf8') <= 12 * 1024);
   assert.ok(full.categories[0].configured);
   assert.ok(full.categories[0].resolved);
   assert.ok(Array.isArray(full.categories[0].warnings));
