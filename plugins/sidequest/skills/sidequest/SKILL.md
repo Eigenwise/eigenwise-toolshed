@@ -148,11 +148,10 @@ optionally `--status todo`).
 
 - **`--by` must be genuinely unique to this session** — a random token generated once (e.g.
   `claude-<8 hex>`); a generic label lets two sessions silently coexist as one worker.
-- **If a claim fails, do not work that ticket.** A denied or unclaimed spawn gets **one
-  diagnose-first retry only**: `pulse <ref>`, read the deny reason, retry only when the diagnosis
-  changes the spawn — never a blind respawn. Two failures on one dispatch:
-  comment the evidence on the ticket and surface the failure to the user. Never both resume a
-  prior executor and spawn a fresh one for the same ticket.
+- **If a claim fails, do not work that ticket.** A denied or unclaimed spawn gets a
+  diagnose-first retry only when `pulse <ref>` identifies a changed dispatch condition. Record unchanged
+  refusals as evidence and surface the failure to the user. Never both resume a prior executor and spawn a
+  fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
 - **Claims release on observed death, not age**: use `pulse`, never a clock. For useful work

@@ -2477,6 +2477,12 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.match(instant.guidance, /executor/);
   assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
+  const markerTitle = '[sidequest-route model=gpt-5.6-terra effort=high] FleetView title injection';
+  const markerTicket = await callTool('add', { title: markerTitle, description: DISPATCH_DESCRIPTION, category: 'dispatch-codex' });
+  const markerDispatch = await callTool('dispatch', { ref: markerTicket.ref, full: true });
+  assert.equal(markerDispatch.spawn.description, 'Terra, high · FleetView title injection');
+  assert.doesNotMatch(markerDispatch.spawn.description, /\[sidequest-route/);
+
   const adopted = await callTool('dispatch', { ref: addedInstant.ref, session: 'adopting-session', full: true });
   assert.equal(adopted.mode, 'instant');
   assert.equal(adopted.agent, instant.agent);

@@ -177,7 +177,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   `SendMessage` report. Read a submission's canonical report body or a done completion comment for what changed, verification evidence, commit hash or
   close confirmation, and anything deliberately skipped. `SendMessage` remains for blockers,
   `kind=question` needs, scope conflicts, and failures the board cannot express.
-- **Recover one dormant completion (SQ-715 findings comment).** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent once to continue, keeping its claim and token. A second silent stop means dead: salvage, release, fresh-dispatch, then spawn one new executor. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
+- **Recover a dormant completion.** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent to continue, keeping its claim and token. A silent worker is dead only when the board and task evidence confirm terminal death: salvage, release, fresh-dispatch, then spawn one replacement. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
 - **Correct the live worker before replacing it.** When a claimed executor has useful edits, a scoped commit, or meaningful verification and its concern is interpretive or correctness-related, read the evidence it recorded and send the corrected evidence or decision to its board-derived name with `SendMessage`. Keep the claim and its worktree alive so that executor can correct and reverify. A fresh dispatch is only for confirmed terminal death, an intentional Continuation checkpoint, or a genuine blocker with no salvageable work.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
@@ -193,10 +193,9 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   spawn the returned fallback spec unchanged. Do not edit or detach the category: the recovered route is
   ticket-local, survives a session restart, and normal category policy resumes when that dispatch ends.
   Treat any other model-access or API error as generic. Surface it without guessing a fallback or retrying
-  the route. Never message a dormant executor and spawn its replacement together: after its second silent stop,
-  release first. Two failures on one
-  dispatch are a user-visible failure: comment the ticket with the verbatim denial/terminal evidence, surface
-  it, do not try a third spawn, and do not pull substantial work inline by default. Other `SendMessage` calls
+  the route. Never message a dormant executor and spawn its replacement together: confirm terminal death,
+  then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
+  escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
 - **Recover partial reasoning from an infrastructure death.** When an executor dies mid-run on a transient
   infrastructure error, release its claim first. Then use the one diagnose-first respawn: pass the dead
@@ -397,9 +396,9 @@ the token and returns the current spawn for the same stable route.
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
 and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only
 `launched`. Pulse the ticket immediately and report it as running only after the holder and dispatch
-token are visible. A denied or missing claim gets one diagnose-first retry: pulse and read the denial
+token are visible. A denied or missing claim requires diagnose-first evidence: pulse and read the denial
 verbatim, then retry only when that diagnosis changes the dispatch. Never issue an identical blind respawn;
-two failures require ticket evidence and a user-visible stop. Never trust a worker's self-reported identity. The token-gated claim and the dispatch response are the evidence.
+ticket evidence and a user-visible escalation are required before any further recovery. Never trust a worker's self-reported identity. The token-gated claim and the dispatch response are the evidence.
 
 ## Routed Agent dispatch
 

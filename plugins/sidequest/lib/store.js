@@ -562,7 +562,7 @@ function descriptionField(...candidates) {
   return "";
 }
 function spawnDescription(ticket, resolved) {
-  const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\s+/g, " ").trim();
+  const title = String(ticket && ticket.title || "Sidequest ticket").replace(/\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)\]/gi, " ").replace(/\s+/g, " ").trim() || "Sidequest ticket";
   const model = descriptionField(resolved && resolved.runsLabel, resolved && resolved.runsModel, ticket && ticket.model) || "unrouted";
   const effort = descriptionField(ticket && ticket.effort, resolved && resolved.effort) || "unset";
   const prefix = `${model}, ${effort} · `;

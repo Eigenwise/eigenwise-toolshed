@@ -430,7 +430,9 @@ function descriptionField(...candidates: any[]) {
 // (SQ-1350). The route leads the description so it survives however far the list
 // truncates the title.
 function spawnDescription(ticket?: any, resolved?: any) {
-  const title = String(ticket && ticket.title || 'Sidequest ticket').replace(/\s+/g, ' ').trim();
+  const title = String(ticket && ticket.title || 'Sidequest ticket')
+    .replace(/\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)\]/gi, ' ')
+    .replace(/\s+/g, ' ').trim() || 'Sidequest ticket';
   const model = descriptionField(resolved && resolved.runsLabel, resolved && resolved.runsModel, ticket && ticket.model) || 'unrouted';
   const effort = descriptionField(ticket && ticket.effort, resolved && resolved.effort) || 'unset';
   const prefix = `${model}, ${effort} · `;
