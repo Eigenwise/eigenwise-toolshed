@@ -20,7 +20,6 @@ fs.writeFileSync(path.join(projectPath, 'fixture.ts'), 'export {};\n');
 const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
 const agentsync = require('../lib/agentsync.js');
-const contextPacket = require('../lib/context-packet.js');
 const { compactionPolicyOutput } = require('../src/hooks/shared/compaction-policy.ts');
 
 let requestId = 0;
@@ -136,11 +135,26 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
   const compaction = await compactionPolicyOutput({ hook_event_name: 'PreCompact', trigger: 'auto', cwd: projectPath, session_id: 'benchmark-compaction' });
   assert.ok(Buffer.byteLength(compaction, 'utf8') <= 1500, `compaction output is ${Buffer.byteLength(compaction, 'utf8')} bytes`);
 
+  const ceilingTicket = store.createTicket(project, {
+    title: 'Context page ceiling control',
+    description: 'x'.repeat(16000),
+    category: 'benchmark', files: ['fixture.ts'], source: 'context-budget-benchmark',
+  });
+  const ceilingDetail = await callTool('list', { project, ref: ceilingTicket.ref });
+  const ceilingRetrieval = ceilingDetail.ticket.descriptionRetrieval;
+  assert.ok(ceilingRetrieval, 'oversized body exposes a context_page retrieval');
+  const overBudgetPage = await callToolRaw('context_page', {
+    ...ceilingRetrieval.arguments,
+    limit: 16 * 1024,
+  });
+  assert.ok(!overBudgetPage.isError, overBudgetPage.content?.[0]?.text);
+  const overBudgetText = overBudgetPage.content[0].text;
+  assert.ok(Buffer.byteLength(overBudgetText, 'utf8') <= 16 * 1024, `context_page response is ${Buffer.byteLength(overBudgetText, 'utf8')} bytes`);
+  const overBudgetPayload = JSON.parse(overBudgetText);
+  assert.ok(overBudgetPayload.pageBytes <= 14 * 1024, `context_page payload is ${overBudgetPayload.pageBytes} bytes`);
+  assert.ok(overBudgetPayload.nextCursor, 'over-limit context_page request remains paged');
+
   const approximateTokens = Math.ceil(durableBytes / 4);
   const boundedTokens = Math.ceil(Math.max(modelBytes, Buffer.byteLength(briefing, 'utf8')) / 4);
   process.stdout.write(`context benchmark durable=${durableBytes}B modelList=${modelBytes}B briefing=${Buffer.byteLength(briefing, 'utf8')}B approxTokens=${approximateTokens}->${boundedTokens}\n`);
-});
-
-test('negative control rejects a page that exceeds its real UTF-8 budget', () => {
-  assert.throws(() => contextPacket.rowsWithinByteLimit([{ body: '測'.repeat(3000) }], 0, 1024), /one row exceeds/);
 });
