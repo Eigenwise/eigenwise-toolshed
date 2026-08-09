@@ -1,29 +1,32 @@
 ---
 title: Release process
-description: How Toolshed changes move from a fragment to a published marketplace version.
+description: Maintainer workflow for moving verified Toolshed changes to the marketplace.
 ---
 
-Toolshed publishes from `main`. A plugin change needs its release fragment and manifest version to reach the marketplace; the notification-only GitHub Release is separate.
+## Maintainer overview
+
+Toolshed publishes from `main`. A plugin change reaches the marketplace through its release fragment and manifest version. The GitHub `v*` release is a separate notification after the marketplace change is on `main`.
 
 ## Prepare a release
 
-Add a fragment under `.release/unreleased/` with the plugin, change type, and user-facing summary. Check the queue before cutting:
+1. Add a fragment under `.release/unreleased/` with the plugin, change type, and user-facing summary.
+2. Check the queue and preview the release:
 
-```text
-sidequest publish queue
-```
+   ```text
+   sidequest publish queue
+   node scripts/release/cut.mjs --dry-run
+   ```
 
-The queue shows held fragments, the latest release, integration and published branches, and the next scheduled-cut hint. Preview the cut, then let `--push` hold the publish lock for the whole release transaction:
+3. Run the publish cut:
 
-```text
-node scripts/release/cut.mjs --dry-run
-node scripts/release/cut.mjs --push
-```
+   ```text
+   node scripts/release/cut.mjs --push
+   ```
 
-`--push` acquires the lock before it changes the local release window and releases it after the final push or a failure. A held lock stops the cut before it changes the window.
+The release cut owns plugin manifest versions. Do not hand-edit a manifest to guess the next version. A `HOLD` marker keeps a fragment for a later cut.
 
-The release cut owns manifest versions. Do not hand-edit both plugin manifests to guess the next number. A hotfix cut uses the same ownership rules and is reserved for an urgent published fix. A `HOLD` marker keeps a fragment out of the next cut while preserving it for a later release.
+The `--push` cut holds the publish lock for the release transaction and stops before changing the release window when the lock is unavailable. Before publishing, it checks the `Test` workflow for the current remote `main` head. A failed or missing run stops the cut unless an explicit `--ci-override "<reason>"` records why it may proceed.
 
-The orchestrator integrates executor submissions, runs the recorded verification command, and cuts the release. Before it publishes, the cut checks the `Test` workflow for the current remote `main` head. A failed or missing run stops the cut unless `--ci-override "<reason>"` records why the release may proceed, such as a release that repairs CI. Executors stop at a verified commit and never push, bump manifests, or assign release versions. The GitHub `v*` release is notification-only and can be created after the marketplace change is on `main`.
+Executors stop at a verified commit. Integration, release cutting, manifest versioning, and publishing happen after their submission.
 
-See `scripts/release/README.md`, `.release/README.md`, and the repository's release workflows for the current commands and safeguards.
+See [`scripts/release/README.md`](https://github.com/Eigenwise/eigenwise-toolshed/blob/main/scripts/release/README.md), [`.release/README.md`](https://github.com/Eigenwise/eigenwise-toolshed/blob/main/.release/README.md), and the [workflow docs](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/.github/workflows) for current safeguards.

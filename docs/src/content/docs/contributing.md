@@ -1,23 +1,28 @@
 ---
-title: Contributing and docs internals
-description: Keep plugin source, generated reference pages, and site prose in sync.
+title: Contributing to the docs
+description: Maintainer workflow for changing plugin source and site documentation.
 ---
 
-The site has two documentation surfaces. Pages under `docs/src/content/docs/reference/` are generated from plugin manifests, skill frontmatter, hook registries, and the marketplace file. Fix their source inputs or the generator, then regenerate. Never hand-edit a generated reference page.
+## Maintainer overview
 
-The setup guides, observability pages, architecture pages, and this page are prose. Update them when a plugin changes what users install, configure, or see. Keep the explanation in the existing guide when a topic fits there; add a page only when the topic has no useful home.
+The site has two documentation surfaces:
 
-## Build and screenshots
+- **Generated reference:** Pages under `docs/src/content/docs/reference/` come from plugin manifests, skill frontmatter, hook registries, binaries, and marketplace metadata. Change the source input or generator, then regenerate. Never hand-edit these pages.
+- **Prose guides:** The setup, observability, architecture, contributing, and release pages are maintained by hand. Update them when a user workflow or maintainer workflow changes.
 
-From `docs/`, install dependencies and build the site:
+Keep user actions in the [getting started guide](./getting-started/) or the relevant plugin guide. Keep implementation boundaries and release mechanics on the maintainer pages.
+
+## Build the site
+
+From `docs/`, install dependencies and build:
 
 ```text
 npm ci
 npm run build
 ```
 
-The deploy workflow regenerates reference pages when plugin manifests, skills, hooks, or marketplace data change. Documentation screenshots come from the committed synthetic pipeline under `docs/screenshots/`; run `npm run screenshots` when a screenshot needs updating. Do not capture live boards, dashboards, project names, session ids, or costs for committed docs.
+The build regenerates the reference pages before Astro checks and builds the site. Run `npm run screenshots` when a committed documentation screenshot needs updating. The screenshot pipeline uses synthetic fixtures and isolated local services.
 
-The repository workflows also run the docs build and deploy checks. Their current release automation state is documented in `.github/README.md`; notification-only `v*` releases do not own marketplace versioning.
+For plugin-specific contracts, read that plugin's `README.md` before changing a guide. Source changes and documentation changes should land together when the user-visible workflow changes.
 
-For plugin-specific source contracts, read the relevant directory README before changing a setup guide. Internal tools such as test helpers can be documented with a short pointer to their directory rather than an install guide.
+See [release process](./release-process/) for publishing changes.

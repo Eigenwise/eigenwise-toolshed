@@ -1,37 +1,49 @@
 ---
 title: Eigenwise Toolshed
-description: Sharp little tools for Claude Code, kept in one shed.
+description: Focused Claude Code plugins for setting up projects, keeping context current, and getting work finished.
 template: splash
 ---
 
 <section class="hero">
   <p class="hero-kicker">A Claude Code plugin marketplace</p>
   <h1>Eigenwise<br />Toolshed</h1>
-  <p class="hero-copy">A small, growing set of focused plugins for building a better Claude Code workspace. Set up a project, keep its rules live, map the codebase, and send side work somewhere it will not get lost.</p>
+  <p class="hero-copy">Tools for the parts of a Claude Code session that need a little structure: set up a project, keep its context current, choose the right model, and move side work to completion.</p>
   <div class="hero-links">
     <a href="./getting-started/">Get started</a>
-    <a href="./reference/">Browse plugins</a>
+    <a href="./reference/">Browse the reference</a>
   </div>
 </section>
 
 <section>
-  <p class="hero-kicker">Built for the whole session</p>
+  <p class="hero-kicker">Choose by what you want to do</p>
   <div class="shed-grid">
     <article class="shed-card card">
-      <h2>Set up the workspace</h2>
-      <p>Workbench gets the useful project wiring in place, then keeps the install fresh without turning setup into a project of its own.</p>
+      <h2>Set up a project</h2>
+      <p><a href="./getting-started/workbench/">Workbench</a> installs the Toolshed plugins you choose, writes the project settings, and checks the workspace.</p>
     </article>
     <article class="shed-card card">
-      <h2>Keep context current</h2>
-      <p>Codebase Mapper and Live Rules give Claude the parts of your project it needs, when it needs them.</p>
+      <h2>Give Claude better context</h2>
+      <p><a href="./getting-started/codebase-mapper/">Codebase Mapper</a> keeps a project map nearby. <a href="./getting-started/live-rules/">Live Rules</a> loads project rules when they apply.</p>
     </article>
     <article class="shed-card card">
-      <h2>Do not lose side work</h2>
-      <p>Sidequest turns the spare thought in the middle of a task into a real, runnable ticket with its own trail.</p>
+      <h2>Plan and finish work</h2>
+      <p><a href="./getting-started/sidequest/">Sidequest</a> turns a larger request or a side issue into visible, trackable work.</p>
+    </article>
+    <article class="shed-card card">
+      <h2>Try another model</h2>
+      <p><a href="./getting-started/model-gateway/">Model Gateway</a> adds subscription-backed GPT and Grok models to Claude Code.</p>
+    </article>
+    <article class="shed-card card">
+      <h2>See local usage</h2>
+      <p><a href="./observability/">Observability</a> gives you a local view of selected session activity. You opt in per project.</p>
+    </article>
+    <article class="shed-card card">
+      <h2>Run a human-judged comparison</h2>
+      <p><a href="./getting-started/experiments/">Experiment loops</a> keep subjective comparisons bounded and record the decisions that guide the next round.</p>
     </article>
   </div>
 </section>
 
 <section>
-  <p class="page-ledge">Start with setup, then use the reference when you want the detail behind a plugin or command.</p>
+  <p class="page-ledge">Start with <a href="./getting-started/">the setup path</a>, then open a plugin guide for its first workflow. Maintainers can jump to <a href="./architecture/">architecture</a> or <a href="./contributing/">contributing</a>.</p>
 </section>

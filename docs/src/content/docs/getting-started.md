@@ -1,55 +1,46 @@
 ---
 title: Getting started
-description: Install the marketplace, reload Claude Code, and start a workspace.
+description: Install Workbench, prepare a project, and choose the next Toolshed workflow.
 ---
 
-Eigenwise Toolshed is a Claude Code plugin marketplace. Start with these four steps:
+Eigenwise Toolshed is a set of Claude Code plugins for setting up a project and keeping work moving. Start with Workbench, then add the plugin that matches the job.
 
-1. Add the marketplace:
+## Install Workbench
 
-   ```text
-   /plugin marketplace add Eigenwise/eigenwise-toolshed
-   ```
-
-2. Install Workbench for your user account:
-
-   ```text
-   /plugin install workbench@eigenwise-toolshed --scope user
-   ```
-
-3. Reload Claude Code so the new skills and hooks are discovered:
-
-   ```text
-   /reload-plugins
-   ```
-
-4. From the project you want to prepare, run:
-
-   ```text
-   /workbench:init-workspace
-   ```
-
-Step 4 installs and configures the other Toolshed plugins for that project. You do not need to install them by hand.
-
-Use these scopes when you install or configure plugins:
-
-- Workbench is user-scoped because you want the workspace manager in every project.
-- Model Gateway is required and user-scoped because its wiring is global.
-- Observability is user-scoped because its observer is one process per machine.
-- Every other plugin is project-scoped so its configuration travels with the repository.
-
-Claude Code only loads a plugin at the reload boundary, so run `/reload-plugins` after installing or updating one.
-
-## First workspace
-
-With Workbench installed, run the workspace setup skill from the project you want to prepare:
+Run these in Claude Code:
 
 ```text
-/workbench:init-workspace
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install workbench@eigenwise-toolshed --scope user
 ```
 
-It walks through project-side configuration, then writes the `.claude/` files the project selected. The setup interview also proposes a Sidequest routing profile after the repository scan. Codebases usually start with `coding`, docs and content with `writing`, source-heavy work with `research`, and audio or music projects with `creative-music`. Accept the proposal, choose another starter, or create a project-specific profile by cloning the closest starter and adjusting it. Setup never edits a shared starter profile.
+Reload plugins or start a new Claude Code session. Workbench is user-scoped so it can prepare more than one project.
 
-Install `codebase-mapper` when you want a maintained map of the codebase, and `live-rules` when rules should be injected as prompts and edits happen. Live Rules stores new rules as individual Markdown files; after changing one, its `add-rule` or `manage-rules` skill runs the plugin-owned sync command to regenerate the hash manifest. When Sidequest is also installed and ready for bounded map artifacts, codebase-mapper tracks existing-project mapping there and leaves the generated map in the working tree for review.
+## Prepare your first project
 
-For local usage data, install the Observability plugin and opt in separately with `/observability:enable-project-telemetry`. See [observability](./observability/) before enabling it.
+From the project directory, tell Claude:
+
+> Set up this project as a Claude Code workspace with Workbench.
+
+Workbench asks which project tools you want, installs the selected plugins, writes the project configuration, and checks the result. You approve the plan before it changes the workspace.
+
+When setup finishes, try one real request in the same project:
+
+> Explain the main parts of this codebase and point me to the files I should read first.
+
+If you enabled Codebase Mapper, Claude can use the maintained project map to answer that request. If you chose other plugins, their guides show the first workflow to try.
+
+## Choose your next workflow
+
+- [Set up and maintain a workspace](./getting-started/workbench/)
+- [Plan and deliver tracked work](./getting-started/sidequest/)
+- [Add GPT or Grok subscription models](./getting-started/model-gateway/)
+- [Keep a project map nearby](./getting-started/codebase-mapper/)
+- [Load project rules when they apply](./getting-started/live-rules/)
+- [Keep working practice and experiments bounded](./getting-started/playbook/)
+- [Run a human-judged comparison](./getting-started/experiments/)
+- [View selected local usage](./observability/)
+
+You can ask Workbench to install or update the Toolshed plugins later. Claude handles the plugin-owned setup, checks, and recovery steps. Reload plugins or start a new session after an install or update so Claude sees the new version.
+
+The [generated plugin reference](./reference/) lists the agent-facing skills, hooks, and commands for each plugin.

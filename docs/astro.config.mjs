@@ -40,17 +40,15 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Setup guides',
+          label: 'Use the plugins',
           items: [
             { label: 'Workbench', slug: 'getting-started/workbench' },
-            { label: 'Sidequest', slug: 'getting-started/sidequest' },
-            { label: 'Experiment loops', slug: 'getting-started/experiments' },
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
+            { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },
             { label: 'Live Rules', slug: 'getting-started/live-rules' },
             { label: 'Playbook', slug: 'getting-started/playbook' },
-            { label: 'Release process', slug: 'release-process' },
-            { label: 'Contributing and docs internals', slug: 'contributing' },
+            { label: 'Experiment loops', slug: 'getting-started/experiments' },
           ],
         },
         {
@@ -63,10 +61,12 @@ export default defineConfig({
           ],
         },
         {
-          label: 'Architecture',
+          label: 'Maintainer docs',
           items: [
-            { label: 'Overview', slug: 'architecture' },
-            { label: 'Modular toolshed', slug: 'architecture/modular-architecture' },
+            { label: 'Architecture', slug: 'architecture' },
+            { label: 'Modular Toolshed', slug: 'architecture/modular-architecture' },
+            { label: 'Contributing to the docs', slug: 'contributing' },
+            { label: 'Release process', slug: 'release-process' },
           ],
         },
         {
@@ -75,6 +75,7 @@ export default defineConfig({
             { label: 'Overview', slug: 'reference' },
             { label: 'Workbench', slug: 'reference/workbench' },
             { label: 'Observability', slug: 'reference/observability' },
+            { label: 'Model Gateway', slug: 'reference/model-gateway' },
             { label: 'Codebase Mapper', slug: 'reference/codebase-mapper' },
             { label: 'Live Rules', slug: 'reference/live-rules' },
             { label: 'Sidequest', slug: 'reference/sidequest' },

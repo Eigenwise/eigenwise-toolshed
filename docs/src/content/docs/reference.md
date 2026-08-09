@@ -1,15 +1,17 @@
 ---
 title: Plugin reference
-description: Generated reference for every Toolshed plugin.
+description: Generated reference for Toolshed plugins and marketplace metadata.
 ---
 
-This section is generated from the plugin manifests, skills, hooks, binaries, and marketplace metadata. The pages are rebuilt from the repository whenever the docs build runs. It currently covers all seven plugins in the marketplace.
+This section is generated from the plugin manifests, skills, hooks, binaries, and marketplace metadata. The docs build regenerates it, so change those source inputs when a reference page needs an update.
+
+Use the guides for decisions and daily workflows. Use this reference when Claude needs the exact skill, hook, command, or configuration detail.
 
 - [Workbench](./reference/workbench/) sets up and maintains a Claude Code workspace.
-- [Observability](./reference/observability/) records local, metadata-only telemetry.
-- [Model Gateway](./reference/model-gateway/) puts ChatGPT, Codex, and Grok subscription models in Claude Code's `/model` picker.
-- [Sidequest](./reference/sidequest/) captures and runs side work.
+- [Observability](./reference/observability/) records selected local, metadata-only telemetry.
+- [Model Gateway](./reference/model-gateway/) adds ChatGPT, Codex, and Grok subscription models to Claude Code.
+- [Sidequest](./reference/sidequest/) captures and runs planned work.
 - [Codebase Mapper](./reference/codebase-mapper/) keeps a project map close at hand.
-- [Playbook](./reference/playbook/) holds working practice, session retros, and a transcript miner.
-- [Live Rules](./reference/live-rules/) loads rules when they apply.
-- [Marketplace versions](./reference/marketplace/) lists the shipped versions.
+- [Playbook](./reference/playbook/) holds working practice, session retros, and transcript tools.
+- [Live Rules](./reference/live-rules/) loads project rules when they apply.
+- [Marketplace versions](./reference/marketplace/) lists the shipped plugin versions.
