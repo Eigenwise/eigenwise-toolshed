@@ -1,0 +1,21 @@
+{
+  "name": "codegraph",
+  "description": "Local semantic graph indexing for TypeScript and JavaScript projects. Seven MCP tools trace symbol impact, paths, hierarchies, modules, and focused context; stale answers are refused, and a pinned runtime is acquired on first use. Source, paths, symbols, graph facts, and project data stay local.",
+  "author": {
+    "name": "Eigenwise",
+    "email": "kenny@eigenwise.io"
+  },
+  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/codegraph",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "license": "MIT",
+  "keywords": [
+    "typescript",
+    "javascript",
+    "codegraph",
+    "semantic-graph",
+    "mcp",
+    "impact-analysis",
+    "code-navigation",
+    "local-first"
+  ]
+}
