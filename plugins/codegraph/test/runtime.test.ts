@@ -21,6 +21,12 @@ const runtimeManifestDirectory = path.join(pluginRoot, 'runtime');
 const fixtureRuntimeDirectory = path.join(pluginRoot, 'test', 'fixtures', 'runtime');
 const fixtureAcquirerScript = path.join(fixtureRuntimeDirectory, 'acquire-runtime.mjs');
 const fixtureCrashReclaimScript = path.join(fixtureRuntimeDirectory, 'crash-after-reclaim.mjs');
+const unconfirmedReclaimResponses = [
+  { behavior: 'wrong', description: 'wrong nonce' },
+  { behavior: 'empty', description: 'immediate EOF with an empty response' },
+  { behavior: 'truncated', description: 'truncated nonce' },
+  { behavior: 'trailing', description: 'nonce with trailing bytes' },
+] as const;
 let fixtureManifestDirectory = '';
 
 function acquireRuntimeInSeparateProcess(
@@ -75,7 +81,7 @@ function holdAfterRuntimeReclaimClaim(
   mode: 'generated' | 'legacy',
   lockDirectory: string,
   ownerToken?: string,
-  behavior: 'hold' | 'silent' | 'wrong' = 'hold',
+  behavior: 'hold' | 'silent' | 'wrong' | 'empty' | 'truncated' | 'trailing' = 'hold',
 ): Promise<() => Promise<void>> {
   return new Promise((resolve, reject) => {
     const childProcess = spawn(
@@ -519,26 +525,30 @@ test('preserves a silent generated reclaim claim and fails acquisition within th
   }
 });
 
-test('reclaims a generated claim when the responder returns the wrong nonce', async () => {
-  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
-  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
-  const ownerToken = '123e4567-e89b-12d3-a456-426614174000';
-  let stopReclaimer: (() => Promise<void>) | undefined;
-  try {
-    await mkdir(lockDirectory, { recursive: true });
-    await writeFile(path.join(lockDirectory, 'owner'), ownerToken, 'utf8');
-    await writeFile(path.join(lockDirectory, `generation-${ownerToken}`), ownerToken, 'utf8');
-    const heartbeatFile = path.join(lockDirectory, `owner-${ownerToken}`);
-    await writeFile(heartbeatFile, ownerToken, 'utf8');
-    await utimes(heartbeatFile, new Date(0), new Date(0));
+for (const response of unconfirmedReclaimResponses) {
+  test(`preserves a generated claim after a ${response.description} response`, async () => {
+    const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+    const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+    const ownerToken = '123e4567-e89b-12d3-a456-426614174000';
+    let stopReclaimer: (() => Promise<void>) | undefined;
+    try {
+      await mkdir(lockDirectory, { recursive: true });
+      await writeFile(path.join(lockDirectory, 'owner'), ownerToken, 'utf8');
+      await writeFile(path.join(lockDirectory, `generation-${ownerToken}`), ownerToken, 'utf8');
+      const heartbeatFile = path.join(lockDirectory, `owner-${ownerToken}`);
+      await writeFile(heartbeatFile, ownerToken, 'utf8');
+      await utimes(heartbeatFile, new Date(0), new Date(0));
 
-    stopReclaimer = await holdAfterRuntimeReclaimClaim('generated', lockDirectory, ownerToken, 'wrong');
-    assert.equal(await recoverRuntimeReclaim(lockDirectory), 'reclaimed');
-  } finally {
-    await stopReclaimer?.();
-    await rm(stateDirectory, { recursive: true, force: true });
-  }
-});
+      stopReclaimer = await holdAfterRuntimeReclaimClaim('generated', lockDirectory, ownerToken, response.behavior);
+      assert.equal(await recoverRuntimeReclaim(lockDirectory), 'unknown');
+      assert.equal(await readFile(path.join(lockDirectory, 'owner'), 'utf8'), ownerToken);
+      assert.equal(await recoverRuntimeReclaim(lockDirectory), 'unknown');
+    } finally {
+      await stopReclaimer?.();
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('recovers when a generated-lock reclaimer crashes after claiming a now-closed port', async () => {
   const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
@@ -607,19 +617,24 @@ test('preserves a silent legacy reclaim claim and fails acquisition within the i
   }
 });
 
-test('reclaims a legacy claim when the responder returns the wrong nonce', async () => {
-  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
-  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
-  let stopReclaimer: (() => Promise<void>) | undefined;
-  try {
-    await mkdir(lockDirectory, { recursive: true });
-    stopReclaimer = await holdAfterRuntimeReclaimClaim('legacy', lockDirectory, undefined, 'wrong');
-    assert.equal(await recoverLegacyRuntimeReclaim(lockDirectory), 'reclaimed');
-  } finally {
-    await stopReclaimer?.();
-    await rm(stateDirectory, { recursive: true, force: true });
-  }
-});
+for (const response of unconfirmedReclaimResponses) {
+  test(`preserves a legacy claim after a ${response.description} response`, async () => {
+    const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+    const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+    let stopReclaimer: (() => Promise<void>) | undefined;
+    try {
+      await mkdir(lockDirectory, { recursive: true });
+      stopReclaimer = await holdAfterRuntimeReclaimClaim('legacy', lockDirectory, undefined, response.behavior);
+      const claimBeforeProbe = await readFile(path.join(lockDirectory, 'legacy-reclaim'), 'utf8');
+      assert.equal(await recoverLegacyRuntimeReclaim(lockDirectory), 'unknown');
+      assert.equal(await readFile(path.join(lockDirectory, 'legacy-reclaim'), 'utf8'), claimBeforeProbe);
+      assert.equal(await recoverLegacyRuntimeReclaim(lockDirectory), 'unknown');
+    } finally {
+      await stopReclaimer?.();
+      await rm(stateDirectory, { recursive: true, force: true });
+    }
+  });
+}
 
 test('recovers when an ownerless-lock reclaimer crashes after publishing a claim with a now-closed port', async () => {
   const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');

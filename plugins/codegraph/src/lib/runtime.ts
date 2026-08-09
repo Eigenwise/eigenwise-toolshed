@@ -490,11 +490,11 @@ async function runtimeReclaimerIdentityStatus(identity: RuntimeReclaimIdentity):
     socket.setEncoding('utf8');
     socket.on('data', (data: string) => {
       response += data;
-      if (response.length >= identity.token.length) {
-        finish(response === identity.token ? 'live' : 'dead');
+      if (response.length > identity.token.length || !identity.token.startsWith(response)) {
+        finish('unknown');
       }
     });
-    socket.once('end', () => finish(response === identity.token ? 'live' : 'dead'));
+    socket.once('end', () => finish(response === identity.token ? 'live' : 'unknown'));
     socket.once('error', (error: NodeJS.ErrnoException) => {
       finish(error.code === 'ECONNREFUSED' ? 'dead' : 'unknown');
     });

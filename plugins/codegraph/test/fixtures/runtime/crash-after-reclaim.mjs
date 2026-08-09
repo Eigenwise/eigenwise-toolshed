@@ -11,6 +11,18 @@ if (mode === undefined || lockDirectory === undefined) {
 const token = randomUUID();
 const server = createServer((socket) => {
   if (behavior === 'silent') return;
+  if (behavior === 'empty') {
+    socket.end();
+    return;
+  }
+  if (behavior === 'truncated') {
+    socket.end(token.slice(0, -1));
+    return;
+  }
+  if (behavior === 'trailing') {
+    socket.end(`${token}unexpected`);
+    return;
+  }
   socket.end(behavior === 'wrong' ? randomUUID() : token);
 });
 await new Promise((resolve, reject) => {
@@ -38,7 +50,7 @@ if (mode === 'generated') {
   throw new Error(`unsupported crash reclaim fixture mode: ${mode}`);
 }
 
-if (behavior === 'hold' || behavior === 'silent' || behavior === 'wrong') {
+if (behavior === 'hold' || behavior === 'silent' || behavior === 'wrong' || behavior === 'empty' || behavior === 'truncated' || behavior === 'trailing') {
   process.stdout.write('claimed\n');
   await new Promise(() => undefined);
 }

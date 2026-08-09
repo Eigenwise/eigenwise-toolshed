@@ -393,11 +393,11 @@ async function runtimeReclaimerIdentityStatus(identity) {
     socket.setEncoding("utf8");
     socket.on("data", (data) => {
       response += data;
-      if (response.length >= identity.token.length) {
-        finish(response === identity.token ? "live" : "dead");
+      if (response.length > identity.token.length || !identity.token.startsWith(response)) {
+        finish("unknown");
       }
     });
-    socket.once("end", () => finish(response === identity.token ? "live" : "dead"));
+    socket.once("end", () => finish(response === identity.token ? "live" : "unknown"));
     socket.once("error", (error) => {
       finish(error.code === "ECONNREFUSED" ? "dead" : "unknown");
     });
