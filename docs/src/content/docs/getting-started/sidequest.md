@@ -1,316 +1,69 @@
 ---
-title: Sidequest setup
-description: Capture, route, and work the side jobs that appear mid-task.
+title: Sidequest
+description: Plan, track, and deliver Claude Code work from a local board.
 ---
 
-Sidequest is a local Kanban board for Claude Code work.
+Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow.
+
+## Install
+
+Install Sidequest for the project you are working in:
 
 ```text
-/plugin install sidequest@eigenwise-toolshed
+/plugin marketplace add Eigenwise/eigenwise-toolshed
+/plugin install sidequest@eigenwise-toolshed --scope project
 ```
 
-Reload Claude Code, then open the board with `/sidequest:board`. The dashboard spans projects, while each ticket keeps its project path and status. You can also use the Sidequest MCP tools or CLI to add, update, and close tickets.
+Reload Claude Code or start a new session after installing. You can also run `/workbench:init-workspace` and let Workbench install and configure Sidequest for the project.
 
-## Quick start
+Sidequest is local. The dashboard runs on your machine and ticket data stays in the local Sidequest store.
 
-1. Install Sidequest with the plugin command above, then reload Claude Code.
-2. File a ticket with `sidequest add -t "Ship the next change" --category <id>`.
-3. Dispatch it with `sidequest dispatch <ref>`, then spawn the returned executor unchanged.
-4. After the executor submits its verified commit, integrate it with `sidequest integrate <ref> --by <who>`.
+## Your first workflow
 
-See [CLI basics](#cli-basics) for command details and [Work a ticket](#work-a-ticket) for the full dispatch and integration flow.
+1. Open the board with `/sidequest:board`, or tell Claude to show your Sidequest board.
+2. Describe the outcome you want and ask Claude to plan it as Sidequest work. For example: `Plan the checkout refresh as a Sidequest story and show me the backlog.`
+3. Review the proposed tickets, dependencies, and scope in the board. Adjust the plan before work starts.
+4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results.
+5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
-### Repaired submissions
+The board keeps the work visible while Claude and its executors handle the ticket lifecycle.
 
-A submitted range can stay parked after a repair ticket delivered the same work with a conflict fix. Use the MCP `supersede_submission` tool to close the earlier ticket without replaying stale code. It requires the later repair ticket to be integrated and requires reviewed evidence for every original path the repair intentionally changes or retires from its recorded delivery. Each `reviewedReplacements` entry keeps the path, reviewer, and reason under `supersededBy`; original paths omitted without that exact evidence still refuse closure. The earlier submission then leaves pending-integration warnings and unblocks dependents.
+## Use the dashboard
 
-### Verification during ticket work
+The dashboard shows every project you have registered in Sidequest. Use it to switch boards, scan todo, doing, and done work, search tickets, filter the view, and open a ticket's full details.
 
-Generated executors use focused checks while they iterate, then run the ticket's recorded verification command once before submitting. The executor derives the focused command from that ticket command and the project's task scripts, so it tests the changed file or consumer without assuming every project has the same test runner.
+![Sidequest dashboard showing a synthetic board with todo, doing, and done columns](../../../assets/screenshots/sidequest-kanban.png)
 
-### Compaction configuration
+*Synthetic Acme Webshop demo data showing the board view and ticket status columns.*
 
-Set your auto-compact window globally with `/workbench:init-workspace` or `/autocompact`. It is stored as `autoCompactWindow` in `~/.claude/settings.json`, so the same context preference follows you across projects. The Sidequest compaction policy stays per project as `SIDEQUEST_COMPACTION_POLICY` in `.claude/settings.local.json`: project environment blocks mask global env values. Setup offers `pin` (the default behavior), `off`, and experimental `veto`; it also offers to remove an old project-local `autoCompactWindow`, which would override your global preference.
+Open a ticket to read its details, comments, links, reminders, story, and current ownership. You can edit tickets and leave a note from the detail view.
 
-### Take the dashboard tour
+![Sidequest ticket detail view showing synthetic details, status, story, links, reminder, and comment controls](../../../assets/screenshots/sidequest-ticket-detail.png)
 
-The dashboard starts a guided tour the first time you open it. It is an orientation for reading a board where agents file and execute much of the work. Fifteen short steps move from boards, columns, cards, and full ticket details to the inbox, search and filters, the archive, routing settings, filing a ticket yourself, and archiving or deleting a board from its right-click menu. Each step highlights the real surface, and the ticket and board-menu steps open the real UI so you can see the ticket details, executor comments, and board actions without changing anything. Deleting a board is low-stakes: Sidequest creates it again when an agent starts Sidequest work in that project.
+*Synthetic demo ticket detail view. The names, titles, timestamps, and comments are fixtures created for documentation.*
 
-Use Next, Back, the arrow keys, or Enter to move through the tour. Press Escape or Skip to leave it. If you stop partway through, the dashboard remembers your place and resumes there next time. After you finish or skip, it stays out of the way.
+## Daily use
 
-To replay it, open Settings and choose **Replay the tour** under Appearance. You can also press `?` anywhere on the board. The tour state is stored in local storage for this browser, so clearing site data or using another browser or profile starts it over.
+Ask Claude to do the board work in plain language:
 
-## CLI basics
+- `Show me the Sidequest backlog for this project.`
+- `What is ready to dispatch for the checkout story?`
+- `Add a ticket for the empty-state bug and include the reproduction steps.`
+- `What is blocking SQ-7?`
+- `Review and integrate SQ-7 if its verification passed.`
 
-Check the installed CLI version with `sidequest --version` (also `sidequest -V` or `sidequest version`). Add `--help` to a command for its usage, for example `sidequest add --help`; use `sidequest help` for the full command list.
+For substantial changes, Claude can turn the request into a story with linked tickets so you can see the whole plan before execution. Side issues that come up during a session can become separate tickets instead of disappearing into the current task.
 
-Preview a ticket before writing it with `sidequest add -t "title" --category <id> --dry-run`. The preview validates the input and shows what would be created without changing the board. The flag also appears in the profile and merge command forms where those commands support a preview.
+## If something stops working
 
-`sidequest list` and the MCP `list` tool show active tickets by default. Pass `--status done` or `status: "done"` to inspect completed work, or `--all` / `all: true` for every non-archived status. The dashboard keeps its Done column. List results are paged, so follow `nextCursor` when one is returned. MCP list reads return brief ticket rows by default; pass `detail: true` when you need full ticket bodies and comment threads. `sidequest models` and the MCP `models` tool return compact routes by default; use `--full` or `full: true` for configured routes, resolved executors, and warnings.
+**The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.
 
-Manage user stories through `sidequest story add|list|show|update|rm` or the compact MCP `story` tool. Pass `action: "add" | "list" | "show" | "update" | "rm"`; `show`, `update`, and `rm` take a story `ref` or `id` in `story`. The MCP `story_contract` tool reads or updates execution contracts separately.
+**Claude cannot use Sidequest after an install or upgrade.** Start a new Claude Code session or reload plugins. An already-open session may still have the previous plugin connection.
 
-### Story contracts and decision logs
+**A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.
 
-A multi-ticket wave starts with a story: file the backlog under it and pin an execution contract before dispatching the work. The contract sets the rules for the wave and outranks later log entries.
+**Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. A running ticket can stay in doing until its verification and delivery steps finish.
 
-Executors can leave short findings for later waves with the story decision log:
+**A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.
 
-```text
-sidequest story log US-27
-sidequest story log US-27 -m "DECISION: Keep the MCP surface separate from story CRUD" --ref SQ-952 --by executor-1
-sidequest story log US-27 --body-file finding.txt --ref SQ-952 --by executor-1
-sidequest story log US-27 --clear --by orchestrator
-```
-
-Without an entry or `--clear`, the command reads the log. Entries are one-line `DECISION:`, `CONSTRAINT:`, or `DISCOVERY:` findings. Use `-m` or `--body-file`, and attach `--ref` and `--by` when recording work. The `story_log` MCP tool provides the same read, append, and clear operations.
-
-Later-wave briefings include a recent window of the live log automatically. The briefing window has a 4 KiB budget, and the briefing says how many earlier entries it left out. The stored log has no aggregate size limit, so appending a decision does not fail because sibling executors already wrote decisions. Use `sidequest story log US-27 --full` when you need the complete history, including entries archived by an earlier clear. The story execution contract keeps its separate 4 KiB limit.
-
-`--clear` archives the current entries instead of deleting them. A clear leaves the active log empty, but the entries and their sequence numbers survive in the archived history. Read them back with `sidequest story log US-27 --full`; the normal read shows only the current active window. Each entry still has a 280-byte limit. Keep findings terse so they fit in handoffs and remain useful.
-
-### Context projection budgets
-
-The end-to-end benchmark uses real Sidequest storage and MCP reads. Its fixture measured 3,066,684 durable UTF-8 bytes, a 9,388-byte bounded list response, and a 23,400-byte executor briefing. It also recovers a multibyte ticket body through `context_page`, checks stable and stale revisions, bounds a 1,200-byte dispatch orientation, and checks hook and compaction outputs. Approximate token counts divide measured bytes by four; they describe payload size only and make no cache-attribution claim.
-
-## Board display names
-
-A board has a stable board ID and an editable display name. The display name is for people and can change; the board ID, repository path, ticket refs, claims, and links stay the same. Use the CLI to set or view the name:
-
-```text
-sidequest board-config --name "Client work" --project <path-or-slug>
-```
-
-The MCP equivalent is `board_config` with `name: "Client work"` and the board's project or path. Use the board ID or path when you need to target a board reliably; renaming it does not create or move a board.
-
-## Categories and dispatch
-
-### Routing profiles
-
-Routing profiles hold a complete category set and keep each board's policy independent. Every board points at one profile, then applies its own local rows as overrides, additions, pins, or disabled entries. A profile edit propagates to every board pointing at it; local changes stay local and the dashboard shows their provenance.
-
-Starter profiles include `coding`, `creative-music`, `research`, and `writing`. The init-workspace interview proposes one after scanning the repository. Accept it, pick another, or create a project profile from a starter. Shared starters are never changed by setup.
-
-### Profile commands
-
-Manage profiles with the CLI:
-
-```text
-sidequest profile list [--retired] [--json]
-sidequest profile show <profile> [--json]
-sidequest profile create <profile> [--from <profile>] [--name ...] [--description ...]
-sidequest profile edit <profile> [--name ...] [--description ...]
-sidequest profile retire <profile>
-sidequest profile use <profile> --project <board>
-sidequest profile repoint <from> <to> [--dry-run] [--json]
-sidequest profile promote <new> --from-project <board> --project <board>...
-sidequest profile new-board [<profile>] [--json]
-```
-
-`repoint --dry-run` previews changed, added, and missing categories plus local drift. `promote` copies a board's effective taxonomy into a new profile and repoints the selected boards when their taxonomies match. `new-board` reads or sets the profile used for future boards. Profiles can also be managed through the matching Sidequest MCP tools.
-
-### Category scope and routing
-
-Category commands require an explicit scope. Use `--profile <profile>` for profile entries and `--project <board>` for board-local changes. A mutation with neither scope fails. `global-fallback` remains the availability fallback used after category routes and category fallbacks.
-
-### Provider fallback and refusal
-
-When a Claude Opus dispatch fails before claim because its subscription capacity or entitlement is exhausted, Sidequest prepares that category's configured Codex fallback with a fresh token. The ticket continues on the replacement executor, while dispatch, board, CLI, and MCP reads show the executor actually used. Other provider failures leave the route alone. Category and board-local overrides still win over this recovery path.
-
-When a ticket is routed to a GPT model and Codex is not ready, Sidequest refuses the dispatch instead of quietly running it on a Claude model. The old behavior silently spent Anthropic quota on work routed to the subscription backend. A healthy same-provider route can still fall back automatically, and the dispatch records that fallback. Cross-provider substitution is opt-in and always announced.
-
-The refusal includes the recovery. If `claude-code-proxy` is missing, run `node <plugin>/bin/model-gateway.js setup`, then retry. If ChatGPT sign-in is required, run `node <plugin>/bin/model-gateway.js login`, finish browser OAuth, then run `node <plugin>/bin/model-gateway.js setup` and retry. Credentials live in `~/.config/claude-code-proxy/`, not `~/.claude`. If a Windows upgrade hits a locked executable, the old proxy is retained, so reboot and run `node <plugin>/bin/model-gateway.js setup`. For an OpenAI rejection, run `node <plugin>/bin/model-gateway.js setup`; if it persists, wait for a `claude-code-proxy` update or explicitly re-route the ticket.
-
-Categories describe the kind of work and carry executor guidance, a model route, and an effort. Choose one by its description, not its name. The add result repeats the category description and resolved route so a bad match is visible right away. The board applies local overrides on top of the selected profile, and the dashboard marks each row as profile, override, pinned, board-only, or disabled.
-
-### Category and comment reads
-
-Board MCP reads are brief by default to keep orchestration payloads small. Use `detail: true` with `list` for full ticket bodies and comment threads, `full: true` with `pulse` for the full submission, git, and dispatch lifecycle, and `full: true` with `ready` for full ticket records instead of ref/title rows. `full: true` with `category_list` returns the complete category rows. `changes` is the compact polling read and has no full-payload switch.
-
-Omitted list rows and nested ticket or comment bodies carry a `context_page` retrieval. Pass its typed `handle`, opaque `cursor`, and `expectedRevision` unchanged; `limit` can reduce the page's UTF-8 byte ceiling. Repeat with `nextCursor` until it is null. A stale revision rejects the page, so rerun the source read and use its new retrieval. Existing read shapes stay available during the migration, including `list(ref).ticket.files`, `nextCursor`, and compact metadata.
-
-For tickets with more than 10 comments, default CLI and MCP comment reads keep all metadata but elide the oldest comment bodies, with an explicit omitted-count marker. Long orchestrator sessions can re-bill tool results, so this keeps routine reads smaller. Use `sidequest comments SQ-n --full` or the MCP `comments` tool with `full:true` to restore every body. Tickets with 10 or fewer comments are unchanged. Dashboard and REST reads are unaffected.
-
-### Executor guidance
-
-Use read-only tools or native `Explore` to gather enough evidence for precise tickets, then route implementation by default. Use informed inline judgment when it fits. Routed implementation work goes through a ticket and dispatch. Helpers are limited to `Explore`, `claude-code-guide`, `web-researcher`, and `general-purpose` for genuinely uncategorized bounded work, mechanical sweeps, or documentation research; classify matching work through board categories first, use an explicit cheap model, keep helpers in the background, and route audit or review work through a `review-audit` ticket. Evidence that would require searching session, transcript, or task-output files is self-reference, not a finding. Other delegated implementation, investigation, research, review, or domain analysis needs a ticketed route.
-
-Read-only executors can use any MCP server you have configured, so a visual-review ticket can use Playwright and a research ticket can use a docs MCP. Their repository contract stays read-only: Bash is available for inspection, tests, and verification, but they do not modify the working tree. A zero-scope read-only ticket runs in the bound shared checkout without creating a worktree. Its briefing binds the checkout before file operations and sends temporary files to the session scratchpad. Add a file scope, request an artifact, or pass `sharedTree: false` through MCP when the ticket needs isolation. If a configured MCP can push to a remote or write files, use the per-board `readOnlyDeniedTools` setting to subtract matching tools from the resolved list, for example `readOnlyDeniedTools: ["mcp__remote__*"]`.
-
-Executors post checkpoint comments with findings as they work. These are durable handoffs, not chatter, so an executor death loses one step instead of the whole run. For read-only executors, those comments are the only durable output.
-
-### Session reminder and routing toggle
-
-A board can opt out of routed dispatches with `sidequest routing disabled --project <board>`. Turn routing back on with `sidequest routing enabled --project <board>` before dispatching, or use a direct claim for deliberate inline work.
-
-On the first prompt in each session, an active routed board adds one advisory reminder: gather enough read-only evidence or use `Explore`, then write precise tickets and route implementation by default. It leaves informed inline judgment to the orchestrator. The inline hook records activity counters without blocking or injecting repeat reminders. Both skip subagents, automation prompts, and boards with routing disabled.
-
-### MCP surface and local boundary
-
-The MCP server mirrors the CLI and stays local. Read tools cover tickets, stories, contracts, decision logs, liveness, changes, readiness, comments, categories, and revision-safe context continuations. Collaboration tools cover ticket CRUD, plans, links, assignments, dispatch, and native-agent cleanup. Lifecycle tools cover claims, checkpoints, scope requests, commits, submissions, integration, grooming close, verdicts, releases, and claim sweeps. Administration tools cover routing profiles, category mutations, fallbacks, board configuration, projects, models, and board archive/restore. The dashboard and MCP server bind to loopback, keep board data on disk, and provide no hosted service.
-
-Routine reads are intentionally compact: `list`, `ready`, `pulse`, and `changes` return brief payloads, comments elide older bodies on long threads, and `detail: true` or `full: true` is opt-in for handoffs and audits. This keeps repeated orchestration reads from dominating context and billing.
-
-### Hooks and safety guards
-
-Sidequest hooks cover prompt reminders, tool preflight, failed-agent quota recovery, stop and compaction guidance, session claim reconciliation, and executor registration and cleanup. The single Stop handler reads its payload once, then evaluates compaction and reconciliation together. An actionable reconciliation reminder takes priority when both apply, so one Stop event produces at most one model wake. Pre-tool guards protect the Claude home directory, Windows paths, destructive Git commands, shared-tree commits, worktree isolation, task output, peer messages, repeated commands, and executor identity. Compaction uses only automatic `PreCompact`: `pin` keeps live claimed tickets first with their revisions and typed retrieval calls in a 1500-byte-bounded instruction, `veto` can block at most two unsafe automatic attempts, and `off` disables the policy. Counters live under `SIDEQUEST_HOME/compaction-policy/` per session.
-
-### CLI and environment reference
-
-The CLI includes ticket, story, profile, category, routing, readiness, claim, checkpoint, dispatch, native-agent, commit, submit, integrate, done, release, grooming, verdict, scope-request, reconciliation, comments, plans, links, assignments, reminders, archive, board, dashboard, and server commands. Operational commands include `claims sweep`, `worktrees sweep`, `recover-shared`, and `publish lock|unlock|status|queue`.
-
-The main settings are `SIDEQUEST_HOME` (central SQLite store), `SIDEQUEST_AGENTS_DIR` (executor directory), `SIDEQUEST_PORT` (dashboard port), `SIDEQUEST_CLAIM_IDLE_MIN` and `SIDEQUEST_CLAIM_ABANDON_MIN` (activity backstops), legacy `SIDEQUEST_CLAIM_TTL_MIN`, `SIDEQUEST_NUDGE`, and `SIDEQUEST_COMPACTION_POLICY`. When the Observability plugin is enabled, Sidequest sends lifecycle metadata only, never ticket text, comments, prompts, attachments, tokens, credentials, or errors.
-
-## Work a ticket
-
-Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
-
-Planning warnings use normalized ticket scope, so `path/**` means the existing `path` directory. An explicit `readonly` choice records the ticket's effective mode instead of triggering a redundant category warning. Readonly tickets skip generated-output and consumer-scope warnings because they cannot change those paths. Submission-review anchors check an explicit `refs/sidequest/...` ref or commit before warning that a path is absent from the current tree. Verify validation checks `npm --prefix <dir> test` and `npm --prefix <dir> run <script>` against that package's scripts before dispatch.
-
-### Flagged uncertainty at dispatch
-
-Dispatch can add a **Flagged uncertainty** section to the executor briefing when it finds claims that may need a fresh look. The checks are bounded to the ticket's declared scope and the integration target, so a skipped check does not prove that a claim is correct.
-
-- **Symbol checks** look for backticked symbol-shaped references from the ticket title and description. If a referenced symbol does not appear on the integration target, the warning says to verify the claim before acting.
-- **Cross-ticket state checks** look for `SQ-<number>` references in the description. If a referenced ticket changed state after this ticket was written, the warning includes the old and new states and says that the claim may be stale.
-
-Treat these as review prompts, not permission to fill in missing context. If the briefing or another instruction names a file, symbol, or state that does not exist in the executor's worktree, stop immediately and report the contradiction on the ticket, with the verbatim probe you ran and its output. Do not investigate around it or assume the base is wrong. The orchestrator can correct the ticket or dispatch a fresh executor with an updated brief.
-
-### Repeated dispatches without a commit
-
-Dispatch also warns before the first attempt: a worktree-isolated dispatch whose ticket names a path that is both gitignored and absent from the tree gets a warning naming the exact paths, because an executor worktree holds tracked files only and work that reads ignored state fails the same way on every retry. Ignored-but-present paths like an installed `node_modules` stay silent.
-
-After two prior terminal dispatches for a ticket finish without a submitted commit, Sidequest blocks another dispatch. The check is a bounded visibility heuristic: it treats environment visibility as the leading hypothesis and points you to check ignored paths, try a shared-tree dispatch, or run the work inline. An active claim whose stop was never observed does not count as proof of a failed round.
-
-The CLI override is explicit:
-
-```text
-sidequest dispatch SQ-3 --allow-repeat-failure
-```
-
-Through MCP, pass `allowRepeatFailure: true` to `dispatch`. The override is recorded on the new dispatch with its timestamp, source, and count of prior no-commit attempts. Use it only after checking why the executor could not see or commit its declared paths. A shared-tree dispatch can be requested with `sharedTree: true` through MCP (or the CLI's `--shared-tree`), and inline work is another supported remedy.
-
-### Worktree placement and stale cwd warnings
-
-Sidequest creates isolated worktrees under `~/.claude/sidequest/worktrees/<project-id>/` (or `SIDEQUEST_HOME`), outside the project checkout. This keeps extra copies away from project-scoped tools that honor the checkout root. Claude Code's built-in language server can still retain files from those external worktrees and inject their diagnostics into the parent session, including after a worktree is deleted; `docs/upstream-reports/lsp-stale-worktree-diagnostics.md` records the native boundary and measured impact. `sidequest worktrees sweep` still lists their absolute paths and removes stale trees. Worktrees created by older Sidequest versions under `<project>/.claude/worktrees/` remain eligible for the same sweep and age out instead of being moved while an executor may still use them.
-
-If the board server was launched inside any linked worktree, dispatch warns that spawned executors will inherit that stale working directory. The warning also appears in the executor briefing's flagged-uncertainty packet. It does not block dispatch, and it only covers sessions started inside a worktree, not a later `EnterWorktree` during the session.
-
-Executors inherit the spawning session's cwd. Shared-tree briefings therefore tell them to bind to the shared checkout before any git or file operation, confirm `git rev-parse --show-toplevel`, and stop to report if the mismatch persists.
-
-### Dispatch needs this session's board MCP, not just an install
-
-A dispatched native Agent inherits the parent Claude Code session's connected MCP snapshot, not a fresh lookup of Claude Code's plugin registry. Installing Sidequest for a project, or reinstalling it mid-session, does not reach a conversation that is already open — a freshly spawned Agent can still come up with zero board tools even though the install itself is fine. Never assume a fresh Agent independently discovers a newly installed MCP server.
-
-Dispatch also confirms the target project has a runnable Sidequest install before it touches any ticket state: a `.claude/settings.json` entry alone is not proof. A missing or stale install refuses with the exact repair command and tells you to start a new session or run `/reload-plugins`.
-
-Board MCP dispatch (the `dispatch`/`native_agent` MCP tools) is the normal path, because reaching that handler at all is proof this session already has the board MCP connected. A `sidequest dispatch` run from the CLI inside Claude Code can't offer that proof, so it refuses before any ticket-state change and tells you to run `/reload-plugins`, then dispatch again through the board MCP tool. A CLI run intentionally outside Claude Code can pass `--unverified-transport` to proceed anyway, but that flag proves nothing about any session's board MCP availability.
-
-### How a launch shows up in the agent list
-
-Dispatch builds the launch's `spawn.name` from the board, not from a random id: the ticket ref plus a short slug of its title, like `sq-843-release-engine`. Redispatching the same ticket after something already launched counts up (`sq-843-release-engine-2`), so a reworked or resumed run never shadows a live sibling. That name is what the fleet view filters on (`a:<name>`) and what `SendMessage` resumes.
-
-`spawn.description` leads with the resolved route, as in `[model=GPT-5.6 Terra effort=high] Rebuild the release engine`, so you can see what a run is costing while it is still in flight. Pass both fields through verbatim. If an orchestrator invents its own name or paraphrases the description, the PreToolUse guard rewrites them back to the prepared values and says so.
-
-### Claims, and when one is released
-
-A claim says "someone is on this", so nothing else picks the ticket up. It is not a lease, and it never expires on the clock: an executor that has been working for five hours can still commit, submit, checkpoint, and close. That matters because a wall-clock timeout fails in the worst place, near the end of a long run, when the most unsaved work is at stake.
-
-Completion checks the tree too. A ticket with declared write scope is refused if those files have an empty diff since the dispatch base, and the refusal names the declared files. An executor that legitimately changed nothing reports `[sidequest:verify-complete] no-op` instead. Read-only tickets are unaffected, and a missing submission still takes precedence through the existing `submission_required` refusal. `[sidequest:verify-complete]` used to be only a liveness marker for a long verify; it now also has to be true.
-
-Completion also checks that changed tests exercise changed implementation. When the in-scope diff includes both test-side and non-test-side files, revert the non-test paths to the dispatch base, run the changed tests, and post `[sidequest:negative-control] <command> failed=<n>` with a non-zero failure count before restoring the change. A `failed=0` result is refused. Refactors and coverage-only work can instead post `[sidequest:negative-control] waived <reason>` with a reason of at least 20 characters.
-
-### Claim sweep reference
-
-`sidequest claims sweep` (also run at session start, and available as the `sweepClaims` MCP tool) releases a claim in three cases: its executor has a durable `died` outcome, it went quiet past `SIDEQUEST_CLAIM_IDLE_MIN` (default 60 minutes) with no executor associated, or nothing ever reported the stop and it stayed quiet past `SIDEQUEST_CLAIM_ABANDON_MIN` (default 1440 minutes). Quiet time counts from the holder's last board write, so it says nothing about whether the process is alive. `sidequest pulse SQ-3` reports that value as `claim.boardQuietMs`, puts `reclaimable` and a recorded death first, and derives `liveness` from explicit evidence. An active verification marker is `alive`, a death record is `dead`, and a bound claim without a process heartbeat is `unknown`. Leave an `unknown` claim alone.
-
-A released claim takes its dispatch token with it. An executor that comes back to a swept ticket gets a refusal that names the recovery: keep the commit, re-dispatch, re-claim, and hand in the same commit.
-
-A terminal board result is the source of truth for executor completion. A later Claude Code task notification may say that the executor was stopped or killed after it submitted, released, or closed on the board. Keep the recorded board outcome, then continue the normal integration or follow-up flow. Do not stop, retry, redispatch, or investigate the executor because of that contradictory notification.
-
-Releasing a ticket for a technical blocker requires evidence of the failure. The MCP `release` call takes `kind: "technical_blocker"`, `command`, `exitCode`, and `outputTail`; the CLI uses `--release-kind technical_blocker`, `--command`, `--exit-code`, and `--output-tail`. Both surfaces enforce the same check, and record the evidence on the ticket beside the reason. Deliberate handbacks use `kind: "handback"` without blocker evidence.
-
-A contradiction now needs proof that the named target is absent. Use `--release-kind contradiction` with the verbatim probe in `--command` and its result in `--output-tail`; `--exit-code` is optional because a probe can legitimately exit 0 when it finds nothing. The MCP `release` call uses `kind: "contradiction"`, `command`, and `outputTail` for the same evidence. Deliberate handbacks still need no probe.
-
-### High-stakes tickets
-
-Use `--high-stakes` on `sidequest add` or `sidequest update` when the work has a clear approach but a bad change could damage shared state or consumers, such as migrations, shared API or payload changes, and cross-consumer edits. The MCP `add` and `update` tools use `highStakes: true`.
-
-The flag does not change a ticket's category, model, or effort. It requires the executor to check every consumer of each changed surface, run every affected consumer suite, and get a review-audit before integration. Add a comment starting `reviewed-by: <reviewer>` after the review. Integration stays advisory for now: `groomClose` with `integration: true` warns when a high-stakes ticket has no recorded review pass.
-
-When the approach is clear but the work is dangerous, use the normal route plus deeper verification and review.
-
-When dependent submissions share a main branch, Sidequest automatically trims the submitted range through the newest reachable ancestor that was already submitted. Use an explicit base when you need a different boundary: the CLI accepts `--base <commit>`, and MCP submit accepts `base`. The explicit base must be an ancestor of the submitted tip. Genuine ownership overlap and out-of-scope paths still fail submission.
-
-Apply the inline-safe check before creating a ticket. A user-directed mechanical edit with stated content in one or two named files, including an exact one-line `.gitignore` entry, stays inline without a ticket, claim, or executor. If qualifying work is already ticketed, claim it directly with a concrete recorded reason: `sidequest claim SQ-3 --by <unique-worker-id> --direct --reason "Integration gate pinpoints this exact mechanical diff"` (MCP: `direct:true` with `reason`). Other direct work is limited to pinpointed integration fixes and release bookkeeping; rationales like "context already loaded" or "small change" are refused. Do not edit an existing ticket until its claim succeeds.
-
-Use `/sidequest:user-story` to take a feature from a rough request to integrated work. It walks recon, one batched question round, a pinned contract, a story holding the complete backlog, the executor waves, and review before integration, and it sizes each of those to the work: a settled one-wave change gets a contract written directly and its verify command as the review, while a contested, hard-to-reverse subsystem gets competing architecture proposals merged into one contract, several dependency-ordered waves, and a review panel with distinct lenses. Use `/sidequest:groom` to audit stale tickets and `/sidequest:sidequest` when you need board administration. Keep a ticket's file scope accurate so parallel work stays isolated. `docs/` is always in scope on boards whose repo has a root docs directory, so a required prose update ships with the implementation. View or replace that board-level list with `sidequest board-config` or `sidequest board-config --always-in-scope docs/ --always-in-scope <path>` (MCP: `board_config`).
-
-### Board integration and worktree setup
-
-`board-config` also controls how the publish flow integrates submissions and how isolated executor worktrees are prepared:
-
-```text
-sidequest board-config --integration-mode auto|local|remote
-sidequest board-config --integration-branch feat/client-work
-sidequest board-config --delivery replay
-sidequest board-config --no-worktree-isolation
-sidequest board-config --no-auto-approve-test-scope
-sidequest board-config --auto-approve-scope "generated/**"
-sidequest board-config --worktree-setup "cd plugins/sidequest && npm ci"
-sidequest board-config --worktree-dependency-paths '[{"path":"node_modules","mode":"link"}]'
-```
-
-A scope request is auto-approved when every requested path sits in a test directory the ticket already reaches: any existing `test/`, `tests/`, `spec/`, `specs/`, or `__tests__/` beside a file the ticket declares, or beside any of its parents up to the repo root. So a ticket owning `plugins/x/src/thing.ts` widens into `plugins/x/test/**` on its own, and one owning `src/synth.cpp` widens into the repo's `tests/**`, but neither reaches the other's. The widening is recorded as a board comment and reviewed at publish. Pass `--no-auto-approve-test-scope` to turn it off. The MCP equivalent is `board_config` with `autoApproveTestScope: false`.
-
-A new source file can also add its one governing build-registration file without a ruling. Sidequest walks from the declared source toward the repository root and admits only the file it finds, such as `CMakeLists.txt`, `Cargo.toml`, `go.mod`, a `.csproj`, `pyproject.toml`, `package.json`, or the nearest barrel file. When the repository structure does not prove that dependency, the request is refused immediately.
-
-For opt-in board-specific paths, set one or more `--auto-approve-scope` globs, for example `--auto-approve-scope "generated/**"`. The MCP equivalent is `board_config` with `autoApproveScope: ["generated/**"]`. Matching paths are admitted immediately. Any unmatched path is refused on the same request.
-
-`integrationBranch` defaults to `main`. Set it to the branch your board actually integrates, such as `feat/client-work`; submissions and worktree cleanup then use that branch as their baseline. In local mode it must exist locally. In remote mode `origin/<branch>` must exist locally, so fetch it first. Sidequest refuses a missing configured branch and tells you to create, fetch, or reconfigure it rather than silently falling back to `main`.
-
-`auto` uses local integration when the repository has no `origin` remote, so local-only repos integrate against the configured local branch without a push. `local` forces that same no-push path. `remote` uses the repository's configured `origin/<branch>` integration path. The MCP form is `board_config` with `integrationMode: "auto" | "local" | "remote"`, `integrationBranch: "branch-name"`, `delivery: "merge" | "replay" | "apply"`, `worktreeIsolation: boolean`, `worktreeSetup: "<one-line command>" | null`, and `worktreeDependencyPaths: [{ path: "repo-relative-directory", mode: "link" | "copy" }]`.
-
-### Delivering submitted work
-
-The orchestrator is the integrator. Run `sidequest integrate SQ-3 --by <who> --mode merge|replay|apply` for a ready submission. `merge` is the default and fits repos with a release pipeline. `replay` cherry-picks the submitted commits in order, preserving atomic history. `apply` puts the submitted diff in the working tree without a commit, so a consumer-project user can review it first. It refuses an overlapping dirty path and names it. All three modes recheck the admitted ticket scope, retain `refs/sidequest/SQ-3`, and record that recoverable ref before changing the checkout. Apply closes from that delivery record and ref, so it never waits for a user-side commit.
-
-Before finalizing done, `integrate` runs the submission's recorded `verify` command against the delivered result. If it fails or times out, the delivery stays on the branch but the ticket stays open; the response includes the exit code and output tail, and the full log is written under the board state directory. Skip the check only with the explicit `skipVerify` flag or `--skip-verify`, which is recorded on completion. A submission without a verify command finalizes as before, recorded as `verify: none`.
-
-Set the default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards usually want `apply` or `replay`. Use `merge` for a repository whose release flow owns integration. When a publish lock is active, acquire it before integration.
-
-In local mode, closing an integrated ticket also advances the integration branch. Nothing else moves it. Each isolated dispatch records the configured integration target at preparation; if its fresh worktree is behind that commit, its briefing fetches from the board checkout and resets to the recorded SHA before work begins. `sidequest groom-close <ref> --integration` (MCP: `groomClose` with `integration: true`) looks for the checkout holding the commit that carries the closed ticket's submitted work and fast-forwards the branch onto it. It is fast-forward only, and it refuses rather than touching your default branch when the commit does not descend from the branch, when two checkouts carry the work, when your main checkout has something else checked out or has modified tracked files, or when the repository is mid merge, rebase, or cherry-pick. Every refusal names the branch, the commit, the reason, and the `git merge --ff-only` command that finishes the job. Untracked files do not block it. Remote refs are never written, and remote-mode boards keep advancing by push.
-
-Worktree isolation defaults to enabled. Set `--no-worktree-isolation` (or `worktreeIsolation: false` through MCP) to force every dispatched executor onto the shared checkout, including calls that explicitly request `sharedTree: false`.
-
-### Worktree-loss recovery
-
-An isolated executor can still lose its worktree: Claude Code discards an agent's worktree when that agent stops with it unchanged, so an executor that pauses for a scope request before its first edit comes back in the shared checkout. Sidequest refuses the next write instead of letting it land on your main branch. The refusal names the ticket, the worktree it was promised, and the path it was about to write, and it tells the executor to stop and ask for a re-dispatch. Shared-tree dispatches are unaffected.
-
-:::caution
-
-Sidequest also refuses `git reset --hard`, `git clean -f`, a whole-tree `checkout`/`restore`, and a forced checkout in a shared checkout that has uncommitted changes. Some of those changes may be an executor's finished work that never made it into a commit.
-
-The refusal lists what would be destroyed and names the only recovery path: first preserve every dirty path in a named stash, then run `sidequest recover-shared --project <repo> --stash <stash@{n}> --yes`. It verifies that stash object covers the currently dirty paths before it runs `git reset --hard && git clean -fd`, and prints the stash ref, object ID, and covered paths as recovery evidence.
-
-:::
-
-:::caution
-
-`git tag` and pushes to a repository's published/default branch also need the current session's `sidequest publish lock`. Pushes to the configured integration branch stay available for normal ticket integration. The hook catches Bash and PowerShell forms, including `HEAD:main`, remote aliases, tag pushes, and force pushes. It is a local early warning only. Server-side GitHub rules remain the guarantee. When a repo has `.release/unreleased/`, `sidequest publish queue` adds its fragment and held counts, latest release, integration and published branches, and the next scheduled-cut hint. Repositories without release fragments keep the usual queue output.
-
-:::
-
-`worktreeSetup` is per-project. Sidequest runs a nonblank command in a new isolated worktree after checkout and before the executor starts, so successful setup output never enters the executor's context. The value must be one line and no longer than 1000 characters. Pass `null` through MCP to clear it. `worktreeDependencyPaths` can also link or copy selected ignored dependency directories from the primary checkout before the command runs. Configure every directory explicitly. A linked or copied dependency tree must be relocatable and safe to share: `node_modules` can work when the lockfile is stable, though each worktree's own install is safer; Python `.venv` directories and CMake build directories embed absolute source paths and must use a per-worktree setup command instead. If any configured path or command fails, Sidequest removes the new worktree and dispatch does not start.
-
-A scoped commit commits its declared paths even when another changed file is outside the ticket. Sidequest reports those paths in the commit result, records a ticket comment, and carries them in the submission as `unscopedPaths`; make a second scoped commit after widening scope, or discard them. Missing declared paths are warnings when other declared paths can be committed.
-
-`sidequest submit` refuses outright when `unscopedPaths` are still on the submission, instead of letting a partial commit through as ready. The refusal names every blocked path and says what to do: request scope, commit the paths that are already in scope, then release with `--release-kind handback` naming the refused paths. A submission that already carries `unscopedPaths` still can't integrate: `sidequest integrate` and `sidequest publish queue` mark it `readiness: partial`, and `queue` prints `REJECTED: unscoped_paths` with the blocked paths listed. `subagent-stop` reports the same state to the executor, `PARTIAL_SUBMISSION ... do not integrate it`, instead of the `READY_FOR_INTEGRATION` verdict a clean submission gets.
-
-Fix it with scope, not force. Declare `files` on the ticket up front so an executor isn't inferring scope from its first write. Scope requests rule immediately: allowed policy paths expand the ticket; every other path is refused and recorded with the requester. The executor commits in-scope work and hands back the refused paths. The orchestrator expands the files and redispatches, or redispatches without expansion. Nothing pushes a partial submission through.
-
-Run `sidequest worktrees --sweep` from a board repo to inspect stale executor worktrees. It only plans removals by default. `--yes` removes finished, integrated, or already-merged clean `agent-*` worktrees, then prunes Git's worktree registry. Dirty, ahead, locked, and current worktrees stay put, and so does any worktree whose ticket still holds a live claim: a ticket can reach a final board state while its executor is still working in that tree.
-
-![Sidequest kanban board](../../../assets/screenshots/sidequest-kanban.png)
-
-![Sidequest ticket detail](../../../assets/screenshots/sidequest-ticket-detail.png)
+See the [generated Sidequest reference](../reference/sidequest/) for the agent-facing tool and configuration details, or the [Sidequest plugin README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest) for the project landing page.
