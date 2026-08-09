@@ -808,6 +808,52 @@ test('rejects unrunnable npm verifies when tickets are added or updated', () => 
   assert.strictEqual(store.dispatchVerifyCommandError(manual.ticket, PROJ), null);
 });
 
+test('defers greenfield npm package verification only for declared package manifests', () => {
+  const prefix = cliJson([
+    'add', '-t', 'greenfield prefixed verify', '--category', 'coding.normal',
+    '--file', 'plugins/greenfield-prefix/package.json', '--file', 'plugins/greenfield-prefix/test/suite.test.js',
+    '--verify', 'npm --prefix plugins/greenfield-prefix run test:files',
+  ]);
+  assert.match(prefix.warnings.join('\n'), /deferred verify preflight.*plugins\/greenfield-prefix\/package\.json/);
+  assert.strictEqual(store.dispatchVerifyCommandError(prefix.ticket, PROJ), null);
+
+  const changedDirectory = cliJson([
+    'add', '-t', 'greenfield directory verify', '--category', 'coding.normal',
+    '--file', 'plugins/greenfield-directory/package.json', '--file', 'plugins/greenfield-directory/test/suite.test.js',
+    '--verify', 'cd plugins/greenfield-directory && npm run test:files',
+  ]);
+  assert.match(changedDirectory.warnings.join('\n'), /deferred verify preflight.*plugins\/greenfield-directory\/package\.json/);
+  assert.strictEqual(store.dispatchVerifyCommandError(changedDirectory.ticket, PROJ), null);
+
+  const undeclared = cliJson([
+    'add', '-t', 'undeclared greenfield verify', '--category', 'coding.normal',
+    '--file', 'plugins/another-package/package.json',
+    '--verify', 'npm --prefix plugins/undeclared-package run test:files',
+  ]);
+  assert.match(store.dispatchVerifyCommandError(undeclared.ticket, PROJ), /declared greenfield package scope/);
+
+  const directoryScope = cliJson([
+    'add', '-t', 'directory-only greenfield verify', '--category', 'coding.normal',
+    '--file', 'plugins/directory-only',
+    '--verify', 'cd plugins/directory-only && npm run test:files',
+  ]);
+  assert.match(store.dispatchVerifyCommandError(directoryScope.ticket, PROJ), /declared greenfield package scope/);
+
+  const typo = cliJson([
+    'add', '-t', 'mistyped greenfield verify', '--category', 'coding.normal',
+    '--file', 'plugins/greenfield-typo/package.json',
+    '--verify', 'npm --prefix plugins/greenfield-typ run test:files',
+  ]);
+  assert.match(store.dispatchVerifyCommandError(typo.ticket, PROJ), /declared greenfield package scope/);
+
+  const outsideRepository = cliJson([
+    'add', '-t', 'outside greenfield verify', '--category', 'coding.normal',
+    '--file', 'plugins/greenfield-outside/package.json',
+    '--verify', 'npm --prefix ../greenfield-outside run test:files',
+  ]);
+  assert.match(store.dispatchVerifyCommandError(outsideRepository.ticket, PROJ), /outside this repo/);
+});
+
 test('MCP add returns each planning warning only once per ticket and session', () => {
   const add = mcpTicketTools.find((tool: any) => tool.name === 'add');
   assert.ok(add);

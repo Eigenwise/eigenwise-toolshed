@@ -611,15 +611,24 @@ ${String(ticket?.description || "")}`;
     }
     return null;
   }
+  function declaresGreenfieldPackage(ticket, projectPath, packageDirectory) {
+    const packageJson = path.join(String(packageDirectory), "package.json");
+    return normalizeFiles(ticket?.files).some((file) => path.resolve(String(projectPath), file) === packageJson);
+  }
+  function deferredGreenfieldVerifyWarning(command, projectPath, packageDirectory) {
+    const packageJson = path.join(relativePathWithin(projectPath, packageDirectory) || ".", "package.json").replace(/\\/g, "/");
+    return `deferred verify preflight: \`${command}\` requires ${packageJson}, which this ticket declares to create. Run the exact command after creating it before submitting.`;
+  }
   function verifyCommandIssue(ticket, projectPath) {
     const verify = String(ticket?.executorVerify || "").trim();
     if (!verify || manualVerify(verify)) return null;
     const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
     const directory = match ? path.resolve(String(projectPath || ""), match[1] || match[2]) : String(projectPath || "");
-    if (!projectPath || !relativePathWithin(projectPath, directory) || !fs.existsSync(directory)) {
-      return match ? "the recorded verify command changes to a directory that does not exist in this repo. Run the exact string you record before submitting." : "the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.";
+    if (!projectPath || !relativePathWithin(projectPath, directory)) {
+      return match ? "the recorded verify command changes to a directory outside this repo. Run the exact string you record before submitting." : "the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.";
     }
     const commands = splitVerifyCommands(match ? verify.slice(match[0].length) : verify).segments;
+    let deferredWarning = null;
     for (const command of commands) {
       const prefix = /^npm\s+--prefix(?:=|\s+)(?:["']([^"']+)["']|([^\s;&|]+))\s+/.exec(command);
       const npmCommand = prefix ? `npm ${command.slice(prefix[0].length)}` : command;
@@ -629,8 +638,15 @@ ${String(ticket?.description || "")}`;
       if (script) {
         const packageDirectory = prefix ? path.resolve(directory, prefix[1] || prefix[2]) : directory;
         const npmInvocation = command;
-        if (!relativePathWithin(projectPath, packageDirectory) || !fs.existsSync(packageDirectory)) {
-          return `\`${npmInvocation}\` changes to a directory that does not exist in this repo. Run the exact string you record before submitting.`;
+        if (!relativePathWithin(projectPath, packageDirectory)) {
+          return `\`${npmInvocation}\` changes to a directory outside this repo. Run the exact string you record before submitting.`;
+        }
+        if (!fs.existsSync(packageDirectory)) {
+          if (declaresGreenfieldPackage(ticket, projectPath, packageDirectory)) {
+            deferredWarning ||= deferredGreenfieldVerifyWarning(npmInvocation, projectPath, packageDirectory);
+            continue;
+          }
+          return `\`${npmInvocation}\` changes to a directory that does not exist in this repo or this ticket's declared greenfield package scope. Run the exact string you record before submitting.`;
         }
         let scripts;
         try {
@@ -644,12 +660,15 @@ ${String(ticket?.description || "")}`;
         continue;
       }
       if (!match) continue;
+      if (!fs.existsSync(directory)) {
+        return "the recorded verify command changes to a directory that does not exist in this repo or this ticket's declared greenfield package scope. Run the exact string you record before submitting.";
+      }
       const glob = nodeTestGlob(command);
       if (glob && !fs.globSync(glob, { cwd: directory }).length) {
         return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || "."}.`;
       }
     }
-    return null;
+    return deferredWarning;
   }
   function verifyPathWarning(ticket, projectPath) {
     const verify = String(ticket?.executorVerify || "").trim();
@@ -685,7 +704,7 @@ ${String(ticket?.description || "")}`;
   function dispatchVerifyCommandError(ticket, projectPath) {
     if (manualVerify(ticket?.executorVerify)) return null;
     const issue = verifyCommandIssue(ticket, projectPath);
-    if (!issue || /^(?:record verify commands|the recorded verify command changes)/.test(issue)) return null;
+    if (!issue || /^(?:record verify commands|deferred verify preflight)/.test(issue)) return null;
     const suite = derivedVerifyCommand(ticket, projectPath);
     const suggestion = suite ? ` Use \`cd ${suite.cwd} && ${suite.command}\` instead.` : "";
     return `dispatch: verify command cannot run: ${issue}${suggestion}`;
