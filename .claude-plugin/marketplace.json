@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.426.0",
+  "version": "3.427.0",
   "plugins": [
     {
       "name": "workbench",
       "source": "./plugins/workbench",
       "description": "Set up and maintain a Claude Code workspace, and the front door to the rest of the Toolshed: initialize project-side configuration, install and update plugins, diagnose local health, and wire up local observability.",
-      "version": "0.83.3",
+      "version": "0.83.4",
       "author": {
         "name": "Eigenwise"
       },
@@ -31,7 +31,7 @@
       "name": "observability",
       "source": "./plugins/observability",
       "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Prompts, responses, code, tool inputs and results, credentials, and environment values are never stored. Every sink beyond local SQLite is opt-in.",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "author": {
         "name": "Eigenwise"
       },
@@ -54,7 +54,7 @@
       "name": "model-gateway",
       "source": "./plugins/model-gateway",
       "description": "Your ChatGPT/Codex and Grok subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, and Grok mid-session like any other model. No API keys.",
-      "version": "0.48.2",
+      "version": "0.48.3",
       "author": {
         "name": "Eigenwise"
       },
@@ -77,7 +77,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "4.42.0",
+      "version": "4.42.1",
       "author": {
         "name": "Eigenwise"
       },
@@ -100,7 +100,7 @@
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
       "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
-      "version": "2.14.1",
+      "version": "2.14.2",
       "author": {
         "name": "Eigenwise"
       },
@@ -123,7 +123,7 @@
       "name": "playbook",
       "source": "./plugins/playbook",
       "description": "How to work with Claude Code, and how to notice what should become permanent. Ships practice skills for running parallel agents in worktrees, suggesting the right model for a task, and verifying without burning the clock, a session retro, and a transcript miner that finds work you keep redoing and routes each finding to the cheapest durable fix: a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or a ticket. Sessions run to tens of megabytes, so the miner streams them and emits bounded aggregates instead of loading transcripts into context.",
-      "version": "0.4.1",
+      "version": "0.4.2",
       "author": {
         "name": "Eigenwise"
       },
@@ -146,7 +146,7 @@
       "name": "live-rules",
       "source": "./plugins/live-rules",
       "description": "Project rules in a Markdown file that Claude re-injects right when they apply: every prompt, or just before it edits a matching file. Edits apply on the next prompt, no restart. A SessionStart hook injects the always-on rules once as a fallback, and it's a way to tell whether per-prompt injection is actually wired.",
-      "version": "2.10.1",
+      "version": "2.10.2",
       "author": {
         "name": "Eigenwise"
       },

@@ -8,6 +8,76 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.427.0 (2026-08-09)
+
+### codebase-mapper 2.14.1 → 2.14.2
+
+#### Fixes
+
+- Rewrite Codebase Mapper and Playbook docs (SQ-1611)
+  Rewrote the Codebase Mapper, Playbook, and experiment-loop guides around user outcomes, with concise plugin READMEs and symptom-based recovery steps.
+
+### live-rules 2.10.1 → 2.10.2
+
+#### Fixes
+
+- Rewrite Workbench and Live-rules user docs (SQ-1610)
+  Rewrote the Workbench and Live Rules setup guides and plugin READMEs around the current user flow: install the plugin, ask Claude to set up or manage it, and recover from common failures without running internal commands.
+
+### model-gateway 0.48.2 → 0.48.3
+
+#### Fixes
+
+- Rewrite Model Gateway user docs (SQ-1603)
+  Rewrote the Model Gateway setup guide and plugin README around the real user flow: install the plugin, ask Claude to set it up or repair it, and choose a model. Internal commands stay in the agent-facing reference.
+
+### observability 0.7.0 → 0.7.1
+
+#### Fixes
+
+- Rewrite Observability user docs (SQ-1612)
+  Rewrote the Observability guides and plugin README around installing the plugin, opting repositories in, reading the local dashboard, and recovering from empty or unavailable views. Added links to the committed synthetic dashboard captures without exposing internal setup details or real telemetry.
+
+### playbook 0.4.1 → 0.4.2
+
+#### Fixes
+
+- Rewrite Codebase Mapper and Playbook docs (SQ-1611)
+  Rewrote the Codebase Mapper, Playbook, and experiment-loop guides around user outcomes, with concise plugin READMEs and symptom-based recovery steps.
+
+### sidequest 4.42.0 → 4.42.1
+
+#### Fixes
+
+- Suppress impossible readonly planning warnings (SQ-1600)
+  Suppress generated-output and consumer-scope warnings for readonly tickets, and resolve submission-review anchors against their pinned ref or commit.
+- Consolidate Sidequest Stop hooks (SQ-1601)
+  Combine Sidequest's Stop policies into one handler, so each stop reads its payload once and emits at most one reminder.
+- Repair end-to-end context budget benchmark (SQ-1602)
+- Run every Luna route at high effort (SQ-1605)
+  All Luna starter-profile routes now use high effort.
+- Remove briefing and admin ceremony (SQ-1607)
+  Executor briefings and spawn orientation now include frozen contracts and ticket inputs without raw story-log history. Sidequest guidance also keeps board-only admin changes out of ticket dispatch.
+- Rewrite Sidequest user docs (SQ-1613)
+  Rewrote the Sidequest getting-started guide and plugin README around installing Sidequest, planning work with Claude, using the local board, dispatching and integrating tickets, and recovering from common symptoms. Added the committed synthetic board and ticket-detail captures with descriptive captions.
+- Route context budget benchmark through MCP paging (SQ-1614)
+  Route the context budget benchmark through the production MCP context_page handler and verify its payload ceiling.
+- Cut small-ticket executor latency (SQ-1619)
+  Remove three optional executor board round trips while keeping stale-worktree protection, final verification evidence, scoped submission, and orchestrator-owned integration.
+- Repair final public docs audit findings (SQ-1620)
+  Fixed broken generated-reference links, qualified Observability's local-storage wording, corrected Sidequest marketplace capabilities, and added coverage for reference links and scoped skills.
+- Scale Sidequest test budget to CI cores (SQ-1621)
+  Scale the Sidequest full-suite hang budget with test concurrency so low-core CI runners keep enough time to finish while retaining bounded timeout detection and near-budget warnings.
+- Prevent stale dispatch retries clearing fresh tokens (SQ-1622)
+  Sidequest now waits for a launched executor to reach a terminal state before retrying dispatch, so an older attempt cannot clear a newer token.
+
+### workbench 0.83.3 → 0.83.4
+
+#### Fixes
+
+- Rewrite Workbench and Live-rules user docs (SQ-1610)
+  Rewrote the Workbench and Live Rules setup guides and plugin READMEs around the current user flow: install the plugin, ask Claude to set up or manage it, and recover from common failures without running internal commands.
+
 ## v3.426.0 (2026-08-09)
 
 ### sidequest 4.41.7 → 4.42.0
