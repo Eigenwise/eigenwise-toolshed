@@ -62,6 +62,35 @@ node "<OBS_ROOT>/bin/token-usage-report.js" --format json
 
 From the JSON report, call out outbox queue depth/capacity, drops, schema drops, telemetry conflicts, sessions missing `SessionEnd`, and the newest event/source. The SessionStart ensure hook repairs stopped managed processes on the next startup/resume; if immediate repair is requested, rerun `/observability:enable-project-telemetry` and keep the current observability choices.
 
+## TypeScript code intelligence
+
+Workbench serves TypeScript/JavaScript definition, references, and diagnostics through its own pull-only
+`code-intel` MCP server (`typescript_definition`, `typescript_references`, `typescript_diagnostics`). Check
+that a language server backend is reachable from the current project. This is read-only:
+
+```sh
+node -e "const { locateLanguageServer } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/code-intel/language-server-locator.js'); const outcome = locateLanguageServer(process.cwd()); console.log(outcome.error || ('ok: ' + outcome.backend + ' at ' + outcome.command));"
+```
+
+An `ok:` line means the tools work here. An error line is not a Workbench fault: report it verbatim, it
+already names the fix (install TypeScript 7 in the project, or typescript-language-server for TypeScript 5
+projects). When the backend is `typescript-language-server`, mention that TypeScript 5 ships no pull
+endpoint, so diagnostics come from a push the server sends for exactly the requested file and version,
+harvested into that one response; per-call behavior is identical, the first result on a cold project just
+takes longer. Skip this whole check for projects with no TypeScript or JavaScript source.
+
+Also check whether the official native LSP plugin is still installed:
+
+```sh
+node -e "const fs=require('node:fs'),os=require('node:os'),path=require('node:path');const reg=JSON.parse(fs.readFileSync(path.join(os.homedir(),'.claude','plugins','installed_plugins.json'),'utf8'));console.log((reg?.plugins?.['typescript-lsp@claude-plugins-official']||[]).length?'installed':'not installed');"
+```
+
+If it prints `installed`, report that `typescript-lsp@claude-plugins-official` pushes diagnostics
+process-wide and blind to which agent owns them, so diagnostics from parallel isolated worktrees land in
+the wrong transcript, and that Workbench's pull-only tools replace it. Recommend removing it with
+`/plugin uninstall typescript-lsp@claude-plugins-official` and a reload. Do not uninstall it from the
+doctor; only report.
+
 ## Agent teams
 
 Check whether a project-level `env` block masks the global agent-teams setting. This is read-only and prints nothing when the project has no `env` block or already enables teams:

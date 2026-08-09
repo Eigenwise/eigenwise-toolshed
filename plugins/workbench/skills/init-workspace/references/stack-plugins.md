@@ -47,7 +47,9 @@ Propose these only when they fit the project:
 ### Frontend / web
 
 Propose `context7`, `frontend-design`, `playwright`, and `security-guidance` when they match the
-project and team. For TypeScript projects, offer the official TypeScript LSP below.
+project and team. TypeScript and JavaScript code intelligence is already covered: Workbench ships
+pull-only tools for it (see the TypeScript note under the LSP table), so never propose
+`typescript-lsp@claude-plugins-official`.
 
 ### Cloudflare-deployed
 
@@ -162,11 +164,20 @@ Never install system packages or run a package manager for the user.
 | Ruby | `ruby-lsp@claude-plugins-official` | `ruby --version` (3.0+) | `gem install ruby-lsp` |
 | Rust | `rust-analyzer-lsp@claude-plugins-official` | `rust-analyzer --version` | `rustup component add rust-analyzer` |
 | Swift | `swift-lsp@claude-plugins-official` | `sourcekit-lsp --version` | Install the Swift toolchain for the platform |
-| TypeScript | `typescript-lsp@claude-plugins-official` | `typescript-language-server --version` | `npm install -g typescript-language-server typescript` |
 
 A missing binary is a warning, not an automatic installer failure. The user can install it, continue
 knowing the LSP cannot work until the binary exists, or drop the plugin. After reload, confirm the
 binary is still on `PATH` and that the language server responds.
+
+TypeScript is deliberately absent from this table. Workbench itself serves TypeScript/JavaScript code
+intelligence through its pull-only `code-intel` MCP tools (`typescript_definition`,
+`typescript_references`, `typescript_diagnostics`), which talk to the project's own TypeScript install.
+Do not install `typescript-lsp@claude-plugins-official`: its push diagnostics are process-global and
+blind to which agent owns them, so diagnostics from parallel isolated worktrees leak into the wrong
+transcript. If it is already installed, recommend removing it with
+`/plugin uninstall typescript-lsp@claude-plugins-official`. Preflight for a TypeScript project instead:
+TypeScript 7 resolvable in the project (`npm install -D typescript@latest`), or
+`typescript-language-server --version` for TypeScript 5 projects.
 
 ## Portable marketplace sources
 
