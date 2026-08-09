@@ -195,7 +195,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
 test('quota recovery cannot prepare a ticket parked before launch', () => {
   const ticket = createFixture('parked quota recovery');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'parked-quota-session' });
-  assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'orchestrator' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'orchestrator', force: true }).ok, true);
 
   const parked = store.getTicket(slug, ticket.ref);
   const recovered = store.recoverDispatchQuotaFailure(slug, ticket.ref, {
@@ -362,7 +362,7 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
     const dispatchRoute = store.getTicket(slug, ticket.ref).dispatch.route;
     assert.equal(dispatchRoute.model, fallback.model);
     assert.equal(dispatchRoute.effort, fallback.effort);
-    assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'test' }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'test', force: true }).ok, true);
   }
 
   store.setProjectCategory(slug, 'debugging', 'OVERRIDE', {

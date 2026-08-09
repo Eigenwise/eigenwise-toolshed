@@ -591,6 +591,10 @@ function createDispatch(dependencies) {
       const t = getTicket(slug, found.id);
       if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
       const current = dispatchState(t);
+      const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by) && Boolean(current.launchedAt || current.boundAt);
+      if (activeRuntimeAttempt) {
+        throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}). Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.`);
+      }
       const repeatFailure = repeatNoCommitDispatchError(t, current);
       if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
       const releasedContinuation = releasedContinuationState(slug, t, current);
@@ -1100,12 +1104,17 @@ function createDispatch(dependencies) {
         if (normalizedAgentId || normalizedAgentName) {
           recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
         }
-        if (active) {
+        if (active && state.outcome === "launched" && !(t.claim && t.claim.by)) {
+          setDispatchTerminal(t, "failed", "subagent-stop", { failureShape: "stopped_before_claim" });
+          t.dispatchNonce = null;
+          t.dispatchExecutor = null;
+          stopped = true;
+        } else if (active) {
           state.turnEndedAt = now;
         }
         stampDispatchEvent(t, "subagent-stop", now);
         putTicket(match.slug, t);
-        return { ok: true, ticket: t, stopped: false, turnEnded: active };
+        return { ok: true, ticket: t, stopped, turnEnded: active };
       });
       if (!result || !result.ok) return { ok: false, reason: "not_found" };
       stopped = stopped || result.stopped;

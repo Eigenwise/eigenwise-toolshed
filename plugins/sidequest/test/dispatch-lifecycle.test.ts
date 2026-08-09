@@ -425,7 +425,7 @@ test('zero-scope read-only dispatches use the shared checkout without a worktree
 
   const explicitlyIsolated = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
   assert.equal(explicitlyIsolated.ticket.dispatch.sharedTree, false);
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('read-only category classes dispatch through restricted stable executors', () => {
@@ -653,8 +653,8 @@ test('worktree dispatch warnings name ignored missing paths without flagging ins
   assert.match(missingWarnings, /missing-visibility-artifact\/output\.json/);
   assert.match(missingWarnings, /sharedTree: true, or run inline/);
   assert.doesNotMatch(installedWarnings, /Worktree visibility warning/);
-  assert.equal(store.releaseTicket(slug, missing.ref, 'visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
-  assert.equal(store.releaseTicket(slug, installed.ref, 'visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, missing.ref, 'visibility-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  assert.equal(store.releaseTicket(slug, installed.ref, 'visibility-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('worktree dispatch warns when ignored scoped fixtures are absent from the linked worktree', () => {
@@ -684,7 +684,7 @@ test('worktree dispatch warns when ignored scoped fixtures are absent from the l
     assert.match(warnings, /test results can differ from integration/);
     assert.doesNotMatch(warnings, /capture-app\/node_modules/);
   } finally {
-    assert.equal(store.releaseTicket(slug, ticket.ref, 'linked-visibility-cleanup', { status: 'todo', source: 'test' }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'linked-visibility-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
     fs.rmSync(path.join(PROJECT, 'capture-app'), { recursive: true, force: true });
     fs.rmSync(path.join(PROJECT, '.claude', 'worktrees'), { recursive: true, force: true });
   }
@@ -700,7 +700,7 @@ test('dispatch warns when compose bind-mounts the repository root into an isolat
     assert.match(warnings, /compose\.yaml bind-mounts the repository root/);
     assert.match(warnings, /worktreeIsolation: false/);
   } finally {
-    assert.equal(store.releaseTicket(slug, ticket.ref, 'compose-worktree-cleanup', { status: 'todo', source: 'test' }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'compose-worktree-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
     fs.rmSync(compose, { force: true });
   }
 });
@@ -724,7 +724,7 @@ test('dispatch blocks a third terminal no-commit attempt unless explicitly overr
   });
   const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
   assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-no-commit-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-no-commit-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 // The breaker is meant to catch a run that keeps dying with nothing to show,
@@ -757,7 +757,7 @@ test('repeat contradiction releases identify the ticket premise as the likely pr
   });
   const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
   assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-contradiction-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-contradiction-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('dispatch does not count an attempt that checkpointed a commit toward the repeat-failure breaker', () => {
@@ -783,7 +783,7 @@ test('dispatch does not count an attempt that checkpointed a commit toward the r
   assert.equal(attempts.at(-1).commit, checkpointCommit);
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `checkpointed-3-${Date.now()}` });
   assert.equal(prepared.ticket.dispatch.repeatFailureOverride, undefined);
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpointed-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'checkpointed-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 
@@ -848,7 +848,7 @@ test('repeat failures identify isolated missing-app errors as worktree-shaped', 
 
   assert.throws(() => store.prepareDispatch(slug, ticket.ref), /isolated no-commit dispatches.*died at.*worktreeIsolation:false/);
   const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-worktree-failure-cleanup', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-worktree-failure-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
   assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
 });
 
@@ -1244,6 +1244,35 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
   assert.equal(after.dispatchExecutor, null);
   assert.equal(after.dispatch.terminalAt != null, true);
   assert.equal(after.dispatch.supersededTokens, undefined);
+});
+
+test('a stopped attempt cannot invalidate the next dispatch token', () => {
+  const ticket = createFixture('attempt-isolated token recovery fixture');
+  const firstSession = `attempt-isolation-first-${Date.now()}`;
+  const first = store.prepareDispatch(slug, ticket.ref, { sessionId: firstSession });
+  const executor = first.ticket.dispatchExecutor;
+  const firstAgent = `attempt-isolation-agent-${ticket.id}`;
+
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: firstSession,
+    token: first.token,
+    executor,
+    agentName: firstAgent,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(firstSession, executor, firstAgent, firstAgent).ok, true);
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref, { sessionId: `attempt-isolation-second-${Date.now()}` }), /live dispatch attempt.*Wait for that executor's terminal hook/);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'first-attempt-worker', { source: 'test' }).reason, 'unclaimed_active_dispatch');
+
+  assert.equal(store.markDispatchStopped(firstSession, executor, firstAgent, firstAgent).stopped, true);
+  const stopped = store.getTicket(slug, ticket.ref);
+  assert.equal(stopped.dispatch.outcome, 'failed');
+  assert.equal(stopped.dispatchNonce, null);
+
+  const second = store.prepareDispatch(slug, ticket.ref, { sessionId: `attempt-isolation-second-${Date.now()}` });
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, second.token).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'first-attempt-worker', { source: 'test' }).reason, 'unclaimed_active_dispatch');
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, second.token).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'attempt-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('ordinary, resumed, and reworked launches all carry a readable name and the route prefix', () => {

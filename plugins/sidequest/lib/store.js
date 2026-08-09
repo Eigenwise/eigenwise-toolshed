@@ -1568,6 +1568,14 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const held = t.claim;
     const liveClaim = Boolean(held && held.by);
     const activeDispatch = Boolean(t.dispatchNonce || dispatch2 && !dispatch2.terminalAt);
+    if (!liveClaim && activeDispatch && !opts.force) {
+      return {
+        ok: false,
+        reason: "unclaimed_active_dispatch",
+        message: `${t.ref} has a newer active dispatch but no claim owned by ${by}. Do not release it from this executor. Wait for the current attempt to finish, then have the orchestrator dispatch once from todo.`,
+        ticket: t
+      };
+    }
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch2?.nonRepoOutput === true && liveClaim && activeDispatch;
     const activeReadOnlyDispatch = dispatch2?.readonly === true && liveClaim && activeDispatch;

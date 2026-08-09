@@ -2770,6 +2770,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   assert.equal(driftedBriefing.hookSpecificOutput.permissionDecision, 'deny');
   assert.match(driftedBriefing.hookSpecificOutput.permissionDecisionReason, /briefing command must match the prepared spawn/);
 
+  assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, null, expectedName).stopped, true);
   store.prepareDispatch(slug, ticket.ref, { sessionId });
   const staleToken = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
@@ -2980,7 +2981,7 @@ test('session start reconciles a reload-lost launch once and leaves it ready to 
   assert.ok(!second.includes('launched but never claimed'));
 });
 
-test('subagent stop records a turn end for a launch that has not claimed yet', () => {
+test('subagent stop terminalizes an unclaimed launch so the next dispatch can recover safely', () => {
   const ticket = addEffortTicket('stop before claim', 'high');
   const sessionId = `stop-${++sqSeq}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
@@ -2996,11 +2997,11 @@ test('subagent stop records a turn end for a launch that has not claimed yet', (
     agent_id: 'native-stop-1',
     agent_name: 'stop-before-claim',
   });
-  assert.equal(context, '');
+  assert.match(context, /exec DIED before claiming/);
   const after = store.getTicket(slug, ticket.ref);
-  assert.equal(after.dispatch.outcome, 'launched');
-  assert.ok(after.dispatch.turnEndedAt);
-  assert.equal(after.dispatchNonce, prepared.token);
+  assert.equal(after.dispatch.outcome, 'failed');
+  assert.ok(after.dispatch.terminalAt);
+  assert.equal(after.dispatchNonce, null);
 });
 
 test('subagent-stop: legacy ticket executors without identity stay silent', () => {
