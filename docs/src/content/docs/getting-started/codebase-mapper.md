@@ -37,4 +37,4 @@ The map is available automatically when a session starts, so you can begin with 
 - **A section is missing or wrong:** Name the area or behavior you want checked, then ask Claude to update the map. Review the cited paths before committing it.
 - **Your team does not see the map:** Commit `.claude/.codebase-info/` and pull that change in the other checkout.
 
-See the generated [Codebase Mapper reference](../reference/codebase-mapper/) for the agent-facing skill details.
+See the generated [Codebase Mapper reference](/reference/codebase-mapper/) for the agent-facing skill details.

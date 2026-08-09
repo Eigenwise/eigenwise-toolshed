@@ -44,4 +44,4 @@ The **Sidequest board costs** view rolls usage up by story so a board can be com
 
 Resetting a generated dashboard does not disable telemetry or delete local history. Ask Claude to repair or reset it when the dashboard definition is stale.
 
-See the generated [Observability reference](../reference/observability/) for the dashboard and verification details.
+See the generated [Observability reference](/reference/observability/) for the dashboard and verification details.

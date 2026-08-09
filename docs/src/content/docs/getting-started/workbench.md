@@ -45,4 +45,4 @@ Claude uses the bundled update or doctor skill, tells you what it found, and ask
 - **A plugin or workspace check fails:** say which plugin or workflow failed and ask Claude to run a Workbench health check. It will give you the smallest next step.
 - **New plugin skills are missing after an install:** reload plugins or start a new session.
 
-The [generated Workbench reference](../reference/workbench/) contains the agent-facing skill and command details.
+The [generated Workbench reference](/reference/workbench/) contains the agent-facing skill and command details.

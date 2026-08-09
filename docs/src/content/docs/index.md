@@ -6,7 +6,6 @@ template: splash
 
 <section class="hero">
   <p class="hero-kicker">A Claude Code plugin marketplace</p>
-  <h1>Eigenwise<br />Toolshed</h1>
   <p class="hero-copy">Tools for the parts of a Claude Code session that need a little structure: set up a project, keep its context current, choose the right model, and move side work to completion.</p>
   <div class="hero-links">
     <a href="./getting-started/">Get started</a>

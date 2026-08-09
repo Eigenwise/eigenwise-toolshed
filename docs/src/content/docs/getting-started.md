@@ -43,4 +43,4 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 
 You can ask Workbench to install or update the Toolshed plugins later. Claude handles the plugin-owned setup, checks, and recovery steps. Reload plugins or start a new session after an install or update so Claude sees the new version.
 
-The [generated plugin reference](./reference/) lists the agent-facing skills, hooks, and commands for each plugin.
+The [generated plugin reference](/reference/) lists the agent-facing skills, hooks, and commands for each plugin.

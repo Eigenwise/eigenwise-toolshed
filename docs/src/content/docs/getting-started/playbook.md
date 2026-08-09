@@ -41,4 +41,4 @@ The two retro requests answer different questions. A session retro uses what is 
 - **A retro missed older or other-project patterns:** Ask Claude for a broader cross-session retro and name the projects or time range that matter.
 - **You want periodic reminders:** Ask Claude to enable Playbook's project reminder. It stays off unless you turn it on.
 
-See the generated [Playbook reference](../reference/playbook/) for the agent-facing skills and CLI details.
+See the generated [Playbook reference](/reference/playbook/) for the agent-facing skills and CLI details.

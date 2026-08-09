@@ -5,8 +5,8 @@ export default defineConfig({
   site: 'https://eigenwise.github.io',
   base: '/eigenwise-toolshed',
   redirects: {
-    '/getting-started/codex-gateway': '/getting-started/model-gateway',
-    '/reference/codex-gateway': '/reference/model-gateway',
+    '/getting-started/codex-gateway': '/eigenwise-toolshed/getting-started/model-gateway',
+    '/reference/codex-gateway': '/eigenwise-toolshed/reference/model-gateway',
   },
   integrations: [
     starlight({

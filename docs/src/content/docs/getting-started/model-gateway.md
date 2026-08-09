@@ -48,4 +48,4 @@ Claude checks the relevant state and tells you if a browser sign-in or restart n
 
 Remote Control conflicts with gateway model discovery. Tell Claude you want to enable or disable Model Gateway’s Remote Control compatibility. It will explain which model rows will disappear before making the change.
 
-The generated [Model Gateway reference](../reference/model-gateway/) records the agent-facing commands and configuration details used by the skill.
+The generated [Model Gateway reference](/reference/model-gateway/) records the agent-facing commands and configuration details used by the skill.

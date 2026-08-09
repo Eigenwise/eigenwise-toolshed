@@ -45,4 +45,4 @@ Use `add-rule` when the instruction itself needs to change. Use `manage-rules` t
 - **Rules worked earlier but stopped after installing or updating the plugin:** reload plugins or start a new session so Claude loads the current hooks.
 - **A rule is malformed or two rules run together:** ask Claude to audit and repair the live rules, then commit the resulting project files.
 
-The [generated Live Rules reference](../reference/live-rules/) contains the agent-facing format and hook details.
+The [generated Live Rules reference](/reference/live-rules/) contains the agent-facing format and hook details.
