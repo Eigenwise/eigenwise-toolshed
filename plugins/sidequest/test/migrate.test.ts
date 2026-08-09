@@ -133,7 +133,7 @@ test('schema v4 through v6 migration refreshes only uncustomized codebase explor
     description: 'Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation.',
     contract: 'Read before concluding; cite files and symbols, with no edits.',
   };
-  const newDescription = 'Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so medium code reasoning is sufficient. The deliverable is a grounded map of existing code, not an implementation or design recommendation.';
+  const newDescription = 'Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so high code reasoning is appropriate. The deliverable is a grounded map of existing code, not an implementation or design recommendation.';
   for (const customized of [false, true]) {
     const homeRoot = makeHome();
     const dbPath = path.join(homeRoot, 'sidequest.db');

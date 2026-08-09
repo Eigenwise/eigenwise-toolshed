@@ -14,7 +14,7 @@ const snapshotPath = path.join(__dirname, 'fixtures', 'category-defaults.json');
 test('seeded categories match the checked-in global category snapshot', () => {
   const snapshot: unknown = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   assert.deepEqual(DEFAULT_CATEGORIES, snapshot);
-  assert.equal(ROUTING_PROFILE_SEED_REVISION, 5);
+  assert.equal(ROUTING_PROFILE_SEED_REVISION, 6);
 });
 
 test('hard coding excludes stakes alone from classification', () => {
@@ -66,6 +66,19 @@ test('starter profiles expose the re-derived capability sets', () => {
     Object.fromEntries(STARTER_ROUTING_PROFILES.map((profile) => [profile.id, profile.categories.map((category) => category.id)])),
     expectedIds,
   );
+});
+
+test('every Luna route uses high effort in every starter profile', () => {
+  for (const profile of STARTER_ROUTING_PROFILES) {
+    for (const category of profile.categories) {
+      for (const routeName of ['route', 'fallback'] as const) {
+        const route = category[routeName];
+        if (route?.model === 'codex-gpt-5-6-luna') {
+          assert.equal(route.effort, 'high', `${profile.id}/${category.id} ${routeName} must use high Luna effort`);
+        }
+      }
+    }
+  }
 });
 
 test('every starter category carries a distinct full resolution contract', () => {

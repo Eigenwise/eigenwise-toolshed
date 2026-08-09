@@ -2,10 +2,10 @@
   {
     "id": "codebase-exploration",
     "name": "Codebase exploration",
-    "description": "Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so medium code reasoning is sufficient. The deliverable is a grounded map of existing code, not an implementation or design recommendation.",
+    "description": "Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so high code reasoning is appropriate. The deliverable is a grounded map of existing code, not an implementation or design recommendation.",
     "route": {
       "model": "codex-gpt-5-6-luna",
-      "effort": "medium"
+      "effort": "high"
     },
     "fallback": null,
     "contract": "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact path under .claude/.codebase-info as its only write scope.",
@@ -51,10 +51,10 @@
   {
     "id": "implementation-explanation",
     "name": "Implementation-grounded explanation",
-    "description": "Explain established technical behavior for a named audience when the implementation already supplies the factual boundary. Known code bounds both facts and structure, so medium code-and-language capability is sufficient.",
+    "description": "Explain established technical behavior for a named audience when the implementation already supplies the factual boundary. Known code bounds both facts and structure, so high code-and-language capability is appropriate.",
     "route": {
       "model": "codex-gpt-5-6-luna",
-      "effort": "medium"
+      "effort": "high"
     },
     "fallback": {
       "model": "sonnet",
@@ -67,10 +67,10 @@
   {
     "id": "general",
     "name": "General fallback",
-    "description": "Required and undeletable fallback. Use only when no more specific capability fits or the request is too underspecified to classify safely. This route performs bounded triage, so medium reasoning is sufficient. Reclassify after the first concrete evidence appears.",
+    "description": "Required and undeletable fallback. Use only when no more specific capability fits or the request is too underspecified to classify safely. This route performs bounded triage, so high reasoning is appropriate. Reclassify after the first concrete evidence appears.",
     "route": {
       "model": "codex-gpt-5-6-luna",
-      "effort": "medium"
+      "effort": "high"
     },
     "fallback": null,
     "contract": "Clarify or inspect just enough to select a specific category; avoid broad work by default.",
@@ -190,10 +190,10 @@
   {
     "id": "behavior-verification",
     "name": "Behavior verification",
-    "description": "Add, run, repair, or interpret a focused verification flow where the intended behavior and deciding signal are already known. Those fixed constraints make medium execution-and-test reasoning sufficient. Use debugging when the cause of a failing result is unknown.",
+    "description": "Add, run, repair, or interpret a focused verification flow where the intended behavior and deciding signal are already known. Those fixed constraints still benefit from high execution-and-test reasoning. Use debugging when the cause of a failing result is unknown.",
     "route": {
       "model": "codex-gpt-5-6-luna",
-      "effort": "medium"
+      "effort": "high"
     },
     "fallback": null,
     "contract": "Exercise the named behavior with the narrowest reliable check and report the observed result faithfully.",
