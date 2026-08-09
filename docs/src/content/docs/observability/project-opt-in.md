@@ -1,31 +1,33 @@
 ---
 title: Per-project opt-in
-description: Enable local telemetry only for the projects where it helps.
+description: Enable, verify, or disable local usage telemetry for one repository.
 ---
 
-Telemetry is off until a project opts in. Install the [Observability plugin](../setup/) first, then from anywhere inside that project, run:
+Observability is opt-in per repository. From anywhere inside the repository, run:
 
 ```text
 /observability:enable-project-telemetry
 ```
 
-The skill asks for consent before changing anything. It writes only the repository's private project settings, then prepares the loopback observer and Collector, records the project in the local registry, and checks whether metrics arrive. Model Gateway wiring is global: one `env --write-user` block reaches every project and executor worktree. The registry lets the global dashboard group data by project without copying project files anywhere.
+Approve the setup when Claude asks. It wires that repository for metadata-only Claude Code usage, starts the managed local services you selected, and checks for incoming metrics. You can keep the local report only, use the loopback dashboard, or choose a remote sink yourself.
 
-## Opting in covers the repository
+## What one opt-in covers
 
-A project is its enclosing git repository. Every working directory inside it reports under the repository's name: subdirectories, monorepo packages, and the linked worktrees agents run in. One repository means one registry entry and one dashboard, whichever directory a session started in.
+A repository includes its subdirectories and linked worktrees. Claude groups them under one project identity, so sessions started from a package or worktree still land in the same project view.
 
-Claude Code's own metrics exporter reads its settings from the directory a session started in and never walks up to the repository root, so opting in writes the telemetry env into the repository root and into each subdirectory that has already hosted sessions. The command prints every directory it wired.
+Settings changes apply to new Claude Code sessions. Restart existing sessions in the directories Claude lists before expecting their native metrics to appear.
 
-Sessions pick up settings environment changes only at startup. Any session already running in one of those directories has to restart before its metrics appear, not only the one at the repository root.
+## Verify the first workflow
 
-Disabling from anywhere in the repository unwires that same set, and leaves later edits and unrelated settings alone.
+After restarting a session, create some activity, then run the same skill again and ask Claude to verify the project. The result is:
 
-## Checking it worked
+- `found` when the local setup has seen a Claude Code usage sample for the project.
+- `not-found` when no sample has arrived yet or no dashboard is configured.
 
-1. Run the same skill to verify or disable telemetry. Its verification reports `found` only after the local observer and Grafana/Loki stack have a `claude_code_token_usage_tokens_total` sample for the project.
-2. Read the verification result: `not-found` means no sample has arrived yet or no dashboard is configured.
-3. If the result is `not-found`, restart Claude Code in the listed directories and create activity before treating setup as complete.
-4. Run `/workbench:workbench-doctor` for a read-only second opinion. It checks the observer, collector, registry, and statusline path, and flags a half-wired project: one whose hook events reach the observer while no `claude_code_*` metric carries its name in the same window, which is what an unwired session directory looks like from the outside. It names the directory and prints the command that fixes it.
+If it is still `not-found`, restart the listed session directories and create another small piece of activity. Then ask Claude to audit the project wiring.
 
-The global dashboard can show every opted-in project. A project view filters to the current project, so you can inspect one codebase without mixing its counts with the rest of your machine. When that project has no samples in the selected range, the top of its dashboard says so instead of looking like an idle project.
+## Disable one repository
+
+Run the same skill and ask Claude to disable telemetry for the current repository. It removes this repository's wiring and registry entry, leaves other opted-in repositories alone, and keeps local history unless you choose deletion.
+
+The [dashboard guide](./dashboard/) explains how to read project and global views after verification.

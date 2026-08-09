@@ -1,57 +1,47 @@
 ---
-title: Dashboard
-description: Inspect local Claude Code activity from one place.
+title: Observability dashboard
+description: Read the local usage views after a repository starts reporting.
 ---
 
-The Grafana dashboard reads local telemetry from enabled projects. The global **Claude Code Usage** view answers four questions: what the selected range cost, where the spend went, whether the orchestrator or executors consumed it, and whether anything failed or stopped reporting.
+After setup, open the configured loopback dashboard. The default URL is `http://127.0.0.1:3000`. The global **Claude Code Usage** view compares all opted-in repositories. A project view filters the same signals to one repository.
 
-Project dashboards are data-driven. Enabling telemetry keeps a project wired, but Grafana only gets a project dashboard after Claude Code metrics arrive for it. A project drops from the dashboard list after 30 days without Claude Code metrics. Gateway usage records carry project attribution, so each project dashboard includes its own spend total, model breakdown, and Codex share.
+A project appears after Claude Code metrics arrive for it. Restart sessions after opt-in, create activity, and allow the first records to arrive before treating an empty project view as a failure.
 
-## At a glance
+## Start with the main views
 
-- **Total spend** estimates list-price-equivalent cost across every backend for the selected range. It is a comparison figure, not a bill.
-- **Work routed to Codex** shows the share of that same total routed to Codex.
-- **Tool failure rate** shows the share of observed tool calls marked failed or errored.
+Use the dashboard to answer three practical questions:
 
-## Where the spend goes
+- Which models and projects account for token use and estimated cost?
+- Which tools and MCP servers are active?
+- Which Sidequest stories are consuming the most work?
 
-- **Cost by model** graphs the same total by resolved backend model. Advertised aliases such as `claude-opus-5[1m]` are normalized to the resolved model, so a request appears once.
-- **Cost by project** compares the same backend-independent spend across reporting projects on the global dashboard. Usage without a currently active project is grouped as **Other / unattributed**, so the project totals still reconcile with **Total spend**.
-- **Context by orchestrator vs executor** compares context-token volume by agent role.
+The global view also includes total spend, work routed to Codex, tool failure rate, hook and gateway failures, source activity, and context recharge. Choose a smaller time bucket for investigation, then use the legend or data inspection view for exact series values.
 
-Use the **Bucket** dropdown to change the aggregation window. Choose `1m` for close investigation or `1h` and above for an overview. Grafana legends and tooltips carry the individual series values, and **Inspect > Data** provides the table view.
+The screenshots below use fixed synthetic records from the documentation capture pipeline. They show the shape of the views without exposing a real project, session, or cost record.
 
-## Failures and source activity
+![Synthetic Tokens & models dashboard view showing model totals and roles](../../../assets/screenshots/observability-tokens-models.png)
 
-**Hook failures over time** and **Gateway errors and throttles** show when failures happened instead of reducing the whole range to a count. The three source cards show whether Claude metrics, observer records, and gateway records arrived in the last five minutes. A zero on the gateway card can also mean the gateway was idle.
+The **Tokens & models** view helps compare model usage and the role attached to each series.
 
-A project dashboard starts with a telemetry status card. If it has no Claude Code metrics in the selected range, the card points to project telemetry setup instead of leaving the rest of the dashboard unexplained.
+![Synthetic Who is burning tokens dashboard view showing model token totals and synthetic costs](../../../assets/screenshots/observability-who-is-burning.png)
 
-## Resetting generated dashboards
+The **Who is burning tokens** view makes the largest model totals easy to find before you change routing or prompts.
 
-From the installed Observability plugin's `bin` directory, run:
+![Synthetic MCP dashboard view showing definition tokens and call activity by server](../../../assets/screenshots/observability-mcp.png)
 
-```sh
-node setup-observability.js --reset-dashboards
-```
+The **MCP** view separates server definition footprint from call activity.
 
-This removes every generated Grafana dashboard and records the reset time. The global dashboard returns on the next setup or ensure run. A project dashboard returns only after that project sends fresh Claude Code metrics, so old samples do not immediately rebuild the deleted list.
+![Synthetic Sidequest board costs dashboard view showing story ticket counts and synthetic costs](../../../assets/screenshots/observability-board-costs.png)
 
-Resetting dashboards does not disable telemetry or delete stored metrics and logs.
+The **Sidequest board costs** view rolls usage up by story so a board can be compared with the work it represents.
 
-## Deleting project data
+## If a view is missing
 
-Replace `project-id` and the Loki start time with the project and oldest data you want gone.
+- **The dashboard does not open:** tell Claude the local Observability dashboard is unavailable and ask it to diagnose the setup.
+- **A project is missing:** restart sessions in that repository, create activity, then ask Claude to verify project telemetry.
+- **The project says `not-found`:** run the same skill with an audit request. Claude checks which session directories are wired and tells you what needs a restart or repair.
+- **The dashboard has no recent data:** check the selected time range and whether the source cards have received records in the last few minutes.
 
-:::danger
-Delete telemetry only when you mean it. It is permanent.
-:::
+Resetting a generated dashboard does not disable telemetry or delete local history. Ask Claude to repair or reset it when the dashboard definition is stale.
 
-```sh
-docker exec workbench-otel-lgtm-demo curl -X POST -g 'http://127.0.0.1:9090/api/v1/admin/tsdb/delete_series?match[]={project_id=~"project-id"}'
-docker exec workbench-otel-lgtm-demo curl -X POST http://127.0.0.1:9090/api/v1/admin/tsdb/clean_tombstones
-```
-
-```sh
-docker exec workbench-otel-lgtm-demo curl -X POST -g 'http://127.0.0.1:3100/loki/api/v1/delete?query={project_id="project-id"}&start=2026-01-01T00:00:00Z'
-```
+See the generated [Observability reference](../reference/observability/) for the dashboard and verification details.
