@@ -115,6 +115,29 @@ test('add stays quiet for a greenfield scope whose parent directory does not exi
   assert.deepStrictEqual(added.warnings, []);
 });
 
+test('normalizes declared directory patterns before checking scope existence', () => {
+  fs.mkdirSync(path.join(PROJ, 'scope-fixtures', 'existing'), { recursive: true });
+  const added = cliJson([
+    'add', '-t', 'directory pattern scope', '--complexity', '3',
+    '--why', 'declare every file in an existing directory without statting the glob literally',
+    '--file', 'scope-fixtures/existing/**',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, []);
+});
+
+test('explicit readonly overrides suppress category write-intent warnings', () => {
+  fs.mkdirSync(path.join(PROJ, 'readonly-fixtures'), { recursive: true });
+  fs.writeFileSync(path.join(PROJ, 'readonly-fixtures', 'evidence.md'), 'evidence\n');
+  const added = cliJson([
+    'add', '-t', 'readonly scoped evidence', '--category', 'source-lookup', '--readonly', 'true',
+    '--description', 'Record the repository evidence without changing it.',
+    '--file', 'readonly-fixtures/evidence.md',
+  ]);
+
+  assert.deepStrictEqual(added.warnings, []);
+});
+
 test('add and update warn for nonexistent executor anchor paths without refusing the write', () => {
   fs.mkdirSync(path.join(PROJ, 'anchor-fixtures'), { recursive: true });
   fs.writeFileSync(path.join(PROJ, 'anchor-fixtures', 'target.js'), 'const targetSymbol = true;\n');
@@ -136,6 +159,26 @@ test('add and update warn for nonexistent executor anchor paths without refusing
     'Anchor-path warning: executor anchor references path absent from this repo: anchor-fixtures/also-missing.js. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
   ]);
   assert.equal(updated.ticket.executorAnchors, 'targetSymbol is at anchor-fixtures/also-missing.js:8');
+});
+
+test('anchor parsing excludes sentence-ending punctuation from existing and missing paths', () => {
+  fs.mkdirSync(path.join(PROJ, 'anchor-punctuation'), { recursive: true });
+  fs.writeFileSync(path.join(PROJ, 'anchor-punctuation', 'present.ts'), 'export const present = true;\n');
+  const existing = cliJson([
+    'add', '-t', 'existing punctuated anchor', '--complexity', '3',
+    '--why', 'allow an anchor path at the end of a normal prose sentence',
+    '--file', 'anchor-punctuation/present.ts', '--anchors', 'Inspect anchor-punctuation/present.ts.',
+  ]);
+  assert.deepStrictEqual(existing.warnings, []);
+
+  const missing = cliJson([
+    'add', '-t', 'missing punctuated anchor', '--complexity', '3',
+    '--why', 'report a missing repo-relative path even when it ends a prose sentence',
+    '--file', 'anchor-punctuation/present.ts', '--anchors', 'Create greenfield-anchor/src/entry.ts.',
+  ]);
+  assert.deepStrictEqual(missing.warnings, [
+    'Anchor-path warning: executor anchor references path absent from this repo: greenfield-anchor/src/entry.ts. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
+  ]);
 });
 
 test('a symbol anchor warns when its existing file does not contain that symbol', () => {
@@ -622,6 +665,18 @@ test('rejects unrunnable npm verifies when tickets are added or updated', () => 
   const correct = cliJson(['add', '-t', 'working verify', '--category', 'coding.normal', '--description', 'Verify the fixture command before dispatching so this description satisfies the executor briefing requirement.', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'cd plugins/package-suite && npm run test:full']);
   assert.deepStrictEqual(correct.warnings, []);
   assert.strictEqual(store.dispatchVerifyCommandError(correct.ticket, PROJ), null);
+
+  const missingPrefixedTest = cliResult(['add', '-t', 'missing prefixed test script', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'npm --prefix plugins/package-suite test']);
+  assert.strictEqual(missingPrefixedTest.status, 1);
+  assert.match(missingPrefixedTest.stderr + missingPrefixedTest.stdout, /npm --prefix plugins\/package-suite test.*`test` script/);
+
+  const missingPrefixedRun = cliResult(['add', '-t', 'missing prefixed run script', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'npm --prefix plugins/package-suite run missing']);
+  assert.strictEqual(missingPrefixedRun.status, 1);
+  assert.match(missingPrefixedRun.stderr + missingPrefixedRun.stdout, /npm --prefix plugins\/package-suite run missing.*`missing` script/);
+
+  const correctPrefixedRun = cliJson(['add', '-t', 'working prefixed verify', '--category', 'coding.normal', '--file', 'plugins/package-suite/test/suite.test.js', '--verify', 'npm --prefix plugins/package-suite run test:full']);
+  assert.deepStrictEqual(correctPrefixedRun.warnings, []);
+  assert.strictEqual(store.dispatchVerifyCommandError(correctPrefixedRun.ticket, PROJ), null);
 
   const missingScript = cliResult(['update', correct.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
   assert.strictEqual(missingScript.status, 1);

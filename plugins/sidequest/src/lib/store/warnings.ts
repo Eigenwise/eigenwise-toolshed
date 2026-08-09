@@ -181,7 +181,7 @@ function anchorResolutionRoots(ticket?: any, projectPath?: any) {
 }
 
 function anchorPath(ticket?: any, projectPath?: any, value?: any) {
-  const relative = String(value || '').replace(/^\.\//, '');
+  const relative = String(value || '').replace(/^\.\//, '').replace(/\.$/, '');
   if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) return null;
   const roots = anchorResolutionRoots(ticket, projectPath);
   const candidates = roots.map((root) => path.resolve(root, relative)).filter((absolute) => relativePathWithin(projectPath, absolute));
@@ -254,7 +254,7 @@ function readonlyWriteIntentPaths(ticket?: any) {
 }
 
 function readonlyCategoryWriteIntentWarning(ticket?: any) {
-  if (!categoryReadOnly(ticket)) return null;
+  if (!categoryReadOnly(ticket) || readOnlyOverrideActive(ticket)) return null;
   const paths = readonlyWriteIntentPaths(ticket);
   if (!paths.length) return null;
   const artifactRoots = ticket?.category?.artifactRoots || [];
@@ -585,24 +585,33 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
   }
 
   const commands = splitVerifyCommands(match ? verify.slice(match[0].length) : verify).segments;
-  if (!match) return null;
   for (const command of commands) {
-    const npmTest = /^npm\s+test(?:\s|$)/.test(command) ? 'test' : null;
-    const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(command);
+    const prefix = /^npm\s+--prefix(?:=|\s+)(?:["']([^"']+)["']|([^\s;&|]+))\s+/.exec(command);
+    const npmCommand = prefix ? `npm ${command.slice(prefix[0].length)}` : command;
+    const npmTest = /^npm\s+test(?:\s|$)/.test(npmCommand) ? 'test' : null;
+    const npmRun = /^npm\s+run\s+(?:["']([^"']+)["']|([^\s;&|]+))/.exec(npmCommand);
     const script = npmTest || (npmRun && (npmRun[1] || npmRun[2]));
     if (script) {
+      const packageDirectory = prefix
+        ? path.resolve(directory, prefix[1] || prefix[2])
+        : directory;
+      const npmInvocation = command;
+      if (!relativePathWithin(projectPath, packageDirectory) || !fs.existsSync(packageDirectory)) {
+        return `\`${npmInvocation}\` changes to a directory that does not exist in this repo. Run the exact string you record before submitting.`;
+      }
       let scripts: any;
       try {
-        scripts = JSON.parse(fs.readFileSync(path.join(directory, 'package.json'), 'utf8')).scripts;
+        scripts = JSON.parse(fs.readFileSync(path.join(packageDirectory, 'package.json'), 'utf8')).scripts;
       } catch (_) {
-        return `\`${npmTest ? 'npm test' : `npm run ${script}`}\` requires ${path.join(relativePathWithin(projectPath, directory) || '.', 'package.json').replace(/\\/g, '/')}.`;
+        return `\`${npmInvocation}\` requires ${path.join(relativePathWithin(projectPath, packageDirectory) || '.', 'package.json').replace(/\\/g, '/')}.`;
       }
       if (!scripts || !scripts[script]) {
-        return `\`${npmTest ? 'npm test' : `npm run ${script}`}\` requires a \`${script}\` script in ${path.join(relativePathWithin(projectPath, directory) || '.', 'package.json').replace(/\\/g, '/')}.`;
+        return `\`${npmInvocation}\` requires a \`${script}\` script in ${path.join(relativePathWithin(projectPath, packageDirectory) || '.', 'package.json').replace(/\\/g, '/')}.`;
       }
       continue;
     }
 
+    if (!match) continue;
     const glob = nodeTestGlob(command);
     if (glob && !fs.globSync(glob, { cwd: directory }).length) {
       return `\`node --test ${glob}\` matches no files under ${relativePathWithin(projectPath, directory) || '.'}.`;
@@ -980,7 +989,7 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   if (!projectPath || !Array.isArray(ticket.files)) return warnings;
   warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
   warnings.push(...scopeConsumerWarnings(ticket, projectPath));
-  const absent = ticket.files.filter((file?: any) => {
+  const absent = commitScope.scopedPaths(ticket.files).filter((file?: any) => {
     const declared = path.resolve(projectPath, file);
     return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
   });
