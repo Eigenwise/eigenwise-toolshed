@@ -25,6 +25,10 @@ template: splash
       <p><a href="./getting-started/codebase-mapper/">Codebase Mapper</a> keeps a project map nearby. <a href="./getting-started/live-rules/">Live Rules</a> loads project rules when they apply.</p>
     </article>
     <article class="shed-card card">
+      <h2>Trace code across symbols</h2>
+      <p><a href="./getting-started/codegraph/">Codegraph</a> gives Claude a fresh semantic view of symbol relationships, dependency paths, and focused context.</p>
+    </article>
+    <article class="shed-card card">
       <h2>Plan and finish work</h2>
       <p><a href="./getting-started/sidequest/">Sidequest</a> turns a larger request or a side issue into visible, trackable work.</p>
     </article>
