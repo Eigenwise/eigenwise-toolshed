@@ -1,145 +1,43 @@
-# playbook
+# Playbook
 
-Plays for working with Claude Code, and a miner that finds the next one worth writing down.
+Playbook gives Claude practical guidance for choosing models, splitting work, verifying changes, and learning from repeated friction.
 
-> Start with the [playbook guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/playbook/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+[Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/playbook/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/playbook/) · [Toolshed marketplace](../../README.md)
+
+## Install
+
+Run these in Claude Code:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install playbook@eigenwise-toolshed --scope project
 ```
 
-`/workbench:init-workspace` installs and configures it for a project, so manual installation is the fallback.
+Then describe the task in front of you. For example:
 
-## What's in it
+> I need to change several independent areas. Should we split this across agents?
 
-| Skill | What it covers |
-|---|---|
-| `fan-out` | Splitting work across parallel subagents in git worktrees, and consolidating it back |
-| `pick-model` | What each reachable model is good at, so a model gets suggested with a reason |
-| `verify-discipline` | Running tests without burning the clock or the context window |
-| `retro` | Reflecting on the session in context right now and applying the fixes |
-| `skill-retro` | Mining transcripts on disk for work that keeps getting redone |
+Claude recommends whether parallel work is worth it and explains the split. If one owner is the better choice, it says so.
 
-The first two are practice: no code behind them, nothing to run, just what to do and why. The last
-two are how a new play gets found. `retro` works from what you remember of this session.
-`skill-retro` works from the transcripts, which is the only way to see what your subagents did.
+## Ask for help
 
-## The miner
+Use plain-language requests:
 
-The point is the routing. Detecting that you ran the same command eleven times is easy; deciding whether
-that wants a skill, a bundled script, a live rule, a memory entry, a codebase-map edit, or nothing at
-all is the part worth doing, and it is the part a padded report gets wrong.
+- "Which model fits this task, and why?"
+- "Give me a narrow verification check for this change, then the final full check."
+- "Should I fan this work out, or keep one owner?"
+- "Run a retro on this session and show me the fixes before applying anything."
+- "What do I keep redoing across recent sessions?"
 
-### When it runs
+The session retro uses the current conversation. The cross-session retro looks for repeated work across recent sessions and subagents, then suggests the smallest durable fix. Claude shows proposed workspace changes before applying them.
 
-Mining is explicit: invoke the `skill-retro` skill or run the CLI when you want a cross-session review.
-The plugin does not mine during normal prompts or session shutdown. Its optional hooks only count finished
-sessions and deliver a nudge later:
+## If the result is not useful
 
-- `SessionEnd` records one completed session when `PLAYBOOK_NUDGE=on`.
-- `SessionStart` mentions the retro after `PLAYBOOK_NUDGE_EVERY` sessions, defaulting to 10.
+- **The advice misses your constraint:** Say what matters, such as keeping one owner or minimizing test time.
+- **Verification is too broad:** Ask for a file-scoped check first and one full check at the end.
+- **A retro needs wider history:** Ask for a broader cross-session review and name the projects or period that matter.
+- **You want reminders:** Ask Claude to enable Playbook's project reminder. It stays off unless you turn it on.
 
-The nudge never scans transcripts. It is disabled unless enabled in the project's
-`.claude/settings.local.json`.
+## License
 
-### From findings to changes
-
-The miner reports proposed routes; review them before writing anything. Check existing skills, scripts,
-live rules, memory, codebase-map docs, and tickets first, then apply each approved fix through the tool that
-owns it. Re-run verification after changes. A finding can route to a new artifact, an amendment to an
-existing artifact, or a ticket when no clear owner exists.
-
-### Why a script does the reading
-
-A busy session is around 37 MB and 11,700 JSONL records. Reading one into context would exhaust the
-window and still cover less than a scan of forty. The bundled CLI streams transcripts line by line and
-emits bounded aggregates; nothing but the summary reaches the model.
-
-### It mines the whole loop, not just you
-
-Three actors leave traces, and only one of them is you:
-
-- **You**, in corrections and preferences.
-- **The main loop**, redoing the same orientation work session after session.
-- **Subagents**, under `~/.claude/projects/<slug>/<session>/subagents/`, each with a `.meta.json`
-  naming its agent type and model. In a repo that fans out this is usually most of the work, and it is
-  invisible in the main transcript: subagent turns are written only to those side files.
-
-Who repeated the work changes where the fix belongs. A skill only helps someone who thinks to invoke
-one, so work that agents keep redoing routes to a script they can call, a rule scoped to the files
-they edit, or a map entry loaded before they start reading.
-
-### What it detects
-
-| Signal | Default route |
-|---|---|
-| Private data in an untracked, unignored path | gitignore entry, then a memory entry for why |
-| A command shape repeated 3+ times | a bundled script, the parts that varied as CLI arguments |
-| A failure and the retry that fixed it | fix into the script, reason into the skill body |
-| A script rewritten from scratch more than once | salvage the working copy, never regenerate it |
-| An artifact rebuilt in a temp directory every session | give it a home and a CLI |
-| Orienting reads before the first change | a codebase-map entry |
-| A repeated correction from you | a live rule, never a skill |
-| Repeated permission denials | a settings allowlist |
-
-Hazards are reported first regardless of how often they happened, because the cost of a credential
-reaching a commit is not proportional to frequency. Everything else has to earn its place: one-offs are
-dropped and counted rather than padded into the report.
-
-Every route above can land on something the repo already has. The report carries an **Amend first** line
-saying so, because a skill that was invoked while the work got redone anyway needs its body fixed, and a
-skill that covers the work but never got invoked needs its description widened. Both leave the same trace
-in a transcript, and shipping a second skill instead of fixing the first one leaves two half-right
-skills where there was one.
-
-### Usage
-
-```bash
-node bin/playbook.js mine --project /path/to/repo
-```
-
-Defaults to the current project, the last 7 days, and at most 5 sessions, whichever is tighter. The
-window it actually used, including what the cap skipped, is printed at the top of every report.
-
-| Flag | Effect |
-|---|---|
-| `--days N` / `--sessions N` | Widen or narrow the window |
-| `--all-projects` | Scan every project, for habits that span repos. Much slower |
-| `--no-subagents` | Skip subagent transcripts, usually the larger half |
-| `--out DIR` | Where `report.md`, `findings.json`, and `salvage/` land |
-| `--format json` | Machine-readable output for headless use |
-
-Then verify what it salvaged:
-
-```bash
-node bin/playbook.js verify --dir <report-dir> [--run]
-node bin/playbook.js salvage --dir <report-dir> --id salvage-1 --to scripts/probe.mjs
-```
-
-`verify` syntax-checks every salvaged file. With `--run` it replays the command that proved the script
-worked and diffs against the output the transcript recorded at the time, so "does this still work" is
-answered rather than assumed. Execution is opt-in because the command is replayed from a transcript.
-
-A script that only passed the syntax check is reported as **unproven**, never as working.
-
-### Redaction
-
-Every reported string is redacted before it is written or shown: bearer headers, API keys, private key
-blocks, and high-entropy strings. Real transcripts contain live credentials, and a report that quotes
-one has copied it into a file and into a model's context. Salvaged script bodies are written to disk
-unredacted, because they are your own files and redacting them would break them.
-
-### Optional session nudge
-
-Off by default. Set `PLAYBOOK_NUDGE=on` in a project's `.claude/settings.local.json` env block and a
-SessionEnd hook starts counting finished sessions; once `PLAYBOOK_NUDGE_EVERY` (default 10) have gone
-by, the next SessionStart mentions it. The tally is kept at SessionEnd but delivered at SessionStart,
-because a session that is ending has no context left to inject into. Counting only, never mining, so
-ending a session stays instant.
-
-## Tests
-
-```bash
-node --test "test/*.test.js"
-```
+MIT

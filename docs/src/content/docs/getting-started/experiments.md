@@ -1,66 +1,41 @@
 ---
 title: Experiment loops
-description: Run human-judged experiments as bounded Sidequest rounds.
+description: Run bounded, human-judged comparisons when a person has to decide what works.
 ---
 
-Sidequest experiments are for work where a person has to judge the result and no offline metric has been shown to reproduce that judgement. Audio tuning is a useful example: a script can render each candidate, but a listener still has to decide which version sounds better.
+Use a Sidequest experiment when the result needs human judgement and no test or metric has been shown to reproduce it. For example, a script can render several audio candidates, but a listener still has to decide which one sounds best.
 
-If a test or metric can decide the question, use a coding or debugging ticket instead. An experiment ticket keeps the human decision in the loop and records what each round tried.
+Use an ordinary coding or debugging task when a test or metric can make the decision for you.
 
-## File the experiment
+## Start an experiment
 
-Create the ticket with the `experiment` category and put the round budget in its description:
+Tell Claude what you want to compare, how many rounds are worth trying, and what the human should judge:
 
-```text
-sidequest add -t "Tune the spoken-word render" \
-  --category experiment \
-  -d "Run up to four bounded rounds comparing room tone and sibilance."
-```
+> Run an experiment to improve this spoken-word render. Use up to four rounds, compare clarity and sibilance, and ask me to judge the candidates blind.
 
-Sidequest does not enforce a separate rounds flag. Each round gets one hypothesis. The experiment category also requires every candidate to be committed under `sidequest/experiment/<ref>` and pinned as `refs/sidequest/<ref>/r<N>`, including candidates that lose.
+Claude creates the experiment record, sets the round budget, and starts with one clear hypothesis. You do not need to manage branches, refs, log files, or candidate bookkeeping.
 
-## What happens in a round
+## Judge a round
 
-Start from the base direction for the first round. Later rounds continue from the prior candidate ref, such as `refs/sidequest/SQ-123/r1`. Make one change, render or otherwise produce the candidate, and record the result in the experiment log. Keep the comparison blind and ranked so the human is judging the output rather than the label or implementation story.
+When a candidate is ready, Claude gives you the comparison and asks for a verdict. Judge the output, not the implementation story or the candidate labels. Say what you chose and why:
 
-A round's log entry records the hypothesis, change, commit and branch, measured result, deliverable, verdict, failure reason, constraint bought, and status. The log also keeps ruled-out options and standing constraints so the next round does not repeat old work.
+> B, A, C. B is clearest and has less harshness on the S sounds.
 
-Sidequest creates an experiment log asset for the ticket. When a new round is briefed, the executor receives the log path and a bounded packet from that log before its first edit. Read the full asset before starting the round. The briefing also names the checkout target, including the prior `refs/sidequest/<ref>/r<N>` pin when continuing.
+Claude records your words with the round, carries forward useful constraints, and keeps rejected options from being repeated. An accepted result becomes the candidate to carry forward. A rejected or inconclusive result stays recorded as evidence.
 
-## Ask the oracle
+## Continue or finish
 
-When a candidate is ready for a human, hand off the active round with its blind comparison question. Keep the ticket in `doing` and include the candidate pin and deliverable when they help the person judge it:
+Ask Claude to continue the experiment when you want another bounded round:
 
-```text
-sidequest release SQ-123 \
-  --status doing \
-  --oracle "Rank these renders A, B, and C from best to worst for clear speech, without seeing which change produced each one." \
-  --candidate refs/sidequest/SQ-123/r2 \
-  --deliverable artifacts/audio-tuning-r2/
-```
+> Continue the render experiment using the last verdict, and change one thing for the next round.
 
-`--oracle` is the question the human answers. `--candidate` identifies the pinned candidate, and `--deliverable` points to the thing they should listen to, view, or otherwise inspect. The ticket stays active while it waits for the answer.
+The loop ends when you accept a candidate, spend the declared rounds without finding one, or decide there is no useful direction left. Tell Claude which stopping point applies so the record explains what happened.
 
-## Record the verdict
+## If the loop needs attention
 
-Record the human's words exactly. Choose `accepted`, `rejected`, or `inconclusive`; `--why` and `--constraint` are optional notes for the experiment log.
+- **The question has an objective answer:** Stop the experiment and ask Claude to turn it into a normal coding or debugging task with a test or metric.
+- **The comparison is hard to judge:** Ask Claude to restate the blind question and the decision criteria before you answer.
+- **A candidate needs another pass:** Ask Claude to continue from the last verdict and state the one change you want tested.
+- **The experiment is going in circles:** Ask Claude to review the recorded constraints and ruled-out options before proposing another round.
 
-```text
-sidequest verdict SQ-123 \
-  --text "B, A, C. B is the clearest, with less harshness on the S sounds." \
-  --outcome accepted \
-  --why "The ranking favored clarity and comfort, not loudness." \
-  --constraint "Keep the high-frequency cut that reduced harshness."
-```
-
-The verdict updates the current round in the experiment log and clears the pending oracle ask. An accepted candidate is marked `accepted`; a rejected candidate is marked `DO-NOT-MERGE`; an inconclusive result stays explicitly inconclusive. The original verdict text remains quoted in the log, without paraphrasing.
-
-## Where the record lives
-
-The ticket's experiment asset is named `experiment-<ref>.md`. It contains the round history, ruled-out options, and standing constraints. Candidate commits live under `sidequest/experiment/<ref>`, with round pins at `refs/sidequest/<ref>/r<N>`.
-
-## How the loop ends
-
-The loop ends when the human accepts a candidate. The accepted candidate is the one to carry forward.
-
-It can also end without an accepted candidate: a candidate is rejected or inconclusive and the remaining declared rounds are spent, or the human and operator decide there is no useful direction left. Keep the final verdict and the reason in the log so the next attempt starts with the actual evidence.
+See the generated [Sidequest reference](../reference/sidequest/) for the agent-facing experiment workflow.
