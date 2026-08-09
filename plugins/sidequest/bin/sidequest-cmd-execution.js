@@ -377,7 +377,7 @@ async function cmdCommit(opts, positional) {
       fail(`commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`);
     }
   }
-  const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
+  const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
   const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref);
   if (foreignFragments.length) {
     fail(`commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable. Other release fragments: ${foreignFragments.join(", ")}.`);
@@ -475,7 +475,7 @@ async function cmdSubmit(opts, positional) {
     return commits.some((commit) => range.commits.includes(commit));
   });
   if (duplicate) fail(`submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`);
-  const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
+  const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
   const scopedRange = commitScope.validateCommitRangeScope(process.cwd(), range.commits, scope);
   if (!scopedRange.ok) {
     if (scopedRange.reason === "missing_scope") fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);

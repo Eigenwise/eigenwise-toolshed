@@ -130,6 +130,9 @@ function setBoardConfig(...args) {
 function effectiveScope(...args) {
   return configLayer.effectiveScope(...args);
 }
+function executionScope(slug, ticket) {
+  return Array.isArray(ticket?.dispatch?.declaredFiles) ? ticket.dispatch.declaredFiles : effectiveScope(slug, ticket?.files);
+}
 let projectsLayer;
 function ensureProject(...args) {
   return projectsLayer.ensureProject(...args);
@@ -786,7 +789,7 @@ function negativeControlRefusal(ticket, result) {
 function completionTreeCheck(slug, ticket, opts) {
   const state = dispatchState(ticket);
   if (!state || state.readonly === true || state.nonRepoOutput === true) return { ok: true, applicable: false };
-  const declaredFiles = Array.isArray(state.declaredFiles) ? state.declaredFiles : effectiveScope(slug, ticket?.files);
+  const declaredFiles = executionScope(slug, ticket);
   if (!declaredFiles.length) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
@@ -1049,7 +1052,7 @@ const {
   crypto,
   dirtyPathKey,
   dispatchState,
-  effectiveScope,
+  executionScope,
   ensureDir,
   execFileSync,
   fs,
@@ -2144,6 +2147,7 @@ module.exports = {
   integrateSubmission,
   verifyIntegration,
   effectiveScope,
+  executionScope,
   VERIFY_ORACLE_KINDS,
   normalizeVerifyOracleKind,
   attestationErrors,

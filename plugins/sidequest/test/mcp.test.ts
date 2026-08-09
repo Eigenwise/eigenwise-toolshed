@@ -1650,6 +1650,58 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   assert.match(foreignCommit.message, new RegExp(`only \\.release/unreleased/${foreign.ref}\\.md is implicitly writable`));
 });
 
+test('MCP carries a derived release scope through a released continuation and integration admission', async () => {
+  const worktree = createGitWorktree();
+  addMarketplaceFixture(worktree);
+  const project = store.ensureProject(worktree).slug;
+  store.setBoardConfig(project, { alwaysInScope: ['.release/unreleased'] });
+  const ticket = store.createTicket(project, {
+    title: 'continued release fragment scope',
+    description: DISPATCH_DESCRIPTION,
+    category: 'coding.normal',
+    files: ['plugins/fixture-plugin'],
+    executorVerify: 'node --test plugins/fixture-plugin/test/declared.test.js',
+  });
+  const first = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.deepEqual(first.ticket.dispatch.declaredFiles, ['plugins/fixture-plugin', '.release/unreleased']);
+  assert.equal(store.claimTicket(project, ticket.ref, 'release-scope-first-worker', {
+    token: first.token,
+    executor: first.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(project, ticket.ref, 'release-scope-first-worker', {
+    status: 'todo',
+    source: 'test',
+    releaseKind: 'handback',
+    releaseReason: 'Continue the prepared release-fragment work.',
+  }).ok, true);
+  store.setBoardConfig(project, { alwaysInScope: [] });
+
+  const continued = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.deepEqual(continued.ticket.dispatch.declaredFiles, ['plugins/fixture-plugin', '.release/unreleased']);
+  const by = 'release-scope-continuation-worker';
+  assert.equal(store.claimTicket(project, ticket.ref, by, {
+    token: continued.token,
+    executor: continued.ticket.dispatchExecutor,
+  }).ok, true);
+
+  fs.mkdirSync(path.join(worktree, 'plugins', 'fixture-plugin', 'test'), { recursive: true });
+  fs.mkdirSync(path.join(worktree, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
+  fs.writeFileSync(path.join(worktree, '.release', 'unreleased', `${ticket.ref}.md`), `---\nref: ${ticket.ref}\ntitle: Continued fixture change\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nContinued fixture change.\n`);
+  const committed = await callTool('commit', {
+    project, ref: ticket.ref, by, message: 'continued release fragment scope', worktree,
+  });
+  assert.ok(committed.commit, 'the continuation admits its ticket-bound release fragment');
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+  assert.equal((await callTool('submit', {
+    project, ref: ticket.ref, by, commit: committed.commit, worktree,
+    verify: 'node --test plugins/fixture-plugin/test/declared.test.js',
+    body: 'Continued release fragment scope evidence.',
+  })).ok, true);
+  assert.deepEqual(store.getTicket(project, ticket.ref).submission.admittedScope, ['plugins/fixture-plugin', '.release/unreleased']);
+  assert.equal(store.validateIntegrationSubmission(project, ticket.ref, {}).ok, true, 'integration revalidation keeps the derived release scope');
+});
+
 test('MCP submit reports every independently fixable completion refusal together', async () => {
   const worktree = createGitWorktree();
   addMarketplaceFixture(worktree);

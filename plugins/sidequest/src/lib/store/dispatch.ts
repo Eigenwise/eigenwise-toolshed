@@ -724,7 +724,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const requestedSharedTree = Object.hasOwn(opts, 'sharedTree') ? opts.sharedTree === true : Boolean(current && current.sharedTree);
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
     let sharedTree = worktreeIsolation ? requestedSharedTree : true;
-    const declaredFiles = effectiveScope(slug, t.files);
+    const declaredFiles = current?.outcome === 'released' && Array.isArray(current.declaredFiles)
+      ? current.declaredFiles.slice()
+      : effectiveScope(slug, t.files);
     const nonRepoOutput = nonRepoExternalOutput(t, declaredFiles);
     const worktreeWarning = !worktreeIsolation && Object.hasOwn(opts, 'sharedTree') && requestedSharedTree === false
       ? 'Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately.'

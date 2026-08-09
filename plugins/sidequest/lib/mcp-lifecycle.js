@@ -450,7 +450,7 @@ const tools = [
           });
         }
       }
-      const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
+      const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
         return mutationAck(slug, {
@@ -556,7 +556,7 @@ const tools = [
         });
       }
       const completion = store.completionTreeCheck(slug, ticket, { explicitNoOp: String(args.base || "").trim() === commit });
-      const scope = commitScope.ticketCommitScope(store.effectiveScope(slug, ticket.files), ticket.files, ticket.ref);
+      const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
       const independentFailures = [];
       if (!completion.ok) independentFailures.push({ reason: completion.reason, message: completion.message });
       const attestation = ticket.executorVerifyKind === "attestation";
