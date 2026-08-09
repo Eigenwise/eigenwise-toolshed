@@ -69,6 +69,10 @@ Later-wave briefings include a recent window of the live log automatically. The 
 
 `--clear` archives the current entries instead of deleting them. A clear leaves the active log empty, but the entries and their sequence numbers survive in the archived history. Read them back with `sidequest story log US-27 --full`; the normal read shows only the current active window. Each entry still has a 280-byte limit. Keep findings terse so they fit in handoffs and remain useful.
 
+### Context projection budgets
+
+The end-to-end benchmark uses real Sidequest storage and MCP reads. Its fixture measured 3,066,684 durable UTF-8 bytes, a 9,388-byte bounded list response, and a 23,400-byte executor briefing. It also recovers a multibyte ticket body through `context_page`, checks stable and stale revisions, bounds a 1,200-byte dispatch orientation, and checks hook and compaction outputs. Approximate token counts divide measured bytes by four; they describe payload size only and make no cache-attribution claim.
+
 ## Board display names
 
 A board has a stable board ID and an editable display name. The display name is for people and can change; the board ID, repository path, ticket refs, claims, and links stay the same. Use the CLI to set or view the name:
