@@ -841,8 +841,11 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
   if (worktreeWarning) warnings.push(worktreeWarning);
   const continuation = dispatchState(ticket)?.continuation;
-  if (continuation?.mode === 'checkpoint_replay') {
-    warnings.push(`Continuation checkpoint carried from ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing replays it before work.`);
+  if (continuation?.mode === 'retained_worktree_resume') {
+    warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);
+  }
+  if (continuation?.mode === 'dirty_worktree_resume') {
+    warnings.push(`Continuation retains uncommitted work in ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);
   }
   const continuationFallback = dispatchState(ticket)?.continuationFallback;
   if (continuationFallback?.reason) {

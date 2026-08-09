@@ -951,7 +951,7 @@ test('released handbacks carry their committed worktree range into continuation 
 
     const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
     assert.deepEqual(continued.ticket.dispatch.continuation, {
-      mode: 'checkpoint_replay',
+      mode: 'retained_worktree_resume',
       ticketRef: ticket.ref,
       sourceWorktree: worktree,
       sourceBranch: branch,
@@ -963,11 +963,140 @@ test('released handbacks carry their committed worktree range into continuation 
       releaseKind: 'handback',
     }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
-    assert.match(briefing, new RegExp(`git cherry-pick ${checkpoint}`));
-    assert.match(briefing, /Agent spawns cannot attach a new agent to an existing linked worktree/);
+    assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
+    assert.ok(briefing.includes(`git rev-parse HEAD\` equals \`${checkpoint}\``));
+    assert.doesNotMatch(briefing, /git cherry-pick/);
     assert.ok(store.dispatchWarnings(continued.ticket, slug).some((warning?: any) => warning.includes(`at ${checkpoint}`)));
+
+    const continuationExecutor = continued.ticket.dispatchExecutor;
+    const continuationAgentId = `${agentId}-next`;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId: `${sessionId}-next`,
+      token: continued.token,
+      executor: continuationExecutor,
+      agentName: continuationAgentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(`${sessionId}-next`, continuationExecutor, continuationAgentId, continuationAgentId).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-second-worker', {
+      sessionId: `${sessionId}-next`,
+      token: continued.token,
+      executor: continuationExecutor,
+    }).ok, true);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktree);
+    assert.equal(store.submitTicket(slug, ticket.ref, 'continuation-second-worker', {
+      commit: checkpoint,
+      worktree,
+      source: 'test',
+    }).ok, true);
+    assert.equal(store.getTicket(slug, ticket.ref).submission.worktree, worktree);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+  }
+});
+
+test('dirty released worktrees without commits resume in place for a continuation', () => {
+  const ticket = createFixture('dirty continuation fixture');
+  const sessionId = `dirty-continuation-${Date.now()}`;
+  const agentId = `dirty-continuation-${Date.now()}`;
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-continuation-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 4;\n');
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'dirty-continuation-worker', {
+      status: 'todo',
+      source: 'test',
+    }).ok, true);
+
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    assert.equal(continued.ticket.dispatch.continuation.mode, 'dirty_worktree_resume');
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.match(briefing, /with uncommitted work in retained worktree/);
+    assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
+    assert.doesNotMatch(briefing, /git cherry-pick/);
+
+    const continuationExecutor = continued.ticket.dispatchExecutor;
+    const continuationAgentId = `${agentId}-next`;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId: `${sessionId}-next`,
+      token: continued.token,
+      executor: continuationExecutor,
+      agentName: continuationAgentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(`${sessionId}-next`, continuationExecutor, continuationAgentId, continuationAgentId).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-continuation-second-worker', {
+      sessionId: `${sessionId}-next`,
+      token: continued.token,
+      executor: continuationExecutor,
+    }).ok, true);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktree);
+    assert.deepEqual(store.completionTreeCheck(slug, store.getTicket(slug, ticket.ref)).changedPaths, ['tracked.js']);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'dirty-continuation-cleanup', { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+  }
+});
+
+test('dirty released worktrees with checkpoints fall back to cherry-picking the commit range', () => {
+  const ticket = createFixture('dirty checkpoint fallback fixture');
+  const sessionId = `dirty-checkpoint-${Date.now()}`;
+  const agentId = `dirty-checkpoint-${Date.now()}`;
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-checkpoint-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 5;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
+    execFileSync('git', ['commit', '--quiet', '-m', 'dirty continuation checkpoint'], { cwd: worktree });
+    const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 6;\n');
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'dirty-checkpoint-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'Continue from the committed checkpoint.',
+    }).ok, true);
+
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    assert.equal(continued.ticket.dispatch.continuation, undefined);
+    assert.deepEqual(continued.ticket.dispatch.continuationFallback.commits, [checkpoint]);
+    const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    assert.match(briefing, new RegExp(`git cherry-pick ${checkpoint}`));
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'dirty-checkpoint-cleanup', { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
     execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
   }
@@ -1020,7 +1149,7 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
 
     const continued = store.prepareDispatch(aliasSlug, ticket.ref, { sessionId: `${sessionId}-next` });
     assert.deepEqual(continued.ticket.dispatch.continuation, {
-      mode: 'checkpoint_replay',
+      mode: 'retained_worktree_resume',
       ticketRef: ticket.ref,
       sourceWorktree: worktree,
       sourceBranch: branch,

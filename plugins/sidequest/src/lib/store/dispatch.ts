@@ -559,10 +559,11 @@ function gitOutput(root?: any, args?: any[]) {
   }).trim();
 }
 
-function continuationFallback(reason?: any, worktree?: any) {
+function continuationFallback(reason?: any, worktree?: any, details?: any) {
   return {
     reason: String(reason || 'unavailable'),
     ...(worktree ? { sourceWorktree: String(worktree) } : {}),
+    ...(details && typeof details === 'object' ? details : {}),
   };
 }
 
@@ -575,9 +576,6 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
   const attempts = Array.isArray(state.attempts) ? state.attempts : [];
   const attempt = attempts[attempts.length - 1] || null;
   const checkpointCommit = String(attempt?.commit || '').trim();
-  if (!checkpointCommit && attempt?.release?.kind !== 'handback') {
-    return { fallback: continuationFallback('release_has_no_checkpoint_or_handback', worktree) };
-  }
   try {
     const projectPath = String(readMeta(slug)?.path || '').trim();
     const projectGitDirectory = gitOutput(projectPath, ['rev-parse', '--git-common-dir']);
@@ -586,23 +584,47 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
       !== normalizedFilesystemPath(path.resolve(worktree, worktreeGitDirectory))) {
       return { fallback: continuationFallback('released_worktree_belongs_to_another_repository', worktree) };
     }
-    if (gitOutput(worktree, ['status', '--porcelain'])) {
-      return { fallback: continuationFallback('released_worktree_is_dirty', worktree) };
-    }
     const baseCommit = gitOutput(worktree, ['rev-parse', '--verify', `${state.baseCommit}^{commit}`]);
     const commit = gitOutput(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
+    gitOutput(worktree, ['merge-base', '--is-ancestor', baseCommit, commit]);
+    const commits = gitOutput(worktree, ['rev-list', '--reverse', `${baseCommit}..${commit}`, '--']).split(/\r?\n/).filter(Boolean);
+    let sourceBranch = null;
+    try { sourceBranch = gitOutput(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) || null; } catch (_: any) {}
+    if (gitOutput(worktree, ['status', '--porcelain'])) {
+      if (!commits.length) {
+        return {
+          continuation: {
+            mode: 'dirty_worktree_resume',
+            ticketRef: ticket.ref,
+            sourceWorktree: worktree,
+            sourceBranch,
+            baseCommit,
+            commit,
+            clean: false,
+            releasedAt: state.terminalAt,
+            releaseKind: attempt?.release?.kind || 'release',
+          },
+        };
+      }
+      return {
+        fallback: continuationFallback('released_worktree_is_dirty', worktree, {
+          sourceBranch,
+          commit,
+          commits,
+        }),
+      };
+    }
+    if (!checkpointCommit && attempt?.release?.kind !== 'handback') {
+      return { fallback: continuationFallback('release_has_no_checkpoint_or_handback', worktree) };
+    }
     if (checkpointCommit && gitOutput(worktree, ['rev-parse', '--verify', `${checkpointCommit}^{commit}`]) !== commit) {
       return { fallback: continuationFallback('checkpoint_is_not_worktree_head', worktree) };
     }
-    gitOutput(worktree, ['merge-base', '--is-ancestor', baseCommit, commit]);
-    const commits = gitOutput(worktree, ['rev-list', '--reverse', `${baseCommit}..${commit}`, '--']).split(/\r?\n/).filter(Boolean);
     if (!commits.length) return { fallback: continuationFallback('released_worktree_has_no_committed_progress', worktree) };
     if (commits.length > 128) return { fallback: continuationFallback('released_worktree_commit_range_is_too_large', worktree) };
-    let sourceBranch = null;
-    try { sourceBranch = gitOutput(worktree, ['symbolic-ref', '--quiet', '--short', 'HEAD']) || null; } catch (_: any) {}
     return {
       continuation: {
-        mode: 'checkpoint_replay',
+        mode: 'retained_worktree_resume',
         ticketRef: ticket.ref,
         sourceWorktree: worktree,
         sourceBranch,
@@ -772,7 +794,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       declaredFiles,
-      ...(!sharedTree && releasedContinuation?.continuation ? { continuation: releasedContinuation.continuation } : {}),
+      ...(!sharedTree && releasedContinuation?.continuation ? {
+        continuation: releasedContinuation.continuation,
+        worktree: releasedContinuation.continuation.sourceWorktree,
+      } : {}),
       ...(releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {}),
       ...(sharedTree && releasedContinuation?.continuation
         ? { continuationFallback: continuationFallback('continuation_checkpoint_requires_isolated_worktree', releasedContinuation.continuation.sourceWorktree) }
@@ -1045,7 +1070,7 @@ function dispatchWorkspace(slug?: any, ticket?: any) {
   if (state.sharedTree !== false) return baseCommit ? { root: projectPath, base: baseCommit } : null;
   const agentId = String(state.agentId || '').trim();
   if (!agentId) return null;
-  const root = agentWorktreePath(projectPath, agentId);
+  const root = String(state.worktree || '').trim() || agentWorktreePath(projectPath, agentId);
   if (!fs.existsSync(root)) return null;
   let base = baseCommit;
   if (!base) {
@@ -1112,7 +1137,7 @@ function dispatchCanBindRuntimeIdentity(state?: any, sessionId?: any, executor?:
 function recordDispatchRuntimeIdentity(slug?: any, state?: any, agentId?: any, agentName?: any, now?: any) {
   if (agentId) state.agentId = agentId;
   if (agentName) state.agentName = agentName;
-  if (state.sharedTree === false && agentId) {
+  if (state.sharedTree === false && agentId && !state.continuation?.sourceWorktree) {
     const projectPath = readMeta(slug)?.path;
     if (projectPath) state.worktree = agentWorktreePath(projectPath, agentId);
   }

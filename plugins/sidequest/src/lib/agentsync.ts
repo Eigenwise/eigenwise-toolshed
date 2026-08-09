@@ -514,21 +514,35 @@ function ticketCloseout(ticket?: any) {
 
 function ticketContinuationPacket(ticket?: any) {
   const continuation = ticket?.dispatch?.continuation;
-  if (continuation?.mode === 'checkpoint_replay' && Array.isArray(continuation.commits) && continuation.commits.length) {
+  if (continuation?.mode === 'retained_worktree_resume' && continuation.sourceWorktree && continuation.commit) {
     const branch = continuation.sourceBranch || '(detached HEAD)';
     return [
       'Continuation handoff:',
-      `The previous executor released this same ticket from worktree ${continuation.sourceWorktree}.`,
+      `The previous executor released this same ticket from retained worktree ${continuation.sourceWorktree}.`,
       `Previous branch: ${branch}`,
       `Checkpoint commit: ${continuation.commit}`,
-      'Claude Code Agent spawns cannot attach a new agent to an existing linked worktree, so this dispatch carries the released commit range into its fresh isolated worktree.',
-      `After claiming and before any other work, run \`git cherry-pick ${continuation.commits.join(' ')}\`.`,
-      'If the cherry-pick fails, stop and report the failure. Do not rediscover or rewrite the checkpointed work.',
+      'After claiming and before any other work, call EnterWorktree with `path` set to that retained worktree.',
+      `Then verify \`git rev-parse HEAD\` equals \`${continuation.commit}\` and continue from that checkpoint.`,
+      'The board binds this ticket to the retained worktree at claim time. Your freshly minted spawn worktree is disposable; the worktree sweep reaps it after this ticket reaches a final state.',
+      'Do not cherry-pick the checkpoint or rediscover the checkpointed work.',
+    ].join('\n');
+  }
+  if (continuation?.mode === 'dirty_worktree_resume' && continuation.sourceWorktree && continuation.commit) {
+    return [
+      'Continuation handoff:',
+      `The previous executor released this same ticket with uncommitted work in retained worktree ${continuation.sourceWorktree}.`,
+      `Recorded HEAD: ${continuation.commit}`,
+      'After claiming and before any other work, call EnterWorktree with `path` set to that retained worktree.',
+      `Then verify \`git rev-parse HEAD\` equals \`${continuation.commit}\`, preserve the existing working changes, and continue.`,
+      'The board binds this ticket to the retained worktree at claim time. Your freshly minted spawn worktree is disposable; the worktree sweep reaps it after this ticket reaches a final state.',
     ].join('\n');
   }
   const fallback = ticket?.dispatch?.continuationFallback;
   if (!fallback?.reason) return null;
-  return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree. ${fallback.sourceWorktree ? `Previous worktree: ${fallback.sourceWorktree}.` : ''}`.trim();
+  const replay = Array.isArray(fallback.commits) && fallback.commits.length
+    ? ` After claiming and before any other work, run \`git cherry-pick ${fallback.commits.join(' ')}\`. If the cherry-pick fails, stop and report the failure. Do not rediscover or rewrite the checkpointed work.`
+    : '';
+  return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${replay}`.trim();
 }
 
 function ticketWorktreeSync(ticket?: any, projectPath?: any) {
@@ -636,7 +650,8 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
   const root = String(projectPath || '').trim();
   if (!dispatch || !root || dispatch.sharedTree == null) return null;
   const sharedTree = dispatch.sharedTree === true;
-  const worktree = sharedTree ? root : String(dispatch.worktree || '').trim();
+  const continuationWorktree = dispatch.continuation?.sourceWorktree;
+  const worktree = sharedTree ? root : String(continuationWorktree || dispatch.worktree || '').trim();
   if (!worktree) return null;
   const gitDir = sharedTree
     ? path.join(root, '.git')
@@ -662,7 +677,8 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
   if (!ticket || !ticket.dispatch || ticket.dispatch.sharedTree !== false) return null;
   const root = String(projectPath || '').trim() || '<board project path>';
   const dispatch = ticket.dispatch;
-  const expected = String(dispatch.worktree || '').trim() || path.join(worktreeRoot(root), 'agent-<your agent id>');
+  const continuationWorktree = String(dispatch.continuation?.sourceWorktree || '').trim();
+  const expected = continuationWorktree || String(dispatch.worktree || '').trim() || path.join(worktreeRoot(root), 'agent-<your agent id>');
   return [[
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     `Expected worktree root: ${expected}`,
