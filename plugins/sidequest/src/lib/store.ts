@@ -97,6 +97,11 @@ function normalizeBoardName(...args: any[]) { return configLayer.normalizeBoardN
 function boardConfig(...args: any[]) { return configLayer.boardConfig(...args); }
 function setBoardConfig(...args: any[]) { return configLayer.setBoardConfig(...args); }
 function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...args); }
+function executionScope(slug?: any, ticket?: any) {
+  return Array.isArray(ticket?.dispatch?.declaredFiles)
+    ? ticket.dispatch.declaredFiles
+    : effectiveScope(slug, ticket?.files);
+}
 
 let projectsLayer: any;
 function ensureProject(...args: any[]) { return projectsLayer.ensureProject(...args); }
@@ -682,7 +687,7 @@ function negativeControlRefusal(ticket?: any, result?: any) {
 function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (!state || state.readonly === true || state.nonRepoOutput === true) return { ok: true, applicable: false };
-  const declaredFiles = Array.isArray(state.declaredFiles) ? state.declaredFiles : effectiveScope(slug, ticket?.files);
+  const declaredFiles = executionScope(slug, ticket);
   if (!declaredFiles.length) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
@@ -959,7 +964,7 @@ const {
   crypto,
   dirtyPathKey,
   dispatchState,
-  effectiveScope,
+  executionScope,
   ensureDir,
   execFileSync,
   fs,
@@ -2260,6 +2265,7 @@ module.exports = {
   integrateSubmission,
   verifyIntegration,
   effectiveScope,
+  executionScope,
   VERIFY_ORACLE_KINDS,
   normalizeVerifyOracleKind,
   attestationErrors,
