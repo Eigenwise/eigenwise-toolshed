@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.428.0 (2026-08-09)
+
+### sidequest 4.42.1 → 4.42.2
+
+#### Fixes
+
+- Allow greenfield package verify commands (SQ-1635)
+
 ## v3.427.0 (2026-08-09)
 
 ### codebase-mapper 2.14.1 → 2.14.2
