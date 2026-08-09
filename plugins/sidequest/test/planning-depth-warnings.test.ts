@@ -54,6 +54,11 @@ function cliJsonAt(project: any, args: any[]) {
   return JSON.parse(res.stdout);
 }
 
+function cliResultAt(project: any, args: any[]) {
+  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: project });
+  return spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env });
+}
+
 function cliResult(args: any[]) {
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
   return spawnSync(process.execPath, [BIN, ...args, '--json'], { encoding: 'utf8', env });
@@ -205,6 +210,34 @@ test('correct executor anchors stay quiet', () => {
   ]);
 
   assert.deepStrictEqual(added.warnings, []);
+});
+
+test('submission-review anchors resolve against their explicit pinned ref or commit', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'pinned-anchor');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'README.md'), 'fixture\n');
+  fs.writeFileSync(path.join(project, 'test', 'context-projection-benchmark.test.ts'), 'export {};\n');
+  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'seed pinned review'], { cwd: project, encoding: 'utf8' }).status, 0);
+  const pinned = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: project, encoding: 'utf8' }).stdout.trim();
+  assert.strictEqual(spawnSync('git', ['update-ref', 'refs/sidequest/SQ-1565', pinned], { cwd: project, encoding: 'utf8' }).status, 0);
+  fs.rmSync(path.join(project, 'test', 'context-projection-benchmark.test.ts'));
+
+  const added = cliJsonAt(project, [
+    'add', '-t', 'review a submitted context benchmark', '--category', 'source-lookup', '--readonly', 'true', '--file', 'README.md',
+    '--anchors', `Review test/context-projection-benchmark.test.ts from refs/sidequest/SQ-1565 at commit ${pinned}.`,
+  ]);
+  assert.deepStrictEqual(added.warnings, []);
+
+  const absent = cliJsonAt(project, [
+    'add', '-t', 'review an absent submitted path', '--category', 'source-lookup', '--readonly', 'true', '--file', 'README.md',
+    '--anchors', `Review test/missing-benchmark.test.ts from refs/sidequest/SQ-1565 at commit ${pinned}.`,
+  ]);
+  assert.deepStrictEqual(absent.warnings, [
+    'Anchor-path warning: executor anchor references path absent from this repo or its explicit pinned submission: test/missing-benchmark.test.ts. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.',
+  ]);
 });
 
 test('anchor warnings ignore slashed prose and resolve package-relative files', () => {
@@ -586,6 +619,54 @@ test('discovers bundled hook output from the build script export', () => {
 
   const outputOnly = cliJsonAt(project, ['add', '-t', 'hook output change', '--category', 'coding.normal', '--file', 'hooks/subagent-stop.js']);
   assert.deepStrictEqual(outputOnly.warnings, []);
+});
+
+test('readonly tickets skip build-output and consumer write-scope warnings on add and dispatch', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'readonly-output');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src', 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'src', 'hooks'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'lib'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'hooks'), { recursive: true });
+  fs.mkdirSync(path.join(project, 'scripts'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { build: 'node scripts/build.mjs' } }));
+  fs.writeFileSync(path.join(project, 'scripts', 'build.mjs'), [
+    "export const nonBundledBuildDirectories = ['lib'];",
+    'export const bundledBuildOutputs = [{',
+    "  sourceDirectory: 'src/hooks',",
+    "  outputDirectory: 'hooks',",
+    "  sourceExtension: '.ts',",
+    "  outputExtension: '.js',",
+    '}];',
+  ].join('\n'));
+  fs.writeFileSync(path.join(project, 'src', 'lib', 'store.ts'), 'export const readOnlyReview = true;\n');
+  fs.writeFileSync(path.join(project, 'src', 'lib', 'consumer.ts'), "import { readOnlyReview } from './store.js';\nvoid readOnlyReview;\n");
+  fs.writeFileSync(path.join(project, 'src', 'hooks', 'subagent-stop.ts'), 'export {};\n');
+  fs.writeFileSync(path.join(project, 'lib', 'store.js'), 'module.exports = {};\n');
+  fs.writeFileSync(path.join(project, 'hooks', 'subagent-stop.js'), 'module.exports = {};\n');
+  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
+
+  const writable = cliJsonAt(project, [
+    'add', '-t', 'writable source change', '--category', 'coding.normal',
+    '--file', 'src/lib/store.ts', '--file', 'src/hooks/subagent-stop.ts',
+  ]);
+  assert.ok(writable.warnings.some((warning: string) => warning.includes('tracked build output lib')));
+  assert.ok(writable.warnings.some((warning: string) => warning.includes('tracked build output hooks')));
+  assert.ok(writable.warnings.some((warning: string) => warning.includes('direct importer: src/lib/consumer.ts')));
+
+  const readonly = cliJsonAt(project, [
+    'add', '-t', 'readonly source review', '--category', 'source-lookup', '--readonly', 'true',
+    '--description', 'Review the source and generated outputs for a planning audit without changing either file or rebuilding package artifacts.',
+    '--verify', 'manual: Reviewed the pinned source and generated output relationship.',
+    '--file', 'src/lib/store.ts', '--file', 'src/hooks/subagent-stop.ts',
+  ]);
+  assert.deepStrictEqual(readonly.warnings, []);
+  const dispatched = cliResultAt(project, ['dispatch', readonly.ticket.ref, '--unverified-transport']);
+  assert.strictEqual(dispatched.status, 0, dispatched.stderr + dispatched.stdout);
+  const dispatchWarnings = JSON.parse(dispatched.stdout).warnings;
+  assert.ok(dispatchWarnings.includes('readonly override active: this ticket closes with done + comment despite its category default.'));
+  assert.ok(!dispatchWarnings.some((warning: string) => /tracked build output|direct importer/.test(warning)));
 });
 
 test('warns only for visual-evaluation and legacy visual-review categories', () => {

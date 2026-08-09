@@ -180,6 +180,28 @@ function anchorResolutionRoots(ticket?: any, projectPath?: any) {
   return [...roots.values()];
 }
 
+function pinnedAnchorReferences(ticket?: any) {
+  const context = `${String(ticket?.executorAnchors || '')}\n${String(ticket?.description || '')}`;
+  const references = new Set<string>();
+  for (const match of context.matchAll(/\brefs\/sidequest\/SQ-\d+(?:\/[A-Za-z0-9._-]+)?\b/gi)) references.add(match[0]);
+  for (const match of context.matchAll(/\b[0-9a-f]{40}\b/gi)) references.add(match[0]);
+  return [...references];
+}
+
+function pinnedAnchorContents(projectPath?: any, relative?: any, references?: any) {
+  for (const reference of references || []) {
+    try {
+      return execFileSync('git', ['show', `${reference}:${relative}`], {
+        cwd: projectPath,
+        encoding: 'utf8',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'ignore'],
+      });
+    } catch (_) {}
+  }
+  return null;
+}
+
 function anchorPath(ticket?: any, projectPath?: any, value?: any) {
   const relative = String(value || '').replace(/^\.\//, '').replace(/\.$/, '');
   if (!relative || relative.startsWith('../') || path.isAbsolute(relative)) return null;
@@ -190,31 +212,39 @@ function anchorPath(ticket?: any, projectPath?: any, value?: any) {
   const hasExistingPrefix = roots.some((root) => fs.existsSync(path.resolve(root, firstSegment)));
   if (!hasKnownExtension && !hasExistingPrefix) return null;
   const existing = candidates.find((absolute) => fs.existsSync(absolute));
-  return { relative, absolute: existing || candidates[0], exists: Boolean(existing) };
+  const references = pinnedAnchorReferences(ticket);
+  const pinnedContents = existing ? null : pinnedAnchorContents(projectPath, relative, references);
+  return { relative, absolute: existing || candidates[0], exists: Boolean(existing) || pinnedContents !== null, contents: pinnedContents, hasPinnedReference: references.length > 0 };
 }
 
 function executorAnchorWarnings(ticket?: any, projectPath?: any) {
   if (!projectPath || !String(ticket?.executorAnchors || '').trim()) return [];
   const anchors = String(ticket.executorAnchors);
-  const missing = new Set<string>();
-  const existing = new Map<string, string>();
+  const missing = new Map<string, boolean>();
+  const existing = new Map<string, any>();
   for (const match of anchors.matchAll(ANCHOR_PATH_TOKEN)) {
     const candidate = anchorPath(ticket, projectPath, match[1]);
     if (!candidate) continue;
-    if (candidate.exists) existing.set(candidate.relative.toLowerCase(), candidate.absolute);
-    else missing.add(candidate.relative);
+    if (candidate.exists) existing.set(candidate.relative.toLowerCase(), candidate);
+    else missing.set(candidate.relative, candidate.hasPinnedReference);
   }
-  const warnings = [...missing].sort().map((relative) => `Anchor-path warning: executor anchor references path absent from this repo: ${relative}. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.`);
+  const warnings = [...missing.entries()].sort(([left], [right]) => left.localeCompare(right)).map(([relative, hasPinnedReference]) => {
+    const location = hasPinnedReference ? 'this repo or its explicit pinned submission' : 'this repo';
+    return `Anchor-path warning: executor anchor references path absent from ${location}: ${relative}. This is allowed for greenfield work; confirm the executor creates it before relying on the anchor.`;
+  });
   const absentSymbols = new Set<string>();
   for (const match of anchors.matchAll(ANCHOR_SYMBOL_REFERENCE)) {
     const symbol = match[1];
     const candidate = anchorPath(ticket, projectPath, match[2]);
-    if (!candidate || !existing.has(candidate.relative.toLowerCase())) continue;
-    let contents = '';
-    try {
-      contents = fs.readFileSync(candidate.absolute, 'utf8');
-    } catch (_) {
-      continue;
+    const existingCandidate = candidate && existing.get(candidate.relative.toLowerCase());
+    if (!existingCandidate) continue;
+    let contents = String(existingCandidate.contents || '');
+    if (!contents) {
+      try {
+        contents = fs.readFileSync(existingCandidate.absolute, 'utf8');
+      } catch (_) {
+        continue;
+      }
     }
     if (!new RegExp(`\\b${symbol}\\b`).test(contents)) absentSymbols.add(`${symbol}|${candidate.relative}`);
   }
@@ -376,7 +406,7 @@ function scopeIncludesPath(files?: any, projectPath?: any, target?: any) {
 }
 
 function sourceBuildOutputWarnings(ticket?: any, projectPath?: any) {
-  if (!projectPath || !Array.isArray(ticket?.files)) return [];
+  if (dispatchReadOnly(ticket) || !projectPath || !Array.isArray(ticket?.files)) return [];
   const warnings = new Set<string>();
   for (const scope of normalizeFiles(ticket.files)) {
     const packageRoot = packageRootForScope(projectPath, scope);
@@ -502,7 +532,7 @@ function packageConsumerHops(packageSources: string[], sourceFiles: string[]) {
 }
 
 function scopeConsumerWarnings(ticket?: any, projectPath?: any) {
-  if (!projectPath || !Array.isArray(ticket?.files)) return [];
+  if (dispatchReadOnly(ticket) || !projectPath || !Array.isArray(ticket?.files)) return [];
   const sourceFiles = normalizeFiles(ticket.files)
     .map((scope?: any) => path.resolve(projectPath, scope))
     .filter((file?: any) => fs.existsSync(file) && sourceModulePath(file));

@@ -165,7 +165,7 @@ The main settings are `SIDEQUEST_HOME` (central SQLite store), `SIDEQUEST_AGENTS
 
 Route delegated work with `sidequest dispatch SQ-3`, then spawn the returned executor unchanged. Dispatch requires a real ticket description, at least 80 characters, because that description is the executor's entire brief. Include **Where**, **Contract**, and **Verify**. Coding and debugging tickets without a verify command still dispatch, but return a warning. The executor claims with the returned token and executor, commits declared paths, and submits its verified commit for the orchestrator to publish.
 
-Planning warnings use normalized ticket scope, so `path/**` means the existing `path` directory. An explicit `readonly` choice records the ticket's effective mode instead of triggering a redundant category warning. Verify validation checks `npm --prefix <dir> test` and `npm --prefix <dir> run <script>` against that package's scripts before dispatch.
+Planning warnings use normalized ticket scope, so `path/**` means the existing `path` directory. An explicit `readonly` choice records the ticket's effective mode instead of triggering a redundant category warning. Readonly tickets skip generated-output and consumer-scope warnings because they cannot change those paths. Submission-review anchors check an explicit `refs/sidequest/...` ref or commit before warning that a path is absent from the current tree. Verify validation checks `npm --prefix <dir> test` and `npm --prefix <dir> run <script>` against that package's scripts before dispatch.
 
 ### Flagged uncertainty at dispatch
 
