@@ -1,4 +1,6 @@
 import assert from 'node:assert/strict';
+import { spawn } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -14,6 +16,49 @@ import {
 const pluginRoot = process.cwd();
 const runtimeManifestDirectory = path.join(pluginRoot, 'runtime');
 const fixtureRuntimeDirectory = path.join(pluginRoot, 'test', 'fixtures', 'runtime');
+const fixtureAcquirerScript = path.join(fixtureRuntimeDirectory, 'acquire-runtime.mjs');
+let fixtureManifestDirectory = '';
+
+function acquireRuntimeInSeparateProcess(
+  stateDirectory: string,
+  runtimeManifestDirectory: string,
+  installRecordFile: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const childProcess = spawn(process.execPath, [fixtureAcquirerScript, stateDirectory, runtimeManifestDirectory, installRecordFile, '100'], {
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    let standardError = '';
+    childProcess.stderr.on('data', (data: Buffer) => {
+      standardError += data.toString();
+    });
+    childProcess.once('error', reject);
+    childProcess.once('exit', (exitCode) => {
+      if (exitCode === 0) {
+        resolve();
+      } else {
+        reject(new Error(`fixture runtime acquirer exited ${exitCode}: ${standardError}`));
+      }
+    });
+  });
+}
+
+async function fixtureModuleIntegrity(): Promise<string> {
+  const moduleContent = await readFile(path.join(fixtureRuntimeDirectory, 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js'));
+  return `sha512-${createHash('sha512').update(moduleContent).digest('base64')}`;
+}
+
+test.before(async () => {
+  fixtureManifestDirectory = await temporaryDirectory('codegraph-runtime-fixture-manifest-');
+  await cp(runtimeManifestDirectory, fixtureManifestDirectory, { recursive: true });
+  const manifestPath = path.join(fixtureManifestDirectory, 'integrity.json');
+  const manifest = await readFile(manifestPath, 'utf8');
+  await writeFile(manifestPath, manifest.replace(/"moduleIntegrity": "[^"]+"/, `"moduleIntegrity": "${await fixtureModuleIntegrity()}"`), 'utf8');
+});
+
+test.after(async () => {
+  await rm(fixtureManifestDirectory, { recursive: true, force: true });
+});
 
 async function temporaryDirectory(prefix: string): Promise<string> {
   return mkdtemp(path.join(tmpdir(), prefix));
@@ -34,7 +79,7 @@ class FixtureInstaller implements RuntimeInstaller {
   }
 }
 
-function createAcquirer(stateDirectory: string, installer: RuntimeInstaller, manifestDirectory = runtimeManifestDirectory) {
+function createAcquirer(stateDirectory: string, installer: RuntimeInstaller, manifestDirectory = fixtureManifestDirectory) {
   return new TypeScriptRuntimeAcquirer({
     architecture: 'x64',
     installer,
@@ -59,12 +104,29 @@ test('acquires the pinned runtime from a local fixture and reuses the complete c
   }
 });
 
+test('repairs a cached runtime whose ESM entrypoint content was changed', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const installer = new FixtureInstaller();
+  try {
+    await createAcquirer(stateDirectory, installer).acquire();
+    const modulePath = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64', 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js');
+    await writeFile(modulePath, 'export const semanticRuntimeFixture = false;\n', 'utf8');
+
+    await createAcquirer(stateDirectory, installer).acquire();
+
+    assert.equal(installer.calls, 2);
+    assert.match(await readFile(modulePath, 'utf8'), /semanticRuntimeFixture = true/);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
 test('rejects a runtime lock whose integrity differs from the committed manifest', async () => {
   const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
   const manifestDirectory = await temporaryDirectory('codegraph-runtime-manifest-');
   const installer = new FixtureInstaller();
   try {
-    await cp(runtimeManifestDirectory, manifestDirectory, { recursive: true });
+    await cp(fixtureManifestDirectory, manifestDirectory, { recursive: true });
     const lockPath = path.join(manifestDirectory, 'package-lock.json');
     const lock = await readFile(lockPath, 'utf8');
     await writeFile(lockPath, lock.replace('sha512-8FYau96o3', 'sha512-rejected'), 'utf8');
@@ -99,7 +161,13 @@ test('rejects an installed runtime with the wrong package version without publis
 
 test('maps supported platforms and rejects unsupported combinations before installation', async () => {
   const manifest = {
-    engine: { id: 'typescript', module: 'typescript/unstable/sync', version: '7.0.2' },
+    engine: {
+      id: 'typescript',
+      module: 'typescript/unstable/sync',
+      moduleFile: 'dist/api/sync/api.js',
+      moduleIntegrity: 'sha512-test',
+      version: '7.0.2',
+    },
     packages: {},
     platformPackages: {
       'darwin-arm64': '@typescript/typescript-darwin-arm64',
@@ -117,7 +185,7 @@ test('maps supported platforms and rejects unsupported combinations before insta
       architecture: 's390x',
       installer,
       platform: 'linux',
-      runtimeManifestDirectory,
+      runtimeManifestDirectory: fixtureManifestDirectory,
       stateDirectory,
     });
     await assert.rejects(acquirer.acquire(), UnsupportedRuntimePlatformError);
@@ -151,6 +219,20 @@ test('leaves no cache after an interrupted stage and recovers a partial cache on
       await readFile(path.join(cacheDirectory, 'node_modules', 'typescript', 'package.json'), 'utf8'),
       /7\.0\.2/,
     );
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('separate processes serialize cache acquisition', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const installRecordFile = path.join(stateDirectory, 'install-record.txt');
+  try {
+    await Promise.all([
+      acquireRuntimeInSeparateProcess(stateDirectory, fixtureManifestDirectory, installRecordFile),
+      acquireRuntimeInSeparateProcess(stateDirectory, fixtureManifestDirectory, installRecordFile),
+    ]);
+    assert.equal((await readFile(installRecordFile, 'utf8')).trim().split('\n').length, 1);
   } finally {
     await rm(stateDirectory, { recursive: true, force: true });
   }

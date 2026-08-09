@@ -2,7 +2,9 @@
   "engine": {
     "id": "typescript",
     "version": "7.0.2",
-    "module": "typescript/unstable/sync"
+    "module": "typescript/unstable/sync",
+    "moduleFile": "./dist/api/sync/api.js",
+    "moduleIntegrity": "sha512-R0fAvzO3sn1ljoXpzBoxZEWBGtJO8/VVQtegigjsnkWwPqA6R3lnf+XRNX3l0Alp90Pd+ClmtUM0f263rEVc0A=="
   },
   "platformPackages": {
     "darwin-arm64": "@typescript/typescript-darwin-arm64",
