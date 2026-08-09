@@ -1,8 +1,7 @@
 import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
-import { access, chmod, copyFile, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
+import { access, copyFile, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 import { runtimeCacheDirectory } from './paths.js';
 import type { RuntimeAcquirer, SemanticRuntime } from './runtime-contract.js';
 
@@ -11,6 +10,8 @@ const runtimePackageFile = 'package.json';
 const runtimePackageLockFile = 'package-lock.json';
 const runtimeModulesDirectory = 'node_modules';
 const runtimeLockSuffix = '.lock';
+const runtimeCurrentFile = 'current.json';
+const runtimeGenerationsDirectory = 'generations';
 const runtimeLockStaleMilliseconds = 5 * 60 * 1000;
 const runtimeLockRetryMilliseconds = 25;
 const inFlightAcquisitions = new Map<string, Promise<SemanticRuntime>>();
@@ -39,12 +40,12 @@ interface PackageLock {
   packages: Record<string, unknown>;
 }
 
-export interface RuntimeInstaller {
-  install(stageDirectory: string, runtimeManifestDirectory: string): Promise<void>;
+interface RuntimeCachePointer {
+  generation: string;
 }
 
-export interface RuntimeModuleLoader {
-  load(modulePath: string): Promise<unknown>;
+export interface RuntimeInstaller {
+  install(stageDirectory: string, runtimeManifestDirectory: string): Promise<void>;
 }
 
 interface RuntimeCacheLease {
@@ -56,7 +57,6 @@ export interface TypeScriptRuntimeOptions {
   architecture?: string;
   environment?: NodeJS.ProcessEnv;
   installer?: RuntimeInstaller;
-  moduleLoader?: RuntimeModuleLoader;
   platform?: NodeJS.Platform;
   runtimeManifestDirectory?: string;
   stateDirectory?: string;
@@ -112,8 +112,17 @@ function isPackageLock(value: unknown): value is PackageLock {
   return isJsonRecord(value) && isJsonRecord(value.packages);
 }
 
+function isRuntimeCachePointer(value: unknown): value is RuntimeCachePointer {
+  return isJsonRecord(value) && typeof value.generation === 'string' && /^[a-f0-9-]+$/i.test(value.generation);
+}
+
 async function parseJson(filePath: string): Promise<unknown> {
-  return JSON.parse(await readFile(filePath, 'utf8'));
+  try {
+    return JSON.parse(await readFile(filePath, 'utf8'));
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new SemanticRuntimeError(`runtime metadata could not be read: ${filePath}: ${detail}`);
+  }
 }
 
 async function readRuntimeManifest(runtimeManifestDirectory: string): Promise<RuntimeManifest> {
@@ -216,12 +225,6 @@ export class NpmRuntimeInstaller implements RuntimeInstaller {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
     const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
     await waitForProcess(process.execPath, [npmCli, 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--fund=false'], stageDirectory);
-  }
-}
-
-class ImportRuntimeModuleLoader implements RuntimeModuleLoader {
-  async load(modulePath: string): Promise<unknown> {
-    return import(pathToFileURL(modulePath).href);
   }
 }
 
@@ -329,55 +332,15 @@ async function validatedModulePath(
   return modulePath;
 }
 
-async function createRuntimeLoadDirectory(runtimeDirectory: string): Promise<string> {
-  return mkdtemp(path.join(path.dirname(runtimeDirectory), `.${path.basename(runtimeDirectory)}-load-`));
-}
-
-async function setRuntimeTreeWritable(directory: string, writable: boolean): Promise<void> {
-  const entries = await readdir(directory, { withFileTypes: true });
-  for (const entry of entries) {
-    const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) {
-      await setRuntimeTreeWritable(entryPath, writable);
-      await chmod(entryPath, writable ? 0o755 : 0o555);
-      continue;
-    }
-    if (!entry.isFile()) {
-      throw new SemanticRuntimeError(`runtime tree contains an unsupported entry: ${entryPath}`);
-    }
-    await chmod(entryPath, writable ? 0o644 : 0o444);
-  }
-  await chmod(directory, writable ? 0o755 : 0o555);
-}
-
 async function validateInstalledRuntime(
   runtimeDirectory: string,
   runtimeKey: string,
   manifest: RuntimeManifest,
   platformPackage: string,
-  moduleLoader: RuntimeModuleLoader,
 ): Promise<void> {
-  const loadDirectory = await createRuntimeLoadDirectory(runtimeDirectory);
-  try {
-    await cp(
-      path.join(runtimeDirectory, runtimeModulesDirectory),
-      path.join(loadDirectory, runtimeModulesDirectory),
-      { recursive: true },
-    );
-    await setRuntimeTreeWritable(path.join(loadDirectory, runtimeModulesDirectory), false);
-    const modulePath = await validatedModulePath(loadDirectory, manifest, platformPackage);
-    await validateInstalledTree(loadDirectory, runtimeKey, manifest);
-    await validateFileIntegrity(modulePath, manifest.engine.moduleIntegrity);
-    try {
-      await moduleLoader.load(modulePath);
-    } catch (error: unknown) {
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new SemanticRuntimeError(`runtime module could not load: ${detail}`);
-    }
-  } finally {
-    await setRuntimeTreeWritable(path.join(loadDirectory, runtimeModulesDirectory), true).catch(() => undefined);
-    await rm(loadDirectory, { recursive: true, force: true });
-  }
+  const modulePath = await validatedModulePath(runtimeDirectory, manifest, platformPackage);
+  await validateInstalledTree(runtimeDirectory, runtimeKey, manifest);
+  await validateFileIntegrity(modulePath, manifest.engine.moduleIntegrity);
 }
 
 async function createStageDirectory(cacheDirectory: string): Promise<string> {
@@ -385,18 +348,49 @@ async function createStageDirectory(cacheDirectory: string): Promise<string> {
   return mkdtemp(path.join(path.dirname(cacheDirectory), `.${path.basename(cacheDirectory)}-staging-`));
 }
 
+async function currentRuntimeDirectory(cacheDirectory: string): Promise<string | undefined> {
+  const pointerPath = path.join(cacheDirectory, runtimeCurrentFile);
+  if (!(await exists(pointerPath))) return undefined;
+  const pointer = await parseJson(pointerPath);
+  if (!isRuntimeCachePointer(pointer)) {
+    throw new SemanticRuntimeError(`runtime cache pointer is invalid: ${pointerPath}`);
+  }
+  return path.join(cacheDirectory, runtimeGenerationsDirectory, pointer.generation);
+}
+
+async function publishRuntimeStage(cacheDirectory: string, stageDirectory: string, lease: RuntimeCacheLease): Promise<void> {
+  const generation = randomUUID();
+  const generationsDirectory = path.join(cacheDirectory, runtimeGenerationsDirectory);
+  const generationDirectory = path.join(generationsDirectory, generation);
+  const temporaryPointerPath = path.join(cacheDirectory, `.${runtimeCurrentFile}-${generation}`);
+  try {
+    await lease.assertOwnership();
+    await mkdir(generationsDirectory, { recursive: true });
+    await rename(stageDirectory, generationDirectory);
+    await lease.assertOwnership();
+    await writeFile(temporaryPointerPath, JSON.stringify({ generation }), 'utf8');
+    await rename(temporaryPointerPath, path.join(cacheDirectory, runtimeCurrentFile));
+  } catch (error: unknown) {
+    await rm(temporaryPointerPath, { force: true });
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new SemanticRuntimeError(`runtime cache could not be published: ${detail}`);
+  }
+}
+
 function waitForRuntimeLock(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, runtimeLockRetryMilliseconds));
 }
 
+function runtimeOwnerHeartbeatFile(lockDirectory: string, ownerToken: string): string {
+  return path.join(lockDirectory, `owner-${ownerToken}`);
+}
+
+function runtimeOwnerReleaseFile(lockDirectory: string, ownerToken: string): string {
+  return path.join(lockDirectory, `released-${ownerToken}`);
+}
+
 async function releaseRuntimeLock(lockDirectory: string, ownerToken: string): Promise<void> {
-  try {
-    if (await readFile(path.join(lockDirectory, 'owner'), 'utf8') === ownerToken) {
-      await rm(lockDirectory, { recursive: true, force: true });
-    }
-  } catch {
-    // A stale-lock breaker moved this owner aside or a newer owner replaced it.
-  }
+  await writeFile(runtimeOwnerReleaseFile(lockDirectory, ownerToken), 'released', { flag: 'wx' }).catch(() => undefined);
 }
 
 function runtimeLockLease(lockDirectory: string, ownerToken: string, heartbeat: NodeJS.Timeout): RuntimeCacheLease {
@@ -417,18 +411,29 @@ function runtimeLockLease(lockDirectory: string, ownerToken: string, heartbeat: 
 }
 
 async function breakStaleRuntimeLock(lockDirectory: string): Promise<boolean> {
-  const ownerFile = path.join(lockDirectory, 'owner');
-  let lastHeartbeat: number;
+  let ownerToken: string;
   try {
-    lastHeartbeat = (await stat(ownerFile)).mtimeMs;
+    ownerToken = await readFile(path.join(lockDirectory, 'owner'), 'utf8');
   } catch {
-    lastHeartbeat = (await stat(lockDirectory)).mtimeMs;
+    return false;
   }
-  if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
+
+  const released = await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken));
+  if (!released) {
+    let lastHeartbeat: number;
+    try {
+      lastHeartbeat = (await stat(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
+    } catch {
+      return false;
+    }
+    if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
+  }
 
   const staleDirectory = `${lockDirectory}.stale-${randomUUID()}`;
   try {
     await rename(lockDirectory, staleDirectory);
+    const movedOwnerToken = await readFile(path.join(staleDirectory, 'owner'), 'utf8');
+    if (movedOwnerToken !== ownerToken) return false;
     await rm(staleDirectory, { recursive: true, force: true });
     return true;
   } catch {
@@ -443,7 +448,9 @@ async function acquireRuntimeLock(lockDirectory: string): Promise<RuntimeCacheLe
       const ownerFile = path.join(lockDirectory, 'owner');
       const ownerToken = randomUUID();
       await writeFile(ownerFile, ownerToken, 'utf8');
-      const heartbeat = setInterval(() => void utimes(ownerFile, new Date(), new Date()).catch(() => undefined), runtimeLockStaleMilliseconds / 3);
+      const heartbeatFile = runtimeOwnerHeartbeatFile(lockDirectory, ownerToken);
+      await writeFile(heartbeatFile, ownerToken, 'utf8');
+      const heartbeat = setInterval(() => void utimes(heartbeatFile, new Date(), new Date()).catch(() => undefined), runtimeLockStaleMilliseconds / 3);
       heartbeat.unref();
       return runtimeLockLease(lockDirectory, ownerToken, heartbeat);
     } catch (error: unknown) {
@@ -469,7 +476,6 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
   private readonly architecture: string;
   private readonly environment: NodeJS.ProcessEnv;
   private readonly installer: RuntimeInstaller;
-  private readonly moduleLoader: RuntimeModuleLoader;
   private readonly platform: NodeJS.Platform;
   private readonly runtimeManifestDirectory: string;
   private readonly stateDirectory: string | undefined;
@@ -479,7 +485,6 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     this.architecture = options.architecture ?? process.arch;
     this.environment = options.environment ?? process.env;
     this.installer = options.installer ?? new NpmRuntimeInstaller();
-    this.moduleLoader = options.moduleLoader ?? new ImportRuntimeModuleLoader();
     this.platform = options.platform ?? process.platform;
     this.runtimeManifestDirectory = options.runtimeManifestDirectory ?? path.resolve(__dirname, '..', 'runtime');
     this.stateDirectory = options.stateDirectory;
@@ -516,9 +521,10 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     const packageName = runtimePlatformPackage(manifest, this.platform, this.architecture);
     const runtimeKey = platformKey(this.platform, this.architecture);
 
-    if (await exists(cacheDirectory)) {
+    const cachedRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => undefined);
+    if (cachedRuntimeDirectory !== undefined) {
       try {
-        await validateInstalledRuntime(cacheDirectory, runtimeKey, manifest, packageName, this.moduleLoader);
+        await validateInstalledRuntime(cachedRuntimeDirectory, runtimeKey, manifest, packageName);
         return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
       } catch (error: unknown) {
         await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, error);
@@ -540,10 +546,7 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
   ): Promise<void> {
     const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);
     try {
-      await lease.assertOwnership();
-      await rm(cacheDirectory, { recursive: true, force: true });
-      await lease.assertOwnership();
-      await rename(stageDirectory, cacheDirectory);
+      await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
     } catch (error: unknown) {
       await rm(stageDirectory, { recursive: true, force: true });
       const detail = error instanceof Error ? error.message : String(error);
@@ -560,16 +563,15 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
   ): Promise<void> {
     const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);
     try {
-      await lease.assertOwnership();
-      await rename(stageDirectory, cacheDirectory);
+      await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
     } catch (error: unknown) {
       await rm(stageDirectory, { recursive: true, force: true });
-      if (await exists(cacheDirectory)) {
-        await validateInstalledRuntime(cacheDirectory, runtimeKey, manifest, packageName, this.moduleLoader);
+      const existingRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => undefined);
+      if (existingRuntimeDirectory !== undefined) {
+        await validateInstalledRuntime(existingRuntimeDirectory, runtimeKey, manifest, packageName);
         return;
       }
-      const detail = error instanceof Error ? error.message : String(error);
-      throw new SemanticRuntimeError(`runtime cache could not be published: ${detail}`);
+      throw error;
     }
   }
 
@@ -577,7 +579,7 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     const stageDirectory = await createStageDirectory(cacheDirectory);
     try {
       await this.installer.install(stageDirectory, this.runtimeManifestDirectory);
-      await validateInstalledRuntime(stageDirectory, runtimeKey, manifest, packageName, this.moduleLoader);
+      await validateInstalledRuntime(stageDirectory, runtimeKey, manifest, packageName);
       return stageDirectory;
     } catch (error: unknown) {
       await rm(stageDirectory, { recursive: true, force: true });

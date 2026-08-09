@@ -3,7 +3,6 @@ import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import { cp, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -12,7 +11,6 @@ import {
   TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError,
   type RuntimeInstaller,
-  type RuntimeModuleLoader,
 } from '../src/lib/runtime.ts';
 
 const pluginRoot = process.cwd();
@@ -72,6 +70,12 @@ async function temporaryDirectory(prefix: string): Promise<string> {
   return mkdtemp(path.join(tmpdir(), prefix));
 }
 
+async function currentRuntimeDirectory(stateDirectory: string): Promise<string> {
+  const cacheDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64');
+  const pointer = JSON.parse(await readFile(path.join(cacheDirectory, 'current.json'), 'utf8')) as { generation: string };
+  return path.join(cacheDirectory, 'generations', pointer.generation);
+}
+
 class FixtureInstaller implements RuntimeInstaller {
   calls = 0;
   private readonly mutate?: (stageDirectory: string) => Promise<void>;
@@ -91,12 +95,10 @@ function createAcquirer(
   stateDirectory: string,
   installer: RuntimeInstaller,
   manifestDirectory = fixtureManifestDirectory,
-  moduleLoader?: RuntimeModuleLoader,
 ) {
   return new TypeScriptRuntimeAcquirer({
     architecture: 'x64',
     installer,
-    moduleLoader,
     platform: 'win32',
     runtimeManifestDirectory: manifestDirectory,
     stateDirectory,
@@ -123,13 +125,13 @@ test('repairs a cached runtime whose ESM entrypoint content was changed', async 
   const installer = new FixtureInstaller();
   try {
     await createAcquirer(stateDirectory, installer).acquire();
-    const modulePath = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64', 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js');
+    const modulePath = path.join(await currentRuntimeDirectory(stateDirectory), 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js');
     await writeFile(modulePath, 'export const semanticRuntimeFixture = false;\n', 'utf8');
 
     await createAcquirer(stateDirectory, installer).acquire();
 
     assert.equal(installer.calls, 2);
-    assert.match(await readFile(modulePath, 'utf8'), /semanticRuntimeFixture = true/);
+    assert.match(await readFile(path.join(await currentRuntimeDirectory(stateDirectory), 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js'), 'utf8'), /semanticRuntimeFixture = true/);
   } finally {
     await rm(stateDirectory, { recursive: true, force: true });
   }
@@ -140,39 +142,29 @@ test('repairs a cached runtime after a TypeScript import-map tamper', async () =
   const installer = new FixtureInstaller();
   try {
     await createAcquirer(stateDirectory, installer).acquire();
-    const packagePath = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64', 'node_modules', 'typescript', 'package.json');
+    const packagePath = path.join(await currentRuntimeDirectory(stateDirectory), 'node_modules', 'typescript', 'package.json');
     const packageMetadata = await readFile(packagePath, 'utf8');
     await writeFile(packagePath, packageMetadata.replace('./dist/api/sync/api.js', '#enums/completionItemKind'), 'utf8');
 
     await createAcquirer(stateDirectory, installer).acquire();
 
     assert.equal(installer.calls, 2);
-    assert.match(await readFile(packagePath, 'utf8'), /dist\/api\/sync\/api\.js/);
+    assert.match(await readFile(path.join(await currentRuntimeDirectory(stateDirectory), 'node_modules', 'typescript', 'package.json'), 'utf8'), /dist\/api\/sync\/api\.js/);
   } finally {
     await rm(stateDirectory, { recursive: true, force: true });
   }
 });
 
-test('loads an isolated verified tree when the cache changes after validation', async () => {
+test('validates acquired runtime bytes without dynamically executing them', async () => {
   const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
   const installer = new FixtureInstaller();
-  const cacheModulePath = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64', 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js');
-  let loadedModulePath = '';
-  const cacheTamperingLoader: RuntimeModuleLoader = {
-    async load(modulePath: string): Promise<unknown> {
-      loadedModulePath = modulePath;
-      await writeFile(cacheModulePath, 'throw new Error("cache-tamper-executed");\n', 'utf8');
-      return import(pathToFileURL(modulePath).href);
-    },
-  };
   try {
     await createAcquirer(stateDirectory, installer).acquire();
-    await createAcquirer(stateDirectory, installer, fixtureManifestDirectory, cacheTamperingLoader).acquire();
-
-    assert.notEqual(loadedModulePath, cacheModulePath);
-    assert.match(await readFile(cacheModulePath, 'utf8'), /cache-tamper-executed/);
+    const modulePath = path.join(await currentRuntimeDirectory(stateDirectory), 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js');
+    await writeFile(modulePath, 'throw new Error("runtime-tamper-executed");\n', 'utf8');
 
     await createAcquirer(stateDirectory, installer).acquire();
+
     assert.equal(installer.calls, 2);
   } finally {
     await rm(stateDirectory, { recursive: true, force: true });
@@ -191,6 +183,21 @@ test('rejects a runtime lock whose integrity differs from the committed manifest
 
     await assert.rejects(createAcquirer(stateDirectory, installer, manifestDirectory).acquire(), SemanticRuntimeError);
     assert.equal(installer.calls, 0);
+  } finally {
+    await Promise.all([
+      rm(stateDirectory, { recursive: true, force: true }),
+      rm(manifestDirectory, { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test('maps malformed runtime metadata to a typed acquisition failure', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const manifestDirectory = await temporaryDirectory('codegraph-runtime-manifest-');
+  try {
+    await cp(fixtureManifestDirectory, manifestDirectory, { recursive: true });
+    await writeFile(path.join(manifestDirectory, 'integrity.json'), '{', 'utf8');
+    await assert.rejects(createAcquirer(stateDirectory, new FixtureInstaller(), manifestDirectory).acquire(), SemanticRuntimeError);
   } finally {
     await Promise.all([
       rm(stateDirectory, { recursive: true, force: true }),
@@ -275,7 +282,7 @@ test('leaves no cache after an interrupted stage and recovers a partial cache on
     await createAcquirer(stateDirectory, recoveryInstaller).acquire();
     assert.equal(recoveryInstaller.calls, 1);
     assert.match(
-      await readFile(path.join(cacheDirectory, 'node_modules', 'typescript', 'package.json'), 'utf8'),
+      await readFile(path.join(await currentRuntimeDirectory(stateDirectory), 'node_modules', 'typescript', 'package.json'), 'utf8'),
       /7\.0\.2/,
     );
   } finally {
@@ -320,11 +327,14 @@ test('a stale holder cannot replace a cache published by its successor', async (
 
     const firstAcquisition = createAcquirer(stateDirectory, firstInstaller).acquire();
     await firstInstallStarted;
-    await utimes(path.join(`${cacheDirectory}.lock`, 'owner'), new Date(0), new Date(0));
+    const ownerToken = await readFile(path.join(`${cacheDirectory}.lock`, 'owner'), 'utf8');
+    await utimes(path.join(`${cacheDirectory}.lock`, `owner-${ownerToken}`), new Date(0), new Date(0));
 
     await acquireRuntimeInSeparateProcess(stateDirectory, fixtureManifestDirectory, installRecordFile);
+    const successorRuntimeDirectory = await currentRuntimeDirectory(stateDirectory);
     releaseFirstInstall?.();
-    await assert.rejects(firstAcquisition, /lock ownership was lost/);
+    await firstAcquisition;
+    assert.equal(await currentRuntimeDirectory(stateDirectory), successorRuntimeDirectory);
 
     await createAcquirer(stateDirectory, verifierInstaller).acquire();
     assert.equal((await readFile(installRecordFile, 'utf8')).trim().split('\n').length, 1);
