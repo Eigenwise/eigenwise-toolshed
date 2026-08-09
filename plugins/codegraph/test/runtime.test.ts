@@ -1,8 +1,9 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
+import { cp, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -11,6 +12,7 @@ import {
   TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError,
   type RuntimeInstaller,
+  type RuntimeModuleLoader,
 } from '../src/lib/runtime.ts';
 
 const pluginRoot = process.cwd();
@@ -85,10 +87,16 @@ class FixtureInstaller implements RuntimeInstaller {
   }
 }
 
-function createAcquirer(stateDirectory: string, installer: RuntimeInstaller, manifestDirectory = fixtureManifestDirectory) {
+function createAcquirer(
+  stateDirectory: string,
+  installer: RuntimeInstaller,
+  manifestDirectory = fixtureManifestDirectory,
+  moduleLoader?: RuntimeModuleLoader,
+) {
   return new TypeScriptRuntimeAcquirer({
     architecture: 'x64',
     installer,
+    moduleLoader,
     platform: 'win32',
     runtimeManifestDirectory: manifestDirectory,
     stateDirectory,
@@ -140,6 +148,32 @@ test('repairs a cached runtime after a TypeScript import-map tamper', async () =
 
     assert.equal(installer.calls, 2);
     assert.match(await readFile(packagePath, 'utf8'), /dist\/api\/sync\/api\.js/);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('loads an isolated verified tree when the cache changes after validation', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const installer = new FixtureInstaller();
+  const cacheModulePath = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64', 'node_modules', 'typescript', 'dist', 'api', 'sync', 'api.js');
+  let loadedModulePath = '';
+  const cacheTamperingLoader: RuntimeModuleLoader = {
+    async load(modulePath: string): Promise<unknown> {
+      loadedModulePath = modulePath;
+      await writeFile(cacheModulePath, 'throw new Error("cache-tamper-executed");\n', 'utf8');
+      return import(pathToFileURL(modulePath).href);
+    },
+  };
+  try {
+    await createAcquirer(stateDirectory, installer).acquire();
+    await createAcquirer(stateDirectory, installer, fixtureManifestDirectory, cacheTamperingLoader).acquire();
+
+    assert.notEqual(loadedModulePath, cacheModulePath);
+    assert.match(await readFile(cacheModulePath, 'utf8'), /cache-tamper-executed/);
+
+    await createAcquirer(stateDirectory, installer).acquire();
+    assert.equal(installer.calls, 2);
   } finally {
     await rm(stateDirectory, { recursive: true, force: true });
   }
@@ -259,6 +293,44 @@ test('separate processes serialize cache acquisition', async () => {
     ]);
     assert.equal((await readFile(installRecordFile, 'utf8')).trim().split('\n').length, 1);
   } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('a stale holder cannot replace a cache published by its successor', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const cacheDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64');
+  const installRecordFile = path.join(stateDirectory, 'successor-install.txt');
+  let releaseFirstInstall: (() => void) | undefined;
+  const firstInstallReady = new Promise<void>((resolve) => {
+    releaseFirstInstall = resolve;
+  });
+  let signalFirstInstall: (() => void) | undefined;
+  const firstInstallStarted = new Promise<void>((resolve) => {
+    signalFirstInstall = resolve;
+  });
+  const firstInstaller = new FixtureInstaller(async () => {
+    signalFirstInstall?.();
+    await firstInstallReady;
+  });
+  const verifierInstaller = new FixtureInstaller();
+  try {
+    await cp(path.join(fixtureRuntimeDirectory, 'node_modules'), path.join(cacheDirectory, 'node_modules'), { recursive: true });
+    await writeFile(path.join(cacheDirectory, 'node_modules', 'typescript', 'package.json'), '{"name":"typescript","version":"partial"}', 'utf8');
+
+    const firstAcquisition = createAcquirer(stateDirectory, firstInstaller).acquire();
+    await firstInstallStarted;
+    await utimes(path.join(`${cacheDirectory}.lock`, 'owner'), new Date(0), new Date(0));
+
+    await acquireRuntimeInSeparateProcess(stateDirectory, fixtureManifestDirectory, installRecordFile);
+    releaseFirstInstall?.();
+    await assert.rejects(firstAcquisition, /lock ownership was lost/);
+
+    await createAcquirer(stateDirectory, verifierInstaller).acquire();
+    assert.equal((await readFile(installRecordFile, 'utf8')).trim().split('\n').length, 1);
+    assert.equal(verifierInstaller.calls, 0);
+  } finally {
+    releaseFirstInstall?.();
     await rm(stateDirectory, { recursive: true, force: true });
   }
 });
