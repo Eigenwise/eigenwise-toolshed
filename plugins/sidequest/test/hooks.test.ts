@@ -1766,7 +1766,10 @@ test('stop reminder: a live executor claim is in progress, not unfinished busine
 
   // Once the dispatch goes terminal the claim is nobody's live work, and the
   // ticket is business the orchestrator still owes an answer on.
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-executor', { status: 'doing', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-executor', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'todo');
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: dispatchSession, cwd: BOARD_PATH }), null,
+    'a terminal dispatch released to todo is no longer this session\'s responsibility');
   assert.equal(store.claimTicket(slug, ticket.ref, 'reconcile-live-orchestrator', {
     direct: true, reason: 'A direct claim with no live dispatch stays this session\'s own to close.',
   }).ok, true);
@@ -1795,15 +1798,24 @@ test('stop reminder: resets its counter when the board signature changes', () =>
   assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).count, 1);
 });
 
-test('stop reminder: ignores this session\'s live dispatched tickets in doing or todo', () => {
+test('stop reminder: ignores this session\'s live dispatched tickets before and after the executor claims them', () => {
   const sessionId = `reconcile-live-${++sqSeq}`;
   const doing = addTicket('executor is verifying');
-  const todo = addTicket('executor has not claimed yet');
+  const awaitingClaim = addTicket('executor is bound before its claim');
   claimStopTicket(doing, sessionId, 'reconcile-live-doing');
-  store.prepareDispatch(slug, todo.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, awaitingClaim.ref, { sessionId });
+  const agentId = `stop-agent-${awaitingClaim.id}-${++sqSeq}`;
+  const agentName = `stop-executor-${awaitingClaim.id}-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(slug, awaitingClaim.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName).ok, true);
 
   assert.equal(store.getTicket(slug, doing.ref).status, 'doing');
-  assert.equal(store.getTicket(slug, todo.ref).status, 'todo');
+  assert.ok(store.getTicket(slug, awaitingClaim.ref).dispatch?.boundAt);
   assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }), null);
 });
 

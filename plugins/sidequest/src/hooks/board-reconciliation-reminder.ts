@@ -22,7 +22,7 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string };
   listTickets: (slug: string) => Ticket[];
-  sessionClaims: (sessionId: string) => Array<{ ref?: string | null }>;
+  sessionClaims: (sessionId: string) => Array<{ ref?: string | null; held?: boolean }>;
   claimPulse: (ticket: Ticket) => { reclaimable?: string | null } | null;
 }
 
@@ -53,6 +53,10 @@ function liveDispatch(ticket: Ticket, sessionId: string, store: Store): boolean 
   return ticket.dispatch?.sessionId === sessionId
     && !ticket.dispatch.terminalAt
     && !store.claimPulse(ticket)?.reclaimable;
+}
+
+function dispatchedBySession(ticket: Ticket, sessionId: string): boolean {
+  return ticket.dispatch?.sessionId === sessionId;
 }
 
 // An executor holding a live dispatch with a claim that is not reclaimable. The
@@ -125,8 +129,15 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     if (!project.ok || !project.slug) project = store.findProject(start);
     if (!project.ok || !project.slug) return null;
 
-    const claimedRefs = new Set(store.sessionClaims(sessionId).map((claim) => String(claim.ref || '')).filter(Boolean));
-    const touched = (ticket: Ticket): boolean => claimedRefs.has(String(ticket.ref || '')) || ticket.dispatch?.sessionId === sessionId;
+    const claimedRefs = new Set(store.sessionClaims(sessionId)
+      .filter((claim) => claim.held)
+      .map((claim) => String(claim.ref || ''))
+      .filter(Boolean));
+    const claimedByThisSession = (ticket: Ticket): boolean => claimedRefs.has(String(ticket.ref || ''))
+      || Boolean(ticket.claim?.by && dispatchedBySession(ticket, sessionId));
+    const touched = (ticket: Ticket): boolean => claimedByThisSession(ticket)
+      || (pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId))
+      || (dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId, store));
     const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== 'done'
       && touched(ticket)
       && ((!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store)) || pendingSubmission(ticket)));

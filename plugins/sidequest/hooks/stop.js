@@ -133,6 +133,9 @@ function pendingSubmission(ticket) {
 function liveDispatch(ticket, sessionId, store) {
   return ticket.dispatch?.sessionId === sessionId && !ticket.dispatch.terminalAt && !store.claimPulse(ticket)?.reclaimable;
 }
+function dispatchedBySession(ticket, sessionId) {
+  return ticket.dispatch?.sessionId === sessionId;
+}
 function heldByLiveExecutor(ticket, store) {
   if (!ticket.claim?.by || !ticket.dispatch || ticket.dispatch.terminalAt) return false;
   return !store.claimPulse(ticket)?.reclaimable;
@@ -186,8 +189,9 @@ function reconciliationMessage(data) {
     let project = store.findProject(store.nearestRepoRoot(start));
     if (!project.ok || !project.slug) project = store.findProject(start);
     if (!project.ok || !project.slug) return null;
-    const claimedRefs = new Set(store.sessionClaims(sessionId).map((claim) => String(claim.ref || "")).filter(Boolean));
-    const touched = (ticket) => claimedRefs.has(String(ticket.ref || "")) || ticket.dispatch?.sessionId === sessionId;
+    const claimedRefs = new Set(store.sessionClaims(sessionId).filter((claim) => claim.held).map((claim) => String(claim.ref || "")).filter(Boolean));
+    const claimedByThisSession = (ticket) => claimedRefs.has(String(ticket.ref || "")) || Boolean(ticket.claim?.by && dispatchedBySession(ticket, sessionId));
+    const touched = (ticket) => claimedByThisSession(ticket) || pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId) || dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId, store);
     const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
