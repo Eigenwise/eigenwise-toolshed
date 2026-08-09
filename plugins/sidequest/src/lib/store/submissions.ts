@@ -315,7 +315,7 @@ function integrationVerifyCommand(slug: any, ticket: any) {
   if (!projectPath || pluginDirectories.size !== 1) return recorded;
   const directoryName = [...pluginDirectories][0];
   const suite = resolveSuite(projectPath, { name: directoryName, dir: `plugins/${directoryName}` });
-  return suite ? `cd ${suite.cwd} && ${suite.command}` : recorded;
+  return suite ? `cd ${suite.cwd} && ${[suite.setup, suite.command].filter(Boolean).join(' && ')}` : recorded;
 }
 
 function verifyDeliveredSubmission(slug: any, ticket: any, opts?: any) {
