@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { writeInstalledPluginsAtomically } from '../src/lib/installed-plugins.js';
 
 // SQ-1017: dispatch and native-agent now refuse before spawning unless the
 // target project has a registered, board-MCP-capable Sidequest install (see
@@ -31,16 +32,19 @@ export function stubSidequestInstall(): void {
   }));
 
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
-  let registry: any = { plugins: {} };
-  try { registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')); } catch (_) {}
+  let registry: { plugins?: Record<string, unknown> } = { plugins: {} };
+  try {
+    registry = JSON.parse(fs.readFileSync(registryPath, 'utf8')) as { plugins?: Record<string, unknown> };
+  } catch (error: unknown) {
+    if (!(error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT')) throw error;
+  }
   if (!registry.plugins || typeof registry.plugins !== 'object') registry.plugins = {};
   const existing = Array.isArray(registry.plugins['sidequest@eigenwise-toolshed']) ? registry.plugins['sidequest@eigenwise-toolshed'] : [];
-  const currentVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
-  existing.push({ scope: 'user', installPath, version: currentVersion });
+  const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
+  existing.push({ scope: 'user', installPath, version: manifest.version });
   registry.plugins['sidequest@eigenwise-toolshed'] = existing;
 
-  fs.mkdirSync(path.dirname(registryPath), { recursive: true });
-  fs.writeFileSync(registryPath, JSON.stringify(registry));
+  writeInstalledPluginsAtomically(registryPath, JSON.stringify(registry));
 }
 
 stubSidequestInstall();
