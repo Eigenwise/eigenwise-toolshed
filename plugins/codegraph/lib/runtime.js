@@ -359,7 +359,10 @@ async function breakStaleRuntimeLock(lockDirectory) {
     let lastHeartbeat;
     try {
       lastHeartbeat = (await (0, import_promises.stat)(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
-    } catch {
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        return discardUnverifiableRuntimeLock(lockDirectory);
+      }
       return false;
     }
     if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;

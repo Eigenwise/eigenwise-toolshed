@@ -26,7 +26,8 @@ export function normalizeProjectRelativePath(pathValue: string): string {
 }
 
 export function normalizeProjectRoot(projectRoot: string): string {
-  return normalizedPath(path.resolve(projectRoot));
+  const resolvedRoot = normalizedPath(path.resolve(projectRoot));
+  return process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot;
 }
 
 export function projectIdentity(projectRoot: string): string {

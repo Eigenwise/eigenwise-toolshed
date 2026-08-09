@@ -58,7 +58,8 @@ function normalizeProjectRelativePath(pathValue) {
   return relativePath;
 }
 function normalizeProjectRoot(projectRoot) {
-  return normalizedPath(import_node_path.default.resolve(projectRoot));
+  const resolvedRoot = normalizedPath(import_node_path.default.resolve(projectRoot));
+  return process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
 }
 function projectIdentity(projectRoot) {
   return (0, import_node_crypto.createHash)("sha256").update(normalizeProjectRoot(projectRoot)).digest("hex");

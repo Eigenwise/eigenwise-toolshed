@@ -383,3 +383,17 @@ test('recovers an empty runtime lock left by a crashed owner', async () => {
     await rm(stateDirectory, { recursive: true, force: true });
   }
 });
+
+test('recovers a runtime lock with an owner but no heartbeat after a crash', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const installer = new FixtureInstaller();
+  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    await writeFile(path.join(lockDirectory, 'owner'), '123e4567-e89b-12d3-a456-426614174000', 'utf8');
+    await createAcquirer(stateDirectory, installer).acquire();
+    assert.equal(installer.calls, 1);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});

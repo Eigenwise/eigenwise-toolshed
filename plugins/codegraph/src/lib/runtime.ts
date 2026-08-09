@@ -439,7 +439,10 @@ async function breakStaleRuntimeLock(lockDirectory: string): Promise<boolean> {
     let lastHeartbeat: number;
     try {
       lastHeartbeat = (await stat(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
-    } catch {
+    } catch (error: unknown) {
+      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
+        return discardUnverifiableRuntimeLock(lockDirectory);
+      }
       return false;
     }
     if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;

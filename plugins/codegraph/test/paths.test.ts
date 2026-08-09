@@ -27,6 +27,13 @@ test('project identity is stable across equivalent roots', () => {
   );
 });
 
+test('project identity ignores Windows root casing', { skip: process.platform !== 'win32' }, () => {
+  assert.equal(
+    projectIdentity('C:\\Codegraph\\Project'),
+    projectIdentity('c:\\codegraph\\project'),
+  );
+});
+
 test('state directories use the explicit test override', () => {
   const environment = { CODEGRAPH_STATE_DIR: path.join('state', 'override') };
   const stateRoot = codegraphStateRoot(environment, path.join('home', 'user'));
