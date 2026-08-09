@@ -1,0 +1,8 @@
+{
+  "name": "@eigenwise/codegraph-semantic-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "dependencies": {
+    "typescript": "7.0.2"
+  }
+}
