@@ -124,9 +124,9 @@ test('orchestrator appends without a member ticket ref through the CLI', () => {
     storyId: createdStory.id, files: ['plugins/sidequest/src/lib/agentsync.ts'], executorAnchors: 'agentsync.ts renderDispatchStub',
   };
   const briefing = agentsync.renderTicketBriefing(briefingTicket, 'story-log-token', slug);
-  assert.match(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
+  assert.doesNotMatch(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
   const spawn = agentsync.renderDispatchStub(briefingTicket, 'story-log-token', PROJECT_DIR);
-  assert.match(spawn, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
+  assert.doesNotMatch(spawn, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
   assert.match(spawn, /Description:\nConsume the prior story finding\./);
   assert.match(spawn, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts/);
   assert.match(spawn, /Anchors:\nagentsync\.ts renderDispatchStub/);
@@ -179,8 +179,8 @@ test('appends beyond the former aggregate limit and defaults reads to the briefi
   assert.equal(full.story.decisionLog.length, 61);
 });
 
-test('briefings retain the newest decision log entries within the 16 KB packet', () => {
-  const createdStory = story('Briefing window');
+test('executor contexts exclude the story decision-log briefing window', () => {
+  const createdStory = story('Briefing boundary');
   const ticket = member(createdStory.ref);
   claim(ticket.ref, 'briefing-worker');
 
@@ -193,19 +193,11 @@ test('briefings retain the newest decision log entries within the 16 KB packet',
     ref: ticket.ref, title: ticket.title, model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {}, storyId: createdStory.id,
   };
   const briefing = agentsync.renderTicketBriefing(briefingTicket, 'story-log-token', slug);
-  const packetStart = briefing.indexOf('## Story decision log');
-  const packet = briefing.slice(packetStart, briefing.indexOf('## This ticket', packetStart));
-  assert.ok(Buffer.byteLength(packet, 'utf8') <= 16 * 1024);
-  assert.match(packet, /#60 DISCOVERY/);
-  assert.doesNotMatch(packet, /#1 DISCOVERY/);
-  assert.match(packet, /omitted \d+ earlier entries.*sidequest story log US-\d+ --full/);
+  assert.doesNotMatch(briefing, /Story decision log|#60 DISCOVERY/);
 
   const spawn = agentsync.renderDispatchStub(briefingTicket, 'story-log-token', PROJECT_DIR);
   assert.ok(Buffer.byteLength(spawn, 'utf8') < 1600, `spawn context is ${Buffer.byteLength(spawn, 'utf8')} bytes`);
-  assert.match(spawn, /Story handoff \(US-\d+, newest first through #60\)/);
-  assert.match(spawn, /#60 DISCOVERY/);
-  assert.doesNotMatch(spawn, /#59 DISCOVERY/);
-  assert.match(spawn, /Story handoff excerpt capped/);
+  assert.doesNotMatch(spawn, /Story handoff|#60 DISCOVERY/);
 });
 
 test('sequence numbers remain monotonic after the log is rotated', () => {

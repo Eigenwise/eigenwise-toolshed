@@ -222,10 +222,12 @@ requests, use `SendMessage` for what a message can fix, and never stop-then-redi
 still moving.
 
 **Between waves is where re-planning belongs.** Close the wave (every ticket integrated or explicitly
-deferred), read the story log for what the wave learned, then adjust the next wave's tickets before
-dispatching them. That is legitimate precisely because those tickets already exist and the user could
-see them; it is the opposite of inventing the plan one ticket at a time. New discoveries become normal
-tickets, linked into the wave they belong to.
+deferred), read the story log for what the wave learned, then promote each finding needed by the next
+executor into that ticket's description, dependency contract, comment, or the story execution contract
+before dispatching it. The story log is orchestrator planning history, never executor orientation. Adjust
+the next wave's tickets after that promotion. That is legitimate precisely because those tickets already
+exist and the user could see them; it is the opposite of inventing the plan one ticket at a time. New
+discoveries become normal tickets, linked into the wave they belong to.
 
 A wave that straggles on one ticket while you sit idle is a sizing error, not a reason to poke it.
 Note it, and cut thinner slices next time.

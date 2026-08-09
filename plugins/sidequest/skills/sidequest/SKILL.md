@@ -78,10 +78,11 @@ Routed executors use **only** the `mcp__plugin_sidequest_board__*` tools for the
 (`commit`/`submit` take the executor's absolute worktree path). Missing tools → report the
 blocker and release through an available board tool, never a command-line fallback.
 
-MCP is also the normal interface for everyday board and admin/config work; the CLI is the
-fallback and the path for git-context-bound operations. After a schema-bumping release, reload
-plugins before MCP writes. Commands default to the current project; `--project "<path-or-slug>"`
-(MCP: `project`) targets another board.
+MCP is the normal interface for board admin/config; the CLI is fallback for git-context operations.
+Apply board-only admin changes directly through an available MCP tool, never as a ticket or dispatch. Live
+category/profile edits affect only that board, not installation defaults unless the user asks. After a
+schema-bumping release, reload plugins before MCP writes. Commands default to the current project;
+`--project "<path-or-slug>"` (MCP: `project`) targets another board.
 
 `dispatch <ref>` is **instant**: it returns the ticket's stable executor, a short `spawn` fetch
 stub, and a token. Pass every supplied `spawn` field (`name` and `description` too) to Agent

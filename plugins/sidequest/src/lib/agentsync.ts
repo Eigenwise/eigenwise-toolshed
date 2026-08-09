@@ -331,7 +331,6 @@ const TICKET_COMMENT_BODY_MAX_BYTES = 768;
 const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
 const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
 const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
-const STORY_DECISION_LOG_PACKET_MAX_BYTES = 16 * 1024;
 const DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES = 1024;
 // Section caps keep the serialized spawn under its 2 KB ceiling without letting
 // one huge field crowd out the orientation that prevents executor rediscovery.
@@ -340,7 +339,6 @@ const DISPATCH_TITLE_MAX_BYTES = 96;
 const DISPATCH_DESCRIPTION_MAX_BYTES = 360;
 const DISPATCH_FILES_MAX_BYTES = 180;
 const DISPATCH_ANCHORS_MAX_BYTES = 120;
-const DISPATCH_STORY_HANDOFF_MAX_BYTES = 320;
 
 function byteLength(value?: any) {
   return Buffer.byteLength(String(value || ''), 'utf8');
@@ -569,45 +567,6 @@ function storyContractPacket(ticket?: any, slug?: any) {
   return `## Story execution contract (revision ${Number(snapshot.revision) || 1})\n${snapshot.body}`;
 }
 
-function storyDecisionLogPacket(ticket?: any, slug?: any) {
-  const story = ticket && ticket.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
-  const entries = Array.isArray(story && story.decisionLog)
-    ? story.decisionLog.slice().sort((left: any, right: any) => Number(left.seq) - Number(right.seq))
-    : [];
-  if (!entries.length) return null;
-  const revision = Number(story.logRevision) || Number(entries[entries.length - 1].seq) || 0;
-  const render = (selected: any[], omitted: number) => {
-    const marker = omitted
-      ? `\n\n[Story decision log briefing window omitted ${omitted} earlier ${omitted === 1 ? 'entry' : 'entries'}. Read the full history with sidequest story log ${story.ref} --full before acting.]`
-      : '';
-    return [
-      `## Story decision log (${story.ref}, ${selected.length} ${omitted ? 'recent ' : ''}${selected.length === 1 ? 'entry' : 'entries'} through #${revision})`,
-      'Findings appended by sibling executors on this story. The contract above outranks these.',
-      ...selected.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
-    ].join('\n') + marker;
-  };
-  const selected: any[] = [];
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const candidate = [entries[index], ...selected];
-    if (byteLength(render(candidate, entries.length - candidate.length)) > STORY_DECISION_LOG_PACKET_MAX_BYTES) break;
-    selected.unshift(entries[index]);
-  }
-  return render(selected, entries.length - selected.length);
-}
-
-function storyDecisionLogSpawnPacket(ticket?: any, slug?: any) {
-  const story = ticket && ticket.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
-  const entries = Array.isArray(story && story.decisionLog)
-    ? story.decisionLog.slice().sort((left: any, right: any) => Number(right.seq) - Number(left.seq))
-    : [];
-  if (!entries.length) return null;
-  const revision = Number(story.logRevision) || Number(entries[0].seq) || 0;
-  return boundedPacket([
-    `Story handoff (${story.ref}, newest first through #${revision}):`,
-    ...entries.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
-  ].join('\n'), DISPATCH_STORY_HANDOFF_MAX_BYTES, '\n[Story handoff excerpt capped. Full newest-first window is in briefing.]');
-}
-
 function ticketContractsPacket(ticket?: any) {
   const contracts = store.normalizeContracts(ticket && ticket.contracts);
   const entries = [
@@ -792,32 +751,6 @@ function storyContractProjectionBody(snapshot?: any, retrieval?: any, forceHandl
   return `## Story execution contract (revision ${snapshot.revision})\nSnapshot ${metadata}.\n${snapshot.body}`;
 }
 
-function storyDecisionProjectionBody(ticket?: any, slug?: any) {
-  const story = ticket?.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
-  const entries = Array.isArray(story?.decisionLog)
-    ? story.decisionLog.slice().sort((left: any, right: any) => Number(left.seq) - Number(right.seq))
-    : [];
-  if (!entries.length) return '(No live story decisions or constraints were recorded.)';
-  const revision = Number(story?.logRevision) || Number(entries[entries.length - 1].seq) || 0;
-  const render = (selected: any[], omitted: number) => {
-    const marker = omitted
-      ? `\n\n[Story decision log briefing window omitted ${omitted} earlier ${omitted === 1 ? 'entry' : 'entries'}. Read the full history with sidequest story log ${story.ref} --full before acting.]`
-      : '';
-    return [
-      `## Story decision log (${String(story?.ref || ticket?.storyId || '(unknown story)')}, ${selected.length} ${omitted ? 'recent ' : ''}${selected.length === 1 ? 'entry' : 'entries'} through #${revision})`,
-      'Live watermark: this log is current at briefing time and is not part of the frozen contract snapshot.',
-      ...selected.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
-    ].join('\n') + marker;
-  };
-  const selected: any[] = [];
-  for (let index = entries.length - 1; index >= 0; index--) {
-    const candidate = [entries[index], ...selected];
-    if (byteLength(render(candidate, entries.length - candidate.length)) > STORY_DECISION_LOG_PACKET_MAX_BYTES) break;
-    selected.unshift(entries[index]);
-  }
-  return render(selected, entries.length - selected.length);
-}
-
 function briefingCommentBody(comments?: any) {
   const entries = Array.isArray(comments) ? comments.slice().reverse() : [];
   if (!entries.length) return '(No ticket comments were recorded.)';
@@ -985,7 +918,6 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const taskRetrieval = taskAndScopeRetrieval(ticket, slug);
   const snapshot = storySnapshot(ticket, slug);
   const commentsRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
-  const storyLogRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__story_log', Object.assign(briefingProjectArguments(project), { story: snapshot.story }));
   const ticketRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const suffix = marker ? `
 
@@ -999,15 +931,13 @@ ${marker}` : '';
     return [
     { id: 'safety', kind: 'safety', priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
     { id: 'execution-contract', kind: 'contract', priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
-    { id: 'live-story-log', kind: 'risk', priority: 400, order: 3, watermark: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0), body: storyDecisionProjectionBody(ticket, slug), retrieval: storyLogRetrieval },
-    { id: 'task-and-scope', kind: 'task', priority: 300, order: 4, body: taskAndScope, retrieval: taskRetrieval },
-    { id: 'newest-comments', kind: 'evidence', priority: 200, order: 5, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
-    { id: 'handles', kind: 'handle', priority: 100, order: 6, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
+    { id: 'task-and-scope', kind: 'task', priority: 300, order: 3, body: taskAndScope, retrieval: taskRetrieval },
+    { id: 'newest-comments', kind: 'evidence', priority: 200, order: 4, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
+    { id: 'handles', kind: 'handle', priority: 100, order: 5, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
     ];
   };
   const watermarks = {
     storyContractSnapshot: `${snapshot.revision}:${sha256Text(snapshot.body)}`,
-    storyDecisionLog: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0),
   };
   const compile = (forceContractHandle = false) => compileContextProjection({
     profile: { id: 'executor-briefing', budgetBytes: profileBudget },
@@ -1132,17 +1062,11 @@ function dispatchTicketContext(ticket?: any, projectPath?: any) {
     DISPATCH_ANCHORS_MAX_BYTES,
     '\n[Anchors excerpt capped. Full anchors are in briefing.]',
   );
-  let slug = null;
-  if (ticket?.storyId) {
-    try { slug = store.findProject(projectPath)?.slug || null; } catch (_) {}
-  }
-  const storyHandoff = storyDecisionLogSpawnPacket(ticket, slug);
   return boundedPacket([
     `Title: ${title}`,
     `Description:\n${description}`,
     `Declared files:\n${declaredFiles}`,
     `Anchors:\n${anchors}`,
-    ...(storyHandoff ? [storyHandoff] : []),
   ].join('\n\n'), DISPATCH_TICKET_CONTEXT_MAX_BYTES, '\n\n[Spawn orientation capped. Full implementation context is in briefing.]');
 }
 
