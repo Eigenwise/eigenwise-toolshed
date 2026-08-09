@@ -89,7 +89,7 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
   };
 }
 function readOnlyNote() {
-  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Put scratch files in your own worktree, not the session scratchpad, which is shared with every other agent in the session, including the orchestrator, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+  return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
 }
 function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
@@ -468,6 +468,10 @@ Git dir: ${gitDir}`;
     "If it still differs after cd, stop and report to the orchestrator. Do not release or write anything in the wrong tree."
   ].join("\n");
 }
+function ticketReadOnlyScratchSpace(ticket) {
+  if (ticket?.dispatch?.readonly !== true) return null;
+  return ticket.dispatch.sharedTree === true ? "Read-only shared checkout: keep temporary files in the session scratchpad, never the repository working tree. The scratchpad is shared, so it is not a durable ticket artifact." : "Read-only linked worktree: keep temporary files in your own worktree, not the shared session scratchpad.";
+}
 function ticketIsolationContract(ticket, projectPath) {
   if (!ticket || !ticket.dispatch || ticket.dispatch.sharedTree !== false) return null;
   const root = String(projectPath || "").trim() || "<board project path>";
@@ -608,7 +612,7 @@ function briefingCommentBody(comments) {
     ].join("\n"))
   ].join("\n\n");
 }
-function executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, worktreeSync) {
+function executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
     `  ref: ${JSON.stringify(ticket.ref)},`,
@@ -629,6 +633,7 @@ function executorSafetyBody(ticket, nonce, project, executor, closeout, worktree
     "Claim first with this exact call. Do not pass direct or replace the prepared executor:",
     ["```javascript", claimCall, "```"].join("\n"),
     ...worktreeIdentity ? [worktreeIdentity] : [],
+    ...readOnlyScratchSpace ? [readOnlyScratchSpace] : [],
     ...worktreeSync ? [worktreeSync] : [],
     ...ticketIsolationContract(ticket, project) || [],
     verify,
@@ -744,6 +749,7 @@ ${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
   const closeout = ticketCloseout(ticket);
   const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
+  const readOnlyScratchSpace = ticketReadOnlyScratchSpace(ticket);
   const uncertainty = dispatchUncertaintyPacket(ticket, slug);
   const planDocument = planDocumentPacket(ticket, slug);
   const experimentLog = experimentLogPacket(ticket, slug);
@@ -767,7 +773,7 @@ This dispatch deliberately runs in the shared checkout. Write only within the de
   const buildItems = (forceContractHandle = false) => {
     const contractRetrieval = storyContractRetrieval(ticket, snapshot, slug || project, forceContractHandle);
     return [
-      { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
+      { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
       { id: "execution-contract", kind: "contract", priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
       { id: "live-story-log", kind: "risk", priority: 400, order: 3, watermark: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0), body: storyDecisionProjectionBody(ticket, slug), retrieval: storyLogRetrieval },
       { id: "task-and-scope", kind: "task", priority: 300, order: 4, body: taskAndScope, retrieval: taskRetrieval },

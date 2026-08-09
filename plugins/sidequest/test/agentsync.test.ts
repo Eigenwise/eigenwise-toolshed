@@ -70,11 +70,23 @@ function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
-test('read-only executor briefings keep scratch files in the isolated worktree', () => {
+test('read-only executor briefings keep temporary files outside the repository', () => {
   const briefing = agentsync.renderReadOnlyClaudeAgent('medium');
-  assert.match(briefing, /Put scratch files in your own worktree, not the session scratchpad/);
-  assert.match(briefing, /shared with every other agent in the session, including the orchestrator/);
-  assert.doesNotMatch(briefing, /Put scratch files in the session scratchpad, never the repo/);
+  assert.match(briefing, /Keep temporary files outside the repository working tree/);
+  assert.doesNotMatch(briefing, /Put scratch files in your own worktree/);
+});
+
+test('read-only briefings name the temporary-file location for each checkout mode', () => {
+  const shared = agentsync.renderTicketBriefing({
+    ref: 'SQ-READONLY-SHARED', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-readonly-medium', category: {},
+    dispatch: { readonly: true, sharedTree: true },
+  }, 'readonly-shared-token');
+  const isolated = agentsync.renderTicketBriefing({
+    ref: 'SQ-READONLY-ISOLATED', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-readonly-medium', category: {},
+    dispatch: { readonly: true, sharedTree: false },
+  }, 'readonly-isolated-token');
+  assert.match(shared, /Read-only shared checkout: keep temporary files in the session scratchpad/);
+  assert.match(isolated, /Read-only linked worktree: keep temporary files in your own worktree/);
 });
 
 test('briefings surface tracked generated outputs paired into effective scope', () => {

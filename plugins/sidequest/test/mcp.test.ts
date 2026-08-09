@@ -917,6 +917,18 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   assert.equal(scopeLess.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, scopeLessTicket.ref).dispatch.sharedTree, false);
 
+  store.setCategory({ id: 'readonly-zero-scope', name: 'Readonly zero scope', route: { model: 'sonnet', effort: 'medium' }, fallback: null, readonly: true, enabled: true });
+  const readonlyTicket = store.createTicket(isolatedProject, {
+    title: 'zero-scope read-only shared checkout', description: DISPATCH_DESCRIPTION, category: 'readonly-zero-scope',
+  });
+  const readonly = await callTool('dispatch', { project: isolatedProject, ref: readonlyTicket.ref, full: true });
+  assert.equal(readonly.spawn.isolation, undefined);
+  assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, true);
+  assert.match(readonly.spawn.prompt, /zero-scope read-only shared checkout/);
+  const explicitlyIsolated = await callTool('dispatch', { project: isolatedProject, ref: readonlyTicket.ref, sharedTree: false, full: true });
+  assert.equal(explicitlyIsolated.spawn.isolation, 'worktree');
+  assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, false);
+
   const sharedRoot = committedRepo('sq-mcp-worktree-isolation-off-');
   const sharedProject = store.ensureProject(sharedRoot, 'SQ shared isolation').slug;
   const configured = await callTool('board_config', { project: sharedProject, worktreeIsolation: false });

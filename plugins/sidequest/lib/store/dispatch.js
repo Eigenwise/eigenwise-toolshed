@@ -637,12 +637,15 @@ function createDispatch(dependencies) {
         });
       }
       t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
-      const requestedSharedTree = Object.hasOwn(opts, "sharedTree") ? opts.sharedTree === true : Boolean(current && current.sharedTree);
-      const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
-      let sharedTree = worktreeIsolation ? requestedSharedTree : true;
       const declaredFiles = current?.outcome === "released" && Array.isArray(current.declaredFiles) ? current.declaredFiles.slice() : effectiveScope(slug, t.files);
+      const readonly = dispatchReadOnly(t);
+      const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
+      const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
+      const readOnlySharedCheckout = readonly && declaredFiles.length === 0 && !sharedTreeArtifactRequested(t) && !explicitIsolation;
+      const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
+      let sharedTree = worktreeIsolation ? requestedSharedTree || readOnlySharedCheckout : true;
       const nonRepoOutput = nonRepoExternalOutput(t, declaredFiles);
-      const worktreeWarning = !worktreeIsolation && Object.hasOwn(opts, "sharedTree") && requestedSharedTree === false ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null;
+      const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null;
       if (worktreeWarning) sharedTree = true;
       const category = getCategory(ticketCategory(t), { project: slug });
       const artifactRoot = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, declaredFiles[0]) : null;
@@ -651,7 +654,6 @@ function createDispatch(dependencies) {
       const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
       t.dispatchExecutor = stableExecutorName(t, artifactMode);
       const launchSeq = nextDispatchLaunchSeq(current);
-      const readonly = dispatchReadOnly(t);
       const story = t.storyId ? getStory(slug, t.storyId) : null;
       const contract = storyExecutionContract(story);
       const contractDrift = t.storyContractDrift || null;

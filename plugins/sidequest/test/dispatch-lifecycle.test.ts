@@ -395,6 +395,39 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
   assert.ok(dispatch.turnEndedAt);
 });
 
+test('zero-scope read-only dispatches use the shared checkout without a worktree', () => {
+  const ticket = store.createTicket(slug, {
+    title: 'zero-scope read-only shared checkout',
+    category: 'research',
+    source: 'test',
+  });
+  const sessionId = `zero-scope-readonly-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.equal(prepared.ticket.dispatch.readonly, true);
+  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+  assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-readonly-high');
+  assert.equal(agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree), null);
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName: 'zero-scope-readonly-worker',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, 'zero-scope-readonly-agent', 'zero-scope-readonly-worker').ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, undefined);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'zero-scope-readonly-worker', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-worker', { status: 'todo', source: 'test' }).ok, true);
+
+  const explicitlyIsolated = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
+  assert.equal(explicitlyIsolated.ticket.dispatch.sharedTree, false);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-cleanup', { status: 'todo', source: 'test' }).ok, true);
+});
+
 test('read-only category classes dispatch through restricted stable executors', () => {
   for (const category of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation', 'visual-review']) {
     const ticket = createFixture(`${category} fixture`, category);

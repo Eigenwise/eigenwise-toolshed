@@ -2303,6 +2303,7 @@ module.exports = {
   createTicket,
   updateTicket,
   deleteTicket,
+  dispatchReadOnly,
   stableExecutorName,
   prepareDispatch,
   readDispatchBriefing,

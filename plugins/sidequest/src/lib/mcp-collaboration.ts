@@ -261,7 +261,7 @@ const tools: ToolDefinition[] = [
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
+        sharedTree: { type: 'boolean', description: 'Use shared checkout. Omit for zero-scope read-only; false isolates.' },
         allowRepeatFailure: { type: 'boolean' },
         allowUnscoped: { type: 'boolean', description: 'Explicitly allow a write ticket with no declared file scope.' },
         integrationBranch: { type: 'string' },
@@ -276,7 +276,7 @@ const tools: ToolDefinition[] = [
       const sessionId = requireDispatchSession();
       const prepared = store.prepareDispatch(slug, args.ref, {
         sessionId,
-        sharedTree: !!args.sharedTree,
+        ...(Object.hasOwn(args, 'sharedTree') ? { sharedTree: args.sharedTree === true } : {}),
         allowRepeatFailure: args.allowRepeatFailure === true,
         allowUnscoped: args.allowUnscoped === true,
         integrationBranch: args.integrationBranch,
@@ -343,7 +343,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         prompt: { type: 'string', description: 'The bounded ticket-execution prompt augmented with stored anchors and verify command.' },
         session: { type: 'string' },
-        sharedTree: { type: 'boolean', description: 'Use shared state or leave an explicitly marked artifact.' },
+        sharedTree: { type: 'boolean', description: 'Use shared checkout. Omit for zero-scope read-only; false isolates.' },
       },
       required: ['ref', 'prompt'],
     },
@@ -362,7 +362,9 @@ const tools: ToolDefinition[] = [
       if (!route || !route.exec) throw new Error(`native_agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
       const resolved = route.exec;
       const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, args.prompt), meta.path);
-      const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!args.sharedTree;
+      const explicitIsolation = Object.hasOwn(args, 'sharedTree') && args.sharedTree === false;
+      const zeroScopeReadOnly = store.dispatchReadOnly(ticket) && store.effectiveScope(slug, ticket.files).length === 0;
+      const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || args.sharedTree === true || (zeroScopeReadOnly && !explicitIsolation);
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
         agentType: resolved.agent || `sidequest-exec-${route.effort || 'low'}`,

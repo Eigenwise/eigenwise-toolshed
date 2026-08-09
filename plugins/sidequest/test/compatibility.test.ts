@@ -122,6 +122,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('release')?.inputSchema.properties?.candidate?.type, 'string');
   assert.equal(byName.get('release')?.inputSchema.properties?.deliverable?.type, 'string');
   assert.match(byName.get('release')?.description ?? '', /oracle handoff/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description ?? '', /Omit to share zero-scope read-only work/);
 
   const payload = JSON.stringify(descriptors);
   const payloadBytes = Buffer.byteLength(payload, 'utf8');

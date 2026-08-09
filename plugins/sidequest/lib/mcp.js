@@ -134,8 +134,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     command: "Required for blocker/contradiction.",
     outputTail: "Required blocker/contradiction output."
   },
-  story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes." },
-  category_edit: { fallbackModel: "null clears fallback." }
+  story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
+  category_edit: { fallbackModel: "null clears fallback." },
+  dispatch: { sharedTree: "Omit to share zero-scope read-only work." }
 };
 function toolDescriptors() {
   return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map((tool) => {

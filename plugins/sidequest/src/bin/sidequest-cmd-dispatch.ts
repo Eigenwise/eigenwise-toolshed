@@ -27,7 +27,7 @@ async function cmdDispatch(opts: any, positional: any) {
   try {
     prepared = store.prepareDispatch(slug, idOrRef, {
       sessionId,
-      sharedTree: !!opts['shared-tree'],
+      ...(Object.hasOwn(opts, 'shared-tree') ? { sharedTree: opts['shared-tree'] === true } : {}),
       allowRepeatFailure: !!opts['allow-repeat-failure'],
       allowUnscoped: !!opts['allow-unscoped'],
       source: 'cli',
@@ -118,7 +118,9 @@ async function cmdNativeAgent(opts: any, positional: any) {
   const resolved = route.exec;
   const sessionId = opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || null;
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
-  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || !!opts['shared-tree'];
+  const explicitIsolation = Object.hasOwn(opts, 'shared-tree') && opts['shared-tree'] === false;
+  const zeroScopeReadOnly = store.dispatchReadOnly(ticket) && store.effectiveScope(slug, ticket.files).length === 0;
+  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || opts['shared-tree'] === true || (zeroScopeReadOnly && !explicitIsolation);
   const created = agentsync.createNativeAgent({
     ref: ticket.ref,
     agentType: resolved.agent || `sidequest-exec-${route.effort || 'low'}`,

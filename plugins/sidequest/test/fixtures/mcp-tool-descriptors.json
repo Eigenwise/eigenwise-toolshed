@@ -194,7 +194,7 @@
         "entry": {
           "type": "string",
           "pattern": "^(DECISION|CONSTRAINT|DISCOVERY)\\s*:",
-          "description": "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes."
+          "description": "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes."
         },
         "ref": {
           "type": "string"
@@ -1282,7 +1282,8 @@
           "type": "string"
         },
         "sharedTree": {
-          "type": "boolean"
+          "type": "boolean",
+          "description": "Omit to share zero-scope read-only work."
         },
         "allowRepeatFailure": {
           "type": "boolean"

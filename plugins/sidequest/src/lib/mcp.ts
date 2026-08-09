@@ -153,8 +153,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
     command: 'Required for blocker/contradiction.',
     outputTail: 'Required blocker/contradiction output.',
   },
-  story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:. Text after the prefix is at most 16,000 UTF-8 bytes.' },
+  story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears fallback.' },
+  dispatch: { sharedTree: 'Omit to share zero-scope read-only work.' },
 };
 
 function toolDescriptors() {
