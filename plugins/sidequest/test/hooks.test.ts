@@ -1842,6 +1842,34 @@ test('stop reminder: excludes live claims from a mixed live and terminal dispatc
   }, { SIDEQUEST_NUDGE: 'off' }), null);
 });
 
+test('stop reminder: changed signatures during its continuation stay silent and require work, not acknowledgment', () => {
+  const sessionId = `reconcile-continuation-${++sqSeq}`;
+  const firstSubmission = addTicket('first continuing submission');
+  claimStopTicket(firstSubmission, sessionId, 'reconcile-continuation-first');
+  assert.equal(store.submitTicket(slug, firstSubmission.ref, 'reconcile-continuation-first', {
+    commit: 'abc1234',
+    sessionId,
+  }).ok, true);
+
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+  const firstOutput = runHookOutput(BOARD_RECONCILIATION_REMINDER, input);
+  assert.match(firstOutput.hookSpecificOutput.additionalContext, /Integrate pending submissions now\./);
+  assert.match(firstOutput.hookSpecificOutput.additionalContext, /Continue working without replying to this reminder/);
+  assert.match(firstOutput.hookSpecificOutput.additionalContext, /do not send an acknowledgment-only or progress reply/);
+
+  const secondSubmission = addTicket('second continuing submission');
+  claimStopTicket(secondSubmission, sessionId, 'reconcile-continuation-second');
+  assert.equal(store.submitTicket(slug, secondSubmission.ref, 'reconcile-continuation-second', {
+    commit: 'def5678',
+    sessionId,
+  }).ok, true);
+
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
+    ...input,
+    stop_hook_active: true,
+  }), null, 'a Stop continuation stays silent even when a background submission changes the board signature');
+});
+
 test('stop reminder: ignores re-entry and only re-escalates pending submissions', () => {
   const sessionId = `reconcile-bound-${++sqSeq}`;
   const ticket = addTicket('bounded reconciliation reminder');

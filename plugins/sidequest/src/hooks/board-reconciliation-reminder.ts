@@ -103,10 +103,14 @@ function canRemind(reminder: Reminder): ReminderKind | null {
   }
 }
 
+function acknowledgementFreeContinuation(action: string): string {
+  return `${action} Continue working without replying to this reminder; do not send an acknowledgment-only or progress reply.`;
+}
+
 function escalatedMessage(reminder: Reminder): string {
   const refs = reminder.pendingRefs.join(', ');
   const verb = reminder.pendingRefs.length === 1 ? 'is' : 'are';
-  return byteCapped(`Sidequest: ${refs} ${verb} still pending integration after ${ESCALATION_STOP_THRESHOLD} consecutive stops. Checkpoint and hold; never release, releasing loses work.`);
+  return byteCapped(`Sidequest: ${acknowledgementFreeContinuation('Integrate pending submissions now.')} ${refs} ${verb} still pending integration after ${ESCALATION_STOP_THRESHOLD} consecutive stops. If integration cannot proceed, checkpoint and hold; never release it as complete.`);
 }
 
 function reconciliationMessage(data: HookInput): Reminder | null {
@@ -141,10 +145,11 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     ].filter(Boolean);
     const state = [...actionable, ...waits].join(' / ');
     const closeActionable = actionable.length
-      ? ` Update or close ${actionable.length === 1 && doing.length === 1 ? 'it' : 'them'} before finishing.`
-      : '';
+      ? `Update or close ${actionable.length === 1 && doing.length === 1 ? 'it' : 'them'} before finishing.`
+      : 'Continue working on the board.';
+    const action = submissions.length ? 'Integrate pending submissions now.' : closeActionable;
     const holdWaits = waits.length
-      ? ' Pending integration is unfinished work. Checkpoint and hold; never release it as complete.'
+      ? ' If integration cannot proceed, checkpoint and hold; never release it as complete.'
       : '';
     const signature = JSON.stringify(open.map((ticket) => ({
       ref: ticket.ref || '',
@@ -156,7 +161,7 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     })).sort((left, right) => left.ref.localeCompare(right.ref)));
     return {
       sessionId,
-      message: byteCapped(`Sidequest: ${state}.${closeActionable}${holdWaits}`),
+      message: byteCapped(`Sidequest: ${acknowledgementFreeContinuation(action)} ${state}.${holdWaits}`),
       pendingRefs,
       state: signature,
     };
