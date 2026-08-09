@@ -37,6 +37,7 @@ __export(paths_exports, {
 });
 module.exports = __toCommonJS(paths_exports);
 var import_node_crypto = require("node:crypto");
+var import_node_fs = require("node:fs");
 var import_node_os = require("node:os");
 var import_node_path = __toESM(require("node:path"));
 const projectPathSeparator = "/";
@@ -57,9 +58,18 @@ function normalizeProjectRelativePath(pathValue) {
   }
   return relativePath;
 }
+function canonicalProjectRoot(projectRoot) {
+  const resolvedRoot = import_node_path.default.resolve(projectRoot);
+  try {
+    return import_node_fs.realpathSync.native(resolvedRoot);
+  } catch (error) {
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return resolvedRoot;
+    throw error;
+  }
+}
 function normalizeProjectRoot(projectRoot) {
-  const resolvedRoot = normalizedPath(import_node_path.default.resolve(projectRoot));
-  return process.platform === "win32" ? resolvedRoot.toLowerCase() : resolvedRoot;
+  const canonicalRoot = normalizedPath(canonicalProjectRoot(projectRoot));
+  return process.platform === "win32" ? canonicalRoot.toLowerCase() : canonicalRoot;
 }
 function projectIdentity(projectRoot) {
   return (0, import_node_crypto.createHash)("sha256").update(normalizeProjectRoot(projectRoot)).digest("hex");

@@ -397,3 +397,20 @@ test('recovers a runtime lock with an owner but no heartbeat after a crash', asy
     await rm(stateDirectory, { recursive: true, force: true });
   }
 });
+
+test('concurrent contenders reclaim an owner-only crash lock without stealing the winner lease', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+  const installRecordFile = path.join(stateDirectory, 'install-record.txt');
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    await writeFile(path.join(lockDirectory, 'owner'), '123e4567-e89b-12d3-a456-426614174000', 'utf8');
+    await Promise.all([
+      acquireRuntimeInSeparateProcess(stateDirectory, fixtureManifestDirectory, installRecordFile),
+      acquireRuntimeInSeparateProcess(stateDirectory, fixtureManifestDirectory, installRecordFile),
+    ]);
+    assert.equal((await readFile(installRecordFile, 'utf8')).trim().split('\n').length, 1);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});

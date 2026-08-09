@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
 
@@ -25,9 +26,19 @@ export function normalizeProjectRelativePath(pathValue: string): string {
   return relativePath;
 }
 
+function canonicalProjectRoot(projectRoot: string): string {
+  const resolvedRoot = path.resolve(projectRoot);
+  try {
+    return realpathSync.native(resolvedRoot);
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return resolvedRoot;
+    throw error;
+  }
+}
+
 export function normalizeProjectRoot(projectRoot: string): string {
-  const resolvedRoot = normalizedPath(path.resolve(projectRoot));
-  return process.platform === 'win32' ? resolvedRoot.toLowerCase() : resolvedRoot;
+  const canonicalRoot = normalizedPath(canonicalProjectRoot(projectRoot));
+  return process.platform === 'win32' ? canonicalRoot.toLowerCase() : canonicalRoot;
 }
 
 export function projectIdentity(projectRoot: string): string {

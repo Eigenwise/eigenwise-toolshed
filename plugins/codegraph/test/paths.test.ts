@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
+import { mkdir, mkdtemp, rm, symlink } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
@@ -32,6 +34,19 @@ test('project identity ignores Windows root casing', { skip: process.platform !=
     projectIdentity('C:\\Codegraph\\Project'),
     projectIdentity('c:\\codegraph\\project'),
   );
+});
+
+test('project identity resolves Windows junctions to their target', { skip: process.platform !== 'win32' }, async () => {
+  const fixtureRoot = await mkdtemp(path.join(tmpdir(), 'codegraph-project-identity-'));
+  const targetRoot = path.join(fixtureRoot, 'target');
+  const junctionRoot = path.join(fixtureRoot, 'junction');
+  try {
+    await mkdir(targetRoot);
+    await symlink(targetRoot, junctionRoot, 'junction');
+    assert.equal(projectIdentity(junctionRoot), projectIdentity(targetRoot));
+  } finally {
+    await rm(fixtureRoot, { recursive: true, force: true });
+  }
 });
 
 test('state directories use the explicit test override', () => {

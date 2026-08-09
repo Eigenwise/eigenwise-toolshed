@@ -378,23 +378,45 @@ async function breakStaleRuntimeLock(lockDirectory) {
     return false;
   }
 }
+async function prepareRuntimeLock(lockDirectory) {
+  const ownerToken = (0, import_node_crypto.randomUUID)();
+  const stageDirectory = `${lockDirectory}.pending-${ownerToken}`;
+  try {
+    await (0, import_promises.mkdir)(stageDirectory);
+    await (0, import_promises.writeFile)(import_node_path.default.join(stageDirectory, "owner"), ownerToken, "utf8");
+    await (0, import_promises.writeFile)(runtimeOwnerHeartbeatFile(stageDirectory, ownerToken), ownerToken, "utf8");
+    return { ownerToken, stageDirectory };
+  } catch (error) {
+    await (0, import_promises.rm)(stageDirectory, { recursive: true, force: true });
+    throw error;
+  }
+}
+function isRuntimeLockPublishConflict(error) {
+  if (!(error instanceof Error) || !("code" in error)) return false;
+  if (error.code === "EEXIST" || error.code === "ENOTEMPTY") return true;
+  return process.platform === "win32" && (error.code === "EACCES" || error.code === "EPERM");
+}
+async function publishRuntimeLock(lockDirectory, preparedLock) {
+  try {
+    await (0, import_promises.rename)(preparedLock.stageDirectory, lockDirectory);
+    return true;
+  } catch (error) {
+    await (0, import_promises.rm)(preparedLock.stageDirectory, { recursive: true, force: true });
+    if (isRuntimeLockPublishConflict(error)) return false;
+    throw error;
+  }
+}
 async function acquireRuntimeLock(lockDirectory) {
   while (true) {
-    try {
-      await (0, import_promises.mkdir)(lockDirectory);
-      const ownerFile = import_node_path.default.join(lockDirectory, "owner");
-      const ownerToken = (0, import_node_crypto.randomUUID)();
-      await (0, import_promises.writeFile)(ownerFile, ownerToken, "utf8");
-      const heartbeatFile = runtimeOwnerHeartbeatFile(lockDirectory, ownerToken);
-      await (0, import_promises.writeFile)(heartbeatFile, ownerToken, "utf8");
+    const preparedLock = await prepareRuntimeLock(lockDirectory);
+    if (await publishRuntimeLock(lockDirectory, preparedLock)) {
+      const heartbeatFile = runtimeOwnerHeartbeatFile(lockDirectory, preparedLock.ownerToken);
       const heartbeat = setInterval(() => void (0, import_promises.utimes)(heartbeatFile, /* @__PURE__ */ new Date(), /* @__PURE__ */ new Date()).catch(() => void 0), runtimeLockStaleMilliseconds / 3);
       heartbeat.unref();
-      return runtimeLockLease(lockDirectory, ownerToken, heartbeat);
-    } catch (error) {
-      if (!(error instanceof Error) || !("code" in error) || error.code !== "EEXIST") throw error;
-      if (await breakStaleRuntimeLock(lockDirectory)) continue;
-      await waitForRuntimeLock();
+      return runtimeLockLease(lockDirectory, preparedLock.ownerToken, heartbeat);
     }
+    if (await breakStaleRuntimeLock(lockDirectory)) continue;
+    await waitForRuntimeLock();
   }
 }
 async function withRuntimeCacheLock(cacheDirectory, action) {
