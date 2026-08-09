@@ -518,17 +518,20 @@ function briefingProjectArguments(project) {
   return project ? { project } : {};
 }
 function storySnapshot(ticket, slug) {
-  const snapshot = ticket?.dispatch?.storyContract || store.storyExecutionContract(ticket?.storyId ? store.getStory(slug, ticket.storyId) : null);
+  const dispatch = ticket?.dispatch;
+  const hasFrozenSnapshot = !!dispatch && Object.prototype.hasOwnProperty.call(dispatch, "storyContract");
+  const snapshot = hasFrozenSnapshot ? dispatch.storyContract : store.storyExecutionContract(ticket?.storyId ? store.getStory(slug, ticket.storyId) : null);
   const story = ticket?.storyId && slug ? store.getStory(slug, ticket.storyId) : null;
   return {
     body: String(snapshot?.body || ""),
     revision: Number(snapshot?.revision) || 1,
-    story: String(story?.ref || ticket?.storyId || "")
+    story: String(story?.ref || ticket?.storyId || ""),
+    frozenAbsent: hasFrozenSnapshot && snapshot == null
   };
 }
 function storyContractRetrieval(ticket, snapshot, project, forceHandle = false) {
   const body = String(snapshot?.body || "");
-  if (!forceHandle && byteLength(body) <= EXECUTOR_CONTRACT_MAX_BYTES) {
+  if (!forceHandle && !snapshot?.frozenAbsent && byteLength(body) <= EXECUTOR_CONTRACT_MAX_BYTES) {
     return projectionRetrieval("mcp__plugin_sidequest_board__story_contract", Object.assign(
       briefingProjectArguments(project),
       { story: snapshot.story, cursor: 0, limit: 16384, full: true }
@@ -547,11 +550,13 @@ function storyContractRetrieval(ticket, snapshot, project, forceHandle = false) 
       ref: String(ticket?.ref || ""),
       snapshotRevision: Number(snapshot?.revision) || 1,
       sha256: hash,
-      totalBytes: byteLength(body)
+      totalBytes: byteLength(body),
+      ...snapshot?.frozenAbsent ? { frozenAbsent: true } : {}
     }
   }).arguments);
 }
 function storyContractProjectionBody(snapshot, retrieval, forceHandle = false) {
+  if (snapshot.frozenAbsent) return "## Story execution contract\nFrozen dispatch snapshot contains no contract.";
   const totalBytes = byteLength(snapshot.body);
   const hash = sha256Text(snapshot.body);
   const metadata = `snapshot revision ${snapshot.revision}; sha256 ${hash}; totalBytes ${totalBytes}`;
@@ -658,6 +663,36 @@ ${declaredFiles}`,
     "Scope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix."
   ].join("\n\n");
 }
+function taskAndScopeBody(ticket, slug) {
+  const category = ticket?.category || {};
+  const declared = Array.isArray(ticket?.files) ? ticket.files : [];
+  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const effectiveFiles = store.effectiveScope(slug, declared);
+  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
+  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
+  const generatedFiles = effectiveFiles.filter((file) => {
+    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
+    return !declaredKeys.has(key) && !alwaysKeys.has(key);
+  });
+  const scopedFiles = generatedFiles.length ? `${declaredFiles}
+
+Auto-paired tracked generated files (regenerate before verifying):
+${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
+  return executorTaskBody(ticket, category, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
+}
+function taskAndScopeRetrieval(ticket, slug) {
+  const body = taskAndScopeBody(ticket, slug);
+  return projectionRetrieval("mcp__plugin_sidequest_board__context_page", contextRetrieval({
+    tool: "briefing",
+    project: String(slug || ticket?.project || "unbound"),
+    kind: "body",
+    field: "task-and-scope",
+    position: "task-and-scope",
+    revision: contextRevision(body),
+    reason: "budget",
+    selector: { ref: String(ticket?.ref || "") }
+  }).arguments);
+}
 function executorHandlesBody(ticket, slug) {
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
   return [
@@ -714,6 +749,8 @@ ${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
   const experimentLog = experimentLogPacket(ticket, slug);
   const findingCheckpoints = findingCheckpointPacket(ticket);
   const continuation = ticketContinuationPacket(ticket);
+  const taskAndScope = taskAndScopeBody(ticket, slug);
+  const taskRetrieval = taskAndScopeRetrieval(ticket, slug);
   const snapshot = storySnapshot(ticket, slug);
   const commentsRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__comments", Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const storyLogRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__story_log", Object.assign(briefingProjectArguments(project), { story: snapshot.story }));
@@ -733,7 +770,7 @@ This dispatch deliberately runs in the shared checkout. Write only within the de
       { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
       { id: "execution-contract", kind: "contract", priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
       { id: "live-story-log", kind: "risk", priority: 400, order: 3, watermark: String((ticket?.storyId && slug ? store.getStory(slug, ticket.storyId)?.logRevision : 0) || 0), body: storyDecisionProjectionBody(ticket, slug), retrieval: storyLogRetrieval },
-      { id: "task-and-scope", kind: "task", priority: 300, order: 4, body: executorTaskBody(ticket, category, scopedFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation), retrieval: ticketRetrieval },
+      { id: "task-and-scope", kind: "task", priority: 300, order: 4, body: taskAndScope, retrieval: taskRetrieval },
       { id: "newest-comments", kind: "evidence", priority: 200, order: 5, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
       { id: "handles", kind: "handle", priority: 100, order: 6, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval }
     ];
@@ -1116,6 +1153,7 @@ module.exports = {
   renderReadOnlyClaudeAgent,
   renderExecAgent,
   renderTicketBriefing,
+  taskAndScopeBody,
   createNativeAgent,
   cleanupNativeAgents,
   nativeAgentName,

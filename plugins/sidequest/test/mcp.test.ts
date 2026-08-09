@@ -377,6 +377,58 @@ test('context_page reads the frozen dispatch story contract after the live contr
   assert.match(mismatchedRevision.content[0].text, /expectedRevision does not match/);
 });
 
+test('briefings preserve an explicit frozen absence when contracts appear after dispatch', () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-frozen-absence-'))).slug;
+  store.setCategory({ id: 'frozen-absence-context', name: 'Frozen absence context', route: { model: 'sonnet', effort: 'low' } });
+  for (const liveContract of [
+    `LIVE-CONTRACT-SMALL-${'é'.repeat(100)}`,
+    `LIVE-CONTRACT-OVERSIZED-${'測🧪'.repeat(5_000)}`,
+  ]) {
+    const story = store.createStory(project, { title: 'Frozen absence retrieval' });
+    const ticket = store.createTicket(project, {
+      title: 'Preserve frozen absence', storyId: story.id, category: 'frozen-absence-context', source: 'test',
+    });
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'frozen-absence-session' });
+    assert.equal(prepared.ticket.dispatch.storyContract, null);
+    store.updateStory(project, story.ref, { executionContract: liveContract });
+    const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'frozen-absence-token', project, project);
+    assert.match(briefing, /Frozen dispatch snapshot contains no contract/);
+    assert.doesNotMatch(briefing, new RegExp(liveContract.slice(0, 32)));
+    assert.doesNotMatch(briefing, /Required before editing: fetch the paged snapshot/);
+  }
+});
+
+test('context_page recovers every omitted task-and-scope field from a briefing', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-task-context-'))).slug;
+  store.setCategory({
+    id: 'task-context-category', name: 'Task context category',
+    description: 'Task context reproduction category.',
+    contract: 'Recover the complete category contract from the context page.',
+    route: { model: 'sonnet', effort: 'low' },
+  });
+  const description = `TASK-DESCRIPTION-${'測🧪'.repeat(8_000)}`;
+  const files = ['src/contract.ts', 'test/contract.test.ts'];
+  const ticket = store.createTicket(project, {
+    title: 'Recover oversized task context', description, files, category: 'task-context-category', source: 'test',
+  });
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'task-context-session' });
+  const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'task-context-token', project, project);
+  const retrievalMatch = briefing.match(/task-and-scope (?:budget|truncated) [^\n]*mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
+  assert.ok(retrievalMatch, 'oversized task context includes a typed context_page retrieval');
+  const retrieval = JSON.parse(retrievalMatch[1]);
+  let reconstructed = '';
+  let cursor = retrieval.cursor;
+  while (cursor !== null) {
+    const page = await callTool('context_page', { ...retrieval, cursor, limit: 16 * 1024 });
+    reconstructed += page.body;
+    cursor = page.nextCursor;
+  }
+  assert.match(reconstructed, new RegExp(description.slice(0, 32)));
+  assert.match(reconstructed, /Recover the complete category contract from the context page/);
+  for (const file of files) assert.match(reconstructed, new RegExp(file.replace('.', '\\.')));
+  assert.match(reconstructed, /Scope check: request scope/);
+});
+
 test('context_page row continuations retain their revision when claim liveness changes', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-context-liveness-'))).slug;
   const originalIdleMinutes = process.env.SIDEQUEST_CLAIM_IDLE_MIN;

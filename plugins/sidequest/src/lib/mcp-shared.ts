@@ -573,6 +573,10 @@ function listRowsContextRetrieval(project: string, args: any, position: number) 
 
 function frozenStoryContractBody(source: any, ticket: any) {
   const snapshot = ticket?.dispatch?.storyContract;
+  if (source.selector.frozenAbsent === true) {
+    if (snapshot != null) throw new Error('context_page: stale dispatch snapshot handle; the frozen contract revision or hash no longer matches.');
+    return '';
+  }
   if (!snapshot || typeof snapshot !== 'object') {
     throw new Error(`context_page: dispatch snapshot for ticket "${source.selector.ref}" no longer exists.`);
   }
@@ -596,6 +600,9 @@ function resolvedContextBody(source: any) {
   if (source.tool === 'dispatch' && source.field === 'dispatch.storyContract' && source.position === 'storyContract') {
     return frozenStoryContractBody(source, ticket);
   }
+  if (source.tool === 'briefing' && source.field === 'task-and-scope' && source.position === 'task-and-scope') {
+    return agentsync.taskAndScopeBody(ticket, source.project);
+  }
   if (source.field === 'description' && source.position === 'description') return String(ticket.description || '');
   if (source.field === 'comments.body') {
     const comment = (Array.isArray(ticket.comments) ? ticket.comments : [])
@@ -617,7 +624,7 @@ function assertCurrentContextRevision(source: any, currentRevision: string, expe
 
 function resolveContextPage(args: any) {
   const source = decodeContextHandle(args.handle);
-  if (!['list', 'comments', 'dispatch'].includes(source.tool)) {
+  if (!['list', 'comments', 'dispatch', 'briefing'].includes(source.tool)) {
     throw new Error(`context_page: handle belongs to unsupported source tool "${source.tool}".`);
   }
   const position = decodeContextCursor(String(args.handle), args.cursor);
