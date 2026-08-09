@@ -296,6 +296,8 @@ function nativeAgentSource(spec?: any) {
   const model = String(spec.modelId || '').trim();
   const effort = String(spec.effort || '').trim();
   const runtime = String(spec.runtime || spec.runsModel || '').trim();
+  const description = String(spec.description || 'Sidequest ticket executor.').replace(/\s+/g, ' ').trim();
+  if (!description) throw new Error('native agent description is required.');
   if (!model || /[\r\n]/.test(model)) throw new Error('native agent model id is required and must be one line.');
   if (!NON_MAX_EFFORTS.includes(effort)) throw new Error(`native agent effort must be one of: ${NON_MAX_EFFORTS.join(', ')}.`);
   if (!runtime || /[\r\n]/.test(runtime)) throw new Error('native agent runtime must be a concrete one-line model identifier.');
@@ -303,7 +305,7 @@ function nativeAgentSource(spec?: any) {
   return [
     '---',
     `name: ${spec.name}`,
-    'description: Temporary Sidequest native executor. Removed after this run.',
+    `description: ${JSON.stringify(description)}`,
     `model: ${model}`,
     `effort: ${effort}`,
     `tools: ${tools.join(', ')}`,
@@ -1094,8 +1096,12 @@ function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
 }
 
 function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, prompt?: any, description?: any) {
-  return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions' },
-    description !== undefined ? { description } : {}, isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
+  const suppliedLabel = typeof description === 'string' ? description : '';
+  const taskLabel = suppliedLabel && !ROUTE_MARKER_RE.test(suppliedLabel)
+    ? suppliedLabel
+    : 'Sidequest ticket executor.';
+  return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions', description: taskLabel },
+    isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }
 
 function createNativeAgent(spec?: any, opts?: any) {

@@ -2490,6 +2490,13 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(staleBriefing.status, 1);
   assert.match(staleBriefing.stderr, /dispatch token was refused/);
   assert.doesNotMatch(JSON.stringify(adopted), /ephemeral/);
+
+  store.setCategory({ id: 'dispatch-readonly-codex', name: 'Dispatch Readonly Codex', readonly: true, route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+  const readonlyTicket = await callTool('add', { title: 'friendly readonly dispatch', description: DISPATCH_DESCRIPTION, category: 'dispatch-readonly-codex' });
+  const readonlyDispatch = await callTool('dispatch', { ref: readonlyTicket.ref, full: true });
+  assert.equal(readonlyDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-readonly');
+  assert.equal(readonlyDispatch.spawn.description, 'Terra, high · friendly readonly dispatch');
+  assert.doesNotMatch(readonlyDispatch.spawn.description, /\[sidequest-route/);
 });
 
 test('MCP dispatch records the runtime session and the Agent lifecycle binds it', async () => {

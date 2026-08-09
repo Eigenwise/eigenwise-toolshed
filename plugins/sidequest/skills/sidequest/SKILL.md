@@ -155,9 +155,9 @@ optionally `--status todo`).
   prior executor and spawn a fresh one for the same ticket.
 - **Read the thread before working a ticket** (`sidequest comments <ref>`). Default reads retain all
   metadata; pass `--full` only for needed elided bodies.
-- **Claims release on observed death, not age**: a long run is not stale (`pulse` shows
-  `claim.reclaimable`; null = leave it), and closeout never consults a clock. Dead executor: salvage
-  its worktree FIRST, `release SQ-3 --by <dead-worker-id> --status todo`, then spawn one replacement.
+- **Claims release on observed death, not age**: use `pulse`, never a clock. For useful work
+  needing a decision, `SendMessage` the same agent and keep its claim and worktree. On death,
+  salvage its worktree, release, then replace it.
 - Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID
   or launch name. THE polling read: `changes --since`; `pulse <ref>` for liveness.
   `TaskStop` only after terminal evidence.
@@ -196,8 +196,8 @@ full suite once while publishing the wave in one transaction → re-plan, spawn 
 executor mini-sessions from the spawn side: **the ticket is the spec** (the cheaper the model,
 the more patch-level the detail); **scope the spawn prompt only with logistics**, the ticket
 contract traveling in full and unnarrowed;
-**Executors bounce back, they don't grind** — on ambiguity, growing scope, or two failed
-attempts they release + report fast; **batch small same-model tickets into ONE executor**
+**Executors keep useful work**: keep claim, checkpoint evidence, and await `SendMessage`
+steering for questions or failed checks. Release only for confirmed death or unsalvageable blockers; **batch small same-model tickets into ONE executor**
 (different models never batch); **parallel fan-out spawns one executor per ticket in a single
 message** when the wave justifies it.
 

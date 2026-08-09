@@ -381,6 +381,14 @@ test('Agent spawn preserves the routed nested review description', () => {
   assert.equal(agentCall.prompt, dispatchedReview.prompt);
   assert.match(agentCall.prompt, /^\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
   assert.doesNotMatch(agentCall.description, /\[sidequest-route/);
+
+  const missingDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt);
+  const markerDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, '[sidequest-route model=gpt-5.6-terra effort=high]');
+  const whitespaceDescription = '  GPT-5.6 Terra, high · Keep this exact label  ';
+  const whitespaceCall = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, whitespaceDescription);
+  assert.equal(missingDescription.description, 'Sidequest ticket executor.');
+  assert.equal(markerDescription.description, 'Sidequest ticket executor.');
+  assert.equal(whitespaceCall.description, whitespaceDescription);
 });
 
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
@@ -406,8 +414,9 @@ test('executor descriptions pass dispatch payloads without Agent model overrides
 
   for (const file of STABLE_EXECUTORS) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
-    assert.match(body, /spawn\.name, spawn\.description, spawn\.isolation, and spawn\.prompt verbatim\. Set Agent\.description to\s+spawn\.description byte-for-byte, never deriving it from spawn\.prompt, its route marker, title, model, or effort\./);
-    assert.match(body, /Do not pass a model:\s+the route marker in spawn\.prompt carries model and effort\./);
+    assert.match(body, /^description: Sidequest ticket executor\.$/m);
+    assert.match(body, /Live task label:.*prepared `spawn\.description` is the label Claude Code shows for this run\./);
+    assert.match(body, /Pass it through byte-for-byte; never substitute the route marker or prompt text\./);
     assert.doesNotMatch(body, /tickets' model|unique --by id|task\(s\)/);
   }
 });
@@ -660,6 +669,15 @@ test('native dispatch fallback names Claude agents after their runtime', () => {
   assert.strictEqual(created.name, 'sidequest-native-sq-249-opus');
   assert.strictEqual(created.file, null);
   assert.deepStrictEqual(readDir(dir), []);
+});
+
+test('native agent definitions retain the prepared friendly task label', () => {
+  const source = agentsync.nativeAgentSource({
+    name: 'sidequest-native-sq-249-terra', modelId: 'claude-codex-auto', runtime: 'codex-gpt-5-6-terra', effort: 'high',
+    description: 'GPT-5.6 Terra, high · Repair the agent label',
+  });
+  assert.match(source, /^description: "GPT-5\.6 Terra, high · Repair the agent label"$/m);
+  assert.doesNotMatch(source, /Temporary Sidequest native executor/);
 });
 
 test('dispatch intent controls worktree isolation regardless of declared files', () => {

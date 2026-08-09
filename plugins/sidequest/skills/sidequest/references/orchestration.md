@@ -178,6 +178,7 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   close confirmation, and anything deliberately skipped. `SendMessage` remains for blockers,
   `kind=question` needs, scope conflicts, and failures the board cannot express.
 - **Recover one dormant completion (SQ-715 findings comment).** A task-completed notification with no submission or terminal board state while its claim is live means the executor is dormant, not finished. `pulse`; if dispatch is still claimed and fresh, `SendMessage` the same named agent once to continue, keeping its claim and token. A second silent stop means dead: salvage, release, fresh-dispatch, then spawn one new executor. Never respawn beside a live claim or `TaskStop` without terminal board evidence.
+- **Correct the live worker before replacing it.** When a claimed executor has useful edits, a scoped commit, or meaningful verification and its concern is interpretive or correctness-related, read the evidence it recorded and send the corrected evidence or decision to its board-derived name with `SendMessage`. Keep the claim and its worktree alive so that executor can correct and reverify. A fresh dispatch is only for confirmed terminal death, an intentional Continuation checkpoint, or a genuine blocker with no salvageable work.
 - **Salvage before redispatch.** When a worker is dead or stopped, inspect its worktree before releasing or
   replacing it. If an isolated worker's recorded worktree is gone, do not `SendMessage` it: redispatch after
   reading the ticket instead, because a resumed agent must never fall back to the shared checkout. Preserve a
@@ -307,8 +308,8 @@ reflexively go synchronous to save money, and do not answer the wakeup cost by w
   the end. Many runs reasonably refuse that trade and stay background/steerable. If you do reach
   for it, wave SIZE is the dial: one big synchronous wave is cheapest and blindest; small synchronous
   waves ("spawn wave, wait, re-run `ready`, repeat") give a steering checkpoint between each. Fit it to
-  work that barely needs steering — tight, verify-gated tickets whose executors bounce back on
-  ambiguity — never to exploratory or drift-prone work. (Agent teams takes this lever off the table
+  work that barely needs steering — tight, verify-gated tickets whose executors retain their claims
+  for steering through questions or concerns — never to exploratory or drift-prone work. (Agent teams takes this lever off the table
   anyway: with teams on, every spawn is a background teammate regardless of `run_in_background: false`,
   which is no loss if you wanted the steering.)
 
