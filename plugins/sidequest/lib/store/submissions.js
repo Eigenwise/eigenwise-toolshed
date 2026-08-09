@@ -679,6 +679,177 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: t, comment, ...advisories.length ? { advisory: advisories.join(" ") } : {} };
     });
   }
+  function normalizedReplacementEvidence(replacements) {
+    const entries = Array.isArray(replacements) ? replacements : [];
+    const evidence = /* @__PURE__ */ new Map();
+    for (const entry of entries) {
+      const path2 = String(entry?.path || "").trim().replace(/\\/g, "/");
+      const reviewedBy = String(entry?.reviewedBy || "").trim();
+      const reason = String(entry?.reason || "").trim();
+      if (!path2 || !reviewedBy || !reason) {
+        throw new Error("each reviewed replacement requires path, reviewedBy, and reason");
+      }
+      if (evidence.has(path2)) throw new Error(`duplicate reviewed replacement for ${path2}`);
+      evidence.set(path2, { path: path2, reviewedBy, reason });
+    }
+    return evidence;
+  }
+  function submissionChangedPaths(repo, submission) {
+    if (Array.isArray(submission?.changedPaths) && submission.changedPaths.length) {
+      return submission.changedPaths.map((entry) => String(entry).trim().replace(/\\/g, "/")).filter(Boolean);
+    }
+    return integrationGit(repo, ["diff", "--name-only", submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
+  }
+  function pathsWithDifferentContent(repo, sourceCommit, deliveredHead, paths) {
+    const divergent = [];
+    for (const file of paths) {
+      try {
+        integrationGit(repo, ["diff", "--quiet", sourceCommit, deliveredHead, "--", file]);
+      } catch (error) {
+        if (error?.status === 1) divergent.push(file);
+        else throw error;
+      }
+    }
+    return divergent;
+  }
+  function integratedRepairTicket(slug, source, repairRef) {
+    const repair = getTicket(slug, repairRef);
+    if (!repair) return { ok: false, reason: "repair_not_found", message: `No repair ticket ${repairRef}.` };
+    if (repair.id === source.id) return { ok: false, reason: "repair_self_reference", message: `${source.ref} cannot supersede its own submission.` };
+    const integration = repair.submission?.integration;
+    if (repair.status !== "done" || !repair.submission?.integratedAt || !integration?.resultingHead || !["delivered", "verified"].includes(integration.outcome)) {
+      return {
+        ok: false,
+        reason: "repair_not_integrated",
+        message: `${repair.ref} must be done with a recorded integrated delivery before it can supersede ${source.ref}. Integrate and close ${repair.ref} first.`
+      };
+    }
+    return { ok: true, repair, integration };
+  }
+  function closeSubmissionAsSuperseded(slug, idOrRef, opts) {
+    opts = opts || {};
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    const by = String(opts.by || "").trim();
+    const repairRef = String(opts.supersededBy || "").trim();
+    const reason = String(opts.reason || "").trim();
+    if (!by) return { ok: false, reason: "identity_required", message: "Submission supersession requires a control-plane identity." };
+    if (!repairRef) return { ok: false, reason: "repair_required", message: `${found.ref} needs supersededBy: the later integrated repair ticket ref.` };
+    if (!reason) return { ok: false, reason: "evidence_required", message: `${found.ref} needs a concise evidence record explaining why the repair range replaces this submission.` };
+    let replacements;
+    try {
+      replacements = normalizedReplacementEvidence(opts.reviewedReplacements);
+    } catch (error) {
+      return { ok: false, reason: "invalid_replacements", message: String(error?.message || error) };
+    }
+    return withTicketLock(slug, found.id, () => {
+      const source = getTicket(slug, found.id);
+      if (!source) return { ok: false, reason: "not_found" };
+      const existing = source.submission?.supersededBy;
+      if (existing && source.status === "done") {
+        if (String(existing.ref || "").toUpperCase() === repairRef.toUpperCase()) return { ok: true, idempotent: true, ticket: source, supersededBy: existing };
+        return { ok: false, reason: "already_superseded", ticket: source, message: `${source.ref} was already superseded by ${existing.ref}.` };
+      }
+      if (!pendingSubmission(source)) {
+        return { ok: false, reason: "submission_required", ticket: source, message: `${source.ref} has no pending submission to supersede.` };
+      }
+      const repaired = integratedRepairTicket(slug, source, repairRef);
+      if (!repaired.ok) return Object.assign({ ticket: source }, repaired);
+      const repo = readMeta(slug)?.path;
+      if (!repo) return { ok: false, reason: "project_unavailable", ticket: source };
+      let changedPaths;
+      try {
+        integrationGit(repo, ["rev-parse", "--verify", `${source.submission.commit}^{commit}`]);
+        integrationGit(repo, ["rev-parse", "--verify", `${repaired.integration.resultingHead}^{commit}`]);
+        changedPaths = submissionChangedPaths(repo, source.submission);
+      } catch (error) {
+        return {
+          ok: false,
+          reason: "lineage_unavailable",
+          ticket: source,
+          message: `${source.ref} supersession refused because its submitted range or ${repaired.repair.ref}'s delivered head cannot be inspected: ${integrationGitError(error)}`
+        };
+      }
+      const deliveredFiles = Array.isArray(repaired.integration.deliveredFiles) ? repaired.integration.deliveredFiles.map((entry) => String(entry).trim().replace(/\\/g, "/")).filter(Boolean) : [];
+      const delivered = new Set(deliveredFiles);
+      const missingPaths = changedPaths.filter((file) => !delivered.has(file));
+      if (missingPaths.length) {
+        return {
+          ok: false,
+          reason: "lineage_paths_missing",
+          ticket: source,
+          missingPaths,
+          message: `${source.ref} supersession refused: ${repaired.repair.ref}'s recorded delivery does not include every submitted path: ${missingPaths.join(", ")}. Keep the submission parked or integrate a repair that delivers the full path lineage.`
+        };
+      }
+      let divergentPaths;
+      try {
+        divergentPaths = pathsWithDifferentContent(repo, source.submission.commit, repaired.integration.resultingHead, changedPaths);
+      } catch (error) {
+        return {
+          ok: false,
+          reason: "lineage_unavailable",
+          ticket: source,
+          message: `${source.ref} supersession refused while comparing delivered content: ${integrationGitError(error)}`
+        };
+      }
+      const unreviewed = divergentPaths.filter((file) => !replacements.has(file));
+      if (unreviewed.length) {
+        return {
+          ok: false,
+          reason: "lineage_content_diverged",
+          ticket: source,
+          divergentPaths: unreviewed,
+          message: `${source.ref} supersession refused: delivered content differs for ${unreviewed.join(", ")}. Supply reviewedReplacements entries with path, reviewedBy, and reason for every intentional replacement.`
+        };
+      }
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      const reviewedReplacements = divergentPaths.map((file) => replacements.get(file));
+      const supersededBy = {
+        ref: repaired.repair.ref,
+        commit: repaired.repair.submission.commit,
+        resultingHead: repaired.integration.resultingHead,
+        deliveredAt: repaired.integration.deliveredAt || repaired.repair.submission.integratedAt,
+        closedAt: now,
+        changedPaths,
+        reviewedReplacements,
+        reason
+      };
+      const commentPreparation = prepareComment({ by, body: reason, kind: "comment", source: opts.source || "control-plane-supersession" });
+      if (!commentPreparation.ok) throw new Error(`supersession comment ${commentPreparation.reason}`);
+      const comment = createComment(commentPreparation, now);
+      if (!Array.isArray(source.comments)) source.comments = [];
+      source.comments.push(comment);
+      source.claim = null;
+      source.submission = Object.assign({}, source.submission, {
+        integratedAt: now,
+        supersededBy,
+        integration: Object.assign({}, source.submission.integration || {}, { outcome: "superseded", supersededAt: now, supersededBy })
+      });
+      const previousStatus = source.status;
+      source.status = "done";
+      source.statusTransition = { from: previousStatus, to: "done", at: now };
+      source.completion = {
+        key: [source.id, now, by, "done"].join(":"),
+        by,
+        state: "done",
+        claimAt: null,
+        at: now,
+        commentId: comment.id,
+        authority: "control-plane",
+        purpose: "submission-supersession",
+        supersededBy
+      };
+      setDispatchTerminal(source, "done", opts.source || "control-plane-supersession", { failureShape: "superseded_submission" });
+      source.dispatchNonce = null;
+      source.dispatchExecutor = null;
+      stampDispatchEvent(source, opts.source || "control-plane-supersession", now);
+      putTicket(slug, source);
+      queueEventNotification(slug, source, source.lastEventType, source.lastEventSource);
+      queueEventNotification(slug, source, "comment", comment.source, { commentBody: comment.body });
+      return { ok: true, ticket: source, supersededBy, comment };
+    });
+  }
   function clearSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const found = getTicket(slug, idOrRef);
@@ -733,6 +904,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, verifyIntegration, validateIntegrationSubmission, integrateSubmission, submitTicket, clearSubmission, submissionBaseCandidates, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, verifyIntegration, validateIntegrationSubmission, integrateSubmission, closeSubmissionAsSuperseded, submitTicket, clearSubmission, submissionBaseCandidates, submissionsPayload };
 }
 module.exports = { createSubmissions };

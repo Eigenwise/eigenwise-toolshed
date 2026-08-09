@@ -54,6 +54,8 @@ usually want `apply` or `replay`; use `merge` where the repository's release flo
 If a publish lock is active, acquire it before delivery. `integrate` closes the delivered ticket with the
 same control-plane integration bookkeeping as `groom-close --integration`.
 
+If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
+
 ## Local-only repositories
 
 `board-config --integration-mode local` records ranges against local `main`; `auto` chooses that mode when

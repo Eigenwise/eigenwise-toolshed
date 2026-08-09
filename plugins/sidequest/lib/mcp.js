@@ -7,7 +7,7 @@ const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 19500;
+const MCP_TOOLS_LIST_MAX_BYTES = 2e4;
 function serverVersion() {
   try {
     return require("../.claude-plugin/plugin.json").version || "0.0.0";
@@ -41,6 +41,7 @@ const MUTATING_TOOLS = /* @__PURE__ */ new Set([
   "release",
   "commit",
   "submit",
+  "supersede_submission",
   "comment",
   "plan",
   "link",

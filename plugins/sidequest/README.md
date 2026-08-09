@@ -144,7 +144,7 @@ sidequest publish queue
 sidequest publish unlock --by <who>
 ```
 
-Executors do not push, bump manifests, or assign release versions. Partial submissions with unscoped paths are rejected until scope is approved and the commit is complete.
+Executors do not push, bump manifests, or assign release versions. Partial submissions with unscoped paths are rejected until scope is approved and the commit is complete. When a rejected submission was deliberately delivered through a later repair ticket, use MCP `supersede_submission` instead of replaying the obsolete range. It closes the earlier submission only after the repair is integrated, every original changed path is recorded in that delivery, and any changed content has explicit reviewed replacement evidence.
 
 ## Hooks
 

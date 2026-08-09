@@ -1059,6 +1059,58 @@
     }
   },
   {
+    "name": "supersede_submission",
+    "description": "Close a pending submission delivered by an integrated repair.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "supersededBy": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "reviewedReplacements": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "string"
+              },
+              "reviewedBy": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "path",
+              "reviewedBy",
+              "reason"
+            ]
+          }
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "supersededBy",
+        "reason"
+      ]
+    }
+  },
+  {
     "name": "comment",
     "description": "Add a handoff comment.",
     "inputSchema": {

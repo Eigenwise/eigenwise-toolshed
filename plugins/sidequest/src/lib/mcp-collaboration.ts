@@ -73,6 +73,46 @@ type ToolDefinition = {
 
 const tools: ToolDefinition[] = [
   {
+    name: 'supersede_submission',
+    description: 'Close a pending submission delivered by an integrated repair.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ref: { type: 'string', description: 'Pending submission to close.' },
+        project: PROJECT_PROP,
+        by: { type: 'string', description: 'Control-plane identity recording the closure.' },
+        supersededBy: { type: 'string', description: 'Later ticket ref with an integrated repair delivery.' },
+        reason: { type: 'string', description: 'Concise delivery evidence retained on the closed submission.' },
+        reviewedReplacements: {
+          type: 'array',
+          description: 'Required only where the repair intentionally changes original submitted content.',
+          items: {
+            type: 'object',
+            properties: {
+              path: { type: 'string' },
+              reviewedBy: { type: 'string', description: 'Reviewer or review ticket that approved the replacement.' },
+              reason: { type: 'string', description: 'Why this replacement preserves the intended delivery.' },
+            },
+            required: ['path', 'reviewedBy', 'reason'],
+          },
+        },
+      },
+      required: ['ref', 'by', 'supersededBy', 'reason'],
+    },
+    handler(args) {
+      const { slug } = resolveProject(args.project);
+      const by = requireBy(args, 'supersede_submission');
+      const result = store.closeSubmissionAsSuperseded(slug, args.ref, {
+        by,
+        supersededBy: args.supersededBy,
+        reason: args.reason,
+        reviewedReplacements: args.reviewedReplacements,
+        source: 'mcp',
+      });
+      return mutationAck(slug, result, result.ok ? { supersededBy: result.supersededBy, idempotent: result.idempotent === true } : null);
+    },
+  },
+  {
     name: 'comment',
     description: 'Add a durable handoff comment (decisions, constraints, risks, evidence); not progress narration.',
     inputSchema: {
