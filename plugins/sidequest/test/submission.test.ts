@@ -254,7 +254,7 @@ test('integration rejects a plugin change when its merged-tree full gate fails',
   assert.strictEqual(result.ok, false);
   assert.strictEqual(result.reason, 'verify_failed');
   assert.strictEqual(result.verify.status, 'failed');
-  assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && npm run test:full');
+  assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && npm ci && npm run test:full');
 });
 
 test('SQ-971: rejected range submission is quarantined and clean rebase resubmits', async () => {

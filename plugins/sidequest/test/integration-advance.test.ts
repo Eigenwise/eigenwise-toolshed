@@ -581,3 +581,92 @@ test('a failed merged-tree gate restores the submitted work without resetting un
   assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
 });
+
+function makeGreenfieldRepo(label: string, locked = true) {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-greenfield-${label}-`));
+  git(['init'], repo);
+  git(['config', 'user.name', 'Sidequest Test'], repo);
+  git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+  fs.writeFileSync(path.join(repo, 'README.md'), 'greenfield fixture\n');
+  git(['add', '.'], repo);
+  git(['commit', '-m', 'base'], repo);
+  git(['branch', '-M', 'main'], repo);
+
+  const executor = path.join(repo, '.claude', 'worktrees', 'agent-greenfield');
+  git(['worktree', 'add', '-b', 'worktree-agent-greenfield', executor, 'main'], repo);
+  const pluginDirectory = path.join(executor, 'plugins', 'greenfield');
+  fs.mkdirSync(path.join(pluginDirectory, 'locked-dependency'), { recursive: true });
+  fs.mkdirSync(path.join(pluginDirectory, 'test'), { recursive: true });
+  fs.writeFileSync(path.join(pluginDirectory, 'package.json'), JSON.stringify({
+    name: 'greenfield',
+    private: true,
+    scripts: { 'test:full': 'node --test test/greenfield.test.js' },
+    ...(locked ? { devDependencies: { 'locked-dependency': 'file:./locked-dependency' } } : {}),
+  }));
+  if (locked) {
+    fs.writeFileSync(path.join(pluginDirectory, 'package-lock.json'), JSON.stringify({
+      name: 'greenfield',
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        '': { name: 'greenfield', devDependencies: { 'locked-dependency': 'file:./locked-dependency' } },
+        'locked-dependency': { version: '1.0.0', dev: true },
+        'node_modules/locked-dependency': { resolved: 'locked-dependency', link: true },
+      },
+    }));
+    fs.writeFileSync(path.join(pluginDirectory, 'locked-dependency', 'package.json'), JSON.stringify({ name: 'locked-dependency', version: '1.0.0' }));
+    fs.writeFileSync(path.join(pluginDirectory, 'locked-dependency', 'index.js'), "module.exports = 'locked';\n");
+  }
+  fs.writeFileSync(
+    path.join(pluginDirectory, 'test', 'greenfield.test.js'),
+    locked ? "require('node:assert').equal(require('locked-dependency'), 'locked');\n" : "require('node:assert').ok(true);\n",
+  );
+  git(['add', 'plugins'], executor);
+  git(['commit', '-m', 'add greenfield plugin'], executor);
+  const submitted = head(executor);
+
+  return { repo, executor, submitted, target: { mode: 'local', branch: 'main', upstream: 'main' } };
+}
+
+test('integration installs a locked greenfield package before its resolved suite', () => {
+  const fixture = makeGreenfieldRepo('locked-dependencies');
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'greenfield package',
+    category: 'codebase-exploration',
+    description: 'A new locked package requires its dependencies during integration.',
+    files: ['plugins/greenfield'],
+  });
+  submitFixture(slug, ticket, fixture);
+  const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verify.status, 'passed');
+  assert.equal(payload.verify.command, 'cd plugins/greenfield && npm ci && npm run test:full');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules', 'locked-dependency')), true);
+});
+
+test('integration refuses an unlocked package instead of resolving dependencies', () => {
+  const fixture = makeGreenfieldRepo('missing-lock', false);
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'unlocked greenfield package',
+    category: 'codebase-exploration',
+    description: 'A package without a lockfile cannot use mutable dependency resolution.',
+    files: ['plugins/greenfield'],
+  });
+  submitFixture(slug, ticket, fixture);
+  const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
+
+  assert.equal(result.status, 1, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.verifyFailed.command, 'cd plugins/greenfield && npm ci && npm run test:full');
+  assert.match(payload.verifyFailed.outputTail, /package-lock\.json/);
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
+});
