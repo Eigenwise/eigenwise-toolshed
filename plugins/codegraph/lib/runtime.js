@@ -53,6 +53,7 @@ const runtimeCurrentFile = "current.json";
 const runtimeGenerationsDirectory = "generations";
 const runtimeLockStaleMilliseconds = 5 * 60 * 1e3;
 const runtimeLockRetryMilliseconds = 25;
+const runtimeReclaimProbeTimeoutMilliseconds = 250;
 const inFlightAcquisitions = /* @__PURE__ */ new Map();
 class SemanticRuntimeError extends Error {
   constructor(message) {
@@ -376,24 +377,30 @@ function parseRuntimeReclaimMarker(fileName) {
   if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return void 0;
   return { generationToken: match[1], identity: { port, token: match[3] } };
 }
-async function runtimeReclaimerIsAlive(identity) {
+async function runtimeReclaimerIdentityStatus(identity) {
   return new Promise((resolve) => {
     let response = "";
     let settled = false;
-    const finish = (alive) => {
+    const socket = (0, import_node_net.createConnection)({ host: "127.0.0.1", port: identity.port });
+    const timeout = setTimeout(() => finish("unknown"), runtimeReclaimProbeTimeoutMilliseconds);
+    const finish = (status) => {
       if (settled) return;
       settled = true;
+      clearTimeout(timeout);
       socket.destroy();
-      resolve(alive);
+      resolve(status);
     };
-    const socket = (0, import_node_net.createConnection)({ host: "127.0.0.1", port: identity.port });
     socket.setEncoding("utf8");
     socket.on("data", (data) => {
       response += data;
-      if (response.length > identity.token.length) finish(false);
+      if (response.length >= identity.token.length) {
+        finish(response === identity.token ? "live" : "dead");
+      }
     });
-    socket.once("end", () => finish(response === identity.token));
-    socket.once("error", () => finish(false));
+    socket.once("end", () => finish(response === identity.token ? "live" : "dead"));
+    socket.once("error", (error) => {
+      finish(error.code === "ECONNREFUSED" ? "dead" : "unknown");
+    });
   });
 }
 async function moveClaimedRuntimeLock(lockDirectory, claimMarker, guard) {
@@ -430,7 +437,9 @@ async function recoverRuntimeReclaim(lockDirectory) {
   for (const entry of entries) {
     const reclaim = parseRuntimeReclaimMarker(entry);
     if (reclaim === void 0) continue;
-    if (await runtimeReclaimerIsAlive(reclaim.identity)) return "active";
+    const identityStatus = await runtimeReclaimerIdentityStatus(reclaim.identity);
+    if (identityStatus === "live") return "active";
+    if (identityStatus === "unknown") return "unknown";
     return await continueRuntimeReclaim(
       lockDirectory,
       import_node_path.default.join(lockDirectory, entry),
@@ -464,7 +473,9 @@ async function recoverLegacyRuntimeReclaim(lockDirectory) {
   } catch {
     return "none";
   }
-  if (await runtimeReclaimerIsAlive(reclaim)) return "active";
+  const identityStatus = await runtimeReclaimerIdentityStatus(reclaim);
+  if (identityStatus === "live") return "active";
+  if (identityStatus === "unknown") return "unknown";
   return await continueRuntimeReclaim(lockDirectory, claimFile, reclaim.generationToken) ? "reclaimed" : "active";
 }
 async function claimLegacyRuntimeLock(lockDirectory, observedOwnerToken) {
@@ -538,8 +549,18 @@ async function reclaimObservedRuntimeLock(lockDirectory, ownerToken) {
 }
 async function breakStaleRuntimeLock(lockDirectory) {
   const generatedReclaim = await recoverRuntimeReclaim(lockDirectory);
+  if (generatedReclaim === "unknown") {
+    throw new SemanticRuntimeError(
+      `runtime cache lock reclaim identity did not respond at ${lockDirectory}; the claim was preserved, retry after confirming its claimant exited`
+    );
+  }
   if (generatedReclaim !== "none") return generatedReclaim === "reclaimed";
   const legacyReclaim = await recoverLegacyRuntimeReclaim(lockDirectory);
+  if (legacyReclaim === "unknown") {
+    throw new SemanticRuntimeError(
+      `runtime cache lock reclaim identity did not respond at ${lockDirectory}; the claim was preserved, retry after confirming its claimant exited`
+    );
+  }
   if (legacyReclaim !== "none") return legacyReclaim === "reclaimed";
   let ownerToken;
   try {
