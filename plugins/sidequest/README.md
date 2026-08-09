@@ -99,6 +99,8 @@ Routine reads are brief by default. Omitted rows and nested bodies carry a `cont
 - `scopeRequest`, `commit`, `submit`, `integrate`, `groomClose`
 - `sweepClaims`
 
+`add` and `update` default to `verifyKind: "command"`. Use `verifyKind: "attestation"` only with an `attestationArtifact`; then `verify` must be `attestation: <artifact> | <evidence produced> | <what it showed>`, with `<artifact>` replaced by that same artifact. An artifact with the default command kind is rejected.
+
 Repository executors normally follow `dispatch → token claim → scoped commit → submit → orchestrator integration`. **Routed repo lifecycle:** dispatch → token claim → scoped commit → submit →
   orchestrator publish. The orchestrator owns publish, versioning, and pushing. Direct claim/done is reserved for deliberate inline-safe work, non-repository work, or read-only/artifact contracts that explicitly allow it.
 

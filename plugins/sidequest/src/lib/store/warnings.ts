@@ -39,30 +39,30 @@ function normalizeVerifyOracleKind(value?: any) {
   return kind;
 }
 
+const ATTESTATION_FORMAT = '`attestation: <artifact> | <evidence produced> | <what it showed>`';
+
 function attestationErrors(value?: any, artifact?: any) {
   const evidence = String(value || '').trim();
   const observedArtifact = String(artifact || '').trim();
-  if (!observedArtifact) return ['Attestation verification requires attestationArtifact: name the URL, file, frame, or returned count that was observed.'];
+  if (!observedArtifact) return ['verifyKind: attestation requires attestationArtifact: name the URL, file, frame, or returned count that was observed.'];
+  if (!evidence) return [];
   const expected = `attestation: ${observedArtifact} | `;
   const evidenceParts = evidence.slice(expected.length).split('|').map((part) => part.trim());
   if (!evidence.startsWith(expected) || evidenceParts.length !== 2 || evidenceParts.some((part) => !part)) {
-    return [`Attestation evidence must use \`attestation: ${observedArtifact} | <evidence produced> | <what it showed>\`.`];
+    return [`verify must use ${ATTESTATION_FORMAT}; replace <artifact> with attestationArtifact.`];
   }
   return [];
 }
 
 function verifyOracleErrors(kind?: any, value?: any, artifact?: any) {
-  return normalizeVerifyOracleKind(kind) === 'attestation'
-    ? (artifact === undefined ? attestationErrors('', value) : attestationErrors(value, artifact))
-    : verifyCommandErrors(value);
+  const verifyKind = normalizeVerifyOracleKind(kind);
+  if (verifyKind === 'attestation') return attestationErrors(value, artifact);
+  if (String(artifact || '').trim()) return ['attestationArtifact requires verifyKind: attestation.'];
+  return verifyCommandErrors(value);
 }
 
 function requireVerifyOracle(kind?: any, value?: any, artifact?: any) {
-  if (normalizeVerifyOracleKind(kind) === 'attestation') {
-    if (!String(artifact || '').trim()) throw new Error('Attestation verification requires attestationArtifact: name the URL, file, frame, or returned count that was observed.');
-    return;
-  }
-  const errors = verifyCommandErrors(value);
+  const errors = verifyOracleErrors(kind, value, artifact);
   if (errors.length) throw new Error(errors.join('\n'));
 }
 

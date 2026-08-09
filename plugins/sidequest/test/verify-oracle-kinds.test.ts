@@ -17,7 +17,7 @@ test('attestation oracle requires an observed artifact and structured evidence',
 
   assert.throws(
     () => store.createTicket(slug, { title: 'Missing attestation artifact', executorVerifyKind: 'attestation' }),
-    /Attestation verification requires attestationArtifact/,
+    /verifyKind: attestation requires attestationArtifact/,
   );
 
   const artifact = 'grafana://dashboards/sidequest-overview';

@@ -1707,6 +1707,56 @@ test('MCP add reports every verify-command defect together', async () => {
   assert.match(refused.failures[1].message, /must start with a runnable command/);
 });
 
+test('MCP rejects incompatible attestation fields on add and update', async () => {
+  const artifact = 'grafana://caller-controlled-artifact';
+  const invalidAttestationCalls = [
+    {
+      fields: { verifyKind: 'attestation' },
+      expected: /verifyKind: attestation requires attestationArtifact/,
+    },
+    {
+      fields: {
+        verifyKind: 'attestation',
+        attestationArtifact: artifact,
+        verify: `attestation: ${artifact} | incomplete evidence`,
+      },
+      expected: /verify must use `attestation: <artifact> \| <evidence produced> \| <what it showed>`/,
+    },
+    {
+      fields: { attestationArtifact: artifact },
+      expected: /attestationArtifact requires verifyKind: attestation/,
+    },
+  ];
+
+  for (const { fields, expected } of invalidAttestationCalls) {
+    const refused = await callTool('add', {
+      title: 'invalid attestation add',
+      unclassified: true,
+      ...fields,
+    });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'invalid_verify');
+    assert.match(refused.message, expected);
+    if (fields.verify) assert.doesNotMatch(refused.message, new RegExp(artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  }
+
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-attestation-update-')), 'attestation update').slug;
+  const ticket = store.createTicket(project, { title: 'valid command ticket' });
+  for (const { fields, expected } of invalidAttestationCalls) {
+    const refused = await callTool('update', { project, ref: ticket.ref, ...fields });
+    assert.equal(refused.ok, false);
+    assert.equal(refused.reason, 'invalid_verify');
+    assert.match(refused.message, expected);
+  }
+
+  for (const name of ['add', 'update']) {
+    const properties = mcp.TOOLS.find((tool: any) => tool.name === name).inputSchema.properties;
+    assert.match(properties.verify.description, /attestation: <artifact> \| <evidence produced> \| <what it showed>/);
+    assert.match(properties.verifyKind.description, /attestationArtifact is rejected when verifyKind is command/);
+    assert.match(properties.attestationArtifact.description, /Required only when verifyKind is attestation/);
+  }
+});
+
 test('CLI submit requires release fragments for marketplace plugin changes', async () => {
   const missingWorktree = createGitWorktree();
   addMarketplaceFixture(missingWorktree);

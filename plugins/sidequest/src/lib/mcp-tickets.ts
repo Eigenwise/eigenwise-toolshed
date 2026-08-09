@@ -87,9 +87,9 @@ const tools: ToolDefinition[] = [
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
         readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
-        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Exact command verification: runnable cmd.exe command (for example `cd plugins/sidequest && npm run test:full`) or manual check (`manual: <what you checked>`). cmd.exe uses &&, never ;. Attestation evidence is recorded at submission when verifyKind is attestation.' },
-        verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification oracle. command runs verify; attestation records observed artifact evidence.' },
-        attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required for attestation: the specific URL, file, frame, or returned count observed.' },
+        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'When verifyKind is command (the default), use one runnable cmd.exe command (for example `cd plugins/sidequest && npm run test:full`) or `manual: <what you checked>`. cmd.exe uses &&, never ;. When verifyKind is attestation, use exactly `attestation: <artifact> | <evidence produced> | <what it showed>` and replace <artifact> with attestationArtifact.' },
+        verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification oracle. Defaults to command. attestation requires attestationArtifact; attestationArtifact is rejected when verifyKind is command.' },
+        attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command.' },
         storyId: { type: 'string', pattern: '^US-\\d+$', description: 'A story ref (US-n) to file this ticket into.' },
         complexity: { type: 'integer', minimum: 1, maximum: 10, description: 'Legacy score. Requires why (min 20 chars).' },
         why: { type: 'string', description: 'Motivation for the complexity score (min 20 chars).' },
@@ -180,9 +180,9 @@ const tools: ToolDefinition[] = [
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
         readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
-        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Exact command verification: runnable cmd.exe command (for example `cd plugins/sidequest && npm run test:full`) or manual check (`manual: <what you checked>`). cmd.exe uses &&, never ;. Attestation evidence is recorded at submission when verifyKind is attestation.' },
-        verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification oracle. command runs verify; attestation records observed artifact evidence.' },
-        attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required for attestation: the specific URL, file, frame, or returned count observed.' },
+        verify: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'When verifyKind is command (the default), use one runnable cmd.exe command (for example `cd plugins/sidequest && npm run test:full`) or `manual: <what you checked>`. cmd.exe uses &&, never ;. When verifyKind is attestation, use exactly `attestation: <artifact> | <evidence produced> | <what it showed>` and replace <artifact> with attestationArtifact.' },
+        verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification oracle. Defaults to command. attestation requires attestationArtifact; attestationArtifact is rejected when verifyKind is command.' },
+        attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command.' },
         storyId: { anyOf: [{ type: 'string', pattern: '^US-\\d+$' }, { const: 'none' }] },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
@@ -207,6 +207,24 @@ const tools: ToolDefinition[] = [
         throw new Error('update: re-scoring complexity needs a fresh why (min 20 chars).');
       }
       const { slug, meta } = resolveProject(args.project);
+      const existing = store.getTicket(slug, args.ref);
+      if (!existing) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
+      if (args.verify !== undefined || args.verifyKind !== undefined || args.attestationArtifact !== undefined) {
+        const verifyFailures = store.verifyOracleErrors(
+          args.verifyKind === undefined ? existing.executorVerifyKind : args.verifyKind,
+          args.verify === undefined ? existing.executorVerify : args.verify,
+          args.attestationArtifact === undefined ? existing.executorAttestationArtifact : args.attestationArtifact,
+        );
+        if (verifyFailures.length) {
+          return {
+            ok: false,
+            project: slug,
+            reason: 'invalid_verify',
+            message: verifyFailures[0],
+            failures: verifyFailures.map((message: string) => ({ reason: 'invalid_verify', message })),
+          };
+        }
+      }
       const patch: any = { source: 'mcp', sessionId: sessionOf(args) };
       if (args.by !== undefined) patch.by = args.by;
       for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
