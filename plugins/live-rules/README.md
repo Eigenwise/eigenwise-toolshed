@@ -1,398 +1,46 @@
-# live-rules
+# Live Rules
 
-[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Flive-rules%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
-[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
+Live Rules keeps project instructions in front of Claude Code when they apply to a prompt or edit. Use it for conventions, guardrails, and reminders that should follow the project instead of relying on memory.
 
-*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
-
-**Developer-friendly, live rules for Claude Code.** New workspaces store one rule per Markdown file under
-`.claude/live-rules/`, with a small hash manifest. Hooks re-ground only rules that are newly relevant,
-changed, or lost after a context reset. Healthy prompts inject zero rule content. Global and prompt-keyword
-rules apply on prompts, directory rules apply in their folder, and path/glob rules apply right before Claude
-edits a matching file. Existing `.claude/live-rules.md` projects stay supported and can migrate without
-changing rule behavior.
-
-> Start with the [live-rules guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
-
-It is the same idea behind [codebase-mapper](../codebase-mapper) (a hook that re-injects context so
-it stays salient), pointed at a different job: instead of a map of your codebase, it injects **your
-rules**, scoped to the moment they matter.
+[Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/live-rules/) · [Toolshed marketplace](../../README.md)
 
 ## Install
 
-Install live-rules at project scope by default, so its rules travel with the repo.
+Run these in Claude Code from the project where the rules should live:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed --scope project
 ```
 
-`/workbench:init-workspace` installs and configures live-rules for a project for you, so manual installation is the fallback.
+Reload plugins or start a new Claude Code session. Workbench can also install and configure Live Rules during workspace setup.
 
-Then run `/reload-plugins` (or restart Claude Code).
+## Add a rule
 
-## Atomic rule storage
+Tell Claude the instruction and when it applies:
 
-New workspaces keep one frontmatter-plus-body Markdown rule under `.claude/live-rules/rules/`. After changing a rule, generate the manifest with the plugin-owned command:
+> Add a rule that runs the linter before every commit.
 
-```text
-node "${CLAUDE_PLUGIN_ROOT}/scripts/sync-atomic-rules.js" --project "${CLAUDE_PROJECT_DIR}"
-```
+Claude writes the rule with the right scope. Global rules appear on prompts; file, directory, and keyword rules appear when those situations apply. Content changes take effect on the next prompt or relevant edit, with no restart.
 
-It derives paths, SHA-256 hashes, and rule metadata from the files on disk, validates a stable read, and atomically replaces only the generated manifest. Rule files stay authoritative and sync never rewrites, replaces, or deletes them. Never hand-author `.claude/live-rules/manifest.json`. A stale or mistyped manifest is repaired from the rule files when sync runs; an invalid or concurrently changing rule file fails with its exact path and the next action. Hooks still verify content hashes while reading as defense in depth.
+Commit the project rules so your team gets the same guidance.
 
-Projects using the old `.claude/live-rules.md` format remain readable. The maintenance path can call `migrateLegacyRules(projectDir)` to write the atomic copy without deleting the original, then commit the new directory after checking the generated rules.
+## Daily use
 
-## Rules used by this repository
+Tell Claude what you need:
 
-This repository keeps its own conditional release guidance under `.claude/live-rules/rules/`:
+> List and audit the live rules in this project.
 
-- `release-publication.md` is prompt-keyword scoped to `ship`, `publish`, `release`, `bump`, `hotfix`, and `marketplace`. It explains the release fragment, publish lock, `scripts/release/cut.mjs`, atomic push, and paused `release-cut.yml` flow.
-- `manifest-versioning.md` is file-scoped to `.claude-plugin/marketplace.json` and `plugins/*/.claude-plugin/plugin.json`. It allows normal metadata edits but keeps the `version` field owned by `scripts/release/cut.mjs`.
+> Which rules are active when you edit `src/api/client.ts`?
 
-These are examples of combining prompt and file scopes with repository-specific workflow rules. They are ordinary project rule files, not built-in live-rules behavior.
+> Disable the strict lint rule for now.
 
-## Why not just use `CLAUDE.md`?
+Ask Claude to add or edit rule content with `add-rule`. Use `manage-rules` to list, audit, explain, enable, or disable rules. Live Rules does not edit `CLAUDE.md`.
 
-For the longer comparison with `CLAUDE.md` and `AGENTS.md`, see [Why live-rules exists](./WHY.md).
+## If something stops working
 
-`CLAUDE.md` is great for a static, always-on brief. live-rules is for everything that is **conditional
-or that needs to stay salient**:
-
-- **Scoped.** A React rule only shows up when editing `*.tsx`. A deploy checklist only shows up when
-  you mention deploying. Your context is not permanently full of rules that apply 5% of the time.
-- **Salient.** Rules are re-grounded when they become relevant, change, or need to return after a context reset, including right before each relevant edit. That keeps them from getting buried without sending unchanged content on every turn.
-- **Live.** Edit a rule and it applies on the very next prompt. No restart, no re-reading a giant
-  file.
-- **Toggleable.** One rule per section, each with its own scope. Disable one with a single field; the
-  rest are untouched.
-
-Use both: `CLAUDE.md` for the permanent project brief, live-rules for conditional guidance and
-guardrails that need to stay in front of the model. live-rules never touches `CLAUDE.md`.
-
-## Quick start
-
-The simplest possible rules file has no frontmatter at all. Create `.claude/live-rules.md` with one
-line:
-
-```markdown
-Write code as poetry. Prefer plain words over jargon.
-```
-
-A file with no `---` fences is treated as a **single global rule**: its whole text is injected on
-every prompt. That is all you need to get started.
-
-When you want **scoped** rules (only when editing certain files, or when your prompt mentions a
-keyword), add frontmatter blocks. Each rule is a `--- ... ---` block followed by its body, and the
-next `---` starts the next rule:
-
-```markdown
-# Live rules (re-injected every turn)
-
----
-description: House style
----
-- No em dashes. Use commas, colons, parentheses, or periods.
-- Prefer plain words over jargon.
-
----
-description: React component conventions
-globs: ["**/*.tsx"]
----
-- Function components with hooks only; no class components.
-- No inline styles; use CSS modules.
-```
-
-That is two rules in one file. The first is **global** (no scope fields), so it is injected on every
-prompt. The second is **scoped** to `.tsx` files, so it stays out of your way until Claude is about to
-edit one. Commit `.claude/live-rules.md` and your whole team shares the rules.
-
-Anything before the first `---` fence (the `# Live rules` heading above) is just a title and is
-ignored. Each rule is a frontmatter block (`--- ... ---`) followed by its body; the next `---` starts
-the next rule.
-
-Prefer to let Claude write them for you? Just ask: *"add a rule that we always use httpx instead of
-requests in Python files"*, and the `add-rule` skill appends a correctly-scoped rule to the file.
-
-## Where the file lives (configurable)
-
-By default the hooks read `.claude/live-rules.md` at the project root. Point them anywhere with the
-`LIVE_RULES_PATH` environment variable, set in `.claude/settings.json` so it is committed with the
-project:
-
-```json
-{
-  "env": {
-    "LIVE_RULES_PATH": "docs/live-rules.md"
-  }
-}
-```
-
-The value can be:
-
-- **project-relative** (`docs/live-rules.md`, `rules/team.md`) — resolved from the repo root,
-- **absolute** (`C:\\work\\shared\\rules.md`, `/srv/rules.md`),
-- **home-relative** (`~/claude-rules.md`) — handy for personal rules you want in every project.
-
-When the variable is unset, the default `.claude/live-rules.md` is used. When the file does not exist,
-the hooks stay silent and never block anything.
-
-## How it works
-
-The plugin ships three hooks (Node, standard library only, cross-platform, and fail-soft: any error or
-a missing rules file produces no output and never blocks anything).
-
-| Hook | Fires | Injects |
-|------|-------|---------|
-| `SessionStart` | when a session starts, resumes, clears, or compacts | all rules currently applicable to the working directory, then resets that session's seen-hash ledger |
-| `UserPromptSubmit` | every time you submit a prompt | relevant global, prompt-keyword, and directory rules only when their content hash is new to this session |
-| `PreToolUse` (Edit / Write / MultiEdit / NotebookEdit) | right before Claude edits a file | relevant path/glob and directory rules only when their content hash is new to this session |
-
-Why this split? `UserPromptSubmit` sees your prompt text and working directory, so it serves the
-rules that depend on those. `PreToolUse` is the only event that knows **which file** is about to be
-edited, so it serves the file-scoped rules, delivered exactly when they are relevant. `SessionStart`
-doesn't add new scope, it's a safety net (see the restart gotcha right below).
-
-The `PreToolUse` hook only **adds context**; it never sends a permission decision, so your normal
-edit-approval flow is unchanged. It informs Claude, it does not auto-approve anything.
-
-### The cost of staying salient
-
-Re-injection is not free, and it is worth knowing what you are paying for. `SessionStart` grounds global
-rules once and records their hashes. The first `UserPromptSubmit` skips those unchanged hashes, and later
-prompts do the same. Global and prompt-keyword rules cost tokens again when their content changes or after
-a context reset; scoped rules (`globs` / `dirs`) cost you when they become relevant and their content hash
-is new to the session.
-
-## Restart after enabling or updating
-
-Claude Code snapshots a session's hook registrations at session start. If you install live-rules, or
-update it to a new version, in the middle of an existing session, that session keeps running with the
-old wiring: the new (or fixed) `UserPromptSubmit` hook does not fire until you restart. There's no
-error, nothing tells you, it just silently never injects for the rest of that session.
-
-**Run `/reload-plugins` or restart Claude Code after enabling or updating live-rules.** This is the
-same gotcha called out in Install above, worth repeating here because it's the main way injection goes
-silently missing.
-
-As a partial safety net, the `SessionStart` hook re-injects your global rules once at the very start of
-every session (including after `/clear` and after a context compaction), so they reach the model at
-least once even if `UserPromptSubmit`'s wiring is somehow stale. It also gives you a concrete way to
-tell if per-prompt injection is actually working: that same "=== LIVE RULES ===" block should reappear
-on your very next prompt. If it doesn't, `UserPromptSubmit` isn't wired, restart the session.
-
-## The four trigger types
-
-Scope is inferred from which frontmatter fields a rule declares. You never set a "type".
-
-### 1. Global (always-on)
-
-No scope fields. Injected on every prompt. Reserve these for things that truly always apply.
-
-```markdown
----
-description: Commit hygiene
----
-- Never commit directly to main; branch first.
-- Run the tests before committing.
-```
-
-### 2. Path / glob
-
-`globs:` a list of gitignore-style patterns. Injected before editing a matching file.
-
-```markdown
----
-description: SQL safety
-globs: ["*.sql"]
----
-- Always use parameterized queries.
-- Every destructive migration needs a tested rollback.
-```
-
-### 3. Directory
-
-`dirs:` a list of repo-relative directories. Injected before editing a file under one of them (and on
-prompts when your session's working dir is inside one).
-
-```markdown
----
-description: API layer rules
-dirs: ["packages/api"]
----
-- Validate input with the shared schemas in packages/api/schemas.
-- Return the standard error envelope; do not invent ad hoc shapes.
-```
-
-### 4. Prompt-keyword
-
-`prompt:` a list of triggers. Each is a literal substring (case-insensitive) or a `/regex/flags`.
-Injected when your prompt matches.
-
-```markdown
----
-description: Deploy checklist
-prompt: ["deploy", "release", "/ship.*prod/i"]
----
-- Confirm staging smoke tests passed.
-- Bump the version and update CHANGELOG.md.
-```
-
-Scopes combine. A rule with both `globs` and `prompt` fires on either condition (OR).
-
-## Including a live file
-
-The four fields above decide **when** a rule fires. `include:` decides **what extra it carries**: the
-live contents of one or more files, read fresh and appended under the body every time the rule is
-injected. It is not a scope, it is a payload, and it composes with any scope.
-
-```markdown
----
-description: Codebase map protocol
-include: .claude/.codebase-info/INDEX.md
----
-This repo has a maintained codebase map. Before starting any task, say which doc(s)
-from .claude/.codebase-info/ you will read, and read them before exploring. After
-changing code, review whether the map needs updating.
-```
-
-That single rule is a self-loading codebase map: a forceful protocol in the body, plus the map file
-re-injected on every prompt so it stays salient. It is exactly what the
-[codebase-mapper](../codebase-mapper) plugin's hook does, rebuilt as one live-rules rule. The
-difference is division of labor: this gives you the **auto-loading**; codebase-mapper additionally
-ships the skills that **generate and maintain** the map docs. Same idea, your choice of how much to
-install. `include:` is just as useful for a live TODO, an ADR index, the current sprint doc, or an API
-schema you want kept in front of Claude.
-
-- **Paths** resolve project-relative by default; absolute and `~`-relative paths work too, like
-  `LIVE_RULES_PATH`.
-- **Missing files stay silent.** If none of a rule's `include:` files can be read, the rule is dropped
-  and injects nothing, so a "consult the map" rule produces nothing in a project with no map. If at
-  least one resolves, the rule fires with whatever was read.
-- **It shares the size budget.** Included contents count against the same ~10,000-char cap as rule
-  bodies (below), and an oversized include is truncated the same way. Point `include:` at a compact hub
-  like an `INDEX.md`, not a sprawling document.
-
-## File format reference
-
-The rules file is a sequence of rules. Each rule is a YAML frontmatter block between `---` fences,
-followed by its body, and the next `---` begins the next rule:
-
-```markdown
----
-description: Short human title (shown as the heading when injected)
-globs: ["**/*.tsx", "**/*.jsx"]   # path/glob scope
-dirs:  ["packages/api"]            # directory scope
-prompt: ["deploy", "/migrat/i"]    # prompt-keyword scope
-priority: 10                        # higher injects first (default 0)
-enabled: true                      # default true; set false to switch off
----
-- The body is the instruction Claude sees. Keep it tight and imperative.
-```
-
-| Field | Type | Default | Purpose |
-|-------|------|---------|---------|
-| `description` | string | `""` | Title shown when injected and in listings. |
-| `globs` | list | none | Path/glob scope (also accepts singular `glob`). |
-| `dirs` | list | none | Directory scope (also accepts singular `dir`). |
-| `prompt` | list | none | Prompt-keyword scope (also accepts `prompts` / `keywords`). |
-| `include` | string or list | none | Live file payload: inject the current contents of these file(s) under the body (also accepts `includes`). See [Including a live file](#including-a-live-file). |
-| `priority` | number | `0` | Ordering when several rules match; higher first. |
-| `enabled` | boolean | `true` | `false` switches the rule off without deleting it. |
-
-- A rule with **none** of `globs` / `dirs` / `prompt` is **global**.
-- Anything before the first `---` fence is treated as a title or intro and ignored.
-- A rule body must **not** contain a line that is exactly `---` (it would be read as the next rule's
-  fence). For a horizontal rule inside a body, use `***` or `___`.
-- The file is read fresh on every prompt and every edit, so all changes are live.
-
-### Glob syntax
-
-Matched gitignore-style against the **repo-relative** path:
-
-- **No `/` in the pattern** matches that name at any depth: `*.sql` matches `db/schema.sql`.
-- **A `/` in the pattern** anchors it: `src/*.ts` matches `src/index.ts`, not `src/util/x.ts`.
-
-Tokens: `*` (within a segment), `**` (any depth, including zero), `?` (one char), `{a,b}`
-(alternation). Trailing `**` also matches the bare directory (`packages/api/**` matches
-`packages/api`). Not supported: POSIX classes `[a-z]`, extglobs, numeric ranges, nested braces.
-
-### Size budget
-
-Claude Code caps injected context at about **10,000 characters** per event. All rules matching one
-event share that budget. The hooks stay under it and, if too many match, inject the highest-priority
-rules and note how many were held back. Keep each rule short, use `priority` for the important ones,
-and split unrelated guidance into separate rules.
-
-## Skills
-
-| Skill | Invoke with | Does |
-|-------|-------------|------|
-| `add-rule` | "add a rule that...", "make a guardrail for...", or `/live-rules:add-rule` | Appends or edits a rule in your live-rules file, picking the right scope and writing valid frontmatter |
-| `manage-rules` | "list my rules", "audit my rules", "disable the X rule", or `/live-rules:manage-rules` | Lists, audits, enables/disables rules, and explains which rules are active when |
-
-You never have to use the skills: you can hand-edit a legacy file, or edit atomic rule files and run the sync command above. The hooks read the resulting files directly and verify their hashes.
-
-## Sharing with your team
-
-Commit `.claude/live-rules.md` (or whatever `LIVE_RULES_PATH` points at, as long as it is in the
-repo). Everyone who pulls the repo and has the plugin installed gets the same rules, injected the same
-way. Disabling a rule (`enabled: false`) is a reviewable one-line diff, so you can pause a strict gate
-during a refactor and turn it back on later.
-
-## Troubleshooting
-
-- **A rule is not showing up.** Check the scope: a glob rule only fires on an edit to a matching file,
-  not on a plain prompt. Ask `manage-rules` to "explain what is active when I edit `path/to/file`".
-- **A glob never matches.** Globs are repo-relative. Remember the gitignore rule: use `**/*.ext` (or a
-  slash-free `*.ext`) to match at any depth; `*.ext` with no `**` and no `/` still matches at any
-  depth, but `dir/*.ext` only matches direct children of `dir`. `manage-rules` can test a glob
-  against your actual files.
-- **A rule got mangled or two rules merged.** A bare `---` line in a body is read as the next rule's
-  fence. Use `***` or `___` for a horizontal rule inside a body.
-- **Nothing happens at all.** The hooks are silent when the rules file does not exist. Confirm
-  `.claude/live-rules.md` exists at the project root (or that `LIVE_RULES_PATH` points at a real
-  file), that the plugin is enabled (`/plugin`), then reload plugins.
-- **Rules worked earlier this session, then stopped, or never showed up despite a real rules file.**
-  This is almost always the restart gotcha above: live-rules (or a version bump) got picked up
-  mid-session, so `UserPromptSubmit` is running on stale wiring. Check whether the "=== LIVE RULES
-  (live-rules, session start) ===" block showed up once at the top of the session. If it did but the
-  plain "=== LIVE RULES (live-rules) ===" block never reappears on later prompts, that confirms
-  `UserPromptSubmit` isn't wired: restart Claude Code (or `/reload-plugins`) and it will be. There is
-  no other way to check hook wiring from inside a session; the `SessionStart` injection is the signal.
-- **Glob/directory rules never fire, but always-on and prompt rules work fine.** Edit-scoped rules
-  (`globs` / `dirs`) are delivered through the `PreToolUse` hook's `hookSpecificOutput.additionalContext`
-  field. Older Claude Code versions silently ignore `additionalContext` on `PreToolUse`: the hook still
-  runs, still emits well-formed JSON, and the host just drops it, no error anywhere. If always-on and
-  prompt-keyword rules show up but a `globs`/`dirs` rule never does no matter what you edit, this is the
-  likely cause. Update Claude Code.
-- **A hook occasionally seems to miss a beat under heavy load.** Each hook is a fresh `node` process,
-  and on Windows, spawning `node` under concurrent hook load (several plugins' hooks firing on the
-  same event) can occasionally be slow. The hooks themselves finish in milliseconds once running, so
-  the 20s timeout in `hooks.json` is there purely to give slow process spawns room to finish rather
-  than getting killed mid-injection; it doesn't slow down the normal case.
-- **Too much context.** If many rules match at once you will hit the size note; raise `priority` on
-  the few that matter and trim or split the rest.
-- **It is safe by design.** Every hook exits cleanly on any error and never blocks a prompt or an
-  edit, so a broken section degrades to "that one rule is skipped", nothing worse.
-
-## Clean up
-
-- Rules: delete `.claude/live-rules.md` (or individual sections inside it).
-- Plugin: `/plugin uninstall live-rules@eigenwise-toolshed`.
-
-## Support
-
-live-rules is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
-
-| Ko-fi | GitHub Sponsors |
-|:-----:|:---------------:|
-| <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a> | <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a> |
+Tell Claude the symptom and ask it to audit the live rules. If no rules appear, check that the plugin is enabled and the project has its rules file, then reload plugins or restart Claude Code. If rules stopped after an install or update, the current session has stale hook wiring and needs the same reload or restart.
 
 ## License
 
-MIT (c) Eigenwise
+MIT
