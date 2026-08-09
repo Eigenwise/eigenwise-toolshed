@@ -328,6 +328,29 @@ test('update announcements require the map update skill in the same main-session
   assert.strictEqual(hook(startHook, directory, state, { ...turn, agent_id: 'subagent' }), '');
 });
 
+test('update skill completion matches Stop despite host prompt id mismatch', () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: 'mismatched-host-prompts',
+    prompt_id: 'stop-host-prompt',
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  assert.strictEqual(JSON.parse(hook(startHook, directory, state, stop)).decision, 'block');
+  assert.strictEqual(hook(startHook, directory, state, {
+    ...stop,
+    hook_event_name: 'PreToolUse',
+    prompt_id: 'tool-host-prompt',
+    tool_name: 'Skill',
+    tool_input: { skill: 'codebase-mapper:update-codebase-map' },
+  }), '');
+  assert.strictEqual(hook(startHook, directory, state, stop), '', 'the completed update matches by session');
+  assert.strictEqual(JSON.parse(hook(startHook, directory, state, stop)).decision, 'block', 'the completion record is consumed');
+});
+
 test('overlapping prompt-less Stop processes atomically claim one veto', async () => {
   const directory = project();
   const state = path.join(directory, 'state');
@@ -408,6 +431,35 @@ test('an advancing transcript cannot split one prompt-independent Stop batch', a
 
   const results = await Promise.all([first, second]);
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
+  assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
+});
+
+test('transcript path presence and value cannot split one Stop batch', async () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const sessionId = 'overlapping-transcript-path-metadata';
+  const stateFile = path.join(state, 'stop-veto-' + crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
+  const lockDirectory = stateFile + '.lock-v2';
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, process.pid);
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  const pending = Promise.all([
+    hookAsync(startHook, directory, state, stop),
+    hookAsync(startHook, directory, state, { ...stop, transcript_path: path.join(directory, 'first.jsonl') }),
+    hookAsync(startHook, directory, state, { ...stop, transcript_path: path.join(directory, 'second.jsonl') }),
+  ]);
+  await waitForLockContenders(lockDirectory, 3);
+  fs.rmSync(lockDirectory, { recursive: true, force: true });
+
+  const results = await pending;
+  assert.deepStrictEqual(results.map((result) => result.status), [0, 0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
   assert.ok(results.every((result) => result.stderr === ''));
 });
@@ -503,7 +555,8 @@ test('the stop hook tracks update skill use and preserves the main-session instr
   assert.match(hooksConfig.description, /generation-bound stale-lock cleanup cannot delete a live replacement/);
   assert.match(hooksConfig.description, /overlapping hook processes/);
   assert.match(hooksConfig.description, /Claude batches concurrent blocking hooks into one continuation/);
-  assert.match(hooksConfig.description, /stable documented Stop fields identify prompt-less batches even while transcripts advance/);
+  assert.match(hooksConfig.description, /stable message and reason identity ignores optional prompt and transcript host metadata/);
+  assert.match(hooksConfig.description, /update-skill completion matches by session when host prompt ids differ/);
   assert.match(hooksConfig.description, /stop_hook_active re-entry stays silent/);
   const main = hooksConfig.hooks.Stop[0];
   const skill = hooksConfig.hooks.PreToolUse[0];

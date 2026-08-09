@@ -1,5 +1,5 @@
 {
-  "description": "codebase-mapper atomically emits one independent <=192 B Stop veto per update responsibility across overlapping hook processes; generation-bound stale-lock cleanup cannot delete a live replacement, Claude batches concurrent blocking hooks into one continuation, stable documented Stop fields identify prompt-less batches even while transcripts advance, resolved responsibilities can warn again, and stop_hook_active re-entry stays silent",
+  "description": "codebase-mapper atomically emits one independent <=192 B Stop veto per update responsibility across overlapping hook processes; generation-bound stale-lock cleanup cannot delete a live replacement, Claude batches concurrent blocking hooks into one continuation, stable message and reason identity ignores optional prompt and transcript host metadata, update-skill completion matches by session when host prompt ids differ, resolved responsibilities can warn again, and stop_hook_active re-entry stays silent",
   "hooks": {
     "SessionStart": [
       {

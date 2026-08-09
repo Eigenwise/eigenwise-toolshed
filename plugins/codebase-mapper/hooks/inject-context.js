@@ -74,22 +74,14 @@ function stateDirectory() {
   return process.env.CODEBASE_MAPPER_STATE_DIR || path.join(os.homedir(), '.claude', 'codebase-mapper-state');
 }
 
-function turnKey(data) {
-  const sessionId = typeof data.session_id === 'string' ? data.session_id : '';
-  const promptId = typeof data.prompt_id === 'string' ? data.prompt_id : '';
-  return sessionId && promptId ? crypto.createHash('sha256').update(sessionId + ':' + promptId).digest('hex') : '';
-}
-
 function sessionKey(data) {
   const sessionId = typeof data.session_id === 'string' ? data.session_id : '';
   return sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : '';
 }
 
 function updateSkillRecord(data) {
-  const key = turnKey(data);
-  if (key) return path.join(stateDirectory(), 'update-skill-' + key);
-  const fallback = sessionKey(data);
-  return fallback ? path.join(stateDirectory(), 'update-skill-session-' + fallback) : '';
+  const key = sessionKey(data);
+  return key ? path.join(stateDirectory(), 'update-skill-session-' + key) : '';
 }
 
 function recordUpdateSkill(data) {
@@ -104,7 +96,7 @@ function recordUpdateSkill(data) {
 function updateSkillInvoked(data) {
   const record = updateSkillRecord(data);
   if (!record || !fs.existsSync(record)) return false;
-  if (!turnKey(data)) fs.rmSync(record, { force: true });
+  fs.rmSync(record, { force: true });
   return true;
 }
 
@@ -125,11 +117,9 @@ function stopVetoStateFile(data) {
 }
 
 function stopResponsibility(data) {
-  const transcriptPath = typeof data.transcript_path === 'string' ? data.transcript_path : '';
   return crypto.createHash('sha256').update(JSON.stringify({
     message: messageText(data.last_assistant_message),
     reason: typeof data.reason === 'string' ? data.reason : '',
-    transcriptPath,
   })).digest('hex');
 }
 
