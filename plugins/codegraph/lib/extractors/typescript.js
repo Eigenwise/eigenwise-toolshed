@@ -45,7 +45,7 @@ function isTypeScriptSyncModule(value) {
 }
 function isTypeScriptAstModule(value) {
   if (typeof value !== "object" || value === null) return false;
-  return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
+  return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isPropertyAccessExpression" in value && typeof value.isPropertyAccessExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isNamespaceImport" in value && typeof value.isNamespaceImport === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
 }
 async function loadTypeScript() {
   const [syncModule, astModule] = await Promise.all([
@@ -127,20 +127,36 @@ function nearestOwner(node, declarations, moduleId) {
   }
   return moduleId;
 }
-function resolvedTarget(checker, node, declarationIds, aliasSymbolFlag) {
+function resolvedTarget(checker, node, declarationIds, declarationNodes, aliasSymbolFlag) {
   const symbol = checker.getSymbolAtLocation(node);
   if (symbol === void 0) return { targetId: null, resolution: "unresolved", reason: "TypeScript could not resolve this symbol" };
   const canonical = (symbol.flags & aliasSymbolFlag) === 0 ? symbol : checker.getAliasedSymbol(symbol);
   if (checker.isUnknownSymbol(canonical)) {
     return { targetId: null, resolution: "unresolved", reason: "TypeScript reported an unresolved alias" };
   }
-  const targetId = declarationIds.get(canonical.id) ?? declarationIds.get(symbol.id);
-  if (targetId !== void 0) return { targetId, resolution: "resolved" };
   const declaration = canonical.declarations[0]?.resolve();
+  const targetId = declarationIds.get(canonical.id) ?? declarationIds.get(symbol.id) ?? (declaration === void 0 ? void 0 : declarationNodes.get(declaration));
+  if (targetId !== void 0) return { targetId, resolution: "resolved" };
   if (declaration !== void 0 && declaration.getSourceFile().isDeclarationFile) {
     return { targetId: null, resolution: "external", reason: "symbol resolves to an external declaration" };
   }
   return { targetId: null, resolution: "unresolved", reason: "symbol has no project-owned declaration" };
+}
+function resolvedModuleTarget(checker, node, moduleIds, aliasSymbolFlag) {
+  const symbol = checker.getSymbolAtLocation(node);
+  if (symbol === void 0) return { targetId: null, resolution: "unresolved", reason: "TypeScript could not resolve this module" };
+  const canonical = (symbol.flags & aliasSymbolFlag) === 0 ? symbol : checker.getAliasedSymbol(symbol);
+  if (checker.isUnknownSymbol(canonical)) {
+    return { targetId: null, resolution: "unresolved", reason: "TypeScript reported an unresolved module alias" };
+  }
+  const declaration = canonical.declarations[0]?.resolve();
+  if (declaration === void 0) return { targetId: null, resolution: "unresolved", reason: "module has no resolved declaration" };
+  const targetId = moduleIds.get(declaration.getSourceFile().fileName);
+  if (targetId !== void 0) return { targetId, resolution: "resolved" };
+  if (declaration.getSourceFile().isDeclarationFile) {
+    return { targetId: null, resolution: "external", reason: "module resolves to an external declaration" };
+  }
+  return { targetId: null, resolution: "unresolved", reason: "module has no project-owned declaration" };
 }
 function identifiersWithin(node, ast) {
   const identifiers = [];
@@ -163,6 +179,7 @@ function collectNodes(project, checker, ast, sourceFiles) {
   const declarationIds = /* @__PURE__ */ new Map();
   const declarationNodes = /* @__PURE__ */ new Map();
   const classMembers = /* @__PURE__ */ new Map();
+  const moduleIds = /* @__PURE__ */ new Map();
   for (const sourceFile of sourceFiles) {
     const file = relativeFile(project, sourceFile.fileName);
     const moduleId = (0, import_model.createGraphNodeId)({ extractor: "typescript", projectId: project.id, declarationFile: file, kind: "module", qualifiedName: file });
@@ -180,6 +197,7 @@ function collectNodes(project, checker, ast, sourceFiles) {
     };
     const graph = { file, contentHash: hash(sourceFile.text), nodes: [moduleNode], edges: [], unresolvedCount: 0, diagnostics: [] };
     graphs.set(sourceFile.fileName, graph);
+    moduleIds.set(sourceFile.fileName, moduleId);
     const visit = (node) => {
       const kind = declarationKind(node, ast);
       const name = declarationName(node, ast);
@@ -218,17 +236,17 @@ function collectNodes(project, checker, ast, sourceFiles) {
     };
     visit(sourceFile);
   }
-  return { graphs, declarationIds, declarationNodes, classMembers };
+  return { graphs, declarationIds, declarationNodes, classMembers, moduleIds };
 }
-function extractEdges(project, checker, ast, sourceFiles, graphs, declarationIds, declarationNodes, classMembers, aliasSymbolFlag) {
+function extractEdges(project, checker, ast, sourceFiles, graphs, declarationIds, declarationNodes, classMembers, moduleIds, aliasSymbolFlag) {
   for (const sourceFile of sourceFiles) {
     const graph = graphs.get(sourceFile.fileName);
     if (graph === void 0) continue;
     const moduleId = graph.nodes[0]?.id;
     if (moduleId === void 0) continue;
-    const addResolution = (kind, sourceId, identifier) => {
-      const target = resolvedTarget(checker, identifier, declarationIds, aliasSymbolFlag);
-      addEdge(graph.edges, { kind, sourceId, ...target, evidence: sourceSpan(project, sourceFile, identifier) });
+    const addResolution = (kind, sourceId, node) => {
+      const target = resolvedTarget(checker, node, declarationIds, declarationNodes, aliasSymbolFlag);
+      addEdge(graph.edges, { kind, sourceId, ...target, evidence: sourceSpan(project, sourceFile, node) });
     };
     const visit = (node) => {
       const ownerId = nearestOwner(node, declarationNodes, moduleId);
@@ -239,6 +257,8 @@ function extractEdges(project, checker, ast, sourceFiles, graphs, declarationIds
         const expression = node.expression;
         if (ast.isIdentifier(expression)) {
           addResolution("calls", ownerId, expression);
+        } else if (ast.isPropertyAccessExpression(expression)) {
+          addResolution("calls", ownerId, expression.name);
         } else {
           addEdge(graph.edges, {
             kind: "calls",
@@ -251,13 +271,15 @@ function extractEdges(project, checker, ast, sourceFiles, graphs, declarationIds
         }
       }
       if (ast.isImportDeclaration(node)) {
-        const importText = node.getText(sourceFile);
         const importIdentifiers = identifiersWithin(node, ast);
         if (importIdentifiers.length === 0) {
-          addEdge(graph.edges, { kind: "imports", sourceId: moduleId, targetId: null, resolution: "external", evidence: sourceSpan(project, sourceFile, node), reason: importText });
+          const target = resolvedModuleTarget(checker, node.moduleSpecifier, moduleIds, aliasSymbolFlag);
+          addEdge(graph.edges, { kind: "imports", sourceId: moduleId, ...target, evidence: sourceSpan(project, sourceFile, node.moduleSpecifier) });
         } else {
+          const namedBindings = node.importClause?.namedBindings;
+          const namespaceIdentifier = namedBindings !== void 0 && ast.isNamespaceImport(namedBindings) ? namedBindings.name : void 0;
           for (const identifier of importIdentifiers) {
-            const target = resolvedTarget(checker, identifier, declarationIds, aliasSymbolFlag);
+            const target = identifier === namespaceIdentifier ? resolvedModuleTarget(checker, node.moduleSpecifier, moduleIds, aliasSymbolFlag) : resolvedTarget(checker, identifier, declarationIds, declarationNodes, aliasSymbolFlag);
             addEdge(graph.edges, { kind: "imports", sourceId: moduleId, ...target, evidence: sourceSpan(project, sourceFile, identifier) });
             addEdge(graph.edges, { kind: "aliases", sourceId: nearestOwner(identifier, declarationNodes, moduleId), ...target, evidence: sourceSpan(project, sourceFile, identifier) });
           }
@@ -271,8 +293,7 @@ function extractEdges(project, checker, ast, sourceFiles, graphs, declarationIds
         for (const clause of node.heritageClauses) {
           const kind = clause.getText(sourceFile).trimStart().startsWith("implements") ? "implements" : "extends";
           for (const type of clause.types) {
-            const expression = type.expression;
-            if (ast.isIdentifier(expression)) addResolution(kind, ownerId, expression);
+            addResolution(kind, ownerId, type.expression);
           }
         }
       }
@@ -281,8 +302,8 @@ function extractEdges(project, checker, ast, sourceFiles, graphs, declarationIds
         const classId = declarationNodes.get(classNode);
         const methodName = declarationName(node, ast);
         const heritage = ast.isClassDeclaration(classNode) ? classNode.heritageClauses?.[0]?.types[0] : void 0;
-        if (classId !== void 0 && methodName !== void 0 && heritage !== void 0 && ast.isIdentifier(heritage.expression)) {
-          const base = resolvedTarget(checker, heritage.expression, declarationIds, aliasSymbolFlag);
+        if (classId !== void 0 && methodName !== void 0 && heritage !== void 0) {
+          const base = resolvedTarget(checker, heritage.expression, declarationIds, declarationNodes, aliasSymbolFlag);
           const targetId = base.targetId === null ? null : classMembers.get(base.targetId)?.get(methodName.text) ?? null;
           addEdge(graph.edges, {
             kind: "overrides",
@@ -329,7 +350,7 @@ class TypeScriptSemanticExtractor {
       if (project === void 0) throw new Error(`TypeScript could not open project ${descriptor.configFile ?? descriptor.root}`);
       const sourceFiles = project.program.getSourceFileNames().map((fileName) => project.program.getSourceFile(fileName)).filter((sourceFile) => sourceFile !== void 0 && isProjectSource(descriptor, sourceFile));
       const collected = collectNodes(descriptor, project.checker, loaded.ast, sourceFiles);
-      extractEdges(descriptor, project.checker, loaded.ast, sourceFiles, collected.graphs, collected.declarationIds, collected.declarationNodes, collected.classMembers, loaded.aliasSymbolFlag);
+      extractEdges(descriptor, project.checker, loaded.ast, sourceFiles, collected.graphs, collected.declarationIds, collected.declarationNodes, collected.classMembers, collected.moduleIds, loaded.aliasSymbolFlag);
       return [...collected.graphs.values()].sort((left, right) => left.file.localeCompare(right.file));
     } finally {
       snapshot.dispose();

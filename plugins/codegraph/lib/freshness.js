@@ -38,6 +38,7 @@ var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
 var import_paths = require("./paths.js");
 const relevantExtensions = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
+const configurationNames = /* @__PURE__ */ new Set(["tsconfig.json", "jsconfig.json"]);
 const ignoredDirectories = /* @__PURE__ */ new Set([".git", "node_modules"]);
 function contentHash(content) {
   return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
@@ -45,29 +46,78 @@ function contentHash(content) {
 function manifestHash(inputs) {
   return (0, import_node_crypto.createHash)("sha256").update(inputs.map((input) => `${input.path}\0${input.contentHash}\0${input.configuration}`).join("\n")).digest("hex");
 }
-function isRelevantInput(filePath) {
-  const fileName = import_node_path.default.basename(filePath);
-  return fileName === "tsconfig.json" || fileName === "jsconfig.json" || relevantExtensions.has(import_node_path.default.extname(filePath));
+function isRelevantSource(filePath) {
+  return relevantExtensions.has(import_node_path.default.extname(filePath));
 }
-async function relevantInputPaths(projectRoot, directory = projectRoot) {
+function importEsmModule(specifier) {
+  return new Function("moduleSpecifier", "return import(moduleSpecifier);")(specifier);
+}
+function isSemanticTypeScriptModule(value) {
+  return typeof value === "object" && value !== null && "API" in value && typeof value.API === "function";
+}
+async function loadSemanticTypeScript() {
+  const semanticTypeScript = await importEsmModule("typescript/unstable/sync");
+  if (!isSemanticTypeScriptModule(semanticTypeScript)) {
+    throw new Error("the pinned TypeScript runtime does not expose its sync semantic API");
+  }
+  return semanticTypeScript;
+}
+async function inputPaths(projectRoot, directory = projectRoot) {
   const entries = await (0, import_promises.readdir)(directory, { withFileTypes: true });
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
-    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : relevantInputPaths(projectRoot, entryPath);
-    return entry.isFile() && isRelevantInput(entryPath) ? [entryPath] : [];
+    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputPaths(projectRoot, entryPath);
+    return entry.isFile() && (isRelevantSource(entryPath) || configurationNames.has(entry.name)) ? [entryPath] : [];
   }));
   return children.flat();
 }
-async function buildRelevantInputManifest(projectRoot) {
-  const absoluteInputs = await relevantInputPaths(projectRoot);
-  const inputs = await Promise.all(absoluteInputs.map(async (absolutePath) => {
-    const relativePath = (0, import_paths.normalizeProjectRelativePath)(import_node_path.default.relative(projectRoot, absolutePath));
-    return {
-      path: relativePath,
-      contentHash: contentHash(await (0, import_promises.readFile)(absolutePath, "utf8")),
-      configuration: import_node_path.default.basename(absolutePath) === "tsconfig.json" || import_node_path.default.basename(absolutePath) === "jsconfig.json"
-    };
+async function existingPaths(candidates) {
+  const existing = /* @__PURE__ */ new Set();
+  await Promise.all([...candidates].map(async (candidate) => {
+    try {
+      await (0, import_promises.access)(candidate);
+      existing.add(candidate);
+    } catch {
+    }
   }));
+  return existing;
+}
+async function effectiveConfigurationPaths(projectRoot, discoveredInputs) {
+  const rootConfigurations = discoveredInputs.filter((filePath) => configurationNames.has(import_node_path.default.basename(filePath))).map((filePath) => import_node_path.default.resolve(filePath));
+  const semanticReads = new Set(rootConfigurations);
+  const semanticTypeScript = await loadSemanticTypeScript();
+  const api = new semanticTypeScript.API({
+    cwd: projectRoot,
+    fs: {
+      readFile(fileName) {
+        semanticReads.add(import_node_path.default.resolve(fileName));
+        return void 0;
+      }
+    }
+  });
+  try {
+    for (const configFile of rootConfigurations) api.parseConfigFile(configFile);
+  } finally {
+    api.close();
+  }
+  return existingPaths(semanticReads);
+}
+function manifestPath(projectRoot, absolutePath) {
+  const relativePath = import_node_path.default.relative(projectRoot, absolutePath);
+  if (relativePath !== ".." && !relativePath.startsWith(`..${import_node_path.default.sep}`) && !import_node_path.default.isAbsolute(relativePath)) {
+    return (0, import_paths.normalizeProjectRelativePath)(relativePath);
+  }
+  return `external-config/${contentHash(import_node_path.default.resolve(absolutePath))}`;
+}
+async function buildRelevantInputManifest(projectRoot) {
+  const discoveredInputs = await inputPaths(projectRoot);
+  const configurationPaths = await effectiveConfigurationPaths(projectRoot, discoveredInputs);
+  const absoluteInputs = [.../* @__PURE__ */ new Set([...discoveredInputs.filter((input) => !configurationNames.has(import_node_path.default.basename(input))), ...configurationPaths])];
+  const inputs = await Promise.all(absoluteInputs.map(async (absolutePath) => ({
+    path: manifestPath(projectRoot, absolutePath),
+    contentHash: contentHash(await (0, import_promises.readFile)(absolutePath, "utf8")),
+    configuration: configurationPaths.has(absolutePath)
+  })));
   inputs.sort((left, right) => left.path.localeCompare(right.path));
   const configurationInputs = inputs.filter((input) => input.configuration);
   return {

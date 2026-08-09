@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -15,6 +17,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var index_builder_exports = {};
 __export(index_builder_exports, {
@@ -22,6 +32,7 @@ __export(index_builder_exports, {
 });
 module.exports = __toCommonJS(index_builder_exports);
 var import_node_crypto = require("node:crypto");
+var import_node_path = __toESM(require("node:path"));
 var import_freshness = require("./freshness.js");
 var import_paths = require("./paths.js");
 function snapshotId(project, manifest, runtime) {
@@ -45,6 +56,23 @@ function coverageFor(files) {
     dynamicEdges: edges.filter((edge) => edge.resolution === "dynamic").length,
     externalEdges: edges.filter((edge) => edge.resolution === "external").length
   };
+}
+function repositoryRelativePath(projectRoot, project, file) {
+  return (0, import_paths.normalizeProjectRelativePath)(import_node_path.default.relative(projectRoot, import_node_path.default.resolve(project.root || projectRoot, file)));
+}
+function withRepositoryRelativePaths(projectRoot, project, files) {
+  return files.map((fileGraph) => ({
+    ...fileGraph,
+    file: repositoryRelativePath(projectRoot, project, fileGraph.file),
+    nodes: fileGraph.nodes.map((node) => ({
+      ...node,
+      declaration: { ...node.declaration, file: repositoryRelativePath(projectRoot, project, node.declaration.file) }
+    })),
+    edges: fileGraph.edges.map((edge) => ({
+      ...edge,
+      evidence: { ...edge.evidence, file: repositoryRelativePath(projectRoot, project, edge.evidence.file) }
+    }))
+  }));
 }
 function validateFiles(files) {
   const filePaths = /* @__PURE__ */ new Set();
@@ -92,7 +120,7 @@ async function buildProjectIndex(projectRoot, dependencies) {
   const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(projectRoot)))).flat().sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,
-    files: await extractProject(dependencies.runtime, project)
+    files: withRepositoryRelativePaths(projectRoot, project, await extractProject(dependencies.runtime, project))
   })));
   for (const result of extracted) validateFiles(result.files);
   const indexedAt = (dependencies.indexedAt ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();

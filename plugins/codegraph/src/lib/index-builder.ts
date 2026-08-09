@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
+import path from 'node:path';
 import { buildRelevantInputManifest, type RelevantInputManifest } from './freshness.js';
-import { projectIdentity } from './paths.js';
+import { normalizeProjectRelativePath, projectIdentity } from './paths.js';
 import type { FileGraph, GraphCoverage, ProjectDescriptor, SnapshotIdentity } from './model.js';
 import type { ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from './runtime-contract.js';
 
@@ -37,6 +38,29 @@ function coverageFor(files: readonly FileGraph[]): GraphCoverage {
     dynamicEdges: edges.filter((edge) => edge.resolution === 'dynamic').length,
     externalEdges: edges.filter((edge) => edge.resolution === 'external').length,
   };
+}
+
+function repositoryRelativePath(projectRoot: string, project: ProjectDescriptor, file: string): string {
+  return normalizeProjectRelativePath(path.relative(projectRoot, path.resolve(project.root || projectRoot, file)));
+}
+
+function withRepositoryRelativePaths(
+  projectRoot: string,
+  project: ProjectDescriptor,
+  files: readonly FileGraph[],
+): FileGraph[] {
+  return files.map((fileGraph) => ({
+    ...fileGraph,
+    file: repositoryRelativePath(projectRoot, project, fileGraph.file),
+    nodes: fileGraph.nodes.map((node) => ({
+      ...node,
+      declaration: { ...node.declaration, file: repositoryRelativePath(projectRoot, project, node.declaration.file) },
+    })),
+    edges: fileGraph.edges.map((edge) => ({
+      ...edge,
+      evidence: { ...edge.evidence, file: repositoryRelativePath(projectRoot, project, edge.evidence.file) },
+    })),
+  }));
 }
 
 function validateFiles(files: readonly FileGraph[]): void {
@@ -100,7 +124,7 @@ export async function buildProjectIndex(
     .sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,
-    files: await extractProject(dependencies.runtime, project),
+    files: withRepositoryRelativePaths(projectRoot, project, await extractProject(dependencies.runtime, project)),
   })));
   for (const result of extracted) validateFiles(result.files);
 
