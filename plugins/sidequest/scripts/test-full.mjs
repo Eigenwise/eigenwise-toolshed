@@ -7,9 +7,41 @@ import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
+const minimumTestConcurrency = 2;
+const maximumTestConcurrency = 8;
+const baselineTestPhaseTimeoutMilliseconds = 480_000;
+const maximumTestPhaseTimeoutMilliseconds = 1_200_000;
+
+export function calculateTestConcurrency(availableParallelism) {
+  return Math.min(maximumTestConcurrency, Math.max(minimumTestConcurrency, availableParallelism));
+}
+
+export function calculateTestPhaseTimeoutMilliseconds(testConcurrency) {
+  const concurrencyScale = maximumTestConcurrency / testConcurrency;
+  return Math.min(
+    maximumTestPhaseTimeoutMilliseconds,
+    Math.ceil(baselineTestPhaseTimeoutMilliseconds * concurrencyScale),
+  );
+}
+
+export function formatTestPhaseTimeoutError(phase, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism) {
+  return `Sidequest ${phase} tests exceeded their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`;
+}
+
+export function formatTestPhaseWarning(
+  phase,
+  phaseDurationMilliseconds,
+  testPhaseWarningMilliseconds,
+  testPhaseTimeoutMilliseconds,
+  testConcurrency,
+  availableParallelism,
+) {
+  return `WARNING: Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`;
+}
+
 const availableParallelism = os.availableParallelism();
-const testConcurrency = Math.min(8, Math.max(2, availableParallelism));
-const testPhaseTimeoutMilliseconds = 480_000;
+const testConcurrency = calculateTestConcurrency(availableParallelism);
+const testPhaseTimeoutMilliseconds = calculateTestPhaseTimeoutMilliseconds(testConcurrency);
 const testPhaseWarningMilliseconds = testPhaseTimeoutMilliseconds * 0.75;
 // Benchmarks live behind `npm run test:perf`. Without this exclusion the glob
 // below sweeps them back into the default suite, which is the 23 seconds
@@ -30,9 +62,7 @@ function runTests(phase, files, environment) {
   });
   const phaseDurationMilliseconds = performance.now() - phaseStartTime;
   if (result.error?.code === 'ETIMEDOUT') {
-    throw new Error(
-      `Sidequest ${phase} tests exceeded their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`,
-    );
+    throw new Error(formatTestPhaseTimeoutError(phase, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism));
   }
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`Sidequest ${phase} tests exited ${result.status ?? 1}.`);
@@ -41,32 +71,45 @@ function runTests(phase, files, environment) {
   // exists to remove.
   if (phaseDurationMilliseconds > testPhaseWarningMilliseconds) {
     console.error(
-      `WARNING: Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`,
+      formatTestPhaseWarning(
+        phase,
+        phaseDurationMilliseconds,
+        testPhaseWarningMilliseconds,
+        testPhaseTimeoutMilliseconds,
+        testConcurrency,
+        availableParallelism,
+      ),
     );
   }
 }
 
-const suiteTemporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-full-suite-'));
-const suiteHomeDirectory = path.join(suiteTemporaryDirectory, 'home');
-const suiteClaudeDirectory = path.join(suiteHomeDirectory, '.claude');
-const suiteSidequestDirectory = path.join(suiteClaudeDirectory, 'sidequest');
-const emptyDiscoveryDirectory = path.join(suiteTemporaryDirectory, 'empty-discovery');
-await fs.mkdir(suiteSidequestDirectory, { recursive: true });
-await fs.mkdir(emptyDiscoveryDirectory);
-const suiteTestEnvironment = {
-  ...suiteEnvironment(),
-  HOME: suiteHomeDirectory,
-  USERPROFILE: suiteHomeDirectory,
-  SIDEQUEST_HOME: suiteSidequestDirectory,
-  SIDEQUEST_CLAUDE_HOME: suiteClaudeDirectory,
-  TMPDIR: suiteTemporaryDirectory,
-  TMP: suiteTemporaryDirectory,
-  TEMP: suiteTemporaryDirectory,
-  SIDEQUEST_DISCOVERY_DIRS: emptyDiscoveryDirectory,
-};
+async function main() {
+  const suiteTemporaryDirectory = await fs.mkdtemp(path.join(os.tmpdir(), 'sidequest-full-suite-'));
+  const suiteHomeDirectory = path.join(suiteTemporaryDirectory, 'home');
+  const suiteClaudeDirectory = path.join(suiteHomeDirectory, '.claude');
+  const suiteSidequestDirectory = path.join(suiteClaudeDirectory, 'sidequest');
+  const emptyDiscoveryDirectory = path.join(suiteTemporaryDirectory, 'empty-discovery');
+  await fs.mkdir(suiteSidequestDirectory, { recursive: true });
+  await fs.mkdir(emptyDiscoveryDirectory);
+  const suiteTestEnvironment = {
+    ...suiteEnvironment(),
+    HOME: suiteHomeDirectory,
+    USERPROFILE: suiteHomeDirectory,
+    SIDEQUEST_HOME: suiteSidequestDirectory,
+    SIDEQUEST_CLAUDE_HOME: suiteClaudeDirectory,
+    TMPDIR: suiteTemporaryDirectory,
+    TMP: suiteTemporaryDirectory,
+    TEMP: suiteTemporaryDirectory,
+    SIDEQUEST_DISCOVERY_DIRS: emptyDiscoveryDirectory,
+  };
 
-try {
-  runTests('functional', testFiles, suiteTestEnvironment);
-} finally {
-  await fs.rm(suiteTemporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  try {
+    runTests('functional', testFiles, suiteTestEnvironment);
+  } finally {
+    await fs.rm(suiteTemporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
+  }
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
 }
