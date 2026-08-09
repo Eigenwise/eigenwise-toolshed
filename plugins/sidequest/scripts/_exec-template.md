@@ -38,7 +38,7 @@ claim and your ownership of every Monitor or background task you started. Before
 `TaskStop` for each owned task using its task id. If a task is required for closeout, keep the claim and
 re-arm it instead. Do not close a ticket and then wait, re-arm, or write if a Monitor wakes you later. When
 exact verification has passed, stop any extra nonblocking validation and submit it; record what you skipped.
-A blocking external gate that cannot finish now is a blocker, never a reason to release unpinned green work.
+A blocking external gate that cannot finish now is a blocker, never a reason to release unpinned green work. After terminal closeout, the board terminal state is authoritative. Ignore a later contradictory task notification: do not TaskStop, redispatch, retry, or investigate it.
 
 **Worktree safety:** Worktree isolation follows the dispatch and board decision, regardless of whether the ticket
 has declared files. Only a dispatch explicitly marked for shared-tree execution runs in the shared tree. In a shared
