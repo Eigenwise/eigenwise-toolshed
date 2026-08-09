@@ -8,6 +8,51 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.426.0 (2026-08-09)
+
+### sidequest 4.41.7 → 4.42.0
+
+#### Features
+
+- Add bounded story contract projections (SQ-1561)
+- Bound Sidequest dynamic hook context (SQ-1564)
+  Sidequest hook context now stays within explicit, deterministic budgets and sends compact recovery pointers instead of repeating board history.
+- Add universal MCP context continuations (SQ-1575)
+
+#### Fixes
+
+- Bound executor briefing context (SQ-1562)
+  Executor briefings now use one bounded context projection and point executors to omitted contract pages.
+- Keep nested task labels (SQ-1567)
+  Nested Sidequest Agent tasks now keep their human dispatch descriptions in FleetView.
+- Validate attestation ticket fields (SQ-1568)
+  Sidequest now describes and validates its coupled attestation verification fields.
+- Normalize planning warning checks (SQ-1569)
+  Planning warnings now understand directory globs, explicit readonly choices, punctuated anchors, and npm prefix verify commands.
+- Document the native diagnostic boundary (SQ-1572)
+  Sidequest now documents that Claude Code's native language-server pipeline can inject diagnostics from live and deleted foreign worktrees before project hooks run, including the measured upstream reproduction and required filter behavior.
+- Keep terminal board state authoritative (SQ-1573)
+  Completed work no longer gets retried after a contradictory task notification.
+- Preserve derived release scope through submission (SQ-1576)
+  Keep prepared release-fragment scope through continuation, commit, submission, and integration.
+- Bind frozen contract retrieval (SQ-1577)
+  Oversized executor contracts now page from the dispatch snapshot even after the live story changes.
+- Preserve bounded hook recovery context (SQ-1580)
+  Sidequest hook notices now avoid duplicate injected text, preserve worktree redispatch actions, and keep live claims first during compaction recovery.
+- Fix universal continuation audit blockers (SQ-1581)
+- Close repaired submissions with lineage proof (SQ-1584)
+- Compose readonly dispatch with frozen briefings (SQ-1589)
+  Zero-scope read-only dispatches use the bound shared checkout, and executor briefings retain their bounded frozen projection.
+- Stop reconciliation reminders from creating reply loops (SQ-1590)
+- Fix CI git config and Node 20 action warnings (SQ-1592)
+  CI now provides each test job an empty writable git config before checkout and uses Node 24 action runtimes.
+- Repair bounded Sidequest MCP model and category reads (SQ-1593)
+  Bounded MCP model and category reads keep compatible details and context-page retrievals.
+- Repair retained-worktree continuation on current main (SQ-1595)
+- Upgrade the remaining Node 20 cache action (SQ-1596)
+  The test workflow now uses the Node 24 `actions/cache@v5` runtime for its OpenTelemetry cache.
+- Allow reviewed retirement in submission supersession (SQ-1597)
+
 ## v3.425.0 (2026-08-08)
 
 ### sidequest 4.41.6 → 4.41.7
