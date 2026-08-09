@@ -545,7 +545,7 @@ function storyContractProjectionBody(snapshot, retrieval, forceHandle = false) {
   if (forceHandle || totalBytes > EXECUTOR_CONTRACT_MAX_BYTES) {
     return [
       `## Story execution contract (revision ${snapshot.revision}; ${metadata})`,
-      "Required before editing: fetch the paged snapshot with " + projectionCall(retrieval) + ". Continue with its nextCursor until complete; do not replace this frozen snapshot with a live contract."
+      "Required before editing: fetch the paged snapshot with " + projectionCall(retrieval) + ". For every later page, call context_page with the returned continuation verbatim. Do not combine a nextCursor with another handle or replace this frozen snapshot with a live contract."
     ].join("\n");
   }
   return `## Story execution contract (revision ${snapshot.revision})

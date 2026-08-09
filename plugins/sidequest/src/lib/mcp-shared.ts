@@ -587,14 +587,30 @@ function snapshotRowsContextRetrieval(tool: string, project: string, field: stri
   });
 }
 
+function frozenSnapshotEvidence(selector: any, snapshot?: any) {
+  const body = String(snapshot?.body || '');
+  return {
+    snapshotRevision: snapshot == null ? null : Number(snapshot.revision) || 1,
+    sha256: snapshot == null ? null : crypto.createHash('sha256').update(body, 'utf8').digest('hex'),
+    totalBytes: snapshot == null ? null : utf8ByteLength(body),
+    expectedSnapshotRevision: Number(selector.snapshotRevision) || 1,
+    expectedSha256: String(selector.sha256 || ''),
+    expectedTotalBytes: Number(selector.totalBytes) || 0,
+  };
+}
+
+function staleFrozenSnapshotError(selector: any, snapshot?: any) {
+  return `context_page: stale dispatch snapshot handle; frozen contract changed. Evidence: ${JSON.stringify(frozenSnapshotEvidence(selector, snapshot))}. Rerun the token-gated briefing and use its returned continuation verbatim.`;
+}
+
 function frozenStoryContractBody(source: any, ticket: any) {
   const snapshot = ticket?.dispatch?.storyContract;
   if (source.selector.frozenAbsent === true) {
-    if (snapshot != null) throw new Error('context_page: stale dispatch snapshot handle; the frozen contract revision or hash no longer matches.');
+    if (snapshot != null) throw new Error(staleFrozenSnapshotError(source.selector, snapshot));
     return '';
   }
   if (!snapshot || typeof snapshot !== 'object') {
-    throw new Error(`context_page: dispatch snapshot for ticket "${source.selector.ref}" no longer exists.`);
+    throw new Error(staleFrozenSnapshotError(source.selector, null));
   }
   const body = String(snapshot.body || '');
   const revision = Number(snapshot.revision) || 1;
@@ -605,7 +621,7 @@ function frozenStoryContractBody(source: any, ticket: any) {
     || String(source.selector.sha256 || '') !== hash
     || Number(source.selector.totalBytes) !== totalBytes
   ) {
-    throw new Error('context_page: stale dispatch snapshot handle; the frozen contract revision or hash no longer matches.');
+    throw new Error(staleFrozenSnapshotError(source.selector, snapshot));
   }
   return body;
 }
@@ -672,6 +688,15 @@ function contextSnapshot(source: any) {
   return snapshot.value;
 }
 
+function contextPageContinuation(source: any, handle: unknown, cursor: string | null) {
+  if (cursor === null) return null;
+  return {
+    handle: String(handle),
+    cursor,
+    expectedRevision: source.revision,
+  };
+}
+
 function resolveContextPage(args: any) {
   const source = decodeContextHandle(args.handle);
   if (source.selector.contextSnapshot) {
@@ -686,6 +711,7 @@ function resolveContextPage(args: any) {
         revision: source.revision, body: page.body, cursor: args.cursor, pageBytes: page.pageBytes,
         totalBytes: page.totalBytes,
         nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+        continuation: contextPageContinuation(source, args.handle, page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition)),
         complete: page.nextPosition == null,
       };
     }
@@ -695,6 +721,7 @@ function resolveContextPage(args: any) {
       revision: source.revision, rows: page.rows, cursor: args.cursor, pageBytes: page.pageBytes,
       totalRows: page.totalRows, returned: page.rows.length,
       nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+        continuation: contextPageContinuation(source, args.handle, page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition)),
       complete: page.nextPosition == null,
     };
   }
@@ -718,6 +745,7 @@ function resolveContextPage(args: any) {
       pageBytes: page.pageBytes,
       totalBytes: page.totalBytes,
       nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+        continuation: contextPageContinuation(source, args.handle, page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition)),
       complete: page.nextPosition == null,
     };
   }
@@ -739,6 +767,7 @@ function resolveContextPage(args: any) {
     totalRows: page.totalRows,
     returned: page.rows.length,
     nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+        continuation: contextPageContinuation(source, args.handle, page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition)),
     complete: page.nextPosition == null,
   };
 }

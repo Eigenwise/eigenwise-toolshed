@@ -480,21 +480,35 @@ function snapshotRowsContextRetrieval(tool, project, field, rows, position) {
     cursor: position
   });
 }
+function frozenSnapshotEvidence(selector, snapshot) {
+  const body = String(snapshot?.body || "");
+  return {
+    snapshotRevision: snapshot == null ? null : Number(snapshot.revision) || 1,
+    sha256: snapshot == null ? null : crypto.createHash("sha256").update(body, "utf8").digest("hex"),
+    totalBytes: snapshot == null ? null : utf8ByteLength(body),
+    expectedSnapshotRevision: Number(selector.snapshotRevision) || 1,
+    expectedSha256: String(selector.sha256 || ""),
+    expectedTotalBytes: Number(selector.totalBytes) || 0
+  };
+}
+function staleFrozenSnapshotError(selector, snapshot) {
+  return `context_page: stale dispatch snapshot handle; frozen contract changed. Evidence: ${JSON.stringify(frozenSnapshotEvidence(selector, snapshot))}. Rerun the token-gated briefing and use its returned continuation verbatim.`;
+}
 function frozenStoryContractBody(source, ticket) {
   const snapshot = ticket?.dispatch?.storyContract;
   if (source.selector.frozenAbsent === true) {
-    if (snapshot != null) throw new Error("context_page: stale dispatch snapshot handle; the frozen contract revision or hash no longer matches.");
+    if (snapshot != null) throw new Error(staleFrozenSnapshotError(source.selector, snapshot));
     return "";
   }
   if (!snapshot || typeof snapshot !== "object") {
-    throw new Error(`context_page: dispatch snapshot for ticket "${source.selector.ref}" no longer exists.`);
+    throw new Error(staleFrozenSnapshotError(source.selector, null));
   }
   const body = String(snapshot.body || "");
   const revision = Number(snapshot.revision) || 1;
   const hash = crypto.createHash("sha256").update(body, "utf8").digest("hex");
   const totalBytes = utf8ByteLength(body);
   if (Number(source.selector.snapshotRevision) !== revision || String(source.selector.sha256 || "") !== hash || Number(source.selector.totalBytes) !== totalBytes) {
-    throw new Error("context_page: stale dispatch snapshot handle; the frozen contract revision or hash no longer matches.");
+    throw new Error(staleFrozenSnapshotError(source.selector, snapshot));
   }
   return body;
 }
@@ -546,6 +560,14 @@ function contextSnapshot(source) {
   }
   return snapshot.value;
 }
+function contextPageContinuation(source, handle, cursor) {
+  if (cursor === null) return null;
+  return {
+    handle: String(handle),
+    cursor,
+    expectedRevision: source.revision
+  };
+}
 function resolveContextPage(args) {
   const source = decodeContextHandle(args.handle);
   if (source.selector.contextSnapshot) {
@@ -566,6 +588,7 @@ function resolveContextPage(args) {
         pageBytes: page3.pageBytes,
         totalBytes: page3.totalBytes,
         nextCursor: page3.nextPosition == null ? null : contextCursor(String(args.handle), page3.nextPosition),
+        continuation: contextPageContinuation(source, args.handle, page3.nextPosition == null ? null : contextCursor(String(args.handle), page3.nextPosition)),
         complete: page3.nextPosition == null
       };
     }
@@ -582,6 +605,7 @@ function resolveContextPage(args) {
       totalRows: page2.totalRows,
       returned: page2.rows.length,
       nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
+      continuation: contextPageContinuation(source, args.handle, page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition)),
       complete: page2.nextPosition == null
     };
   }
@@ -605,6 +629,7 @@ function resolveContextPage(args) {
       pageBytes: page2.pageBytes,
       totalBytes: page2.totalBytes,
       nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
+      continuation: contextPageContinuation(source, args.handle, page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition)),
       complete: page2.nextPosition == null
     };
   }
@@ -626,6 +651,7 @@ function resolveContextPage(args) {
     totalRows: page.totalRows,
     returned: page.rows.length,
     nextCursor: page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition),
+    continuation: contextPageContinuation(source, args.handle, page.nextPosition == null ? null : contextCursor(String(args.handle), page.nextPosition)),
     complete: page.nextPosition == null
   };
 }

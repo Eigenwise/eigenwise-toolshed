@@ -351,26 +351,34 @@ test('context_page reads the frozen dispatch story contract after the live contr
     title: 'Retrieve frozen dispatch contract', storyId: story.id, category: 'frozen-snapshot-context', source: 'test',
   });
   const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'frozen-contract-session' });
-  const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'frozen-contract-token', project, project);
+  const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
   const retrievalMatch = briefing.match(/mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
   assert.ok(retrievalMatch, 'oversized frozen contracts include a context_page retrieval');
-  const retrieval = JSON.parse(retrievalMatch[1]);
-  assert.equal(retrieval.expectedRevision, contextPacket.contextRevision(frozenContract));
+  const initialContinuation = JSON.parse(retrievalMatch[1]);
+  let continuation = initialContinuation;
+  assert.equal(continuation.expectedRevision, contextPacket.contextRevision(frozenContract));
 
   store.updateStory(project, story.ref, { executionContract: liveContract });
   let reconstructed = '';
-  let cursor = retrieval.cursor;
-  while (cursor !== null) {
-    const page = await callTool('context_page', { ...retrieval, cursor, limit: 16 * 1024 });
+  while (continuation !== null) {
+    const page = await callTool('context_page', { ...continuation, limit: 16 * 1024 });
     reconstructed += page.body;
-    cursor = page.nextCursor;
+    if (page.continuation === null) {
+      assert.equal(page.nextCursor, null);
+    } else {
+      assert.ok(page.continuation, 'incomplete pages return a bound continuation');
+      assert.equal(page.continuation.handle, continuation.handle);
+      assert.equal(page.continuation.expectedRevision, continuation.expectedRevision);
+    }
+    continuation = page.continuation;
   }
+  assert.match(briefing, /call context_page with the returned continuation verbatim/);
   assert.equal(reconstructed, frozenContract);
   assert.equal(contextPacket.utf8ByteLength(reconstructed), contextPacket.utf8ByteLength(frozenContract));
   assert.equal(require('crypto').createHash('sha256').update(reconstructed, 'utf8').digest('hex'), require('crypto').createHash('sha256').update(frozenContract, 'utf8').digest('hex'));
 
   const mismatchedRevision = await callToolRaw('context_page', {
-    ...retrieval,
+    ...initialContinuation,
     expectedRevision: contextPacket.contextRevision(liveContract),
   });
   assert.equal(mismatchedRevision.isError, true);
