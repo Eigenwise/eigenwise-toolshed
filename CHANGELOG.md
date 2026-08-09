@@ -8,6 +8,67 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.429.0 (2026-08-10)
+
+### codebase-mapper 2.14.2 → 2.14.3
+
+#### Fixes
+
+- Stop hooks bound cascading continuations (SQ-1645)
+  Atomically deduplicate each unchanged Stop responsibility across overlapping hook processes, clean stale locks by exact generation without deleting live replacements, keep one map-update batch independent of optional prompt and transcript host metadata, match update-skill completion by session when Stop and PreToolUse prompt IDs differ, distinguish reopened Sidequest claims, rely on Claude's batched Stop protocol for one continuation per hook batch, reset prompt-less map warnings after their responsibility ends, and keep passive re-entry flushes silent while preserving pending-work and map-update gates.
+
+### codegraph 0.0.0 → 0.1.0
+
+#### Features
+
+- Publish Codegraph semantic graph plugin (SQ-1692)
+  Publish Codegraph for local TypeScript and JavaScript semantic graph indexing through seven MCP tools.
+
+### observability 0.7.1 → 0.7.2
+
+#### Fixes
+
+- Stop hooks bound cascading continuations (SQ-1645)
+  Atomically deduplicate each unchanged Stop responsibility across overlapping hook processes, clean stale locks by exact generation without deleting live replacements, keep one map-update batch independent of optional prompt and transcript host metadata, match update-skill completion by session when Stop and PreToolUse prompt IDs differ, distinguish reopened Sidequest claims, rely on Claude's batched Stop protocol for one continuation per hook batch, reset prompt-less map warnings after their responsibility ends, and keep passive re-entry flushes silent while preserving pending-work and map-update gates.
+
+### sidequest 4.42.2 → 4.42.3
+
+#### Fixes
+
+- Stop reminders for released session tickets (SQ-1636)
+- Greenfield integration skips locked dependency setup (SQ-1639)
+  Run npm ci before a resolved package suite during integration.
+- Stop hooks bound cascading continuations (SQ-1645)
+  Atomically deduplicate each unchanged Stop responsibility across overlapping hook processes, clean stale locks by exact generation without deleting live replacements, keep one map-update batch independent of optional prompt and transcript host metadata, match update-skill completion by session when Stop and PreToolUse prompt IDs differ, distinguish reopened Sidequest claims, rely on Claude's batched Stop protocol for one continuation per hook batch, reset prompt-less map warnings after their responsibility ends, and keep passive re-entry flushes silent while preserving pending-work and map-update gates.
+- Keep frozen contract page cursors bound to their handles (SQ-1651)
+  Keep paginated frozen-contract retrievals on the handle and revision that produced them.
+- Reclaim terminated executor claims immediately (SQ-1654)
+  Terminal executor failures now immediately release the matching claim or pre-claim dispatch binding, while stale or incomplete runtime evidence stays protected.
+- Keep Sidequest test registry writes atomic on Windows (SQ-1662)
+- Keep rejected submission history recoverable (SQ-1667)
+  Sidequest now validates CLI and MCP submissions through the same checks, preserves rejection records across interrupted writes, and requires repair executors to fetch the complete ordered rejection history.
+- Keep live executors and friendly route labels (SQ-1671)
+
+### workbench 0.83.4 → 0.84.0
+
+#### Features
+
+- Pull-only TypeScript code intelligence replaces the native LSP plugin (SQ-1647)
+  New local `code-intel` MCP server: definition, references, and diagnostics pulled from the
+  project's own TypeScript (native TS 7 LSP, or typescript-language-server for TS 5), bound
+  per request to an explicit project root. Push diagnostics are discarded, a location is returned only when
+  its native realpath (symlinks and junctions resolved) is an existing file inside the bound
+  root (non-file URIs and missing targets are withheld and counted), cancelled calls stop
+  their language-server work, and every response is size-bounded, so parallel isolated
+  agents only ever receive results they asked for. A frame the server cannot answer honestly is
+  refused inside those same bounds: a JSON-RPC id that would not come back as the same value, or a
+  request line past the message limit, gets a small `-32600` error and never reaches a language server.
+
+#### Fixes
+
+- Fix code-intel teardown pipe errors (SQ-1719)
+  Prevent code-intel shutdown races from leaving unhandled closed-pipe errors after requests end.
+
 ## v3.428.0 (2026-08-09)
 
 ### sidequest 4.42.1 → 4.42.2
