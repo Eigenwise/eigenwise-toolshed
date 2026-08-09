@@ -2,6 +2,7 @@
 
 const assert = require('node:assert');
 const childProcess = require('node:child_process');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -43,10 +44,66 @@ function hook(script, projectDir, stateDirectory, data) {
   const { CLAUDE_PROJECT_DIR: _ignored, ...ambient } = process.env;
   return childProcess.execFileSync(process.execPath, [script], {
     cwd: projectDir,
-    env: { ...ambient, CODEBASE_MAPPER_STATE_DIR: stateDirectory },
+    env: {
+      ...ambient,
+      CODEBASE_MAPPER_STATE_DIR: stateDirectory,
+    },
     input: JSON.stringify({ cwd: projectDir, ...data }),
     encoding: 'utf8',
   });
+}
+
+function hookAsync(script, projectDir, stateDirectory, data, envOverrides = {}) {
+  return new Promise((resolve, reject) => {
+    const { CLAUDE_PROJECT_DIR: _ignored, ...ambient } = process.env;
+    const child = childProcess.spawn(process.execPath, [script], {
+      cwd: projectDir,
+      env: {
+        ...ambient,
+        CODEBASE_MAPPER_STATE_DIR: stateDirectory,
+        ...envOverrides,
+      },
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk) => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+    child.stdin.end(JSON.stringify({ cwd: projectDir, ...data }));
+  });
+}
+
+async function waitForLockContenders(lockFile, count) {
+  const directory = path.dirname(lockFile);
+  const prefix = path.basename(lockFile) + '.';
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (fs.readdirSync(directory).filter((name) => name.startsWith(prefix)).length >= count) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${count} contenders on ${lockFile}`);
+}
+
+async function waitForPath(file) {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file)) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${file}`);
+}
+
+function publishStateLock(lockDirectory, ownerPid) {
+  const generation = `fixture-${crypto.randomUUID()}`;
+  const candidateDirectory = `${lockDirectory}.${generation}`;
+  const ownerName = `owner-${generation}`;
+  fs.mkdirSync(candidateDirectory, { recursive: true });
+  fs.writeFileSync(path.join(candidateDirectory, ownerName), `${ownerPid}\n`);
+  fs.renameSync(candidateDirectory, lockDirectory);
+  return path.join(lockDirectory, ownerName);
 }
 
 function text(output) {
@@ -247,8 +304,16 @@ test('update announcements require the map update skill in the same main-session
   const blocked = JSON.parse(hook(startHook, directory, state, turn));
   assert.strictEqual(blocked.decision, 'block');
   assert.match(blocked.reason, /invoke Skill/i);
+  assert.ok(Buffer.byteLength(blocked.reason) <= 192);
+  assert.strictEqual(hook(startHook, directory, state, turn), '', 'unchanged responsibility emits only once even without the runtime re-entry flag');
+  assert.strictEqual(hook(startHook, directory, state, {
+    ...turn,
+    last_assistant_message: 'I am still running /codebase-mapper:update-codebase-map before I finish.',
+  }), '', 'rewording the same prompt does not create a new map-update responsibility');
 
   assert.strictEqual(hook(startHook, directory, state, { ...turn, stop_hook_active: true }), '');
+  const nextPrompt = JSON.parse(hook(startHook, directory, state, { ...turn, prompt_id: 'next-prompt' }));
+  assert.strictEqual(nextPrompt.decision, 'block', 'a new prompt is a new map-update responsibility');
   assert.strictEqual(hook(startHook, directory, state, {
     ...turn,
     hook_event_name: 'PreToolUse',
@@ -263,7 +328,183 @@ test('update announcements require the map update skill in the same main-session
   assert.strictEqual(hook(startHook, directory, state, { ...turn, agent_id: 'subagent' }), '');
 });
 
+test('overlapping prompt-less Stop processes atomically claim one veto', async () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const sessionId = 'overlapping-documented-stop';
+  const stateFile = path.join(state, 'stop-veto-' + require('node:crypto').createHash('sha256').update(sessionId).digest('hex') + '.json');
+  const lockDirectory = stateFile + '.lock-v2';
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, process.pid);
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  const pending = Promise.all([
+    hookAsync(startHook, directory, state, stop),
+    hookAsync(startHook, directory, state, stop),
+  ]);
+  setTimeout(() => fs.rmSync(lockDirectory, { recursive: true, force: true }), 100);
+  const results = await pending;
+  assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
+  assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
+  assert.strictEqual(hook(startHook, directory, state, stop), '');
+});
+
+test('overlapping Stop processes with distinct prompt ids atomically claim one batch veto', async () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const sessionId = 'overlapping-distinct-prompts';
+  const stateFile = path.join(state, 'stop-veto-' + require('node:crypto').createHash('sha256').update(sessionId).digest('hex') + '.json');
+  const lockDirectory = stateFile + '.lock-v2';
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, process.pid);
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  const pending = Promise.all([
+    hookAsync(startHook, directory, state, { ...stop, prompt_id: 'first-host-prompt' }),
+    hookAsync(startHook, directory, state, { ...stop, prompt_id: 'second-host-prompt' }),
+  ]);
+  setTimeout(() => fs.rmSync(lockDirectory, { recursive: true, force: true }), 100);
+  const results = await pending;
+  assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
+  assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
+});
+
+test('an advancing transcript cannot split one prompt-independent Stop batch', async () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const transcriptPath = path.join(directory, 'transcript.jsonl');
+  fs.writeFileSync(transcriptPath, '{"type":"assistant","message":"first"}\n');
+  const sessionId = 'overlapping-advancing-transcript';
+  const stateFile = path.join(state, 'stop-veto-' + crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
+  const lockDirectory = stateFile + '.lock-v2';
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, process.pid);
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    reason: 'end_turn',
+    transcript_path: transcriptPath,
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  const first = hookAsync(startHook, directory, state, { ...stop, prompt_id: 'first-host-prompt' });
+  await waitForLockContenders(lockDirectory, 1);
+  fs.appendFileSync(transcriptPath, '{"type":"system","message":"hook running"}\n');
+  const second = hookAsync(startHook, directory, state, { ...stop, prompt_id: 'second-host-prompt' });
+  await waitForLockContenders(lockDirectory, 2);
+  fs.rmSync(lockDirectory, { recursive: true, force: true });
+
+  const results = await Promise.all([first, second]);
+  assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
+  assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
+});
+
+test('two stale-lock cleaners cannot delete a live replacement generation', async () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const sessionId = 'stale-cleaner-generation';
+  const stateFile = path.join(state, 'stop-veto-' + crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
+  const lockDirectory = stateFile + '.lock-v2';
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, 99999999);
+
+  const staleGate = path.join(directory, 'first-cleaner.gate');
+  const staleMarker = path.join(directory, 'first-cleaner-inspected');
+  const cleanedMarker = path.join(directory, 'first-cleaner-cleaned');
+  const firstAcquiredMarker = path.join(directory, 'first-cleaner-acquired');
+  const replacementHoldGate = path.join(directory, 'replacement.gate');
+  const replacementAcquiredMarker = path.join(directory, 'replacement-acquired');
+  fs.writeFileSync(staleGate, 'hold');
+  fs.writeFileSync(replacementHoldGate, 'hold');
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  const first = hookAsync(startHook, directory, state, stop, {
+    CODEBASE_MAPPER_TEST_STALE_LOCK_GATE: staleGate,
+    CODEBASE_MAPPER_TEST_STALE_LOCK_MARKER: staleMarker,
+    CODEBASE_MAPPER_TEST_STALE_LOCK_CLEANED_MARKER: cleanedMarker,
+    CODEBASE_MAPPER_TEST_LOCK_ACQUIRED_MARKER: firstAcquiredMarker,
+  });
+  await waitForPath(staleMarker);
+  const replacement = hookAsync(startHook, directory, state, stop, {
+    CODEBASE_MAPPER_TEST_LOCK_ACQUIRED_MARKER: replacementAcquiredMarker,
+    CODEBASE_MAPPER_TEST_LOCK_HOLD_GATE: replacementHoldGate,
+  });
+  await waitForPath(replacementAcquiredMarker);
+  const replacementOwnerName = fs.readdirSync(lockDirectory).find((name) => name.startsWith('owner-'));
+  assert.ok(replacementOwnerName);
+  const replacementOwner = path.join(lockDirectory, replacementOwnerName);
+
+  let results;
+  try {
+    fs.rmSync(staleGate, { force: true });
+    await waitForPath(cleanedMarker);
+    assert.strictEqual(fs.existsSync(replacementOwner), true, 'the first cleaner preserves the replacement generation');
+    assert.strictEqual(fs.existsSync(firstAcquiredMarker), false, 'the first cleaner cannot acquire through the live replacement');
+  } finally {
+    fs.rmSync(staleGate, { force: true });
+    fs.rmSync(replacementHoldGate, { force: true });
+    results = await Promise.all([first, replacement]);
+  }
+  assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
+  assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
+});
+
+test('prompt-less Stop responsibilities reset after the map update and warn again later', () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: 'documented-stop-fields',
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  assert.strictEqual(JSON.parse(hook(startHook, directory, state, stop)).decision, 'block');
+  assert.strictEqual(hook(startHook, directory, state, stop), '', 'one unchanged prompt-less Stop event emits once');
+
+  assert.strictEqual(hook(startHook, directory, state, {
+    ...stop,
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Skill',
+    tool_input: { skill: 'codebase-mapper:update-codebase-map' },
+  }), '');
+  assert.strictEqual(hook(startHook, directory, state, stop), '', 'the completed update consumes its prompt-less invocation record');
+
+  assert.strictEqual(JSON.parse(hook(startHook, directory, state, stop)).decision, 'block', 'a later independent warning in the same session is actionable');
+  assert.strictEqual(hook(startHook, directory, state, stop), '');
+  assert.strictEqual(hook(startHook, directory, state, {
+    ...stop,
+    last_assistant_message: 'Documentation check complete. No documentation updates needed because the map matches the code.',
+  }), '');
+  assert.strictEqual(JSON.parse(hook(startHook, directory, state, stop)).decision, 'block', 'ending the responsibility resets the event boundary');
+});
+
 test('the stop hook tracks update skill use and preserves the main-session instruction', () => {
+  assert.match(hooksConfig.description, /atomically emits one independent <=192 B Stop veto/);
+  assert.match(hooksConfig.description, /generation-bound stale-lock cleanup cannot delete a live replacement/);
+  assert.match(hooksConfig.description, /overlapping hook processes/);
+  assert.match(hooksConfig.description, /Claude batches concurrent blocking hooks into one continuation/);
+  assert.match(hooksConfig.description, /stable documented Stop fields identify prompt-less batches even while transcripts advance/);
+  assert.match(hooksConfig.description, /stop_hook_active re-entry stays silent/);
   const main = hooksConfig.hooks.Stop[0];
   const skill = hooksConfig.hooks.PreToolUse[0];
   assert.match(main.hooks[0].command, /hooks\/inject-context\.js/);

@@ -2,6 +2,7 @@
 
 const assert = require('node:assert/strict');
 const crypto = require('node:crypto');
+const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -303,6 +304,36 @@ test('spool appends JSON lines and truncates rather than growing unbounded', (t)
   const filePath = path.join(dir, 'blocker');
   fs.writeFileSync(filePath, 'x');
   assert.equal(spool(path.join(filePath, 'child.jsonl'), observation), false);
+});
+
+test('Stop hook flushes once, stays silent on re-entry, and fails open', (t) => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-stop-hook-'));
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }));
+  const hook = path.join(__dirname, '..', 'hooks', 'observability.js');
+  const spoolPath = path.join(dir, 'hook-spool.jsonl');
+  const env = { ...process.env, WORKBENCH_HOOK_SPOOL: spoolPath };
+  const input = { hook_event_name: 'Stop', session_id: 'stop-session', cwd: dir, stop_hook_active: false };
+
+  assert.equal(childProcess.execFileSync(process.execPath, [hook], {
+    input: JSON.stringify(input), encoding: 'utf8', env,
+  }), '');
+  assert.equal(fs.readFileSync(spoolPath, 'utf8').trim().split('\n').length, 1);
+  assert.equal(childProcess.execFileSync(process.execPath, [hook], {
+    input: JSON.stringify({ ...input, stop_hook_active: true }), encoding: 'utf8', env,
+  }), '');
+  assert.equal(fs.readFileSync(spoolPath, 'utf8').trim().split('\n').length, 1);
+
+  const blocker = path.join(dir, 'blocker');
+  fs.writeFileSync(blocker, 'x');
+  assert.equal(childProcess.execFileSync(process.execPath, [hook], {
+    input: JSON.stringify({ ...input, session_id: 'failed-stop' }),
+    encoding: 'utf8',
+    env: { ...env, WORKBENCH_HOOK_SPOOL: path.join(blocker, 'child.jsonl') },
+  }), '');
+  const manifest = require('../hooks/hooks.json');
+  assert.match(manifest.description, /without emitting model context/);
+  assert.match(manifest.description, /affecting Claude's batched Stop continuation/);
+  assert.match(manifest.description, /stays silent on stop_hook_active re-entry/);
 });
 
 test('hook spool drains into the observer store and replays idempotently', (t) => {

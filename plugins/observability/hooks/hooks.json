@@ -1,5 +1,5 @@
 {
-  "description": "observability: capture metadata-only lifecycle observations and warn before a request body hits Claude Code's size limit",
+  "description": "observability captures metadata-only lifecycle observations without emitting model context or affecting Claude's batched Stop continuation; Stop records the initial flush and stays silent on stop_hook_active re-entry, and request preflight warns before Claude Code's body limit",
   "hooks": {
     "SessionStart": [
       {

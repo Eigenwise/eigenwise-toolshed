@@ -270,6 +270,7 @@ async function main() {
   try {
     const raw = await readStdin();
     const payload = JSON.parse(raw);
+    if (payload.hook_event_name === 'Stop' && payload.stop_hook_active === true) return;
     const observation = buildObservation(payload, new Date());
     if (observation) spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);
   } catch {

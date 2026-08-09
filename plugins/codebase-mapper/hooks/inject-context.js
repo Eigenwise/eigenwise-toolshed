@@ -9,6 +9,12 @@ const path = require('node:path');
 const mapDocuments = require('./lib/map-documents');
 const ledger = require('./lib/session-ledger');
 
+const STOP_VETO_REASON = 'Invoke Skill codebase-mapper:update-codebase-map now. The announcement is not the update.';
+const STOP_VETO_MAX_BYTES = 192;
+const STATE_LOCK_WAIT_MS = 500;
+const STATE_LOCK_RETRY_MS = 5;
+const stateLockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
+
 function readStdin() {
   try {
     const raw = fs.readFileSync(0, 'utf8');
@@ -64,15 +70,26 @@ function output(eventName, additionalContext) {
   }));
 }
 
+function stateDirectory() {
+  return process.env.CODEBASE_MAPPER_STATE_DIR || path.join(os.homedir(), '.claude', 'codebase-mapper-state');
+}
+
 function turnKey(data) {
   const sessionId = typeof data.session_id === 'string' ? data.session_id : '';
   const promptId = typeof data.prompt_id === 'string' ? data.prompt_id : '';
   return sessionId && promptId ? crypto.createHash('sha256').update(sessionId + ':' + promptId).digest('hex') : '';
 }
 
+function sessionKey(data) {
+  const sessionId = typeof data.session_id === 'string' ? data.session_id : '';
+  return sessionId ? crypto.createHash('sha256').update(sessionId).digest('hex') : '';
+}
+
 function updateSkillRecord(data) {
   const key = turnKey(data);
-  return key ? path.join(process.env.CODEBASE_MAPPER_STATE_DIR || path.join(os.homedir(), '.claude', 'codebase-mapper-state'), 'update-skill-' + key) : '';
+  if (key) return path.join(stateDirectory(), 'update-skill-' + key);
+  const fallback = sessionKey(data);
+  return fallback ? path.join(stateDirectory(), 'update-skill-session-' + fallback) : '';
 }
 
 function recordUpdateSkill(data) {
@@ -81,11 +98,14 @@ function recordUpdateSkill(data) {
   if (!record) return;
   fs.mkdirSync(path.dirname(record), { recursive: true });
   fs.writeFileSync(record, 'invoked\n');
+  clearStopVetoState(data);
 }
 
 function updateSkillInvoked(data) {
   const record = updateSkillRecord(data);
-  return record ? fs.existsSync(record) : null;
+  if (!record || !fs.existsSync(record)) return false;
+  if (!turnKey(data)) fs.rmSync(record, { force: true });
+  return true;
 }
 
 function announcement(message) {
@@ -99,13 +119,159 @@ function messageText(message) {
   return '';
 }
 
+function stopVetoStateFile(data) {
+  const key = sessionKey(data);
+  return key ? path.join(stateDirectory(), 'stop-veto-' + key + '.json') : '';
+}
+
+function stopResponsibility(data) {
+  const transcriptPath = typeof data.transcript_path === 'string' ? data.transcript_path : '';
+  return crypto.createHash('sha256').update(JSON.stringify({
+    message: messageText(data.last_assistant_message),
+    reason: typeof data.reason === 'string' ? data.reason : '',
+    transcriptPath,
+  })).digest('hex');
+}
+
+function stateLockOwnerFile(lockDirectory) {
+  try {
+    const owners = fs.readdirSync(lockDirectory).filter((name) => name.startsWith('owner-'));
+    return owners.length === 1 ? path.join(lockDirectory, owners[0]) : '';
+  } catch (_) {
+    return '';
+  }
+}
+
+function stateLockOwnerAlive(ownerFile) {
+  try {
+    const owner = Number(fs.readFileSync(ownerFile, 'utf8').trim());
+    if (!Number.isInteger(owner) || owner <= 0) return true;
+    try {
+      process.kill(owner, 0);
+      return true;
+    } catch (error) {
+      return error.code !== 'ESRCH';
+    }
+  } catch (error) {
+    return error.code !== 'ENOENT';
+  }
+}
+
+function waitForTestGate(markerVariable, gateVariable) {
+  const marker = process.env[markerVariable];
+  if (marker) fs.writeFileSync(marker, `${process.pid}\n`);
+  const gate = process.env[gateVariable];
+  while (gate && fs.existsSync(gate)) {
+    Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
+  }
+}
+
+function removeStaleStateLock(lockDirectory, ownerFile) {
+  try {
+    fs.rmSync(ownerFile, { force: true });
+    fs.rmdirSync(lockDirectory);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+
+function acquireStateLock(file) {
+  const lockDirectory = file + '.lock-v2';
+  const generation = `${process.pid}-${crypto.randomUUID()}`;
+  const ownerName = `owner-${generation}`;
+  const candidateDirectory = `${lockDirectory}.${generation}`;
+  const publishedOwnerFile = path.join(lockDirectory, ownerName);
+  const deadline = Date.now() + STATE_LOCK_WAIT_MS;
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  try {
+    fs.mkdirSync(candidateDirectory);
+    fs.writeFileSync(path.join(candidateDirectory, ownerName), `${process.pid}\n`);
+    while (true) {
+      try {
+        fs.renameSync(candidateDirectory, lockDirectory);
+        waitForTestGate('CODEBASE_MAPPER_TEST_LOCK_ACQUIRED_MARKER', 'CODEBASE_MAPPER_TEST_LOCK_HOLD_GATE');
+        return publishedOwnerFile;
+      } catch (_) {
+        const ownerFile = stateLockOwnerFile(lockDirectory);
+        if (ownerFile && !stateLockOwnerAlive(ownerFile)) {
+          waitForTestGate('CODEBASE_MAPPER_TEST_STALE_LOCK_MARKER', 'CODEBASE_MAPPER_TEST_STALE_LOCK_GATE');
+          removeStaleStateLock(lockDirectory, ownerFile);
+          const cleanedMarker = process.env.CODEBASE_MAPPER_TEST_STALE_LOCK_CLEANED_MARKER;
+          if (cleanedMarker) fs.writeFileSync(cleanedMarker, `${process.pid}\n`);
+          continue;
+        }
+        if (Date.now() >= deadline) return '';
+        Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
+      }
+    }
+  } finally {
+    try {
+      fs.rmSync(candidateDirectory, { recursive: true, force: true });
+    } catch (_) {}
+  }
+}
+
+function releaseStateLock(ownerFile) {
+  try {
+    fs.rmSync(ownerFile, { force: true });
+    fs.rmdirSync(path.dirname(ownerFile));
+  } catch (_) {}
+}
+
+function clearStopVetoState(data) {
+  const file = stopVetoStateFile(data);
+  if (!file) return;
+  let lockFile = '';
+  try {
+    lockFile = acquireStateLock(file);
+    if (!lockFile) return;
+    fs.rmSync(file, { force: true });
+  } catch (_) {
+  } finally {
+    if (lockFile) releaseStateLock(lockFile);
+  }
+}
+
+function claimStopVeto(data) {
+  const file = stopVetoStateFile(data);
+  if (!file) return false;
+  const responsibility = stopResponsibility(data);
+  let lockFile = '';
+  try {
+    lockFile = acquireStateLock(file);
+    if (!lockFile) return false;
+    let prior = null;
+    try {
+      prior = JSON.parse(fs.readFileSync(file, 'utf8'));
+    } catch (error) {
+      if (error.code !== 'ENOENT') return false;
+    }
+    if (prior?.responsibility === responsibility) return false;
+    fs.writeFileSync(file, JSON.stringify({ responsibility }) + '\n');
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    if (lockFile) releaseStateLock(lockFile);
+  }
+}
+
 function enforceMapUpdate(data) {
   if (data.stop_hook_active === true || data.agent_id) return;
-  if (!announcement(messageText(data.last_assistant_message))) return;
-  if (updateSkillInvoked(data) !== false) return;
+  const message = messageText(data.last_assistant_message);
+  if (!announcement(message)) {
+    clearStopVetoState(data);
+    return;
+  }
+  if (updateSkillInvoked(data)) {
+    clearStopVetoState(data);
+    return;
+  }
+  if (!claimStopVeto(data)) return;
   process.stdout.write(JSON.stringify({
     decision: 'block',
-    reason: 'Invoke Skill codebase-mapper:update-codebase-map now. The announcement is not the update.',
+    reason: Buffer.byteLength(STOP_VETO_REASON) <= STOP_VETO_MAX_BYTES ? STOP_VETO_REASON : STOP_VETO_REASON.slice(0, STOP_VETO_MAX_BYTES),
   }));
 }
 

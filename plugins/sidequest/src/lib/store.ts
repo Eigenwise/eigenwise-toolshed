@@ -1435,7 +1435,12 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       agentId: currentDispatch.agentId || null,
       agentName: currentDispatch.agentName || null,
     } : null;
-    t.claim = { by, at: now, ...(claimRuntime ? { runtime: claimRuntime } : {}) };
+    t.claim = {
+      by,
+      at: now,
+      generation: crypto.randomUUID(),
+      ...(claimRuntime ? { runtime: claimRuntime } : {}),
+    };
     if (opts.direct && opts.force && terminalDispatch && held?.by && held.by !== by) {
       t.claimTakeover = {
         by,

@@ -123,7 +123,9 @@ function runtimeModule(name) {
 
 // src/hooks/board-reconciliation-reminder.ts
 var MAX_MESSAGE_BYTES = 360;
-var ESCALATION_STOP_THRESHOLD = 3;
+var STATE_LOCK_WAIT_MS = 500;
+var STATE_LOCK_RETRY_MS = 5;
+var stateLockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 function nudgeOff() {
   const value = String(process.env.SIDEQUEST_NUDGE || "").trim().toLowerCase();
   return value === "off" || value === "0" || value === "false" || value === "no";
@@ -152,37 +154,135 @@ function reminderStateFile(sessionId) {
   const key = import_node_crypto2.default.createHash("sha256").update(sessionId).digest("hex");
   return import_node_path2.default.join(home, "hook-state", `stop-reminder-${key}.json`);
 }
-function canRemind(reminder) {
-  const file = reminderStateFile(reminder.sessionId);
+function stateLockOwnerFile(lockDirectory) {
   try {
-    let prior = null;
-    try {
-      prior = JSON.parse(import_node_fs2.default.readFileSync(file, "utf8"));
-    } catch (error) {
-      if (error.code !== "ENOENT") return null;
-    }
-    const priorCount = prior?.state === reminder.state && Number.isInteger(prior.count) ? prior.count : 0;
-    const count = Math.min(priorCount + 1, ESCALATION_STOP_THRESHOLD);
-    import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
-    import_node_fs2.default.writeFileSync(file, JSON.stringify({ state: reminder.state, count }));
-    if (count === 1) return "initial";
-    if (reminder.pendingRefs.length && count === ESCALATION_STOP_THRESHOLD && priorCount < count) return "escalated";
-    return null;
+    const owners = import_node_fs2.default.readdirSync(lockDirectory).filter((name) => name.startsWith("owner-"));
+    const [ownerName] = owners;
+    return owners.length === 1 && ownerName ? import_node_path2.default.join(lockDirectory, ownerName) : null;
   } catch (_) {
     return null;
   }
 }
+function stateLockOwnerAlive(ownerFile) {
+  try {
+    const owner = Number(import_node_fs2.default.readFileSync(ownerFile, "utf8").trim());
+    if (!Number.isInteger(owner) || owner <= 0) return true;
+    try {
+      process.kill(owner, 0);
+      return true;
+    } catch (error) {
+      return error.code !== "ESRCH";
+    }
+  } catch (error) {
+    return error.code !== "ENOENT";
+  }
+}
+function waitForTestGate(markerVariable, gateVariable) {
+  const marker = process.env[markerVariable];
+  if (marker) import_node_fs2.default.writeFileSync(marker, `${process.pid}
+`);
+  const gate = process.env[gateVariable];
+  while (gate && import_node_fs2.default.existsSync(gate)) {
+    Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
+  }
+}
+function removeStaleStateLock(lockDirectory, ownerFile) {
+  try {
+    import_node_fs2.default.rmSync(ownerFile, { force: true });
+    import_node_fs2.default.rmdirSync(lockDirectory);
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+function acquireStateLock(file) {
+  const lockDirectory = `${file}.lock-v2`;
+  const generation = `${process.pid}-${import_node_crypto2.default.randomUUID()}`;
+  const ownerName = `owner-${generation}`;
+  const candidateDirectory = `${lockDirectory}.${generation}`;
+  const publishedOwnerFile = import_node_path2.default.join(lockDirectory, ownerName);
+  const deadline = Date.now() + STATE_LOCK_WAIT_MS;
+  import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
+  try {
+    import_node_fs2.default.mkdirSync(candidateDirectory);
+    import_node_fs2.default.writeFileSync(import_node_path2.default.join(candidateDirectory, ownerName), `${process.pid}
+`);
+    while (true) {
+      try {
+        import_node_fs2.default.renameSync(candidateDirectory, lockDirectory);
+        waitForTestGate("SIDEQUEST_TEST_STOP_LOCK_ACQUIRED_MARKER", "SIDEQUEST_TEST_STOP_LOCK_HOLD_GATE");
+        return publishedOwnerFile;
+      } catch (_) {
+        const ownerFile = stateLockOwnerFile(lockDirectory);
+        if (ownerFile && !stateLockOwnerAlive(ownerFile)) {
+          waitForTestGate("SIDEQUEST_TEST_STOP_STALE_LOCK_MARKER", "SIDEQUEST_TEST_STOP_STALE_LOCK_GATE");
+          removeStaleStateLock(lockDirectory, ownerFile);
+          const cleanedMarker = process.env.SIDEQUEST_TEST_STOP_STALE_LOCK_CLEANED_MARKER;
+          if (cleanedMarker) import_node_fs2.default.writeFileSync(cleanedMarker, `${process.pid}
+`);
+          continue;
+        }
+        if (Date.now() >= deadline) return null;
+        Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
+      }
+    }
+  } finally {
+    try {
+      import_node_fs2.default.rmSync(candidateDirectory, { recursive: true, force: true });
+    } catch (_) {
+    }
+  }
+}
+function releaseStateLock(ownerFile) {
+  try {
+    import_node_fs2.default.rmSync(ownerFile, { force: true });
+    import_node_fs2.default.rmdirSync(import_node_path2.default.dirname(ownerFile));
+  } catch (_) {
+  }
+}
+function rememberTransition(reminder) {
+  const file = reminderStateFile(reminder.sessionId);
+  let lockFile = null;
+  try {
+    lockFile = acquireStateLock(file);
+    if (!lockFile) return false;
+    let prior = null;
+    try {
+      prior = JSON.parse(import_node_fs2.default.readFileSync(file, "utf8"));
+    } catch (error) {
+      if (error.code !== "ENOENT") return false;
+    }
+    if (prior?.state === reminder.state) return false;
+    import_node_fs2.default.writeFileSync(file, JSON.stringify({ state: reminder.state }));
+    return true;
+  } catch (_) {
+    return false;
+  } finally {
+    if (lockFile) releaseStateLock(lockFile);
+  }
+}
+function clearReminderState(sessionId) {
+  if (!sessionId) return;
+  const file = reminderStateFile(sessionId);
+  let lockFile = null;
+  try {
+    lockFile = acquireStateLock(file);
+    if (!lockFile) return;
+    import_node_fs2.default.rmSync(file, { force: true });
+  } catch (_) {
+  } finally {
+    if (lockFile) releaseStateLock(lockFile);
+  }
+}
+function reminderSessionId(data) {
+  return stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+}
 function acknowledgementFreeContinuation(action) {
   return `${action} Continue working without replying to this reminder; do not send an acknowledgment-only or progress reply.`;
 }
-function escalatedMessage(reminder) {
-  const refs = reminder.pendingRefs.join(", ");
-  const verb = reminder.pendingRefs.length === 1 ? "is" : "are";
-  return byteCapped(`Sidequest: ${acknowledgementFreeContinuation("Integrate pending submissions now.")} ${refs} ${verb} still pending integration after ${ESCALATION_STOP_THRESHOLD} consecutive stops. If integration cannot proceed, checkpoint and hold; never release it as complete.`);
-}
 function reconciliationMessage(data) {
   if (nudgeOff()) return null;
-  const sessionId = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+  const sessionId = reminderSessionId(data);
   if (!sessionId) return null;
   try {
     const store = require(runtimeModule("store"));
@@ -196,7 +296,6 @@ function reconciliationMessage(data) {
     const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
-    const pendingRefs = submissions.map((ticket) => String(ticket.ref || "")).filter(Boolean);
     const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
     const actionable = [
@@ -214,14 +313,16 @@ function reconciliationMessage(data) {
       ref: ticket.ref || "",
       status: ticket.status || "",
       claimBy: ticket.claim?.by || "",
+      claimAt: ticket.claim?.at || "",
+      claimGeneration: ticket.claim?.generation || "",
       dispatchSessionId: ticket.dispatch?.sessionId || "",
+      dispatchClaimedAt: ticket.dispatch?.claimedAt || "",
       submissionCommit: ticket.submission?.commit || "",
       integratedAt: ticket.submission?.integratedAt || ""
     })).sort((left, right) => left.ref.localeCompare(right.ref)));
     return {
       sessionId,
       message: byteCapped(`Sidequest: ${acknowledgementFreeContinuation(action)} ${state}.${holdWaits}`),
-      pendingRefs,
       state: signature
     };
   } catch (_) {
@@ -230,9 +331,11 @@ function reconciliationMessage(data) {
 }
 function boardReconciliationReminder(data) {
   const reminder = reconciliationMessage(data);
-  const kind = reminder && canRemind(reminder);
-  if (!reminder || !kind) return null;
-  return kind === "escalated" ? escalatedMessage(reminder) : reminder.message;
+  if (!reminder) {
+    clearReminderState(reminderSessionId(data));
+    return null;
+  }
+  return rememberTransition(reminder) ? reminder.message : null;
 }
 function main() {
   const data = readStdin();

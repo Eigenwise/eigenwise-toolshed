@@ -1,5 +1,5 @@
 {
-  "description": "sidequest lifecycle and executor safety hooks emit UTF-8-bounded context: SessionStart <=2 KiB, prompts <=1 KiB, denials preserve recovery actions and critical facts within <=768 B, routine notices inject once within <=512 B, and compaction recovery prioritizes live claims within <=1500 B with omission and retrieval guidance",
+  "description": "sidequest lifecycle and executor safety hooks emit UTF-8-bounded context: SessionStart <=2 KiB, prompts <=1 KiB, denials preserve recovery actions and critical facts within <=768 B, Stop reconciliation atomically emits one <=360 B item per responsibility transition and Claude batches it with concurrent blocking hooks into one continuation, generation-bound stale-lock cleanup cannot delete a live replacement, claim generations distinguish reopened work, unchanged board revisions and stop_hook_active re-entry stay silent, routine notices inject once within <=512 B, and compaction recovery prioritizes live claims within <=1500 B with omission and retrieval guidance",
   "hooks": {
     "WorktreeCreate": [
       {

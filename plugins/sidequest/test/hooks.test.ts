@@ -8,7 +8,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('node:crypto');
-const { execFileSync } = require('node:child_process');
+const { execFileSync, spawn } = require('node:child_process');
 
 // A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
 // subprocess and inherits this env) reads a fixture board, never the real one. The
@@ -114,6 +114,70 @@ function runHookOutput(script?: any, payload?: any, envOverrides?: any) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
+interface HookProcessResult {
+  status: number | null;
+  stdout: string;
+  stderr: string;
+}
+
+function runHookProcessForBudget(script?: any, payload?: any, envOverrides?: any): Promise<HookProcessResult> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [script], {
+      env: {
+        ...process.env,
+        CLAUDE_PLUGIN_ROOT: FIXED_PLUGIN_ROOT,
+        ...(envOverrides || {}),
+      },
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk?: any) => { stdout += chunk.toString(); });
+    child.stderr.on('data', (chunk?: any) => { stderr += chunk.toString(); });
+    child.on('error', reject);
+    child.on('close', (status?: any) => resolve({ status, stdout, stderr }));
+    child.stdin.end(JSON.stringify(payload));
+  });
+}
+
+async function waitForPath(file: string): Promise<void> {
+  const deadline = Date.now() + 2000;
+  while (Date.now() < deadline) {
+    if (fs.existsSync(file)) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error(`Timed out waiting for ${file}`);
+}
+
+function publishStateLock(lockDirectory: string, ownerPid: number): string {
+  const generation = `fixture-${crypto.randomUUID()}`;
+  const candidateDirectory = `${lockDirectory}.${generation}`;
+  const ownerName = `owner-${generation}`;
+  fs.mkdirSync(candidateDirectory, { recursive: true });
+  fs.writeFileSync(path.join(candidateDirectory, ownerName), `${ownerPid}\n`);
+  fs.renameSync(candidateDirectory, lockDirectory);
+  return path.join(lockDirectory, ownerName);
+}
+
+function blocksStop(result: HookProcessResult, asyncRewake = false): boolean {
+  if (asyncRewake) return false;
+  let output = null;
+  try {
+    output = result.stdout.trim() ? JSON.parse(result.stdout) : null;
+  } catch (_) {}
+  return result.status === 2
+    || output?.decision === 'block'
+    || Boolean(output?.hookSpecificOutput?.additionalContext);
+}
+
+function hostContinuationCount(
+  results: HookProcessResult[],
+  hooks: Array<{ asyncRewake?: boolean }>,
+): number {
+  return Number(results.some((result, index) => blocksStop(result, hooks[index]?.asyncRewake)));
+}
+
 function runHook(script?: any, payload?: any, envOverrides?: any) {
   const parsed = runHookOutput(script, payload, envOverrides);
   if (!parsed) return '';
@@ -149,7 +213,7 @@ function runSessionWithHomeForBudget(home?: any, envOverrides?: any) {
 function unpinnedBudgetTests(source?: any) {
   return source
     .split(/\n(?=test\()/)
-    .filter((block?: any) => block.includes('BUDGET.') && !block.includes('budget assertions must use a fixed plugin root') && !block.includes('runHookForBudget') && !block.includes('runHookOutputForBudget') && !block.includes('runSessionWithHomeForBudget'));
+    .filter((block?: any) => block.includes('BUDGET.') && !block.includes('budget assertions must use a fixed plugin root') && !block.includes('runHookForBudget') && !block.includes('runHookOutputForBudget') && !block.includes('runHookProcessForBudget') && !block.includes('runSessionWithHomeForBudget'));
 }
 
 test('budget assertions must use a fixed plugin root', () => {
@@ -1787,7 +1851,7 @@ test('stop reminder: a live executor claim is in progress, not unfinished busine
 });
 
 
-test('stop reminder: resets its counter when the board signature changes', () => {
+test('stop reminder: emits once when the responsibility signature changes', () => {
   const sessionId = `reconcile-reset-${++sqSeq}`;
   const submitted = addTicket('reset reconciliation reminder');
   claimStopTicket(submitted, sessionId, 'reconcile-reset');
@@ -1798,12 +1862,95 @@ test('stop reminder: resets its counter when the board signature changes', () =>
 
   const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  fs.writeFileSync(stateFile, JSON.stringify({ state: 'stale-signature', count: 3 }));
+  fs.writeFileSync(stateFile, JSON.stringify({ state: 'stale-signature' }));
 
   const output = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
   assert.match(output.hookSpecificOutput.additionalContext, /1 submission pending integration/);
-  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /consecutive stops/);
-  assert.equal(JSON.parse(fs.readFileSync(stateFile, 'utf8')).count, 1);
+  assert.deepEqual(Object.keys(JSON.parse(fs.readFileSync(stateFile, 'utf8'))), ['state']);
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }), null);
+});
+
+test('stop reminder: overlapping processes atomically claim one responsibility', async () => {
+  const sessionId = `reconcile-overlap-${++sqSeq}`;
+  const ticket = addTicket('overlapping reconciliation responsibility');
+  store.updateTicket(slug, ticket.ref, { labels: ['direct-ok'] });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'reconcile-overlap-worker', {
+    direct: true,
+    reason: 'Concurrent Stop responsibility fixture.',
+    sessionId,
+  }).ok, true);
+  const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
+  const lockDirectory = `${stateFile}.lock-v2`;
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, process.pid);
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+
+  const pending = Promise.all([
+    runHookProcessForBudget(BOARD_RECONCILIATION_REMINDER, input),
+    runHookProcessForBudget(BOARD_RECONCILIATION_REMINDER, input),
+  ]);
+  setTimeout(() => fs.rmSync(lockDirectory, { recursive: true, force: true }), 100);
+  const results = await pending;
+  assert.deepEqual(results.map((result) => result.status), [0, 0]);
+  assert.equal(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null);
+});
+
+test('stop reminder: two stale-lock cleaners preserve a live replacement generation', async () => {
+  const sessionId = `reconcile-stale-cleaners-${++sqSeq}`;
+  const ticket = addTicket('stale cleaner reconciliation responsibility');
+  store.updateTicket(slug, ticket.ref, { labels: ['direct-ok'] });
+  assert.equal(store.claimTicket(slug, ticket.ref, 'reconcile-stale-cleaner-worker', {
+    direct: true,
+    reason: 'Stale cleaner generation fixture.',
+    sessionId,
+  }).ok, true);
+  const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
+  const lockDirectory = `${stateFile}.lock-v2`;
+  fs.mkdirSync(path.dirname(stateFile), { recursive: true });
+  publishStateLock(lockDirectory, 99999999);
+
+  const staleGate = path.join(SIDEQUEST_HOME, `first-cleaner-${sqSeq}.gate`);
+  const staleMarker = path.join(SIDEQUEST_HOME, `first-cleaner-${sqSeq}-inspected`);
+  const cleanedMarker = path.join(SIDEQUEST_HOME, `first-cleaner-${sqSeq}-cleaned`);
+  const firstAcquiredMarker = path.join(SIDEQUEST_HOME, `first-cleaner-${sqSeq}-acquired`);
+  const replacementHoldGate = path.join(SIDEQUEST_HOME, `replacement-${sqSeq}.gate`);
+  const replacementAcquiredMarker = path.join(SIDEQUEST_HOME, `replacement-${sqSeq}-acquired`);
+  fs.writeFileSync(staleGate, 'hold');
+  fs.writeFileSync(replacementHoldGate, 'hold');
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+
+  const first = runHookProcessForBudget(BOARD_RECONCILIATION_REMINDER, input, {
+    SIDEQUEST_TEST_STOP_STALE_LOCK_GATE: staleGate,
+    SIDEQUEST_TEST_STOP_STALE_LOCK_MARKER: staleMarker,
+    SIDEQUEST_TEST_STOP_STALE_LOCK_CLEANED_MARKER: cleanedMarker,
+    SIDEQUEST_TEST_STOP_LOCK_ACQUIRED_MARKER: firstAcquiredMarker,
+  });
+  await waitForPath(staleMarker);
+  const replacement = runHookProcessForBudget(BOARD_RECONCILIATION_REMINDER, input, {
+    SIDEQUEST_TEST_STOP_LOCK_ACQUIRED_MARKER: replacementAcquiredMarker,
+    SIDEQUEST_TEST_STOP_LOCK_HOLD_GATE: replacementHoldGate,
+  });
+  await waitForPath(replacementAcquiredMarker);
+  const replacementOwnerName = fs.readdirSync(lockDirectory).find((ownerName: string) => ownerName.startsWith('owner-'));
+  assert.ok(replacementOwnerName);
+  const replacementOwner = path.join(lockDirectory, replacementOwnerName);
+
+  let results: HookProcessResult[];
+  try {
+    fs.rmSync(staleGate, { force: true });
+    await waitForPath(cleanedMarker);
+    assert.equal(fs.existsSync(replacementOwner), true, 'the first cleaner preserves the replacement generation');
+    assert.equal(fs.existsSync(firstAcquiredMarker), false, 'the first cleaner cannot acquire through the live replacement');
+  } finally {
+    fs.rmSync(staleGate, { force: true });
+    fs.rmSync(replacementHoldGate, { force: true });
+    results = await Promise.all([first, replacement]);
+  }
+  assert.deepEqual(results.map((result) => result.status), [0, 0]);
+  assert.equal(results.filter((result) => result.stdout.trim()).length, 1);
+  assert.ok(results.every((result) => result.stderr === ''));
 });
 
 test('stop reminder: ignores this session\'s live dispatched tickets before and after the executor claims them', () => {
@@ -1887,9 +2034,124 @@ test('stop reminder: changed signatures during its continuation stay silent and 
     ...input,
     stop_hook_active: true,
   }), null, 'a Stop continuation stays silent even when a background submission changes the board signature');
+
+  const transitioned = runHookOutput(BOARD_RECONCILIATION_REMINDER, input);
+  assert.match(transitioned.hookSpecificOutput.additionalContext, /2 submissions pending integration/);
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null);
 });
 
-test('stop reminder ignores re-entry and stays silent after terminal release', () => {
+test('stop reminder: reviewed submissions stay held until integration', () => {
+  const sessionId = `reconcile-reviewed-${++sqSeq}`;
+  const submitted = addTicket('reviewed pending submission');
+  claimStopTicket(submitted, sessionId, 'reconcile-reviewed');
+  assert.equal(store.submitTicket(slug, submitted.ref, 'reconcile-reviewed', {
+    commit: 'abc9876',
+    sessionId,
+  }).ok, true);
+  const review = store.createTicket(slug, { title: 'Review pending submission', category: 'review-audit', status: 'done' });
+  assert.equal(store.linkTickets(slug, review.ref, 'related', submitted.ref).ok, true);
+
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input);
+  assert.match(output.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null);
+});
+
+test('stop reminder: checkpoint refusal does not repeat an audited submission hold during active repair', () => {
+  const sessionId = `reconcile-held-repair-${++sqSeq}`;
+  const by = 'reconcile-held-repair-worker';
+  const submitted = addTicket('audited submission awaiting repair');
+  claimStopTicket(submitted, sessionId, by);
+  assert.equal(store.submitTicket(slug, submitted.ref, by, {
+    commit: 'abc9876',
+    sessionId,
+  }).ok, true);
+  assert.equal(store.addComment(slug, submitted.ref, {
+    by: 'orchestrator',
+    kind: 'comment',
+    body: 'Hold integration: the audit failed and the linked repair is active.',
+    source: 'mcp',
+  }).ok, true);
+
+  const audit = store.createTicket(slug, { title: 'Audit held submission', category: 'review-audit', status: 'done' });
+  assert.equal(store.addComment(slug, audit.ref, {
+    by: 'auditor',
+    kind: 'comment',
+    body: 'Audit failed: repair before integration.',
+    source: 'mcp',
+  }).ok, true);
+  assert.equal(store.linkTickets(slug, audit.ref, 'related', submitted.ref).ok, true);
+
+  const repair = addTicket('repair audited submission');
+  assert.equal(store.linkTickets(slug, repair.ref, 'related', submitted.ref).ok, true);
+  claimStopTicket(repair, sessionId, 'reconcile-linked-repair');
+
+  const input = { session_id: sessionId, cwd: BOARD_PATH, stop_hook_active: false };
+  const first = runHookOutput(BOARD_RECONCILIATION_REMINDER, input);
+  assert.match(first.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+  assert.doesNotMatch(first.hookSpecificOutput.additionalContext, new RegExp(repair.ref));
+
+  const checkpoint = store.checkpointTicket(slug, submitted.ref, by, {
+    commit: 'abc9876',
+    verify: 'focused tests passed before the audit hold',
+  });
+  assert.equal(checkpoint.ok, false);
+  assert.equal(checkpoint.reason, 'submitted');
+  for (let stop = 0; stop < 3; stop += 1) {
+    assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null);
+  }
+});
+
+test('stop reminder: completion clears the transition boundary', () => {
+  const sessionId = `reconcile-complete-${++sqSeq}`;
+  const by = 'reconcile-complete-worker';
+  const ticket = addTicket('responsibility returns after completion');
+  store.updateTicket(slug, ticket.ref, { labels: ['direct-ok'] });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+    direct: true,
+    reason: 'Completion boundary fixture.',
+    sessionId,
+  }).ok, true);
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input));
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null);
+  store.updateTicket(slug, ticket.ref, { labels: ['direct-ok'] });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+    direct: true,
+    reason: 'Reappearing responsibility fixture.',
+    sessionId,
+  }).ok, true);
+  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input));
+});
+
+test('stop reminder: an immediate release and reclaim starts a new responsibility', () => {
+  const sessionId = `reconcile-immediate-reclaim-${++sqSeq}`;
+  const by = 'reconcile-immediate-reclaim-worker';
+  const ticket = addTicket('immediately reclaimed responsibility');
+  store.updateTicket(slug, ticket.ref, { labels: ['direct-ok'] });
+  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+    direct: true,
+    reason: 'Immediate reclaim responsibility fixture.',
+    sessionId,
+  }).ok, true);
+  const input = { session_id: sessionId, cwd: BOARD_PATH };
+  const firstGeneration = store.getTicket(slug, ticket.ref).claim.generation;
+  assert.ok(firstGeneration);
+  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input));
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, by, { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, by, {
+    direct: true,
+    reason: 'Immediate reclaim responsibility fixture.',
+    sessionId,
+  }).ok, true);
+  assert.notEqual(store.getTicket(slug, ticket.ref).claim.generation, firstGeneration);
+  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input));
+});
+
+test('stop reminder: ignores re-entry and unchanged responsibility', () => {
   const sessionId = `reconcile-bound-${++sqSeq}`;
   const ticket = addTicket('bounded reconciliation reminder');
   const stop = claimStopTicket(ticket, sessionId, 'reconcile-bound');
@@ -2255,6 +2517,101 @@ test('combined Stop hook gives actionable reconciliation priority over a compact
   assert.equal(runHookOutput(STOP, { ...input, stop_hook_active: true }), null);
 });
 
+test('four concurrent Stop hooks preserve independent responsibilities in one host continuation', async (t?: any) => {
+  const sessionId = `stop-cascade-${++sqSeq}`;
+  const firstSubmission = addTicket('runtime-shaped Stop cascade');
+  claimStopTicket(firstSubmission, sessionId, 'stop-cascade-worker');
+  assert.equal(store.submitTicket(slug, firstSubmission.ref, 'stop-cascade-worker', {
+    commit: 'abc1234',
+    sessionId,
+  }).ok, true);
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'stop-cascade-hooks-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const securityHook = path.join(directory, 'security-guidance.js');
+  fs.writeFileSync(securityHook, [
+    "const fs = require('node:fs');",
+    "const input = JSON.parse(fs.readFileSync(0, 'utf8'));",
+    "if (input.stop_hook_active) process.exit(0);",
+    "if (process.env.SECURITY_FIXTURE_FAIL === '1') process.exit(1);",
+    "process.stderr.write('security review feedback');",
+    "process.stdout.write(JSON.stringify({ decision: 'block', reason: 'security review feedback' }));",
+    'process.exit(2);',
+  ].join('\n'));
+  const mapperHook = path.join(__dirname, '..', '..', 'codebase-mapper', 'hooks', 'inject-context.js');
+  const observerHook = path.join(__dirname, '..', '..', 'observability', 'hooks', 'observability.js');
+  const observerSpool = path.join(directory, 'hook-spool.jsonl');
+  const mapperState = path.join(directory, 'mapper-state');
+  const payload = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    cwd: BOARD_PATH,
+    stop_hook_active: false,
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+  const hooks = [
+    {
+      script: STOP,
+      env: { SIDEQUEST_HOME, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') },
+    },
+    {
+      script: mapperHook,
+      env: { CODEBASE_MAPPER_STATE_DIR: mapperState },
+    },
+    { script: observerHook, env: { WORKBENCH_HOOK_SPOOL: observerSpool } },
+    { script: securityHook, env: {}, asyncRewake: true },
+  ];
+  const runAll = (input?: any, securityEnv?: any) => Promise.all(hooks.map((hook?: any) => runHookProcessForBudget(
+    hook.script,
+    input,
+    { ...hook.env, ...(hook.asyncRewake ? securityEnv : {}) },
+  )));
+  const actionableOutputs = (results: HookProcessResult[]) => results.slice(0, 2)
+    .map((result) => result.stdout.trim() ? JSON.parse(result.stdout) : null)
+    .filter(Boolean);
+
+  const first = await runAll(payload);
+  assert.equal(hostContinuationCount(first, hooks), 1, 'Claude batches all synchronous blockers into one continuation');
+  assert.equal(actionableOutputs(first).length, 2, 'Sidequest and mapper must both preserve distinct responsibilities');
+  assert.match(actionableOutputs(first)[0]?.hookSpecificOutput?.additionalContext, /Integrate pending submissions now/);
+  assert.match(actionableOutputs(first)[1]?.reason, /update-codebase-map now/);
+  assert.ok(Buffer.byteLength(actionableOutputs(first)[0].hookSpecificOutput.additionalContext) <= BUDGET.reconciliation);
+  assert.ok(Buffer.byteLength(actionableOutputs(first)[1].reason) <= 192);
+  assert.equal(first[3]!.status, 2, 'official asynchronous security guidance coexists with the host continuation');
+  assert.equal(fs.readFileSync(observerSpool, 'utf8').trim().split('\n').length, 1);
+
+  for (let repeatedStop = 0; repeatedStop < 3; repeatedStop += 1) {
+    const repeated = await runAll(payload);
+    assert.equal(hostContinuationCount(repeated, hooks), 0, 'unchanged responsibilities stay silent independently');
+    assert.equal(actionableOutputs(repeated).length, 0);
+  }
+  assert.equal(fs.readFileSync(observerSpool, 'utf8').trim().split('\n').length, 4);
+
+  const reentry = await runAll({ ...payload, stop_hook_active: true });
+  assert.equal(hostContinuationCount(reentry, hooks), 0);
+  assert.equal(fs.readFileSync(observerSpool, 'utf8').trim().split('\n').length, 4);
+
+  runHookOutput(mapperHook, {
+    ...payload,
+    hook_event_name: 'PreToolUse',
+    tool_name: 'Skill',
+    tool_input: { skill: 'codebase-mapper:update-codebase-map' },
+  }, { CODEBASE_MAPPER_STATE_DIR: mapperState });
+  const completedUpdate = await runAll(payload);
+  assert.equal(hostContinuationCount(completedUpdate, hooks), 0, 'the completed map update consumes its prompt-less invocation record');
+  assert.equal(actionableOutputs(completedUpdate).length, 0);
+  const secondSubmission = addTicket('second runtime-shaped responsibility');
+  claimStopTicket(secondSubmission, sessionId, 'stop-cascade-worker-two');
+  assert.equal(store.submitTicket(slug, secondSubmission.ref, 'stop-cascade-worker-two', {
+    commit: 'def5678',
+    sessionId,
+  }).ok, true);
+  const failedSecurity = await runAll(payload, { SECURITY_FIXTURE_FAIL: '1' });
+  assert.equal(failedSecurity[3]!.status, 1);
+  assert.equal(hostContinuationCount(failedSecurity, hooks), 1, 'the host gets one continuation for both transitions');
+  assert.equal(actionableOutputs(failedSecurity).length, 2, 'neither transitioned responsibility can suppress the other');
+});
+
 test('ticket filing stays explicit while the Agent gate enforces dispatch and docs match it', () => {
   const pluginRoot = path.join(__dirname, '..');
   const repoRoot = path.join(pluginRoot, '..', '..');
@@ -2273,6 +2630,11 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   }
 
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
+  assert.match(config.description, /Stop reconciliation atomically emits one <=360 B item per responsibility transition/);
+  assert.match(config.description, /generation-bound stale-lock cleanup cannot delete a live replacement/);
+  assert.match(config.description, /claim generations distinguish reopened work/);
+  assert.match(config.description, /Claude batches it with concurrent blocking hooks into one continuation/);
+  assert.match(config.description, /unchanged board revisions and stop_hook_active re-entry stay silent/);
   assert.ok(config.hooks.WorktreeCreate.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('worktree-create.js'))), 'isolated worktrees must use the external placement hook');
   assert.ok(config.hooks.UserPromptSubmit.some((entry?: any) => entry.hooks
