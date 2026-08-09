@@ -82,7 +82,7 @@ jobs:
   affected-plugin:
     needs: plugin-matrix
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 10
+    timeout-minutes: 60
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}

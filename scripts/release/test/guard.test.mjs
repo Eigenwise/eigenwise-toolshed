@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { runGuard } from '../guard.mjs';
 import { createGit } from '../lib/git.mjs';
+import { DEFAULT_SCHEMA, load, Type } from '../vendor/js-yaml.mjs';
 import { fileGit, makeRepo, marketplaceJson } from './helpers.mjs';
 
 const PLUGINS = { sidequest: '3.6.49', workbench: '0.63.11' };
@@ -19,6 +20,104 @@ function setup(t, { published = null, ...repoOptions } = {}) {
 }
 
 const reasons = (result) => result.failures.join('\n');
+
+const workflowPath = path.resolve(import.meta.dirname, '../../../.github/workflows/test.yml');
+
+const localScalarTag = new Type('!', { kind: 'scalar', multi: true, construct: (value) => value });
+const localSequenceTag = new Type('!', { kind: 'sequence', multi: true, construct: (value) => value });
+const localMappingTag = new Type('!', { kind: 'mapping', multi: true, construct: (value) => value });
+const workflowSchema = DEFAULT_SCHEMA.extend([localScalarTag, localSequenceTag, localMappingTag]);
+
+function parseWorkflow(source) {
+  return load(source, { schema: workflowSchema });
+}
+
+function affectedPluginTimeout(source) {
+  return parseWorkflow(source)?.jobs?.['affected-plugin']?.['timeout-minutes'];
+}
+
+test('affected-plugin keeps its 60 minute timeout, matrix, and PR-only cancellation', () => {
+  const workflow = parseWorkflow(readFileSync(workflowPath, 'utf8'));
+  assert.equal(workflow.jobs['affected-plugin']['timeout-minutes'], 60);
+  assert.equal(workflow.jobs['affected-plugin'].strategy.matrix, '${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}');
+  assert.equal(workflow.concurrency['cancel-in-progress'], "${{ github.event_name == 'pull_request' }}");
+});
+
+test('the affected-plugin timeout stays at job level regardless of key ordering', () => {
+  for (const job of [
+    [
+      '    timeout-minutes: 5',
+      '    strategy:',
+      '      matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}',
+      '      timeout-minutes: 60',
+    ],
+    [
+      '    strategy:',
+      '      matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}',
+      '      timeout-minutes: 60',
+      '    timeout-minutes: 5',
+    ],
+  ]) {
+    const workflow = ['jobs:', '  affected-plugin:', ...job].join('\n');
+    assert.equal(affectedPluginTimeout(workflow), 5);
+  }
+});
+
+test('the affected-plugin timeout accepts quoted scalars and GitHub Actions expressions', () => {
+  for (const [timeout, expected] of [
+    ['"60"', '60'],
+    ["'60'", '60'],
+    ['${{ matrix.timeout }}', '${{ matrix.timeout }}'],
+  ]) {
+    const workflow = ['jobs:', '  affected-plugin:', `    timeout-minutes: ${timeout}`].join('\n');
+    assert.equal(affectedPluginTimeout(workflow), expected);
+  }
+});
+
+test('the affected-plugin timeout resolves flow and alias job mappings', () => {
+  const flowWorkflow = 'jobs: { affected-plugin: { strategy: { timeout-minutes: 60 }, timeout-minutes: 5 } }';
+  const aliasWorkflow = [
+    'job-template: &base_job',
+    '  strategy:',
+    '    timeout-minutes: 60',
+    '  timeout-minutes: 5',
+    'jobs:',
+    '  affected-plugin: *base_job',
+  ].join('\n');
+
+  assert.equal(affectedPluginTimeout(flowWorkflow), 5);
+  assert.equal(affectedPluginTimeout(aliasWorkflow), 5);
+});
+
+test('the affected-plugin timeout cannot borrow a later job value', () => {
+  const laterJobHeaders = [
+    'FutureJob: &base_job',
+    'FutureJob   :   &base_job',
+    'FutureJob: !future',
+    '"FutureJob": &base_job',
+    '"FutureJob": !future &base_job # a later job',
+    'FUTURE-JOB: !future &base_job',
+  ];
+
+  for (const header of laterJobHeaders) {
+    const workflow = [
+      'jobs:',
+      '  affected-plugin: # timeout intentionally absent',
+      '    strategy:',
+      '      matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}',
+      '      timeout-minutes: 60',
+      `  ${header}`,
+      '    timeout-minutes: 60',
+    ].join('\r\n');
+
+    assert.equal(affectedPluginTimeout(workflow), undefined, header);
+  }
+});
+
+test('malformed workflow YAML fails instead of returning a timeout scalar', () => {
+  const workflow = ['jobs:', '  affected-plugin:', '    timeout-minutes: [5'].join('\n');
+  assert.throws(() => affectedPluginTimeout(workflow), /unexpected end of the stream|missed comma/);
+});
 
 test('a clean tree passes', (t) => {
   const context = setup(t, { fragments: { 'SQ-1': { plugins: ['sidequest'], bump: 'patch' } } });
