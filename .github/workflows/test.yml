@@ -11,11 +11,6 @@ permissions:
 env:
   GIT_TERMINAL_PROMPT: '0'
   GIT_CONFIG_NOSYSTEM: '1'
-  # The null config path is set per job, not here: Windows has no /dev/null, and git
-  # answers "could not lock config file" instead of reading an empty config, which
-  # breaks every fixture that shells out to git.
-  GIT_CONFIG_GLOBAL: /dev/null
-  GIT_CONFIG_SYSTEM: /dev/null
 
 concurrency:
   group: test-${{ github.workflow }}-${{ github.event_name == 'pull_request' && github.ref || github.sha }}
@@ -25,11 +20,19 @@ jobs:
   release-engine:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - name: Create empty git config
+        shell: bash
+        run: |
+          posix_runner_temp="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
+          : > "$posix_runner_temp/empty-gitconfig"
+          config_path="$(printf '%s' "$RUNNER_TEMP" | tr '\\' '/')/empty-gitconfig"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$config_path" >> "$GITHUB_ENV"
+          printf 'GIT_CONFIG_SYSTEM=%s\n' "$config_path" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: node --test scripts/release/test/*.test.mjs
@@ -40,10 +43,18 @@ jobs:
     outputs:
       matrix: ${{ steps.matrix.outputs.matrix }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Create empty git config
+        shell: bash
+        run: |
+          posix_runner_temp="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
+          : > "$posix_runner_temp/empty-gitconfig"
+          config_path="$(printf '%s' "$RUNNER_TEMP" | tr '\\' '/')/empty-gitconfig"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$config_path" >> "$GITHUB_ENV"
+          printf 'GIT_CONFIG_SYSTEM=%s\n' "$config_path" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - id: matrix
@@ -76,24 +87,19 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plugin-matrix.outputs.matrix) }}
     steps:
-      # Must precede checkout: it runs `git config --global --add safe.directory`,
-      # and on Windows that cannot write to /dev/null, so git aborts with "could not
-      # lock config file" and every later fixture that shells out to git fails.
-      - name: Point git config at a writable empty file
+      - name: Create empty git config
         shell: bash
         run: |
-          # Create through the shell's own view of the path, but export the native
-          # one: checkout shells out to git.exe, which cannot resolve /d/a/_temp/...
-          posix="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
-          : > "$posix/empty-gitconfig"
-          native="$(printf '%s' "$RUNNER_TEMP" | tr '\\' '/')"
-          printf 'GIT_CONFIG_GLOBAL=%s/empty-gitconfig\n' "$native" >> "$GITHUB_ENV"
-          printf 'GIT_CONFIG_SYSTEM=%s/empty-gitconfig\n' "$native" >> "$GITHUB_ENV"
-      - uses: actions/checkout@v4
+          posix_runner_temp="$(cygpath -u "$RUNNER_TEMP" 2>/dev/null || printf '%s' "$RUNNER_TEMP")"
+          : > "$posix_runner_temp/empty-gitconfig"
+          config_path="$(printf '%s' "$RUNNER_TEMP" | tr '\\' '/')/empty-gitconfig"
+          printf 'GIT_CONFIG_GLOBAL=%s\n' "$config_path" >> "$GITHUB_ENV"
+          printf 'GIT_CONFIG_SYSTEM=%s\n' "$config_path" >> "$GITHUB_ENV"
+      - uses: actions/checkout@v7
         with:
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       # The cache key must track COLLECTOR_VERSION. A hardcoded version would keep
