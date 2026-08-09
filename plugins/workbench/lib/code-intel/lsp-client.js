@@ -153,13 +153,20 @@ function createLspClient({ rootDir, recipe, onExit }) {
     stdio: ['pipe', 'pipe', 'ignore'],
   });
 
+  function stdinWriteFailed(error) {
+    const detail = error && error.message ? `: ${error.message}` : '';
+    markDead(new Error(`${recipe.backend} stdin write failed${detail}`));
+  }
+
   function writeMessage(message) {
     if (!alive) return;
     const json = JSON.stringify(message);
     try {
-      child.stdin.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`);
-    } catch {
-      markDead(new Error(`${recipe.backend} stdin write failed`));
+      child.stdin.write(`Content-Length: ${Buffer.byteLength(json)}\r\n\r\n${json}`, (error) => {
+        if (error) stdinWriteFailed(error);
+      });
+    } catch (error) {
+      stdinWriteFailed(error);
     }
   }
 
@@ -192,6 +199,7 @@ function createLspClient({ rootDir, recipe, onExit }) {
     markDead(error);
   }
 
+  child.stdin.on('error', stdinWriteFailed);
   child.on('error', (spawnError) => {
     markDead(new Error(`${recipe.backend} failed to start (${recipe.command}): ${spawnError.message}`));
   });

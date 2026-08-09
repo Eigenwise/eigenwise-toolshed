@@ -1,9 +1,12 @@
 'use strict';
 
 const assert = require('node:assert/strict');
+const childProcess = require('node:child_process');
+const { EventEmitter } = require('node:events');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { PassThrough } = require('node:stream');
 const test = require('node:test');
 
 const {
@@ -317,6 +320,44 @@ test('after a same-file refresh, a delayed unversioned push no longer satisfies 
   );
   assert.ok(client.discardStats().publishDiagnosticCount >= 2, 'the refused unversioned pushes must be discarded and counted');
   assert.equal(client.isAlive(), true, 'refusing a stale unversioned push must not kill the language server');
+});
+
+test('a terminated language-server stdin settles a request without a later uncaught exception', async (t) => {
+  const { rootDir, filePath } = makeProject();
+  const stdin = new PassThrough();
+  const stdout = new PassThrough();
+  const child = new EventEmitter();
+  child.stdin = stdin;
+  child.stdout = stdout;
+  child.pid = 1;
+  child.kill = () => {};
+  let writes = 0;
+  stdin.on('data', (chunk) => {
+    writes += 1;
+    if (writes === 1) stdout.write(frame({ jsonrpc: '2.0', id: 1, result: { capabilities: {} } }));
+  });
+  const originalSpawn = childProcess.spawn;
+  childProcess.spawn = () => child;
+  t.after(() => {
+    childProcess.spawn = originalSpawn;
+  });
+  const uncaught = [];
+  const recordUncaught = (error) => uncaught.push(error);
+  process.on('uncaughtExceptionMonitor', recordUncaught);
+  t.after(() => process.off('uncaughtExceptionMonitor', recordUncaught));
+  const client = createLspClient({ rootDir, recipe: fakeRecipe() });
+  t.after(() => client.kill('test finished'));
+
+  await client.ready();
+  const definition = client.definition(filePath, 1, 7);
+  await waitFor(() => writes >= 4);
+  const closedPipe = new Error('broken pipe');
+  closedPipe.code = 'EPIPE';
+  stdin.emit('error', closedPipe);
+  await assert.rejects(() => definition, /stdin write failed: broken pipe/);
+  await new Promise((resolve) => setTimeout(resolve, 50));
+  assert.deepEqual(uncaught, []);
+  assert.equal(client.isAlive(), false);
 });
 
 test('a timed-out request kills the server process to cancel the work', async (t) => {
