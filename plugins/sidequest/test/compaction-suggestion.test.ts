@@ -15,7 +15,7 @@ const boardPath = path.join(HOME, 'board');
 fs.mkdirSync(boardPath, { recursive: true });
 const { slug } = store.ensureProject(boardPath);
 const hooks = path.join(__dirname, '..', 'hooks');
-const stopHook = path.join(hooks, 'compaction-suggestion.js');
+const stopHook = path.join(hooks, 'stop.js');
 const postCompactHook = path.join(hooks, 'post-compact.js');
 
 function hook(script: string, payload: unknown, env: Record<string, string> = {}): any {

@@ -53,6 +53,8 @@ const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
 const BOARD_FIRST_REMINDER = path.join(HOOKS, 'board-first-reminder.js');
 const BOARD_RECONCILIATION_REMINDER = path.join(HOOKS, 'board-reconciliation-reminder.js');
+const STOP = path.join(HOOKS, 'stop.js');
+const POST_COMPACT = path.join(HOOKS, 'post-compact.js');
 const GUARD_TASK_OUTPUT = path.join(HOOKS, 'guard-task-output.js');
 const GUARD_SHARED_TREE_COMMIT = path.join(HOOKS, 'guard-shared-tree-commit.js');
 const WORKTREE_CREATE = path.join(HOOKS, 'worktree-create.js');
@@ -2213,6 +2215,30 @@ test('subagent-start warns only for embedded worktrees outside the receiving age
   assert.match(warning, /error-severity diagnostics/);
 });
 
+test('combined Stop hook gives actionable reconciliation priority over a compaction suggestion', () => {
+  const sessionId = `combined-stop-${++sqSeq}`;
+  const transcript = path.join(SIDEQUEST_HOME, `${sessionId}.jsonl`);
+  fs.writeFileSync(transcript, '[]');
+  runHookOutput(POST_COMPACT, { session_id: sessionId, transcript_path: transcript });
+
+  const submitted = addTicket('combined stop submission');
+  claimStopTicket(submitted, sessionId, 'combined-stop-executor');
+  assert.equal(store.submitTicket(slug, submitted.ref, 'combined-stop-executor', {
+    commit: 'abcdef0',
+    sessionId,
+  }).ok, true);
+  for (const title of ['combined compact one', 'combined compact two', 'combined compact three']) {
+    const ticket = addTicket(title);
+    assert.equal(store.completeTicket(slug, ticket.ref, 'test-worker').ok, true);
+  }
+
+  const input = { session_id: sessionId, cwd: BOARD_PATH, transcript_path: transcript };
+  const output = runHookOutput(STOP, input);
+  assert.match(output.hookSpecificOutput.additionalContext, /Integrate pending submissions now\./);
+  assert.equal(output.systemMessage, undefined, 'one Stop response cannot schedule a second model wake');
+  assert.equal(runHookOutput(STOP, { ...input, stop_hook_active: true }), null);
+});
+
 test('ticket filing stays explicit while the Agent gate enforces dispatch and docs match it', () => {
   const pluginRoot = path.join(__dirname, '..');
   const repoRoot = path.join(pluginRoot, '..', '..');
@@ -2235,8 +2261,11 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     .some((hook?: any) => hook.command.includes('worktree-create.js'))), 'isolated worktrees must use the external placement hook');
   assert.ok(config.hooks.UserPromptSubmit.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('board-first-reminder.js'))), 'the board-first reminder must run for user prompts');
-  assert.ok(config.hooks.Stop.some((entry?: any) => entry.hooks
-    .some((hook?: any) => hook.command.includes('board-reconciliation-reminder.js'))), 'the reconciliation reminder must run before a session stops');
+  const stopCommands = config.hooks.Stop.flatMap((entry?: any) => entry.hooks || [])
+    .filter((hook?: any) => hook.type === 'command');
+  assert.equal(stopCommands.length, 1, 'Stop must launch one Sidequest handler');
+  assert.match(stopCommands[0].command, /stop\.js/);
+  assert.doesNotMatch(stopCommands[0].command, /compaction-suggestion|board-reconciliation-reminder/);
   assert.doesNotMatch(JSON.stringify(config), /capture-nudge|ticket-filer/);
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === '*'
     && entry.hooks.some((hook?: any) => hook.command.includes('inline-work-nudge.js'))), 'the inline-work reminder must be registered for every tool');

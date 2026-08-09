@@ -170,12 +170,18 @@ function reconciliationMessage(data: HookInput): Reminder | null {
   }
 }
 
+export function boardReconciliationReminder(data: HookInput): string | null {
+  const reminder = reconciliationMessage(data);
+  const kind = reminder && canRemind(reminder);
+  if (!reminder || !kind) return null;
+  return kind === 'escalated' ? escalatedMessage(reminder) : reminder.message;
+}
+
 function main(): void {
   const data = readStdin();
   if (!data || data.stop_hook_active === true) return;
-  const reminder = reconciliationMessage(data);
-  const kind = reminder && canRemind(reminder);
-  if (reminder && kind) writeContext('Stop', kind === 'escalated' ? escalatedMessage(reminder) : reminder.message);
+  const message = boardReconciliationReminder(data);
+  if (message) writeContext('Stop', message);
 }
 
-main();
+if (path.basename(process.argv[1] || '') === 'board-reconciliation-reminder.js') main();

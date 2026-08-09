@@ -172,12 +172,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/compaction-suggestion.js\"",
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/board-reconciliation-reminder.js\"",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/stop.js\"",
             "timeout": 10
           }
         ]

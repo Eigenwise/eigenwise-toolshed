@@ -6,10 +6,6 @@ var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
 var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
-var __export = (target, all) => {
-  for (var name in all)
-    __defProp(target, name, { get: all[name], enumerable: true });
-};
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
     for (let key of __getOwnPropNames(from))
@@ -26,14 +22,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
   mod
 ));
-var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 
 // src/hooks/board-reconciliation-reminder.ts
-var board_reconciliation_reminder_exports = {};
-__export(board_reconciliation_reminder_exports, {
-  boardReconciliationReminder: () => boardReconciliationReminder
-});
-module.exports = __toCommonJS(board_reconciliation_reminder_exports);
 var import_node_crypto2 = __toESM(require("node:crypto"));
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
@@ -60,6 +50,12 @@ function stringField(input, ...names) {
     if (value != null) return String(value);
   }
   return "";
+}
+function isSubagent(input) {
+  return ["agent_id", "agentId", "agent_type", "agentType"].some((name) => {
+    const identity = String(input[name] || "").trim().toLowerCase();
+    return identity && identity !== "main" && identity !== "main-thread";
+  });
 }
 
 // src/hooks/shared/output.ts
@@ -110,6 +106,9 @@ function writeJson(value) {
 }
 function writeContext(hookEventName, additionalContext) {
   writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
+}
+function writeSystemMessage(hookEventName, systemMessage) {
+  writeJson({ systemMessage: projectedText(hookEventName, systemMessage), hookSpecificOutput: { hookEventName } });
 }
 
 // src/hooks/shared/paths.ts
@@ -237,7 +236,163 @@ function main() {
   if (message) writeContext("Stop", message);
 }
 if (import_node_path2.default.basename(process.argv[1] || "") === "board-reconciliation-reminder.js") main();
-// Annotate the CommonJS export names for ESM import in node:
-0 && (module.exports = {
-  boardReconciliationReminder
+
+// src/hooks/shared/compaction.ts
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path3 = __toESM(require("node:path"));
+var CLOSED_TICKETS_THRESHOLD = 3;
+var TRANSCRIPT_BYTES_THRESHOLD = 3 * 1024 * 1024;
+var RETRY_MULTIPLIER = 2;
+function disabledValue(value) {
+  return ["0", "false", "no", "off"].includes(String(value || "").trim().toLowerCase());
+}
+function compactionSuggestionsEnabled() {
+  return !disabledValue(process.env.SIDEQUEST_COMPACTION_SUGGESTIONS);
+}
+function isPrimarySession(input) {
+  return !isSubagent(input);
+}
+function stateDirectory() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
+  return import_node_path3.default.join(home, "compaction-suggestions");
+}
+function stateFile(sessionId) {
+  return import_node_path3.default.join(stateDirectory(), `${encodeURIComponent(sessionId)}.json`);
+}
+function transcriptBytes(transcriptPath) {
+  try {
+    return import_node_fs3.default.statSync(String(transcriptPath || "")).size;
+  } catch (_) {
+    return 0;
+  }
+}
+function readState(sessionId, currentBytes) {
+  try {
+    const parsed = JSON.parse(import_node_fs3.default.readFileSync(stateFile(sessionId), "utf8"));
+    if (parsed && Number.isFinite(parsed.transcriptBytes) && Number.isFinite(Date.parse(parsed.resetAt))) {
+      return { ...parsed, ticketBaselineAt: parsed.ticketBaselineAt || parsed.resetAt };
+    }
+  } catch (_) {
+  }
+  const now = (/* @__PURE__ */ new Date()).toISOString();
+  return { resetAt: now, ticketBaselineAt: now, transcriptBytes: currentBytes };
+}
+function writeState(sessionId, state) {
+  try {
+    import_node_fs3.default.mkdirSync(stateDirectory(), { recursive: true });
+    import_node_fs3.default.writeFileSync(stateFile(sessionId), JSON.stringify(state));
+    return true;
+  } catch (_) {
+    return false;
+  }
+}
+function completionAt(ticket) {
+  const values = [ticket?.submission?.integratedAt, ticket?.completion?.at, ticket?.updatedAt];
+  for (const value of values) {
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return Number.NaN;
+}
+function versionFor(ticket) {
+  const text = Array.isArray(ticket?.comments) ? ticket.comments.map((comment) => String(comment?.body || "")).join("\n") : "";
+  const matched = text.match(/\b(?:sidequest|release)\s+v?(\d+\.\d+\.\d+)\b/i);
+  if (matched?.[1]) return `v${matched[1]}`;
+  const commit = String(ticket?.submission?.commit || "").trim();
+  return commit ? commit.slice(0, 10) : "closed";
+}
+function recentlyClosed(tickets, resetAt) {
+  const since = Date.parse(resetAt);
+  return tickets.filter((ticket) => ticket?.status === "done" && completionAt(ticket) >= since);
+}
+function closedAfter(tickets, baselineAt) {
+  const since = Date.parse(baselineAt);
+  return tickets.filter((ticket) => ticket?.status === "done" && completionAt(ticket) > since);
+}
+function activeBoardWork(tickets, liveClaimRefs) {
+  return tickets.some((ticket) => {
+    if (ticket?.status === "doing" && liveClaimRefs.has(ticket.ref)) return true;
+    return Boolean(ticket?.dispatch && !ticket.dispatch.terminalAt);
+  });
+}
+function projectFor(cwd) {
+  try {
+    const store = require(runtimeModule("store"));
+    const found = store.findProject(store.nearestRepoRoot(cwd));
+    if (!found.ok || !found.slug || !found.meta?.path) return null;
+    return { slug: found.slug, path: found.meta.path };
+  } catch (_) {
+    return null;
+  }
+}
+async function publishLockHeld(repoPath) {
+  try {
+    const publish = require(runtimeModule("publish"));
+    return Boolean((await publish.publishLockStatus(repoPath)).locked);
+  } catch (_) {
+    return false;
+  }
+}
+function byteLabel(bytes) {
+  return `${(bytes / 1024 / 1024).toFixed(bytes >= 10 * 1024 * 1024 ? 0 : 1)} MB`;
+}
+function compactedRefs(tickets) {
+  return tickets.slice(0, 5).map((ticket) => `${ticket.ref} (${versionFor(ticket)})`).join(", ") + (tickets.length > 5 ? `, +${tickets.length - 5} more` : "");
+}
+async function compactionSuggestion(input) {
+  if (!compactionSuggestionsEnabled() || !isPrimarySession(input)) return null;
+  const sessionId = String(input.session_id || input.sessionId || process.env.CLAUDE_CODE_SESSION_ID || "").trim();
+  if (!sessionId) return null;
+  const currentBytes = transcriptBytes(input.transcript_path || input.transcriptPath);
+  const state = readState(sessionId, currentBytes);
+  const project = projectFor(String(input.cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd()));
+  if (!project) return null;
+  try {
+    const store = require(runtimeModule("store"));
+    const tickets = store.listTickets(project.slug);
+    const liveClaimRefs = new Set(store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug && ticket.claimLive && ticket.ref).map((ticket) => String(ticket.ref)));
+    if (activeBoardWork(tickets, liveClaimRefs) || await publishLockHeld(project.path)) return null;
+    const closed = recentlyClosed(tickets, state.resetAt);
+    const newlyClosed = closedAfter(tickets, state.ticketBaselineAt);
+    const growth = Math.max(0, currentBytes - state.transcriptBytes);
+    const multiplier = state.suggestedAt ? RETRY_MULTIPLIER : 1;
+    const enoughClosed = newlyClosed.length >= CLOSED_TICKETS_THRESHOLD * multiplier;
+    const enoughTranscript = growth >= TRANSCRIPT_BYTES_THRESHOLD * multiplier;
+    if (!enoughClosed && !enoughTranscript) return null;
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    state.suggestedAt = now;
+    state.ticketBaselineAt = now;
+    state.transcriptBytes = currentBytes;
+    if (!writeState(sessionId, state)) return null;
+    const accumulated = [
+      closed.length ? `Closed/shipped: ${compactedRefs(closed)}.` : "",
+      growth ? `Transcript growth: ${byteLabel(growth)}.` : ""
+    ].filter(Boolean).join(" ");
+    return [
+      "sidequest: compaction is safe at this boundary.",
+      accumulated,
+      "Safe to lose: completed-ticket screenshots, CI output, superseded dispatch chatter.",
+      "Keep: open ticket specs, board decisions, and pending submission details. Run /compact when ready."
+    ].join("\n");
+  } catch (_) {
+    return null;
+  }
+}
+
+// src/hooks/stop.ts
+async function main2() {
+  const input = readStdin();
+  if (!input || input.stop_hook_active === true) return;
+  const [reconciliation, compaction] = await Promise.all([
+    Promise.resolve(boardReconciliationReminder(input)),
+    compactionSuggestion(input)
+  ]);
+  if (reconciliation) {
+    writeContext("Stop", reconciliation);
+  } else if (compaction) {
+    writeSystemMessage("Stop", compaction);
+  }
+}
+void main2().catch(() => {
 });

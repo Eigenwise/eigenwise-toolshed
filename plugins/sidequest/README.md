@@ -153,7 +153,7 @@ The shipped hook registry covers the full Claude Code session and executor lifec
 - `UserPromptSubmit`: board-first reminder.
 - `PreToolUse`: inline-work nudge, executor identity enforcement, task-output and peer-message guards, home-delete protection, repeated-command warning, Windows-path protection, destructive-git protection, shared-tree commit protection, and worktree-isolation protection.
 - `PostToolUseFailure` for `Agent`: quota-fallback preparation.
-- `Stop`: compaction suggestion and board-reconciliation reminder.
+- `Stop`: one handler evaluates compaction suggestions and board-reconciliation reminders from a single payload. An actionable reconciliation reminder takes priority when both apply.
 - `PreCompact`: compaction policy.
 - `PostCompact`: post-compaction recovery guidance.
 - `SessionStart`: registry write and session setup.
