@@ -543,6 +543,7 @@ const {
   preparedDispatchTtlMs: (...args) => preparedDispatchTtlMs(...args),
   putTicket,
   readMeta,
+  releaseTerminalClaim,
   resolveCategoryFallback: (...args) => resolveCategoryFallback(...args),
   resolveTicketRoute: (...args) => resolveTicketRoute(...args),
   resolveCategoryRoute: (...args) => resolveCategoryRoute(...args),
@@ -1444,7 +1445,13 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (held2 && held2.by && held2.by !== by && !claimReclaimable(t2) && !opts.force) {
       return { ok: false, reason: "claimed", ticket: t2, claim: held2 };
     }
-    t2.claim = { by, at: now };
+    const claimRuntime = currentDispatch ? {
+      sessionId: currentDispatch.sessionId || null,
+      executor: currentDispatch.executor || null,
+      agentId: currentDispatch.agentId || null,
+      agentName: currentDispatch.agentName || null
+    } : null;
+    t2.claim = { by, at: now, ...claimRuntime ? { runtime: claimRuntime } : {} };
     if (opts.direct && opts.force && terminalDispatch && held2?.by && held2.by !== by) {
       t2.claimTakeover = {
         by,
@@ -1636,6 +1643,10 @@ function releaseTicket(slug, idOrRef, by, opts) {
         };
       }
     }
+    const expectedClaim = opts.expectedClaim;
+    if (expectedClaim && (!held?.by || held.by !== expectedClaim.by || held.at !== expectedClaim.at)) {
+      return { ok: false, reason: "claim_changed", ticket: t, claim: held || null };
+    }
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: "not_owner", ticket: t, claim: held };
     }
@@ -1768,6 +1779,30 @@ function releaseTicket(slug, idOrRef, by, opts) {
       ...opts.completionComment && opts.completionComment.advisory ? { advisory: opts.completionComment.advisory } : {}
     };
   });
+}
+function releaseTerminalClaim(slug, idOrRef, expectedClaim, source) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket?.claim?.by || ticket.claim.by !== expectedClaim?.by || ticket.claim.at !== expectedClaim?.at) {
+    return { ok: false, reason: "claim_changed", ticket: ticket || null };
+  }
+  const verdict = claimReleaseVerdict(ticket);
+  if (!verdict || verdict.kind !== "observed_stop") return { ok: false, reason: "claim_live", ticket };
+  const released = releaseTicket(slug, ticket.id, expectedClaim.by, {
+    status: "todo",
+    source,
+    expectedClaim,
+    requireReleaseVerdict: true,
+    claimRelease: { kind: verdict.kind, reason: verdict.reason, idleMs: Number.isFinite(verdict.idleMs) ? verdict.idleMs : null }
+  });
+  if (released.ok) {
+    addComment(slug, ticket.id, {
+      by: "sidequest",
+      kind: "comment",
+      source,
+      body: claimReleaseNote(ticket, verdict)
+    });
+  }
+  return released;
 }
 function makeWorkedBy(input) {
   if (!input) return null;

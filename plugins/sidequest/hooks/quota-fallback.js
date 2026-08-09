@@ -166,15 +166,20 @@ function main() {
       token: launch.token,
       executor,
       sessionId: stringField(input, "session_id", "sessionId") || null,
+      taskName: stringField(toolInput, "name") || null,
+      agentId: stringField(input, "agent_id", "agentId") || null,
+      agentName: stringField(input, "agent_name", "agentName") || null,
       error,
       source: "agent-terminal-failure"
     });
     const failureShape = result.ticket?.dispatch?.failureShape;
-    if (result.ok && failureShape) failed.push({ ref: launch.ref, failureShape });
+    if (result.ok && failureShape) failed.push({ ref: launch.ref, failureShape, claimReleased: result.claimReleased === true, dispatchBindingCleared: result.dispatchBindingCleared === true });
   }
   if (!failed.length) return;
   const outcomes = failed.map(({ ref, failureShape }) => `${ref} (${failureShape})`).join(", ");
-  const message = `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. The dispatch now records died, so its claimed work can be reclaimed safely.`;
+  const released = failed.filter((failure) => failure.claimReleased).map((failure) => failure.ref);
+  const cleared = failed.filter((failure) => failure.dispatchBindingCleared).map((failure) => failure.ref);
+  const message = released.length || cleared.length ? `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Released ${released.concat(cleared).join(", ")} immediately; re-dispatch to continue from its preserved checkpoint or worktree.` : `sidequest: Agent terminated with an observed terminal failure for ${outcomes}. Its terminal evidence is recorded, but the claim still needs recovery before it can be dispatched again.`;
   writeSystemMessage("PostToolUseFailure", message);
 }
 try {

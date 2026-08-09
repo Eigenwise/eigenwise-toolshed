@@ -619,6 +619,10 @@ test('pre-tool hook: a steer between turns is delivered, but a terminal failure 
   assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: store.getTicket(slug, ticket.ref).dispatchNonce,
     executor: dispatch.executor,
+    sessionId,
+    taskName: acting.agent_name,
+    agentId: acting.agent_id,
+    agentName: acting.agent_name,
     error: 'Prompt is too long',
   }).ok, true);
   const denied = runHookOutput(FORCE_BYPASS, steer);
@@ -1250,11 +1254,15 @@ test('peer-guard: terminal dispatch blocks delayed steering before delivery', ()
   assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    taskName: executorName,
+    agentId: 'terminal-agent-id',
+    agentName: executorName,
     error: 'Prompt is too long',
   }).ok, true);
 
   const after = store.getTicket(slug, ticket.ref);
-  assert.equal(after.claim.by, 'terminal-worker');
+  assert.equal(after.claim, null);
   assert.equal(after.dispatch.agentName, executorName, 'terminal failures retain the mapped executor for terminal cleanup');
   assert.equal(after.dispatch.outcome, 'died');
   assert.ok(after.dispatch.terminalAt);
@@ -1819,18 +1827,17 @@ test('stop reminder: ignores this session\'s live dispatched tickets before and 
   assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }), null);
 });
 
-test('stop reminder: counts terminal dispatched claims that are reclaimable', () => {
+test('stop reminder stays silent after a terminal failure releases its claim immediately', () => {
   const sessionId = `reconcile-terminal-${++sqSeq}`;
   const ticket = addTicket('dead executor');
   const stop = claimStopTicket(ticket, sessionId, 'reconcile-terminal');
   assert.equal(recordTerminalAgentFailure(ticket, stop).ok, true);
-  assert.equal(store.claimPulse(store.getTicket(slug, ticket.ref)).reclaimable, 'observed_stop');
+  assert.equal(store.getTicket(slug, ticket.ref).claim, null);
 
-  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
-  assert.match(output.hookSpecificOutput.additionalContext, /1 ticket in doing/);
+  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }), null);
 });
 
-test('stop reminder: excludes live claims from a mixed live and terminal dispatched wave', () => {
+test('stop reminder excludes live and already released terminal claims', () => {
   const sessionId = `reconcile-mixed-${++sqSeq}`;
   const live = addTicket('live executor');
   const dead = addTicket('dead executor');
@@ -1838,9 +1845,7 @@ test('stop reminder: excludes live claims from a mixed live and terminal dispatc
   const stop = claimStopTicket(dead, sessionId, 'reconcile-mixed-dead');
   assert.equal(recordTerminalAgentFailure(dead, stop).ok, true);
 
-  const output = runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
-  assert.match(output.hookSpecificOutput.additionalContext, /1 ticket in doing/);
-  assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /2 tickets in doing/);
+  assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH }), null);
 });test('stop reminder: stays silent for a quiet session and when nudges are off', () => {
   assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, {
     session_id: `reconcile-quiet-${++sqSeq}`,
@@ -1884,7 +1889,7 @@ test('stop reminder: changed signatures during its continuation stay silent and 
   }), null, 'a Stop continuation stays silent even when a background submission changes the board signature');
 });
 
-test('stop reminder: ignores re-entry and only re-escalates pending submissions', () => {
+test('stop reminder ignores re-entry and stays silent after terminal release', () => {
   const sessionId = `reconcile-bound-${++sqSeq}`;
   const ticket = addTicket('bounded reconciliation reminder');
   const stop = claimStopTicket(ticket, sessionId, 'reconcile-bound');
@@ -1895,9 +1900,8 @@ test('stop reminder: ignores re-entry and only re-escalates pending submissions'
     ...input,
     stop_hook_active: true,
   }), null, 're-entered Stop hooks must never emit another continuation');
-  assert.ok(runHookOutput(BOARD_RECONCILIATION_REMINDER, input)?.hookSpecificOutput?.additionalContext);
-  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'a stable board without a submission must not re-fire');
-  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null, 'a stable board without a submission remains silent');
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null);
+  assert.equal(runHookOutput(BOARD_RECONCILIATION_REMINDER, input), null);
 });
 
 test('session-start excludes the retired generic-agent bypass', () => {
@@ -2385,6 +2389,10 @@ function recordTerminalAgentFailure(ticket?: any, stop?: any) {
   return store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: current.dispatchNonce,
     executor: stop.agent_type,
+    sessionId: stop.session_id,
+    taskName: stop.agent_name,
+    agentId: stop.agent_id,
+    agentName: stop.agent_name,
     error: 'Prompt is too long',
   });
 }
@@ -2401,22 +2409,17 @@ function backdateSessionClaims(sessionId?: any, minutesAgo?: any, effort?: any) 
   db.putRow(database, 'globals', { key: 'workers', data: w });
 }
 
-test('subagent-stop: a terminal Agent failure reports durable death evidence within budget', () => {
+test('subagent-stop stays silent after a terminal Agent failure releases the exact claim', () => {
   const sess = `sess-long-${++sqSeq}`;
-  const t = addTicket('runaway 28-min ticket');
+  const t = addTicket('terminal release ticket');
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
   assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
   const ctx = runHookForBudget(SUBAGENT_STOP, stop);
-  const expectedWorktree = worktrees.agentWorktreePath(BOARD_PATH, stop.agent_id);
-  assert.match(ctx, new RegExp(`^exec DIED: ${t.ref} at `));
-  assert.match(ctx, /board quiet since .*; checkpoint none; commit none; comment none/);
-  assert.ok(ctx.includes(`worktree ${expectedWorktree}`));
-  assert.match(ctx, /Next: recover the worktree diff, or release \+ fresh dispatch\.$/);
+  assert.equal(ctx, '');
+  assert.equal(store.getTicket(slug, t.ref).claim, null);
   assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
   assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);
-  assert.ok(ctx.length <= BUDGET.longrun, `stop verdict is ${ctx.length} chars — budget is ${BUDGET.longrun}`);
-  assert.ok(ctx.indexOf('\n') === -1, 'the verdict must stay ONE line');
 });
 
 test('subagent-stop: a held claim is classified regardless of claimed effort', () => {

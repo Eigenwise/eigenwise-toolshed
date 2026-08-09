@@ -7,6 +7,7 @@ import test from 'node:test';
 const {
   installedSidequestVersion,
   reportLoadedSidequestVersion,
+  sidequestDispatchRefusal,
   sidequestReloadWarning,
 } = require('../lib/plugin-freshness.js');
 
@@ -50,6 +51,19 @@ test('stays silent when the registry is unavailable or versions cannot be compar
   assert.doesNotThrow(() => assert.equal(sidequestReloadWarning(project, { claudeHome, pluginRoot }), ''));
   writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: 'not-semver' }]);
   assert.doesNotThrow(() => assert.equal(sidequestReloadWarning(project, { claudeHome, pluginRoot }), ''));
+});
+
+test('dispatch refuses stale or malformed installed Sidequest versions', () => {
+  const directory = temporaryDirectory();
+  const claudeHome = path.join(directory, 'claude');
+  const pluginRoot = path.join(directory, 'loaded-sidequest');
+  const project = path.join(directory, 'current');
+  writePluginVersion(pluginRoot, '1.0.0');
+  writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: '2.0.0' }]);
+  assert.match(sidequestDispatchRefusal(project, { claudeHome, pluginRoot }), /loaded 1\.0\.0, installed 2\.0\.0/);
+
+  writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: 'not-semver' }]);
+  assert.match(sidequestDispatchRefusal(project, { claudeHome, pluginRoot }), /missing or malformed/);
 });
 
 test('records this session loaded version for the Workbench prompt guard', () => {

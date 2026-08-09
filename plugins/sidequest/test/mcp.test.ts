@@ -1188,7 +1188,7 @@ test('verify commands reject direct multi-plugin directory chaining', () => {
   }));
 });
 
-test('dispatch warns when this Sidequest process loaded an older plugin version', async () => {
+test('dispatch refuses an older loaded Sidequest before it records a launch binding', async () => {
   const projectPath = committedRepo('sq-mcp-dispatch-freshness-');
   const project = store.ensureProject(projectPath).slug;
   const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-dispatch-freshness-home-'));
@@ -1214,9 +1214,11 @@ test('dispatch warns when this Sidequest process loaded an older plugin version'
       category: 'general',
       files: ['src'],
     });
-    const dispatched = await callTool('dispatch', { project, ref: ticket.ref, full: true });
-    assert.match(dispatched.warnings.join('\n'), /dispatch warning: Sidequest: loaded \d+\.\d+\.\d+, installed 99\.99\.99/);
-    assert.match(dispatched.warnings.join('\n'), /\/reload-plugins/);
+    await assert.rejects(() => callTool('dispatch', { project, ref: ticket.ref, full: true }), /Sidequest: loaded \d+\.\d+\.\d+, installed 99\.99\.99\. Run \/reload-plugins/);
+    const unlaunched = store.getTicket(project, ticket.ref);
+    assert.equal(unlaunched.dispatchNonce, null);
+    assert.equal(unlaunched.dispatchExecutor, null);
+    assert.equal(unlaunched.dispatch, undefined);
   } finally {
     if (originalClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
     else process.env.SIDEQUEST_CLAUDE_HOME = originalClaudeHome;

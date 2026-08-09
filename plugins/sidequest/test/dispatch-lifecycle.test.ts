@@ -810,6 +810,10 @@ test('dispatch counts terminal Agent failures toward the repeat-failure breaker'
     assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
       token: prepared.token,
       executor,
+      sessionId,
+      taskName: worker,
+      agentId: `repeat-terminal-failure-agent-${number}`,
+      agentName: worker,
       error: 'Agent stopped after max_tokens',
     }).ok, true);
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'died');
@@ -841,6 +845,10 @@ test('repeat failures identify isolated missing-app errors as worktree-shaped', 
     assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
       token: prepared.token,
       executor,
+      sessionId,
+      taskName: worker,
+      agentId: `repeat-worktree-failure-agent-${number}`,
+      agentName: worker,
       error: 'Vite returned 404 because the app service is missing.',
     }).ok, true);
     assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);

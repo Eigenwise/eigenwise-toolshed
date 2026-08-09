@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
@@ -890,13 +890,33 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
+function terminalRuntimeMatches(state?: any, claim?: any, opts?: any) {
+  const sessionId = String(opts?.sessionId || '').trim();
+  const executor = String(opts?.executor || '').trim();
+  const taskName = String(opts?.taskName || '').trim();
+  if (!sessionId || !executor || !taskName) return false;
+  if (state?.sessionId !== sessionId || state?.executor !== executor || state?.agentName !== taskName) return false;
+  const runtime = claim?.runtime;
+  if (runtime && (runtime.sessionId !== sessionId || runtime.executor !== executor || runtime.agentName !== taskName)) return false;
+  const agentId = String(opts?.agentId || '').trim();
+  const agentName = String(opts?.agentName || '').trim();
+  if (agentId && state.agentId && state.agentId !== agentId) return false;
+  if (agentName && state.agentName && state.agentName !== agentName) return false;
+  return true;
+}
+
+function claimSnapshot(claim?: any) {
+  if (!claim?.by || !claim?.at) return null;
+  return { by: claim.by, at: claim.at };
+}
+
 function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const failureShape = terminalAgentFailure(opts.error);
   if (!failureShape) return { ok: false, reason: 'unrecognized_failure' };
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
-  return withTicketLock(slug, found.id, () => {
+  const recorded = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
@@ -905,15 +925,24 @@ function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
     if (!state || !['launched', 'claimed'].includes(state.outcome) || state.terminalAt) {
       return { ok: false, reason: 'not_launched' };
     }
+    if (!terminalRuntimeMatches(state, t.claim, opts)) return { ok: false, reason: 'runtime_mismatch', ticket: t };
     const now = new Date().toISOString();
-    setDispatchTerminal(t, t.claim && t.claim.by ? 'died' : 'failed', opts.source || 'agent-terminal-failure', {
+    const claim = claimSnapshot(t.claim);
+    setDispatchTerminal(t, claim ? 'died' : 'failed', opts.source || 'agent-terminal-failure', {
       error: opts.error,
       failureShape,
     });
+    if (!claim) {
+      t.dispatchNonce = null;
+      t.dispatchExecutor = null;
+    }
     stampDispatchEvent(t, opts.source || 'agent-terminal-failure', now);
     putTicket(slug, t);
-    return { ok: true, ticket: t };
+    return { ok: true, ticket: t, claim, dispatchBindingCleared: !claim };
   });
+  if (!recorded?.ok || !recorded.claim || typeof releaseTerminalClaim !== 'function') return recorded;
+  const released = releaseTerminalClaim(slug, found.id, recorded.claim, opts.source || 'agent-terminal-failure');
+  return Object.assign({}, recorded, { claimReleased: Boolean(released?.ok), ticket: released?.ticket || recorded.ticket });
 }
 
 function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
@@ -1133,10 +1162,21 @@ function dispatchIdentityAmbiguous(matches: any[], agentName?: any) {
 }
 
 function dispatchCanBindRuntimeIdentity(state?: any, sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
-  if (!state || state.sessionId !== sessionId || state.executor !== executor || state.outcome !== 'launched') return false;
+  if (!state || state.sessionId !== sessionId || state.executor !== executor || !['launched', 'claimed'].includes(state.outcome)) return false;
   if (agentName && state.agentName && state.agentName !== agentName) return false;
   if (agentId) return !state.agentId || state.agentId === agentId;
   return Boolean(agentName && state.agentName === agentName);
+}
+
+function syncClaimRuntimeIdentity(ticket?: any, state?: any) {
+  const runtime = ticket?.claim?.runtime;
+  if (!runtime || runtime.sessionId !== state?.sessionId || runtime.executor !== state?.executor) return;
+  ticket.claim.runtime = {
+    sessionId: state.sessionId || null,
+    executor: state.executor || null,
+    agentId: state.agentId || null,
+    agentName: state.agentName || null,
+  };
 }
 
 function recordDispatchRuntimeIdentity(slug?: any, state?: any, agentId?: any, agentName?: any, now?: any) {
@@ -1189,6 +1229,7 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
       }
       const now = new Date().toISOString();
       recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
+      syncClaimRuntimeIdentity(t, state);
       stampDispatchEvent(t, 'subagent-start', now);
       putTicket(match.slug, t);
       return { ok: true, ticket: t };

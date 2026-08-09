@@ -264,7 +264,7 @@ test('an executor without a dispatch record cannot write into the shared checkou
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /no active dispatch record/);
 });
 
-test('a terminally failed executor still expects its worktree after a resume', () => {
+test('a terminally failed executor releases its claim and still cannot resume in the shared checkout', () => {
   const agentId = 'a9dead';
   const { ticket, sessionId, executor } = dispatched(agentId);
   assert.equal(store.claimTicket(slug, ticket.ref, 'dead-worker', {
@@ -274,9 +274,14 @@ test('a terminally failed executor still expects its worktree after a resume', (
   assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: ticket.dispatchNonce,
     executor,
+    sessionId,
+    taskName: agentId,
     error: 'Subagent terminated unexpectedly',
   }).ok, true);
-  assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'died');
+  const failedTicket = store.getTicket(slug, ticket.ref);
+  assert.equal(failedTicket.dispatch.outcome, 'died');
+  assert.equal(failedTicket.claim, null);
+  assert.equal(failedTicket.status, 'todo');
 
   const expectation = store.dispatchIsolationExpectation({ agentId, sessionId, executor });
   assert.equal(expectation && expectation.ref, ticket.ref);

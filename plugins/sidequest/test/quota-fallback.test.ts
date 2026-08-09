@@ -299,11 +299,31 @@ test('PostToolUseFailure records observed terminal executor failures without rel
     error: 'Prompt is too long',
   });
   const current = store.getTicket(slug, terminal.ref);
-  assert.match(output.systemMessage, /observed terminal failure/);
+  assert.match(output.systemMessage, /Released/);
+  assert.equal(current.status, 'todo');
+  assert.equal(current.claim, null);
   assert.equal(current.dispatch.outcome, 'died');
   assert.equal(current.dispatch.failureShape, 'context_overflow');
   assert.equal(current.dispatch.terminalSource, 'agent-terminal-failure');
-  assert.equal(store.pulsePayload(slug, terminal.ref).claim.reclaimable, 'observed_stop');
+  assert.equal(current.dispatchNonce, null);
+  assert.equal(store.pulsePayload(slug, terminal.ref).claim, null);
+
+  const beforeClaim = createFixture('terminal Agent failure before claim');
+  const beforeClaimLaunch = launch(beforeClaim, 'terminal-before-claim');
+  const beforeClaimOutput = runHook(QUOTA_FALLBACK, {
+    session_id: 'terminal-before-claim',
+    cwd: PROJECT,
+    tool_name: 'Agent',
+    tool_input: beforeClaimLaunch.toolInput,
+    error: 'Prompt is too long',
+  });
+  const cleared = store.getTicket(slug, beforeClaim.ref);
+  assert.match(beforeClaimOutput.systemMessage, /Released/);
+  assert.equal(cleared.status, 'todo');
+  assert.equal(cleared.claim, null);
+  assert.equal(cleared.dispatch.outcome, 'failed');
+  assert.equal(cleared.dispatchNonce, null);
+  assert.equal(cleared.dispatchExecutor, null);
 });
 
 test('every seeded Opus category recovers to its explicit Codex fallback without replacing local overrides', () => {
@@ -411,10 +431,13 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
     sessionId: 'stopped-attempt',
     token: preparedStopped.token,
     executor: preparedStopped.ticket.dispatchExecutor,
+    agentName: 'stopped-agent',
   }).ok, true);
   assert.equal(store.recordDispatchAgentFailure(slug, stopped.ref, {
     token: preparedStopped.token,
     executor: preparedStopped.ticket.dispatchExecutor,
+    sessionId: 'stopped-attempt',
+    taskName: 'stopped-agent',
     error: 'Subagent terminated unexpectedly',
   }).ok, true);
   assert.equal(store.getTicket(slug, stopped.ref).dispatch.failureShape, 'agent_terminal');
@@ -433,15 +456,20 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
 
   let bounded = createFixture('bounded attempts');
   for (let index = 0; index < 9; index++) {
-    const prepared = store.prepareDispatch(slug, bounded.ref, { sessionId: `bounded-attempt-${index}`, allowRepeatFailure: true });
+    const sessionId = `bounded-attempt-${index}`;
+    const taskName = `bounded-agent-${index}`;
+    const prepared = store.prepareDispatch(slug, bounded.ref, { sessionId, allowRepeatFailure: true });
     assert.equal(store.recordDispatchLaunch(slug, bounded.ref, {
-      sessionId: `bounded-attempt-${index}`,
+      sessionId,
       token: prepared.token,
       executor: prepared.ticket.dispatchExecutor,
+      agentName: taskName,
     }).ok, true);
     assert.equal(store.recordDispatchAgentFailure(slug, bounded.ref, {
       token: prepared.token,
       executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      taskName,
       error: 'Subagent terminated unexpectedly',
     }).ok, true);
   }

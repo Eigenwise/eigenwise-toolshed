@@ -62,7 +62,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state,
 } = require('./mcp-shared');
-const { sidequestReloadWarning } = require('./plugin-freshness');
+const { sidequestDispatchRefusal } = require('./plugin-freshness');
 
 type ToolDefinition = {
   name: string;
@@ -271,6 +271,8 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, '..') });
+      if (freshnessRefusal) throw new Error(freshnessRefusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
       const sessionId = requireDispatchSession();
@@ -302,8 +304,6 @@ const tools: ToolDefinition[] = [
         spawn,
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
-      const freshnessWarning = sidequestReloadWarning(meta.path, { pluginRoot: path.join(__dirname, '..') });
-      if (freshnessWarning) warnings.push(`dispatch warning: ${freshnessWarning}`);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         // Compact dispatches must keep a bounded spawn payload. Warnings ride only when they fit the MCP ceiling.
@@ -349,6 +349,8 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, '..') });
+      if (freshnessRefusal) throw new Error(freshnessRefusal);
       // native_agent does not go through prepareDispatch, so it needs its own
       // copy of the same install preflight (SQ-1017) — see dispatch-preflight.js.
       // Reaching this handler is itself proof the board MCP is connected.

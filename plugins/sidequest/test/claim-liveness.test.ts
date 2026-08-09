@@ -79,12 +79,21 @@ function addWriteRouted(title?: any) {
 }
 
 function claimRouted(ticket?: any, by?: any, opts?: any) {
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, ...(opts || {}) });
+  const sessionId = (opts && opts.sessionId) || `${ticket.ref}-session`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, ...(opts || {}), sessionId });
+  const taskName = prepared.ticket.dispatch.launchName;
+  assert.strictEqual(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: taskName,
+    source: 'test',
+  }).ok, true);
   const claimed = store.claimTicket(slug, ticket.ref, by, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
     source: 'mcp',
-    sessionId: (opts && opts.sessionId) || undefined,
+    sessionId,
   });
   assert.strictEqual(claimed.ok, true);
   return prepared;
@@ -240,14 +249,15 @@ test('an active verification marker is alive until a terminal Agent failure is r
   assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
+    sessionId: session,
+    taskName: prepared.ticket.dispatch.launchName,
     error: 'Prompt is too long',
   }).ok, true);
-  const stoppedPulse = store.pulsePayload(slug, ticket.ref);
-  assert.equal(stoppedPulse.liveness, 'dead');
-  assert.equal(stoppedPulse.died.source, 'agent-terminal-failure');
-  assert.equal(stoppedPulse.claim.reclaimable, 'observed_stop');
-  const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
-  assert.equal(swept.released.some((entry?: any) => entry.ref === ticket.ref), true);
+  const stopped = store.getTicket(slug, ticket.ref);
+  assert.equal(stopped.status, 'todo');
+  assert.equal(stopped.claim, null);
+  assert.equal(stopped.dispatchNonce, null);
+  assert.equal(stopped.dispatch.outcome, 'died');
 });
 
 
@@ -265,46 +275,50 @@ test('the claim sweep releases a dead executor with a pending scope request', ()
 });
 
 
-test('a terminal dispatch lets the orchestrator take over and submit the existing claim', () => {
-  const ticket = addRouted('terminal claim takeover');
-  const prepared = claimRouted(ticket, 'terminated-executor');
+test('a terminal dispatch immediately releases its exact claim for a fresh dispatch', () => {
+  const ticket = addRouted('terminal claim release');
+  const sessionId = 'terminal-claim-release-session';
+  const prepared = claimRouted(ticket, 'terminated-executor', { sessionId });
   assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    taskName: prepared.ticket.dispatch.launchName,
     error: 'Prompt is too long',
   }).ok, true);
 
-  const requiresForce = store.claimTicket(slug, ticket.ref, 'orchestrator', {
-    direct: true,
-    reason: 'The executor has a recorded terminal dispatch outcome and cannot submit its verified commit.',
-  });
-  assert.equal(requiresForce.ok, false);
-  assert.equal(requiresForce.reason, 'terminal_claim_takeover_required');
+  const released = store.getTicket(slug, ticket.ref);
+  assert.equal(released.status, 'todo');
+  assert.equal(released.claim, null);
+  assert.equal(released.dispatchNonce, null);
+  assert.equal(released.dispatch.outcome, 'died');
+  const fresh = store.prepareDispatch(slug, ticket.ref);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'replacement-executor', {
+    token: fresh.token,
+    executor: fresh.ticket.dispatchExecutor,
+  }).ok, true);
+});
 
-  const takeover = store.claimTicket(slug, ticket.ref, 'orchestrator', {
-    direct: true,
-    force: true,
-    reason: 'The executor has a recorded terminal dispatch outcome and cannot submit its verified commit.',
-  });
-  assert.equal(takeover.ok, true);
-  const claimed = store.getTicket(slug, ticket.ref);
-  assert.equal(claimed.claim.by, 'orchestrator');
-  assert.deepEqual(claimed.claimTakeover, {
-    by: 'orchestrator',
-    at: claimed.claim.at,
-    previousBy: 'terminated-executor',
-    evidence: {
-      outcome: 'died',
-      terminalAt: claimed.claimTakeover.evidence.terminalAt,
-      terminalSource: 'agent-terminal-failure',
-    },
-  });
-
-  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'module.exports = "terminal takeover fixture";\n');
-  git(['add', 'lib/fixture.js']);
-  git(['commit', '-m', 'terminal takeover fixture']);
-  const submitted = store.submitTicket(slug, ticket.ref, 'orchestrator', { commit: git(['rev-parse', 'HEAD']) });
-  assert.equal(submitted.ok, true);
+test('terminal evidence keeps partial, stale, and mismatched runtime bindings live', () => {
+  const ticket = addRouted('terminal runtime identity guard');
+  const sessionId = 'terminal-runtime-identity-session';
+  const prepared = claimRouted(ticket, 'identity-guard-executor', { sessionId });
+  const base = {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    taskName: prepared.ticket.dispatch.launchName,
+    error: 'Prompt is too long',
+  };
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, { ...base, taskName: undefined }).reason, 'runtime_mismatch');
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, { ...base, sessionId: 'stale-session' }).reason, 'runtime_mismatch');
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, { ...base, taskName: 'other-native-task' }).reason, 'runtime_mismatch');
+  const protectedTicket = store.getTicket(slug, ticket.ref);
+  assert.equal(protectedTicket.status, 'doing');
+  assert.equal(protectedTicket.claim.by, 'identity-guard-executor');
+  assert.equal(protectedTicket.dispatch.terminalAt, null);
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, base).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).claim, null);
 });
 
 test('a non-terminal dispatch still refuses a forced direct takeover', () => {
@@ -754,6 +768,8 @@ test('a closeout after an auto-release names the exact recovery instead of silen
   assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
+    sessionId: session,
+    taskName: prepared.ticket.dispatch.launchName,
     error: 'Prompt is too long',
   }).ok, true);
   store.sweepStaleClaims({ project: slug, source: 'test' });
@@ -787,15 +803,19 @@ test('the sweep refuses to release a shared-tree claim while the checkout is dir
   assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-shared-tree-executor', {
     token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId,
   }).ok, true);
-  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
-    token: prepared.token,
-    executor: prepared.ticket.dispatchExecutor,
-    error: 'Prompt is too long',
-  }).ok, true);
-
   const fixturePath = path.join(PROJECT_DIR, 'lib', 'fixture.js');
   const originalFixture = fs.readFileSync(fixturePath, 'utf8');
   fs.writeFileSync(fixturePath, `${originalFixture}module.exports.dirty = true;\n`);
+  assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    taskName: agentId,
+    agentId,
+    agentName: agentId,
+    error: 'Prompt is too long',
+  }).ok, true);
+
   const blockedSweep = store.sweepStaleClaims({ project: slug, source: 'test' });
   assert.equal(blockedSweep.released.some((entry?: any) => entry.ref === ticket.ref), false);
   assert.deepStrictEqual(

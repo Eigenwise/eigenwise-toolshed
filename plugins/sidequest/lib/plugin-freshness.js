@@ -34,6 +34,7 @@ __export(plugin_freshness_exports, {
   loadedPluginVersion: () => loadedPluginVersion,
   loadedVersionStateFile: () => loadedVersionStateFile,
   reportLoadedSidequestVersion: () => reportLoadedSidequestVersion,
+  sidequestDispatchRefusal: () => sidequestDispatchRefusal,
   sidequestReloadWarning: () => sidequestReloadWarning
 });
 module.exports = __toCommonJS(plugin_freshness_exports);
@@ -113,6 +114,17 @@ function installedSidequestVersion(projectPath, options = {}) {
   const selected = projectInstall || installs.find((install) => install.scope === "user");
   return typeof selected?.version === "string" ? selected.version : null;
 }
+function sidequestDispatchRefusal(projectPath, options = {}) {
+  const loadedVersion = loadedPluginVersion(options.pluginRoot);
+  const installedVersion = installedSidequestVersion(projectPath, options);
+  if (!installedVersion) return "";
+  const comparison = compareSemver(loadedVersion, installedVersion);
+  if (comparison === null) {
+    return `Sidequest: cannot safely dispatch because the loaded or installed plugin version is missing or malformed (loaded ${loadedVersion || "unknown"}, installed ${installedVersion}). Run /reload-plugins or restart Claude Code before dispatching work.`;
+  }
+  if (comparison !== -1) return "";
+  return `Sidequest: loaded ${loadedVersion}, installed ${installedVersion}. Run /reload-plugins or restart Claude Code before dispatching work.`;
+}
 function sidequestReloadWarning(projectPath, options = {}) {
   const loadedVersion = loadedPluginVersion(options.pluginRoot);
   const installedVersion = installedSidequestVersion(projectPath, options);
@@ -151,5 +163,6 @@ function reportLoadedSidequestVersion(input, options = {}) {
   loadedPluginVersion,
   loadedVersionStateFile,
   reportLoadedSidequestVersion,
+  sidequestDispatchRefusal,
   sidequestReloadWarning
 });

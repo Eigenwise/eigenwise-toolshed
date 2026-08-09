@@ -403,6 +403,7 @@ const {
   preparedDispatchTtlMs: (...args: any[]) => preparedDispatchTtlMs(...args),
   putTicket,
   readMeta,
+  releaseTerminalClaim,
   resolveCategoryFallback: (...args: any[]) => resolveCategoryFallback(...args),
   resolveTicketRoute: (...args: any[]) => resolveTicketRoute(...args),
   resolveCategoryRoute: (...args: any[]) => resolveCategoryRoute(...args),
@@ -1428,7 +1429,13 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: 'claimed', ticket: t, claim: held };
     }
-    t.claim = { by, at: now };
+    const claimRuntime = currentDispatch ? {
+      sessionId: currentDispatch.sessionId || null,
+      executor: currentDispatch.executor || null,
+      agentId: currentDispatch.agentId || null,
+      agentName: currentDispatch.agentName || null,
+    } : null;
+    t.claim = { by, at: now, ...(claimRuntime ? { runtime: claimRuntime } : {}) };
     if (opts.direct && opts.force && terminalDispatch && held?.by && held.by !== by) {
       t.claimTakeover = {
         by,
@@ -1657,6 +1664,10 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         };
       }
     }
+    const expectedClaim = opts.expectedClaim;
+    if (expectedClaim && (!held?.by || held.by !== expectedClaim.by || held.at !== expectedClaim.at)) {
+      return { ok: false, reason: 'claim_changed', ticket: t, claim: held || null };
+    }
     if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
@@ -1803,6 +1814,31 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       ...(opts.completionComment && opts.completionComment.advisory ? { advisory: opts.completionComment.advisory } : {}),
     };
   });
+}
+
+function releaseTerminalClaim(slug?: any, idOrRef?: any, expectedClaim?: any, source?: any) {
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket?.claim?.by || ticket.claim.by !== expectedClaim?.by || ticket.claim.at !== expectedClaim?.at) {
+    return { ok: false, reason: 'claim_changed', ticket: ticket || null };
+  }
+  const verdict = claimReleaseVerdict(ticket);
+  if (!verdict || verdict.kind !== 'observed_stop') return { ok: false, reason: 'claim_live', ticket };
+  const released = releaseTicket(slug, ticket.id, expectedClaim.by, {
+    status: 'todo',
+    source,
+    expectedClaim,
+    requireReleaseVerdict: true,
+    claimRelease: { kind: verdict.kind, reason: verdict.reason, idleMs: Number.isFinite(verdict.idleMs) ? verdict.idleMs : null },
+  });
+  if (released.ok) {
+    addComment(slug, ticket.id, {
+      by: 'sidequest',
+      kind: 'comment',
+      source,
+      body: claimReleaseNote(ticket, verdict),
+    });
+  }
+  return released;
 }
 
 // Build the provenance stamp recorded when a ticket is completed — which model

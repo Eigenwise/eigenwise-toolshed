@@ -227,7 +227,7 @@ Native Agent dispatch (routed work stays in this conversation):
     (the SessionEnd hook calls this automatically on the session id it's given, so a crashed/ended worker's
     tickets recover immediately; safe — it only touches that session's claims).
     Defaults to \$CLAUDE_CODE_SESSION_ID when --session is omitted.
-  sidequest claims sweep [--project <path-or-slug>]  release claims whose executor was observed to stop (SubagentStop),
+  sidequest claims sweep [--project <path-or-slug>]  audit residual claims after terminal failures already release their exact claim,
     then two activity-based backstops: no board activity for SIDEQUEST_CLAIM_IDLE_MIN (default 60m) with no live executor
     associated, or SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m) for a death nothing observed. A running executor's claim is
     never swept on age, and closeout (commit/submit/done) never consults these windows.

@@ -61,7 +61,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
-const { sidequestReloadWarning } = require("./plugin-freshness");
+const { sidequestDispatchRefusal } = require("./plugin-freshness");
 const tools = [
   {
     name: "supersede_submission",
@@ -262,6 +262,8 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      if (freshnessRefusal) throw new Error(freshnessRefusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
       const sessionId = requireDispatchSession();
@@ -290,8 +292,6 @@ const tools = [
         spawn
       };
       const warnings = store.presentWarnings(prepared.ticket, store.dispatchWarnings(prepared.ticket, slug), sessionId);
-      const freshnessWarning = sidequestReloadWarning(meta.path, { pluginRoot: path.join(__dirname, "..") });
-      if (freshnessWarning) warnings.push(`dispatch warning: ${freshnessWarning}`);
       if (!args.full) {
         const withWarnings = warnings.length ? Object.assign({}, compact, { warnings }) : compact;
         return Buffer.byteLength(JSON.stringify(withWarnings, null, 2)) <= 1200 ? withWarnings : compact;
@@ -334,6 +334,8 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
+      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      if (freshnessRefusal) throw new Error(freshnessRefusal);
       if (meta.path) {
         assertSidequestInstall(meta.path);
         assertDispatchTransport("mcp");
