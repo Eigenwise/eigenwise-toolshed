@@ -33,12 +33,15 @@ __export(runtime_exports, {
   TypeScriptRuntimeAcquirer: () => TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError: () => UnsupportedRuntimePlatformError,
   reclaimObservedRuntimeLock: () => reclaimObservedRuntimeLock,
+  recoverLegacyRuntimeReclaim: () => recoverLegacyRuntimeReclaim,
+  recoverRuntimeReclaim: () => recoverRuntimeReclaim,
   runtimePlatformPackage: () => runtimePlatformPackage
 });
 module.exports = __toCommonJS(runtime_exports);
 var import_node_child_process = require("node:child_process");
 var import_node_crypto = require("node:crypto");
 var import_promises = require("node:fs/promises");
+var import_node_net = require("node:net");
 var import_node_path = __toESM(require("node:path"));
 var import_paths = require("./paths.js");
 const runtimeManifestFile = "integrity.json";
@@ -344,56 +347,169 @@ function runtimeLockLease(lockDirectory, ownerToken, heartbeat) {
 function isVerifiableRuntimeLockOwner(ownerToken) {
   return /^[a-f0-9-]{36}$/i.test(ownerToken);
 }
-async function moveClaimedRuntimeLock(lockDirectory, expectedOwnerToken) {
+const runtimeReclaimMarkerPattern = /^reclaim-([a-f0-9-]{36})\.(\d+)\.([a-f0-9-]{36})$/i;
+async function openRuntimeReclaimGuard() {
+  const token = (0, import_node_crypto.randomUUID)();
+  const server = (0, import_node_net.createServer)((socket) => socket.end(token));
+  await new Promise((resolve, reject) => {
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (address === null || typeof address === "string") {
+    await new Promise((resolve) => server.close(() => resolve()));
+    throw new SemanticRuntimeError("runtime reclaim guard did not bind a TCP port");
+  }
+  server.unref();
+  return { port: address.port, server, token };
+}
+async function closeRuntimeReclaimGuard(guard) {
+  await new Promise((resolve) => guard.server.close(() => resolve()));
+}
+function runtimeReclaimMarker(lockDirectory, generationToken, identity) {
+  return import_node_path.default.join(lockDirectory, `reclaim-${generationToken}.${identity.port}.${identity.token}`);
+}
+function parseRuntimeReclaimMarker(fileName) {
+  const match = runtimeReclaimMarkerPattern.exec(fileName);
+  if (match === null) return void 0;
+  const port = Number(match[2]);
+  if (!Number.isSafeInteger(port) || port < 1 || port > 65535) return void 0;
+  return { generationToken: match[1], identity: { port, token: match[3] } };
+}
+async function runtimeReclaimerIsAlive(identity) {
+  return new Promise((resolve) => {
+    let response = "";
+    let settled = false;
+    const finish = (alive) => {
+      if (settled) return;
+      settled = true;
+      socket.destroy();
+      resolve(alive);
+    };
+    const socket = (0, import_node_net.createConnection)({ host: "127.0.0.1", port: identity.port });
+    socket.setEncoding("utf8");
+    socket.on("data", (data) => {
+      response += data;
+      if (response.length > identity.token.length) finish(false);
+    });
+    socket.once("end", () => finish(response === identity.token));
+    socket.once("error", () => finish(false));
+  });
+}
+async function moveClaimedRuntimeLock(lockDirectory, claimMarker, guard) {
   const staleDirectory = `${lockDirectory}.stale-${(0, import_node_crypto.randomUUID)()}`;
   try {
+    await (0, import_promises.access)(claimMarker);
     await (0, import_promises.rename)(lockDirectory, staleDirectory);
-    if (expectedOwnerToken !== void 0) {
-      const movedOwnerToken = await (0, import_promises.readFile)(import_node_path.default.join(staleDirectory, "owner"), "utf8");
-      if (movedOwnerToken !== expectedOwnerToken) return false;
-    }
     await (0, import_promises.rm)(staleDirectory, { recursive: true, force: true });
     return true;
   } catch {
     return false;
+  } finally {
+    await closeRuntimeReclaimGuard(guard);
   }
 }
-async function claimLegacyRuntimeLock(lockDirectory, observedOwnerToken) {
-  const claimFile = import_node_path.default.join(lockDirectory, "legacy-reclaim");
+async function continueRuntimeReclaim(lockDirectory, observedMarker, generationToken) {
+  const guard = await openRuntimeReclaimGuard();
+  const claimMarker = runtimeReclaimMarker(lockDirectory, generationToken, guard);
   try {
-    await (0, import_promises.writeFile)(claimFile, (0, import_node_crypto.randomUUID)(), { flag: "wx" });
+    await (0, import_promises.rename)(observedMarker, claimMarker);
   } catch {
+    await closeRuntimeReclaimGuard(guard);
+    return false;
+  }
+  return moveClaimedRuntimeLock(lockDirectory, claimMarker, guard);
+}
+async function recoverRuntimeReclaim(lockDirectory) {
+  let entries;
+  try {
+    entries = await (0, import_promises.readdir)(lockDirectory);
+  } catch {
+    return "none";
+  }
+  for (const entry of entries) {
+    const reclaim = parseRuntimeReclaimMarker(entry);
+    if (reclaim === void 0) continue;
+    if (await runtimeReclaimerIsAlive(reclaim.identity)) return "active";
+    return await continueRuntimeReclaim(
+      lockDirectory,
+      import_node_path.default.join(lockDirectory, entry),
+      reclaim.generationToken
+    ) ? "reclaimed" : "active";
+  }
+  return "none";
+}
+function parseLegacyRuntimeReclaim(value) {
+  try {
+    const parsed = JSON.parse(value);
+    if (typeof parsed !== "object" || parsed === null) return void 0;
+    if (!("generationToken" in parsed) || !("port" in parsed) || !("token" in parsed)) return void 0;
+    if (typeof parsed.generationToken !== "string" || !isVerifiableRuntimeLockOwner(parsed.generationToken)) return void 0;
+    if (typeof parsed.token !== "string" || !isVerifiableRuntimeLockOwner(parsed.token)) return void 0;
+    if (typeof parsed.port !== "number" || !Number.isSafeInteger(parsed.port) || parsed.port < 1 || parsed.port > 65535) return void 0;
+    return { generationToken: parsed.generationToken, port: parsed.port, token: parsed.token };
+  } catch {
+    return void 0;
+  }
+}
+async function recoverLegacyRuntimeReclaim(lockDirectory) {
+  const claimFile = import_node_path.default.join(lockDirectory, "legacy-reclaim");
+  let reclaim;
+  try {
+    const parsed = parseLegacyRuntimeReclaim(await (0, import_promises.readFile)(claimFile, "utf8"));
+    if (parsed === void 0) {
+      return await continueRuntimeReclaim(lockDirectory, claimFile, (0, import_node_crypto.randomUUID)()) ? "reclaimed" : "active";
+    }
+    reclaim = parsed;
+  } catch {
+    return "none";
+  }
+  if (await runtimeReclaimerIsAlive(reclaim)) return "active";
+  return await continueRuntimeReclaim(lockDirectory, claimFile, reclaim.generationToken) ? "reclaimed" : "active";
+}
+async function claimLegacyRuntimeLock(lockDirectory, observedOwnerToken) {
+  const guard = await openRuntimeReclaimGuard();
+  const generationToken = (0, import_node_crypto.randomUUID)();
+  const preparedClaimFile = import_node_path.default.join(lockDirectory, `.legacy-reclaim-${generationToken}`);
+  const claimFile = import_node_path.default.join(lockDirectory, "legacy-reclaim");
+  const serializedClaim = JSON.stringify({ generationToken, port: guard.port, token: guard.token });
+  try {
+    await (0, import_promises.writeFile)(preparedClaimFile, serializedClaim, { flag: "wx" });
+    await (0, import_promises.link)(preparedClaimFile, claimFile);
+    await (0, import_promises.rm)(preparedClaimFile, { force: true });
+  } catch {
+    await (0, import_promises.rm)(preparedClaimFile, { force: true });
+    await closeRuntimeReclaimGuard(guard);
     return false;
   }
   try {
     const entries = await (0, import_promises.readdir)(lockDirectory);
     if (entries.some((entry) => entry.startsWith("generation-"))) {
       await (0, import_promises.rm)(claimFile, { force: true });
+      await closeRuntimeReclaimGuard(guard);
       return false;
     }
     if (observedOwnerToken !== void 0) {
       const currentOwnerToken = await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8");
       if (currentOwnerToken !== observedOwnerToken) {
         await (0, import_promises.rm)(claimFile, { force: true });
+        await closeRuntimeReclaimGuard(guard);
         return false;
       }
     }
-    return true;
   } catch {
     await (0, import_promises.rm)(claimFile, { force: true });
+    await closeRuntimeReclaimGuard(guard);
     return false;
   }
-}
-function runtimeReclaimMarker(lockDirectory, ownerToken) {
-  return import_node_path.default.join(lockDirectory, `reclaim-${ownerToken}-${(0, import_node_crypto.randomUUID)()}`);
-}
-async function hasRuntimeReclaimMarker(lockDirectory, ownerToken) {
-  const prefix = `reclaim-${ownerToken}-`;
+  const claimMarker = runtimeReclaimMarker(lockDirectory, generationToken, guard);
   try {
-    return (await (0, import_promises.readdir)(lockDirectory)).some((entry) => entry.startsWith(prefix));
+    await (0, import_promises.rename)(claimFile, claimMarker);
   } catch {
+    await closeRuntimeReclaimGuard(guard);
     return false;
   }
+  return moveClaimedRuntimeLock(lockDirectory, claimMarker, guard);
 }
 async function reclaimObservedRuntimeLock(lockDirectory, ownerToken) {
   try {
@@ -409,25 +525,30 @@ async function reclaimObservedRuntimeLock(lockDirectory, ownerToken) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return false;
     }
   }
+  const guard = await openRuntimeReclaimGuard();
   const generationFile = runtimeOwnerGenerationFile(lockDirectory, ownerToken);
+  const claimMarker = runtimeReclaimMarker(lockDirectory, ownerToken, guard);
   try {
-    await (0, import_promises.rename)(generationFile, runtimeReclaimMarker(lockDirectory, ownerToken));
+    await (0, import_promises.rename)(generationFile, claimMarker);
   } catch {
+    await closeRuntimeReclaimGuard(guard);
     return false;
   }
-  return moveClaimedRuntimeLock(lockDirectory, ownerToken);
+  return moveClaimedRuntimeLock(lockDirectory, claimMarker, guard);
 }
 async function breakStaleRuntimeLock(lockDirectory) {
+  const generatedReclaim = await recoverRuntimeReclaim(lockDirectory);
+  if (generatedReclaim !== "none") return generatedReclaim === "reclaimed";
+  const legacyReclaim = await recoverLegacyRuntimeReclaim(lockDirectory);
+  if (legacyReclaim !== "none") return legacyReclaim === "reclaimed";
   let ownerToken;
   try {
     ownerToken = await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8");
   } catch {
-    if (!await claimLegacyRuntimeLock(lockDirectory)) return false;
-    return moveClaimedRuntimeLock(lockDirectory);
+    return claimLegacyRuntimeLock(lockDirectory);
   }
   if (!isVerifiableRuntimeLockOwner(ownerToken)) {
-    if (!await claimLegacyRuntimeLock(lockDirectory, ownerToken)) return false;
-    return moveClaimedRuntimeLock(lockDirectory, ownerToken);
+    return claimLegacyRuntimeLock(lockDirectory, ownerToken);
   }
   const released = await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken));
   if (!released) {
@@ -436,21 +557,17 @@ async function breakStaleRuntimeLock(lockDirectory) {
       lastHeartbeat = (await (0, import_promises.stat)(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
     } catch (error) {
       if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return false;
-      if (await hasRuntimeReclaimMarker(lockDirectory, ownerToken)) return false;
       if (await exists(runtimeOwnerGenerationFile(lockDirectory, ownerToken))) {
         return reclaimObservedRuntimeLock(lockDirectory, ownerToken);
       }
-      if (!await claimLegacyRuntimeLock(lockDirectory, ownerToken)) return false;
-      return moveClaimedRuntimeLock(lockDirectory, ownerToken);
+      return claimLegacyRuntimeLock(lockDirectory, ownerToken);
     }
     if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
   }
   if (await exists(runtimeOwnerGenerationFile(lockDirectory, ownerToken))) {
     return reclaimObservedRuntimeLock(lockDirectory, ownerToken);
   }
-  if (await hasRuntimeReclaimMarker(lockDirectory, ownerToken)) return false;
-  if (!await claimLegacyRuntimeLock(lockDirectory, ownerToken)) return false;
-  return moveClaimedRuntimeLock(lockDirectory, ownerToken);
+  return claimLegacyRuntimeLock(lockDirectory, ownerToken);
 }
 async function prepareRuntimeLock(lockDirectory) {
   const ownerToken = (0, import_node_crypto.randomUUID)();
@@ -602,5 +719,7 @@ class TypeScriptRuntimeAcquirer {
   TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError,
   reclaimObservedRuntimeLock,
+  recoverLegacyRuntimeReclaim,
+  recoverRuntimeReclaim,
   runtimePlatformPackage
 });

@@ -7,6 +7,8 @@ import path from 'node:path';
 import test from 'node:test';
 import {
   reclaimObservedRuntimeLock,
+  recoverLegacyRuntimeReclaim,
+  recoverRuntimeReclaim,
   runtimePlatformPackage,
   SemanticRuntimeError,
   TypeScriptRuntimeAcquirer,
@@ -18,6 +20,7 @@ const pluginRoot = process.cwd();
 const runtimeManifestDirectory = path.join(pluginRoot, 'runtime');
 const fixtureRuntimeDirectory = path.join(pluginRoot, 'test', 'fixtures', 'runtime');
 const fixtureAcquirerScript = path.join(fixtureRuntimeDirectory, 'acquire-runtime.mjs');
+const fixtureCrashReclaimScript = path.join(fixtureRuntimeDirectory, 'crash-after-reclaim.mjs');
 let fixtureManifestDirectory = '';
 
 function acquireRuntimeInSeparateProcess(
@@ -40,6 +43,63 @@ function acquireRuntimeInSeparateProcess(
       } else {
         reject(new Error(`fixture runtime acquirer exited ${exitCode}: ${standardError}`));
       }
+    });
+  });
+}
+
+function crashAfterRuntimeReclaimClaim(
+  mode: 'generated' | 'legacy',
+  lockDirectory: string,
+  ownerToken?: string,
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const childArguments = [fixtureCrashReclaimScript, mode, lockDirectory];
+    if (ownerToken !== undefined) childArguments.push(ownerToken);
+    const childProcess = spawn(process.execPath, childArguments, { stdio: ['ignore', 'ignore', 'pipe'] });
+    let standardError = '';
+    childProcess.stderr.on('data', (data: Buffer) => {
+      standardError += data.toString();
+    });
+    childProcess.once('error', reject);
+    childProcess.once('exit', (exitCode) => {
+      if (exitCode === 0) {
+        resolve();
+      } else {
+        reject(new Error(`crash reclaim fixture exited ${exitCode}: ${standardError}`));
+      }
+    });
+  });
+}
+
+function holdAfterRuntimeReclaimClaim(
+  mode: 'generated' | 'legacy',
+  lockDirectory: string,
+  ownerToken?: string,
+): Promise<() => Promise<void>> {
+  return new Promise((resolve, reject) => {
+    const childProcess = spawn(
+      process.execPath,
+      [fixtureCrashReclaimScript, mode, lockDirectory, ownerToken ?? '', 'hold'],
+      { stdio: ['ignore', 'pipe', 'pipe'] },
+    );
+    let standardError = '';
+    let ready = false;
+    childProcess.stderr.on('data', (data: Buffer) => {
+      standardError += data.toString();
+    });
+    childProcess.stdout.on('data', (data: Buffer) => {
+      if (ready || !data.toString().includes('claimed')) return;
+      ready = true;
+      resolve(async () => {
+        if (childProcess.exitCode !== null) return;
+        const exited = new Promise<void>((exitResolve) => childProcess.once('exit', () => exitResolve()));
+        childProcess.kill();
+        await exited;
+      });
+    });
+    childProcess.once('error', reject);
+    childProcess.once('exit', (exitCode) => {
+      if (!ready) reject(new Error(`live reclaim fixture exited ${exitCode}: ${standardError}`));
     });
   });
 }
@@ -392,6 +452,92 @@ test('recovers a runtime lock with an owner but no heartbeat after a crash', asy
   try {
     await mkdir(lockDirectory, { recursive: true });
     await writeFile(path.join(lockDirectory, 'owner'), '123e4567-e89b-12d3-a456-426614174000', 'utf8');
+    await createAcquirer(stateDirectory, installer).acquire();
+    assert.equal(installer.calls, 1);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps a live generated reclaim claim and recovers it after exact process death', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+  const ownerToken = '123e4567-e89b-12d3-a456-426614174000';
+  const installer = new FixtureInstaller();
+  let stopReclaimer: (() => Promise<void>) | undefined;
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    await writeFile(path.join(lockDirectory, 'owner'), ownerToken, 'utf8');
+    await writeFile(path.join(lockDirectory, `generation-${ownerToken}`), ownerToken, 'utf8');
+    const heartbeatFile = path.join(lockDirectory, `owner-${ownerToken}`);
+    await writeFile(heartbeatFile, ownerToken, 'utf8');
+    await utimes(heartbeatFile, new Date(0), new Date(0));
+
+    stopReclaimer = await holdAfterRuntimeReclaimClaim('generated', lockDirectory, ownerToken);
+    assert.equal(await recoverRuntimeReclaim(lockDirectory), 'active');
+    assert.equal(await readFile(path.join(lockDirectory, 'owner'), 'utf8'), ownerToken);
+
+    await stopReclaimer();
+    stopReclaimer = undefined;
+    assert.equal(await recoverRuntimeReclaim(lockDirectory), 'reclaimed');
+    await createAcquirer(stateDirectory, installer).acquire();
+    assert.equal(installer.calls, 1);
+  } finally {
+    await stopReclaimer?.();
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('recovers when a generated-lock reclaimer crashes after claiming the generation', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+  const ownerToken = '123e4567-e89b-12d3-a456-426614174000';
+  const installer = new FixtureInstaller();
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    await writeFile(path.join(lockDirectory, 'owner'), ownerToken, 'utf8');
+    await writeFile(path.join(lockDirectory, `generation-${ownerToken}`), ownerToken, 'utf8');
+    const heartbeatFile = path.join(lockDirectory, `owner-${ownerToken}`);
+    await writeFile(heartbeatFile, ownerToken, 'utf8');
+    await utimes(heartbeatFile, new Date(0), new Date(0));
+    await crashAfterRuntimeReclaimClaim('generated', lockDirectory, ownerToken);
+
+    await createAcquirer(stateDirectory, installer).acquire();
+    assert.equal(installer.calls, 1);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('keeps a live legacy reclaim claim and recovers it after exact process death', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+  const installer = new FixtureInstaller();
+  let stopReclaimer: (() => Promise<void>) | undefined;
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    stopReclaimer = await holdAfterRuntimeReclaimClaim('legacy', lockDirectory);
+    assert.equal(await recoverLegacyRuntimeReclaim(lockDirectory), 'active');
+
+    await stopReclaimer();
+    stopReclaimer = undefined;
+    assert.equal(await recoverLegacyRuntimeReclaim(lockDirectory), 'reclaimed');
+    await createAcquirer(stateDirectory, installer).acquire();
+    assert.equal(installer.calls, 1);
+  } finally {
+    await stopReclaimer?.();
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('recovers when an ownerless-lock reclaimer crashes after publishing its legacy claim', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const lockDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock');
+  const installer = new FixtureInstaller();
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    await crashAfterRuntimeReclaimClaim('legacy', lockDirectory);
+
     await createAcquirer(stateDirectory, installer).acquire();
     assert.equal(installer.calls, 1);
   } finally {
