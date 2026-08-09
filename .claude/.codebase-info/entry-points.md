@@ -1,0 +1,26 @@
+# Entry points
+
+Last Updated: 2026-08-10
+
+## User and runtime entry points
+
+- Sidequest CLI: `plugins/sidequest/bin/sidequest.js`; `dashboard` starts or reuses the local server. Ticket CRUD, stories, comments, links, reminders, archive, and the publish lock are exposed through this CLI.
+- Sidequest MCP: `plugins/sidequest/.mcp.json` launches `plugins/sidequest/bin/sidequest-mcp.js`; its read and mutation tools share the store with the CLI. Tool modules are `mcp-read`, `mcp-tickets`, `mcp-lifecycle`, `mcp-collaboration`, and `mcp-routing`; `context_page` continues bounded, revision-bound projections, and dispatch accepts omitted `sharedTree` for zero-scope read-only work.
+- Sidequest hooks: `plugins/sidequest/hooks/hooks.json`; source hooks are under `plugins/sidequest/src/hooks/`. Five events: PreToolUse safety guards (oversized skill, home delete, repeated command, Windows paths, destructive git), Stop compaction suggestion, PreCompact `pin` policy, PostCompact recovery, and SessionStart registry write plus a short board note.
+- Dashboard app: `plugins/sidequest/dashboard/app/src/main.ts`; shell is `App.svelte`; API client is `app/src/lib/api.ts`.
+- Model Gateway CLI: `plugins/model-gateway/bin/model-gateway.js`; dispatches setup/login/start/stop/ensure/status/models/catalog/pin/env/doctor/remote-control commands.
+- Model Gateway hook and skills: `plugins/model-gateway/hooks/hooks.json`, `plugins/model-gateway/hooks/registry-writer.js`, and `plugins/model-gateway/skills/{model-gateway,remote-control-compatibility}/SKILL.md`. Registry writing installs `~/.claude/model-gateway/update.js`; CLI `setup`/`ensure` handle atomic proxy replacement and deferred restart.
+- Workbench MCP: `plugins/workbench/.mcp.json` launches `plugins/workbench/bin/code-intel-mcp.js`. It exposes `typescript_definition`, `typescript_references`, and `typescript_diagnostics`; every call requires an explicit project root and is served by the per-root language-server registry in `plugins/workbench/lib/code-intel/`.
+- Workbench skills: `init-workspace`, `update-toolshed`, and `workbench-doctor` under `plugins/workbench/skills/`; `bin/update-toolshed.js` and `bin/install-workspace-plugins.js` are the bundled programs, with updates handed to the stable Model Gateway updater. Its `hooks/hooks.json` registers only SessionStart freshness and billing-path checks plus a UserPromptSubmit freshness check.
+- Observability skill: `enable-project-telemetry` under `plugins/observability/skills/`; its setup provisions dashboards from opted-in projects, and `hooks/hooks.json` registers the eight lifecycle observers, the SessionStart ensure worker, and the `Agent|Task` request-body preflight.
+- Live-rules skills: `manage-rules` and `add-rule` under `plugins/live-rules/skills/`.
+- Codebase-mapper hooks: `plugins/codebase-mapper/hooks/hooks.json` registers `PreToolUse: Skill` and `Stop`, both invoking `hooks/inject-context.js`; the hook enforces that an announced map update invokes `codebase-mapper:update-codebase-map`. Map creation/update: `plugins/codebase-mapper/skills/map-codebase/SKILL.md` and `update-codebase-map/SKILL.md`.
+- Codegraph MCP: `plugins/codegraph/.mcp.json` launches `plugins/codegraph/bin/codegraph-mcp.js`, which serves seven bounded tools through `CodegraphService`: status, index, impact, path, hierarchy, modules, and context. The SessionStart hook in `plugins/codegraph/hooks/hooks.json` calls `hooks/session-start.js` for a bounded availability pointer. Package checks are in `plugins/codegraph/package.json`.
+- Playbook CLI: `plugins/playbook/bin/playbook.js` with `mine`, `salvage`, and `verify` subcommands; the `skill-retro` skill drives it and never reads a transcript directly. Its `hooks/hooks.json` registers a SessionEnd/SessionStart nudge that stays inert unless `PLAYBOOK_NUDGE` is set. Playbook also ships the `fan-out`, `pick-model`, `verify-discipline`, and `retro` skills, which are guidance with no code behind them.
+- Windows Sandbox launcher (maintainer-only, gitignored, no docs page): `sandbox/windows/Start-ToolshedSandbox.ps1`; guest entry is `sandbox/windows/bootstrap/Start-ToolshedSandboxGuest.ps1`; contract test is `sandbox/windows/Test-ToolshedSandbox.ps1`.
+
+## Maintainer entry points
+
+- Sidequest build and tests: `plugins/sidequest/package.json` scripts.
+- Release workflow: `scripts/release/README.md`, then the release CLI and `.release/` files; `scripts/release/daily-release.mjs` drives the once-a-day notification release.
+- Docs build and reference generation: `docs/package.json` and `docs/scripts/generate-reference.mjs`.

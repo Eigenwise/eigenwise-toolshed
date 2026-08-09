@@ -1,0 +1,24 @@
+# Modules and plugin catalog
+
+Last Updated: 2026-08-10
+
+## Plugins
+
+- **Sidequest** (`plugins/sidequest`): local orchestration board, typed SQLite store, MCP server, CLI, lifecycle hooks, and dashboard. Core modules are `src/lib/store.ts` (a facade over `src/lib/store/` layers), `db.ts`, `mcp.ts`, `server.ts`, `agentsync.ts`, `context-packet.ts`, `mcp-read.ts`, `mcp-shared.ts`, `mcp-process-lifecycle.ts`, `worktrees.ts`, `commit-scope.ts`, and `src/bin/`. It handles dispatch, routing, categories, executors, claims, submissions, scope enforcement, and worktree management. `context-packet.ts` projects bounded frozen briefings, `mcp-read.ts` exposes `context_page`, `mcp-shared.ts` resolves its continuation handles, and `store/submissions.ts` records reviewed submission supersession.
+- **Workbench** (`plugins/workbench`): project bootstrap, Toolshed updates, health checks, and pull-only TypeScript code intelligence. `.mcp.json` launches `bin/code-intel-mcp.js`; `lib/code-intel/` validates canonical project roots, manages one real TypeScript language server per root, and bounds definition, reference, and diagnostic results. `lib/project-settings.js` is the workspace settings writer (agent teams, compaction window, Sidequest compaction policy). `bin/update-toolshed.js` hands Model Gateway updates to the stable `~/.claude/model-gateway/update.js` launcher, installed from the newest active registry entry. It records nothing itself and resolves Observability from the install registry rather than importing it, so it works standalone.
+- **Observability** (`plugins/observability`): metadata-only lifecycle telemetry. `hooks/observability.js` observes eight lifecycle events, `lib/observability/` holds the schema, store, ingest, outbox, OTLP sender, and ensure worker, `bin/` holds the observer, statusline, setup, and reports, and `observability/sinks/` selects grafana, otlp, posthog, or none. Setup provisions dashboards from the opted-in project registry and treats dashboard mounts as container freshness. Its adapters read Model Gateway and Sidequest. Split out of Workbench; the `workbench-observer` service name and `workbench_` attribute prefix stayed, because shipped Grafana queries and existing data depend on them.
+- **Model Gateway** (`plugins/model-gateway`): local Claude Code model registry, proxy launcher, readiness/doctor state, catalog, and ChatGPT/Codex and Grok subscription routing. `hooks/registry-writer.js` writes the stable updater and breadcrumb; commands support atomic proxy rename/rollback, serving-version state, deferred restart, and ephemeral shim listener reporting.
+- **Live-rules** (`plugins/live-rules`): atomic rule storage and injection into prompts and edits.
+- **Codebase-mapper** (`plugins/codebase-mapper`): generates atomic project maps, injects the index at session start, and enforces announced map updates through declarative `PreToolUse: Skill` and `Stop` hooks.
+- **Codegraph** (`plugins/codegraph`): discovers TypeScript and JavaScript projects, extracts semantic declarations and resolved or classified relationships with the pinned TypeScript 7 sync API, stores validated snapshots in SQLite, and exposes bounded MCP queries. `src/lib/service.ts` coordinates freshness, indexing, and query readiness; `src/lib/runtime.ts` acquires an integrity-pinned runtime with generation publishing and lock ownership; `src/lib/extractors/typescript.ts` emits file-owned graph facts.
+- **Playbook** (`plugins/playbook`): working practice plus a transcript miner. Ships the `fan-out`, `pick-model`, `verify-discipline`, `retro`, and `skill-retro` skills. The miner mines recent Claude Code transcripts for repeated work and routes each finding to a durable fix. `lib/scan.js` resolves the window, `lib/stream.js` streams records into stateful detectors under `lib/detectors/`, `lib/findings.js` ranks and routes, and `lib/verify.js` replays a salvaged script against its recorded output. `bin/playbook.js` exposes `mine`, `salvage`, and `verify`.
+
+The eight published plugin packages use a manifest such as `plugins/model-gateway/.claude-plugin/plugin.json`, skill files under `skills/<name>/SKILL.md`, and `hooks/hooks.json`. Hook runtime files are committed JavaScript.
+
+## Shared support
+
+`plugins/test-support/windows-hide.js` scans plugin JavaScript for child-process calls missing `windowsHide: true`. Workbench, Observability, and Model Gateway consume it in their tests.
+
+## Dashboard modules
+
+The dashboard has a project rail, toolbar, board views, archive, ticket/settings/notification surfaces, a guided tour (`app/src/lib/components/tour/TourOverlay.svelte`, `app/src/lib/tour/steps.ts`, `app/src/lib/state/tour.svelte.ts`), and a polling state layer. It communicates with the local server through `app/src/lib/api.ts`; it does not access SQLite directly.
