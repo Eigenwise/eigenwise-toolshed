@@ -23,6 +23,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-test
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
 const { makeCliRunner } = require('./_helpers.js');
@@ -90,6 +91,29 @@ function addTicket(title?: any, extra?: any) {
     source: 'cli',
     labels: ['direct-ok'],
   }, extra || {}));
+}
+
+function addClaimedTicket(title: string, owner: string, extra?: any) {
+  const ticket = addTicket(title, extra);
+  const claim = store.claimTicket(slug, ticket.ref, owner, { direct: true, reason: 'The submission fixture requires a local direct claim.' });
+  assert.strictEqual(claim.ok, true, claim.message);
+  return ticket;
+}
+
+function createCandidateCommit(filename: string, content: string) {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', filename), content);
+  git(['add', `lib/${filename}`]);
+  git(['commit', '-m', `candidate ${filename}`]);
+  return git(['rev-parse', 'HEAD']);
+}
+
+function assertForeignSubmissionWasRefused(ticket: any, owner: string) {
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim.by, owner);
+  assert.strictEqual(stored.submission, undefined);
+  assert.strictEqual(stored.rejectedSubmissions, undefined);
 }
 
 async function callMcp(name: string, args: Record<string, unknown>) {
@@ -492,7 +516,7 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.ok(queue.tickets.some((x?: any) => x.ref === t.ref), 'the integration queue lists it');
 
   // Orchestrator reset: integration bounced, the work must be redone.
-  const cleared = store.clearSubmission(slug, t.ref, { status: 'todo' });
+  const cleared = store.clearSubmission(slug, t.ref, { by: 'worker-a', status: 'todo' });
   assert.strictEqual(cleared.ok, true);
   assert.strictEqual(cleared.cleared.commit, COMMIT);
   const after = store.getTicket(slug, t.ref);
@@ -557,21 +581,468 @@ test('update --status todo refuses on a pending submission instead of silently a
   assert.match(cliAttempt.stderr + cliAttempt.stdout, /pending submission/);
 
   // The documented escape works and unwedges the ticket.
-  const cleared = store.clearSubmission(slug, t.ref, { status: 'todo' });
+  const cleared = store.clearSubmission(slug, t.ref, { by: 'worker-a', status: 'todo' });
   assert.strictEqual(cleared.ok, true);
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
 });
 
-test('MCP submit(clear:true) rejects a pending submission end to end: submit -> reject -> redispatch -> fresh claim succeeds (SQ-1010)', async () => {
+test('review rejection preserves the candidate through a normal repair dispatch until replacement submission (SQ-1642)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'original candidate\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'original candidate']);
+  const originalCommit = git(['rev-parse', 'HEAD']);
+  const t = addTicket('high-stakes rejected candidate', { highStakes: true, category: 'submission.fixture' });
+  pin(t, originalCommit);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'original-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'original-worker', { commit: originalCommit }).ok, true);
+
+  const unauthorizedCliRejection = runCli([
+    'rework', t.ref,
+    '--by', 'review-audit',
+    '--review', 'SQ-1640 rejected: missing lifecycle coverage',
+    '--reason', 'Repair the rejected submission without dropping the candidate.',
+    '--force',
+  ]);
+  assert.strictEqual(unauthorizedCliRejection.status, 1);
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.commit, originalCommit);
+  assert.strictEqual(store.getTicket(slug, t.ref).rejectedSubmissions, undefined);
+
+  const unauthorizedRejection = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'review-audit',
+    review: 'SQ-1640 rejected: missing lifecycle coverage',
+    reason: 'Repair the rejected submission without dropping the candidate.',
+    force: true,
+  });
+  assert.strictEqual(unauthorizedRejection.reason, 'not_owner');
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.commit, originalCommit);
+  assert.strictEqual(store.getTicket(slug, t.ref).rejectedSubmissions, undefined);
+
+  const rejected = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'original-worker',
+    review: 'SQ-1640 rejected: missing lifecycle coverage',
+    reason: 'Repair the rejected submission without dropping the candidate.',
+  });
+  assert.strictEqual(rejected.ok, true, rejected.message);
+  const afterRejection = store.getTicket(slug, t.ref);
+  assert.strictEqual(afterRejection.submission, null);
+  assert.strictEqual(afterRejection.status, 'todo');
+  assert.strictEqual(afterRejection.rejectedSubmissions[0].commit, originalCommit);
+  assert.match(afterRejection.rejectedSubmissions[0].review, /SQ-1640/);
+  assert.strictEqual(afterRejection.rejectedSubmissions[0].quarantineRef, `refs/sidequest/${t.ref}-rejected`);
+  assert.strictEqual(git(['rev-parse', afterRejection.rejectedSubmissions[0].quarantineRef]), originalCommit);
+
+  const firstRepair = store.prepareDispatch(slug, t.ref, { sessionId: 'sq-1642-first-repair', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'repair-worker', {
+    token: firstRepair.token, executor: firstRepair.ticket.dispatchExecutor, sessionId: 'sq-1642-first-repair',
+  }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'duplicate-repair-worker', {
+    token: firstRepair.token, executor: firstRepair.ticket.dispatchExecutor, sessionId: 'sq-1642-first-repair',
+  }).reason, 'claimed');
+  const reused = store.submitTicket(slug, t.ref, 'repair-worker', { commit: originalCommit });
+  assert.strictEqual(reused.ok, false);
+  assert.strictEqual(reused.reason, 'rejected_submission_reused');
+  assert.strictEqual(store.getTicket(slug, t.ref).rejectedSubmissions[0].supersededAt, undefined, 'the rejected candidate cannot be reused as its own repair');
+  assert.throws(() => store.submitTicket(slug, t.ref, 'repair-worker', { commit: 'not-a-commit' }), /invalid commit/);
+  assert.strictEqual(store.getTicket(slug, t.ref).rejectedSubmissions[0].supersededAt, undefined, 'a failed repair leaves the rejected candidate intact');
+  assert.strictEqual(store.releaseTicket(slug, t.ref, 'repair-worker', { status: 'todo', reason: 'Repair submission validation failed.' }).ok, true);
+
+  const repaired = store.prepareDispatch(slug, t.ref, { sessionId: 'sq-1642-second-repair', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'stale-repair-worker', {
+    token: firstRepair.token, executor: repaired.ticket.dispatchExecutor, sessionId: 'sq-1642-second-repair',
+  }).reason, 'token');
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'replacement-worker', {
+    token: repaired.token, executor: repaired.ticket.dispatchExecutor, sessionId: 'sq-1642-second-repair',
+  }).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'replacement candidate\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'replacement candidate']);
+  const replacementCommit = git(['rev-parse', 'HEAD']);
+  pin(t, replacementCommit);
+  const replacement = store.submitTicket(slug, t.ref, 'replacement-worker', { commit: replacementCommit });
+  assert.strictEqual(replacement.ok, true, replacement.message);
+  const afterReplacement = store.getTicket(slug, t.ref);
+  assert.strictEqual(afterReplacement.submission.integratedAt, null, 'repair submission is still queued, never integrated early');
+  assert.strictEqual(afterReplacement.submission.supersedesRejectedSubmission, originalCommit);
+  assert.strictEqual(afterReplacement.rejectedSubmissions[0].supersededBy.commit, replacementCommit);
+});
+
+test('rework preserves every rejected commit and avoids quarantine ref collisions (SQ-1642)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'candidate one\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'candidate one']);
+  const candidateOne = git(['rev-parse', 'HEAD']);
+  const collisionCommit = git(['rev-parse', 'origin/main']);
+  const t = addTicket('repeated rejected candidates', { category: 'submission.fixture' });
+  pin(t, candidateOne);
+  git(['update-ref', `refs/sidequest/${t.ref}-rejected`, collisionCommit]);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'first-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'first-worker', { commit: candidateOne }).ok, true);
+  assert.strictEqual(runCli([
+    'rework', t.ref,
+    '--by', 'first-worker',
+    '--review', 'First repair review evidence.',
+    '--reason', 'Replace the first rejected candidate.',
+  ]).status, 0);
+  assert.strictEqual(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), collisionCommit, 'an existing quarantine ref remains untouched');
+  assert.strictEqual(store.getTicket(slug, t.ref).rejectedSubmissions[0].quarantineRef, `refs/sidequest/${t.ref}-rejected-2`);
+
+  const firstRepair = store.prepareDispatch(slug, t.ref, { sessionId: 'first-repeated-repair', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'second-worker', {
+    token: firstRepair.token, executor: firstRepair.ticket.dispatchExecutor, sessionId: 'first-repeated-repair',
+  }).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'candidate two\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'candidate two']);
+  const candidateTwo = git(['rev-parse', 'HEAD']);
+  pin(t, candidateTwo);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'second-worker', { commit: candidateTwo }).ok, true);
+  assert.strictEqual((await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'second-worker',
+    review: 'Second repair review evidence.',
+    reason: 'Replace the second rejected candidate.',
+  })).ok, true);
+
+  const afterSecondRejection = store.getTicket(slug, t.ref);
+  assert.strictEqual(afterSecondRejection.rejectedSubmissions[1].quarantineRef, `refs/sidequest/${t.ref}-rejected-3`);
+  const secondRepair = store.prepareDispatch(slug, t.ref, { sessionId: 'second-repeated-repair', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'third-worker', {
+    token: secondRepair.token, executor: secondRepair.ticket.dispatchExecutor, sessionId: 'second-repeated-repair',
+  }).ok, true);
+  const reused = store.submitTicket(slug, t.ref, 'third-worker', { commit: candidateOne });
+  assert.strictEqual(reused.reason, 'rejected_submission_reused');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'candidate three\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'candidate three']);
+  const candidateThree = git(['rev-parse', 'HEAD']);
+  const replayedRange = store.submitTicket(slug, t.ref, 'third-worker', {
+    commit: candidateThree,
+    range: {
+      base: candidateOne,
+      upstream: 'main',
+      upstreamCommit: candidateOne,
+      commits: [candidateOne, candidateThree],
+      changedPaths: [],
+    },
+  });
+  assert.strictEqual(replayedRange.reason, 'rejected_submission_reused', 'a new tip cannot replay a rejected commit in its admitted range');
+  assert.strictEqual(store.getTicket(slug, t.ref).rejectedSubmissions.length, 2, 'a failed third repair retains the full rejection history');
+});
+
+test('store force cannot submit over a foreign claim or replace its pending submission (SQ-1702)', () => {
+  const ticket = addClaimedTicket('store foreign forced submission', 'victim-worker');
+  const forcedSubmission = store.submitTicket(slug, ticket.ref, 'attacker-worker', { commit: COMMIT, force: true });
+  assert.strictEqual(forcedSubmission.ok, false);
+  assert.strictEqual(forcedSubmission.reason, 'not_owner');
+  assertForeignSubmissionWasRefused(ticket, 'victim-worker');
+
+  const ownerSubmission = store.submitTicket(slug, ticket.ref, 'victim-worker', { commit: COMMIT });
+  assert.strictEqual(ownerSubmission.ok, true, ownerSubmission.message);
+  const forcedReplacement = store.submitTicket(slug, ticket.ref, 'attacker-worker', { commit: 'def5678abc1234def5678abc1234def5678abc12', force: true });
+  assert.strictEqual(forcedReplacement.ok, false);
+  assert.strictEqual(forcedReplacement.reason, 'not_owner');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim, null);
+  assert.strictEqual(stored.submission.by, 'victim-worker');
+  assert.strictEqual(stored.submission.commit, COMMIT);
+
+  const ownerReplacement = store.submitTicket(slug, ticket.ref, 'victim-worker', { commit: 'def5678abc1234def5678abc1234def5678abc12', force: true });
+  assert.strictEqual(ownerReplacement.ok, true, ownerReplacement.message);
+  assert.strictEqual(ownerReplacement.ticket.submission.by, 'victim-worker');
+});
+
+test('CLI force cannot submit over a foreign claim (SQ-1702)', () => {
+  const commit = createCandidateCommit('cli-force-submit.js', 'CLI force submit candidate\n');
+  const ticket = addClaimedTicket('CLI foreign forced submission', 'victim-worker', { files: ['lib/cli-force-submit.js'], category: 'submission.fixture' });
+  pin(ticket, commit);
+  const result = runCli([
+    'submit', ticket.ref,
+    '--by', 'attacker-worker',
+    '--commit', commit,
+    '--gitref', `refs/sidequest/${ticket.ref}`,
+    '--verify', 'node --test test/submission.test.ts',
+    '--force',
+  ]);
+  assert.strictEqual(result.status, 1);
+  assert.match(result.stderr + result.stdout, /not_owner|claimed by "victim-worker"|rather than you/);
+  assertForeignSubmissionWasRefused(ticket, 'victim-worker');
+
+  const ownerSubmission = store.submitTicket(slug, ticket.ref, 'victim-worker', { commit });
+  assert.strictEqual(ownerSubmission.ok, true, ownerSubmission.message);
+  const forcedReplacement = runCli([
+    'submit', ticket.ref,
+    '--by', 'attacker-worker',
+    '--commit', commit,
+    '--gitref', `refs/sidequest/${ticket.ref}`,
+    '--verify', 'node --test test/submission.test.ts',
+    '--force',
+  ]);
+  assert.strictEqual(forcedReplacement.status, 1);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim, null);
+  assert.strictEqual(stored.submission.by, 'victim-worker');
+  assert.strictEqual(stored.rejectedSubmissions, undefined);
+});
+
+test('MCP force cannot submit over a foreign claim (SQ-1702)', async () => {
+  const commit = createCandidateCommit('mcp-force-submit.js', 'MCP force submit candidate\n');
+  const ticket = addClaimedTicket('MCP foreign forced submission', 'victim-worker', { files: ['lib/mcp-force-submit.js'], category: 'submission.fixture' });
+  pin(ticket, commit);
+  const result = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'attacker-worker',
+    commit,
+    gitRef: `refs/sidequest/${ticket.ref}`,
+    verify: 'node --test test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'A foreign force must not submit or release the victim claim.',
+    force: true,
+  });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'not_owner');
+  assertForeignSubmissionWasRefused(ticket, 'victim-worker');
+
+  const ownerSubmission = store.submitTicket(slug, ticket.ref, 'victim-worker', { commit });
+  assert.strictEqual(ownerSubmission.ok, true, ownerSubmission.message);
+  const forcedReplacement = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'attacker-worker',
+    commit,
+    gitRef: `refs/sidequest/${ticket.ref}`,
+    verify: 'node --test test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'A foreign force must not replace the victim submission.',
+    force: true,
+  });
+  assert.strictEqual(forcedReplacement.ok, false);
+  assert.strictEqual(forcedReplacement.reason, 'not_owner');
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.claim, null);
+  assert.strictEqual(stored.submission.by, 'victim-worker');
+  assert.strictEqual(stored.rejectedSubmissions, undefined);
+});
+
+test('store force cannot preserve rejection history for a foreign claim (SQ-1702)', () => {
+  const commit = createCandidateCommit('store-force-rejection.js', 'Store force rejection candidate\n');
+  const ticket = addClaimedTicket('store foreign forced rejection', 'victim-worker', { files: ['lib/store-force-rejection.js'], category: 'submission.fixture' });
+  const result = store.recordSubmissionRejection(slug, ticket.ref, {
+    by: 'attacker-worker',
+    review: 'Foreign rejection evidence must be refused.',
+    reason: 'Foreign force must not poison rejection history.',
+    commit,
+    root: PROJECT_DIR,
+    force: true,
+  });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'not_owner');
+  assertForeignSubmissionWasRefused(ticket, 'victim-worker');
+});
+
+test('CLI forced validation failure cannot preserve rejection history for a foreign claim (SQ-1702)', () => {
+  const commit = createCandidateCommit('cli-force-rejection.js', 'CLI force rejection candidate\n');
+  const ticket = addClaimedTicket('CLI foreign forced rejection', 'victim-worker', { files: ['lib/cli-force-rejection.js'], category: 'submission.fixture' });
+  const result = runCli([
+    'submit', ticket.ref,
+    '--by', 'attacker-worker',
+    '--commit', commit,
+    '--gitref', `refs/sidequest/${ticket.ref}-missing`,
+    '--verify', 'node --test test/submission.test.ts',
+    '--force',
+  ]);
+  assert.strictEqual(result.status, 1);
+  assertForeignSubmissionWasRefused(ticket, 'victim-worker');
+});
+
+test('MCP forced validation failure cannot preserve rejection history for a foreign claim (SQ-1702)', async () => {
+  const commit = createCandidateCommit('mcp-force-rejection.js', 'MCP force rejection candidate\n');
+  const ticket = addClaimedTicket('MCP foreign forced rejection', 'victim-worker', { files: ['lib/mcp-force-rejection.js'], category: 'submission.fixture' });
+  const result = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'attacker-worker',
+    commit,
+    gitRef: `refs/sidequest/${ticket.ref}-missing`,
+    verify: 'node --test test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'A foreign forced validation failure must not preserve rejection history.',
+    force: true,
+  });
+  assert.strictEqual(result.ok, false);
+  assert.strictEqual(result.reason, 'not_owner');
+  assertForeignSubmissionWasRefused(ticket, 'victim-worker');
+});
+
+test('CLI and MCP reject unauthorized or independently invalid ranges without poisoning history (SQ-1667)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'validation-parity.js'), 'candidate\n');
+  git(['add', 'lib/validation-parity.js']);
+  git(['commit', '-m', 'validation parity candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const ticket = addTicket('canonical submission validation', { files: ['lib/validation-parity.js'], category: 'submission.fixture' });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'owner-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+
+  const unauthorizedCli = runCli(['submit', ticket.ref, '--by', 'intruder-worker', '--commit', commit, '--verify', 'node --test test/submission.test.ts']);
+  assert.strictEqual(unauthorizedCli.status, 1);
+  assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions, undefined);
+  const unauthorizedMcp = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'intruder-worker',
+    commit,
+    verify: 'node --test test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'No paths admitted. Validation was expected to refuse the caller.',
+  });
+  assert.strictEqual(unauthorizedMcp.reason, 'not_owner');
+  assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions, undefined);
+
+  const invalidCli = runCli(['submit', ticket.ref, '--by', 'owner-worker', '--commit', commit, '--verify', 'unstructured prose']);
+  assert.strictEqual(invalidCli.status, 1);
+  assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions, undefined);
+  const invalidMcp = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by: 'owner-worker',
+    commit,
+    verify: 'unstructured prose',
+    worktree: PROJECT_DIR,
+    body: 'No paths admitted. Independent verify validation must prevent rejection history.',
+  });
+  assert.strictEqual(invalidMcp.reason, 'missing_git_ref');
+  assert.ok(invalidMcp.failures.some((failure: any) => failure.reason === 'invalid_verify'));
+  assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions, undefined);
+});
+
+test('pending rejection transactions recover the quarantine ref and store transition (SQ-1667)', () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'crash recovery candidate\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'crash recovery candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  const ticket = addTicket('recover a staged rejection', { category: 'submission.fixture' });
+  const stored = store.getTicket(slug, ticket.ref);
+  stored.rejectedSubmissions = [{
+    commit,
+    rejectedAt: '2026-08-09T12:00:00.000Z',
+    rejectedBy: 'recovery-worker',
+    review: 'Recovery evidence survives the interrupted transaction.',
+    reason: 'The process stopped after the store intent was committed.',
+    quarantineRef: `refs/sidequest/${ticket.ref}-rejected`,
+    validation: true,
+    rejectionKind: 'validation',
+    preservationState: 'pending',
+    source: 'mcp',
+  }];
+  persist(stored);
+  git(['update-ref', '-d', stored.rejectedSubmissions[0].quarantineRef]);
+
+  const recovered = store.reconcileSubmissionRejections(slug, ticket.ref);
+  assert.strictEqual(recovered.ok, true, recovered.message);
+  assert.strictEqual(recovered.recovered.length, 1);
+  assert.strictEqual(git(['rev-parse', stored.rejectedSubmissions[0].quarantineRef]), commit);
+  assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions[0].preservationState, 'preserved');
+});
+
+test('rejection history retrieval returns every bounded row oldest first (SQ-1667)', async () => {
+  const ticket = addTicket('retrieve complete rejection history', { category: 'submission.fixture' });
+  const stored = store.getTicket(slug, ticket.ref);
+  stored.rejectedSubmissions = Array.from({ length: 6 }, (_, index) => ({
+    commit: `${index + 1}`.repeat(40),
+    rejectedAt: `2026-08-09T12:00:0${index}.000Z`,
+    rejectedBy: 'review-audit',
+    review: `${index}:` + 'v'.repeat(990),
+    reason: `${index}:` + 'r'.repeat(3990),
+    quarantineRef: `refs/sidequest/${ticket.ref}-rejected-${index + 1}`,
+    preservationState: 'preserved',
+  }));
+  persist(stored);
+  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, ticket.ref), 'history-token', slug, PROJECT_DIR);
+  const latest = stored.rejectedSubmissions[stored.rejectedSubmissions.length - 1];
+  assert.ok(briefing.includes(`Latest rejected candidate (6/6): ${latest.commit}`));
+  assert.ok(briefing.includes(`Latest rejection reason:\n${latest.reason}`));
+  assert.ok(briefing.includes(`Latest review evidence:\n${latest.review}`));
+  const retrievalMatch = briefing.match(/context_page\((\{[^\n]+\})\)\. For every later page/);
+  assert.ok(retrievalMatch, 'briefing carries the mandatory history retrieval');
+  let argumentsValue: any = JSON.parse(retrievalMatch[1]);
+  const rows: any[] = [];
+  while (argumentsValue) {
+    const page = await callMcp('context_page', argumentsValue);
+    rows.push(...page.rows);
+    argumentsValue = page.continuation;
+  }
+  assert.deepStrictEqual(rows.map((entry: any) => entry.position), [1, 2, 3, 4, 5, 6]);
+  assert.deepStrictEqual(rows.map((entry: any) => entry.commit), stored.rejectedSubmissions.map((entry: any) => entry.commit));
+  assert.strictEqual(rows[0].reason, stored.rejectedSubmissions[0].reason);
+  assert.strictEqual(rows[5].review, stored.rejectedSubmissions[5].review);
+});
+
+test('rework leaves a pending submission intact when quarantine preservation fails (SQ-1642)', async () => {
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'fixture.js'), 'preservation failure candidate\n');
+  git(['add', 'lib/fixture.js']);
+  git(['commit', '-m', 'preservation failure candidate']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  const t = addTicket('rework preservation failure', { category: 'submission.fixture' });
+  pin(t, candidate);
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'failure-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, t.ref, 'failure-worker', { commit: candidate }).ok, true);
+  const pending = store.getTicket(slug, t.ref);
+  pending.submission.commit = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
+  persist(pending);
+
+  const rejected = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'failure-worker',
+    review: 'Preservation failure review evidence.',
+    reason: 'Keep the pending candidate when its quarantine ref cannot be created.',
+  });
+  assert.strictEqual(rejected.ok, false);
+  assert.strictEqual(rejected.reason, 'rejected_submission_preservation_failed');
+  const afterFailure = store.getTicket(slug, t.ref);
+  assert.strictEqual(afterFailure.submission.commit, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa');
+  assert.strictEqual(afterFailure.rejectedSubmissions, undefined);
+});
+
+test('MCP submit(clear:true) clears a bounced submission end to end: submit -> clear -> redispatch -> fresh claim succeeds (SQ-1010)', async () => {
   const t = addTicket('mcp submit clear end to end');
   assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-a', { commit: COMMIT }).ok, true);
   assert.strictEqual(store.pendingSubmission(store.getTicket(slug, t.ref)), true);
 
-  const rejected = await callMcp('submit', {
+  const unauthorizedCliClear = runCli(['submit', t.ref, '--by', 'orchestrator', '--clear', '--status', 'todo', '--force']);
+  assert.strictEqual(unauthorizedCliClear.status, 1);
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.commit, COMMIT);
+
+  const unauthorizedClear = await callMcp('submit', {
     project: PROJECT_DIR,
     ref: t.ref,
     by: 'orchestrator',
+    clear: true,
+    status: 'todo',
+    force: true,
+  });
+  assert.strictEqual(unauthorizedClear.reason, 'not_owner');
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.commit, COMMIT);
+
+  const rejected = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by: 'worker-a',
     clear: true,
     status: 'todo',
   });
@@ -923,7 +1394,7 @@ test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence commen
   assert.strictEqual(reclaim.status, 1);
   assert.match(reclaim.stdout, /READY_FOR_INTEGRATION/);
 
-  const cleared = runCli(['submit', t.ref, '--clear', '-s', 'todo']);
+  const cleared = runCli(['submit', t.ref, '--by', 'cli-worker', '--clear', '-s', 'todo']);
   assert.strictEqual(cleared.status, 0, cleared.stderr + cleared.stdout);
   assert.strictEqual(store.getTicket(slug, t.ref).submission, null);
 });

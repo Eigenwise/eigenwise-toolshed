@@ -733,7 +733,7 @@ function updateDoneRefusal(ticket?: any) {
 function updateReopenRefusal(ticket?: any, nextStatus?: any) {
   if (!pendingSubmission(ticket)) return null;
   const commit = String(ticket.submission.commit || '').slice(0, 12);
-  return `${ticket.ref} has a pending submission (commit ${commit}) parked READY_FOR_INTEGRATION. update cannot move it to "${nextStatus}" and leave the submission in place — the next claim would still refuse it as already-submitted. Reject it first: \`sidequest submit ${ticket.ref} --clear --status ${nextStatus}\` (MCP \`submit\` with \`clear:true, status:"${nextStatus}"\`), or integrate it through the publish flow.`;
+  return `${ticket.ref} has a pending submission (commit ${commit}) parked READY_FOR_INTEGRATION. update cannot move it to "${nextStatus}" and leave the submission in place. For a review rejection, record it with MCP \`rework\` (review and reason required), then dispatch the same ticket for repair; the old candidate stays recorded until replacement submission. Use \`sidequest submit ${ticket.ref} --clear --status ${nextStatus}\` only for an integration bounce that intentionally drops the candidate, or integrate it through the publish flow.`;
 }
 
 function sameFiles(left?: any, right?: any) {

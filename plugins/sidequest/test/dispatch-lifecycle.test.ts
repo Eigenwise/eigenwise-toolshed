@@ -912,7 +912,7 @@ test('release and submission clear retain structured rework attempts', () => {
     commit: 'abc1234def5678',
     source: 'test',
   }).ok, true);
-  assert.equal(store.clearSubmission(slug, ticket.ref, { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.clearSubmission(slug, ticket.ref, { by: 'rework-second-worker', status: 'todo', source: 'test' }).ok, true);
 
   after = store.getTicket(slug, ticket.ref);
   assert.equal(after.reworkEvents.length, 2);

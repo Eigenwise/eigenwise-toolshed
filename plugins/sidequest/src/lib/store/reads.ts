@@ -37,6 +37,9 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
   if (Array.isArray(opts.blockedBy)) blockedBy = opts.blockedBy;
   else if (opts.index) blockedBy = openBlockersFromIndex(opts.index, t);
   else blockedBy = openBlockers(slug, t);
+  const rework = Array.isArray(t.rejectedSubmissions)
+    ? t.rejectedSubmissions.filter((entry?: any) => entry)
+    : [];
   return {
     ref: t.ref,
     title: t.title,
@@ -61,6 +64,7 @@ function briefTicket(slug?: any, t?: any, opts?: any) {
     submission: pendingSubmission(t)
       ? { commit: t.submission.commit, at: t.submission.at, readiness: submissionReadiness(t.submission) }
       : null,
+    ...(rework.length ? { rework } : {}),
   };
 }
 

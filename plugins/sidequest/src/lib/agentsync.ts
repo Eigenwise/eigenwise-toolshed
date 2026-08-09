@@ -806,6 +806,52 @@ function executorSafetyBody(ticket?: any, nonce?: any, project?: any, executor?:
   ].filter(Boolean).join('\n\n');
 }
 
+function rejectedSubmissionRows(ticket?: any) {
+  const rejections = Array.isArray(ticket?.rejectedSubmissions)
+    ? ticket.rejectedSubmissions.filter((entry: any) => entry)
+    : [];
+  return rejections.map((rejected: any, index: number) => ({
+    position: index + 1,
+    commit: rejected.commit || null,
+    quarantineRef: rejected.quarantineRef || `refs/sidequest/${ticket.ref}-rejected`,
+    rejectedAt: rejected.rejectedAt || null,
+    rejectedBy: rejected.rejectedBy || null,
+    reason: boundedPacket(rejected.reason, 4096, '\n[Reason excerpt truncated.]'),
+    review: boundedPacket(rejected.review, 2048, '\n[Review evidence excerpt truncated.]'),
+    preservationState: rejected.preservationState || 'preserved',
+    ...(rejected.preservationError ? { preservationError: rejected.preservationError } : {}),
+    ...(rejected.supersededAt ? { supersededAt: rejected.supersededAt, supersededBy: rejected.supersededBy || null } : {}),
+  }));
+}
+
+function rejectedSubmissionHistoryRetrieval(ticket?: any, slug?: any) {
+  const rows = rejectedSubmissionRows(ticket);
+  return projectionRetrieval('mcp__plugin_sidequest_board__' + 'context_page', contextRetrieval({
+    tool: 'briefing',
+    project: String(slug || ticket?.project || 'unbound'),
+    kind: 'rows',
+    field: 'rejected-submissions',
+    position: 'rejected-submissions',
+    revision: contextRevision(rows),
+    reason: 'mandatory-rejection-history',
+    selector: { ref: String(ticket?.ref || '') },
+  }).arguments);
+}
+
+function rejectedSubmissionHistoryBody(ticket?: any, retrieval?: any) {
+  const rows = rejectedSubmissionRows(ticket);
+  if (!rows.length) return null;
+  const latest = rows[rows.length - 1];
+  return [
+    '## Rejected submission history',
+    `${rows.length} prior candidate${rows.length === 1 ? ' was' : 's were'} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
+    `Latest rejected candidate (${latest.position}/${rows.length}): ${latest.commit || '(unknown commit)'}`,
+    `Latest rejection reason:\n${latest.reason || '(No reason recorded.)'}`,
+    `Latest review evidence:\n${latest.review || '(No review evidence recorded.)'}`,
+    'Required before editing: fetch the complete oldest-first history with ' + projectionCall(retrieval) + '. For every later page, call context_page with the returned continuation verbatim.',
+  ].join('\n');
+}
+
 function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, uncertainty?: any, planDocument?: any, experimentLog?: any, findingCheckpoints?: any, continuation?: any) {
   return [
     '## This ticket',
@@ -891,6 +937,10 @@ function renderExecutorProjection(packet?: any) {
 }
 
 function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projectPath?: any) {
+  if (slug && ticket?.ref && rejectedSubmissionRows(ticket).some((entry: any) => entry.preservationState === 'pending')) {
+    const reconciled = store.reconcileSubmissionRejections(slug, ticket.ref);
+    if (reconciled.ok) ticket = reconciled.ticket;
+  }
   const category = ticket.category || {};
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
   const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || '').trim();
@@ -917,6 +967,8 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const continuation = ticketContinuationPacket(ticket);
   const taskAndScope = taskAndScopeBody(ticket, slug);
   const taskRetrieval = taskAndScopeRetrieval(ticket, slug);
+  const rejectionRetrieval = rejectedSubmissionHistoryRetrieval(ticket, slug || project);
+  const rejectionHistory = rejectedSubmissionHistoryBody(ticket, rejectionRetrieval);
   const snapshot = storySnapshot(ticket, slug);
   const commentsRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const ticketRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
@@ -932,9 +984,10 @@ ${marker}` : '';
     return [
     { id: 'safety', kind: 'safety', priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
     { id: 'execution-contract', kind: 'contract', priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
-    { id: 'task-and-scope', kind: 'task', priority: 300, order: 3, body: taskAndScope, retrieval: taskRetrieval },
-    { id: 'newest-comments', kind: 'evidence', priority: 200, order: 4, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
-    { id: 'handles', kind: 'handle', priority: 100, order: 5, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
+    ...(rejectionHistory ? [{ id: 'rejection-history', kind: 'evidence', priority: 450, order: 3, body: rejectionHistory, retrieval: rejectionRetrieval }] : []),
+    { id: 'task-and-scope', kind: 'task', priority: 300, order: 4, body: taskAndScope, retrieval: taskRetrieval },
+    { id: 'newest-comments', kind: 'evidence', priority: 200, order: 5, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
+    { id: 'handles', kind: 'handle', priority: 100, order: 6, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
     ];
   };
   const watermarks = {
@@ -949,6 +1002,12 @@ ${marker}` : '';
   let packet = compile();
   const contract = packet.items.find((item: any) => item.id === 'execution-contract');
   if (!contract || contract.truncated || packet.omissions.some((item: any) => item.id === 'execution-contract')) packet = compile(true);
+  if (rejectionHistory) {
+    const historyItem = packet.items.find((item: any) => item.id === 'rejection-history');
+    if (!historyItem || historyItem.truncated || packet.omissions.some((item: any) => item.id === 'rejection-history')) {
+      throw new RangeError('executor ContextProjection could not carry mandatory rejection-history retrieval');
+    }
+  }
   const rendered = renderExecutorProjection(packet);
   const result = `${rendered}${suffix}`;
   if (byteLength(result) > EXECUTOR_BRIEFING_MAX_BYTES) {
@@ -1334,6 +1393,7 @@ module.exports = {
   renderReadOnlyClaudeAgent,
   renderExecAgent,
   renderTicketBriefing,
+  rejectedSubmissionRows,
   taskAndScopeBody,
   createNativeAgent,
   cleanupNativeAgents,

@@ -112,10 +112,16 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
     Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token'].includes(name)).sort(),
     ['by', 'effort', 'executor', 'token'],
   );
+  const submit = byName.get('submit');
   assert.deepEqual(
-    Object.keys(byName.get('submit')?.inputSchema.properties ?? {}).filter((name) => ['commit', 'verify', 'worktree'].includes(name)).sort(),
+    Object.keys(submit?.inputSchema.properties ?? {}).filter((name) => ['commit', 'verify', 'worktree'].includes(name)).sort(),
     ['commit', 'verify', 'worktree'],
   );
+  assert.equal(submit?.inputSchema.properties?.force?.type, 'boolean');
+  assert.match(submit?.description ?? '', /clear needs owner; force only lets owner replace candidate/);
+  const rework = byName.get('rework');
+  assert.equal(rework?.inputSchema.properties?.force, undefined);
+  assert.match(rework?.description ?? '', /candidate owner only/);
   assert.match(byName.get('comments')?.inputSchema.properties?.full?.description as string, /Whole bodies/);
   assert.match(byName.get('release')?.inputSchema.properties?.command?.description as string, /Required for blocker\/contradiction/);
   assert.match(byName.get('release')?.inputSchema.properties?.outputTail?.description as string, /Required blocker\/contradiction/);

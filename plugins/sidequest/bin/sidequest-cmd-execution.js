@@ -13,7 +13,7 @@ const worktrees = require("../lib/worktrees");
 const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
-const { missingReleaseFragment, missingReleaseFragmentMessage } = require("../lib/mcp-lifecycle");
+const { validateSubmissionCandidate } = require("../lib/mcp-lifecycle");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
 const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment } = require("./sidequest-cmd-shared");
 function reportClaimFailure(action, idOrRef, res, meta) {
@@ -433,13 +433,38 @@ function verifyEmbedsWorktreeRoot(verify, worktreeRoot) {
   }
   return false;
 }
+async function cmdRework(opts, positional) {
+  const idOrRef = positional[0];
+  if (!idOrRef) fail('rework: pass a ticket ref, e.g. sidequest rework SQ-3 --by reviewer --review SQ-4 --reason "what needs repair"');
+  const { slug, meta } = await resolveProject(opts);
+  const by = workerId(opts);
+  const review = String(opts.review || "").trim();
+  const reason = String(opts.reason || "").trim();
+  const res = store.reworkSubmission(slug, idOrRef, {
+    by,
+    review,
+    reason,
+    source: opts.source || "cli"
+  });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + "\n");
+    if (!res.ok) process.exitCode = 1;
+    return;
+  }
+  if (res.ok) console.log(`✓ ${res.ticket.ref} rejected for rework; dispatch it for repair  [${res.ticket.status}]  — ${meta.name}`);
+  else reportClaimFailure("rework submission", idOrRef, res, meta);
+}
 async function cmdSubmit(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>");
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   if (opts.clear) {
-    const res2 = store.clearSubmission(slug, idOrRef, { status: opts.status, source: opts.source || "cli" });
+    const res2 = store.clearSubmission(slug, idOrRef, {
+      by,
+      status: opts.status,
+      source: opts.source || "cli"
+    });
     if (opts.json) {
       process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res2), null, 2) + "\n");
       if (!res2.ok) process.exitCode = 1;
@@ -456,43 +481,34 @@ async function cmdSubmit(opts, positional) {
     fail(`submit: refused ${ticket.ref}; --verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
   }
   const gitRef = opts.gitref || opts["git-ref"] || `refs/sidequest/${ticket.ref}`;
-  const target = store.integrationTarget(slug);
-  const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
-  const range = commitScope.submissionRange(process.cwd(), {
+  const validation = validateSubmissionCandidate({
+    slug,
+    ticket,
+    by,
+    root: process.cwd(),
     commit: opts.commit,
     gitRef,
-    upstream: target.upstream,
-    integrationBranch: target.branch,
+    verify: String(opts.verify || "").trim(),
     base: opts.base,
-    allowedBases,
-    baseCandidates: opts.base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true })
+    force: !!opts.force,
+    source: opts.source || "cli"
   });
-  if (!range.ok) {
-    fail(`submit: refused ${ticket.ref}; ${range.reason}${range.message ? `: ${range.message}` : ""}.`);
-  }
-  const duplicate = store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).find((entry) => {
-    const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit];
-    return commits.some((commit) => range.commits.includes(commit));
-  });
-  if (duplicate) fail(`submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`);
-  const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
-  const scopedRange = commitScope.validateCommitRangeScope(process.cwd(), range.commits, scope);
-  if (!scopedRange.ok) {
-    if (scopedRange.reason === "missing_scope") fail(`submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`);
-    if (scopedRange.reason === "outside_scope") {
-      fail(`submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${scopeRemedy(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`);
+  if (!validation.ok) {
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, validation), null, 2) + "\n");
+      process.exitCode = 1;
+      return;
     }
-    fail(`submit: could not inspect ${opts.commit} from this worktree: ${scopedRange.message || scopedRange.reason}`);
+    fail(validation.message || claimRefusalMessage(validation.reason, idOrRef, validation.ticket || validation.claim, meta.path));
   }
-  const missingFragment = missingReleaseFragment(process.cwd(), ticket.ref, scopedRange.paths);
-  if (missingFragment) fail(missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins));
+  const { target, range, scope } = validation;
   const unscopedPaths = commitScope.unscopedWorkingPaths(process.cwd(), scope);
   let res;
   try {
     res = store.submitTicket(slug, idOrRef, by, {
       commit: range.commit,
       gitRef,
-      range: Object.assign({}, range, { integrationMode: target.mode }),
+      range: Object.assign({}, range, { integrationMode: target.mode, integrationBranch: target.branch }),
       verify: opts.verify,
       worktree: opts.worktree,
       unscopedPaths,
@@ -698,4 +714,4 @@ async function cmdPublish(opts, positional) {
   }
   fail("publish: expected `sidequest publish lock|unlock|status|queue`");
 }
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdSubmit, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdIntegrate, cmdPublish };

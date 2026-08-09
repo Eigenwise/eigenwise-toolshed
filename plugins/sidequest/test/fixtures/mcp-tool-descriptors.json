@@ -966,8 +966,38 @@
     }
   },
   {
+    "name": "rework",
+    "description": "Reject candidate for repair; candidate owner only.",
+    "inputSchema": {
+      "type": "object",
+      "properties": {
+        "ref": {
+          "type": "string"
+        },
+        "project": {
+          "type": "string"
+        },
+        "by": {
+          "type": "string"
+        },
+        "review": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "ref",
+        "by",
+        "review",
+        "reason"
+      ]
+    }
+  },
+  {
     "name": "submit",
-    "description": "Submit verified work.",
+    "description": "Submit verified work; clear needs owner; force only lets owner replace candidate.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1011,6 +1041,9 @@
             "doing",
             "done"
           ]
+        },
+        "force": {
+          "type": "boolean"
         }
       },
       "required": [

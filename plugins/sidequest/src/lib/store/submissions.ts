@@ -3,7 +3,7 @@
 const { resolveSuite } = require('../suite-resolver.js');
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -13,6 +13,102 @@ const DEFAULT_CHECKPOINT_TTL_MIN = 60;
 const MAX_CHECKPOINT_TTL_MIN = 24 * 60;
 const CHECKPOINT_VERIFY_MAX = 4000;
 const CHECKPOINT_VERIFY_EXCERPT_MAX = 500;
+const REJECTION_REVIEW_MAX = 1000;
+const REJECTION_REASON_MAX = 4000;
+
+function rejectionHistory(ticket?: any) {
+  return Array.isArray(ticket?.rejectedSubmissions)
+    ? ticket.rejectedSubmissions.filter((entry: any) => entry)
+    : [];
+}
+
+function putTicketTransaction(slug: any, ticket: any) {
+  return transaction(() => putTicket(slug, ticket));
+}
+
+function rejectionQuarantineRef(ticket: any, rejectionNumber: number) {
+  return `refs/sidequest/${ticket.ref}-rejected${rejectionNumber === 1 ? '' : `-${rejectionNumber}`}`;
+}
+
+function finalizePendingRejection(ticket: any, rejected: any) {
+  const source = rejected.source || 'mcp';
+  rejected.preservationState = 'preserved';
+  delete rejected.preservationError;
+  if (rejected.rejectionKind === 'rework') {
+    const previousStatus = rejected.previousStatus || ticket.status;
+    if (ticket.submission && String(ticket.submission.commit || '').toLowerCase() === rejected.commit) {
+      ticket.submission = null;
+      ticket.status = 'todo';
+      ticket.statusTransition = { from: previousStatus, to: ticket.status, at: rejected.rejectedAt };
+    }
+    appendReworkEvent(ticket, 'submission_rejected', {
+      at: rejected.rejectedAt,
+      by: rejected.rejectedBy,
+      source,
+      fromStatus: previousStatus,
+      toStatus: ticket.status,
+    });
+  } else {
+    appendReworkEvent(ticket, 'submission_validation_rejected', {
+      at: rejected.rejectedAt,
+      by: rejected.rejectedBy,
+      source,
+    });
+  }
+  ticket.lastEventType = 'status';
+  ticket.lastEventSource = source;
+  ticket.updatedAt = rejected.rejectedAt;
+}
+
+function preservePendingRejection(slug: any, ticket: any, rejected: any, root: string) {
+  const history = rejectionHistory(ticket);
+  const firstRejectionNumber = Math.max(1, history.indexOf(rejected) + 1);
+  let preserved: any = { ok: false, reason: 'quarantine_ref_exhausted' };
+  for (let attempt = 0; attempt < 100; attempt += 1) {
+    rejected.quarantineRef = rejectionQuarantineRef(ticket, firstRejectionNumber + attempt);
+    putTicketTransaction(slug, ticket);
+    preserved = commitScope.preserveCommitRef(root, rejected.commit, rejected.quarantineRef, { noOverwrite: true });
+    if (preserved.ok || preserved.reason !== 'git_ref_collision') break;
+  }
+  if (!preserved.ok) {
+    rejected.preservationError = {
+      reason: preserved.reason,
+      ...(preserved.message ? { message: preserved.message } : {}),
+    };
+    putTicketTransaction(slug, ticket);
+    return {
+      ok: false,
+      reason: 'rejected_submission_preservation_failed',
+      ticket,
+      message: `Could not preserve ${rejected.commit} at ${rejected.quarantineRef}: ${preserved.reason}${preserved.message ? `: ${preserved.message}` : ''}`,
+    };
+  }
+  rejected.commit = preserved.commit;
+  finalizePendingRejection(ticket, rejected);
+  putTicketTransaction(slug, ticket);
+  return { ok: true, ticket, rejected };
+}
+
+function reconcileSubmissionRejections(slug?: any, idOrRef?: any) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    const pending = rejectionHistory(ticket).filter((entry: any) => entry.preservationState === 'pending');
+    if (!pending.length) return { ok: true, ticket, recovered: [] };
+    const root = String(readMeta(slug)?.path || '').trim();
+    if (!root) return { ok: false, reason: 'missing_project_path', ticket };
+    const recovered: any[] = [];
+    for (const rejected of pending) {
+      const result = preservePendingRejection(slug, ticket, rejected, root);
+      if (!result.ok) return Object.assign(result, { recovered });
+      recovered.push(result.rejected);
+    }
+    queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
+    return { ok: true, ticket, recovered };
+  });
+}
 
 function checkpointTtlMs(ttlMinutes?: any) {
   const minutes = ttlMinutes == null ? DEFAULT_CHECKPOINT_TTL_MIN : Number(ttlMinutes);
@@ -609,9 +705,8 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
 }
 
 // Record verified, committed work as ready for integration and release the
-// claim in the same locked step. Requires the caller to HOLD the claim (the
-// submit is the terminal act of a claimed run) unless opts.force — mirroring
-// releaseTicket's ownership rules. Status deliberately stays "doing".
+// claim in the same locked step. A held claim establishes ownership. force can
+// only let the same submitted candidate owner replace their pending candidate.
 function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -636,17 +731,29 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
-    if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
-    const held = t.claim;
-    if (held && held.by && held.by !== by && !claimReclaimable(t) && !opts.force) {
-      return { ok: false, reason: 'not_owner', ticket: t, claim: held };
+    const ownershipFailure = submissionOwnershipFailure(t, by, { allowSubmittedOwner: opts.force === true });
+    if (ownershipFailure) return ownershipFailure;
+    const pendingRejections = rejectionHistory(t).filter((entry: any) => entry.preservationState === 'pending');
+    if (pendingRejections.length) {
+      const rejectionRoot = String(readMeta(slug)?.path || '').trim();
+      if (!rejectionRoot) return { ok: false, reason: 'missing_project_path', ticket: t };
+      for (const pendingRejection of pendingRejections) {
+        const recovered = preservePendingRejection(slug, t, pendingRejection, rejectionRoot);
+        if (!recovered.ok) return recovered;
+      }
     }
-    if ((!held || !held.by) && !opts.force) {
+    const rejectedSubmissions = rejectionHistory(t);
+    const rejectedSubmission = rejectedSubmissions.find((entry: any) => entry && !entry.supersededAt) || null;
+    const submittedCommits = range?.commits?.length ? range.commits : [commit];
+    const rejectedCommit = rejectedSubmissions
+      .map((entry: any) => String(entry?.commit || '').trim().toLowerCase())
+      .find((candidate: string) => candidate && submittedCommits.some((submittedCommit: string) => candidate === submittedCommit || candidate.startsWith(submittedCommit) || submittedCommit.startsWith(candidate)));
+    if (rejectedCommit) {
       return {
         ok: false,
-        reason: 'not_claimed',
+        reason: 'rejected_submission_reused',
         ticket: t,
-        ...(t.claimRelease ? { claimRelease: t.claimRelease, message: autoReleasedClaimMessage(t.ref, t.claimRelease) } : {}),
+        message: `submit: refused ${t.ref}; admitted range contains previously rejected commit ${rejectedCommit}. Create and verify a range without any rejected commit before submitting.`,
       };
     }
     const completion = completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
@@ -713,10 +820,15 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       worktree,
       admittedScope,
       unscopedPaths: gatedPaths,
+      ...(rejectedSubmission ? { supersedesRejectedSubmission: rejectedSubmission.commit } : {}),
       ...(inheritedPaths.length ? { inheritedPaths } : {}),
       ...(unsubmittedWorkingPaths.length ? { unsubmittedWorkingPaths } : {}),
       integratedAt: null,
     }, range || {});
+    if (rejectedSubmission) {
+      rejectedSubmission.supersededAt = submittedAt;
+      rejectedSubmission.supersededBy = { commit, gitRef: t.submission.gitRef };
+    }
     const dispatch = dispatchState(t);
     const previousStatus = t.status;
     t.claim = null;
@@ -922,35 +1034,180 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
-// Orchestrator reset: drop a pending submission so the ticket is claimable
-// again (integration bounced and the work must be redone rather than merged).
-// opts.status optionally moves it (usually back to todo) at the same time.
-function clearSubmission(slug?: any, idOrRef?: any, opts?: any) {
+function submissionOwnershipFailure(ticket: any, by: string, opts?: any) {
   opts = opts || {};
+  if (ticket.status === 'done') return { ok: false, reason: 'done', ticket };
+  const held = ticket.claim;
+  const claimOwner = String(held?.by || '').trim();
+  const submissionOwner = String(ticket.submission?.by || '').trim();
+  const owner = claimOwner || submissionOwner;
+  if (!owner) {
+    return {
+      ok: false,
+      reason: 'not_claimed',
+      ticket,
+      ...(ticket.claimRelease ? { claimRelease: ticket.claimRelease, message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease) } : {}),
+    };
+  }
+  if (owner !== by) return { ok: false, reason: 'not_owner', ticket, ...(held ? { claim: held } : {}) };
+  if (!claimOwner && opts.allowSubmittedOwner !== true) {
+    return {
+      ok: false,
+      reason: 'not_claimed',
+      ticket,
+      ...(ticket.claimRelease ? { claimRelease: ticket.claimRelease, message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease) } : {}),
+    };
+  }
+  return null;
+}
+
+function recordSubmissionRejection(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
+  const by = String(opts.by || '').trim();
+  const review = String(opts.review || '').trim();
+  const reason = String(opts.reason || '').trim();
+  const commit = String(opts.commit || '').trim().toLowerCase();
+  const root = String(opts.root || '').trim();
+  if (!by || !review || !reason || !SUBMISSION_COMMIT_RE.test(commit) || !root) {
+    throw new Error('rejected submission requires by, review, reason, commit, and worktree root');
+  }
+  if (review.length > REJECTION_REVIEW_MAX || reason.length > REJECTION_REASON_MAX) {
+    throw new Error('rejected submission review evidence or reason exceeds its maximum length');
+  }
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
-    const t = getTicket(slug, found.id);
-    if (!t) return { ok: false, reason: 'not_found' };
-    if (!t.submission) return { ok: false, reason: 'no_submission', ticket: t };
-    const cleared = t.submission;
-    const previousStatus = t.status;
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    if (ticket.status === 'done') return { ok: false, reason: 'done', ticket };
+    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+    if (ownershipFailure) return ownershipFailure;
+    const history = rejectionHistory(ticket);
+    const existing = history.find((entry: any) => entry.validation === true && entry.commit === commit && entry.reason === reason && entry.review === review);
+    if (existing) {
+      if (existing.preservationState !== 'pending') return { ok: true, ticket, rejected: existing };
+      return preservePendingRejection(slug, ticket, existing, root);
+    }
+    const rejected = {
+      commit,
+      rejectedAt: new Date().toISOString(),
+      rejectedBy: by,
+      review,
+      reason,
+      quarantineRef: rejectionQuarantineRef(ticket, history.length + 1),
+      validation: true,
+      rejectionKind: 'validation',
+      preservationState: 'pending',
+      source: opts.source || 'mcp',
+    };
+    if (!Array.isArray(ticket.rejectedSubmissions)) ticket.rejectedSubmissions = [];
+    ticket.rejectedSubmissions.push(rejected);
+    ticket.updatedAt = rejected.rejectedAt;
+    putTicketTransaction(slug, ticket);
+    const preserved = preservePendingRejection(slug, ticket, rejected, root);
+    if (!preserved.ok) {
+      ticket.rejectedSubmissions = ticket.rejectedSubmissions.filter((entry: any) => entry !== rejected);
+      if (!ticket.rejectedSubmissions.length) delete ticket.rejectedSubmissions;
+      try { putTicketTransaction(slug, ticket); } catch (_: any) { return preserved; }
+      return Object.assign({}, preserved, { ticket });
+    }
+    queueEventNotification(slug, ticket, 'status', rejected.source);
+    return preserved;
+  });
+}
+
+function reworkSubmission(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
+  const by = String(opts.by || '').trim();
+  const review = String(opts.review || '').trim();
+  const reason = String(opts.reason || '').trim();
+  if (!by) throw new Error('rework requires the reviewer or orchestrator identity in by');
+  if (!review) throw new Error('rework requires review evidence');
+  if (!reason) throw new Error('rework requires the review rejection reason');
+  if (review.length > REJECTION_REVIEW_MAX || reason.length > REJECTION_REASON_MAX) throw new Error('rework review evidence or reason exceeds its maximum length');
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    if (!pendingSubmission(ticket)) {
+      return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no pending submission to reject for rework.` };
+    }
+    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+    if (ownershipFailure) return ownershipFailure;
+    const history = rejectionHistory(ticket);
+    const pendingRejection = history.find((entry: any) => entry.rejectionKind === 'rework'
+      && entry.preservationState === 'pending'
+      && entry.commit === String(ticket.submission.commit || '').toLowerCase());
+    const source = opts.source || 'cli';
+    const root = String(readMeta(slug)?.path || '').trim();
+    if (pendingRejection) {
+      if (!root) return { ok: false, reason: 'rejected_submission_preservation_failed', ticket, message: `rework: refused ${ticket.ref}; missing project path` };
+      const recovered = preservePendingRejection(slug, ticket, pendingRejection, root);
+      if (recovered.ok) queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
+      return recovered;
+    }
+    const rejected = Object.assign({}, ticket.submission, {
+      rejectedAt: new Date().toISOString(),
+      rejectedBy: by,
+      review,
+      reason,
+      quarantineRef: rejectionQuarantineRef(ticket, history.length + 1),
+      rejectionKind: 'rework',
+      preservationState: 'pending',
+      previousStatus: ticket.status,
+      source,
+    });
+    if (!Array.isArray(ticket.rejectedSubmissions)) ticket.rejectedSubmissions = [];
+    ticket.rejectedSubmissions.push(rejected);
+    ticket.updatedAt = rejected.rejectedAt;
+    putTicketTransaction(slug, ticket);
+    const preserved = root
+      ? preservePendingRejection(slug, ticket, rejected, root)
+      : { ok: false, reason: 'rejected_submission_preservation_failed', ticket, message: `rework: refused ${ticket.ref}; missing project path` };
+    if (!preserved.ok) {
+      ticket.rejectedSubmissions = ticket.rejectedSubmissions.filter((entry: any) => entry !== rejected);
+      if (!ticket.rejectedSubmissions.length) delete ticket.rejectedSubmissions;
+      try { putTicketTransaction(slug, ticket); } catch (_: any) { return preserved; }
+      return Object.assign({}, preserved, {
+        ticket,
+        message: `rework: refused ${ticket.ref}; ${preserved.message || preserved.reason}`,
+      });
+    }
+    queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
+    return preserved;
+  });
+}
+
+function clearSubmission(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
+  const by = String(opts.by || '').trim();
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    if (!ticket.submission) return { ok: false, reason: 'no_submission', ticket };
+    const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
+    if (ownershipFailure) return ownershipFailure;
+    const cleared = ticket.submission;
+    const previousStatus = ticket.status;
     const now = new Date().toISOString();
-    t.submission = null;
-    if (opts.status) t.status = coerceStatus(opts.status, t.status);
-    if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
-    appendReworkEvent(t, 'submission_cleared', {
+    ticket.submission = null;
+    if (opts.status) ticket.status = coerceStatus(opts.status, ticket.status);
+    if (ticket.status !== previousStatus) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: now };
+    appendReworkEvent(ticket, 'submission_cleared', {
       at: now,
       source: opts.source || 'cli',
       fromStatus: previousStatus,
-      toStatus: t.status,
+      toStatus: ticket.status,
     });
-    t.lastEventType = 'status';
-    t.lastEventSource = opts.source ? String(opts.source) : 'cli';
-    t.updatedAt = now;
-    putTicket(slug, t);
-    queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
-    return { ok: true, ticket: t, cleared };
+    ticket.lastEventType = 'status';
+    ticket.lastEventSource = opts.source ? String(opts.source) : 'cli';
+    ticket.updatedAt = now;
+    putTicket(slug, ticket);
+    queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
+    return { ok: true, ticket, cleared };
   });
 }
 
@@ -989,7 +1246,7 @@ function submissionsPayload(slug?: any) {
 }
 
 
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, verifyIntegration, validateIntegrationSubmission, integrateSubmission, closeSubmissionAsSuperseded, submitTicket, clearSubmission, submissionBaseCandidates, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, verifyIntegration, validateIntegrationSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
 }
 
 module.exports = { createSubmissions };

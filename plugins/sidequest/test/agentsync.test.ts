@@ -70,6 +70,37 @@ function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
+test('repair briefings require bounded retrieval of the complete rejection history (SQ-1667)', () => {
+  const ticket = {
+    ref: 'SQ-1642',
+    title: 'Repair rejected candidate',
+    model: 'sonnet',
+    effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high',
+    category: { id: 'debugging', route: { model: 'sonnet', effort: 'high' } },
+    rejectedSubmissions: [{
+      commit: 'abcdef1234567',
+      quarantineRef: 'refs/sidequest/SQ-1642-rejected',
+      reason: 'The repair path must preserve the original candidate.',
+      review: 'SQ-1646: the audit reproduced the rejected-commit bypass.',
+      supersededAt: '2026-08-09T00:00:00.000Z',
+    }, {
+      commit: 'fedcba7654321',
+      quarantineRef: 'refs/sidequest/SQ-1642-rejected-2',
+      reason: 'The replacement must preserve every rejected candidate.',
+      review: 'SQ-1659: the audit found the repeated-rework gap.',
+    }],
+  };
+  const briefing = agentsync.renderTicketBriefing(ticket, 'repair-briefing-token');
+  assert.match(briefing, /## Rejected submission history/);
+  assert.match(briefing, /Required before editing: fetch the complete oldest-first history with mcp__plugin_sidequest_board__context_page/);
+  assert.doesNotMatch(briefing, /SQ-1646: the audit reproduced/);
+  assert.deepStrictEqual(agentsync.rejectedSubmissionRows(ticket).map((entry: any) => entry.commit), [
+    'abcdef1234567',
+    'fedcba7654321',
+  ]);
+});
+
 test('read-only executor briefings keep temporary files outside the repository', () => {
   const briefing = agentsync.renderReadOnlyClaudeAgent('medium');
   assert.match(briefing, /Keep temporary files outside the repository working tree/);

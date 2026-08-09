@@ -367,7 +367,7 @@ export function headCommit(cwd: string): string | null {
   return head.ok ? head.value : null;
 }
 
-export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown) {
+export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown, options?: { noOverwrite?: boolean }) {
   const ref = String(gitRef || '').trim();
   if (!ref) return { ok: false as const, reason: 'missing_git_ref' };
   try {
@@ -376,6 +376,17 @@ export function preserveCommitRef(cwd: string, commit: unknown, gitRef: unknown)
     if (!tip.ok) return { ok: false as const, reason: 'missing_commit', message: tip.message };
     const validRef = gitResult(root, ['check-ref-format', ref]);
     if (!validRef.ok) return { ok: false as const, reason: 'invalid_git_ref', message: validRef.message };
+    if (options?.noOverwrite) {
+      const existing = resolvedCommit(root, ref);
+      if (existing.ok) {
+        if (existing.value === tip.value) return { ok: true as const, commit: tip.value, gitRef: ref };
+        return { ok: false as const, reason: 'git_ref_collision', message: `${ref} already points to ${existing.value}` };
+      }
+      const emptyRef = '0000000000000000000000000000000000000000';
+      const created = gitResult(root, ['update-ref', ref, tip.value, emptyRef]);
+      if (!created.ok) return { ok: false as const, reason: 'git_ref_collision', message: created.message };
+      return { ok: true as const, commit: tip.value, gitRef: ref };
+    }
     git(root, ['update-ref', ref, tip.value]);
     return { ok: true as const, commit: tip.value, gitRef: ref };
   } catch (error) {

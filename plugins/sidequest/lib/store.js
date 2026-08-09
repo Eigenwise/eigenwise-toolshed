@@ -1032,7 +1032,11 @@ const {
   validateIntegrationSubmission,
   integrateSubmission,
   closeSubmissionAsSuperseded,
+  submissionOwnershipFailure,
   submitTicket,
+  recordSubmissionRejection,
+  reconcileSubmissionRejections,
+  reworkSubmission,
   clearSubmission,
   submissionBaseCandidates,
   submissionsPayload
@@ -1080,6 +1084,7 @@ const {
   spawnSync,
   stampDispatchEvent,
   ticketLockPath,
+  transaction,
   unregisterClaim,
   verifyCommandErrors,
   verifyCommandError,
@@ -1566,7 +1571,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
             reason: "pending_submission",
             ticket: t,
             submission: t.submission,
-            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. CLI: pass --force to reject the submission and reopen in one step, or run \`sidequest submit ${t.ref} --clear --status ${reopenStatus}\` first. MCP: \`submit\` with \`clear:true, status:"${reopenStatus}"\` (release has no force param over MCP).`
+            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
           };
         }
         reopenedSubmission = t.submission;
@@ -2262,7 +2267,11 @@ module.exports = {
   checkpointTtlMs,
   DEFAULT_CHECKPOINT_TTL_MIN,
   MAX_CHECKPOINT_TTL_MIN,
+  submissionOwnershipFailure,
   submitTicket,
+  recordSubmissionRejection,
+  reconcileSubmissionRejections,
+  reworkSubmission,
   clearSubmission,
   pendingSubmission,
   submissionReadiness,

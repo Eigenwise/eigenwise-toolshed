@@ -84,13 +84,13 @@ function submitFixture(slug: string, ticket: any, fixture: any, verify: string |
     integrationBranch: target.branch,
   });
   assert.equal(range.ok, true, JSON.stringify(range));
+  assert.equal(store.claimTicket(slug, ticket.ref, 'fixture-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
   assert.equal(store.submitTicket(slug, ticket.ref, 'fixture-worker', {
     commit: fixture.submitted,
     gitRef,
     range,
     worktree: fixture.executor,
     verify,
-    force: true,
   }).ok, true);
 }
 

@@ -42,7 +42,7 @@ const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // The listing is loaded into every MCP session. This rounded cap retains 1.5KB
 // for schema growth after compacting the instructions callers still need.
-const MCP_TOOLS_LIST_MAX_BYTES = 20000;
+const MCP_TOOLS_LIST_MAX_BYTES = 20500;
 
 function serverVersion() {
   try {

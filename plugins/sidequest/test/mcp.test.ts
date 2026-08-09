@@ -222,7 +222,7 @@ test('notifications/initialized takes no response', async () => {
 test('tools/list advertises the board tools with input schemas', async () => {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: 2, method: 'tools/list' });
   const names = resp.result.tools.map((t: any) => t.name);
-  for (const expected of ['context_page', 'list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'commit', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
+  for (const expected of ['context_page', 'list', 'ready', 'add', 'update', 'remove', 'archive', 'unarchive', 'claim', 'sweepClaims', 'next', 'done', 'groomClose', 'release', 'verdict', 'scopeRequest', 'commit', 'rework', 'submit', 'comment', 'plan', 'link', 'unlink', 'assign', 'dispatch', 'story', 'story_contract', 'story_log', 'category_add', 'category_edit', 'category_rm', 'category_detach', 'category_relink', 'category_list', 'global_fallback', 'board_config', 'models', 'projects', 'archive_board', 'unarchive_board', 'route_recipe']) {
     assert.ok(names.includes(expected), `exposes ${expected}`);
   }
   for (const cliOnly of ['native_agent', 'native_agent_cleanup']) {
@@ -236,11 +236,13 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.equal(contextPage.inputSchema.properties.limit.maximum, 16 * 1024);
   assert.match(contextPage.inputSchema.properties.cursor.description, /Opaque/);
   assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
+  const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
+  assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
+  assert.match(rework.description, /repair/);
   const submit = resp.result.tools.find((tool: any) => tool.name === 'submit');
   assert.ok(submit.inputSchema.properties.base, 'submit exposes an explicit base');
-  // body/commit are enforced by the handler for an ordinary submission, but are
-  // not schema-required: clear:true (SQ-1010's reject-without-integrating path)
-  // legitimately omits both.
+  // body/commit are handler-enforced, not schema-required: clear:true handles
+  // an integration bounce and legitimately omits both.
   assert.ok(submit.inputSchema.properties.clear, 'submit exposes clear to reject a pending submission without integrating it');
   assert.equal(submit.inputSchema.required.includes('body'), false, 'body is handler-enforced, not schema-required, so clear:true can omit it');
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
@@ -1141,6 +1143,7 @@ test('integrate compacts successful verification output', async () => {
   gitAt(repo, ['update-ref', gitRef, commit]);
   gitAt(repo, ['checkout', 'main']);
   const verify = `"${process.execPath}" verify-summary.cjs`;
+  assert.equal(store.claimTicket(project, ticket.ref, 'fixture-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
   const submitted = store.submitTicket(project, ticket.ref, 'fixture-worker', {
     commit,
     gitRef,
@@ -1155,7 +1158,6 @@ test('integrate compacts successful verification output', async () => {
     },
     worktree: repo,
     verify,
-    force: true,
   });
   assert.equal(submitted.ok, true);
 

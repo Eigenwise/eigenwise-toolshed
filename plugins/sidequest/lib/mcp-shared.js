@@ -227,7 +227,8 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   next: "Claim next ticket.",
   scopeRequest: "Request scope.",
   commit: "Commit declared worktree paths.",
-  submit: "Submit verified work.",
+  rework: "Reject candidate for repair; candidate owner only.",
+  submit: "Submit verified work; clear needs owner; force only lets owner replace candidate.",
   integrate: "Deliver verified work.",
   comment: "Add a handoff comment.",
   comments: "Read comments before work.",
@@ -529,6 +530,14 @@ function resolvedContextBody(source) {
   }
   throw new Error(`context_page: unsupported ${source.tool} field "${source.field}".`);
 }
+function resolvedContextRows(source) {
+  const ticket = store.getTicket(source.project, source.selector.ref);
+  if (!ticket) throw new Error(`context_page: source ticket "${source.selector.ref}" no longer exists.`);
+  if (source.tool === "briefing" && source.field === "rejected-submissions" && source.position === "rejected-submissions") {
+    return agentsync.rejectedSubmissionRows(ticket);
+  }
+  throw new Error(`context_page: unsupported ${source.tool} rows field "${source.field}".`);
+}
 function assertCurrentContextRevision(source, currentRevision, expectedRevision) {
   if (String(expectedRevision || "") !== source.revision) {
     throw new Error(`context_page: expectedRevision does not match the ${source.tool} handle revision.`);
@@ -628,6 +637,26 @@ function resolveContextPage(args) {
       cursor: args.cursor,
       pageBytes: page2.pageBytes,
       totalBytes: page2.totalBytes,
+      nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
+      continuation: contextPageContinuation(source, args.handle, page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition)),
+      complete: page2.nextPosition == null
+    };
+  }
+  if (source.kind === "rows" && source.tool === "briefing" && source.field === "rejected-submissions") {
+    const rows2 = resolvedContextRows(source);
+    assertCurrentContextRevision(source, contextRevision(rows2), args.expectedRevision);
+    const page2 = rowsWithinByteLimit(rows2, position, limit);
+    return {
+      source: source.tool,
+      field: source.field,
+      position: source.position,
+      reason: source.reason,
+      revision: source.revision,
+      rows: page2.rows,
+      cursor: args.cursor,
+      pageBytes: page2.pageBytes,
+      totalRows: page2.totalRows,
+      returned: page2.rows.length,
       nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
       continuation: contextPageContinuation(source, args.handle, page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition)),
       complete: page2.nextPosition == null
@@ -891,20 +920,27 @@ function boundedSubmissionText(value, maxChars = 600) {
   return `${text.slice(0, maxChars - 16)}… [${text.length} chars]`;
 }
 function preserveRejectedSubmission(options) {
-  const { slug, ticket, by, root, commit, gitRef, verify, reason, message, remedy } = options;
-  const quarantineRef = `refs/sidequest/${ticket.ref}-rejected`;
+  const { slug, ticket, by, root, commit, gitRef, verify, reason, message, remedy, source = "mcp" } = options;
   const validationMessage = boundedSubmissionText(message);
   const failure = `${reason}${validationMessage ? `: ${validationMessage}` : ""}`;
-  const preserved = commitScope.preserveCommitRef(root, commit, quarantineRef);
-  if (!preserved.ok) {
-    const preservationFailure = `${preserved.reason}${preserved.message ? `: ${boundedSubmissionText(preserved.message)}` : ""}`;
+  const archived = store.recordSubmissionRejection(slug, ticket.ref, {
+    by,
+    review: validationMessage || failure,
+    reason,
+    commit,
+    root,
+    source
+  });
+  if (!archived.ok) {
+    const preservationFailure = `${archived.reason}${archived.message ? `: ${boundedSubmissionText(archived.message)}` : ""}`;
     return {
       ok: false,
-      ticket,
+      ticket: archived.ticket || ticket,
       reason,
-      message: `submit: refused ${ticket.ref}; ${failure}. Could not preserve ${commit} at ${quarantineRef}: ${preservationFailure}. The claim remains active. Remedy: ${remedy}`
+      message: `submit: refused ${ticket.ref}; ${failure}. Could not preserve ${commit}: ${preservationFailure}. The claim remains active. Remedy: ${remedy}`
     };
   }
+  const preserved = { commit: archived.rejected.commit, gitRef: archived.rejected.quarantineRef };
   let checkpoint;
   try {
     checkpoint = store.checkpointTicket(slug, ticket.ref, by, {
@@ -913,13 +949,13 @@ function preserveRejectedSubmission(options) {
       verify: verify.slice(0, 4e3),
       ttlMinutes: 24 * 60,
       kind: "submission_rejected",
-      gitRef: quarantineRef,
+      gitRef: preserved.gitRef,
       failure: { reason, message: validationMessage },
       commentBody: `Submission validation refused ${ticket.ref}: ${failure}
-Preserved: ${preserved.commit} at ${quarantineRef}
+Preserved: ${preserved.commit} at ${preserved.gitRef}
 Claim retained with a recovery checkpoint.
 Remedy: ${remedy}`,
-      source: "mcp"
+      source
     });
   } catch (error) {
     checkpoint = { ok: false, reason: "checkpoint_error", message: error && error.message || String(error) };
@@ -929,8 +965,8 @@ Remedy: ${remedy}`,
       ok: false,
       ticket: checkpoint.ticket,
       reason,
-      message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${quarantineRef}; the claim and recovery checkpoint remain active. Remedy: ${remedy}`,
-      preserved: { commit: preserved.commit, gitRef: quarantineRef, checkpoint: checkpoint.checkpoint }
+      message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${preserved.gitRef}; the claim and recovery checkpoint remain active. Remedy: ${remedy}`,
+      preserved: { commit: preserved.commit, gitRef: preserved.gitRef, checkpoint: checkpoint.checkpoint }
     };
   }
   const checkpointFailure = `${checkpoint?.reason || "checkpoint_failed"}${checkpoint?.message ? `: ${boundedSubmissionText(checkpoint.message)}` : ""}`;
@@ -938,8 +974,8 @@ Remedy: ${remedy}`,
     ok: false,
     ticket: store.getTicket(slug, ticket.ref) || ticket,
     reason,
-    message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${quarantineRef}, but the recovery checkpoint failed: ${checkpointFailure}. The claim remains active. Remedy: ${remedy}`,
-    preserved: { commit: preserved.commit, gitRef: quarantineRef }
+    message: `submit: refused ${ticket.ref}; ${failure}. Preserved ${preserved.commit} at ${preserved.gitRef}, but the recovery checkpoint failed: ${checkpointFailure}. The claim remains active. Remedy: ${remedy}`,
+    preserved: { commit: preserved.commit, gitRef: preserved.gitRef }
   };
 }
 function requiredReleaseReason(args) {
