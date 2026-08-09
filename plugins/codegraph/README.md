@@ -1,5 +1,8 @@
 # Codegraph
 
+> [!WARNING]
+> Codegraph is under heavy construction and isn't recommended for installation yet.
+
 Codegraph gives Claude a semantic view of a TypeScript or JavaScript project: symbol relationships, dependency paths, inheritance, module structure, and focused context. It complements Grep and LSP when you need to understand how a change travels through the codebase.
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codegraph/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/codegraph/) · [Toolshed marketplace](../../README.md)
