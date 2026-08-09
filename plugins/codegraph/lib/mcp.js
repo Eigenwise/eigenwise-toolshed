@@ -23,6 +23,7 @@ __export(mcp_exports, {
   invokeCodegraphTool: () => invokeCodegraphTool
 });
 module.exports = __toCommonJS(mcp_exports);
+var import_cursors = require("./cursors.js");
 var import_ranking = require("./ranking.js");
 const codegraphTools = [
   "codegraph_status",
@@ -42,8 +43,11 @@ function object(value, label) {
 function onlyKeys(value, keys) {
   for (const key of Object.keys(value)) if (!keys.includes(key)) throw new Error(`unknown parameter: ${key}`);
 }
-function text(value, label, minimum = 1) {
+const maximumMcpTextBytes = 64 * 1024;
+const maximumSeedFiles = 1e3;
+function text(value, label, minimum = 1, maximumBytes = maximumMcpTextBytes) {
   if (typeof value !== "string" || value.trim().length < minimum) throw new Error(`${label} must be a non-empty string`);
+  if (Buffer.byteLength(value, "utf8") > maximumBytes) throw new Error(`${label} exceeds the input budget`);
   return value;
 }
 function integer(value, label, minimum, maximum) {
@@ -66,7 +70,7 @@ function limits(value, allowed) {
     ...value.maxDepth === void 0 ? {} : { maxDepth: integer(value.maxDepth, "maxDepth", 1, 8) },
     ...value.tokenBudget === void 0 ? {} : { tokenBudget: integer(value.tokenBudget, "tokenBudget", 500, 16e3) },
     ...value.maxResults === void 0 ? {} : { maxResults: integer(value.maxResults, "maxResults", 1, 1e3) },
-    ...value.cursor === void 0 ? {} : { cursor: text(value.cursor, "cursor") }
+    ...value.cursor === void 0 ? {} : { cursor: text(value.cursor, "cursor", 1, import_cursors.maximumCursorBytes) }
   };
 }
 function traversal(value, allowed) {
@@ -116,20 +120,23 @@ async function invokeCodegraphTool(service, name, arguments_ = {}) {
     return result(await service.modules(mode, limits(input, ["mode", "tokenBudget", "maxResults", "cursor"])));
   }
   onlyKeys(input, ["query", "seedFiles", "maxDepth", "tokenBudget", "maxResults", "cursor"]);
-  if (input.seedFiles !== void 0 && (!Array.isArray(input.seedFiles) || input.seedFiles.some((file) => typeof file !== "string" || file.length === 0))) throw new Error("seedFiles must be non-empty strings");
+  if (input.seedFiles !== void 0) {
+    if (!Array.isArray(input.seedFiles) || input.seedFiles.length > maximumSeedFiles) throw new Error(`seedFiles must contain at most ${maximumSeedFiles} entries`);
+    for (const file of input.seedFiles) text(file, "seedFiles entry", 1);
+  }
   return result(await service.context(text(input.query, "query"), { ...limits(input, ["query", "seedFiles", "maxDepth", "tokenBudget", "maxResults", "cursor"]), ...input.seedFiles === void 0 ? {} : { seedFiles: input.seedFiles } }));
 }
 const selectorSchema = {
   type: "object",
   additionalProperties: false,
   required: ["qualifiedName"],
-  properties: { qualifiedName: { type: "string", minLength: 1 }, file: { type: "string", minLength: 1 }, kind: { type: "string", enum: [...nodeKinds] } }
+  properties: { qualifiedName: { type: "string", minLength: 1, maxLength: maximumMcpTextBytes }, file: { type: "string", minLength: 1, maxLength: maximumMcpTextBytes }, kind: { type: "string", enum: [...nodeKinds] } }
 };
 const limitsSchema = {
   maxDepth: { type: "integer", minimum: 1, maximum: 8 },
   tokenBudget: { type: "integer", minimum: 500, maximum: 16e3 },
   maxResults: { type: "integer", minimum: 1, maximum: 1e3 },
-  cursor: { type: "string", minLength: 1 }
+  cursor: { type: "string", minLength: 1, maxLength: import_cursors.maximumCursorBytes }
 };
 function toolSchema(properties, required = []) {
   return { type: "object", additionalProperties: false, properties, ...required.length === 0 ? {} : { required } };
@@ -141,7 +148,7 @@ const codegraphToolDefinitions = [
   { name: "codegraph_path", description: "Find the shortest resolved path between two symbols.", inputSchema: toolSchema({ from: selectorSchema, to: selectorSchema, edgeKinds: { type: "array", items: { enum: [...edgeKinds] } }, ...limitsSchema }, ["from", "to"]) },
   { name: "codegraph_hierarchy", description: "Traverse type extension and implementation relationships.", inputSchema: toolSchema({ symbol: selectorSchema, direction: { enum: ["forward", "reverse", "both"] }, ...limitsSchema }, ["symbol"]) },
   { name: "codegraph_modules", description: "Report import cycles, layers, or fanout.", inputSchema: toolSchema({ mode: { enum: ["cycles", "layers", "fanout"] }, tokenBudget: limitsSchema.tokenBudget, maxResults: limitsSchema.maxResults, cursor: limitsSchema.cursor }, ["mode"]) },
-  { name: "codegraph_context", description: "Rank lexical and graph-adjacent context.", inputSchema: toolSchema({ query: { type: "string", minLength: 1 }, seedFiles: { type: "array", items: { type: "string", minLength: 1 } }, ...limitsSchema }, ["query"]) }
+  { name: "codegraph_context", description: "Rank lexical and graph-adjacent context.", inputSchema: toolSchema({ query: { type: "string", minLength: 1, maxLength: maximumMcpTextBytes }, seedFiles: { type: "array", maxItems: maximumSeedFiles, items: { type: "string", minLength: 1, maxLength: maximumMcpTextBytes } }, ...limitsSchema }, ["query"]) }
 ];
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {

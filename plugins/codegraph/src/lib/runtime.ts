@@ -410,13 +410,29 @@ function runtimeLockLease(lockDirectory: string, ownerToken: string, heartbeat: 
   };
 }
 
+async function discardUnverifiableRuntimeLock(lockDirectory: string): Promise<boolean> {
+  const staleDirectory = `${lockDirectory}.stale-${randomUUID()}`;
+  try {
+    await rename(lockDirectory, staleDirectory);
+    await rm(staleDirectory, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isVerifiableRuntimeLockOwner(ownerToken: string): boolean {
+  return /^[a-f0-9-]{36}$/i.test(ownerToken);
+}
+
 async function breakStaleRuntimeLock(lockDirectory: string): Promise<boolean> {
   let ownerToken: string;
   try {
     ownerToken = await readFile(path.join(lockDirectory, 'owner'), 'utf8');
   } catch {
-    return false;
+    return discardUnverifiableRuntimeLock(lockDirectory);
   }
+  if (!isVerifiableRuntimeLockOwner(ownerToken)) return discardUnverifiableRuntimeLock(lockDirectory);
 
   const released = await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken));
   if (!released) {

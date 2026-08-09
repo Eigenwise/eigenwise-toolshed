@@ -1,5 +1,6 @@
 import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { projectStateDirectory } from '../lib/paths.js';
 
 const maximumContextBytes = 1_024;
 const allowedStatuses = new Set(['ready', 'missing', 'stale', 'unavailable']);
@@ -20,7 +21,7 @@ async function readHookInput(): Promise<HookInput> {
 
 async function statusPointer(root: string): Promise<string> {
   try {
-    const raw = await readFile(path.join(root, '.claude', 'codegraph', 'status.json'), 'utf8');
+    const raw = await readFile(path.join(projectStateDirectory(root), 'status.json'), 'utf8');
     const value = JSON.parse(raw) as StatusPointer;
     if (typeof value.status === 'string' && allowedStatuses.has(value.status)) {
       return pointer(value.status, typeof value.snapshotId === 'string' ? value.snapshotId : undefined);

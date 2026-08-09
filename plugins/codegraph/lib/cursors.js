@@ -20,10 +20,12 @@ var cursors_exports = {};
 __export(cursors_exports, {
   decodeCursor: () => decodeCursor,
   encodeCursor: () => encodeCursor,
+  maximumCursorBytes: () => maximumCursorBytes,
   normalizedQueryHash: () => normalizedQueryHash
 });
 module.exports = __toCommonJS(cursors_exports);
 var import_node_crypto = require("node:crypto");
+const maximumCursorBytes = 16 * 1024;
 function normalizedQueryHash(query) {
   return (0, import_node_crypto.createHash)("sha256").update(JSON.stringify(query)).digest("hex");
 }
@@ -33,6 +35,7 @@ function encodeCursor(snapshotId, query, offset) {
   return Buffer.from(JSON.stringify(cursor)).toString("base64url");
 }
 function decodeCursor(cursor, snapshotId, query) {
+  if (Buffer.byteLength(cursor, "utf8") > maximumCursorBytes) throw new Error("graph cursor exceeds the input budget");
   let value;
   try {
     value = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
@@ -51,5 +54,6 @@ function decodeCursor(cursor, snapshotId, query) {
 0 && (module.exports = {
   decodeCursor,
   encodeCursor,
+  maximumCursorBytes,
   normalizedQueryHash
 });

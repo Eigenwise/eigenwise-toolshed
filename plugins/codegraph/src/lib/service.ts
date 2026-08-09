@@ -9,6 +9,7 @@ import { impact, shortestPath, hierarchy, modules, context, type SymbolSelector,
 import type { QueryLimits } from './ranking.js';
 import type { RuntimeAcquirer, SemanticRuntime } from './runtime-contract.js';
 import { GraphStore } from './store.js';
+import { projectStateDirectory } from './paths.js';
 
 export interface CodegraphServiceOptions {
   readonly projectRoot: string;
@@ -56,6 +57,7 @@ export class CodegraphService {
   private readonly projectRoot: string;
   private readonly store: GraphStore;
   private readonly runtime: RuntimeAcquirer;
+  private readonly stateDirectory: string;
   private readonly buildIndex: (projectRoot: string, runtime: SemanticRuntime) => Promise<IndexBuildResult>;
   private state: ServiceState = { status: 'missing', message: messageFor('missing') };
   private indexing: Promise<GraphResponse<never>> | undefined;
@@ -64,6 +66,7 @@ export class CodegraphService {
     this.projectRoot = options.projectRoot;
     this.store = options.store;
     this.runtime = options.runtime;
+    this.stateDirectory = projectStateDirectory(this.projectRoot);
     this.buildIndex = options.index ?? ((projectRoot, runtime) => buildProjectIndex(projectRoot, {
       runtime,
       store: { readSnapshot: async () => null, replaceSnapshot: async () => undefined },
@@ -72,8 +75,8 @@ export class CodegraphService {
 
   private async response<Result>(state: ServiceState, snapshot: SnapshotIdentity | null, coverage: GraphCoverage | null): Promise<GraphResponse<Result>> {
     try {
-      await mkdir(path.join(this.projectRoot, '.claude', 'codegraph'), { recursive: true });
-      await writeFile(path.join(this.projectRoot, '.claude', 'codegraph', 'status.json'), JSON.stringify({ status: state.status, snapshotId: snapshot?.snapshotId }), 'utf8');
+      await mkdir(this.stateDirectory, { recursive: true });
+      await writeFile(path.join(this.stateDirectory, 'status.json'), JSON.stringify({ status: state.status, snapshotId: snapshot?.snapshotId }), 'utf8');
     } catch { }
     return emptyResponse(state, snapshot, coverage);
   }

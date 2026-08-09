@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+export const maximumCursorBytes = 16 * 1_024;
+
 export interface QueryCursor {
   version: 1;
   snapshotId: string;
@@ -18,6 +20,7 @@ export function encodeCursor(snapshotId: string, query: unknown, offset: number)
 }
 
 export function decodeCursor(cursor: string, snapshotId: string, query: unknown): number {
+  if (Buffer.byteLength(cursor, 'utf8') > maximumCursorBytes) throw new Error('graph cursor exceeds the input budget');
   let value: unknown;
   try { value = JSON.parse(Buffer.from(cursor, 'base64url').toString('utf8')); } catch { throw new Error('invalid graph cursor'); }
   if (typeof value !== 'object' || value === null) throw new Error('invalid graph cursor');

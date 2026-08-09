@@ -1,5 +1,6 @@
 import { createInterface } from 'node:readline';
 import path from 'node:path';
+import { codegraphStateRoot, projectStateDirectory } from '../lib/paths.js';
 import { invokeCodegraphTool, codegraphToolDefinitions } from '../lib/mcp.js';
 import { TypeScriptRuntimeAcquirer } from '../lib/runtime.js';
 import { CodegraphService } from '../lib/service.js';
@@ -8,10 +9,12 @@ import { GraphStore } from '../lib/store.js';
 interface RpcRequest { jsonrpc: '2.0'; id?: string | number; method: string; params?: unknown }
 interface RpcParameters { name: string; arguments?: unknown }
 
+const maximumJsonRpcRequestBytes = 1_024 * 1_024;
 const projectRoot = process.env.CODEGRAPH_PROJECT_ROOT ?? process.cwd();
-const stateDirectory = process.env.CODEGRAPH_STATE_DIR ?? path.join(projectRoot, '.claude', 'codegraph');
+const stateDirectory = projectStateDirectory(projectRoot);
+const runtimeStateDirectory = codegraphStateRoot();
 const store = GraphStore.open(path.join(stateDirectory, 'graph.sqlite'));
-const service = new CodegraphService({ projectRoot, store, runtime: new TypeScriptRuntimeAcquirer({ stateDirectory }) });
+const service = new CodegraphService({ projectRoot, store, runtime: new TypeScriptRuntimeAcquirer({ stateDirectory: runtimeStateDirectory }) });
 
 function send(id: RpcRequest['id'], value: Record<string, unknown>): void {
   if (id !== undefined) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, ...value })}\n`);
@@ -40,6 +43,7 @@ async function handle(request: RpcRequest): Promise<void> {
 
 createInterface({ input: process.stdin, crlfDelay: Infinity }).on('line', (line) => {
   try {
+    if (Buffer.byteLength(line, 'utf8') > maximumJsonRpcRequestBytes) throw new Error('JSON-RPC request exceeds the input budget');
     const request = JSON.parse(line) as RpcRequest;
     if (request.jsonrpc !== '2.0' || typeof request.method !== 'string') throw new Error('invalid JSON-RPC request');
     void handle(request);

@@ -1,9 +1,9 @@
 import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { DatabaseSync } from 'node:sqlite';
-import type { FileGraph, GraphCoverage, GraphEdge, GraphNode, GraphResultOrder, ProjectDescriptor, SnapshotIdentity } from './model.ts';
-import { normalizeProjectRelativePath } from './paths.ts';
-import { migrateGraphSchema, validateGraphDatabase } from './schema.ts';
+import type { FileGraph, GraphCoverage, GraphEdge, GraphNode, GraphResultOrder, ProjectDescriptor, SnapshotIdentity } from './model.js';
+import { normalizeProjectRelativePath } from './paths.js';
+import { migrateGraphSchema, validateGraphDatabase } from './schema.js';
 
 export interface GraphSnapshotInput {
   snapshot: SnapshotIdentity;

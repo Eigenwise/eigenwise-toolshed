@@ -26,9 +26,9 @@ __export(queries_exports, {
   shortestPath: () => shortestPath
 });
 module.exports = __toCommonJS(queries_exports);
-var import_model = require("./model.ts");
-var import_cursors = require("./cursors.ts");
-var import_ranking = require("./ranking.ts");
+var import_model = require("./model.js");
+var import_cursors = require("./cursors.js");
+var import_ranking = require("./ranking.js");
 function unavailable() {
   return { status: "missing", snapshot: null, coverage: null, results: [], omitted: 0, nextCursor: null, tokenEstimate: 0, message: "Codegraph has no indexed snapshot. Run codegraph_index first." };
 }

@@ -333,13 +333,27 @@ function runtimeLockLease(lockDirectory, ownerToken, heartbeat) {
     }
   };
 }
+async function discardUnverifiableRuntimeLock(lockDirectory) {
+  const staleDirectory = `${lockDirectory}.stale-${(0, import_node_crypto.randomUUID)()}`;
+  try {
+    await (0, import_promises.rename)(lockDirectory, staleDirectory);
+    await (0, import_promises.rm)(staleDirectory, { recursive: true, force: true });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isVerifiableRuntimeLockOwner(ownerToken) {
+  return /^[a-f0-9-]{36}$/i.test(ownerToken);
+}
 async function breakStaleRuntimeLock(lockDirectory) {
   let ownerToken;
   try {
     ownerToken = await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8");
   } catch {
-    return false;
+    return discardUnverifiableRuntimeLock(lockDirectory);
   }
+  if (!isVerifiableRuntimeLockOwner(ownerToken)) return discardUnverifiableRuntimeLock(lockDirectory);
   const released = await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken));
   if (!released) {
     let lastHeartbeat;

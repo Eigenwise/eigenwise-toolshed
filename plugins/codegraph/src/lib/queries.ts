@@ -1,8 +1,8 @@
-import type { GraphEdgeKind, GraphNodeKind, GraphResponse } from './model.ts';
-import { sortGraphResults } from './model.ts';
-import { decodeCursor, encodeCursor } from './cursors.ts';
-import { applyQueryLimits, boundResults, queryTerms, type QueryLimits } from './ranking.ts';
-import type { GraphStore, LexicalMatch, StoredEdge, StoredNode } from './store.ts';
+import type { GraphEdgeKind, GraphNodeKind, GraphResponse } from './model.js';
+import { sortGraphResults } from './model.js';
+import { decodeCursor, encodeCursor } from './cursors.js';
+import { applyQueryLimits, boundResults, queryTerms, type QueryLimits } from './ranking.js';
+import type { GraphStore, LexicalMatch, StoredEdge, StoredNode } from './store.js';
 
 export interface SymbolSelector { qualifiedName: string; file?: string; kind?: GraphNodeKind }
 export interface TraversalStep { node: StoredNode; depth: number; via: StoredEdge | null; rank: number; file: string; startLine: number; kind: string; qualifiedName: string; id: string }

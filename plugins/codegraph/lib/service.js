@@ -38,6 +38,7 @@ var import_freshness = require("./freshness.js");
 var import_index_builder = require("./index-builder.js");
 var import_typescript = require("./extractors/typescript.js");
 var import_queries = require("./queries.js");
+var import_paths = require("./paths.js");
 function messageFor(status) {
   if (status === "missing") return "Codegraph has no indexed snapshot. Run codegraph_index first.";
   if (status === "stale") return "Codegraph snapshot is stale. Run codegraph_index to refresh it.";
@@ -69,6 +70,7 @@ class CodegraphService {
   projectRoot;
   store;
   runtime;
+  stateDirectory;
   buildIndex;
   state = { status: "missing", message: messageFor("missing") };
   indexing;
@@ -76,6 +78,7 @@ class CodegraphService {
     this.projectRoot = options.projectRoot;
     this.store = options.store;
     this.runtime = options.runtime;
+    this.stateDirectory = (0, import_paths.projectStateDirectory)(this.projectRoot);
     this.buildIndex = options.index ?? ((projectRoot, runtime) => (0, import_index_builder.buildProjectIndex)(projectRoot, {
       runtime,
       store: { readSnapshot: async () => null, replaceSnapshot: async () => void 0 }
@@ -83,8 +86,8 @@ class CodegraphService {
   }
   async response(state, snapshot, coverage) {
     try {
-      await (0, import_promises.mkdir)(import_node_path.default.join(this.projectRoot, ".claude", "codegraph"), { recursive: true });
-      await (0, import_promises.writeFile)(import_node_path.default.join(this.projectRoot, ".claude", "codegraph", "status.json"), JSON.stringify({ status: state.status, snapshotId: snapshot?.snapshotId }), "utf8");
+      await (0, import_promises.mkdir)(this.stateDirectory, { recursive: true });
+      await (0, import_promises.writeFile)(import_node_path.default.join(this.stateDirectory, "status.json"), JSON.stringify({ status: state.status, snapshotId: snapshot?.snapshotId }), "utf8");
     } catch {
     }
     return emptyResponse(state, snapshot, coverage);

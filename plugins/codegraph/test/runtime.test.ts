@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { cp, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
+import { cp, mkdir, mkdtemp, readFile, rm, utimes, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -366,6 +366,18 @@ test('concurrent callers share one acquisition', async () => {
     const second = acquirer.acquire();
     continueInstall?.();
     await Promise.all([first, second]);
+    assert.equal(installer.calls, 1);
+  } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('recovers an empty runtime lock left by a crashed owner', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const installer = new FixtureInstaller();
+  try {
+    await mkdir(path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64.lock'), { recursive: true });
+    await createAcquirer(stateDirectory, installer).acquire();
     assert.equal(installer.calls, 1);
   } finally {
     await rm(stateDirectory, { recursive: true, force: true });

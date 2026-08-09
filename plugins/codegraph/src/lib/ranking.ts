@@ -1,4 +1,4 @@
-import type { GraphResultOrder } from './model.ts';
+import type { GraphResultOrder } from './model.js';
 
 export const minimumTokenBudget = 500;
 export const maximumTokenBudget = 16_000;

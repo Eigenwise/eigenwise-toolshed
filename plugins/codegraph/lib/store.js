@@ -34,8 +34,8 @@ module.exports = __toCommonJS(store_exports);
 var import_node_fs = require("node:fs");
 var import_node_path = __toESM(require("node:path"));
 var import_node_sqlite = require("node:sqlite");
-var import_paths = require("./paths.ts");
-var import_schema = require("./schema.ts");
+var import_paths = require("./paths.js");
+var import_schema = require("./schema.js");
 function nodeFromRow(row, rank = 0) {
   return {
     id: row.node_id,
