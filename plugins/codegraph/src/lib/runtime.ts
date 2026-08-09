@@ -381,6 +381,10 @@ function waitForRuntimeLock(): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, runtimeLockRetryMilliseconds));
 }
 
+function runtimeOwnerGenerationFile(lockDirectory: string, ownerToken: string): string {
+  return path.join(lockDirectory, `generation-${ownerToken}`);
+}
+
 function runtimeOwnerHeartbeatFile(lockDirectory: string, ownerToken: string): string {
   return path.join(lockDirectory, `owner-${ownerToken}`);
 }
@@ -397,7 +401,11 @@ function runtimeLockLease(lockDirectory: string, ownerToken: string, heartbeat: 
   return {
     async assertOwnership(): Promise<void> {
       try {
-        if (await readFile(path.join(lockDirectory, 'owner'), 'utf8') === ownerToken) return;
+        const [currentOwnerToken, generationToken] = await Promise.all([
+          readFile(path.join(lockDirectory, 'owner'), 'utf8'),
+          readFile(runtimeOwnerGenerationFile(lockDirectory, ownerToken), 'utf8'),
+        ]);
+        if (currentOwnerToken === ownerToken && generationToken === ownerToken) return;
       } catch {
         // The lock was moved or replaced while this holder was suspended.
       }
@@ -410,10 +418,18 @@ function runtimeLockLease(lockDirectory: string, ownerToken: string, heartbeat: 
   };
 }
 
-async function discardUnverifiableRuntimeLock(lockDirectory: string): Promise<boolean> {
+function isVerifiableRuntimeLockOwner(ownerToken: string): boolean {
+  return /^[a-f0-9-]{36}$/i.test(ownerToken);
+}
+
+async function moveClaimedRuntimeLock(lockDirectory: string, expectedOwnerToken?: string): Promise<boolean> {
   const staleDirectory = `${lockDirectory}.stale-${randomUUID()}`;
   try {
     await rename(lockDirectory, staleDirectory);
+    if (expectedOwnerToken !== undefined) {
+      const movedOwnerToken = await readFile(path.join(staleDirectory, 'owner'), 'utf8');
+      if (movedOwnerToken !== expectedOwnerToken) return false;
+    }
     await rm(staleDirectory, { recursive: true, force: true });
     return true;
   } catch {
@@ -421,8 +437,70 @@ async function discardUnverifiableRuntimeLock(lockDirectory: string): Promise<bo
   }
 }
 
-function isVerifiableRuntimeLockOwner(ownerToken: string): boolean {
-  return /^[a-f0-9-]{36}$/i.test(ownerToken);
+async function claimLegacyRuntimeLock(lockDirectory: string, observedOwnerToken?: string): Promise<boolean> {
+  const claimFile = path.join(lockDirectory, 'legacy-reclaim');
+  try {
+    await writeFile(claimFile, randomUUID(), { flag: 'wx' });
+  } catch {
+    return false;
+  }
+
+  try {
+    const entries = await readdir(lockDirectory);
+    if (entries.some((entry) => entry.startsWith('generation-'))) {
+      await rm(claimFile, { force: true });
+      return false;
+    }
+    if (observedOwnerToken !== undefined) {
+      const currentOwnerToken = await readFile(path.join(lockDirectory, 'owner'), 'utf8');
+      if (currentOwnerToken !== observedOwnerToken) {
+        await rm(claimFile, { force: true });
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    await rm(claimFile, { force: true });
+    return false;
+  }
+}
+
+function runtimeReclaimMarker(lockDirectory: string, ownerToken: string): string {
+  return path.join(lockDirectory, `reclaim-${ownerToken}-${randomUUID()}`);
+}
+
+async function hasRuntimeReclaimMarker(lockDirectory: string, ownerToken: string): Promise<boolean> {
+  const prefix = `reclaim-${ownerToken}-`;
+  try {
+    return (await readdir(lockDirectory)).some((entry) => entry.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+
+export async function reclaimObservedRuntimeLock(lockDirectory: string, ownerToken: string): Promise<boolean> {
+  try {
+    if (await readFile(path.join(lockDirectory, 'owner'), 'utf8') !== ownerToken) return false;
+  } catch {
+    return false;
+  }
+
+  if (!(await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken)))) {
+    try {
+      const lastHeartbeat = (await stat(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
+      if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
+    } catch (error: unknown) {
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') return false;
+    }
+  }
+
+  const generationFile = runtimeOwnerGenerationFile(lockDirectory, ownerToken);
+  try {
+    await rename(generationFile, runtimeReclaimMarker(lockDirectory, ownerToken));
+  } catch {
+    return false;
+  }
+  return moveClaimedRuntimeLock(lockDirectory, ownerToken);
 }
 
 async function breakStaleRuntimeLock(lockDirectory: string): Promise<boolean> {
@@ -430,9 +508,13 @@ async function breakStaleRuntimeLock(lockDirectory: string): Promise<boolean> {
   try {
     ownerToken = await readFile(path.join(lockDirectory, 'owner'), 'utf8');
   } catch {
-    return discardUnverifiableRuntimeLock(lockDirectory);
+    if (!(await claimLegacyRuntimeLock(lockDirectory))) return false;
+    return moveClaimedRuntimeLock(lockDirectory);
   }
-  if (!isVerifiableRuntimeLockOwner(ownerToken)) return discardUnverifiableRuntimeLock(lockDirectory);
+  if (!isVerifiableRuntimeLockOwner(ownerToken)) {
+    if (!(await claimLegacyRuntimeLock(lockDirectory, ownerToken))) return false;
+    return moveClaimedRuntimeLock(lockDirectory, ownerToken);
+  }
 
   const released = await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken));
   if (!released) {
@@ -440,24 +522,23 @@ async function breakStaleRuntimeLock(lockDirectory: string): Promise<boolean> {
     try {
       lastHeartbeat = (await stat(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
     } catch (error: unknown) {
-      if (error instanceof Error && 'code' in error && error.code === 'ENOENT') {
-        return discardUnverifiableRuntimeLock(lockDirectory);
+      if (!(error instanceof Error) || !('code' in error) || error.code !== 'ENOENT') return false;
+      if (await hasRuntimeReclaimMarker(lockDirectory, ownerToken)) return false;
+      if (await exists(runtimeOwnerGenerationFile(lockDirectory, ownerToken))) {
+        return reclaimObservedRuntimeLock(lockDirectory, ownerToken);
       }
-      return false;
+      if (!(await claimLegacyRuntimeLock(lockDirectory, ownerToken))) return false;
+      return moveClaimedRuntimeLock(lockDirectory, ownerToken);
     }
     if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
   }
 
-  const staleDirectory = `${lockDirectory}.stale-${randomUUID()}`;
-  try {
-    await rename(lockDirectory, staleDirectory);
-    const movedOwnerToken = await readFile(path.join(staleDirectory, 'owner'), 'utf8');
-    if (movedOwnerToken !== ownerToken) return false;
-    await rm(staleDirectory, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
+  if (await exists(runtimeOwnerGenerationFile(lockDirectory, ownerToken))) {
+    return reclaimObservedRuntimeLock(lockDirectory, ownerToken);
   }
+  if (await hasRuntimeReclaimMarker(lockDirectory, ownerToken)) return false;
+  if (!(await claimLegacyRuntimeLock(lockDirectory, ownerToken))) return false;
+  return moveClaimedRuntimeLock(lockDirectory, ownerToken);
 }
 
 interface PreparedRuntimeLock {
@@ -471,6 +552,7 @@ async function prepareRuntimeLock(lockDirectory: string): Promise<PreparedRuntim
   try {
     await mkdir(stageDirectory);
     await writeFile(path.join(stageDirectory, 'owner'), ownerToken, 'utf8');
+    await writeFile(runtimeOwnerGenerationFile(stageDirectory, ownerToken), ownerToken, 'utf8');
     await writeFile(runtimeOwnerHeartbeatFile(stageDirectory, ownerToken), ownerToken, 'utf8');
     return { ownerToken, stageDirectory };
   } catch (error: unknown) {

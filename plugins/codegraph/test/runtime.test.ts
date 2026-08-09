@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  reclaimObservedRuntimeLock,
   runtimePlatformPackage,
   SemanticRuntimeError,
   TypeScriptRuntimeAcquirer,
@@ -394,6 +395,48 @@ test('recovers a runtime lock with an owner but no heartbeat after a crash', asy
     await createAcquirer(stateDirectory, installer).acquire();
     assert.equal(installer.calls, 1);
   } finally {
+    await rm(stateDirectory, { recursive: true, force: true });
+  }
+});
+
+test('a forced A/B/C interleaving cannot reclaim B from C stale observation of A', async () => {
+  const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
+  const cacheDirectory = path.join(stateDirectory, 'runtime', '7.0.2', 'win32-x64');
+  const lockDirectory = `${cacheDirectory}.lock`;
+  const staleOwnerToken = '123e4567-e89b-12d3-a456-426614174000';
+  let signalReplacementInstall: (() => void) | undefined;
+  const replacementInstallStarted = new Promise<void>((resolve) => {
+    signalReplacementInstall = resolve;
+  });
+  let releaseReplacementInstall: (() => void) | undefined;
+  const replacementInstallReleased = new Promise<void>((resolve) => {
+    releaseReplacementInstall = resolve;
+  });
+  const replacementInstaller = new FixtureInstaller(async () => {
+    signalReplacementInstall?.();
+    await replacementInstallReleased;
+  });
+  try {
+    await mkdir(lockDirectory, { recursive: true });
+    await writeFile(path.join(lockDirectory, 'owner'), staleOwnerToken, 'utf8');
+    await writeFile(path.join(lockDirectory, `generation-${staleOwnerToken}`), staleOwnerToken, 'utf8');
+    const staleHeartbeat = path.join(lockDirectory, `owner-${staleOwnerToken}`);
+    await writeFile(staleHeartbeat, staleOwnerToken, 'utf8');
+    await utimes(staleHeartbeat, new Date(0), new Date(0));
+
+    const replacementAcquisition = createAcquirer(stateDirectory, replacementInstaller).acquire();
+    await replacementInstallStarted;
+    const replacementOwnerToken = await readFile(path.join(lockDirectory, 'owner'), 'utf8');
+    assert.notEqual(replacementOwnerToken, staleOwnerToken);
+
+    assert.equal(await reclaimObservedRuntimeLock(lockDirectory, staleOwnerToken), false);
+    assert.equal(await readFile(path.join(lockDirectory, 'owner'), 'utf8'), replacementOwnerToken);
+
+    releaseReplacementInstall?.();
+    await replacementAcquisition;
+    assert.equal(replacementInstaller.calls, 1);
+  } finally {
+    releaseReplacementInstall?.();
     await rm(stateDirectory, { recursive: true, force: true });
   }
 });

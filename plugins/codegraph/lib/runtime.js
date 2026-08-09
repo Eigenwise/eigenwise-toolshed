@@ -32,6 +32,7 @@ __export(runtime_exports, {
   SemanticRuntimeError: () => SemanticRuntimeError,
   TypeScriptRuntimeAcquirer: () => TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError: () => UnsupportedRuntimePlatformError,
+  reclaimObservedRuntimeLock: () => reclaimObservedRuntimeLock,
   runtimePlatformPackage: () => runtimePlatformPackage
 });
 module.exports = __toCommonJS(runtime_exports);
@@ -309,6 +310,9 @@ async function publishRuntimeStage(cacheDirectory, stageDirectory, lease) {
 function waitForRuntimeLock() {
   return new Promise((resolve) => setTimeout(resolve, runtimeLockRetryMilliseconds));
 }
+function runtimeOwnerGenerationFile(lockDirectory, ownerToken) {
+  return import_node_path.default.join(lockDirectory, `generation-${ownerToken}`);
+}
 function runtimeOwnerHeartbeatFile(lockDirectory, ownerToken) {
   return import_node_path.default.join(lockDirectory, `owner-${ownerToken}`);
 }
@@ -322,7 +326,11 @@ function runtimeLockLease(lockDirectory, ownerToken, heartbeat) {
   return {
     async assertOwnership() {
       try {
-        if (await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8") === ownerToken) return;
+        const [currentOwnerToken, generationToken] = await Promise.all([
+          (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8"),
+          (0, import_promises.readFile)(runtimeOwnerGenerationFile(lockDirectory, ownerToken), "utf8")
+        ]);
+        if (currentOwnerToken === ownerToken && generationToken === ownerToken) return;
       } catch {
       }
       throw new SemanticRuntimeError("runtime cache lock ownership was lost");
@@ -333,50 +341,116 @@ function runtimeLockLease(lockDirectory, ownerToken, heartbeat) {
     }
   };
 }
-async function discardUnverifiableRuntimeLock(lockDirectory) {
+function isVerifiableRuntimeLockOwner(ownerToken) {
+  return /^[a-f0-9-]{36}$/i.test(ownerToken);
+}
+async function moveClaimedRuntimeLock(lockDirectory, expectedOwnerToken) {
   const staleDirectory = `${lockDirectory}.stale-${(0, import_node_crypto.randomUUID)()}`;
   try {
     await (0, import_promises.rename)(lockDirectory, staleDirectory);
+    if (expectedOwnerToken !== void 0) {
+      const movedOwnerToken = await (0, import_promises.readFile)(import_node_path.default.join(staleDirectory, "owner"), "utf8");
+      if (movedOwnerToken !== expectedOwnerToken) return false;
+    }
     await (0, import_promises.rm)(staleDirectory, { recursive: true, force: true });
     return true;
   } catch {
     return false;
   }
 }
-function isVerifiableRuntimeLockOwner(ownerToken) {
-  return /^[a-f0-9-]{36}$/i.test(ownerToken);
+async function claimLegacyRuntimeLock(lockDirectory, observedOwnerToken) {
+  const claimFile = import_node_path.default.join(lockDirectory, "legacy-reclaim");
+  try {
+    await (0, import_promises.writeFile)(claimFile, (0, import_node_crypto.randomUUID)(), { flag: "wx" });
+  } catch {
+    return false;
+  }
+  try {
+    const entries = await (0, import_promises.readdir)(lockDirectory);
+    if (entries.some((entry) => entry.startsWith("generation-"))) {
+      await (0, import_promises.rm)(claimFile, { force: true });
+      return false;
+    }
+    if (observedOwnerToken !== void 0) {
+      const currentOwnerToken = await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8");
+      if (currentOwnerToken !== observedOwnerToken) {
+        await (0, import_promises.rm)(claimFile, { force: true });
+        return false;
+      }
+    }
+    return true;
+  } catch {
+    await (0, import_promises.rm)(claimFile, { force: true });
+    return false;
+  }
+}
+function runtimeReclaimMarker(lockDirectory, ownerToken) {
+  return import_node_path.default.join(lockDirectory, `reclaim-${ownerToken}-${(0, import_node_crypto.randomUUID)()}`);
+}
+async function hasRuntimeReclaimMarker(lockDirectory, ownerToken) {
+  const prefix = `reclaim-${ownerToken}-`;
+  try {
+    return (await (0, import_promises.readdir)(lockDirectory)).some((entry) => entry.startsWith(prefix));
+  } catch {
+    return false;
+  }
+}
+async function reclaimObservedRuntimeLock(lockDirectory, ownerToken) {
+  try {
+    if (await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8") !== ownerToken) return false;
+  } catch {
+    return false;
+  }
+  if (!await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken))) {
+    try {
+      const lastHeartbeat = (await (0, import_promises.stat)(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
+      if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
+    } catch (error) {
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return false;
+    }
+  }
+  const generationFile = runtimeOwnerGenerationFile(lockDirectory, ownerToken);
+  try {
+    await (0, import_promises.rename)(generationFile, runtimeReclaimMarker(lockDirectory, ownerToken));
+  } catch {
+    return false;
+  }
+  return moveClaimedRuntimeLock(lockDirectory, ownerToken);
 }
 async function breakStaleRuntimeLock(lockDirectory) {
   let ownerToken;
   try {
     ownerToken = await (0, import_promises.readFile)(import_node_path.default.join(lockDirectory, "owner"), "utf8");
   } catch {
-    return discardUnverifiableRuntimeLock(lockDirectory);
+    if (!await claimLegacyRuntimeLock(lockDirectory)) return false;
+    return moveClaimedRuntimeLock(lockDirectory);
   }
-  if (!isVerifiableRuntimeLockOwner(ownerToken)) return discardUnverifiableRuntimeLock(lockDirectory);
+  if (!isVerifiableRuntimeLockOwner(ownerToken)) {
+    if (!await claimLegacyRuntimeLock(lockDirectory, ownerToken)) return false;
+    return moveClaimedRuntimeLock(lockDirectory, ownerToken);
+  }
   const released = await exists(runtimeOwnerReleaseFile(lockDirectory, ownerToken));
   if (!released) {
     let lastHeartbeat;
     try {
       lastHeartbeat = (await (0, import_promises.stat)(runtimeOwnerHeartbeatFile(lockDirectory, ownerToken))).mtimeMs;
     } catch (error) {
-      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
-        return discardUnverifiableRuntimeLock(lockDirectory);
+      if (!(error instanceof Error) || !("code" in error) || error.code !== "ENOENT") return false;
+      if (await hasRuntimeReclaimMarker(lockDirectory, ownerToken)) return false;
+      if (await exists(runtimeOwnerGenerationFile(lockDirectory, ownerToken))) {
+        return reclaimObservedRuntimeLock(lockDirectory, ownerToken);
       }
-      return false;
+      if (!await claimLegacyRuntimeLock(lockDirectory, ownerToken)) return false;
+      return moveClaimedRuntimeLock(lockDirectory, ownerToken);
     }
     if (Date.now() - lastHeartbeat <= runtimeLockStaleMilliseconds) return false;
   }
-  const staleDirectory = `${lockDirectory}.stale-${(0, import_node_crypto.randomUUID)()}`;
-  try {
-    await (0, import_promises.rename)(lockDirectory, staleDirectory);
-    const movedOwnerToken = await (0, import_promises.readFile)(import_node_path.default.join(staleDirectory, "owner"), "utf8");
-    if (movedOwnerToken !== ownerToken) return false;
-    await (0, import_promises.rm)(staleDirectory, { recursive: true, force: true });
-    return true;
-  } catch {
-    return false;
+  if (await exists(runtimeOwnerGenerationFile(lockDirectory, ownerToken))) {
+    return reclaimObservedRuntimeLock(lockDirectory, ownerToken);
   }
+  if (await hasRuntimeReclaimMarker(lockDirectory, ownerToken)) return false;
+  if (!await claimLegacyRuntimeLock(lockDirectory, ownerToken)) return false;
+  return moveClaimedRuntimeLock(lockDirectory, ownerToken);
 }
 async function prepareRuntimeLock(lockDirectory) {
   const ownerToken = (0, import_node_crypto.randomUUID)();
@@ -384,6 +458,7 @@ async function prepareRuntimeLock(lockDirectory) {
   try {
     await (0, import_promises.mkdir)(stageDirectory);
     await (0, import_promises.writeFile)(import_node_path.default.join(stageDirectory, "owner"), ownerToken, "utf8");
+    await (0, import_promises.writeFile)(runtimeOwnerGenerationFile(stageDirectory, ownerToken), ownerToken, "utf8");
     await (0, import_promises.writeFile)(runtimeOwnerHeartbeatFile(stageDirectory, ownerToken), ownerToken, "utf8");
     return { ownerToken, stageDirectory };
   } catch (error) {
@@ -526,5 +601,6 @@ class TypeScriptRuntimeAcquirer {
   SemanticRuntimeError,
   TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError,
+  reclaimObservedRuntimeLock,
   runtimePlatformPackage
 });
