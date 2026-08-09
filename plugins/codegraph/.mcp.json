@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "codegraph": {
+      "command": "node",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/bin/codegraph-mcp.js"],
+      "env": {
+        "CODEGRAPH_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}"
+      }
+    }
+  }
+}

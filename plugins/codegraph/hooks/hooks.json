@@ -1,0 +1,17 @@
+{
+  "description": "Adds a bounded Codegraph availability pointer at session start.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": ".*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node ${CLAUDE_PLUGIN_ROOT}/hooks/session-start.js",
+            "timeout": 2
+          }
+        ]
+      }
+    ]
+  }
+}
