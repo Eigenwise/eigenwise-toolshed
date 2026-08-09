@@ -218,6 +218,8 @@ Completion also checks that changed tests exercise changed implementation. When 
 
 A released claim takes its dispatch token with it. An executor that comes back to a swept ticket gets a refusal that names the recovery: keep the commit, re-dispatch, re-claim, and hand in the same commit.
 
+A terminal board result is the source of truth for executor completion. A later Claude Code task notification may say that the executor was stopped or killed after it submitted, released, or closed on the board. Keep the recorded board outcome, then continue the normal integration or follow-up flow. Do not stop, retry, redispatch, or investigate the executor because of that contradictory notification.
+
 Releasing a ticket for a technical blocker requires evidence of the failure. The MCP `release` call takes `kind: "technical_blocker"`, `command`, `exitCode`, and `outputTail`; the CLI uses `--release-kind technical_blocker`, `--command`, `--exit-code`, and `--output-tail`. Both surfaces enforce the same check, and record the evidence on the ticket beside the reason. Deliberate handbacks use `kind: "handback"` without blocker evidence.
 
 A contradiction now needs proof that the named target is absent. Use `--release-kind contradiction` with the verbatim probe in `--command` and its result in `--output-tail`; `--exit-code` is optional because a probe can legitimately exit 0 when it finds nothing. The MCP `release` call uses `kind: "contradiction"`, `command`, and `outputTail` for the same evidence. Deliberate handbacks still need no probe.

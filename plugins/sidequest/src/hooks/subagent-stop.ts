@@ -127,7 +127,7 @@ function submissionVerdict(store: Store, ticket: Ticket): string | null {
   if (!readiness.ok) {
     return `exec FINISHED with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(', ')}); do not integrate it`;
   }
-  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md), then TaskStop this executor`;
+  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
 }
 
 function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null {
@@ -135,7 +135,7 @@ function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null
     const submissionVerdictText = submissionVerdict(store, ticket);
     if (submissionVerdictText) return submissionVerdictText;
     if (ticket?.dispatch?.terminalAt && ticket.dispatch.outcome === 'released') {
-      return `exec FINISHED after terminal release: ${ticket.ref}; TaskStop this executor so an owned Monitor cannot resume it`;
+      return `exec FINISHED after terminal release: ${ticket.ref}. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
     }
     if (!ticket || ticket.status !== 'done') continue;
     const comment = doneComment(ticket);
@@ -144,7 +144,7 @@ function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec FINISHED: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
   }
   return null;
 }
@@ -165,7 +165,7 @@ function stopVerdict(
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec FINISHED: ${ticket.ref}${suffix}; verify, then TaskStop this executor so it doesn't linger idle`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
   }
 
   for (const claim of claims) {

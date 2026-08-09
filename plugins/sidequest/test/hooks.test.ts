@@ -2408,35 +2408,35 @@ test('subagent-stop: a stopped executor holding a fresh claim remains resumable'
   assert.match(ctx, new RegExp(`^exec WAITING: ${t.ref} ended a turn while holding its claim; it may resume\.`));
 });
 
-test('subagent-stop: a terminal release tells the parent to stop a Monitor-backed executor', () => {
+test('subagent-stop: a terminal release leaves task state alone after board closeout', () => {
   const sess = `sess-released-${++sqSeq}`;
   const t = addStopTicket('released ticket with a monitor still armed');
   const stop = claimStopTicket(t, sess, 'worker-released');
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
   assert.strictEqual(
     runHook(SUBAGENT_STOP, stop),
-    `exec FINISHED after terminal release: ${t.ref}; TaskStop this executor so an owned Monitor cannot resume it`
+    `exec FINISHED after terminal release: ${t.ref}. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`
   );
 });
 
-test('subagent-stop: a completed executor reports a clean stop from its done comment', () => {
+test('subagent-stop: completed board closeout overrides a contradictory task notification', () => {
   const sess = `sess-completed-${++sqSeq}`;
   const t = addStopTicket('completed ticket with commit note', { files: ['lib/fixture.js'] });
   const stop = claimStopTicket(t, sess, 'worker-completed');
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-completed', { status: 'todo' }).ok, true);
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done (abc1234); verify, then TaskStop this executor so it doesn't linger idle`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done (abc1234); review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`);
 });
 
-test('subagent-stop: a completed file ticket without a hash is flagged', () => {
+test('subagent-stop: completed board closeout without a hash still overrides task state', () => {
   const sess = `sess-no-hash-${++sqSeq}`;
   const t = addStopTicket('completed ticket without commit note', { files: ['lib/fixture.js'] });
   const stop = claimStopTicket(t, sess, 'worker-no-hash');
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-no-hash', { status: 'todo' }).ok, true);
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done WITHOUT commit hash; verify, then TaskStop this executor so it doesn't linger idle`);
+  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done WITHOUT commit hash; review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`);
 });
 
 test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
@@ -2456,14 +2456,14 @@ test('subagent-stop: a legacy partial submission is not reported ready for integ
   );
 });
 
-test('subagent-stop: a submitted executor reports READY_FOR_INTEGRATION, not a dead claim', () => {
+test('subagent-stop: submitted board state overrides a contradictory task notification', () => {
   const sess = `sess-submitted-${++sqSeq}`;
   const t = addStopTicket('submitted ticket awaiting the publish transaction', { files: ['lib/fixture.js'] });
   const stop = claimStopTicket(t, sess, 'worker-submitted');
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
   assert.strictEqual(
     runHook(SUBAGENT_STOP, stop),
-    `exec FINISHED: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md), then TaskStop this executor`
+    `exec FINISHED: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`
   );
 });
 
