@@ -1,406 +1,75 @@
-# model-gateway
+# Model Gateway
 
-[![Version](https://img.shields.io/badge/dynamic/json?url=https%3A%2F%2Fraw.githubusercontent.com%2FEigenwise%2Feigenwise-toolshed%2Fmain%2Fplugins%2Fmodel-gateway%2F.claude-plugin%2Fplugin.json&query=%24.version&label=version&color=blue)](.claude-plugin/plugin.json)
-[![Claude Code](https://img.shields.io/badge/Claude_Code-plugin-D97757?logo=claude&logoColor=white)](https://claude.com/claude-code)
-[![License: MIT](https://img.shields.io/badge/license-MIT-yellow)](../../LICENSE)
-[![GitHub Sponsors](https://img.shields.io/badge/Sponsor-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Eigenwise)
-[![Ko-fi](https://img.shields.io/badge/Ko--fi-support-FF5E5B?logo=kofi&logoColor=white)](https://ko-fi.com/eigenwise)
-[![Discord](https://img.shields.io/badge/chat-on_discord-7289DA?logo=discord&logoColor=white)](https://discord.gg/J3W9b5AZJR)
+Model Gateway puts your ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker. Claude requests keep using your normal Claude login. No OpenAI API key is required.
 
-*Part of the [eigenwise-toolshed](../../README.md), a small marketplace of Claude Code plugins by [Eigenwise](https://eigenwise.io).*
-
-**Your ChatGPT/Codex subscription models, in Claude Code's `/model` picker.** Open `/model`, see
-"GPT-5.6 Sol (Codex)" next to your Anthropic models, and switch mid-session. Codex requests use
-your ChatGPT Plus/Pro subscription through Codex's own OAuth sign-in, not an OpenAI API key or
-pay-per-token API account. Claude requests keep flowing to api.anthropic.com with your normal
-claude.ai login. Both subscriptions, one harness.
-
-> Start with the [model-gateway guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
-
-## How it works
-
-```
-Claude Code ── ANTHROPIC_BASE_URL ──▶ shim (127.0.0.1:18764)
-                                        │
-                     model claude-gpt-* ──▶ claude-code-proxy (:18765) ──▶ Codex backend
-                     everything else ───────▶ api.anthropic.com (untouched passthrough)
-```
-
-- [raine/claude-code-proxy](https://github.com/raine/claude-code-proxy) does the hard part:
-  ChatGPT OAuth (PKCE) and translating the Anthropic Messages API to OpenAI's Codex backend.
-  It's actively maintained, which matters because OpenAI periodically tightens how it
-  fingerprints Codex clients.
-- The **shim** (this plugin, one dependency-free node file) is what gets you the picker.
-  Claude Code's [gateway model discovery](https://code.claude.com/docs/en/llm-gateway-protocol#model-discovery)
-  can populate `/model` from a gateway's `/v1/models`, but it drops ids that don't start with
-  `claude` or `anthropic`. So the shim advertises the proxy's models as `claude-<id>`
-  with readable display names, strips the prefix on the way through, and passes every
-  non-Codex request to api.anthropic.com byte-for-byte (your claude.ai auth, prompt caching,
-  and beta headers are untouched). The built-in picker catalog includes `gpt-5.6-sol`,
-  `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`,
-  `gpt-5.3-codex`, `gpt-5.3-codex-spark`, and `gpt-5.2`; override it with
-  `~/.claude/model-gateway/models.json` if you need a different list.
-- A **SessionStart hook** keeps both processes alive so a wired session never starts against a
-  dead port.
-- model-gateway also publishes a small model catalog (`catalog.json`, next to its state) carrying the
-  GPT-5.6 family (Sol, Terra, Luna) that [sidequest](../sidequest) reads to offer as routing-tier
-  backends. The `/model` picker above still sees every model; the catalog is a separate, narrower
-  surface just for sidequest's tier mapping.
+[Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/model-gateway/) · [Toolshed marketplace](../../README.md)
 
 ## Install
+
+Install at user scope so the keepalive hook works in every project:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install model-gateway@eigenwise-toolshed --scope user
+/model-gateway:model-gateway setup
 ```
 
-**Install it at user scope, as required** (that's the default for `/plugin install`) so its keepalive hook is
-available wherever you work. Wiring is global: `node <plugin>/bin/model-gateway.js env --write-user` writes
-`~/.claude/settings.json` once and covers every project and executor worktree. Run `/update-toolshed`
-to write that block and reconcile any leftover per-project wiring. Per-project wiring used to be the
-default and was removed: a project `.claude/settings.local.json` outranks user settings, so a stale
-project block silently overrode the gateway URL with nothing to show for it. To exempt one project on
-purpose, set `ANTHROPIC_BASE_URL` in that project's `settings.local.json` yourself; `doctor` marks
-whichever file actually wins as `[effective]`. Settings changes apply to new Claude Code sessions, so
-restart open sessions after wiring.
+If setup asks you to sign in, run `/model-gateway:model-gateway login`, finish the browser OAuth flow, and run setup again. Restart Claude Code after setup so it discovers the new model rows.
 
-`env --write-user --reconcile` is a separate, confirmation-gated cleanup. It lists recorded projects whose local URL differs from the global URL; without the flag, those other project `.claude/settings.local.json` files stay unchanged. With the flag, it removes only Model Gateway's own wiring keys, skips projects that already agree, and leaves unrelated env and top-level settings alone. It cannot change `process.env.ANTHROPIC_BASE_URL`, and cleanup affects the next session after a restart.
+The gateway writes its wiring to your user settings. To remove that wiring before uninstalling:
 
-On your next session, Claude notices the plugin isn't set up yet (a one-line SessionStart nudge)
-and offers to finish the job. `setup` downloads claude-code-proxy and starts the gateway; then run
-`/update-toolshed` to wire every recorded project locally. The only thing it can't do for you is
-the ChatGPT browser sign-in, which it asks for when needed. Restart Claude Code and open `/model`:
-the Codex rows are there.
-
-`/workbench:init-workspace` installs and configures model-gateway for a project for you, so manual installation is the fallback.
-
-Prefer doing it by hand? Same thing:
-
-```bash
-node <plugin>/bin/model-gateway.js setup   # download + start; prompts for login if needed
-node <plugin>/bin/model-gateway.js login   # ChatGPT sign-in in your browser (if asked)
-node <plugin>/bin/model-gateway.js setup   # finishes setup after sign-in
-node <plugin>/bin/model-gateway.js env --write-user     # writes ~/.claude/settings.json
+```text
+/model-gateway:model-gateway env --remove
 ```
 
-### Verify the install
+## First successful use
 
-After restarting Claude Code, run the health check and model listing from the plugin directory:
+1. Restart Claude Code.
+2. Run `/model`.
+3. Select a row labeled `From gateway`, or type a model id such as `claude-gpt-5.6-terra`.
+4. Run `doctor` if the rows are missing:
 
 ```bash
 node <plugin>/bin/model-gateway.js doctor
 node <plugin>/bin/model-gateway.js models
 ```
 
-`doctor` should show the proxy binary, a successful Codex auth status, both local ports, a written
-catalog, the global `~/.claude/settings.json` wiring and any project file shadowing it (or global user
-settings if selected). `models` should return `claude-gpt-*` rows. Then
-open `/model` and select a row labeled `From gateway`. If the rows are missing, check that Claude
-Code is v2.1.129 or newer, restart once more, and run `models` to confirm the shim has a catalog.
-
-`doctor` also prints a fallback diagnostic. If a dispatch appears to use a different model than the
-one served, reproduce it in a throwaway session with `CLAUDE_CODE_NO_MODEL_FALLBACK=true`. That turns
-silent fallback into a thrown error identifying the call site. Unset the variable afterwards; normal
-operation should keep graceful fallback for transient 5xx errors.
-
-
-### Upgrades and Windows recovery
-
-`setup` verifies the downloaded archive when a release checksum is published, compares the installed
-and downloaded proxy versions, and restarts only when the proxy changed. The shim is supervised as a
-single instance: `ensure` reaps orphaned listeners, checks the version reported by `/healthz`, and
-replaces a stale supervisor when the installed plugin version differs from the serving version. `doctor`
-prints both values and fails with `VERSION MISMATCH` until the stale supervisor is replaced.
-
-On Windows, an upgrade can fail because the running proxy executable is locked. The installer restores
-the previous binary and restarts it so the working gateway stays available. Reboot Windows, then run
-`node <plugin>/bin/model-gateway.js setup` again. Do not delete the restored executable while the proxy
-is running.
-
-### Migrating from codex-gateway
-
-`codex-gateway` was renamed to `model-gateway` in 0.38.0. Install and invoke `model-gateway`; the
-plugin keeps resolving legacy `claude-codex-*` model ids saved in existing project settings, while the
-picker advertises the current `claude-gpt-*` and `claude-grok-*` ids. Re-run `setup`, then
-`env --write-user`, and restart Claude Code. `/update-toolshed` also migrates old per-project wiring
-to the global user block. Remove old wiring before uninstalling the old plugin so sessions do not keep
-pointing at a dead shim.
+The GPT rows use the ChatGPT/Codex subscription route. Grok rows use the official Grok CLI subscription route when that CLI is installed and signed in. Claude models continue through Anthropic.
 
 ## Commands
 
-| Command | What it does |
-|---|---|
-| `setup` | Download the latest claude-code-proxy release for your platform, verify sha256 |
-| `login [--device]` | ChatGPT OAuth; `--device` prints a device code for headless boxes |
-| `start` / `stop` / `status` | Manage the proxy + shim (detached; logs in `~/.claude/model-gateway/logs/`) |
-| `ensure [--quiet]` | Start whatever's down; the SessionStart hook runs this |
-| `models` | Show exactly what the shim advertises to the picker |
-| `catalog [--json]` | Print the sidequest-readable model catalog (recomputed if stale/missing) |
-| `pin [--opus\|--sonnet\|--fable <model\|default>]` | Show or persist the native Claude alias pins |
-| `env [--write-user\|--remove] [--reconcile]` | Write or remove global `~/.claude/settings.json` wiring; `--reconcile` is a confirmation-gated cleanup of plugin-owned keys in other recorded projects |
-| `doctor` | Binary, auth, ports, model count, settings wiring, in one shot |
-| `remote-control enable\|disable\|doctor` | Confirmation-gated hosts compatibility procedure, or read-only diagnosis |
-
-### Trace unexpected model usage
-
-Set `CODEX_GATEWAY_REQUEST_LOG=1` before starting the shim. It appends one JSON object per routed
-request to `~/.claude/model-gateway/logs/request-routes.jsonl`: timestamp, route (`codex` or
-`anthropic`), requested model, request path, and Claude Code's session id when supplied. It never
-writes request bodies, prompts, tool payloads, authorization, or arbitrary headers. Set
-`CODEX_GATEWAY_REQUEST_LOG_PATH` to put this metadata-only log somewhere else.
-
 ```text
-{"at":"...","backend":"anthropic","model":"claude-fable-5","path":"/v1/messages","sessionId":"..."}
+setup                         download or update the local proxy and start the gateway
+login [--device]              sign in to ChatGPT/Codex, with device login for headless hosts
+start / stop / status          manage the local proxy and shim
+ensure                         start anything that is down
+models                        show models advertised to Claude Code
+catalog [--json]              show the catalog consumed by Sidequest
+pin --opus|--sonnet|--fable   show or save a native Claude alias pin
+env --write-user              write user-level gateway wiring
+env --remove                  remove only gateway-owned wiring
+doctor                        check auth, processes, ports, models, and wiring
+remote-control enable|disable|doctor
+                              manage Remote Control compatibility
 ```
 
-The route log is created with mode `0600` and keeps its fixed metadata-only schema.
+The executable lives at `<plugin>/bin/model-gateway.js`. The plugin's [generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/model-gateway/) has the complete command and configuration reference.
 
-### Trace-linked route telemetry
+## Remote Control
 
-When `CLAUDE_CODE_PROPAGATE_TRACEPARENT=1`, the shim emits one OTLP/HTTP JSON span and event per routed request. A valid incoming W3C `traceparent` becomes the span's parent. Missing or invalid context produces an unlinked root span instead, so route evidence remains available without inventing a request link.
+Remote Control and gateway model discovery cannot both be active. Use the `remote-control-compatibility` skill to switch modes. Compatibility mode hides gateway rows from `/model`; an explicit id such as `/model claude-gpt-5.6-terra` still routes through the gateway. Restart Claude Code after changing modes.
 
-The fixed payload contains only route ID, trace/span/parent IDs, safe session ID, selected and effective model, backend, effort, fallback, `via`, bounded status, and gateway-observed duration. It never includes request or response bodies, prompts, tools, arbitrary headers, credentials, `tracestate`, baggage, or error text. Incoming trace headers are consumed and removed before both upstream routes. Claude credentials are also removed before the Codex proxy; the Anthropic passthrough keeps only the credential it needs for Anthropic itself. No incoming auth header is copied to telemetry.
+## Troubleshooting
 
-Telemetry defaults to `http://127.0.0.1:4318/v1/traces`. `CODEX_GATEWAY_TELEMETRY_ENDPOINT` can point it at another loopback OTLP endpoint, while `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT` and `OTEL_EXPORTER_OTLP_ENDPOINT` are accepted as fallbacks. Non-loopback endpoints are ignored, `CODEX_GATEWAY_TELEMETRY_ENDPOINT=0` disables export, and connection, timeout, encoding, or collector failures never change the routed response.
+- **No gateway rows:** restart Claude Code, then run `models` and `doctor`. Discovery requires Claude Code v2.1.129 or newer.
+- **Codex errors, Claude works:** run `login` if `doctor` reports missing auth, then run `setup` again.
+- **A local process is down:** run `ensure`.
+- **A project overrides the gateway:** `doctor` shows which settings source wins. A project or process-level `ANTHROPIC_BASE_URL` takes precedence over user settings.
 
-### Gateway-primary token usage
+## Sidequest
 
-The shim emits one `gateway.token.usage` OTLP log after each successful proxied `/v1/messages` response. Response token and cache buckets come straight from the provider. The log also carries the resolved model and effort, Claude Code's safe session/agent/parent IDs, exact serialized byte counts for system, tools, messages, history, and tool results, plus estimated token splits normalized to the exact full input total. A failed response emits `gateway.limit.signal` only when it includes useful rate-limit, retry, or Codex throttle headers.
-
-This is counts-only telemetry. Prompts, tool schemas, tool arguments, tool results, response text, credentials, arbitrary headers, baggage, and error text never enter the record. JSON and SSE inspection is bounded and fail-open, and the loopback POST runs after the client response finishes. `CODEX_GATEWAY_USAGE_ENDPOINT` overrides the default `http://127.0.0.1:4318/v1/logs`; set it to `0` to disable export. The standard OTLP logs and base endpoint variables work as fallbacks. See [the usage observability design](docs/usage-observability.md) for the field contract, cache math, dashboard views, and known gaps.
-
-`doctor` and `/healthz` report whether the gateway URL is wired through Claude Code settings. A shell-only `ANTHROPIC_BASE_URL` can miss background sessions, so the shim warns about it. Fast-mode availability and WebFetch domain-safety checks bypass the gateway. Output tokens have no source split, and per-section cache attribution stays estimated.
-
-Claude Code resolves `ANTHROPIC_BASE_URL` in this order: process environment, the current project's
-`.claude/settings.local.json`, the project's shared `.claude/settings.json`, then user
-`~/.claude/settings.json`. `doctor` marks the winner `[effective]` and the configured wiring scope
-`[selected mode]`. If those disagree about compat versus default mode, `doctor` exits 1 and names
-both files plus the fix. A process-environment winner cannot be fixed by rewriting settings; unset
-that environment value and start a new session.
-
-After changing any of these variables, restart the gateway (`stop`, then `start`) so its detached shim gets the new environment.
-
-### Settings and environment owned by the plugin
-
-`env --write-user` owns one `env` block in `~/.claude/settings.json`. It writes the gateway URL,
-model discovery, non-streaming fallback protection, tool search, and the output-token limit:
-
-```json
-{
-  "ANTHROPIC_BASE_URL": "http://127.0.0.1:18764",
-  "CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY": "1",
-  "CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK": "1",
-  "ENABLE_TOOL_SEARCH": "true",
-  "CLAUDE_CODE_MAX_OUTPUT_TOKENS": "64000",
-  "ANTHROPIC_DEFAULT_OPUS_MODEL": "claude-opus-5[1m]",
-  "ANTHROPIC_DEFAULT_SONNET_MODEL": "claude-sonnet-5[1m]",
-  "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5[1m]"
-}
-```
-
-The three alias values are detected from the installed Claude CLI, cached under
-`~/.claude/model-gateway/detected-pins.json`, and can be overridden in
-`~/.claude/model-gateway/pins.json`. `env --remove` removes only these gateway-owned keys and the
-legacy `CLAUDE_CODE_AUTO_COMPACT_WINDOW=950000` value. It never removes unrelated settings.
-
-The plugin's state lives under `~/.claude/model-gateway/`: the downloaded proxy is in `bin/`, logs
-are in `logs/`, route and dispatch metadata use `request-routes.jsonl` and `dispatch-routes.json`,
-the catalog is `catalog.json`, and supervisor or upstream failure markers are stored beside them.
-ChatGPT/Codex OAuth belongs to claude-code-proxy at `~/.config/claude-code-proxy/` (Windows normally
-uses `%APPDATA%\\claude-code-proxy\\`); this plugin does not store those credentials. Grok CLI OAuth
-belongs to `~/.grok/auth.json` unless `CODEX_GATEWAY_GROK_HOME` changes that directory.
-
-Optional process environment overrides are grouped by purpose:
-
-- **Ports and runtime:** `CODEX_GATEWAY_PORT` (shim, default `18764`),
-  `CODEX_GATEWAY_WORKER_PORT`, `CODEX_GATEWAY_PROXY_PORT` (proxy, default `18765`),
-  `CODEX_GATEWAY_SOCKET_PATH`, and `CODEX_GATEWAY_DRAIN_TIMEOUT_MS`.
-- **Models and routing:** `CODEX_GATEWAY_CONTEXT_WINDOW`, `CODEX_GATEWAY_COMPACT_TRIGGER`,
-  `CODEX_GATEWAY_GROK_ENDPOINT`, `CODEX_GATEWAY_ANTHROPIC_UPSTREAM`,
-  `CODEX_GATEWAY_DISPATCH_CACHE_PATH`, `CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS`,
-  `CODEX_GATEWAY_DISPATCH_CACHE_MAX_SESSIONS`, and `CODEX_GATEWAY_LIST_DISPATCH_MODEL=1`.
-- **Compaction and streaming:** `CODEX_GATEWAY_SENTRY=0`,
-  `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0`, `CODEX_GATEWAY_COMPACT_STREAM_RETRIES`,
-  `CODEX_GATEWAY_COMPACT_STREAM_RETRY_DELAY_MS`, `CODEX_GATEWAY_COMPACT_STREAM_MAX_BYTES`,
-  `CODEX_GATEWAY_SSE_HEARTBEAT_S`, `CODEX_GATEWAY_WS_UPGRADE_RETRIES`, and
-  `CODEX_GATEWAY_WS_UPGRADE_RETRY_DELAY_MS`.
-- **Diagnostics and telemetry:** `CODEX_GATEWAY_REQUEST_LOG=0`,
-  `CODEX_GATEWAY_REQUEST_LOG_PATH`, `CLAUDE_CODE_PROPAGATE_TRACEPARENT=1`,
-  `CODEX_GATEWAY_TELEMETRY_ENDPOINT`, `OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`,
-  `OTEL_EXPORTER_OTLP_ENDPOINT`, and `CODEX_GATEWAY_USAGE_ENDPOINT` (set the gateway-specific
-  telemetry or usage endpoint to `0` to disable that export). `MODEL_GATEWAY_REQUEST_BODY_DIR`
-  changes the local request-body high-water directory.
-- **Advanced setup and compatibility:** `CODEX_GATEWAY_CLAUDE_BIN`,
-  `CODEX_GATEWAY_PIN_CACHE_TTL_MS`, `CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS`,
-  `CODEX_GATEWAY_KEEP_PLAN_TOOLS=1`, `CODEX_GATEWAY_HOSTS_FILE`, and
-  `CODEX_GATEWAY_COMPAT_PORT`.
-
-These overrides are for the detached gateway process. Changing a shell variable alone does not
-rewrite Claude Code settings or update an already-running shim; use `env --write-user`, then restart
-as appropriate.
-
-### RC-compatibility mode (restoring `/remote-control`)
-
-Claude Code's built-in `/remote-control` only lights up when `ANTHROPIC_BASE_URL` is exactly the
-real Anthropic host. Remote Control and the Codex/Grok rows in `/model` cannot both work. RC-compatibility
-points the base URL at `api.anthropic.com`, which makes Claude Code disable gateway model discovery.
-The gateway still routes explicit ids, so type `/model claude-gpt-5.6-terra`; Claude Code accepts it
-and saves it as the default. Routing and Sidequest dispatch are unaffected. The mode is opt-in,
-detected, and completely reversible:
-
-Anthropic's [official Remote Control documentation](https://code.claude.com/docs/en/remote-control)
-also requires Claude Code v2.1.51 or later, a Pro/Max/Team/Enterprise subscription (not an API key),
-a full-scope claude.ai login, and prior workspace trust. Team and Enterprise admins must enable the
-feature. Before blaming gateway compatibility, check `claude --version`, run `/status`, and use
-`/login` with the claude.ai option; unset `ANTHROPIC_API_KEY` if it is forcing API-key auth.
-
-1. Run `node <plugin>/bin/model-gateway.js remote-control doctor` first. It is read-only and
-   reports partial blocks, conflicting mappings, elevation needs, port conflicts, stale settings,
-   and recovery failures.
-2. **You** (never this plugin) can add one marker-delimited block to your hosts file, mapping
-   `api.anthropic.com` to loopback. The `remote-control-compatibility` skill explains the exact
-   edit, asks for direct user confirmation, backs up the file, then runs
-   `remote-control enable --confirm` only after that answer:
-
-   | OS | Hosts file | Managed line |
-   |---|---|---|
-   | Windows | `C:\Windows\System32\drivers\etc\hosts` (edit as Administrator) | `127.0.0.1 api.anthropic.com` |
-   | macOS | `/etc/hosts` (edit with `sudo`) | `127.0.0.1 api.anthropic.com` |
-   | Linux | `/etc/hosts` (edit with `sudo`) | `127.0.0.1 api.anthropic.com` |
-
-   The match has to be exact: a loopback address (`127.0.0.1` or `::1`) and the literal hostname
-   `api.anthropic.com` (other aliases on the same line are fine; comments after `#` are ignored).
-   The plugin writes only its own marked block and preserves all unrelated hosts content.
-3. On the next `ensure` (the SessionStart hook, or `setup`/`doctor`), model-gateway detects the
-   entry, confirms it can actually bind loopback **port 80**, and — only if both hold — switches
-   the plugin-owned `ANTHROPIC_BASE_URL` to `http://api.anthropic.com` and starts a second listener
-   on that port next to the usual `127.0.0.1:18764`. Nothing else in your settings changes. You get
-   exactly one line telling you to restart Claude Code.
-4. Restart Claude Code. Claude Code disables gateway model discovery while the base URL host is
-   `api.anthropic.com`, so the Codex/Grok rows disappear from `/model`. To keep using a gateway model,
-   type its full id directly, for example `/model claude-gpt-5.6-terra`. Claude Code accepts it and
-   saves it as the default for new sessions. The shim routes it to Codex. Disabling compatibility
-   restores the picker rows. Sidequest dispatch is unaffected: it resolves its explicit route marker
-   directly and never depends on `/model` discovery.
-5. Run `remote-control disable --confirm` after another direct confirmation to remove only the
-   plugin-marked block, restore default mode, and verify it. If you manually remove the hosts block,
-   the next `ensure` also reverts the gateway automatically.
-
-If RC compatibility breaks ordinary Claude requests, recover in this order: run
-`remote-control doctor`; run `remote-control disable --confirm` (or remove only the marked hosts
-block if the command cannot run); run `ensure`; verify `doctor` reports default mode; then fully
-restart Claude Code. If Remote Control still fails after the gateway is healthy, follow Anthropic's
-official recovery guidance: refresh the full-scope session with `claude auth login`, retry
-`claude remote-control --verbose`, and confirm outbound HTTPS to the Anthropic API on port 443 is
-not blocked. A machine that was offline for roughly ten minutes must start a new Remote Control
-session rather than resume the expired one.
-
-Notes:
-- Port 80 needs no special privilege on Windows, but Linux and macOS reserve ports below 1024 for
-  root; without `sudo`/`CAP_NET_BIND_SERVICE` the bind fails and model-gateway just stays in
-  default mode (`doctor` shows why).
-- The shim avoids routing back into itself: real (non-Codex) requests still need to reach the
-  actual Anthropic servers, so when the hosts entry is active the shim resolves `api.anthropic.com`
-  with a direct DNS query (which, unlike the OS resolver, never consults the hosts file) instead of
-  the poisoned address your hosts file hands to everything else.
-- `doctor` reports the hosts entry (if any), whether port 80 actually bound, and which mode each
-  settings scope is currently wired to.
-- Test-only overrides (never needed for normal use): `CODEX_GATEWAY_HOSTS_FILE` points detection at
-  a different file, `CODEX_GATEWAY_COMPAT_PORT` changes the port from 80.
-
-## Use with sidequest
-
-If you also run [sidequest](../sidequest) from this marketplace, the two connect on their own. model-gateway
-publishes a catalog of its GPT-5.6 models (`catalog.json`, written on `setup`/`start`), and sidequest reads
-it, so each model tier in the board's gear-menu settings gets a backend dropdown: run that tier on its
-Claude model, or on one of your Codex models. Pick Terra behind the opus tier and opus-tier tickets run
-Terra; sidequest generates a matching executor agent (restart Claude Code to load it). The ladder keeps
-its shape, you're just choosing which model backs each tier. Nothing to wire: install both at user scope,
-open the board settings, set the backends you want. See the sidequest README's *Per-tier Codex backend*
-note for the routing side.
-
-## The fine print
-
-- **Context windows**: Codex GPT-5.6 through the ChatGPT Codex product (the subscription login this
-  gateway routes to, not the pay-per-token API) has a measured 370k input ceiling. The shim advertises
-  `370000` as `max_input_tokens` by default; override it with `CODEX_GATEWAY_CONTEXT_WINDOW` when
-  tuning a machine-specific setup. That advertised value is inert: Claude Code hardwires its own 200k
-  gateway budget for discovered `claude-gpt-*` rows. The backend's HTTP 413 `request_too_large`
-  response is the recovery signal for context overflow. A genuine upstream 413 has no token counts, so
-  the sentry appends its recorded usage before passing it to Claude Code. The shim normalizes older
-  proxy context errors to the same 413 (proxy 0.1.14+ emits it
-  natively). Those ids deliberately have no `[1m]` suffix. `[1m]` is a
-  local Claude Code promise that delays compaction, so keep it off every selected Codex model,
-  including the top-level `model` setting, and use it only for genuine Claude models. Claude models
-  (opus/sonnet/fable, with or without `[1m]`) keep their OWN separate native windows and compaction
-  limits; the shim forwards them byte-identically to Anthropic and never applies Codex window
-  advertisement or error rewriting to them. The env block pins the current real 1M aliases so a
-  gateway session on any of them gets its true 1M window instead of Claude Code's 200k gateway
-  default; haiku stays unpinned (it's 200k). Each `env --write-*` resolves Opus, Sonnet, and Fable
-  through the installed Claude CLI's credential-free headless alias probe, then adds `[1m]`. The
-  result is cached for SessionStart refreshes and falls back to the last good value, then a shipped
-  safe value, if the local CLI cannot answer. To choose an older or custom native model, run
-  `pin --opus claude-opus-4-8[1m]` (or `--sonnet` / `--fable`); an override always wins over
-  auto-detection. `pin --opus default` clears that alias back to the detected default. `pin` prints
-  the effective values and marks overrides, and `doctor` does the same. Overrides persist in
-  `~/.claude/model-gateway/pins.json`, outside the plugin cache. After a pin change or a Claude CLI
-  upgrade, run `env --write-user` and start a new Claude Code session.
-  Until both happen, the existing wiring and open sessions keep their previous pin.
-  Do NOT set a global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to Claude passthrough models too.
-  Version 0.4.4 rewrites stale pre-0.4.2 `[1m]` Codex rows in Claude Code's gateway-model cache in
-  place and serves the built-in rows immediately during shim startup, so restart Claude Code once
-  after upgrading to reload an already-open picker. Legacy typed Codex ids ending in `[1m]` still
-  route, but new sessions should select the unsuffixed picker rows. Loading a huge reference skill
-  (e.g. `claude-api`, ~800k chars) in a single turn can spike Codex context past the point compaction
-  can recover from, so pull large references incrementally on Codex models.
-- **Model quality of life**: typed selection works too: `/model claude-gpt-5.4`, any string
-  passes through on a custom base URL. The advertised list itself is yours to edit:
-  `~/.claude/model-gateway/models.json`, one id per array entry. The proxy has no `/v1/models`
-  route of its own; the shim owns discovery and prefers a future proxy route automatically.
-- **Reasoning display**: the Codex backend doesn't send thinking blocks back, so you get
-  answers without the visible reasoning stream on Codex models. Upstream limitation.
-- **Plan-mode tools are hidden from Codex models.** GPT models call `EnterPlanMode` /
-  `ExitPlanMode` spuriously (they're not trained on Claude Code's tool ecosystem), and an
-  approved plan exit downgrades your permission mode to "accept edits on" instead of restoring
-  it ([anthropics/claude-code#39973](https://github.com/anthropics/claude-code/issues/39973)),
-  which in bypass mode means sudden permission prompts on everything. The shim strips those two
-  tools from Codex-bound requests; Claude models keep them. If you actually want plan mode with
-  a GPT model, set `CODEX_GATEWAY_KEEP_PLAN_TOOLS=1` for the shim process.
-- **`/compact` on a Codex model is retried for you.** claude-code-proxy sends every streaming
-  request over a WebSocket to the Codex backend, and that path can only recover from a dropped
-  socket *before* its first chunk of output. After that, a socket that closes without the final
-  event turns into a mid-stream error carrying the raw slug `websocket_missing_terminal` (or, with
-  a status attached, Claude Code's "Server error mid-response"). A compaction turn is one long
-  generation over the biggest body in the session, so it sits in that unrecoverable window for
-  minutes and eats the failure far more often than a normal turn does. The shim now recognizes
-  Claude Code's compaction request by its own system prompt and buffers the translated stream for
-  those requests only: if the stream ends without a terminal `message_stop`, it retries the whole
-  turn on the same model while your client has seen nothing, so you get one complete summary
-  instead of a half-written one. Normal turns still stream live and are untouched. Nothing is
-  invented: once retries run out you get the real upstream error events, and a stream that
-  truncated with no error at all gets an explicit one saying so. Tune it with
-  `CODEX_GATEWAY_COMPACT_STREAM_RETRIES` (default `2`), turn it off with
-  `CODEX_GATEWAY_COMPACT_STREAM_GUARD=0`, and check what's live in `/healthz` under `compaction`.
-- **Availability**: OpenAI has tightened client fingerprinting before (May 2026), which broke
-  unofficial clients until they updated. When Codex models start dying mid-stream, re-run
-  `setup` to pick up the latest proxy release. Claude models are never affected; worst case
-  `env --remove` restores stock behavior instantly.
-- **ToS**: routing your own subscription through a local proxy is a gray area OpenAI currently
-  tolerates (and adjacent patterns they openly endorse), but it's your account; read the room
-  before pointing this at anything that matters. This plugin stores no credentials itself;
-  OAuth tokens live where claude-code-proxy puts them (`%APPDATA%\claude-code-proxy\` on
-  Windows, Keychain on macOS).
-- **Uninstalling**: run `env --remove` first, then remove the plugin; otherwise sessions keep
-  pointing at a shim that no hook restarts.
-
-## Support
-
-model-gateway is free and MIT-licensed. If it saves you time, [a coffee](https://ko-fi.com/eigenwise) or [a GitHub sponsorship](https://github.com/sponsors/Eigenwise) genuinely helps me keep building and maintaining these tools.
-
-| Ko-fi | GitHub Sponsors |
-|:-----:|:---------------:|
-| <a href="https://ko-fi.com/eigenwise"><img height="32" alt="Support me on Ko-fi" src="https://ko-fi.com/img/githubbutton_sm.svg"></a> | <a href="https://github.com/sponsors/Eigenwise"><img height="32" alt="Sponsor on GitHub" src="https://img.shields.io/badge/Sponsor-EA4AAA?style=for-the-badge&logo=githubsponsors&logoColor=white"></a> |
+If you also install [Sidequest](../sidequest), it reads the gateway's model catalog and can use GPT-5.6 models as routed backends. Install both plugins at user scope, then choose the backend in Sidequest settings.
 
 ## License
 
-MIT (c) Eigenwise
+MIT
