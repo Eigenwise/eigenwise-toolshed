@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.442.0 (2026-08-11)
+
+### observability 0.7.2 → 0.7.3
+
+#### Fixes
+
+- Keep observer hook-spool failures visible (SQ-1812)
+  Observer hook-spool drain failures now log their cause, appear in health, yield between batches, and move repeated failures into a dated poison file.
+- Prune the observability database by size, without stalling the observer (SQ-1813)
+  Retention pruning could never bring a database back under its 1 GB cap, so the file only grew. Pruning now also drops the oldest days once the cap is passed, a few days per pass so it never blocks ingest, and `/toolshed-doctor` reports the storage block instead of skipping it. Reclaiming the file space runs `VACUUM`, which takes about a minute per 2 GB, so only the `prune-observability` CLI does that.
+
+### workbench 0.86.0 → 0.86.1
+
+#### Fixes
+
+- Prune the observability database by size, without stalling the observer (SQ-1813)
+  Retention pruning could never bring a database back under its 1 GB cap, so the file only grew. Pruning now also drops the oldest days once the cap is passed, a few days per pass so it never blocks ingest, and `/toolshed-doctor` reports the storage block instead of skipping it. Reclaiming the file space runs `VACUUM`, which takes about a minute per 2 GB, so only the `prune-observability` CLI does that.
+
 ## v3.441.0 (2026-08-10)
 
 ### quartermaster 0.2.1 → 0.2.2
