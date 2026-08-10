@@ -374,15 +374,15 @@ function createAnalysisService(
   projectRoot: string,
   configFile: string | null,
 ): PyrightAnalysisService {
-  const console = { log: (_message: string) => undefined, info: (_message: string) => undefined, warn: (_message: string) => undefined, error: (_message: string) => undefined };
+  const analysisConsole = { log: (_message: string) => undefined, info: (_message: string) => undefined, warn: (_message: string) => undefined, error: (_message: string) => undefined };
   const tempFile = new nodeFileSystem.RealTempFile();
   const fileSystem = new pyrightFileSystem.PyrightFileSystem(nodeFileSystem.createFromRealFileSystem(
     tempFile,
-    console,
-    new nodeFileSystem.WorkspaceFileWatcherProvider(console),
+    analysisConsole,
+    new nodeFileSystem.WorkspaceFileWatcherProvider(analysisConsole),
   ));
-  const provider = serviceProvider.createServiceProvider(fileSystem, console, tempFile);
-  const service = new AnalyzerService('codegraph', provider, {});
+  const provider = serviceProvider.createServiceProvider(fileSystem, analysisConsole, tempFile);
+  const service = new AnalyzerService('codegraph', provider, { console: analysisConsole });
   if (typeof service !== 'object' || service === null || !('test_program' in service) || !('dispose' in service) || !('setOptions' in service) || !('enumerateSourceFiles' in service)) {
     throw new PyrightCompatibilityError('AnalyzerService does not expose the pinned analysis program');
   }
