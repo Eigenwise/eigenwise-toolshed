@@ -4,6 +4,8 @@ const fs = require('node:fs');
 
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_BATCH_SIZE = 256;
+const DEFAULT_DRAIN_BUDGET_MS = 250;
+const DEFAULT_FAILURE_THRESHOLD = 3;
 
 function readBoundedLines(filePath, maxBytes) {
   const stat = fs.statSync(filePath);
@@ -26,7 +28,68 @@ function readBoundedLines(filePath, maxBytes) {
   };
 }
 
-function drainHookSpool(options) {
+function errorCode(error) {
+  return typeof error?.code === 'string' && error.code.length > 0 ? error.code : 'hook_spool_drain_failed';
+}
+
+function errorMessage(error) {
+  return error instanceof Error && error.message ? error.message : String(error);
+}
+
+function poisonPath(spoolPath) {
+  const date = new Date().toISOString().slice(0, 10);
+  const datedPath = `${spoolPath}.poison-${date}`;
+  if (!fs.existsSync(datedPath)) return datedPath;
+  for (let suffix = 1; ; suffix += 1) {
+    const candidate = `${datedPath}-${suffix}`;
+    if (!fs.existsSync(candidate)) return candidate;
+  }
+}
+
+function recordDrainFailure(options, drainingPath, error) {
+  const state = options.failureState;
+  if (!state) return;
+  state.consecutive_failures = Number(state.consecutive_failures || 0) + 1;
+  state.last_error = {
+    code: errorCode(error),
+    message: errorMessage(error),
+    file: drainingPath,
+    at: new Date().toISOString(),
+  };
+  const threshold = Math.max(1, Number(options.failureThreshold) || DEFAULT_FAILURE_THRESHOLD);
+  if (state.consecutive_failures < threshold) return;
+  const quarantinedPath = poisonPath(options.spoolPath);
+  fs.renameSync(drainingPath, quarantinedPath);
+  state.last_error.quarantined_file = quarantinedPath;
+  state.last_quarantined_file = quarantinedPath;
+  state.last_quarantined_at = new Date().toISOString();
+  state.consecutive_failures = 0;
+}
+
+function recordDrainSuccess(options) {
+  const state = options.failureState;
+  if (!state) return;
+  state.consecutive_failures = 0;
+  state.last_error = null;
+  state.last_success_at = new Date().toISOString();
+}
+
+function drainBudgetMs(options) {
+  return Math.max(10, Math.min(60_000, Number(options.drainBudgetMs) || DEFAULT_DRAIN_BUDGET_MS));
+}
+
+function assertWithinBudget(deadline) {
+  if (Date.now() <= deadline) return;
+  const error = new Error('Hook spool drain exceeded its time budget.');
+  error.code = 'HOOK_SPOOL_DRAIN_TIMEOUT';
+  throw error;
+}
+
+function yieldToEventLoop() {
+  return new Promise((resolve) => setImmediate(resolve));
+}
+
+async function drainHookSpool(options) {
   const spoolPath = options && options.spoolPath;
   const store = options && options.store;
   if (!spoolPath || !store || typeof store.ingestBatch !== 'function') {
@@ -34,47 +97,62 @@ function drainHookSpool(options) {
   }
 
   const drainingPath = `${spoolPath}.draining`;
-  if (!fs.existsSync(drainingPath)) {
-    try {
-      fs.renameSync(spoolPath, drainingPath);
-    } catch (error) {
-      if (error && error.code === 'ENOENT') return { drained: 0, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0 };
-      throw error;
+  try {
+    if (!fs.existsSync(drainingPath)) {
+      try {
+        fs.renameSync(spoolPath, drainingPath);
+      } catch (error) {
+        if (error && error.code === 'ENOENT') return { drained: 0, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0 };
+        throw error;
+      }
     }
-  }
 
-  const maxBytes = Math.max(1024, Number(options.maxBytes) || DEFAULT_MAX_BYTES);
-  const batchSize = Math.max(1, Math.min(1024, Number(options.batchSize) || DEFAULT_BATCH_SIZE));
-  const { lines, droppedBytes } = readBoundedLines(drainingPath, maxBytes);
-  const observations = [];
-  let malformed = 0;
-  for (const line of lines) {
-    try {
-      const observation = JSON.parse(line);
-      if (options.projectId && !observation.project_id) observation.project_id = options.projectId;
-      observations.push(observation);
-    } catch {
-      malformed += 1;
+    const maxBytes = Math.max(1024, Number(options.maxBytes) || DEFAULT_MAX_BYTES);
+    const batchSize = Math.max(1, Math.min(1024, Number(options.batchSize) || DEFAULT_BATCH_SIZE));
+    const deadline = Date.now() + drainBudgetMs(options);
+    const { lines, droppedBytes } = readBoundedLines(drainingPath, maxBytes);
+    const observations = [];
+    let malformed = 0;
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+      if (lineIndex % batchSize === 0) {
+        assertWithinBudget(deadline);
+        await yieldToEventLoop();
+      }
+      try {
+        const observation = JSON.parse(lines[lineIndex]);
+        if (options.projectId && !observation.project_id) observation.project_id = options.projectId;
+        observations.push(observation);
+      } catch {
+        malformed += 1;
+      }
     }
-  }
 
-  let drained = 0;
-  let duplicates = 0;
-  let rejected = 0;
-  for (let offset = 0; offset < observations.length; offset += batchSize) {
-    const results = store.ingestBatch(observations.slice(offset, offset + batchSize));
-    for (const result of results) {
-      if (!result.accepted) rejected += 1;
-      else if (result.duplicate) duplicates += 1;
-      else drained += 1;
+    let drained = 0;
+    let duplicates = 0;
+    let rejected = 0;
+    for (let offset = 0; offset < observations.length; offset += batchSize) {
+      assertWithinBudget(deadline);
+      const results = store.ingestBatch(observations.slice(offset, offset + batchSize));
+      for (const result of results) {
+        if (!result.accepted) rejected += 1;
+        else if (result.duplicate) duplicates += 1;
+        else drained += 1;
+      }
+      await yieldToEventLoop();
     }
+    fs.unlinkSync(drainingPath);
+    recordDrainSuccess(options);
+    return { drained, duplicates, rejected, malformed, droppedBytes };
+  } catch (error) {
+    if (fs.existsSync(drainingPath)) recordDrainFailure(options, drainingPath, error);
+    throw error;
   }
-  fs.unlinkSync(drainingPath);
-  return { drained, duplicates, rejected, malformed, droppedBytes };
 }
 
 module.exports = {
   DEFAULT_BATCH_SIZE,
+  DEFAULT_DRAIN_BUDGET_MS,
+  DEFAULT_FAILURE_THRESHOLD,
   DEFAULT_MAX_BYTES,
   drainHookSpool,
   readBoundedLines,

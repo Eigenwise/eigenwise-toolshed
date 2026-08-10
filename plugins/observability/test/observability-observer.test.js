@@ -12,6 +12,7 @@ const {
   installedPluginVersion,
 } = require('../bin/observer.js');
 const { createOutboxDrainer, flushOutbox } = require('../lib/observability/outbox.js');
+const { drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
@@ -499,6 +500,74 @@ test('health reports an outbox that stopped attempting delivery', async (t) => {
   assert.equal(health.error, 'outbox_stalled');
   assert.equal(health.outbox.exhausted_count, 0);
   assert.equal(health.outbox.last_error_code, 'transport_typeerror');
+});
+
+test('quarantines repeatedly failing hook spools, logs their error, and keeps health answering', async (t) => {
+  const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-poison-spool-'));
+  t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
+  const spoolPath = path.join(spoolDirectory, 'hook-spool.jsonl');
+  fs.writeFileSync(spoolPath, '{"event":"one"}\n');
+  const logs = [];
+  let resolveSecondFailure;
+  const secondFailure = new Promise((resolve) => { resolveSecondFailure = resolve; });
+  const observer = createObserver({
+    store: {
+      ingestBatch() { throw Object.assign(new Error('database is busy'), { code: 'SQLITE_BUSY' }); },
+      queryView() { return [{ pending_count: 0 }]; },
+      storageMetrics() { return {}; },
+    },
+    host: '127.0.0.1',
+    port: 0,
+    hookSpoolFile: spoolPath,
+    hookSpoolFailureThreshold: 2,
+    hookSpoolIntervalMs: 250,
+    logger: {
+      error(message, details) {
+        logs.push({ message, details });
+        if (logs.length === 2) resolveSecondFailure();
+      },
+    },
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+  await secondFailure;
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+  assert.equal(response.status, 200);
+  const health = await response.json();
+  assert.equal(health.ok, true);
+  assert.equal(health.spool.last_error.code, 'SQLITE_BUSY');
+  assert.equal(health.spool.consecutive_failures, 0);
+  assert.match(health.spool.last_quarantined_file, /hook-spool\.jsonl\.poison-\d{4}-\d{2}-\d{2}$/);
+  assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
+  assert.equal(fs.existsSync(health.spool.last_quarantined_file), true);
+  assert.deepEqual(logs[0], {
+    message: 'Observer hook spool drain failed',
+    details: { code: 'SQLITE_BUSY', message: 'database is busy', file: `${spoolPath}.draining` },
+  });
+});
+
+test('hook spool drain yields at its time budget', async (t) => {
+  const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-budget-spool-'));
+  t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
+  const spoolPath = path.join(spoolDirectory, 'hook-spool.jsonl');
+  fs.writeFileSync(spoolPath, '{"event":"one"}\n{"event":"two"}\n');
+  const state = { consecutive_failures: 0, last_error: null };
+  const store = {
+    ingestBatch() {
+      const deadline = Date.now() + 20;
+      while (Date.now() < deadline) {}
+      return [{ accepted: true, duplicate: false }];
+    },
+  };
+
+  await assert.rejects(
+    drainHookSpool({ spoolPath, store, batchSize: 1, drainBudgetMs: 10, failureState: state }),
+    { code: 'HOOK_SPOOL_DRAIN_TIMEOUT' },
+  );
+  assert.equal(state.consecutive_failures, 1);
+  assert.equal(fs.existsSync(`${spoolPath}.draining`), true);
 });
 
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {
