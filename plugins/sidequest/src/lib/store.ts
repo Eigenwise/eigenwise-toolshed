@@ -621,14 +621,15 @@ function negativeControlResult(ticket?: any, expectedTestNames: string[] = []) {
     const waived = markerLine.match(/^\[sidequest:negative-control\]\s+waived\s+(.+)/);
     const waiverReason = waived?.[1]?.trim();
     if (waiverReason) return waiverReason.length >= 20 ? { kind: 'waived' } : { kind: 'short_waiver' };
-    const failed = markerLine.match(/^\[sidequest:negative-control\]\s+(.+?)\s+failed=(\d+)/);
+    const failed = markerLine.match(/^\[sidequest:negative-control\]\s+target=([^;]+);\s*assertion=([^;]+);\s*(.+?)\s+failed=(\d+)/);
     if (failed) {
-      if (Number(failed[2]) === 0) return { kind: 'zero_failures' };
+      if (Number(failed[4]) === 0) return { kind: 'zero_failures' };
       const failureKind = negativeControlFailureKind(body);
       if (failureKind) return { kind: failureKind };
       const unreportedTests = negativeControlTestReport(body, expectedTestNames);
       return unreportedTests.length ? { kind: 'unreported_tests', tests: unreportedTests } : { kind: 'failed' };
     }
+    if (/^\[sidequest:negative-control\]\s+.+?\s+failed=\d+/.test(markerLine)) return { kind: 'missing_target_or_assertion' };
     if (!malformedMarkerLine) malformedMarkerLine = markerLine;
   }
   if (malformedMarkerLine) return { kind: 'malformed_marker', markerLine: malformedMarkerLine };
@@ -643,6 +644,13 @@ function negativeControlRefusal(ticket?: any, result?: any) {
       ok: false,
       reason: `negative_control_${result.kind}`,
       message: `${ticket.ref} completion refused: the recorded negative control failed with ${failure}. ${recipe}`,
+    };
+  }
+  if (result.kind === 'missing_target_or_assertion') {
+    return {
+      ok: false,
+      reason: 'negative_control_evidence_required',
+      message: `${ticket.ref} completion refused: the negative control must name the broken target and the assertion that failed. ${recipe}`,
     };
   }
   if (result.kind === 'zero_failures') {

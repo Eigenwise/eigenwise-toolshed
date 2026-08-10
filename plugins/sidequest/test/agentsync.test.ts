@@ -1028,6 +1028,9 @@ test('small-ticket lifecycle retires three optional board round trips', () => {
   assert.match(generatedExecutor, /Use focused tests while editing/);
   assert.match(generatedExecutor, /Run one final broad gate after all edits and generated output are current/);
   assert.match(generatedExecutor, /Do not run a temporary negative-control/);
+  assert.match(generatedExecutor, /state the changed behavior it exercised and how you know/);
+  assert.match(generatedExecutor, /target=<broken file:line or behavior>; assertion=<named assertion>/);
+  assert.match(generatedExecutor, /verification execution evidence/);
   assert.match(generatedExecutor, /canonical full final report/);
   assert.match(generatedExecutor, /Do not post a separate pre-submit final-report comment/);
 });
@@ -1040,6 +1043,7 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
   }, 'claude-token-347');
   assert.doesNotMatch(briefing, /\[switchboard-route model=/);
   assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then put the full final report in submit\.body/);
+  assert.match(briefing, /verification execution evidence: changed behavior, named assertion, and empty-state proof/);
   assert.match(briefing, /Submit writes the short terminal submission marker/);
   assert.doesNotMatch(briefing, /After submit, keep the terminal board comment/);
 });
