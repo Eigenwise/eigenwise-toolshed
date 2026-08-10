@@ -40,6 +40,24 @@ var import_runtime_contract = require("./runtime-contract.js");
 var import_typescript = require("./extractors/typescript.js");
 var import_queries = require("./queries.js");
 var import_paths = require("./paths.js");
+const persistedStatuses = /* @__PURE__ */ new Set(["missing", "ready", "stale", "unavailable", "error"]);
+function isRecord(value) {
+  return typeof value === "object" && value !== null;
+}
+function isPersistedIndexFailure(value) {
+  return isRecord(value) && typeof value.reason === "string" && value.reason.length > 0 && typeof value.failedAt === "string" && value.failedAt.length > 0;
+}
+function malformedStatusState() {
+  return { status: "error", message: "Codegraph status metadata is malformed. Run codegraph_index to recover." };
+}
+function persistedFailureState(value) {
+  if (!isRecord(value) || typeof value.status !== "string" || !persistedStatuses.has(value.status)) {
+    return malformedStatusState();
+  }
+  if (value.status !== "error") return value.failure === void 0 ? void 0 : malformedStatusState();
+  if (!isPersistedIndexFailure(value.failure)) return malformedStatusState();
+  return { status: "error", message: value.failure.reason, failure: value.failure };
+}
 function messageFor(status) {
   if (status === "missing") return "Codegraph has no indexed snapshot. Run codegraph_index first.";
   if (status === "stale") return "Codegraph snapshot is stale. Run codegraph_index to refresh it.";
@@ -79,7 +97,10 @@ class CodegraphService {
   freshness;
   stateDirectory;
   buildIndex;
+  persistedState;
   state = { status: "missing", message: messageFor("missing") };
+  statusPointerMissing = false;
+  persistedFailureCleared = false;
   indexing;
   constructor(options) {
     this.projectRoot = (0, import_paths.canonicalFilesystemPath)(options.projectRoot);
@@ -91,28 +112,63 @@ class CodegraphService {
     this.legacyRuntime = options.providers === void 0 ? options.runtime : void 0;
     this.freshness = this.providers?.freshnessContributors() ?? [import_freshness.typeScriptFreshnessContributor];
     this.stateDirectory = (0, import_paths.projectStateDirectory)(this.projectRoot);
+    this.persistedState = this.readPersistedState();
     this.buildIndex = options.index ?? ((projectRoot, runtime) => (0, import_index_builder.buildProjectIndex)(projectRoot, {
       runtime,
       freshness: this.freshness,
       store: { readSnapshot: async () => null, replaceSnapshot: async () => void 0 }
     }));
   }
-  async response(state, snapshot, coverage) {
+  async readPersistedState() {
+    try {
+      const raw = await (0, import_promises.readFile)(import_node_path.default.join(this.stateDirectory, "status.json"), "utf8");
+      const value = JSON.parse(raw);
+      return persistedFailureState(value);
+    } catch (error) {
+      if (error instanceof Error && "code" in error && error.code === "ENOENT") {
+        this.statusPointerMissing = true;
+        return void 0;
+      }
+      return malformedStatusState();
+    }
+  }
+  async persistStatus(state, snapshot) {
+    const pointer = {
+      status: state.status,
+      ...snapshot === null ? {} : { snapshotId: snapshot.snapshotId },
+      ...state.failure === void 0 ? {} : { failure: state.failure }
+    };
     try {
       await (0, import_promises.mkdir)(this.stateDirectory, { recursive: true });
-      await (0, import_promises.writeFile)(import_node_path.default.join(this.stateDirectory, "status.json"), JSON.stringify({ status: state.status, snapshotId: snapshot?.snapshotId }), "utf8");
+      await (0, import_promises.writeFile)(import_node_path.default.join(this.stateDirectory, "status.json"), JSON.stringify(pointer), "utf8");
+      this.statusPointerMissing = false;
     } catch {
     }
+  }
+  async response(state, snapshot, coverage) {
     return emptyResponse(state, snapshot, coverage);
   }
+  async persistAndRespond(state, snapshot, coverage) {
+    await this.persistStatus(state, snapshot);
+    return this.response(state, snapshot, coverage);
+  }
   async status() {
+    const persistedState = await this.persistedState;
     const snapshot = this.store.snapshot();
+    const coverage = snapshot === null ? null : this.store.coverage(snapshot.snapshotId);
+    const failedState = this.state.status === "error" ? this.state : this.persistedFailureCleared ? void 0 : persistedState;
+    if (failedState?.status === "error") {
+      this.state = failedState;
+      return this.response(this.state, snapshot, coverage);
+    }
+    if (this.statusPointerMissing && snapshot !== null) {
+      this.state = { status: "error", message: "Codegraph status metadata is missing. Run codegraph_index to recover." };
+      return this.response(this.state, snapshot, coverage);
+    }
     if (snapshot === null) {
       this.state = { status: "missing", message: messageFor("missing") };
       return this.response(this.state, null, null);
     }
-    const coverage = this.store.coverage(snapshot.snapshotId);
-    if (this.state.status === "error") return this.response(this.state, snapshot, coverage);
     if (coverage?.files === 0) {
       this.state = { status: "missing", message: emptySnapshotMessage() };
       return this.response(this.state, snapshot, coverage);
@@ -120,10 +176,11 @@ class CodegraphService {
     try {
       const manifest = await (0, import_freshness.buildRelevantInputManifest)(this.projectRoot, this.freshness);
       this.state = (0, import_freshness.snapshotIsFresh)(snapshot, manifest) ? { status: "ready", message: messageFor("ready") } : { status: "stale", message: messageFor("stale") };
+      return this.response(this.state, snapshot, coverage);
     } catch (error) {
       this.state = { status: "error", message: error instanceof Error ? error.message : messageFor("error") };
+      return this.response(this.state, snapshot, coverage);
     }
-    return this.response(this.state, snapshot, coverage);
   }
   async index() {
     if (this.indexing !== void 0) return this.indexing;
@@ -133,6 +190,7 @@ class CodegraphService {
     return this.indexing;
   }
   async rebuild() {
+    await this.persistedState;
     this.state = { status: "acquiring-runtime", message: messageFor("acquiring-runtime") };
     try {
       const acquired = this.providers !== void 0 ? await this.providers.acquireRuntime() : await this.legacyRuntime.acquire();
@@ -146,13 +204,14 @@ class CodegraphService {
         dependencyEnvironments: result.snapshots.flatMap((entry) => entry.coverage.dependencyEnvironments),
         files: result.snapshots.flatMap((entry) => entry.files)
       });
+      this.persistedFailureCleared = true;
       const coverage = this.store.coverage(snapshot.snapshotId);
       this.state = coverage?.files === 0 ? { status: "missing", message: emptySnapshotMessage() } : { status: "ready", message: messageFor("ready") };
-      return this.response(this.state, snapshot, coverage);
+      return this.persistAndRespond(this.state, snapshot, coverage);
     } catch (error) {
       const message = error instanceof Error ? error.message : messageFor("error");
-      this.state = { status: "error", message };
-      return this.response(this.state, this.store.snapshot(), this.store.coverage());
+      this.state = { status: "error", message, failure: { reason: message, failedAt: (/* @__PURE__ */ new Date()).toISOString() } };
+      return this.persistAndRespond(this.state, this.store.snapshot(), this.store.coverage());
     }
   }
   async ready(action) {

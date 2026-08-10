@@ -108,6 +108,17 @@ export type GraphAvailability =
   | 'unavailable'
   | 'error';
 
+export interface PersistedIndexFailure {
+  readonly reason: string;
+  readonly failedAt: string;
+}
+
+export interface PersistedGraphStatus {
+  readonly status: GraphAvailability;
+  readonly snapshotId?: string;
+  readonly failure?: PersistedIndexFailure;
+}
+
 export interface SnapshotIdentity {
   schemaVersion: number;
   snapshotId: string;
