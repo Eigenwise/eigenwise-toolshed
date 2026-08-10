@@ -42,6 +42,7 @@ var import_node_child_process = require("node:child_process");
 var import_node_crypto = require("node:crypto");
 var import_promises = require("node:fs/promises");
 var import_node_net = require("node:net");
+var import_node_url = require("node:url");
 var import_node_path = __toESM(require("node:path"));
 var import_paths = require("./paths.js");
 const runtimeManifestFile = "integrity.json";
@@ -185,12 +186,24 @@ class NpmRuntimeInstaller {
   }
 }
 class LoadedTypeScriptRuntime {
+  id;
+  version;
   engineId;
   engineVersion;
   extractors = [];
-  constructor(engineId, engineVersion) {
-    this.engineId = engineId;
-    this.engineVersion = engineVersion;
+  runtimeDirectory;
+  manifest;
+  constructor(runtimeDirectory, manifest) {
+    this.id = manifest.engine.id;
+    this.version = manifest.engine.version;
+    this.engineId = manifest.engine.id;
+    this.engineVersion = manifest.engine.version;
+    this.runtimeDirectory = runtimeDirectory;
+    this.manifest = manifest;
+  }
+  async importModule(specifier) {
+    const modulePath = await runtimeModulePath(this.runtimeDirectory, this.manifest, specifier);
+    return import((0, import_node_url.pathToFileURL)(modulePath).href);
   }
 }
 function packageExportPath(packageMetadata, moduleSpecifier, packageName) {
@@ -204,6 +217,19 @@ function packageExportPath(packageMetadata, moduleSpecifier, packageName) {
     throw new SemanticRuntimeError(`runtime package does not export ${moduleSpecifier}`);
   }
   return exports2[exportKey];
+}
+async function runtimeModulePath(runtimeDirectory, manifest, moduleSpecifier) {
+  const engineMetadata = await parseJson(import_node_path.default.join(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id, runtimePackageFile));
+  if (!isJsonRecord(engineMetadata) || engineMetadata.version !== manifest.engine.version) {
+    throw new SemanticRuntimeError(`runtime package version mismatch for ${manifest.engine.id}`);
+  }
+  const exportedModuleFile = packageExportPath(engineMetadata, moduleSpecifier, manifest.engine.id);
+  const engineDirectory = import_node_path.default.resolve(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id);
+  const modulePath = import_node_path.default.resolve(engineDirectory, exportedModuleFile);
+  if (!modulePath.startsWith(`${engineDirectory}${import_node_path.default.sep}`)) {
+    throw new SemanticRuntimeError(`runtime module escapes its package: ${exportedModuleFile}`);
+  }
+  return modulePath;
 }
 async function validateFileIntegrity(filePath, expectedIntegrity) {
   if (!/^sha512-[A-Za-z0-9+/]+={0,2}$/.test(expectedIntegrity)) {
@@ -249,7 +275,6 @@ async function validateInstalledTree(runtimeDirectory, runtimeKey, manifest) {
   }
 }
 async function validatedModulePath(runtimeDirectory, manifest, platformPackage) {
-  let engineMetadata;
   for (const packageName of [manifest.engine.id, platformPackage]) {
     const expected = manifest.packages[packageName];
     if (expected === void 0) {
@@ -259,19 +284,10 @@ async function validatedModulePath(runtimeDirectory, manifest, platformPackage) 
     if (!isJsonRecord(packageMetadata) || packageMetadata.version !== expected.version) {
       throw new SemanticRuntimeError(`runtime package version mismatch for ${packageName}`);
     }
-    if (packageName === manifest.engine.id) engineMetadata = packageMetadata;
   }
-  if (engineMetadata === void 0) {
-    throw new SemanticRuntimeError(`runtime engine package is missing: ${manifest.engine.id}`);
-  }
-  const exportedModuleFile = packageExportPath(engineMetadata, manifest.engine.module, manifest.engine.id);
-  if (exportedModuleFile !== manifest.engine.moduleFile) {
+  const modulePath = await runtimeModulePath(runtimeDirectory, manifest, manifest.engine.module);
+  if (`./${import_node_path.default.relative(import_node_path.default.join(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id), modulePath).split(import_node_path.default.sep).join("/")}` !== manifest.engine.moduleFile) {
     throw new SemanticRuntimeError(`runtime module export changed: ${manifest.engine.module}`);
-  }
-  const engineDirectory = import_node_path.default.resolve(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id);
-  const modulePath = import_node_path.default.resolve(engineDirectory, manifest.engine.moduleFile);
-  if (!modulePath.startsWith(`${engineDirectory}${import_node_path.default.sep}`)) {
-    throw new SemanticRuntimeError(`runtime module escapes its package: ${manifest.engine.moduleFile}`);
   }
   return modulePath;
 }
@@ -688,14 +704,19 @@ class TypeScriptRuntimeAcquirer {
     if (cachedRuntimeDirectory !== void 0) {
       try {
         await validateInstalledRuntime(cachedRuntimeDirectory, runtimeKey, manifest, packageName);
-        return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
+        return new LoadedTypeScriptRuntime(cachedRuntimeDirectory, manifest);
       } catch (error) {
         await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, error);
-        return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
+        return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
       }
     }
     await this.installCache(cacheDirectory, runtimeKey, manifest, packageName, lease);
-    return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
+    return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
+  }
+  async loadedRuntimeDirectory(cacheDirectory) {
+    const runtimeDirectory = await currentRuntimeDirectory(cacheDirectory);
+    if (runtimeDirectory === void 0) throw new SemanticRuntimeError("runtime cache was published without a current generation");
+    return runtimeDirectory;
   }
   async replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, previousError) {
     const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);

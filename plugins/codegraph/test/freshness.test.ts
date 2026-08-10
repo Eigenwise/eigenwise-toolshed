@@ -169,3 +169,20 @@ test('manifest invalidates snapshots for edits, additions, renames, removals, an
   await writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({ include: ['entry.ts'] }));
   assert.equal(snapshotIsFresh(snapshot, await buildRelevantInputManifest(root)), false);
 });
+
+test('central manifest deduplicates provider inputs and preserves configuration classification', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'codegraph-freshness-provider-'));
+  try {
+    const sharedInput = path.join(root, 'provider-input.txt');
+    await writeFile(sharedInput, 'provider input\n');
+    const manifest = await buildRelevantInputManifest(root, [
+      { collect: async () => [{ absolutePath: sharedInput, configuration: false }] },
+      { collect: async () => [{ absolutePath: sharedInput, configuration: true }] },
+    ]);
+    assert.equal(manifest.inputs.length, 1);
+    assert.equal(manifest.inputs[0]?.configuration, true);
+    assert.equal(manifest.configHash, manifest.sourceManifestHash);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});

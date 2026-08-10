@@ -4,6 +4,7 @@ import path from 'node:path';
 import type { API } from 'typescript/unstable/sync' with { "resolution-mode": "import" };
 import { canonicalFilesystemPath, normalizeProjectRelativePath } from './paths.js';
 import type { ProjectDescriptor, SnapshotIdentity } from './model.js';
+import type { FreshnessContributor, RelevantInputCandidate } from './runtime-contract.js';
 
 const relevantExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 const configurationNames = new Set(['tsconfig.json', 'jsconfig.json']);
@@ -58,12 +59,13 @@ async function loadSemanticTypeScript(): Promise<SemanticTypeScriptModule> {
   return semanticTypeScript;
 }
 
-async function inputPaths(projectRoot: string, directory: string = projectRoot): Promise<string[]> {
+async function inputCandidates(directory: string): Promise<RelevantInputCandidate[]> {
   const entries = await readdir(directory, { withFileTypes: true });
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputPaths(projectRoot, entryPath);
-    return entry.isFile() && (isRelevantSource(entryPath) || configurationNames.has(entry.name)) ? [entryPath] : [];
+    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputCandidates(entryPath);
+    if (!entry.isFile() || (!isRelevantSource(entryPath) && !configurationNames.has(entry.name))) return [];
+    return [{ absolutePath: entryPath, configuration: configurationNames.has(entry.name) }];
   }));
   return children.flat();
 }
@@ -79,10 +81,10 @@ async function existingCanonicalPaths(candidates: ReadonlySet<string>): Promise<
   return existing;
 }
 
-async function effectiveConfigurationPaths(projectRoot: string, discoveredInputs: readonly string[]): Promise<Set<string>> {
+async function effectiveConfigurationPaths(projectRoot: string, discoveredInputs: readonly RelevantInputCandidate[]): Promise<Set<string>> {
   const rootConfigurations = discoveredInputs
-    .filter((filePath) => configurationNames.has(path.basename(filePath)))
-    .map((filePath) => path.resolve(filePath));
+    .filter((input) => input.configuration)
+    .map((input) => path.resolve(input.absolutePath));
   const semanticReads = new Set(rootConfigurations);
   const semanticTypeScript = await loadSemanticTypeScript();
   const api = new semanticTypeScript.API({
@@ -102,6 +104,19 @@ async function effectiveConfigurationPaths(projectRoot: string, discoveredInputs
   return existingCanonicalPaths(semanticReads);
 }
 
+export class TypeScriptFreshnessContributor implements FreshnessContributor {
+  async collect(projectRoot: string): Promise<readonly RelevantInputCandidate[]> {
+    const discoveredInputs = await inputCandidates(projectRoot);
+    const configurationPaths = await effectiveConfigurationPaths(projectRoot, discoveredInputs);
+    return [
+      ...discoveredInputs.filter((input) => !input.configuration),
+      ...[...configurationPaths].map((absolutePath) => ({ absolutePath, configuration: true })),
+    ];
+  }
+}
+
+export const typeScriptFreshnessContributor = new TypeScriptFreshnessContributor();
+
 function manifestPath(projectRoot: string, absolutePath: string): string {
   const relativePath = path.relative(projectRoot, absolutePath);
   if (relativePath !== '..' && !relativePath.startsWith(`..${path.sep}`) && !path.isAbsolute(relativePath)) {
@@ -110,16 +125,33 @@ function manifestPath(projectRoot: string, absolutePath: string): string {
   return `external-config/${contentHash(path.resolve(absolutePath))}`;
 }
 
-/** Hashes every source and effective TypeScript configuration input so filesystem changes invalidate a prior snapshot. */
-export async function buildRelevantInputManifest(projectRoot: string): Promise<RelevantInputManifest> {
+async function normalizedCandidates(
+  projectRoot: string,
+  contributors: readonly FreshnessContributor[],
+): Promise<ReadonlyMap<string, boolean>> {
+  const candidates = (await Promise.all(contributors.map((contributor) => contributor.collect(projectRoot)))).flat();
+  const configurationByPath = new Map<string, boolean>();
+  for (const candidate of candidates) {
+    try {
+      await access(candidate.absolutePath);
+      const canonicalPath = canonicalFilesystemPath(candidate.absolutePath);
+      configurationByPath.set(canonicalPath, configurationByPath.get(canonicalPath) === true || candidate.configuration);
+    } catch { }
+  }
+  return configurationByPath;
+}
+
+/** Hashes every centrally deduplicated source and effective configuration input from every installed provider. */
+export async function buildRelevantInputManifest(
+  projectRoot: string,
+  contributors: readonly FreshnessContributor[] = [typeScriptFreshnessContributor],
+): Promise<RelevantInputManifest> {
   const canonicalRoot = canonicalFilesystemPath(projectRoot);
-  const discoveredInputs = await inputPaths(canonicalRoot);
-  const configurationPaths = await effectiveConfigurationPaths(canonicalRoot, discoveredInputs);
-  const absoluteInputs = [...new Set([...discoveredInputs.filter((input) => !configurationNames.has(path.basename(input))), ...configurationPaths])];
-  const inputs = await Promise.all(absoluteInputs.map(async (absolutePath) => ({
+  const candidates = await normalizedCandidates(canonicalRoot, contributors);
+  const inputs = await Promise.all([...candidates].map(async ([absolutePath, configuration]) => ({
     path: manifestPath(canonicalRoot, absolutePath),
     contentHash: contentHash(await readFile(absolutePath, 'utf8')),
-    configuration: configurationPaths.has(absolutePath),
+    configuration,
   })));
   inputs.sort((left, right) => left.path.localeCompare(right.path));
   const configurationInputs = inputs.filter((input) => input.configuration);

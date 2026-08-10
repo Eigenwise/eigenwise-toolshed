@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var typescript_exports = {};
 __export(typescript_exports, {
+  TypeScriptLanguageProvider: () => TypeScriptLanguageProvider,
   TypeScriptSemanticExtractor: () => TypeScriptSemanticExtractor,
   createTypeScriptSemanticExtractor: () => createTypeScriptSemanticExtractor
 });
@@ -37,6 +38,8 @@ var import_node_path = __toESM(require("node:path"));
 var import_model = require("../model.js");
 var import_paths = require("../paths.js");
 var import_projects = require("../projects.js");
+var import_freshness = require("../freshness.js");
+var import_runtime_contract = require("../runtime-contract.js");
 function importEsmModule(specifier) {
   return new Function("moduleSpecifier", "return import(moduleSpecifier);")(specifier);
 }
@@ -47,10 +50,20 @@ function isTypeScriptAstModule(value) {
   if (typeof value !== "object" || value === null) return false;
   return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isMethodSignatureDeclaration" in value && typeof value.isMethodSignatureDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isVariableStatement" in value && typeof value.isVariableStatement === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isPropertyAccessExpression" in value && typeof value.isPropertyAccessExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isNamespaceImport" in value && typeof value.isNamespaceImport === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
 }
-async function loadTypeScript() {
+function directTypeScriptRuntime() {
+  return {
+    id: "typescript",
+    version: "7.0.2",
+    engineId: "typescript",
+    engineVersion: "7.0.2",
+    extractors: [],
+    importModule: importEsmModule
+  };
+}
+async function loadTypeScript(runtime) {
   const [syncModule, astModule] = await Promise.all([
-    importEsmModule("typescript/unstable/sync"),
-    importEsmModule("typescript/unstable/ast")
+    runtime.importModule("typescript/unstable/sync"),
+    runtime.importModule("typescript/unstable/ast")
   ]);
   if (!isTypeScriptSyncModule(syncModule) || !isTypeScriptAstModule(astModule)) {
     throw new Error("the pinned TypeScript runtime does not expose its sync semantic API");
@@ -332,11 +345,15 @@ function projectForDescriptor(snapshot, descriptor) {
 class TypeScriptSemanticExtractor {
   id = "typescript";
   languages = ["typescript", "javascript"];
+  runtime;
+  constructor(runtime = directTypeScriptRuntime()) {
+    this.runtime = runtime;
+  }
   async discoverProjects(projectRoot) {
     return (0, import_projects.discoverProjects)(projectRoot);
   }
   async extractProject(descriptor) {
-    const loaded = await loadTypeScript();
+    const loaded = await loadTypeScript(this.runtime);
     const snapshot = loaded.api.updateSnapshot(descriptor.configFile === null ? { openFiles: [import_node_path.default.join(descriptor.root, "index.ts")] } : { openProjects: [descriptor.configFile] });
     try {
       const project = projectForDescriptor(snapshot, descriptor);
@@ -351,11 +368,36 @@ class TypeScriptSemanticExtractor {
     }
   }
 }
-function createTypeScriptSemanticExtractor() {
-  return new TypeScriptSemanticExtractor();
+function createTypeScriptSemanticExtractor(runtime) {
+  return new TypeScriptSemanticExtractor(runtime);
+}
+class TypeScriptLanguageProvider {
+  id = "typescript";
+  languages = ["typescript", "javascript"];
+  freshness = import_freshness.typeScriptFreshnessContributor;
+  runtime;
+  constructor(runtime) {
+    this.runtime = runtime;
+  }
+  async acquireEngine() {
+    const runtime = await this.runtime.acquire();
+    if ((0, import_runtime_contract.isSemanticEngineRuntime)(runtime)) return runtime;
+    return {
+      id: runtime.engineId,
+      version: runtime.engineVersion,
+      engineId: runtime.engineId,
+      engineVersion: runtime.engineVersion,
+      extractors: [],
+      importModule: importEsmModule
+    };
+  }
+  createExtractor(runtime) {
+    return createTypeScriptSemanticExtractor(runtime);
+  }
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  TypeScriptLanguageProvider,
   TypeScriptSemanticExtractor,
   createTypeScriptSemanticExtractor
 });

@@ -4,6 +4,8 @@ const { createInterface } = require('node:readline');
 const path = require('node:path');
 const { codegraphStateRoot, projectStateDirectory } = require('../lib/paths.js');
 const { invokeCodegraphTool, codegraphToolDefinitions } = require('../lib/mcp.js');
+const { TypeScriptLanguageProvider } = require('../lib/extractors/typescript.js');
+const { SemanticLanguageProviderRegistry } = require('../lib/runtime-contract.js');
 const { TypeScriptRuntimeAcquirer } = require('../lib/runtime.js');
 const { CodegraphService } = require('../lib/service.js');
 const { GraphStore } = require('../lib/store.js');
@@ -12,7 +14,10 @@ const projectRoot = process.env.CODEGRAPH_PROJECT_ROOT ?? process.cwd();
 const stateDirectory = projectStateDirectory(projectRoot);
 const runtimeStateDirectory = codegraphStateRoot();
 const store = GraphStore.open(path.join(stateDirectory, 'graph.sqlite'));
-const service = new CodegraphService({ projectRoot, store, runtime: new TypeScriptRuntimeAcquirer({ stateDirectory: runtimeStateDirectory }) });
+const providers = new SemanticLanguageProviderRegistry([
+  new TypeScriptLanguageProvider(new TypeScriptRuntimeAcquirer({ stateDirectory: runtimeStateDirectory })),
+]);
+const service = new CodegraphService({ projectRoot, store, providers });
 function send(id, value) { if (id !== undefined) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, ...value })}\n`); }
 async function handle(request) {
   try {

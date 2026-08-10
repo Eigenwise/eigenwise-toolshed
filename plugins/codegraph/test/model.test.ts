@@ -8,6 +8,8 @@ import {
   type GraphResponse,
   type SnapshotIdentity,
 } from '../src/lib/model.ts';
+import { SemanticLanguageProviderRegistry, snapshotEngineIdentity } from '../src/lib/runtime-contract.ts';
+import type { LanguageExtractor } from '../src/lib/model.ts';
 
 const snapshot: SnapshotIdentity = {
   schemaVersion: 1,
@@ -73,4 +75,33 @@ test('non-ready graph responses expose no facts', () => {
   assert.doesNotThrow(() => assertGraphResponseInvariants(response));
   assert.throws(() => assertGraphResponseInvariants({ ...response, results: ['fact'] }));
   assert.throws(() => assertGraphResponseInvariants({ ...response, status: 'ready', snapshot: null }));
+});
+
+test('provider registry orders engines and extractors by provider identity', async () => {
+  const extractor = (id: string): LanguageExtractor => ({
+    id,
+    languages: ['fixture'],
+    discoverProjects: async () => [],
+    extractProject: async () => [],
+  });
+  const provider = (id: string, version: string) => ({
+    id,
+    languages: ['fixture'],
+    freshness: { collect: async () => [] },
+    acquireEngine: async () => ({
+      id,
+      version,
+      engineId: id,
+      engineVersion: version,
+      extractors: [],
+      importModule: async () => ({}),
+    }),
+    createExtractor: () => extractor(id),
+  });
+  const registry = new SemanticLanguageProviderRegistry([provider('zeta', '2.0.0'), provider('alpha', '1.0.0')]);
+  const runtime = await registry.acquireRuntime();
+
+  assert.deepEqual(runtime.engines?.map((engine) => `${engine.id}@${engine.version}`), ['alpha@1.0.0', 'zeta@2.0.0']);
+  assert.deepEqual(runtime.extractors.map((candidate) => candidate.id), ['alpha', 'zeta']);
+  assert.equal(snapshotEngineIdentity(runtime.engines ?? []).version, '[{"id":"alpha","version":"1.0.0"},{"id":"zeta","version":"2.0.0"}]');
 });
