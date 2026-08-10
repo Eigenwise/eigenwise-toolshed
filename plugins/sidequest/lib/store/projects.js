@@ -86,7 +86,7 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     try {
       return transaction(fn);
     } finally {
-      if (locked) releaseLock(lock);
+      if (locked) releaseLock(lock, locked);
     }
   }
   function nextSeq(slug) {

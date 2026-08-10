@@ -163,7 +163,6 @@ function validateSubmissionCandidate(options) {
     baseCandidates: base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true })
   };
   const range = commitScope.submissionRange(root, rangeOptions);
-  const diagnosticRange = range.ok ? range : commitScope.submissionRange(root, Object.assign({}, rangeOptions, { gitRef: commit }));
   const submissionFailures = [];
   if (!range.ok) submissionFailures.push({ reason: range.reason, message: submissionRangeFailureMessage(ticket, range, gitRef) });
   const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
@@ -182,7 +181,7 @@ function validateSubmissionCandidate(options) {
       submissionFailures.push({ reason: "duplicate_submission", message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.` });
     }
   }
-  const rangeForChecks = range.ok ? range : diagnosticRange.ok ? diagnosticRange : null;
+  const rangeForChecks = range.ok ? range : null;
   if (rangeForChecks) {
     const scopedRange = commitScope.validateCommitRangeScope(root, rangeForChecks.commits, scope);
     if (!scopedRange.ok) {

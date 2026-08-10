@@ -34,7 +34,7 @@ function createNotifications(dependencies) {
     try {
       return transaction(fn);
     } finally {
-      if (locked) releaseLock(lock);
+      if (locked) releaseLock(lock, locked);
     }
   }
   function pruneReadList(list) {

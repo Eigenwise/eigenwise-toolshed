@@ -39,7 +39,7 @@ function createNotifications(dependencies: any) {
     try {
       return transaction(fn);
     } finally {
-      if (locked) releaseLock(lock);
+      if (locked) releaseLock(lock, locked);
     }
   }
 

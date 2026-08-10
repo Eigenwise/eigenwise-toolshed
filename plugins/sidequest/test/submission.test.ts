@@ -26,6 +26,7 @@ const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
+const { createLocks } = require('../src/lib/store/locks.ts');
 const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-project-'));
@@ -1138,6 +1139,52 @@ test('integration rolls back when post-merge verification fails', () => {
   assert.ok(fs.existsSync(rejected.verify.logPath));
   assert.strictEqual(git(['rev-parse', 'HEAD']), before);
   assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verify_failed_post_merge');
+});
+
+test('SQ-1743: a held delivery lock refuses another integration before it changes the checkout', () => {
+  cleanBranch();
+  const t = addTicket('delivery lock', { files: ['lib/delivery-lock.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'delivery-lock-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'delivery-lock.js'), 'locked\n');
+  git(['add', 'lib/delivery-lock.js']);
+  git(['commit', '-m', 'delivery lock candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'delivery-lock-worker', '--commit', commit]).status, 0);
+  const before = git(['rev-parse', 'HEAD']);
+  const lock = path.resolve(PROJECT_DIR, git(['rev-parse', '--git-common-dir']), 'sidequest-delivery.lock');
+  fs.writeFileSync(lock, 'another integration\n');
+  try {
+    const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'delivery_in_progress');
+    assert.strictEqual(git(['rev-parse', 'HEAD']), before);
+  } finally {
+    fs.unlinkSync(lock);
+  }
+});
+
+test('SQ-1749: a live owner survives expiry and cannot release a replacement lock', () => {
+  const locks = createLocks({ fs, path, ticketsDir: () => SIDEQUEST_HOME, transaction: (fn: any) => fn() });
+  const lock = path.join(SIDEQUEST_HOME, 'delivery-owner.lock');
+  const owner = locks.acquireLock(lock, { wait: false });
+  assert.ok(owner);
+  try {
+    const expired = new Date(Date.now() - 31_000);
+    fs.utimesSync(lock, expired, expired);
+    assert.strictEqual(locks.acquireLock(lock, { wait: false }), false);
+  } finally {
+    assert.deepStrictEqual(locks.releaseLock(lock, owner), { ok: true });
+  }
+
+  fs.writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, token: 'dead-owner' }));
+  const replacement = locks.acquireLock(lock, { wait: false });
+  assert.ok(replacement);
+  assert.deepStrictEqual(locks.releaseLock(lock, 'dead-owner'), { ok: false, reason: 'lock_owner_lost' });
+  assert.ok(fs.existsSync(lock));
+  assert.deepStrictEqual(locks.releaseLock(lock, replacement), { ok: true });
 });
 
 test('integration reports and records merge conflict paths before aborting', () => {
