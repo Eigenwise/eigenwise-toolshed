@@ -2,10 +2,11 @@
 name: setup
 description: >-
   Set up a Claude Code workspace for a new or existing project, informed by hindsight from the
-  user's whole session history. Installs and wires the Toolshed (codebase-mapper, live-rules,
-  sidequest, observability, model-gateway) plus stack plugins, seeds rules and permissions from
-  what the history shows the user actually needs. Use for workspace setup, .claude configuration,
-  project bootstrap, or Toolshed installation.
+  user's whole session history. Installs and wires whichever Toolshed pieces the project actually
+  wants (codebase-mapper, live-rules, sidequest's routing and executors, observability,
+  model-gateway are each independent and opt-in) plus stack plugins, seeds rules and permissions
+  from what the history shows the user actually needs. Use for workspace setup, .claude
+  configuration, project bootstrap, or Toolshed installation.
 ---
 
 # Quartermaster setup
@@ -57,13 +58,49 @@ matters.
 
 One visible plan, then per-item approval. Draw from three sources, in this order:
 
-- **Toolshed core**, from the eigenwise-toolshed marketplace: `codebase-mapper` and `live-rules`
-  for any codebase; `sidequest` for projects with recurring ticketed work (its board, routing
-  profiles, and executors); `observability` only if the user opts into telemetry (its
-  `enable-project-telemetry` skill owns that whole flow, consent through verification);
-  `model-gateway` and `workbench` are user-scope and global, so only check their state, never
-  install them per-project. Recommend each with a reason grounded in the project purpose and the
-  user's attribution history; say "probably not needed here" when it does not fit.
+- **Toolshed core**, from the eigenwise-toolshed marketplace. Every piece is independent and
+  opt-in: they compose, but none of them requires another, and a project that wants one of them
+  is not signing up for the rest. You will have to explain each one you propose, so lead with
+  what it does for this user before the reason it fits, and ground that reason in the project
+  purpose and their attribution history. Say "probably not needed here" when it does not fit.
+
+  - `codebase-mapper` keeps a set of small docs under `.claude/.codebase-info/` describing the
+    architecture, entry points, modules, and conventions, and injects the index at session start
+    so Claude begins oriented instead of re-exploring the tree every time. It refreshes itself
+    from the diff as the code changes. Worth it for any real codebase; pointless for an empty
+    scaffold until there is code to map.
+  - `live-rules` holds project rules as Markdown that gets re-injected exactly when it applies:
+    every prompt for the always-on ones, or right before Claude edits a file matching a glob.
+    That is the difference from CLAUDE.md, which is always in context whether or not it is
+    relevant. Edits take effect on the next prompt, no restart. Worth it anywhere the user has
+    conventions they keep having to repeat.
+  - `sidequest` is the delegation system, not just a ticket tracker, and the routing and
+    executor half is where the value is. Tickets are the input; what it does with them is
+    classify each into a category, route that category to a concrete model and effort level so
+    nobody hand-picks a model per task, dispatch it to a token-gated executor in an isolated git
+    worktree, gate the result on a verify command the ticket carries, and integrate it back. It
+    also captures side issues mentioned mid-task, and runs a live self-hosted Kanban dashboard
+    spanning every project. Recommend it where work is recurring and delegable; a project that
+    just wants a list of TODOs does not need any of this. Non-Claude routes (GPT, Grok) need
+    `model-gateway`, and without it routing still works across Claude models.
+  - `observability` is local, metadata-only telemetry: a bundled observer records session, tool,
+    and subagent lifecycle events into SQLite on the machine, an optional statusline shows live
+    context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana or
+    another sink. Prompts, responses, code, tool inputs and results, credentials, and
+    environment values are never stored, and every sink beyond local SQLite is opt-in. Propose
+    it only when the user wants to see where their tokens and time go; its
+    `enable-project-telemetry` skill owns that whole flow from consent through verification, so
+    hand off rather than wiring it yourself.
+  - `model-gateway` puts the user's existing ChatGPT/Codex and Grok subscription models in
+    Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
+    sidequest's non-Claude routes possible. User-scope and global.
+  - `workbench` is the caretaker: it updates Toolshed plugins, guards against a session running
+    stale plugin code, and answers health questions through `/toolshed-doctor`. User-scope and
+    global.
+
+  `model-gateway` and `workbench` install once for the whole machine, so check their state and
+  point at their own skills; never install them per-project. Do not propose `codegraph`: it is
+  under heavy construction and not ready to recommend.
 - **Stack plugins**, from [references/stack-plugins.md](references/stack-plugins.md) plus the
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
   For LSP plugins, check the required binary is on PATH first; report a missing binary with its

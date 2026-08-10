@@ -36,7 +36,7 @@ This README is a signpost. The guides are over there.
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | A user-scope install and the shed's caretaker: Toolshed updates, health checks, and the freshness guard. Use `/update-toolshed` and `/workbench-doctor`. |
+| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | A user-scope install and the shed's caretaker: Toolshed updates, health checks, and the freshness guard. Use `/update-toolshed` and `/toolshed-doctor`. |
 | [**quartermaster**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/) | Outfits your workspaces and keeps them earning their keep. `/quartermaster:setup` sets up a project (Toolshed core, stack plugins, rules, permissions) grounded in your actual session history; `/quartermaster:retro` mines recent transcripts for friction and proposes fixes one at a time, then reports next retro whether they worked. |
 | [**observability**](https://eigenwise.github.io/eigenwise-toolshed/observability/) | Local, metadata-only telemetry: a loopback observer writing to SQLite on your machine, an optional statusline for live context and usage, and an OpenTelemetry Collector that can forward redacted signals to Grafana. Off until you opt a repository in. |
 | [**model-gateway**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) | Puts ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker through a local gateway. |

@@ -21,7 +21,7 @@ const warnedStates = new Set();
 function isMaintenancePrompt(prompt) {
   const value = String(prompt || '').trim();
   if (/^\/(?:workbench:)?update-toolshed(?:\s+[\w.-]+)*$/i.test(value)) return true;
-  if (/^\/(?:workbench:)?workbench-doctor$/i.test(value)) return true;
+  if (/^\/(?:workbench:)?toolshed-doctor$/i.test(value)) return true;
   if (/^\/reload-plugins(?:\s+--force)?$/i.test(value)) return true;
   if (/^\/plugin$/i.test(value)) return true;
   if (/^\/plugin\s+(?:install|update|enable|disable|remove|uninstall)(?:\s+[^\s]+){0,4}$/i.test(value)) return true;

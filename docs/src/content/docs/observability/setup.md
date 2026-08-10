@@ -37,6 +37,6 @@ After setup, restart any Claude Code session that was already running in the rep
 
 Continue with [per-project opt-in](./project-opt-in/) to see how repository coverage and verification work.
 
-If setup or the dashboard stops working, tell Claude what you see and ask it to diagnose Observability. The bundled skill and Workbench doctor handle the checks and repairs.
+If setup or the dashboard stops working, tell Claude what you see and ask it to diagnose Observability. The bundled skill and the Toolshed doctor handle the checks and repairs.
 
 See the generated [Observability reference](/reference/observability/) for the agent-facing setup contract.

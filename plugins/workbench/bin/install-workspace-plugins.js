@@ -43,7 +43,7 @@ function usage() {
 
 Installs the marketplaces and plugins in a validated workspace plan.
 
-  --plan      JSON install plan (see workbench-doctor)
+  --plan      JSON install plan (see toolshed-doctor)
   --check     Inventory and report the plan without making changes
   --dry-run   Print the planned mutations without making changes
   --claude    Claude Code command to run (default: claude)`;
