@@ -20,6 +20,7 @@ import type {
   VariableStatement,
 } from 'typescript/unstable/ast' with { "resolution-mode": "import" };
 import { createGraphEdgeId, createGraphNodeId, type FileGraph, type GraphEdge, type GraphEdgeKind, type GraphNode, type GraphNodeKind, type LanguageExtractor, type ProjectDescriptor, type ResolutionState, type SourceSpan } from '../model.js';
+import { ignoredDirectoriesUnder } from '../ignored-directories.js';
 import { normalizeProjectRelativePath } from '../paths.js';
 import { discoverProjects } from '../projects.js';
 import { typeScriptFreshnessContributor } from '../freshness.js';
@@ -124,11 +125,18 @@ function hash(content: string): string {
   return createHash('sha256').update(content).digest('hex');
 }
 
-function isProjectSource(project: ProjectDescriptor, sourceFile: SourceFile): boolean {
+function isUnder(directory: string, filePath: string): boolean {
+  const relative = path.relative(directory, filePath);
+  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative);
+}
+
+// A tsconfig that includes `**/*` sweeps up any nested checkout sitting inside
+// the project, so the ignore policy has to be applied here rather than by
+// rewriting someone else's tsconfig.
+function isProjectSource(project: ProjectDescriptor, sourceFile: SourceFile, ignoredDirectories: readonly string[]): boolean {
   if (sourceFile.isDeclarationFile) return false;
-  const relative = path.relative(project.root, sourceFile.fileName);
-  return relative !== '' && !relative.startsWith('..') && !path.isAbsolute(relative)
-    && /\.[cm]?[jt]sx?$/i.test(sourceFile.fileName);
+  if (ignoredDirectories.some((directory) => isUnder(directory, sourceFile.fileName))) return false;
+  return isUnder(project.root, sourceFile.fileName) && /\.[cm]?[jt]sx?$/i.test(sourceFile.fileName);
 }
 
 function declarationName(node: Node, ast: TypeScriptAstModule): Identifier | undefined {
@@ -442,6 +450,7 @@ export class TypeScriptSemanticExtractor implements LanguageExtractor {
 
   async extractProject(descriptor: ProjectDescriptor): Promise<FileGraph[]> {
     const loaded = await loadTypeScript(this.runtime);
+    const ignoredDirectories = await ignoredDirectoriesUnder(descriptor.root);
     const snapshot = loaded.api.updateSnapshot(descriptor.configFile === null
       ? { openFiles: [path.join(descriptor.root, 'index.ts')] }
       : { openProjects: [descriptor.configFile] });
@@ -450,7 +459,7 @@ export class TypeScriptSemanticExtractor implements LanguageExtractor {
       if (project === undefined) throw new Error(`TypeScript could not open project ${descriptor.configFile ?? descriptor.root}`);
       const sourceFiles = project.program.getSourceFileNames()
         .map((fileName) => project.program.getSourceFile(fileName))
-        .filter((sourceFile): sourceFile is SourceFile => sourceFile !== undefined && isProjectSource(descriptor, sourceFile));
+        .filter((sourceFile): sourceFile is SourceFile => sourceFile !== undefined && isProjectSource(descriptor, sourceFile, ignoredDirectories));
       const collected = collectNodes(descriptor, project.checker, loaded.ast, sourceFiles);
       extractEdges(descriptor, project.checker, loaded.ast, sourceFiles, collected.graphs, collected.declarationIds, collected.declarationNodes, collected.classMembers, collected.moduleIds, loaded.aliasSymbolFlag);
       return [...collected.graphs.values()].sort((left, right) => left.file.localeCompare(right.file));

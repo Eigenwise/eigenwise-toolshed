@@ -37,6 +37,7 @@ var import_node_crypto = require("node:crypto");
 var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
 var import_model = require("../model.js");
+var import_ignored_directories = require("../ignored-directories.js");
 var import_paths = require("../paths.js");
 var import_projects = require("../projects.js");
 var import_freshness = require("../freshness.js");
@@ -88,10 +89,14 @@ function sourceSpan(project, sourceFile, node) {
 function hash(content) {
   return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
 }
-function isProjectSource(project, sourceFile) {
+function isUnder(directory, filePath) {
+  const relative = import_node_path.default.relative(directory, filePath);
+  return relative !== "" && !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative);
+}
+function isProjectSource(project, sourceFile, ignoredDirectories) {
   if (sourceFile.isDeclarationFile) return false;
-  const relative = import_node_path.default.relative(project.root, sourceFile.fileName);
-  return relative !== "" && !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative) && /\.[cm]?[jt]sx?$/i.test(sourceFile.fileName);
+  if (ignoredDirectories.some((directory) => isUnder(directory, sourceFile.fileName))) return false;
+  return isUnder(project.root, sourceFile.fileName) && /\.[cm]?[jt]sx?$/i.test(sourceFile.fileName);
 }
 function declarationName(node, ast) {
   if (ast.isClassDeclaration(node) || ast.isInterfaceDeclaration(node) || ast.isFunctionDeclaration(node) || ast.isMethodDeclaration(node) || ast.isMethodSignatureDeclaration(node) || ast.isVariableDeclaration(node)) {
@@ -355,11 +360,12 @@ class TypeScriptSemanticExtractor {
   }
   async extractProject(descriptor) {
     const loaded = await loadTypeScript(this.runtime);
+    const ignoredDirectories = await (0, import_ignored_directories.ignoredDirectoriesUnder)(descriptor.root);
     const snapshot = loaded.api.updateSnapshot(descriptor.configFile === null ? { openFiles: [import_node_path.default.join(descriptor.root, "index.ts")] } : { openProjects: [descriptor.configFile] });
     try {
       const project = projectForDescriptor(snapshot, descriptor);
       if (project === void 0) throw new Error(`TypeScript could not open project ${descriptor.configFile ?? descriptor.root}`);
-      const sourceFiles = project.program.getSourceFileNames().map((fileName) => project.program.getSourceFile(fileName)).filter((sourceFile) => sourceFile !== void 0 && isProjectSource(descriptor, sourceFile));
+      const sourceFiles = project.program.getSourceFileNames().map((fileName) => project.program.getSourceFile(fileName)).filter((sourceFile) => sourceFile !== void 0 && isProjectSource(descriptor, sourceFile, ignoredDirectories));
       const collected = collectNodes(descriptor, project.checker, loaded.ast, sourceFiles);
       extractEdges(descriptor, project.checker, loaded.ast, sourceFiles, collected.graphs, collected.declarationIds, collected.declarationNodes, collected.classMembers, collected.moduleIds, loaded.aliasSymbolFlag);
       return [...collected.graphs.values()].sort((left, right) => left.file.localeCompare(right.file));

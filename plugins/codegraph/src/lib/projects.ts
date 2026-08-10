@@ -1,10 +1,10 @@
 import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { isIgnoredDirectory } from './ignored-directories.js';
 import { projectIdentity, normalizeProjectRoot } from './paths.js';
 import type { ProjectDescriptor } from './model.js';
 
 const configurationNames = new Set(['tsconfig.json', 'jsconfig.json']);
-const ignoredDirectories = new Set(['.git', 'node_modules']);
 
 interface ProjectConfiguration {
   readonly references?: readonly { readonly path?: string }[];
@@ -56,7 +56,7 @@ async function configurationFiles(directory: string): Promise<string[]> {
   const nestedFiles = await Promise.all(entries.map(async (entry) => {
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      return ignoredDirectories.has(entry.name) || entry.name.startsWith('.') ? [] : configurationFiles(entryPath);
+      return entry.name.startsWith('.') || await isIgnoredDirectory(entryPath) ? [] : configurationFiles(entryPath);
     }
     return entry.isFile() && configurationNames.has(entry.name) ? [entryPath] : [];
   }));

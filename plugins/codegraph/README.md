@@ -34,6 +34,12 @@ Claude checks the snapshot first, follows resolved symbol relationships, and ope
 
 For daily work, ask Claude to use Codegraph when a change crosses files or symbols. Codegraph only answers from a ready snapshot. It indexes missing or stale projects before querying and refuses stale facts instead of presenting an old graph as current.
 
+## What gets indexed
+
+Your project's own source. Codegraph never indexes a tree that only happens to sit inside your project: agent worktrees (anything under a `worktrees` directory, and any directory carrying its own `.git`), nested clones and submodules, virtual environments (found by `pyvenv.cfg`, whatever they are named), `node_modules`, and the usual caches. A virtual environment is still read as a resolution input, so imports into installed packages resolve, but its files never become graph nodes.
+
+Anything else you want left out belongs in your project's own `exclude`: `[tool.pyright]` in `pyproject.toml`, `pyrightconfig.json`, or `tsconfig.json`. Codegraph adds its exclusions to yours rather than replacing them.
+
 ## If something stops working
 
 Tell Claude the symptom:

@@ -1,14 +1,11 @@
-import { access, readdir, readFile } from 'node:fs/promises';
+import { readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { isIgnoredDirectory } from '../../ignored-directories.js';
 import { normalizeProjectRoot, projectIdentity } from '../../paths.js';
 import type { ProjectDescriptor } from '../../model.js';
 
 const configurationNames = new Set(['pyrightconfig.json', 'pyproject.toml']);
-const ignoredDirectories = new Set([
-  '.git', '.eggs', '.mypy_cache', '.nox', '.pytest_cache', '.ruff_cache', '.tox',
-  '__pycache__', 'build', 'dist', 'env', 'node_modules', 'venv', 'virtualenv',
-]);
-const virtualEnvironmentMarker = 'pyvenv.cfg';
+const ignoredPythonDirectories = new Set(['build', 'dist', 'env', 'venv', 'virtualenv']);
 
 export interface PythonProjectConfiguration {
   readonly absolutePath: string;
@@ -35,15 +32,11 @@ export function isPythonPyproject(contents: string): boolean {
       && isPythonBuildBackend(contents.match(/^\s*build-backend\s*=\s*["']([^"']+)["']/mi)?.[1] ?? '');
 }
 
-async function isVirtualEnvironment(directory: string): Promise<boolean> {
-  const directoryName = path.basename(directory);
-  if (directoryName.startsWith('.') || ignoredDirectories.has(directoryName)) return true;
-  try {
-    await access(path.join(directory, virtualEnvironmentMarker));
-    return true;
-  } catch {
-    return false;
-  }
+// Discovery has to agree with what Pyright will actually index, and Pyright
+// excludes every dot-prefixed directory by default.
+async function isSearchableDirectory(directory: string): Promise<boolean> {
+  if (path.basename(directory).startsWith('.')) return false;
+  return !await isIgnoredDirectory(directory, ignoredPythonDirectories);
 }
 
 async function configurationAt(filePath: string): Promise<PythonProjectConfiguration | null> {
@@ -76,7 +69,7 @@ async function walkPythonTree(
   await Promise.all(entries.map(async (entry) => {
     const entryPath = path.join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (!await isVirtualEnvironment(entryPath)) await walkPythonTree(entryPath, configurations, pythonFiles);
+      if (await isSearchableDirectory(entryPath)) await walkPythonTree(entryPath, configurations, pythonFiles);
       return;
     }
     if (!entry.isFile()) return;

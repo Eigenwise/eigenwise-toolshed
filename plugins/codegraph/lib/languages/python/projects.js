@@ -34,25 +34,10 @@ __export(projects_exports, {
 module.exports = __toCommonJS(projects_exports);
 var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
+var import_ignored_directories = require("../../ignored-directories.js");
 var import_paths = require("../../paths.js");
 const configurationNames = /* @__PURE__ */ new Set(["pyrightconfig.json", "pyproject.toml"]);
-const ignoredDirectories = /* @__PURE__ */ new Set([
-  ".git",
-  ".eggs",
-  ".mypy_cache",
-  ".nox",
-  ".pytest_cache",
-  ".ruff_cache",
-  ".tox",
-  "__pycache__",
-  "build",
-  "dist",
-  "env",
-  "node_modules",
-  "venv",
-  "virtualenv"
-]);
-const virtualEnvironmentMarker = "pyvenv.cfg";
+const ignoredPythonDirectories = /* @__PURE__ */ new Set(["build", "dist", "env", "venv", "virtualenv"]);
 function pythonConfigurationPriority(configuration) {
   return configuration.configurationName === "pyrightconfig.json" ? 0 : 1;
 }
@@ -65,15 +50,9 @@ function isPythonBuildBackend(value) {
 function isPythonPyproject(contents) {
   return /^\s*requires-python\s*=/mi.test(contents) || /^\s*\[tool\.(?:pyright|poetry|hatch(?:\.[^\]]+)?|pdm|setuptools(?:\.[^\]]+)?|flit(?:\.[^\]]+)?|uv(?:\.[^\]]+)?)\]/mi.test(contents) || /^\s*build-backend\s*=\s*["']([^"']+)["']/mi.test(contents) && isPythonBuildBackend(contents.match(/^\s*build-backend\s*=\s*["']([^"']+)["']/mi)?.[1] ?? "");
 }
-async function isVirtualEnvironment(directory) {
-  const directoryName = import_node_path.default.basename(directory);
-  if (directoryName.startsWith(".") || ignoredDirectories.has(directoryName)) return true;
-  try {
-    await (0, import_promises.access)(import_node_path.default.join(directory, virtualEnvironmentMarker));
-    return true;
-  } catch {
-    return false;
-  }
+async function isSearchableDirectory(directory) {
+  if (import_node_path.default.basename(directory).startsWith(".")) return false;
+  return !await (0, import_ignored_directories.isIgnoredDirectory)(directory, ignoredPythonDirectories);
 }
 async function configurationAt(filePath) {
   const configurationName = import_node_path.default.basename(filePath);
@@ -98,7 +77,7 @@ async function walkPythonTree(directory, configurations, pythonFiles) {
   await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
     if (entry.isDirectory()) {
-      if (!await isVirtualEnvironment(entryPath)) await walkPythonTree(entryPath, configurations, pythonFiles);
+      if (await isSearchableDirectory(entryPath)) await walkPythonTree(entryPath, configurations, pythonFiles);
       return;
     }
     if (!entry.isFile()) return;

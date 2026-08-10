@@ -36,6 +36,8 @@ var import_node_crypto = require("node:crypto");
 var import_promises = require("node:fs/promises");
 var import_node_module = require("node:module");
 var import_node_path = __toESM(require("node:path"));
+var import_ignored_directories = require("../../ignored-directories.js");
+const pyrightDefaultExcludes = ["**/node_modules", "**/__pycache__", "**/.*"];
 const internalChunkId = 223;
 const vendorChunkId = 474;
 const analyzerServiceModuleId = 2439;
@@ -260,7 +262,7 @@ async function createAnalysisService(AnalyzerService, serviceProvider, Uri, node
       configFilePath: analysisConfig.path ?? void 0,
       configSettings: {
         includeFileSpecs: [],
-        excludeFileSpecs: [],
+        excludeFileSpecs: [...pyrightDefaultExcludes, ...await (0, import_ignored_directories.ignoredDirectoriesUnder)(projectRoot)],
         ignoreFileSpecs: [],
         diagnosticSeverityOverrides: {},
         diagnosticBooleanOverrides: {}

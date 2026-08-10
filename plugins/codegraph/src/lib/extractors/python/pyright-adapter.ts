@@ -2,7 +2,13 @@ import { randomUUID } from 'node:crypto';
 import { rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import path from 'node:path';
+import { ignoredDirectoriesUnder } from '../../ignored-directories.js';
 import type { SemanticEngineRuntime } from '../../runtime-contract.js';
+
+// Pyright injects these three only when nothing else excluded anything, so
+// supplying our own exclusions silently drops them. Repeating them keeps the
+// stock behaviour we were relying on.
+const pyrightDefaultExcludes: readonly string[] = ['**/node_modules', '**/__pycache__', '**/.*'];
 
 const internalChunkId = 223;
 const vendorChunkId = 474;
@@ -410,7 +416,7 @@ async function createAnalysisService(
       configFilePath: analysisConfig.path ?? undefined,
       configSettings: {
         includeFileSpecs: [],
-        excludeFileSpecs: [],
+        excludeFileSpecs: [...pyrightDefaultExcludes, ...await ignoredDirectoriesUnder(projectRoot)],
         ignoreFileSpecs: [],
         diagnosticSeverityOverrides: {},
         diagnosticBooleanOverrides: {},

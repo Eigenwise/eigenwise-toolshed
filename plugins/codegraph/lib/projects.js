@@ -34,9 +34,9 @@ __export(projects_exports, {
 module.exports = __toCommonJS(projects_exports);
 var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
+var import_ignored_directories = require("./ignored-directories.js");
 var import_paths = require("./paths.js");
 const configurationNames = /* @__PURE__ */ new Set(["tsconfig.json", "jsconfig.json"]);
-const ignoredDirectories = /* @__PURE__ */ new Set([".git", "node_modules"]);
 function removeJsonComments(text) {
   return text.replace(/\/\*[\s\S]*?\*\//g, "").replace(/(^|[^:])\/\/.*$/gm, "$1");
 }
@@ -71,7 +71,7 @@ async function configurationFiles(directory) {
   const nestedFiles = await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
     if (entry.isDirectory()) {
-      return ignoredDirectories.has(entry.name) || entry.name.startsWith(".") ? [] : configurationFiles(entryPath);
+      return entry.name.startsWith(".") || await (0, import_ignored_directories.isIgnoredDirectory)(entryPath) ? [] : configurationFiles(entryPath);
     }
     return entry.isFile() && configurationNames.has(entry.name) ? [entryPath] : [];
   }));

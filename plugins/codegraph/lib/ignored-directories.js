@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var ignored_directories_exports = {};
 __export(ignored_directories_exports, {
+  ignoredDirectoriesUnder: () => ignoredDirectoriesUnder,
   isIgnoredDirectory: () => isIgnoredDirectory
 });
 module.exports = __toCommonJS(ignored_directories_exports);
@@ -41,20 +42,49 @@ const alwaysIgnoredNames = /* @__PURE__ */ new Set([
   ".pytest_cache",
   ".ruff_cache",
   ".tox",
+  ".worktrees",
   "__pycache__",
-  "node_modules"
+  "node_modules",
+  "worktrees"
 ]);
-async function isIgnoredDirectory(directory, additionalNames = /* @__PURE__ */ new Set()) {
-  const name = import_node_path.default.basename(directory);
-  if (alwaysIgnoredNames.has(name) || additionalNames.has(name)) return true;
+async function exists(candidate) {
   try {
-    await (0, import_promises.access)(import_node_path.default.join(directory, "pyvenv.cfg"));
+    await (0, import_promises.access)(candidate);
     return true;
   } catch {
     return false;
   }
 }
+async function isNestedCheckout(directory) {
+  return exists(import_node_path.default.join(directory, ".git"));
+}
+async function isVirtualEnvironment(directory) {
+  return exists(import_node_path.default.join(directory, "pyvenv.cfg"));
+}
+async function isIgnoredDirectory(directory, additionalNames = /* @__PURE__ */ new Set()) {
+  const name = import_node_path.default.basename(directory);
+  if (alwaysIgnoredNames.has(name) || additionalNames.has(name)) return true;
+  const [nestedCheckout, virtualEnvironment] = await Promise.all([
+    isNestedCheckout(directory),
+    isVirtualEnvironment(directory)
+  ]);
+  return nestedCheckout || virtualEnvironment;
+}
+async function ignoredDirectoriesUnder(root, additionalNames = /* @__PURE__ */ new Set()) {
+  let entries;
+  try {
+    entries = await (0, import_promises.readdir)(root, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+  const nested = await Promise.all(entries.filter((entry) => entry.isDirectory()).map(async (entry) => {
+    const directory = import_node_path.default.join(root, entry.name);
+    return await isIgnoredDirectory(directory, additionalNames) ? [directory] : ignoredDirectoriesUnder(directory, additionalNames);
+  }));
+  return nested.flat().sort((left, right) => left.localeCompare(right));
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  ignoredDirectoriesUnder,
   isIgnoredDirectory
 });
