@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { buildRelevantInputManifest, type RelevantInputManifest } from './freshness.js';
-import { createGraphEdgeId, type FileGraph, type GraphCoverage, type GraphEdge, type GraphNode, type ProjectDescriptor, type SnapshotIdentity } from './model.js';
+import { createGraphEdgeId, type FileGraph, type GraphCoverage, type GraphEdge, type GraphNode, type ProjectDependencyEnvironment, type ProjectDescriptor, type SnapshotIdentity } from './model.js';
 import { canonicalFilesystemPath, normalizeProjectRelativePath, normalizeProjectRoot, projectIdentity } from './paths.js';
 import type { FreshnessContributor, ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from './runtime-contract.js';
 import { runtimeEngineIdentities, snapshotEngineIdentity } from './runtime-contract.js';
@@ -20,6 +20,7 @@ export interface IndexBuildDependencies {
 
 interface ExtractedProject {
   readonly project: ProjectDescriptor;
+  readonly dependencyEnvironment: ProjectDependencyEnvironment;
   readonly canonicalRoot: string;
   readonly canonicalConfigPath: string;
   readonly files: readonly FileGraph[];
@@ -36,7 +37,7 @@ function snapshotId(project: ProjectDescriptor, manifest: RelevantInputManifest,
   ].join('\0')).digest('hex');
 }
 
-function coverageFor(files: readonly FileGraph[]): GraphCoverage {
+function coverageFor(project: ProjectDescriptor, dependencyEnvironment: ProjectDependencyEnvironment, files: readonly FileGraph[]): GraphCoverage {
   const edges = files.flatMap((file) => file.edges);
   return {
     projects: 1,
@@ -47,6 +48,7 @@ function coverageFor(files: readonly FileGraph[]): GraphCoverage {
     ambiguousEdges: edges.filter((edge) => edge.resolution === 'ambiguous').length,
     dynamicEdges: edges.filter((edge) => edge.resolution === 'dynamic').length,
     externalEdges: edges.filter((edge) => edge.resolution === 'external').length,
+    dependencyEnvironments: [{ projectId: project.id, state: dependencyEnvironment.state }],
   };
 }
 
@@ -199,6 +201,7 @@ async function extractProject(runtime: SemanticRuntime, project: ProjectDescript
 
 function createSnapshot(
   project: ProjectDescriptor,
+  dependencyEnvironment: ProjectDependencyEnvironment,
   files: readonly FileGraph[],
   manifest: RelevantInputManifest,
   runtime: SemanticRuntime,
@@ -215,7 +218,7 @@ function createSnapshot(
     engineVersion: engine.version,
     indexedAt,
   };
-  return { project, snapshot, coverage: coverageFor(files), files };
+  return { project, snapshot, coverage: coverageFor(project, dependencyEnvironment, files), files };
 }
 
 /** Extracts and validates every project before replacing any readable snapshot. */
@@ -230,6 +233,9 @@ export async function buildProjectIndex(
     .sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project): Promise<ExtractedProject> => ({
     project,
+    dependencyEnvironment: dependencies.runtime.dependencyEnvironmentFor === undefined
+      ? { state: 'absent', absolutePaths: [] }
+      : await dependencies.runtime.dependencyEnvironmentFor(project),
     canonicalRoot: normalizeProjectRoot(project.root === '' ? canonicalRoot : project.root),
     canonicalConfigPath: project.configFile === null ? '' : normalizeProjectRoot(project.configFile),
     files: withRepositoryRelativePaths(canonicalRoot, project, await extractProject(dependencies.runtime, project)),
@@ -240,8 +246,9 @@ export async function buildProjectIndex(
   validateFiles(retained.flatMap((result) => result.files));
 
   const indexedAt = (dependencies.indexedAt ?? (() => new Date().toISOString()))();
-  const snapshots = retained.map(({ project, files }) => createSnapshot(
+  const snapshots = retained.map(({ project, dependencyEnvironment, files }) => createSnapshot(
     project,
+    dependencyEnvironment,
     files,
     manifest,
     dependencies.runtime,

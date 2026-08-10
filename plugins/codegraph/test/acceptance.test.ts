@@ -261,7 +261,7 @@ test('Codegraph US-50 acceptance oracle exercises the real runtime, graph, lifec
         const manifest = await buildRelevantInputManifest(root);
         const runtime = { engineId: 'test', engineVersion: '1', extractors: [createTypeScriptSemanticExtractor()] };
         const files = await runtime.extractors[0]!.extractProject({ id: 'atomic', root, configFile: path.join(root, 'packages', 'core', 'tsconfig.json'), language: 'typescript' });
-        return { manifest, snapshots: [{ project: { id: 'atomic', root, configFile: path.join(root, 'packages', 'core', 'tsconfig.json'), language: 'typescript' }, snapshot: snapshotBeforeAtomicFailure!, coverage: { projects: 1, files: files.length, nodes: files.reduce((total, file) => total + file.nodes.length, 0), edges: files.reduce((total, file) => total + file.edges.length, 0), unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0 }, files: [...files, files[0]!] }] };
+        return { manifest, snapshots: [{ project: { id: 'atomic', root, configFile: path.join(root, 'packages', 'core', 'tsconfig.json'), language: 'typescript' }, snapshot: snapshotBeforeAtomicFailure!, coverage: { projects: 1, files: files.length, nodes: files.reduce((total, file) => total + file.nodes.length, 0), edges: files.reduce((total, file) => total + file.edges.length, 0), unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0, dependencyEnvironments: [{ projectId: 'atomic', state: 'absent' }] }, files: [...files, files[0]!] }] };
       },
     });
     const atomicFailure = responseOf(await atomicService.index());

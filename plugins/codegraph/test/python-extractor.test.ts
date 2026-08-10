@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { spawn, type ChildProcess } from 'node:child_process';
-import { readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import os from 'node:os';
 import { type Readable } from 'node:stream';
 import path from 'node:path';
 import test from 'node:test';
 import { PyrightCompatibilityError } from '../src/lib/extractors/python/pyright-adapter.ts';
-import { PyrightSemanticExtractor } from '../src/lib/extractors/python/python.ts';
+import { PyrightSemanticExtractor, PythonLanguageProvider } from '../src/lib/extractors/python/python.ts';
 import { discoverPythonProjects } from '../src/lib/languages/python/projects.ts';
 import { PyrightRuntimeAcquirer } from '../src/lib/languages/python/runtime.ts';
 import type { SemanticEngineRuntime } from '../src/lib/runtime-contract.ts';
@@ -51,6 +52,25 @@ async function extractProjectInChild(projectRoot: string): Promise<string> {
   if (exitCode !== 0) throw new Error(`Python extraction child exited ${exitCode}: ${stderr}`);
   return stdout;
 }
+
+test('Python dependency discovery prefers an explicit Pyright environment over .venv', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codegraph-python-environment-'));
+  try {
+    const configured = path.join(root, 'configured');
+    await mkdir(configured);
+    await mkdir(path.join(root, '.venv'));
+    await writeFile(path.join(root, '.venv', 'pyvenv.cfg'), '');
+    const configFile = path.join(root, 'pyrightconfig.json');
+    await writeFile(configFile, JSON.stringify({ venvPath: '.', venv: 'configured' }));
+    const provider = new PythonLanguageProvider();
+    assert.ok(provider.dependencyEnvironment);
+    assert.deepEqual(await provider.dependencyEnvironment.discover({
+      id: 'python-project', root, configFile, language: 'python',
+    }), { state: 'configured', absolutePaths: [configured] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 function mismatchedPyrightRuntime(runtime: SemanticEngineRuntime): SemanticEngineRuntime {
   return {

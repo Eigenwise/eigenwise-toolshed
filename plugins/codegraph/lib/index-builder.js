@@ -47,7 +47,7 @@ function snapshotId(project, manifest, runtime) {
     engine.version
   ].join("\0")).digest("hex");
 }
-function coverageFor(files) {
+function coverageFor(project, dependencyEnvironment, files) {
   const edges = files.flatMap((file) => file.edges);
   return {
     projects: 1,
@@ -57,7 +57,8 @@ function coverageFor(files) {
     unresolvedEdges: edges.filter((edge) => edge.resolution === "unresolved").length,
     ambiguousEdges: edges.filter((edge) => edge.resolution === "ambiguous").length,
     dynamicEdges: edges.filter((edge) => edge.resolution === "dynamic").length,
-    externalEdges: edges.filter((edge) => edge.resolution === "external").length
+    externalEdges: edges.filter((edge) => edge.resolution === "external").length,
+    dependencyEnvironments: [{ projectId: project.id, state: dependencyEnvironment.state }]
   };
 }
 function withRepositoryRelativePaths(canonicalProjectRoot, project, files) {
@@ -186,7 +187,7 @@ async function extractProject(runtime, project) {
   if (extractor === void 0) throw new Error(`no extractor for ${project.language}`);
   return extractor.extractProject(project);
 }
-function createSnapshot(project, files, manifest, runtime, indexedAt) {
+function createSnapshot(project, dependencyEnvironment, files, manifest, runtime, indexedAt) {
   const engine = (0, import_runtime_contract.snapshotEngineIdentity)((0, import_runtime_contract.runtimeEngineIdentities)(runtime));
   const snapshot = {
     schemaVersion: 1,
@@ -198,7 +199,7 @@ function createSnapshot(project, files, manifest, runtime, indexedAt) {
     engineVersion: engine.version,
     indexedAt
   };
-  return { project, snapshot, coverage: coverageFor(files), files };
+  return { project, snapshot, coverage: coverageFor(project, dependencyEnvironment, files), files };
 }
 async function buildProjectIndex(projectRoot, dependencies) {
   const canonicalRoot = (0, import_paths.canonicalFilesystemPath)(projectRoot);
@@ -206,6 +207,7 @@ async function buildProjectIndex(projectRoot, dependencies) {
   const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(canonicalRoot)))).flat().sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,
+    dependencyEnvironment: dependencies.runtime.dependencyEnvironmentFor === void 0 ? { state: "absent", absolutePaths: [] } : await dependencies.runtime.dependencyEnvironmentFor(project),
     canonicalRoot: (0, import_paths.normalizeProjectRoot)(project.root === "" ? canonicalRoot : project.root),
     canonicalConfigPath: project.configFile === null ? "" : (0, import_paths.normalizeProjectRoot)(project.configFile),
     files: withRepositoryRelativePaths(canonicalRoot, project, await extractProject(dependencies.runtime, project))
@@ -214,8 +216,9 @@ async function buildProjectIndex(projectRoot, dependencies) {
   const retained = retainCanonicalFileOwnership(extracted);
   validateFiles(retained.flatMap((result) => result.files));
   const indexedAt = (dependencies.indexedAt ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
-  const snapshots = retained.map(({ project, files }) => createSnapshot(
+  const snapshots = retained.map(({ project, dependencyEnvironment, files }) => createSnapshot(
     project,
+    dependencyEnvironment,
     files,
     manifest,
     dependencies.runtime,

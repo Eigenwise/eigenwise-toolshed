@@ -69,6 +69,15 @@ function edgeFromRow(row) {
 function rankingTerms(value) {
   return [...new Set(value.split(/[^a-z0-9]+|(?<=[a-z])(?=[A-Z])/).map((term) => term.toLowerCase()).filter((term) => term.length > 0))];
 }
+function dependencyEnvironmentCoverage(row) {
+  const projectId = row.projectId;
+  const state = row.state;
+  if (typeof projectId !== "string") throw new Error("dependency environment has an invalid project id");
+  if (state !== "configured" && state !== "conventional" && state !== "absent") {
+    throw new Error(`dependency environment has an invalid state: ${String(state)}`);
+  }
+  return { projectId, state };
+}
 class GraphStore {
   database;
   constructor(database) {
@@ -90,6 +99,15 @@ class GraphStore {
   replaceSnapshot(input) {
     const { snapshot } = input;
     if (snapshot.schemaVersion !== 1) throw new Error(`cannot write schema version ${snapshot.schemaVersion}`);
+    const projectIds = new Set(input.projects.map((project) => project.id));
+    const dependencyEnvironments = input.dependencyEnvironments ?? input.projects.map((project) => ({ projectId: project.id, state: "absent" }));
+    const environmentProjectIds = /* @__PURE__ */ new Set();
+    for (const environment of dependencyEnvironments) {
+      if (!projectIds.has(environment.projectId)) throw new Error(`dependency environment references unknown project: ${environment.projectId}`);
+      if (environmentProjectIds.has(environment.projectId)) throw new Error(`duplicate dependency environment: ${environment.projectId}`);
+      environmentProjectIds.add(environment.projectId);
+    }
+    if (environmentProjectIds.size !== projectIds.size) throw new Error("each project requires one dependency environment");
     const files = input.files.map((fileGraph) => ({ ...fileGraph, file: (0, import_paths.normalizeProjectRelativePath)(fileGraph.file) }));
     const allNodeIds = /* @__PURE__ */ new Set();
     for (const fileGraph of files) for (const node of fileGraph.nodes) {
@@ -108,6 +126,8 @@ class GraphStore {
       this.database.prepare("INSERT INTO snapshots VALUES (?, ?, ?, ?, ?, ?, ?, ?)").run(snapshot.snapshotId, snapshot.schemaVersion, snapshot.projectRootHash, snapshot.sourceManifestHash, snapshot.configHash, snapshot.engineId, snapshot.engineVersion, snapshot.indexedAt);
       const addProject = this.database.prepare("INSERT INTO projects VALUES (?, ?, ?, ?, ?)");
       for (const project of input.projects) addProject.run(snapshot.snapshotId, project.id, project.root, project.configFile, project.language);
+      const addDependencyEnvironment = this.database.prepare("INSERT INTO dependency_environments VALUES (?, ?, ?)");
+      for (const environment of dependencyEnvironments) addDependencyEnvironment.run(snapshot.snapshotId, environment.projectId, environment.state);
       const addFile = this.database.prepare("INSERT INTO files VALUES (?, ?, ?, ?, ?)");
       const addNode = this.database.prepare("INSERT INTO nodes VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)");
       const addOwnership = this.database.prepare("INSERT INTO file_ownership VALUES (?, ?, ?)");
@@ -145,7 +165,8 @@ class GraphStore {
   coverage(snapshotId = this.snapshot()?.snapshotId) {
     if (snapshotId === void 0) return null;
     const row = this.database.prepare(`SELECT (SELECT count(*) FROM projects WHERE snapshot_id = ?) projects, (SELECT count(*) FROM files WHERE snapshot_id = ?) files, (SELECT count(*) FROM nodes WHERE snapshot_id = ?) nodes, (SELECT count(*) FROM edges WHERE snapshot_id = ?) edges, (SELECT count(*) FROM edges WHERE snapshot_id = ? AND resolution = 'unresolved') unresolvedEdges, (SELECT count(*) FROM edges WHERE snapshot_id = ? AND resolution = 'ambiguous') ambiguousEdges, (SELECT count(*) FROM edges WHERE snapshot_id = ? AND resolution = 'dynamic') dynamicEdges, (SELECT count(*) FROM edges WHERE snapshot_id = ? AND resolution = 'external') externalEdges`).get(snapshotId, snapshotId, snapshotId, snapshotId, snapshotId, snapshotId, snapshotId, snapshotId);
-    return { ...row };
+    const dependencyEnvironments = this.database.prepare("SELECT project_id projectId, state FROM dependency_environments WHERE snapshot_id = ? ORDER BY project_id").all(snapshotId).map(dependencyEnvironmentCoverage);
+    return { ...row, dependencyEnvironments };
   }
   node(snapshotId, nodeId) {
     const row = this.database.prepare("SELECT * FROM nodes WHERE snapshot_id = ? AND node_id = ?").get(snapshotId, nodeId);

@@ -57,7 +57,7 @@ test('reports a failed refresh instead of the previous ready snapshot', async ()
               engineVersion: '1.0.0',
               indexedAt: '2026-08-10T00:00:00.000Z',
             },
-            coverage: { projects: 1, files: 1, nodes: 0, edges: 0, unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0 },
+            coverage: { projects: 1, files: 1, nodes: 0, edges: 0, unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0, dependencyEnvironments: [{ projectId: 'fixture', state: 'absent' }] },
             files: [{ file: 'source.ts', contentHash: 'fixture', nodes: [], edges: [], unresolvedCount: 0, diagnostics: [] }],
           }],
         };

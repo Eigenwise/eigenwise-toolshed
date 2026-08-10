@@ -31,6 +31,7 @@ const coverage: GraphCoverage = {
   ambiguousEdges: 0,
   dynamicEdges: 0,
   externalEdges: 0,
+  dependencyEnvironments: [],
 };
 
 test('stable node identity excludes mutable span and content data', () => {
@@ -86,8 +87,11 @@ test('provider registry orders engines and extractors by provider identity', asy
   });
   const provider = (id: string, version: string) => ({
     id,
-    languages: ['fixture'],
+    languages: [id],
     freshness: { collect: async () => [] },
+    dependencyEnvironment: { discover: async () => id === 'zeta'
+      ? { state: 'configured' as const, absolutePaths: ['/fixture/zeta'] }
+      : { state: 'absent' as const, absolutePaths: [] as const } },
     acquireEngine: async () => ({
       id,
       version,
@@ -104,4 +108,7 @@ test('provider registry orders engines and extractors by provider identity', asy
   assert.deepEqual(runtime.engines?.map((engine) => `${engine.id}@${engine.version}`), ['alpha@1.0.0', 'zeta@2.0.0']);
   assert.deepEqual(runtime.extractors.map((candidate) => candidate.id), ['alpha', 'zeta']);
   assert.equal(snapshotEngineIdentity(runtime.engines ?? []).version, '[{"id":"alpha","version":"1.0.0"},{"id":"zeta","version":"2.0.0"}]');
+  assert.deepEqual(await runtime.dependencyEnvironmentFor?.({
+    id: 'zeta-project', root: '/fixture/zeta', configFile: null, language: 'zeta',
+  }), { state: 'configured', absolutePaths: ['/fixture/zeta'] });
 });

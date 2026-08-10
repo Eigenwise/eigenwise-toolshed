@@ -1,11 +1,12 @@
 import { createHash } from 'node:crypto';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import { createGraphEdgeId, createGraphNodeId, type FileGraph, type GraphEdge, type GraphNode, type GraphNodeKind, type LanguageExtractor, type ProjectDescriptor, type ResolutionState, type SourceSpan } from '../../model.js';
 import { normalizeProjectRelativePath } from '../../paths.js';
 import { pythonFreshnessContributor } from '../../languages/python/freshness.js';
 import { discoverPythonProjects } from '../../languages/python/projects.js';
 import { PyrightRuntimeAcquirer } from '../../languages/python/runtime.js';
-import { isSemanticEngineRuntime, type RuntimeAcquirer, type SemanticEngineRuntime, type SemanticLanguageProvider } from '../../runtime-contract.js';
+import { isSemanticEngineRuntime, type DependencyEnvironmentDiscovery, type RuntimeAcquirer, type SemanticEngineRuntime, type SemanticLanguageProvider } from '../../runtime-contract.js';
 import { loadPyrightAdapter, type PyrightSemanticCall, type PyrightSemanticDeclaration, type PyrightSemanticFile, type PyrightSemanticReference } from './pyright-adapter.js';
 
 function hash(content: string): string {
@@ -211,10 +212,73 @@ export class PyrightSemanticExtractor implements LanguageExtractor {
   }
 }
 
+function configuredEnvironmentValues(contents: string): readonly string[] | null {
+  const venvPath = contents.match(/(?:"venvPath"|venvPath)\s*[:=]\s*["']([^"']+)["']/)?.[1];
+  const venv = contents.match(/(?:"venv"|venv)\s*[:=]\s*["']([^"']+)["']/)?.[1];
+  const pythonPath = contents.match(/(?:"pythonPath"|pythonPath)\s*[:=]\s*["']([^"']+)["']/)?.[1];
+  if (venvPath === undefined && venv === undefined && pythonPath === undefined) return null;
+  return [venvPath === undefined ? undefined : venv === undefined ? venvPath : path.join(venvPath, venv), pythonPath]
+    .filter((candidate): candidate is string => candidate !== undefined);
+}
+
+async function accessiblePaths(candidates: readonly string[]): Promise<readonly string[]> {
+  const accessible = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return accessible.filter((candidate): candidate is string => candidate !== null);
+}
+
+async function configuredPythonDependencyPaths(project: ProjectDescriptor): Promise<readonly string[] | null> {
+  if (project.configFile === null) return null;
+  let configured: readonly string[] | null;
+  try {
+    configured = configuredEnvironmentValues(await readFile(project.configFile, 'utf8'));
+  } catch {
+    return null;
+  }
+  if (configured === null) return null;
+  const configurationRoot = path.dirname(project.configFile);
+  return accessiblePaths(configured.map((candidate) => path.resolve(configurationRoot, candidate)));
+}
+
+async function conventionalPythonDependencyPaths(project: ProjectDescriptor): Promise<readonly string[]> {
+  const candidates = [path.join(project.root, '.venv'), path.join(project.root, 'venv')];
+  const environments = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await access(path.join(candidate, 'pyvenv.cfg'));
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return environments.filter((candidate): candidate is string => candidate !== null);
+}
+
+const pythonDependencyEnvironment: DependencyEnvironmentDiscovery = {
+  async discover(project) {
+    const configured = await configuredPythonDependencyPaths(project);
+    if (configured !== null) {
+      return configured.length === 0
+        ? { state: 'absent', absolutePaths: [] }
+        : { state: 'configured', absolutePaths: configured };
+    }
+    const conventional = await conventionalPythonDependencyPaths(project);
+    return conventional.length === 0
+      ? { state: 'absent', absolutePaths: [] }
+      : { state: 'conventional', absolutePaths: conventional };
+  },
+};
+
 export class PythonLanguageProvider implements SemanticLanguageProvider {
   readonly id = 'python';
   readonly languages = ['python'] as const;
   readonly freshness = pythonFreshnessContributor;
+  readonly dependencyEnvironment = pythonDependencyEnvironment;
 
   constructor(private readonly runtime: RuntimeAcquirer = new PyrightRuntimeAcquirer()) {}
 
