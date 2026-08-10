@@ -210,6 +210,20 @@ function gatewayEnvBlock() {
   return { ...STATIC_ENV_BLOCK, ...pinEnvBlock() };
 }
 
+// ANTHROPIC_DEFAULT_*_MODEL are ordinary Claude Code settings a user may set
+// without this plugin, so unwiring must not claim them by key. A pin is ours
+// only if it still holds a value we could have written: the current effective
+// pin, the detected-pin cache, a saved override, or the built-in default. A
+// value outside that set was typed by the user and survives `env --remove`.
+function ownedPinValues() {
+  const overrides = readPinOverrides();
+  const cached = readDetectedPinCache()?.pins || {};
+  return Object.fromEntries(Object.keys(PIN_ALIASES).map((alias) => [
+    PIN_ALIASES[alias],
+    new Set([KNOWN_GOOD_PINS[alias], cached[alias], overrides[alias], detectedPinDefaults()[alias]].filter(Boolean)),
+  ]));
+}
+
 function envBlockFor(mode) {
   return { ANTHROPIC_BASE_URL: mode === 'compat' ? COMPAT_BASE_URL : DEFAULT_BASE_URL, ...gatewayEnvBlock() };
 }
@@ -218,6 +232,6 @@ function ourBaseUrls() { return [DEFAULT_BASE_URL, COMPAT_BASE_URL]; }
 
 module.exports = {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, pinEnvBlock, probeClaudeAlias, readPinOverrides, refreshDetectedPins,
-  writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, probeClaudeAlias, readPinOverrides,
+  refreshDetectedPins, writePinOverrides,
 };

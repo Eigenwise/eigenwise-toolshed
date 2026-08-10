@@ -5,7 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
-const outputDirectory = path.join(pluginRoot, 'lib');
+const outputDirectories = [path.join(pluginRoot, 'lib'), path.join(pluginRoot, 'bin')];
 
 function outputHashes() {
   const hashes = new Map();
@@ -19,7 +19,7 @@ function outputHashes() {
       }
     }
   }
-  collect(outputDirectory);
+  for (const directory of outputDirectories) collect(directory);
   return hashes;
 }
 

@@ -252,15 +252,33 @@ function isWired() {
 
 // The selected wiring scope owns compatibility switching. A legacy global block
 // remains readable during migration but must never be changed in local mode.
-function wiredMode() {
-  const scope = selectedWiringScope();
-  try {
-    const s = JSON.parse(fs.readFileSync(settingsPath(scope), 'utf8'));
-    const base = s.env && s.env.ANTHROPIC_BASE_URL;
-    if (base === COMPAT_BASE_URL) return { scope, mode: 'compat' };
-    if (base === DEFAULT_BASE_URL) return { scope, mode: 'default' };
-  } catch { /* absent or unparsable */ }
+const WRITABLE_SCOPE_BY_SOURCE = { 'project-local': 'project', 'project-shared': 'project-shared', user: 'user' };
+
+function modeForBaseUrl(value) {
+  if (value === COMPAT_BASE_URL) return 'compat';
+  if (value === DEFAULT_BASE_URL) return 'default';
   return null;
+}
+
+// isWired() honours a base URL from the environment or any settings file, so
+// this has to see the same definitions. Reading only the selected scope made
+// the two disagree the moment a project wired itself by hand: isWired() said
+// yes, this returned null, and callers crashed on `current.scope`.
+//
+// Callers use the result to decide what to WRITE, so the answer describes the
+// highest-precedence definition backed by a FILE, not whatever the calling
+// shell happens to export. Taking the environment's mode would make `setup`
+// rewrite the settings file to match a transient shell. A base URL that exists
+// only in the environment is still reported, with scope null, so callers can
+// skip the write and say why instead of throwing.
+function wiredMode() {
+  const effective = effectiveBaseUrl();
+  for (const definition of [effective, ...effective.shadowed]) {
+    const mode = modeForBaseUrl(definition.value);
+    if (mode && definition.file) return { scope: WRITABLE_SCOPE_BY_SOURCE[definition.source], mode, source: definition.source, file: definition.file };
+  }
+  const environmentMode = modeForBaseUrl(effective.source === 'env' ? effective.value : null);
+  return environmentMode ? { scope: null, mode: environmentMode, source: 'env', file: null } : null;
 }
 
 

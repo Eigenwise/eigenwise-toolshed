@@ -103,7 +103,7 @@ const {
 } = require('./runtime.js');
 const {
   codexBaseFromId, detectedPinDefaults, effectivePins, envBlockFor, gatewayEnvBlock, isGatewayModelId,
-  isValidPin, ourBaseUrls, pinEnvBlock, readPinOverrides, refreshDetectedPins, writePinOverrides,
+  isValidPin, ourBaseUrls, ownedPinValues, pinEnvBlock, readPinOverrides, refreshDetectedPins, writePinOverrides,
 } = require('./pins.js');
 
 // Versions through 0.4.1 wrote this unsafe global override. Remove it during
@@ -469,7 +469,9 @@ async function setup() {
   const { mode } = await resolveIntendedMode();
   if (isWired()) {
     const current = wiredMode();
-    if (current && current.mode !== mode) {
+    if (!current || !current.scope) {
+      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write. Claude alias pins were left alone; set them where that base URL is defined.`);
+    } else if (current.mode !== mode) {
       writeEnv(current.scope, false, { mode, quiet: true });
       log(`model-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
     } else {
@@ -656,7 +658,7 @@ function pinCommand() {
 async function syncEffectivePins() {
   await refreshDetectedPins();
   const current = wiredMode();
-  if (!current) return;
+  if (!current?.scope) return;
   const env = readSettingsForWrite(settingsPath(current.scope)).env || {};
   if (Object.entries(pinEnvBlock()).some(([key, value]) => env[key] !== value)) {
     writeEnv(current.scope, false, { mode: current.mode, quiet: true });
@@ -717,9 +719,11 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
   settings.env = settings.env || {};
   delete settings.env.ANTHROPIC_UNIX_SOCKET;
   if (remove) {
+    const ownedPins = ownedPinValues();
     if (ourBaseUrls().includes(settings.env.ANTHROPIC_BASE_URL)) delete settings.env.ANTHROPIC_BASE_URL;
     for (const [k, v] of Object.entries({ ...gatewayEnvBlock(), ...LEGACY_ENV_BLOCK })) {
-      if (Object.values(PIN_ALIASES).includes(k) || String(settings.env[k]) === String(v)) delete settings.env[k];
+      const ours = ownedPins[k] ? ownedPins[k].has(String(settings.env[k])) : String(settings.env[k]) === String(v);
+      if (ours) delete settings.env[k];
     }
     if (!Object.keys(settings.env).length) delete settings.env;
   } else {
@@ -754,7 +758,7 @@ function writeEnv(scope, remove, { mode = 'default', quiet = false } = {}) {
 // silent otherwise. Never touches settings this plugin didn't wire itself.
 async function syncCompatMode() {
   const current = wiredMode();
-  if (!current) return;
+  if (!current?.scope) return;
   const { mode, compat } = await resolveIntendedMode();
   if (mode === current.mode) return;
   writeEnv(current.scope, false, { mode, quiet: true });
@@ -1830,6 +1834,7 @@ module.exports = {
   hostsFilePath,
   envBlockFor,
   ourBaseUrls,
+  isWired,
   wiredMode,
   writeEnv,
   migrateLegacyProjectSettings,

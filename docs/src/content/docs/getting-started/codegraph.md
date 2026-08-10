@@ -1,6 +1,6 @@
 ---
 title: Codegraph
-description: Trace symbol relationships and focused context across a TypeScript or JavaScript project.
+description: Trace symbol relationships and focused context across a TypeScript, JavaScript, or Python project.
 ---
 
 Codegraph gives Claude a semantic view of a project: symbol relationships, dependency paths, inheritance, module structure, and focused context. It complements Grep and LSP when a change crosses files or symbols.

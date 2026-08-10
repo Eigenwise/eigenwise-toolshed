@@ -297,13 +297,19 @@ test('writeEnv removes retired socket wiring while preserving unrelated settings
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-writeenv-'));
   const prevUserProfile = process.env.USERPROFILE;
   const prevHome = process.env.HOME;
+  // wiredMode() reads the environment too, and this suite runs inside a wired
+  // Claude Code session, so the ambient base URL has to go or the file under
+  // test is not what is being measured.
+  const prevBaseUrl = process.env.ANTHROPIC_BASE_URL;
   t.after(() => {
     if (prevUserProfile === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = prevUserProfile;
     if (prevHome === undefined) delete process.env.HOME; else process.env.HOME = prevHome;
+    if (prevBaseUrl === undefined) delete process.env.ANTHROPIC_BASE_URL; else process.env.ANTHROPIC_BASE_URL = prevBaseUrl;
     fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
   });
   process.env.USERPROFILE = home;
   process.env.HOME = home;
+  delete process.env.ANTHROPIC_BASE_URL;
   const isolatedGateway = loadGatewayWithCurrentHome();
 
   const file = isolatedGateway.settingsPath('user');
@@ -324,7 +330,7 @@ test('writeEnv removes retired socket wiring while preserving unrelated settings
   assert.equal(settings.env.ANTHROPIC_BASE_URL, isolatedGateway.COMPAT_BASE_URL);
   assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me'); // untouched across the switch
-  assert.deepEqual(isolatedGateway.wiredMode(), { scope: 'user', mode: 'compat' });
+  assert.deepEqual(isolatedGateway.wiredMode(), { scope: 'user', mode: 'compat', source: 'user', file });
 
   isolatedGateway.writeEnv('user', true, { quiet: true }); // --remove
   settings = JSON.parse(fs.readFileSync(file, 'utf8'));
@@ -332,6 +338,78 @@ test('writeEnv removes retired socket wiring while preserving unrelated settings
   assert.equal(settings.env.ANTHROPIC_UNIX_SOCKET, undefined);
   assert.equal(settings.env.USER_SETTING, 'keep-me');
   assert.equal(isolatedGateway.wiredMode(), null);
+});
+
+// A project that wires itself in its own settings.local.json leaves the user
+// scope empty, and setup crashed with "Cannot read properties of null (reading
+// 'scope')" because isWired() saw the environment while wiredMode() only read
+// the selected scope. Whatever the two disagree about, they must never disagree
+// about whether anything is wired at all.
+test('wiredMode agrees with isWired for environment-only and project-local wiring', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiredmode-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-project-'));
+  const previous = {
+    USERPROFILE: process.env.USERPROFILE,
+    HOME: process.env.HOME,
+    ANTHROPIC_BASE_URL: process.env.ANTHROPIC_BASE_URL,
+  };
+  const previousCwd = process.cwd();
+  t.after(() => {
+    process.chdir(previousCwd);
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    for (const directory of [home, project]) fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  process.env.USERPROFILE = home;
+  process.env.HOME = home;
+  process.chdir(project);
+  const isolatedGateway = loadGatewayWithCurrentHome();
+
+  delete process.env.ANTHROPIC_BASE_URL;
+  assert.equal(isolatedGateway.isWired(), false);
+  assert.equal(isolatedGateway.wiredMode(), null);
+
+  process.env.ANTHROPIC_BASE_URL = isolatedGateway.DEFAULT_BASE_URL;
+  assert.equal(isolatedGateway.isWired(), true);
+  assert.deepEqual(isolatedGateway.wiredMode(), { scope: null, mode: 'default', source: 'env', file: null });
+
+  const projectFile = isolatedGateway.settingsPath('project');
+  fs.mkdirSync(path.dirname(projectFile), { recursive: true });
+  fs.writeFileSync(projectFile, JSON.stringify({ env: { ANTHROPIC_BASE_URL: isolatedGateway.COMPAT_BASE_URL } }));
+  assert.deepEqual(isolatedGateway.wiredMode(), { scope: 'project', mode: 'compat', source: 'project-local', file: projectFile });
+});
+
+// An unwire must not take ANTHROPIC_DEFAULT_*_MODEL pins the user set for
+// themselves: they are ordinary Claude Code settings this plugin only sometimes
+// owns, and claiming them by key wiped a working configuration.
+test('env --remove keeps alias pins the gateway did not write', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-pins-'));
+  const previous = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME };
+  t.after(() => {
+    for (const [key, value] of Object.entries(previous)) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+    fs.rmSync(home, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  process.env.USERPROFILE = home;
+  process.env.HOME = home;
+  const isolatedGateway = loadGatewayWithCurrentHome();
+
+  const file = isolatedGateway.settingsPath('user');
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  isolatedGateway.writeEnv('user', false, { mode: 'default', quiet: true });
+
+  const written = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const gatewayWrittenPin = written.env.ANTHROPIC_DEFAULT_OPUS_MODEL;
+  assert.ok(gatewayWrittenPin, 'the gateway writes an opus pin it owns');
+  written.env.ANTHROPIC_DEFAULT_SONNET_MODEL = 'claude-sonnet-5-my-own-choice';
+  fs.writeFileSync(file, JSON.stringify(written));
+
+  isolatedGateway.writeEnv('user', true, { quiet: true });
+  const after = JSON.parse(fs.readFileSync(file, 'utf8'));
+  assert.equal(after.env?.ANTHROPIC_DEFAULT_OPUS_MODEL, undefined, 'a pin holding our own value is removed');
+  assert.equal(after.env?.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5-my-own-choice', 'a pin the user set survives');
 });
 
 // ---------------------------------------------------- DNS recursion guard
