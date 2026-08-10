@@ -937,12 +937,12 @@ test('ordinary isolated dispatches preserve native worktree isolation', () => {
   assert.equal(store.releaseTicket(slug, ticket.ref, 'ordinary-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
-test('released handbacks carry their committed worktree range into continuation dispatches', () => {
+test('released handbacks carry registered native worktrees into continuation dispatches', () => {
   const ticket = createFixture('continuation checkpoint fixture');
   const sessionId = `continuation-${Date.now()}`;
   const agentId = `continuation-${Date.now()}`;
   const branch = `worktree-agent-${agentId}`;
-  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  const worktree = worktrees.canonicalPath(path.join(SIDEQUEST_HOME, 'worktrees', `agent-native-parent-${agentId}`, `agent-${agentId}`));
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
@@ -955,6 +955,7 @@ test('released handbacks carry their committed worktree range into continuation 
       agentName: agentId,
     }).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
     assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-worker', {
       sessionId,
       token: prepared.token,
@@ -1014,7 +1015,7 @@ test('released handbacks carry their committed worktree range into continuation 
       token: continued.token,
       executor: continuationExecutor,
     }).ok, true);
-    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktree);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
     assert.equal(store.submitTicket(slug, ticket.ref, 'continuation-second-worker', {
       commit: checkpoint,
       worktree,
@@ -1087,7 +1088,7 @@ test('dirty released worktrees without commits resume in place for a continuatio
       token: continued.token,
       executor: continuationExecutor,
     }).ok, true);
-    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktree);
+    assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
     assert.deepEqual(store.completionTreeCheck(slug, store.getTicket(slug, ticket.ref)).changedPaths, ['tracked.js']);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'dirty-continuation-cleanup', { status: 'todo', source: 'test', force: true });

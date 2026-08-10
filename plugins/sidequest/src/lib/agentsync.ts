@@ -543,7 +543,9 @@ function ticketContinuationPacket(ticket?: any) {
   const replay = Array.isArray(fallback.commits) && fallback.commits.length
     ? ` After claiming and before any other work, run \`git cherry-pick ${fallback.commits.join(' ')}\`. If the cherry-pick fails, stop and report the failure. Do not rediscover or rewrite the checkpointed work.`
     : '';
-  return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${replay}`.trim();
+  const cause = String(fallback.cause || '').trim();
+  const evidence = cause ? ` Validation evidence: ${cause}.` : '';
+  return `Continuation fallback: the previous released worktree was not carried (${String(fallback.reason).replace(/_/g, ' ')}). This dispatch uses a fresh worktree.${fallback.sourceWorktree ? ` Previous worktree: ${fallback.sourceWorktree}.` : ''}${evidence}${replay}`.trim();
 }
 
 function ticketWorktreeSync(ticket?: any, projectPath?: any) {

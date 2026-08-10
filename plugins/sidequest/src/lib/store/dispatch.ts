@@ -545,9 +545,19 @@ function worktreeIsolationWarning(slug?: any) {
   }
 }
 
-function normalizedFilesystemPath(value?: any) {
-  const resolved = fs.realpathSync.native(path.resolve(String(value || '')));
+function nativeGitPath(value?: any) {
+  const input = String(value || '').trim();
+  const gitBashPath = process.platform === 'win32' ? /^\/([a-zA-Z])(?=\/|$)/.exec(input) : null;
+  return gitBashPath ? `${gitBashPath[1]}:${input.slice(2)}` : input;
+}
+
+function canonicalFilesystemPath(value?: any) {
+  const resolved = fs.realpathSync.native(path.resolve(nativeGitPath(value)));
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+function canonicalGitDirectory(repository?: any, directory?: any) {
+  return canonicalFilesystemPath(path.resolve(String(repository || ''), nativeGitPath(directory)));
 }
 
 function gitOutput(root?: any, args?: any[]) {
@@ -557,6 +567,31 @@ function gitOutput(root?: any, args?: any[]) {
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'ignore'],
   }).trim();
+}
+
+function registeredWorktrees(repository?: any): string[] {
+  return gitOutput(repository, ['worktree', 'list', '--porcelain'])
+    .split(/\r?\n\r?\n/)
+    .map((entry: string) => /^worktree\s+(.+)$/m.exec(entry)?.[1])
+    .filter((worktree: string | undefined): worktree is string => Boolean(worktree))
+    .map((worktree: string) => canonicalFilesystemPath(worktree));
+}
+
+function registeredAgentWorktree(repository?: any, agentId?: any) {
+  const expectedName = `agent-${String(agentId || '').trim()}`;
+  if (expectedName === 'agent-') return null;
+  try {
+    return registeredWorktrees(repository).find((worktree: string) => path.basename(worktree).toLowerCase() === expectedName.toLowerCase()) || null;
+  } catch (_: any) {
+    return null;
+  }
+}
+
+function gitFailureEvidence(error?: any) {
+  return String(error?.stderr || error?.message || error || 'unknown Git error')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, 1000);
 }
 
 function continuationFallback(reason?: any, worktree?: any, details?: any) {
@@ -569,20 +604,25 @@ function continuationFallback(reason?: any, worktree?: any, details?: any) {
 
 function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
   if (!state || state.outcome !== 'released' || !state.terminalAt || state.sharedTree !== false) return null;
-  const worktree = String(state.worktree || '').trim();
-  if (!worktree || !fs.existsSync(worktree)) {
-    return { fallback: continuationFallback('released_worktree_missing', worktree) };
+  const recordedWorktree = String(state.worktree || '').trim();
+  if (!recordedWorktree || !fs.existsSync(recordedWorktree)) {
+    return { fallback: continuationFallback('released_worktree_missing', recordedWorktree) };
   }
   const attempts = Array.isArray(state.attempts) ? state.attempts : [];
   const attempt = attempts[attempts.length - 1] || null;
   const checkpointCommit = String(attempt?.commit || '').trim();
+  let worktree = recordedWorktree;
   try {
     const projectPath = String(readMeta(slug)?.path || '').trim();
-    const projectGitDirectory = gitOutput(projectPath, ['rev-parse', '--git-common-dir']);
-    const worktreeGitDirectory = gitOutput(worktree, ['rev-parse', '--git-common-dir']);
-    if (normalizedFilesystemPath(path.resolve(projectPath, projectGitDirectory))
-      !== normalizedFilesystemPath(path.resolve(worktree, worktreeGitDirectory))) {
+    const projectRoot = canonicalFilesystemPath(gitOutput(projectPath, ['rev-parse', '--show-toplevel']));
+    worktree = canonicalFilesystemPath(gitOutput(recordedWorktree, ['rev-parse', '--show-toplevel']));
+    const projectGitDirectory = canonicalGitDirectory(projectRoot, gitOutput(projectRoot, ['rev-parse', '--git-common-dir']));
+    const worktreeGitDirectory = canonicalGitDirectory(worktree, gitOutput(worktree, ['rev-parse', '--git-common-dir']));
+    if (projectGitDirectory !== worktreeGitDirectory) {
       return { fallback: continuationFallback('released_worktree_belongs_to_another_repository', worktree) };
+    }
+    if (!registeredWorktrees(projectRoot).includes(worktree)) {
+      return { fallback: continuationFallback('released_worktree_is_not_registered', worktree) };
     }
     const baseCommit = gitOutput(worktree, ['rev-parse', '--verify', `${state.baseCommit}^{commit}`]);
     const commit = gitOutput(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']);
@@ -636,8 +676,12 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
         releaseKind: attempt?.release?.kind || (checkpointCommit ? 'checkpoint' : 'handback'),
       },
     };
-  } catch (_: any) {
-    return { fallback: continuationFallback('released_worktree_git_state_is_unreadable', worktree) };
+  } catch (error: any) {
+    return {
+      fallback: continuationFallback('released_worktree_git_state_is_unreadable', worktree, {
+        cause: gitFailureEvidence(error),
+      }),
+    };
   }
 }
 
@@ -1184,7 +1228,7 @@ function recordDispatchRuntimeIdentity(slug?: any, state?: any, agentId?: any, a
   if (agentName) state.agentName = agentName;
   if (state.sharedTree === false && agentId && !state.continuation?.sourceWorktree) {
     const projectPath = readMeta(slug)?.path;
-    if (projectPath) state.worktree = agentWorktreePath(projectPath, agentId);
+    if (projectPath) state.worktree = registeredAgentWorktree(projectPath, agentId) || agentWorktreePath(projectPath, agentId);
   }
   state.boundAt = state.boundAt || now || new Date().toISOString();
 }
