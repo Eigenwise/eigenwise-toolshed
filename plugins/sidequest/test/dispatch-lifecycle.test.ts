@@ -922,6 +922,21 @@ test('release and submission clear retain structured rework attempts', () => {
   assert.equal(Object.hasOwn(after.reworkEvents[1], 'submission'), false);
 });
 
+test('ordinary isolated dispatches preserve native worktree isolation', () => {
+  const ticket = createFixture('ordinary isolation fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `ordinary-isolation-${Date.now()}` });
+  const spawn = agentsync.agentSpawn(
+    prepared.ticket.dispatch.launchName,
+    agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree),
+    null,
+    prepared.ticket.dispatchExecutor,
+    'Implement the ticket.',
+    'ordinary isolation fixture',
+  );
+  assert.equal(spawn.isolation, 'worktree');
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'ordinary-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 test('released handbacks carry their committed worktree range into continuation dispatches', () => {
   const ticket = createFixture('continuation checkpoint fixture');
   const sessionId = `continuation-${Date.now()}`;
@@ -971,6 +986,15 @@ test('released handbacks carry their committed worktree range into continuation 
       releaseKind: 'handback',
     }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    const spawn = agentsync.agentSpawn(
+      continued.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
+      null,
+      continued.ticket.dispatchExecutor,
+      agentsync.renderDispatchStub(continued.ticket, continued.token, PROJECT),
+      'retained continuation fixture',
+    );
+    assert.equal(Object.hasOwn(spawn, 'isolation'), false);
     assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
     assert.ok(briefing.includes(`git rev-parse HEAD\` equals \`${checkpoint}\``));
     assert.doesNotMatch(briefing, /git cherry-pick/);
@@ -1036,6 +1060,15 @@ test('dirty released worktrees without commits resume in place for a continuatio
     const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
     assert.equal(continued.ticket.dispatch.continuation.mode, 'dirty_worktree_resume');
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
+    const spawn = agentsync.agentSpawn(
+      continued.ticket.dispatch.launchName,
+      agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
+      null,
+      continued.ticket.dispatchExecutor,
+      agentsync.renderDispatchStub(continued.ticket, continued.token, PROJECT),
+      'dirty continuation fixture',
+    );
+    assert.equal(Object.hasOwn(spawn, 'isolation'), false);
     assert.match(briefing, /with uncommitted work in retained worktree/);
     assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
     assert.doesNotMatch(briefing, /git cherry-pick/);

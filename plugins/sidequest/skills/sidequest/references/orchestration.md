@@ -391,7 +391,9 @@ is fixed, so nothing is written or registered when a route changes. The executor
 returned token and exact stable executor name.
 
 Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
-the token and returns the current spawn for the same stable route.
+the token and returns the current spawn for the same stable route. A retained-worktree continuation
+omits `spawn.isolation`, so the executor starts from its caller context and can follow its briefing's
+required `EnterWorktree` handoff. Ordinary isolated dispatches still return `isolation: 'worktree'`.
 
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
 and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only

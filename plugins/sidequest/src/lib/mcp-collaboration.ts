@@ -255,7 +255,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch for a ticket. It returns a stable executor spawn spec and token. Pass spawn unchanged to Agent. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current spawn. The claim stays gated on the returned token and executor.',
+    description: 'Prepare a token-gated dispatch for a ticket. It returns a stable executor spawn spec and token. Pass spawn unchanged to Agent. Ordinary isolated dispatches use a native worktree; retained-worktree continuations omit native isolation so the executor can EnterWorktree into the retained worktree. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current spawn. The claim stays gated on the returned token and executor.',
     inputSchema: {
       type: 'object',
       properties: {
