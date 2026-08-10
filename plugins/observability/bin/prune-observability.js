@@ -71,7 +71,12 @@ function formatResult(result) {
     `dedupe records: ${result.counts.dedupe}`,
     `outbox records: ${result.counts.outbox}`,
     `${result.dryRun ? 'estimated reusable space' : 'reusable space'}: ${formatBytes(reusableBytes)}`,
-    `SQLite keeps the ${formatBytes(result.databaseBytes)} database file size until VACUUM runs. VACUUM needs roughly that much free disk space.`,
+    result.dryRun
+      ? `SQLite keeps the ${formatBytes(result.databaseBytes)} database file size until VACUUM runs. Applying this runs VACUUM, which needs roughly that much free disk space and blocks for about a minute per 2 GB.`
+      : `Database file is now ${formatBytes(result.storage.databaseBytes)}.`,
+    ...(result.sizePrune
+      ? [`Over the ${formatBytes(result.storage.maxDatabaseBytes)} size cap, so the oldest ${result.sizePrune.days} day(s) were dropped as well: ${result.sizePrune.counts.observations} observations.`]
+      : []),
     ...(result.dryRun ? ['Run again with --apply to permanently delete these rows.'] : []),
     '',
   ].join('\n');
@@ -85,7 +90,11 @@ function main(argv = process.argv.slice(2)) {
   }
   const store = openObservabilityStore(options.databaseFile, { readOnly: options.dryRun });
   try {
-    const result = store.prune(options);
+    const result = store.prune({
+      ...options,
+      reclaimFileSpace: !options.dryRun,
+      maxSizePruneDays: Number.POSITIVE_INFINITY,
+    });
     process.stdout.write(options.format === 'json'
       ? `${JSON.stringify(result, null, 2)}\n`
       : formatResult(result));

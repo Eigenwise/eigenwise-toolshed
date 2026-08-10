@@ -42,6 +42,7 @@ const USAGE_NAMES = new Set([
 
 const DEFAULT_RETENTION_DAYS = 30;
 const DEFAULT_MAX_DATABASE_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_MAX_SIZE_PRUNE_DAYS = 3;
 const DEFAULT_MAX_WAL_BYTES = 64 * 1024 * 1024;
 
 function fileBytes(filePath) {
@@ -743,9 +744,13 @@ function openObservabilityStore(databaseFile, options = {}) {
     return (pageCount - freePages) * pageSize;
   }
 
-  function sizePrune() {
+  function sizePrune({ reclaimFileSpace, maxDays }) {
     const result = { counts: { observations: 0, measurements: 0, links: 0, dedupe: 0, outbox: 0 }, days: 0 };
     while (usedDatabaseBytes() > maxDatabaseBytes) {
+      if (result.days >= maxDays) {
+        result.moreWorkPending = true;
+        break;
+      }
       const oldest = database.prepare('SELECT observed_at FROM observation ORDER BY observed_at ASC LIMIT 1').get();
       if (!oldest) break;
       const cutoffDate = new Date(oldest.observed_at);
@@ -757,14 +762,20 @@ function openObservabilityStore(databaseFile, options = {}) {
       for (const [name, count] of Object.entries(counts)) result.counts[name] += count;
       result.days += 1;
     }
-    if (result.counts.observations > 0) database.exec('VACUUM');
+    if (result.counts.observations > 0 && reclaimFileSpace) database.exec('VACUUM');
     result.checkpoint = checkpoint();
     result.storage = storageMetrics();
     return result;
   }
 
+  // VACUUM blocks its caller for as long as it runs: measured at 78s on a 2.5GB database. The
+  // observer calls prune() synchronously on the event loop, so it must never reclaim file space,
+  // or ingest dies for the duration and hooks pile up in the spool. Only the standalone
+  // prune-observability CLI, where blocking costs nothing, opts in.
   function prune(options = {}) {
     assertOpen();
+    const reclaimFileSpace = options.reclaimFileSpace === true;
+    const maxSizePruneDays = Number(options.maxSizePruneDays) || DEFAULT_MAX_SIZE_PRUNE_DAYS;
     const retentionDays = options.retentionDays === undefined
       ? DEFAULT_RETENTION_DAYS
       : Number(options.retentionDays);
@@ -796,12 +807,14 @@ function openObservabilityStore(databaseFile, options = {}) {
     }
     result.checkpoint = checkpoint();
     result.storage = storageMetrics();
-    if (result.storage.overDatabaseLimit && counts.observations > 0) {
+    if (result.storage.overDatabaseLimit && counts.observations > 0 && reclaimFileSpace) {
       database.exec('VACUUM');
       result.checkpoint = checkpoint();
       result.storage = storageMetrics();
     }
-    if (result.storage.overDatabaseLimit) result.sizePrune = sizePrune();
+    if (result.storage.overDatabaseLimit) {
+      result.sizePrune = sizePrune({ reclaimFileSpace, maxDays: maxSizePruneDays });
+    }
     return result;
   }
 

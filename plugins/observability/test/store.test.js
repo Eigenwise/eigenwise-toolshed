@@ -31,8 +31,8 @@ function usageObservation(id, observedAt) {
   };
 }
 
-test('size pruning removes the oldest current day when the database exceeds its cap', (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-store-cap-'));
+function openCappedStore(t, prefix) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   const databaseFile = path.join(directory, 'ledger.db');
   const store = openObservabilityStore(databaseFile, {
     maxDatabaseBytes: 256 * 1024,
@@ -42,6 +42,45 @@ test('size pruning removes the oldest current day when the database exceeds its 
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
   });
+  return store;
+}
+
+test('the observer default leaves the file untouched, because VACUUM would block ingest', (t) => {
+  const store = openCappedStore(t, 'workbench-store-novacuum-');
+
+  for (let index = 0; index < 800; index += 1) {
+    store.ingest(usageObservation(`old-${index}`, '2026-08-06T12:00:00.000Z'));
+  }
+  store.ingest(usageObservation('new', '2026-08-07T12:00:00.000Z'));
+  const bytesBefore = store.storageMetrics().databaseBytes;
+
+  const result = store.prune({ retentionDays: 30 });
+
+  assert.equal(result.sizePrune.counts.observations, 800);
+  assert.ok(store.storageMetrics().databaseBytes >= bytesBefore);
+  assert.ok(Number(store.database.prepare('PRAGMA freelist_count').get().freelist_count) > 0);
+});
+
+test('size pruning stops at its day budget instead of blocking on a long backlog', (t) => {
+  const store = openCappedStore(t, 'workbench-store-bounded-');
+
+  for (const day of ['02', '03', '04', '05', '06']) {
+    for (let index = 0; index < 400; index += 1) {
+      store.ingest(usageObservation(`day${day}-${index}`, `2026-08-${day}T12:00:00.000Z`));
+    }
+  }
+  assert.equal(store.storageMetrics().overDatabaseLimit, true);
+
+  const result = store.prune({ retentionDays: 30 });
+
+  assert.equal(result.sizePrune.days, 3);
+  assert.equal(result.sizePrune.moreWorkPending, true);
+  const oldestLeft = store.database.prepare('SELECT MIN(observed_at) AS oldest FROM observation').get();
+  assert.equal(oldestLeft.oldest, '2026-08-05T12:00:00.000Z');
+});
+
+test('the reclaiming path shrinks the file back under the cap', (t) => {
+  const store = openCappedStore(t, 'workbench-store-cap-');
 
   for (let index = 0; index < 800; index += 1) {
     assert.equal(store.ingest(usageObservation(`old-${index}`, '2026-08-06T12:00:00.000Z')).accepted, true);
@@ -49,7 +88,7 @@ test('size pruning removes the oldest current day when the database exceeds its 
   assert.equal(store.ingest(usageObservation('new', '2026-08-07T12:00:00.000Z')).accepted, true);
   assert.equal(store.storageMetrics().overDatabaseLimit, true);
 
-  const result = store.prune({ retentionDays: 30 });
+  const result = store.prune({ retentionDays: 30, reclaimFileSpace: true });
 
   assert.equal(result.sizePrune.counts.observations, 800);
   assert.equal(result.sizePrune.days, 1);

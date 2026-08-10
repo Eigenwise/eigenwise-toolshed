@@ -38,7 +38,9 @@ Read the consent/config record and report the managed observability health. This
 node "<OBS_ROOT>/lib/observability/ensure.js" --health
 ```
 
-If it reports `configured: false`, observability was never consented to and needs no repair. If it reports `enabled: false`, say it is deliberately disabled. For an enabled record, report observer health, Collector listening state, selected sink, configured ports, and dashboard/Docker state. Treat a listening observer with a failed `/health` response as unhealthy, and a configured dashboard without Docker as optional/unavailable rather than a pipeline failure.
+If it reports `configured: false`, observability was never consented to and needs no repair. If it reports `enabled: false`, say it is deliberately disabled. For an enabled record, report observer health, Collector listening state, selected sink, configured ports, dashboard/Docker state, and the `storage` block. Treat a listening observer with a failed `/health` response as unhealthy, and a configured dashboard without Docker as optional/unavailable rather than a pipeline failure.
+
+Report `storage.overDatabaseLimit: true` or `storage.overWalLimit: true` as a real finding with the two byte counts, not as a note. Over the database limit means retention pruning alone cannot get back under the cap, so the file only grows; the next prune reclaims by dropping the oldest days and that runs a `VACUUM`, which blocks the observer while it works. Say how long that will take from the current size before recommending it.
 
 When the observer is healthy, audit project attribution. Hook events reach the observer from any directory,
 but the `claude_code_*` metrics only exist where Claude Code found the telemetry env in the settings of the
