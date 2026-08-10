@@ -35,7 +35,6 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 - [Set up and maintain a workspace](./getting-started/workbench/)
 - [Plan and deliver tracked work](./getting-started/sidequest/)
 - [Add GPT or Grok subscription models](./getting-started/model-gateway/)
-- [Trace symbol relationships across a project](./getting-started/codegraph/)
 - [Keep a project map nearby](./getting-started/codebase-mapper/)
 - [Load project rules when they apply](./getting-started/live-rules/)
 - [Set up workspaces and run retros with hindsight](./getting-started/quartermaster/)

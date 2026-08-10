@@ -3,7 +3,7 @@
   "tool": "codebase-mapper",
   "version": "2.14.4",
   "mappedAt": "2026-08-10",
-  "gitCommit": "0a68748c4ba52bf5f1483a1fbe2b2f1f970c5b21",
+  "gitCommit": "3545bbef7c90d5ce6e2dd11bb7c7d1e08b1cf1e3",
   "documents": [
     "architecture.md",
     "coding-style.md",
@@ -16,15 +16,15 @@
     "tech-landscape.md"
   ],
   "hashes": {
-    "INDEX.md": "47985d13ce2941b4b113d6cc476c2d87d563c01e2344fe8bf35e8f9697f47501",
-    "architecture.md": "e83405337ba486fb2bcdd2f5d92dd64fbf55333f56cbd3f3de06dce1c5ff02bb",
-    "coding-style.md": "5a1de82ee84d212d980f30860ef6464feedbfcef58f40a22309ce0a25b1d9270",
-    "directory-structure.md": "09af1bc17188a15b4569e3400302447c81e2beeb61eddf669f7d7420adb58692",
-    "entry-points.md": "ee4d96e391a1bd0b2d26d2bd38b485c6bdb95919bd22192c2be219b6d5510d3b",
-    "modules.md": "dcc4861823018d4bb34f32336c5c2a634077fed8e5ac3dd9be3c2a0f1418554b",
-    "onboarding.md": "0f5e226e4ef3817036edb87e1c54ff9a856300a56c7e0d579db8d352fc97fed9",
-    "patterns.md": "feb820f818ad6b4fddda79dfc9c3833e42b159d1b6cbab04bef0f10ee351db5d",
-    "release-publishing.md": "94e271f8532f44c6657bbe035edf6d1dab6a9451066356e65bb12b6594fdbb8b",
-    "tech-landscape.md": "88461e78795e52c8d1345fdf09bb19f1c2019df3eee4a5b458268ea913cf90f6"
+    "INDEX.md": "60f1c07d168b1bb31fc9cf2518bbdb8a2988b54ff9e417a9457da2b8a006c83f",
+    "architecture.md": "a984635e7244a0328f8f56d7afc7f6ed317d654402afb70f91208885291cf0c2",
+    "coding-style.md": "9cf0a75f5a65bd017221473d022c32079fc92f2a4cefecbfbc01388875c53916",
+    "directory-structure.md": "0f604403fd585eb1f491bafbe7c0051c2a62dac698d1400869ad74430a79d883",
+    "entry-points.md": "f09cf7cfb442bf062f3951256eadbdfa438a9388e7679448491ac5e3f940c1b6",
+    "modules.md": "9dfa7cc30d4ea1b686ffcc5e467275b4dfd062c0494415e91fe7499c8a49ec62",
+    "onboarding.md": "3648c5ddc453daeb0677170b1ad72a84832292883492168af9c6083521efcb38",
+    "patterns.md": "08a4a27153e9e20bccaa31e6b4be0d72fa6eae015064c81f01a56cf5c6b7c3c8",
+    "release-publishing.md": "3f826895561144cd4838404a8d4909abcd4852c9f6d0db91b846fd21dcd8f616",
+    "tech-landscape.md": "1a993505fe41a911f757810a707d683a63918c6a4bb564b372209c331c985c65"
   }
 }

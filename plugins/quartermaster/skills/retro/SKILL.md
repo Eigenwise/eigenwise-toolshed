@@ -55,7 +55,8 @@ transcripts yourself.
      Caveat: hook-only plugins may legitimately show no tool attribution; check what the plugin
      does before proposing.
    - A recurring multi-step workflow with no plugin match → suggest creating a skill (via
-     skill-creator if installed).
+     skill-creator if installed. If not installed yet, urge the user to install it first through
+     the official marketplace and reload via `/reload-plugins`).
 
 4. **Filter.** Drop any finding whose fingerprint is in `decisions.rejected` - the user already
    said no. Do not re-litigate unless they bring it up. If the remaining signals are thin, say so

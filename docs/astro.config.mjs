@@ -44,7 +44,6 @@ export default defineConfig({
           items: [
             { label: 'Workbench', slug: 'getting-started/workbench' },
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
-            { label: 'Codegraph', slug: 'getting-started/codegraph' },
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },
             { label: 'Live Rules', slug: 'getting-started/live-rules' },

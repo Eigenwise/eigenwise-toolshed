@@ -1,7 +1,0 @@
-{
-  "name": "@eigenwise/codegraph-pyright-runtime",
-  "private": true,
-  "dependencies": {
-    "pyright": "1.1.411"
-  }
-}

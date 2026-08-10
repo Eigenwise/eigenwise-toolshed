@@ -99,8 +99,7 @@ One visible plan, then per-item approval. Draw from three sources, in this order
     global.
 
   `model-gateway` and `workbench` install once for the whole machine, so check their state and
-  point at their own skills; never install them per-project. Do not propose `codegraph`: it is
-  under heavy construction and not ready to recommend.
+  point at their own skills; never install them per-project.
 - **Stack plugins**, from [references/stack-plugins.md](references/stack-plugins.md) plus the
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
   For LSP plugins, check the required binary is on PATH first; report a missing binary with its

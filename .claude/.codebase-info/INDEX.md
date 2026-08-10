@@ -2,7 +2,7 @@
 
 Last Updated: 2026-08-10
 
-Toolshed is a public Claude Code plugin marketplace. It ships eight published plugins, with Sidequest as the largest runtime system, plus shared test support, docs, examples, and release automation. The current gateway plugin is Model Gateway. Codegraph is the local semantic knowledge-graph plugin for TypeScript/JavaScript and Python, still under heavy construction and not recommended for installation. `sandbox/windows/` is a maintainer-only, gitignored Windows Sandbox clean-room harness — not published, not linked from docs.
+Toolshed is a public Claude Code plugin marketplace. It ships seven published plugins, with Sidequest as the largest runtime system, plus shared test support, docs, examples, and release automation. The current gateway plugin is Model Gateway. `sandbox/windows/` is a maintainer-only, gitignored Windows Sandbox clean-room harness — not published, not linked from docs.
 
 - [Architecture](architecture.md)
 - [Tech landscape](tech-landscape.md)
