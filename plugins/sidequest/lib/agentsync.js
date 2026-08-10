@@ -364,7 +364,7 @@ function ticketContinuationPacket(ticket) {
       `Checkpoint commit: ${continuation.commit}`,
       "After claiming and before any other work, call EnterWorktree with `path` set to that retained worktree.",
       `Then verify \`git rev-parse HEAD\` equals \`${continuation.commit}\` and continue from that checkpoint.`,
-      "The board binds this ticket to the retained worktree at claim time. Your freshly minted spawn worktree is disposable; the worktree sweep reaps it after this ticket reaches a final state.",
+      "The board binds this ticket to the retained worktree at claim time. This continuation spawn starts without native worktree isolation so EnterWorktree can enter that retained worktree before any work.",
       "Do not cherry-pick the checkpoint or rediscover the checkpointed work."
     ].join("\n");
   }
@@ -375,7 +375,7 @@ function ticketContinuationPacket(ticket) {
       `Recorded HEAD: ${continuation.commit}`,
       "After claiming and before any other work, call EnterWorktree with `path` set to that retained worktree.",
       `Then verify \`git rev-parse HEAD\` equals \`${continuation.commit}\`, preserve the existing working changes, and continue.`,
-      "The board binds this ticket to the retained worktree at claim time. Your freshly minted spawn worktree is disposable; the worktree sweep reaps it after this ticket reaches a final state."
+      "The board binds this ticket to the retained worktree at claim time. This continuation spawn starts without native worktree isolation so EnterWorktree can enter that retained worktree before any work."
     ].join("\n");
   }
   const fallback = ticket?.dispatch?.continuationFallback;
@@ -818,7 +818,8 @@ function renderTicketBriefing(ticket, nonce, slug, projectPath) {
   return ticketBrief(ticket, nonce.trim(), ticketRouteMarker(ticket), slug, projectPath);
 }
 function ticketIsolation(ticket, sharedTree) {
-  return sharedTree === true ? null : "worktree";
+  const continuationMode = ticket?.dispatch?.continuation?.mode;
+  return sharedTree === true || continuationMode === "retained_worktree_resume" || continuationMode === "dirty_worktree_resume" ? null : "worktree";
 }
 function withProjectIdentity(prompt, projectPath) {
   const text = String(prompt || "").trim();
