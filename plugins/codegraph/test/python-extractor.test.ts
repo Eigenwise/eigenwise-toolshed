@@ -85,3 +85,13 @@ test('keeps Python declaration identities when source lines move', async () => {
     await writeFile(file, original);
   }
 });
+
+test('represents globals and nonlocals as their enclosing declarations', async () => {
+  const [project] = await discoverPythonProjects(fixtureRoot);
+  assert.ok(project);
+  const graphs = await new PyrightSemanticExtractor(await pyrightRuntime).extractProject(project);
+  const graph = graphs.find((candidate) => candidate.file === 'pkg/scope_rebinding.py');
+  assert.ok(graph);
+  assert.equal(graph.nodes.filter((node) => node.name === 'counter').length, 1);
+  assert.equal(new Set(graph.nodes.map((node) => node.id)).size, graph.nodes.length);
+});

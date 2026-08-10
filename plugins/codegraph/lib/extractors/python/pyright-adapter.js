@@ -172,12 +172,13 @@ function semanticDeclarations(symbolTable, evaluator, seenScopes = /* @__PURE__ 
     if (typeof name !== "string" || !record(symbol)) continue;
     if (name === "__doc__" || name === "__module__" || name === "__qualname__") continue;
     const symbolRecord = symbol;
+    let emittedVariable = false;
     for (const declarationValue of symbolRecord.getDeclarations()) {
       const declaration = record(declarationValue);
       const node = record(declaration?.node);
       if (declaration === void 0 || node === void 0) continue;
       const kind = declarationKind(declaration, node);
-      if (kind === null) continue;
+      if (kind === null || kind === "variable" && emittedVariable) continue;
       const uri = record(declaration.uri);
       const scope = record(node.a)?.scope;
       declarations.push({
@@ -191,6 +192,7 @@ function semanticDeclarations(symbolTable, evaluator, seenScopes = /* @__PURE__ 
         uncertain: kind === "class" && hasMetaclass(node) || kind !== "class" && hasUncertainDecorator(record(node.d)?.decorators),
         children: kind === "class" ? semanticDeclarations(record(scope)?.symbolTable, evaluator, seenScopes) : []
       });
+      emittedVariable ||= kind === "variable";
     }
   }
   return declarations;
