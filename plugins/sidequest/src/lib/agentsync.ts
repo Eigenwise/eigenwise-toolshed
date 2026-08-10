@@ -17,7 +17,7 @@
  * advertise `model: null`. Codex routes share TWO executors total
  * (sidequest-exec-dispatch.md and sidequest-exec-dispatch-readonly.md, pinned
  * to the virtual claude-codex-auto): the real model AND effort ride each
- * dispatch briefing as a [switchboard-route model=... effort=...] marker the
+ * dispatch briefing as a [sidequest-route model=... effort=...] marker the
  * codex-gateway shim resolves per request (SQ-347/SQ-348), overwriting
  * output_config.effort, so per-effort dispatch defs carried dead frontmatter.
  * The Claude ladder stays per-effort: the Agent tool has no effort parameter,
@@ -88,8 +88,8 @@ function defaultAgentsDir() {
 // from the route marker below. Must match the gateway's advertised id.
 const DISPATCH_MODEL_ID = 'claude-codex-auto';
 const ROUTE_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
-const EMITTED_ROUTE_MARKER_RE = /^\[switchboard-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
-const ROUTE_MARKER_RE = /^\[(?:switchboard-route|sidequest-route) model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+const EMITTED_ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
 
 // The exact marker grammar the shim scans for. Throws rather than emitting a
 // marker the gateway would silently ignore (which would 400 the whole run).
@@ -98,7 +98,7 @@ function routeMarker(dispatchModel?: any, effort?: any) {
   const markerEffort = String(effort || '');
   if (!ROUTE_MODEL_RE.test(model)) throw new Error(`dispatch model id is not marker-safe: ${dispatchModel}`);
   if (!EXEC_EFFORTS.includes(markerEffort)) throw new Error(`dispatch effort is not marker-safe: ${effort}`);
-  const marker = `[switchboard-route model=${model} effort=${markerEffort}]`;
+  const marker = `[sidequest-route model=${model} effort=${markerEffort}]`;
   if (!EMITTED_ROUTE_MARKER_RE.test(marker)) throw new Error('dispatch route marker does not match the gateway grammar.');
   return marker;
 }
@@ -203,7 +203,7 @@ function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief
 // on this path. The note bans writing marker-shaped text anywhere else (the gateway
 // takes the last occurrence in the conversation).
 function dispatchNote() {
-  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[switchboard-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
+  return `\n\n_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 
 // The dispatch defs use a safe frontmatter effort for internal non-marker calls.

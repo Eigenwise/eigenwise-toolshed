@@ -397,7 +397,7 @@ test('spawn descriptions are bounded and lead with the resolved route', () => {
 test('Agent spawn preserves the routed nested review description', () => {
   const dispatchedReview = {
     description: 'GPT-5.6 Terra, high · Audit SQ-1561 projection core',
-    prompt: '[switchboard-route model=gpt-5.6-terra effort=high]\n\nAudit SQ-1561 projection core',
+    prompt: '[sidequest-route model=gpt-5.6-terra effort=high]\n\nAudit SQ-1561 projection core',
   };
 
   const agentCall = agentsync.agentSpawn(
@@ -412,11 +412,11 @@ test('Agent spawn preserves the routed nested review description', () => {
   assert.equal(agentCall.description, dispatchedReview.description);
   assert.equal(agentCall.description, 'GPT-5.6 Terra, high · Audit SQ-1561 projection core');
   assert.equal(agentCall.prompt, dispatchedReview.prompt);
-  assert.match(agentCall.prompt, /^\[switchboard-route model=gpt-5\.6-terra effort=high\]/);
-  assert.doesNotMatch(agentCall.description, /\[switchboard-route/);
+  assert.match(agentCall.prompt, /^\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
+  assert.doesNotMatch(agentCall.description, /\[sidequest-route/);
 
   const missingDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt);
-  const markerDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, '[switchboard-route model=gpt-5.6-terra effort=high]');
+  const markerDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, '[sidequest-route model=gpt-5.6-terra effort=high]');
   const legacyMarkerDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, '[sidequest-route model=gpt-5.6-terra effort=high]');
   const whitespaceDescription = '  GPT-5.6 Terra, high · Keep this exact label  ';
   const whitespaceCall = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, whitespaceDescription);
@@ -472,8 +472,8 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
     assert.match(dispatch, /^model: claude-codex-auto$/m);
     assert.match(dispatch, /^effort: high$/m);
-    assert.match(dispatch, /\[switchboard-route model=\.\.\. effort=\.\.\.\]/);
-    assert.doesNotMatch(dispatch, /\[sidequest-route/);
+    assert.match(dispatch, /\[sidequest-route model=\.\.\. effort=\.\.\.\]/);
+    assert.doesNotMatch(dispatch, new RegExp('\\[switch' + 'board-route'));
     for (const file of STABLE_EXECUTORS) {
       const body = fs.readFileSync(path.join(dir, file), 'utf8');
       assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'maxTurns'), false, `${file} must be uncapped`);
@@ -813,8 +813,8 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(briefing, /space file\.png/);
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
-  assert.ok(briefing.trimEnd().endsWith('[switchboard-route model=gpt-5.6-terra effort=high]'));
-  assert.ok(stub.startsWith('[switchboard-route model=gpt-5.6-terra effort=high]\n'));
+  assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
+  assert.ok(stub.startsWith('[sidequest-route model=gpt-5.6-terra effort=high]\n'));
   assert.ok(Buffer.byteLength(stub) < 1600, `spawn context is ${Buffer.byteLength(stub)} bytes`);
   assert.match(stub, /Title: Instant dispatch/);
   assert.match(stub, /Description:\ny{128}/);
@@ -1041,7 +1041,7 @@ test('renderTicketBriefing embeds no route marker for a Claude-backed route', ()
     ref: 'SQ-347', title: 'Claude route', model: 'opus', effort: 'high',
     dispatchExecutor: 'sidequest-exec-high', category: {},
   }, 'claude-token-347');
-  assert.doesNotMatch(briefing, /\[switchboard-route model=/);
+  assert.doesNotMatch(briefing, /\[sidequest-route model=/);
   assert.match(briefing, /Closeout: this prepared dispatch is write-capable\. Commit scoped repo changes, then put the full final report in submit\.body/);
   assert.match(briefing, /verification execution evidence: changed behavior, named assertion, and empty-state proof/);
   assert.match(briefing, /Submit writes the short terminal submission marker/);
@@ -1117,7 +1117,7 @@ test('workflow recipes use the dispatch pin and normalized catalog marker for Co
     runsLabel: TERRA.label,
     agent: {
       model: agentsync.DISPATCH_MODEL_ID,
-      promptPrefix: '[switchboard-route model=gpt-5.6-terra effort=medium]\n\n',
+      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n',
     },
     effortCarrier: 'marker',
     warnings: [],
@@ -1135,7 +1135,7 @@ test('workflow recipes derive the same marker from a pre-rename catalog', () => 
 
   const recipe = agentsync.workflowRecipe(category, store.resolveCategoryRoute(category));
   assert.equal(recipe.agent.model, agentsync.DISPATCH_MODEL_ID);
-  assert.equal(recipe.agent.promptPrefix, '[switchboard-route model=gpt-5.6-terra effort=medium]\n\n');
+  assert.equal(recipe.agent.promptPrefix, '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n');
 });
 
 test('workflow recipes use the Claude runtime alias without a prompt prefix', () => {
@@ -1181,7 +1181,7 @@ test('workflow recipes reject an invalid Codex marker before spawning', () => {
 
 test('routeMarker rejects ids and efforts outside the gateway grammar', () => {
   for (const effort of EFFORTS) {
-    assert.equal(agentsync.routeMarker('gpt-5.6-sol', effort), `[switchboard-route model=gpt-5.6-sol effort=${effort}]`);
+    assert.equal(agentsync.routeMarker('gpt-5.6-sol', effort), `[sidequest-route model=gpt-5.6-sol effort=${effort}]`);
   }
   for (const bad of ['', 'UPPER', 'has space', 'has]bracket', '-leading', 'x'.repeat(70)]) {
     assert.throws(() => agentsync.routeMarker(bad, 'high'), /model id is not marker-safe/);

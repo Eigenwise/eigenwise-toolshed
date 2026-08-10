@@ -81,7 +81,7 @@ export function dispatchLaunchName(ref: unknown, title?: unknown, sequence?: unk
 }
 
 // Codex dispatch executors are effort-collapsed: the gateway resolves BOTH model and
-// effort from the [switchboard-route model=... effort=...] marker in the briefing and
+// effort from the [sidequest-route model=... effort=...] marker in the briefing and
 // overwrites the request's output_config.effort, so a per-effort definition ladder on
 // this side carried five copies of dead frontmatter (verified on the wire 2026-08-02:
 // a def pinned to effort low produced effort=xhigh when the marker said so). Claude
