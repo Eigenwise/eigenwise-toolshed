@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.436.0 (2026-08-10)
+
+### codegraph 0.1.5 → 0.1.6
+
+#### Fixes
+
+- Handle unreachable Python code during indexing (SQ-1773)
+  Codegraph now keeps indexing Python files when Pyright omits declaration data for unreachable code, recording the affected references as unresolved.
+- Avoid duplicate nodes for Python global rebindings (SQ-1774)
+  Python global assignments no longer create duplicate graph nodes during indexing.
+- Find the pinned Pyright manifest from the shipped plugin build (SQ-1775) [`031a244`](https://github.com/Eigenwise/eigenwise-toolshed/commit/031a2441)
+
+### sidequest 4.42.5 → 4.42.6
+
+#### Fixes
+
+- Block executor-side ticket dispatch (SQ-1766)
+  Executors with an active claim now file and report follow-up tickets instead of dispatching their own subagents.
+- Require verification evidence that the changed behavior ran (SQ-1768)
+
 ## v3.435.0 (2026-08-10)
 
 ### codegraph 0.1.4 → 0.1.5
