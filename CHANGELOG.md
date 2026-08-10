@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.433.0 (2026-08-10)
+
+### codegraph 0.1.3 → 0.1.4
+
+#### Fixes
+
+- Add pluggable Codegraph language providers (SQ-1727)
+  Codegraph now composes language providers through a deterministic registry while preserving TypeScript and JavaScript indexing.
+- Add Python project discovery (SQ-1728)
+  Codegraph finds Python source trees, Pyright configuration, and relevant freshness inputs.
+- Pin the Pyright semantic runtime (SQ-1729)
+  Codegraph acquires and verifies a pinned Pyright runtime behind an isolated compatibility adapter.
+
+### sidequest 4.42.3 → 4.42.4
+
+#### Fixes
+
+- Stop continuation worktree double-isolation (SQ-1735)
+  Retained Sidequest worktree continuations now start without a conflicting native Agent worktree.
+
 ## v3.432.0 (2026-08-10)
 
 ### codegraph 0.1.2 → 0.1.3
