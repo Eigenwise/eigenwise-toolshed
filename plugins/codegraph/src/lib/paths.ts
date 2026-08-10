@@ -73,11 +73,12 @@ export function runtimeCacheDirectory(
   architecture: string = process.arch,
   environment: NodeJS.ProcessEnv = process.env,
   userHomeDirectory: string = homedir(),
+  cacheIdentity: string = `${platform}-${architecture}`,
 ): string {
   return path.join(
     codegraphStateRoot(environment, userHomeDirectory),
     'runtime',
     engineVersion,
-    `${platform}-${architecture}`,
+    cacheIdentity,
   );
 }

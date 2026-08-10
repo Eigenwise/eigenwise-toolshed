@@ -29,6 +29,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var runtime_exports = {};
 __export(runtime_exports, {
   NpmRuntimeInstaller: () => NpmRuntimeInstaller,
+  PinnedNpmRuntimeAcquirer: () => PinnedNpmRuntimeAcquirer,
   SemanticRuntimeError: () => SemanticRuntimeError,
   TypeScriptRuntimeAcquirer: () => TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError: () => UnsupportedRuntimePlatformError,
@@ -182,7 +183,7 @@ class NpmRuntimeInstaller {
   async install(stageDirectory, runtimeManifestDirectory) {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
     const npmCli = import_node_path.default.join(import_node_path.default.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-    await waitForProcess(process.execPath, [npmCli, "ci", "--ignore-scripts", "--omit=dev", "--no-audit", "--fund=false"], stageDirectory);
+    await waitForProcess(process.execPath, [npmCli, "ci", "--ignore-scripts", "--omit=dev", "--omit=optional", "--no-audit", "--fund=false"], stageDirectory);
   }
 }
 class LoadedTypeScriptRuntime {
@@ -223,11 +224,11 @@ async function runtimeModulePath(runtimeDirectory, manifest, moduleSpecifier) {
   if (!isJsonRecord(engineMetadata) || engineMetadata.version !== manifest.engine.version) {
     throw new SemanticRuntimeError(`runtime package version mismatch for ${manifest.engine.id}`);
   }
-  const exportedModuleFile = packageExportPath(engineMetadata, moduleSpecifier, manifest.engine.id);
   const engineDirectory = import_node_path.default.resolve(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id);
+  const exportedModuleFile = isJsonRecord(engineMetadata.exports) ? packageExportPath(engineMetadata, moduleSpecifier, manifest.engine.id) : `./${moduleSpecifier.slice(`${manifest.engine.id}/`.length)}`;
   const modulePath = import_node_path.default.resolve(engineDirectory, exportedModuleFile);
-  if (!modulePath.startsWith(`${engineDirectory}${import_node_path.default.sep}`)) {
-    throw new SemanticRuntimeError(`runtime module escapes its package: ${exportedModuleFile}`);
+  if (!moduleSpecifier.startsWith(`${manifest.engine.id}/`) || !modulePath.startsWith(`${engineDirectory}${import_node_path.default.sep}`)) {
+    throw new SemanticRuntimeError(`runtime module escapes its package: ${moduleSpecifier}`);
   }
   return modulePath;
 }
@@ -754,9 +755,104 @@ class TypeScriptRuntimeAcquirer {
     }
   }
 }
+class PinnedNpmRuntimeAcquirer {
+  architecture;
+  cacheIdentity;
+  engineVersion;
+  environment;
+  installer;
+  platform;
+  runtimeManifestDirectory;
+  stateDirectory;
+  userHomeDirectory;
+  constructor(options) {
+    this.architecture = options.architecture ?? process.arch;
+    this.cacheIdentity = options.cacheIdentity;
+    this.engineVersion = options.engineVersion;
+    this.environment = options.environment ?? process.env;
+    this.installer = options.installer ?? new NpmRuntimeInstaller();
+    this.platform = options.platform ?? process.platform;
+    this.runtimeManifestDirectory = options.runtimeManifestDirectory;
+    this.stateDirectory = options.stateDirectory;
+    this.userHomeDirectory = options.userHomeDirectory;
+  }
+  acquire() {
+    const cacheDirectory = this.cacheDirectory();
+    const existing = inFlightAcquisitions.get(cacheDirectory);
+    if (existing !== void 0) return existing;
+    const acquisition = this.acquireRuntime(cacheDirectory).finally(() => inFlightAcquisitions.delete(cacheDirectory));
+    inFlightAcquisitions.set(cacheDirectory, acquisition);
+    return acquisition;
+  }
+  cacheDirectory() {
+    if (this.stateDirectory !== void 0) return import_node_path.default.join(this.stateDirectory, "runtime", this.engineVersion, this.cacheIdentity);
+    return (0, import_paths.runtimeCacheDirectory)(this.engineVersion, this.platform, this.architecture, this.environment, this.userHomeDirectory, this.cacheIdentity);
+  }
+  async acquireRuntime(cacheDirectory) {
+    return withRuntimeCacheLock(cacheDirectory, (lease) => this.acquireLockedRuntime(cacheDirectory, lease));
+  }
+  async acquireLockedRuntime(cacheDirectory, lease) {
+    const manifest = await readRuntimeManifest(this.runtimeManifestDirectory);
+    const packageLock = await readPackageLock(this.runtimeManifestDirectory);
+    validateManifestLock(manifest, packageLock);
+    const cachedRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => void 0);
+    if (cachedRuntimeDirectory !== void 0) {
+      try {
+        await validateInstalledRuntime(cachedRuntimeDirectory, this.cacheIdentity, manifest, manifest.engine.id);
+        return new LoadedTypeScriptRuntime(cachedRuntimeDirectory, manifest);
+      } catch {
+        await this.replaceIncompleteCache(cacheDirectory, manifest, lease);
+        return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
+      }
+    }
+    await this.installCache(cacheDirectory, manifest, lease);
+    return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
+  }
+  async loadedRuntimeDirectory(cacheDirectory) {
+    const runtimeDirectory = await currentRuntimeDirectory(cacheDirectory);
+    if (runtimeDirectory === void 0) throw new SemanticRuntimeError("runtime cache was published without a current generation");
+    return runtimeDirectory;
+  }
+  async replaceIncompleteCache(cacheDirectory, manifest, lease) {
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, manifest);
+    try {
+      await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
+    } catch (error) {
+      await (0, import_promises.rm)(stageDirectory, { recursive: true, force: true });
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new SemanticRuntimeError(`runtime cache recovery failed: ${detail}`);
+    }
+  }
+  async installCache(cacheDirectory, manifest, lease) {
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, manifest);
+    try {
+      await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
+    } catch (error) {
+      await (0, import_promises.rm)(stageDirectory, { recursive: true, force: true });
+      const existingRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => void 0);
+      if (existingRuntimeDirectory !== void 0) {
+        await validateInstalledRuntime(existingRuntimeDirectory, this.cacheIdentity, manifest, manifest.engine.id);
+        return;
+      }
+      throw error;
+    }
+  }
+  async createValidatedStage(cacheDirectory, manifest) {
+    const stageDirectory = await createStageDirectory(cacheDirectory);
+    try {
+      await this.installer.install(stageDirectory, this.runtimeManifestDirectory);
+      await validateInstalledRuntime(stageDirectory, this.cacheIdentity, manifest, manifest.engine.id);
+      return stageDirectory;
+    } catch (error) {
+      await (0, import_promises.rm)(stageDirectory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   NpmRuntimeInstaller,
+  PinnedNpmRuntimeAcquirer,
   SemanticRuntimeError,
   TypeScriptRuntimeAcquirer,
   UnsupportedRuntimePlatformError,

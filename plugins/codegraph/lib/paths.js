@@ -82,12 +82,12 @@ function codegraphStateRoot(environment = process.env, userHomeDirectory = (0, i
 function projectStateDirectory(projectRoot, environment = process.env, userHomeDirectory = (0, import_node_os.homedir)()) {
   return import_node_path.default.join(codegraphStateRoot(environment, userHomeDirectory), "projects", projectIdentity(projectRoot));
 }
-function runtimeCacheDirectory(engineVersion, platform = process.platform, architecture = process.arch, environment = process.env, userHomeDirectory = (0, import_node_os.homedir)()) {
+function runtimeCacheDirectory(engineVersion, platform = process.platform, architecture = process.arch, environment = process.env, userHomeDirectory = (0, import_node_os.homedir)(), cacheIdentity = `${platform}-${architecture}`) {
   return import_node_path.default.join(
     codegraphStateRoot(environment, userHomeDirectory),
     "runtime",
     engineVersion,
-    `${platform}-${architecture}`
+    cacheIdentity
   );
 }
 // Annotate the CommonJS export names for ESM import in node:

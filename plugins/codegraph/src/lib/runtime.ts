@@ -227,7 +227,7 @@ export class NpmRuntimeInstaller implements RuntimeInstaller {
   async install(stageDirectory: string, runtimeManifestDirectory: string): Promise<void> {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
     const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    await waitForProcess(process.execPath, [npmCli, 'ci', '--ignore-scripts', '--omit=dev', '--no-audit', '--fund=false'], stageDirectory);
+    await waitForProcess(process.execPath, [npmCli, 'ci', '--ignore-scripts', '--omit=dev', '--omit=optional', '--no-audit', '--fund=false'], stageDirectory);
   }
 }
 
@@ -273,11 +273,13 @@ async function runtimeModulePath(runtimeDirectory: string, manifest: RuntimeMani
   if (!isJsonRecord(engineMetadata) || engineMetadata.version !== manifest.engine.version) {
     throw new SemanticRuntimeError(`runtime package version mismatch for ${manifest.engine.id}`);
   }
-  const exportedModuleFile = packageExportPath(engineMetadata, moduleSpecifier, manifest.engine.id);
   const engineDirectory = path.resolve(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id);
+  const exportedModuleFile = isJsonRecord(engineMetadata.exports)
+    ? packageExportPath(engineMetadata, moduleSpecifier, manifest.engine.id)
+    : `./${moduleSpecifier.slice(`${manifest.engine.id}/`.length)}`;
   const modulePath = path.resolve(engineDirectory, exportedModuleFile);
-  if (!modulePath.startsWith(`${engineDirectory}${path.sep}`)) {
-    throw new SemanticRuntimeError(`runtime module escapes its package: ${exportedModuleFile}`);
+  if (!moduleSpecifier.startsWith(`${manifest.engine.id}/`) || !modulePath.startsWith(`${engineDirectory}${path.sep}`)) {
+    throw new SemanticRuntimeError(`runtime module escapes its package: ${moduleSpecifier}`);
   }
   return modulePath;
 }
@@ -905,6 +907,116 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     try {
       await this.installer.install(stageDirectory, this.runtimeManifestDirectory);
       await validateInstalledRuntime(stageDirectory, runtimeKey, manifest, packageName);
+      return stageDirectory;
+    } catch (error: unknown) {
+      await rm(stageDirectory, { recursive: true, force: true });
+      throw error;
+    }
+  }
+}
+
+export interface PinnedNpmRuntimeOptions extends Omit<TypeScriptRuntimeOptions, 'runtimeManifestDirectory'> {
+  cacheIdentity: string;
+  engineVersion: string;
+  runtimeManifestDirectory: string;
+}
+
+export class PinnedNpmRuntimeAcquirer implements RuntimeAcquirer {
+  private readonly architecture: string;
+  private readonly cacheIdentity: string;
+  private readonly engineVersion: string;
+  private readonly environment: NodeJS.ProcessEnv;
+  private readonly installer: RuntimeInstaller;
+  private readonly platform: NodeJS.Platform;
+  private readonly runtimeManifestDirectory: string;
+  private readonly stateDirectory: string | undefined;
+  private readonly userHomeDirectory: string | undefined;
+
+  constructor(options: PinnedNpmRuntimeOptions) {
+    this.architecture = options.architecture ?? process.arch;
+    this.cacheIdentity = options.cacheIdentity;
+    this.engineVersion = options.engineVersion;
+    this.environment = options.environment ?? process.env;
+    this.installer = options.installer ?? new NpmRuntimeInstaller();
+    this.platform = options.platform ?? process.platform;
+    this.runtimeManifestDirectory = options.runtimeManifestDirectory;
+    this.stateDirectory = options.stateDirectory;
+    this.userHomeDirectory = options.userHomeDirectory;
+  }
+
+  acquire(): Promise<SemanticEngineRuntime> {
+    const cacheDirectory = this.cacheDirectory();
+    const existing = inFlightAcquisitions.get(cacheDirectory);
+    if (existing !== undefined) return existing;
+    const acquisition = this.acquireRuntime(cacheDirectory).finally(() => inFlightAcquisitions.delete(cacheDirectory));
+    inFlightAcquisitions.set(cacheDirectory, acquisition);
+    return acquisition;
+  }
+
+  private cacheDirectory(): string {
+    if (this.stateDirectory !== undefined) return path.join(this.stateDirectory, 'runtime', this.engineVersion, this.cacheIdentity);
+    return runtimeCacheDirectory(this.engineVersion, this.platform, this.architecture, this.environment, this.userHomeDirectory, this.cacheIdentity);
+  }
+
+  private async acquireRuntime(cacheDirectory: string): Promise<SemanticEngineRuntime> {
+    return withRuntimeCacheLock(cacheDirectory, (lease) => this.acquireLockedRuntime(cacheDirectory, lease));
+  }
+
+  private async acquireLockedRuntime(cacheDirectory: string, lease: RuntimeCacheLease): Promise<SemanticEngineRuntime> {
+    const manifest = await readRuntimeManifest(this.runtimeManifestDirectory);
+    const packageLock = await readPackageLock(this.runtimeManifestDirectory);
+    validateManifestLock(manifest, packageLock);
+    const cachedRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => undefined);
+    if (cachedRuntimeDirectory !== undefined) {
+      try {
+        await validateInstalledRuntime(cachedRuntimeDirectory, this.cacheIdentity, manifest, manifest.engine.id);
+        return new LoadedTypeScriptRuntime(cachedRuntimeDirectory, manifest);
+      } catch {
+        await this.replaceIncompleteCache(cacheDirectory, manifest, lease);
+        return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
+      }
+    }
+    await this.installCache(cacheDirectory, manifest, lease);
+    return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
+  }
+
+  private async loadedRuntimeDirectory(cacheDirectory: string): Promise<string> {
+    const runtimeDirectory = await currentRuntimeDirectory(cacheDirectory);
+    if (runtimeDirectory === undefined) throw new SemanticRuntimeError('runtime cache was published without a current generation');
+    return runtimeDirectory;
+  }
+
+  private async replaceIncompleteCache(cacheDirectory: string, manifest: RuntimeManifest, lease: RuntimeCacheLease): Promise<void> {
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, manifest);
+    try {
+      await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
+    } catch (error: unknown) {
+      await rm(stageDirectory, { recursive: true, force: true });
+      const detail = error instanceof Error ? error.message : String(error);
+      throw new SemanticRuntimeError(`runtime cache recovery failed: ${detail}`);
+    }
+  }
+
+  private async installCache(cacheDirectory: string, manifest: RuntimeManifest, lease: RuntimeCacheLease): Promise<void> {
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, manifest);
+    try {
+      await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
+    } catch (error: unknown) {
+      await rm(stageDirectory, { recursive: true, force: true });
+      const existingRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => undefined);
+      if (existingRuntimeDirectory !== undefined) {
+        await validateInstalledRuntime(existingRuntimeDirectory, this.cacheIdentity, manifest, manifest.engine.id);
+        return;
+      }
+      throw error;
+    }
+  }
+
+  private async createValidatedStage(cacheDirectory: string, manifest: RuntimeManifest): Promise<string> {
+    const stageDirectory = await createStageDirectory(cacheDirectory);
+    try {
+      await this.installer.install(stageDirectory, this.runtimeManifestDirectory);
+      await validateInstalledRuntime(stageDirectory, this.cacheIdentity, manifest, manifest.engine.id);
       return stageDirectory;
     } catch (error: unknown) {
       await rm(stageDirectory, { recursive: true, force: true });
