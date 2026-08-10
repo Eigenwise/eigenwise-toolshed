@@ -6,7 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 import { buildProjectIndex } from '../src/lib/index-builder.ts';
 import { TypeScriptSemanticExtractor } from '../src/lib/extractors/typescript.ts';
-import type { FileGraph, LanguageExtractor, ProjectDescriptor } from '../src/lib/model.ts';
+import { createGraphEdgeId, type FileGraph, type GraphEdge, type GraphNode, type LanguageExtractor, type ProjectDescriptor } from '../src/lib/model.ts';
 import { discoverProjects } from '../src/lib/projects.ts';
 import type { ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from '../src/lib/runtime-contract.ts';
 
@@ -111,6 +111,80 @@ test('indexes repeated local declarations and object-literal methods into a read
     assert.equal(result.snapshots.length, 1);
     assert.equal(store.snapshots.length, 1);
     assert.equal(store.snapshots[0]?.coverage.nodes, 10);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('turns a discarded target without a retained representation into an unresolved edge', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'codegraph-overlap-unresolved-'));
+  try {
+    await writeFile(path.join(root, 'entry.ts'), 'export const retained = true;\n');
+    await writeFile(path.join(root, 'consumer.ts'), 'export const consumed = true;\n');
+    const earlierConfig: ProjectDescriptor = {
+      id: 'earlier-config',
+      root,
+      configFile: path.join(root, 'a.tsconfig.json'),
+      language: 'typescript',
+    };
+    const laterConfig: ProjectDescriptor = {
+      id: 'later-config',
+      root,
+      configFile: path.join(root, 'b.tsconfig.json'),
+      language: 'typescript',
+    };
+    const sourceSpan = (file: string) => ({ file, startLine: 1, startColumn: 1, endLine: 1, endColumn: 2 });
+    const graphNode = (id: string, projectId: string, file: string, qualifiedName: string): GraphNode => ({
+      id,
+      extractor: 'fixture',
+      language: 'typescript',
+      kind: 'variable',
+      name: qualifiedName,
+      qualifiedName,
+      projectId,
+      declaration: sourceSpan(file),
+      exported: true,
+      contentHash: id,
+    });
+    const retainedNode = graphNode('retained-node', earlierConfig.id, 'entry.ts', 'retained');
+    const discardedTarget = graphNode('discarded-target', laterConfig.id, 'entry.ts', 'discardedOnly');
+    const consumerNode = graphNode('consumer-node', laterConfig.id, 'consumer.ts', 'consumed');
+    const resolvedEdgeWithoutIdentity: Omit<GraphEdge, 'id'> = {
+      kind: 'references',
+      sourceId: consumerNode.id,
+      targetId: discardedTarget.id,
+      resolution: 'resolved',
+      evidence: sourceSpan('consumer.ts'),
+    };
+    const resolvedEdge: GraphEdge = {
+      ...resolvedEdgeWithoutIdentity,
+      id: createGraphEdgeId(resolvedEdgeWithoutIdentity),
+    };
+    const fixtureExtractor: LanguageExtractor = {
+      id: 'fixture',
+      languages: ['typescript'],
+      async discoverProjects(): Promise<ProjectDescriptor[]> { return [laterConfig, earlierConfig]; },
+      async extractProject(project): Promise<FileGraph[]> {
+        if (project.id === earlierConfig.id) {
+          return [{ file: 'entry.ts', contentHash: 'retained', nodes: [retainedNode], edges: [], unresolvedCount: 0, diagnostics: [] }];
+        }
+        return [
+          { file: 'entry.ts', contentHash: 'discarded', nodes: [discardedTarget], edges: [], unresolvedCount: 0, diagnostics: [] },
+          { file: 'consumer.ts', contentHash: 'consumer', nodes: [consumerNode], edges: [resolvedEdge], unresolvedCount: 0, diagnostics: [] },
+        ];
+      },
+    };
+    const store = new CapturingStore();
+    const runtime: SemanticRuntime = { engineId: 'fixture', engineVersion: '1.0.0', extractors: [fixtureExtractor] };
+    const result = await buildProjectIndex(root, { runtime, store });
+
+    const retainedFiles = result.snapshots.flatMap((snapshot) => snapshot.files);
+    assert.deepEqual(retainedFiles.map((file) => file.file).sort(), ['consumer.ts', 'entry.ts']);
+    assert.equal(retainedFiles.find((file) => file.file === 'entry.ts')?.contentHash, 'retained');
+    const rewrittenEdge = retainedFiles.find((file) => file.file === 'consumer.ts')?.edges[0];
+    assert.equal(rewrittenEdge?.resolution, 'unresolved');
+    assert.equal(rewrittenEdge?.targetId, null);
+    assert.notEqual(rewrittenEdge?.id, resolvedEdge.id);
   } finally {
     await rm(root, { recursive: true, force: true });
   }

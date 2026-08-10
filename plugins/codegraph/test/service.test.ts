@@ -7,6 +7,7 @@ import { buildRelevantInputManifest } from '../src/lib/freshness.ts';
 import { buildProjectIndex, type IndexBuildResult } from '../src/lib/index-builder.ts';
 import type { FileGraph, LanguageExtractor, ProjectDescriptor } from '../src/lib/model.ts';
 import type { SemanticRuntime } from '../src/lib/runtime-contract.ts';
+import { projectIdentity } from '../src/lib/paths.ts';
 import { CodegraphService } from '../src/lib/service.ts';
 import { GraphStore } from '../src/lib/store.ts';
 
@@ -64,6 +65,53 @@ test('indexes same-named files from separate leaf projects under repository-rela
     assert.equal(indexed.status, 'ready');
     assert.deepEqual(store.nodes(indexed.snapshot!.snapshotId), []);
     assert.equal(indexed.coverage?.files, 2);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('retains nested project ownership and remaps incoming semantic edges', async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'codegraph-service-overlapping-projects-'));
+  const nestedProjectRoot = path.join(projectRoot, 'packages', 'core');
+  try {
+    await mkdir(path.join(projectRoot, 'src'), { recursive: true });
+    await mkdir(path.join(nestedProjectRoot, 'src'), { recursive: true });
+    await writeFile(path.join(projectRoot, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022' },
+      include: ['src/**/*.ts', 'packages/core/src/**/*.ts'],
+    }));
+    await writeFile(path.join(nestedProjectRoot, 'tsconfig.json'), JSON.stringify({
+      compilerOptions: { module: 'nodenext', moduleResolution: 'nodenext', target: 'es2022' },
+      include: ['src/**/*.ts'],
+    }));
+    await writeFile(path.join(projectRoot, 'src', 'consumer.ts'), "import { value } from '../packages/core/src/value.js';\nexport const consumed = value;\n");
+    await writeFile(path.join(nestedProjectRoot, 'src', 'value.ts'), 'export const value = 42;\n');
+
+    const store = GraphStore.open(':memory:');
+    const service = new CodegraphService({
+      projectRoot,
+      store,
+      runtime: { acquire: async () => ({ engineId: 'typescript', engineVersion: '7.0.2', extractors: [] }) },
+    });
+    const indexed = await service.index();
+
+    assert.equal(indexed.status, 'ready', indexed.message);
+    assert.equal(indexed.coverage?.files, 2);
+    const snapshotId = indexed.snapshot!.snapshotId;
+    const storedFiles = store.database.prepare('SELECT file FROM files ORDER BY file').all() as { file: string }[];
+    assert.deepEqual(storedFiles.map((row) => row.file), ['packages/core/src/value.ts', 'src/consumer.ts']);
+
+    const nodes = store.nodes(snapshotId);
+    const retainedTarget = nodes.find((node) => node.qualifiedName.endsWith('.value') && node.declaration.file === 'packages/core/src/value.ts');
+    const consumerModule = nodes.find((node) => node.kind === 'module' && node.declaration.file === 'src/consumer.ts');
+    assert.ok(retainedTarget);
+    assert.ok(consumerModule);
+    assert.equal(retainedTarget.projectId, projectIdentity(nestedProjectRoot));
+
+    const incomingImport = store.edges(snapshotId).find((edge) => edge.kind === 'imports' && edge.sourceId === consumerModule.id);
+    assert.ok(incomingImport);
+    assert.equal(incomingImport.resolution, 'resolved');
+    assert.equal(incomingImport.targetId, retainedTarget.id);
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
   }

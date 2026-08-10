@@ -155,6 +155,22 @@ export function createGraphNodeId(identity: GraphNodeIdentity): string {
   return createHash('sha256').update(identityParts.join('\0')).digest('hex');
 }
 
+export type GraphEdgeIdentity = Omit<GraphEdge, 'id'>;
+
+export function createGraphEdgeId(identity: GraphEdgeIdentity): string {
+  const identityParts = [
+    identity.kind,
+    identity.sourceId,
+    identity.targetId ?? '',
+    identity.resolution,
+    identity.evidence.file,
+    String(identity.evidence.startLine),
+    String(identity.evidence.startColumn),
+    identity.reason ?? '',
+  ];
+  return createHash('sha256').update(identityParts.join('\0')).digest('hex');
+}
+
 export function compareGraphResults(
   left: GraphResultOrder,
   right: GraphResultOrder,

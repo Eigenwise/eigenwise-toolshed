@@ -34,6 +34,7 @@ module.exports = __toCommonJS(index_builder_exports);
 var import_node_crypto = require("node:crypto");
 var import_node_path = __toESM(require("node:path"));
 var import_freshness = require("./freshness.js");
+var import_model = require("./model.js");
 var import_paths = require("./paths.js");
 function snapshotId(project, manifest, runtime) {
   return (0, import_node_crypto.createHash)("sha256").update([
@@ -87,14 +88,96 @@ function validateFiles(files) {
     for (const edge of file.edges) {
       if (edgeIds.has(edge.id)) throw new Error(`duplicate graph edge: ${edge.id}`);
       edgeIds.add(edge.id);
+    }
+  }
+  for (const file of files) {
+    for (const edge of file.edges) {
+      if (!nodeIds.has(edge.sourceId)) throw new Error(`graph edge source is not retained: ${edge.id}`);
       if (edge.resolution === "resolved" && edge.targetId === null) {
         throw new Error(`resolved graph edge is missing its target: ${edge.id}`);
+      }
+      if (edge.resolution === "resolved" && edge.targetId !== null && !nodeIds.has(edge.targetId)) {
+        throw new Error(`resolved graph edge target is not retained: ${edge.id}`);
       }
       if (edge.resolution !== "resolved" && edge.targetId !== null) {
         throw new Error(`non-resolved graph edge has a target: ${edge.id}`);
       }
     }
   }
+}
+function projectPathDepth(projectRoot) {
+  return projectRoot.split("/").filter((part) => part.length > 0).length;
+}
+function compareProjectOwnership(left, right) {
+  return projectPathDepth(right.canonicalRoot) - projectPathDepth(left.canonicalRoot) || left.canonicalConfigPath.localeCompare(right.canonicalConfigPath) || left.project.id.localeCompare(right.project.id);
+}
+function nodeRepresentationKey(repositoryFile, node) {
+  return JSON.stringify([repositoryFile, node.extractor, node.language, node.kind, node.qualifiedName]);
+}
+function edgeWithIdentity(edge) {
+  return { ...edge, id: (0, import_model.createGraphEdgeId)(edge) };
+}
+function retainCanonicalFileOwnership(extractedProjects) {
+  const orderedProjects = [...extractedProjects].sort(compareProjectOwnership);
+  const ownerByFile = /* @__PURE__ */ new Map();
+  for (const extractedProject of orderedProjects) {
+    for (const file of extractedProject.files) {
+      if (!ownerByFile.has(file.file)) ownerByFile.set(file.file, extractedProject);
+    }
+  }
+  const representationByNodeId = /* @__PURE__ */ new Map();
+  const retainedNodeByRepresentation = /* @__PURE__ */ new Map();
+  const retainedNodeIds = /* @__PURE__ */ new Set();
+  for (const extractedProject of extractedProjects) {
+    for (const file of extractedProject.files) {
+      const retained = ownerByFile.get(file.file) === extractedProject;
+      for (const node of file.nodes) {
+        const representation = nodeRepresentationKey(file.file, node);
+        const existingRepresentation = representationByNodeId.get(node.id);
+        if (existingRepresentation !== void 0 && existingRepresentation !== representation) {
+          throw new Error(`graph node identity has inconsistent representations: ${node.id}`);
+        }
+        representationByNodeId.set(node.id, representation);
+        if (retained) {
+          retainedNodeByRepresentation.set(representation, node);
+          retainedNodeIds.add(node.id);
+        }
+      }
+    }
+  }
+  return extractedProjects.map((extractedProject) => ({
+    ...extractedProject,
+    files: extractedProject.files.filter((file) => ownerByFile.get(file.file) === extractedProject).map((file) => {
+      const edges = file.edges.map((edge) => {
+        if (edge.targetId === null || retainedNodeIds.has(edge.targetId)) return edge;
+        const targetRepresentation = representationByNodeId.get(edge.targetId);
+        const retainedTarget = targetRepresentation === void 0 ? void 0 : retainedNodeByRepresentation.get(targetRepresentation);
+        if (retainedTarget !== void 0) {
+          return edgeWithIdentity({
+            kind: edge.kind,
+            sourceId: edge.sourceId,
+            targetId: retainedTarget.id,
+            resolution: edge.resolution,
+            evidence: edge.evidence,
+            ...edge.reason === void 0 ? {} : { reason: edge.reason }
+          });
+        }
+        return edgeWithIdentity({
+          kind: edge.kind,
+          sourceId: edge.sourceId,
+          targetId: null,
+          resolution: "unresolved",
+          evidence: edge.evidence,
+          reason: "overlapping project target has no retained declaration"
+        });
+      });
+      return {
+        ...file,
+        edges,
+        unresolvedCount: edges.filter((edge) => edge.resolution === "unresolved").length
+      };
+    })
+  }));
 }
 async function extractProject(runtime, project) {
   const extractor = runtime.extractors.find((candidate) => candidate.languages.includes(project.language));
@@ -120,11 +203,15 @@ async function buildProjectIndex(projectRoot, dependencies) {
   const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(canonicalRoot)))).flat().sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,
+    canonicalRoot: (0, import_paths.normalizeProjectRoot)(project.root === "" ? canonicalRoot : project.root),
+    canonicalConfigPath: project.configFile === null ? "" : (0, import_paths.normalizeProjectRoot)(project.configFile),
     files: withRepositoryRelativePaths(canonicalRoot, project, await extractProject(dependencies.runtime, project))
   })));
   for (const result of extracted) validateFiles(result.files);
+  const retained = retainCanonicalFileOwnership(extracted);
+  validateFiles(retained.flatMap((result) => result.files));
   const indexedAt = (dependencies.indexedAt ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();
-  const snapshots = extracted.map(({ project, files }) => createSnapshot(
+  const snapshots = retained.map(({ project, files }) => createSnapshot(
     project,
     files,
     manifest,
