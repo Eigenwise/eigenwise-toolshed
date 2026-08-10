@@ -16,6 +16,7 @@ import type {
   PropertyAccessExpression,
   SourceFile,
   VariableDeclaration,
+  VariableStatement,
 } from 'typescript/unstable/ast' with { "resolution-mode": "import" };
 import { createGraphNodeId, type FileGraph, type GraphEdge, type GraphEdgeKind, type GraphNode, type GraphNodeKind, type LanguageExtractor, type ProjectDescriptor, type ResolutionState, type SourceSpan } from '../model.js';
 import { normalizeProjectRelativePath } from '../paths.js';
@@ -35,6 +36,7 @@ interface TypeScriptAstModule {
   isMethodSignatureDeclaration(node: Node): node is MethodSignatureDeclaration;
   isConstructorDeclaration(node: Node): node is ConstructorDeclaration;
   isVariableDeclaration(node: Node): node is VariableDeclaration;
+  isVariableStatement(node: Node): node is VariableStatement;
   isCallExpression(node: Node): node is CallExpression;
   isPropertyAccessExpression(node: Node): node is PropertyAccessExpression;
   isImportDeclaration(node: Node): node is ImportDeclaration;
@@ -69,6 +71,7 @@ function isTypeScriptAstModule(value: unknown): value is TypeScriptAstModule {
     && 'isMethodSignatureDeclaration' in value && typeof value.isMethodSignatureDeclaration === 'function'
     && 'isConstructorDeclaration' in value && typeof value.isConstructorDeclaration === 'function'
     && 'isVariableDeclaration' in value && typeof value.isVariableDeclaration === 'function'
+    && 'isVariableStatement' in value && typeof value.isVariableStatement === 'function'
     && 'isCallExpression' in value && typeof value.isCallExpression === 'function'
     && 'isPropertyAccessExpression' in value && typeof value.isPropertyAccessExpression === 'function'
     && 'isImportDeclaration' in value && typeof value.isImportDeclaration === 'function'
@@ -133,7 +136,7 @@ function declarationKind(node: Node, ast: TypeScriptAstModule): GraphNodeKind | 
 }
 
 function isIndexableDeclaration(node: Node, kind: GraphNodeKind, sourceFile: SourceFile, ast: TypeScriptAstModule): boolean {
-  if (kind === 'variable') return node.parent.parent.parent === sourceFile;
+  if (kind === 'variable') return ast.isVariableStatement(node.parent.parent) && node.parent.parent.parent === sourceFile;
   if (kind === 'method') return ast.isClassDeclaration(node.parent) || ast.isInterfaceDeclaration(node.parent);
   return true;
 }

@@ -85,6 +85,8 @@ test('indexes statically owned declarations without local or object-literal coll
     'tsconfig.json': JSON.stringify({ files: ['index.ts'] }),
     'index.ts': [
       'const retained = true;',
+      'for (const response of [1, 2]) { console.log(response); }',
+      'for (const response of [3, 4]) { console.log(response); }',
       'function first() { const entry = 1; return entry; }',
       'function second() { const entry = 2; return entry; }',
       'const firstObject = { extractProject() { return first(); } };',
@@ -96,6 +98,7 @@ test('indexes statically owned declarations without local or object-literal coll
   try {
     const nodes = graphs.flatMap((graph) => graph.nodes);
     assert.equal(nodes.filter((node) => node.name === 'entry' && node.kind === 'variable').length, 0);
+    assert.equal(nodes.filter((node) => node.name === 'response' && node.kind === 'variable').length, 0);
     assert.equal(nodes.filter((node) => node.name === 'extractProject' && node.kind === 'method').length, 0);
     assert.ok(nodes.some((node) => node.name === 'retained' && node.kind === 'variable'));
     assert.ok(nodes.some((node) => node.qualifiedName === 'Worker.run' && node.kind === 'method'));
