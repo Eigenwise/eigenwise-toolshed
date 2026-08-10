@@ -198,51 +198,6 @@ function addResolvedAliases(parsedFiles) {
     }
     parsedFile.graph.unresolvedCount = parsedFile.graph.edges.filter((edge) => edge.resolution === "unresolved").length;
   }
-  const nodesById = /* @__PURE__ */ new Map();
-  const graphByNodeId = /* @__PURE__ */ new Map();
-  const childrenByOwner = /* @__PURE__ */ new Map();
-  const basesByClass = /* @__PURE__ */ new Map();
-  for (const parsedFile of parsedFiles) {
-    for (const node of parsedFile.graph.nodes) {
-      nodesById.set(node.id, node);
-      graphByNodeId.set(node.id, parsedFile.graph);
-    }
-    for (const edge of parsedFile.graph.edges) {
-      if (edge.kind === "contains" && edge.targetId !== null) {
-        const children = childrenByOwner.get(edge.sourceId) ?? [];
-        children.push(edge.targetId);
-        childrenByOwner.set(edge.sourceId, children);
-      }
-      if (edge.kind === "extends" && edge.targetId !== null && edge.resolution === "resolved") {
-        const bases = basesByClass.get(edge.sourceId) ?? [];
-        bases.push(edge.targetId);
-        basesByClass.set(edge.sourceId, bases);
-      }
-    }
-  }
-  for (const [classId, directBases] of basesByClass) {
-    const ownMembers = (childrenByOwner.get(classId) ?? []).map((nodeId) => nodesById.get(nodeId)).filter((node) => node !== void 0 && (node.kind === "method" || node.kind === "property"));
-    const seenBases = /* @__PURE__ */ new Set();
-    const pendingBases = [...directBases];
-    while (pendingBases.length > 0) {
-      const baseId = pendingBases.pop();
-      if (seenBases.has(baseId)) continue;
-      seenBases.add(baseId);
-      pendingBases.push(...basesByClass.get(baseId) ?? []);
-      const inheritedByName = new Map((childrenByOwner.get(baseId) ?? []).map((nodeId) => nodesById.get(nodeId)).filter((node) => node !== void 0 && (node.kind === "method" || node.kind === "property")).map((node) => [`${node.kind}:${node.name}`, node]));
-      for (const member of ownMembers) {
-        const inherited = inheritedByName.get(`${member.kind}:${member.name}`);
-        const graph = graphByNodeId.get(member.id);
-        if (inherited !== void 0 && graph !== void 0) addEdge(graph.edges, {
-          kind: "overrides",
-          sourceId: member.id,
-          targetId: inherited.id,
-          resolution: "resolved",
-          evidence: member.declaration
-        });
-      }
-    }
-  }
 }
 class PyrightSemanticExtractor {
   constructor(runtime) {

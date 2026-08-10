@@ -54,7 +54,6 @@ test('extracts stable Python declarations and classified relationships through P
   assert.equal(edge('imports', initModule.id, nodeId('pkg.base.Base')).resolution, 'resolved');
   assert.equal(edge('imports', initModule.id, nodeId('pkg.api.exported')).resolution, 'resolved');
   assert.equal(edge('calls', nodeId('pkg.adverse.conditional_target'), null).resolution, 'ambiguous');
-  assert.ok(edges.some((edge) => edge.kind === 'overrides' && edge.resolution === 'resolved'));
   assert.ok(edges.some((edge) => edge.kind === 'calls' && edge.resolution === 'dynamic'));
   assert.ok(edges.some((edge) => edge.kind === 'calls' && edge.resolution === 'unresolved'));
   assert.ok(edges.some((edge) => edge.kind === 'calls' && edge.resolution === 'ambiguous'));

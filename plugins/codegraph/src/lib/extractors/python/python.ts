@@ -167,47 +167,6 @@ function addResolvedAliases(parsedFiles: readonly ParsedFile[]): void {
     parsedFile.graph.unresolvedCount = parsedFile.graph.edges.filter((edge) => edge.resolution === 'unresolved').length;
   }
 
-  const nodesById = new Map<string, GraphNode>();
-  const graphByNodeId = new Map<string, FileGraph>();
-  const childrenByOwner = new Map<string, string[]>();
-  const basesByClass = new Map<string, string[]>();
-  for (const parsedFile of parsedFiles) {
-    for (const node of parsedFile.graph.nodes) {
-      nodesById.set(node.id, node);
-      graphByNodeId.set(node.id, parsedFile.graph);
-    }
-    for (const edge of parsedFile.graph.edges) {
-      if (edge.kind === 'contains' && edge.targetId !== null) {
-        const children = childrenByOwner.get(edge.sourceId) ?? [];
-        children.push(edge.targetId);
-        childrenByOwner.set(edge.sourceId, children);
-      }
-      if (edge.kind === 'extends' && edge.targetId !== null && edge.resolution === 'resolved') {
-        const bases = basesByClass.get(edge.sourceId) ?? [];
-        bases.push(edge.targetId);
-        basesByClass.set(edge.sourceId, bases);
-      }
-    }
-  }
-  for (const [classId, directBases] of basesByClass) {
-    const ownMembers = (childrenByOwner.get(classId) ?? []).map((nodeId) => nodesById.get(nodeId)).filter((node): node is GraphNode => node !== undefined && (node.kind === 'method' || node.kind === 'property'));
-    const seenBases = new Set<string>();
-    const pendingBases = [...directBases];
-    while (pendingBases.length > 0) {
-      const baseId = pendingBases.pop()!;
-      if (seenBases.has(baseId)) continue;
-      seenBases.add(baseId);
-      pendingBases.push(...(basesByClass.get(baseId) ?? []));
-      const inheritedByName = new Map((childrenByOwner.get(baseId) ?? []).map((nodeId) => nodesById.get(nodeId)).filter((node): node is GraphNode => node !== undefined && (node.kind === 'method' || node.kind === 'property')).map((node) => [`${node.kind}:${node.name}`, node]));
-      for (const member of ownMembers) {
-        const inherited = inheritedByName.get(`${member.kind}:${member.name}`);
-        const graph = graphByNodeId.get(member.id);
-        if (inherited !== undefined && graph !== undefined) addEdge(graph.edges, {
-          kind: 'overrides', sourceId: member.id, targetId: inherited.id, resolution: 'resolved', evidence: member.declaration,
-        });
-      }
-    }
-  }
 }
 
 export class PyrightSemanticExtractor implements LanguageExtractor {
