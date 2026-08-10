@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.1 (2026-08-10)
+
+Released in v3.438.0, up from 0.2.0.
+
+### Fixes
+
+- Quartermaster setup explains what each Toolshed plugin is (SQ-1798)
+  The setup skill now describes what each Toolshed plugin does before the reason to install it, so Claude can explain a proposal instead of only naming it. It also says plainly that every piece is independent and opt-in, and that Sidequest is the routing and executor system rather than a ticket tracker.
+
 ## 0.2.0 (2026-08-10)
 
 Released in v3.437.0, up from 0.1.0.

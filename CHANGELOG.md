@@ -8,6 +8,41 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.438.0 (2026-08-10)
+
+### codegraph 0.1.7 → 0.2.0
+
+#### Features
+
+- Codegraph resolves Python imports through the project virtual environment (SQ-1792)
+  Codegraph now hands the discovered Python dependency environment to Pyright, so imports from installed packages resolve to their declarations instead of stopping at the project edge. A project with a virtual environment produces resolved import, alias, and reference edges where it previously produced none.
+
+#### Fixes
+
+- Preserve Codegraph index failures across restarts (SQ-1788)
+  Codegraph keeps a failed index status and its reason after an MCP server or session restart until a later index succeeds.
+
+### quartermaster 0.2.0 → 0.2.1
+
+#### Fixes
+
+- Quartermaster setup explains what each Toolshed plugin is (SQ-1798)
+  The setup skill now describes what each Toolshed plugin does before the reason to install it, so Claude can explain a proposal instead of only naming it. It also says plainly that every piece is independent and opt-in, and that Sidequest is the routing and executor system rather than a ticket tracker.
+
+### sidequest 4.43.0 → 4.44.0
+
+#### Features
+
+- Give an already-delivered ticket a way to close (SQ-1794)
+  A ticket whose work already landed on the integration branch could reach a state where every lifecycle call refused and named another that also refused. `groomClose` now accepts the delivery commit for work integrated by hand, and terminal-agent evidence for clearing a dead dispatch. The refusals that formed the ring name that exit, so an orchestrator finds it from the message it is already reading.
+
+### workbench 0.85.0 → 0.86.0
+
+#### Features
+
+- Rename workbench-doctor to toolshed-doctor (SQ-1796)
+  The health-check skill is now `/toolshed-doctor`. It checks every installed Toolshed plugin rather than Workbench alone, and it reads as a pair with `/update-toolshed`. The old `/workbench-doctor` name is gone with no alias, so the freshness guard no longer treats it as a maintenance command.
+
 ## v3.437.0 (2026-08-10)
 
 ### codegraph 0.1.6 → 0.1.7
