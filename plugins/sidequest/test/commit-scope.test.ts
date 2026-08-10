@@ -46,6 +46,7 @@ const commitScope = require('../lib/commit-scope.js') as {
   submissionRange(cwd: string, opts: Record<string, unknown>): RangeResult;
   validateStoredSubmissionRange(cwd: string, submission: unknown): RangeResult;
   scopedWorkPending(cwd: string, files: unknown, opts?: unknown): any;
+  ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[];
   headCommit(cwd: string): string | null;
   preserveCommitRef(cwd: string, commit: string, gitRef: string): { ok: boolean; reason?: string; commit?: string; gitRef?: string };
 };
@@ -710,4 +711,34 @@ test('SQ-923: pending scoped work separates a genuine no-op from uncommitted and
 
   assert.equal(commitScope.scopedWorkPending(root, ['plugins/sidequest'], {}).ok, false, 'no baseline means no proof');
   assert.equal(commitScope.scopedWorkPending(root, [], { base }).reason, 'missing_scope');
+});
+
+// SQ-806 (the-bot-resurrection). A ticket declaring three files was dispatched
+// three times; every dispatch recorded `declaredFiles: []`, and every scoped
+// commit refused with the byte-identical `Missing: .release/unreleased/SQ-806.md`
+// under three different configurations. `Array.isArray([])` is true, so an empty
+// binding was accepted as an authoritative scope: executionScope returned it,
+// ticketCommitScope saw an empty effective scope beside a non-empty ticket.files,
+// appended the release fragment, and left the fragment as the ONLY path in scope.
+// An hour and three executor contexts went to editing a list the gate never read.
+test('SQ-806: an empty dispatch binding falls back to the declared files instead of scoping the release fragment alone', () => {
+  const declared = ['src/performance_metrics.py', 'src/turn_timing.py', 'tests/test_turn_timing.py'];
+
+  const unbound = { ref: 'SQ-806', files: declared, dispatch: { declaredFiles: [] } };
+  assert.deepEqual(store.executionScope(undefined, unbound), declared, 'an empty binding is unset, not an empty scope');
+  assert.deepEqual(
+    commitScope.ticketCommitScope(store.executionScope(undefined, unbound), unbound.files, unbound.ref),
+    [...declared, '.release/unreleased/SQ-806.md'],
+    'the fragment is added beside the real paths, never instead of them',
+  );
+
+  const bound = { ref: 'SQ-806', files: declared, dispatch: { declaredFiles: ['src/turn_timing.py'] } };
+  assert.deepEqual(store.executionScope(undefined, bound), ['src/turn_timing.py'], 'a real binding still wins');
+
+  const unbindable = { ref: 'SQ-806', files: [], dispatch: { declaredFiles: [] } };
+  assert.deepEqual(
+    commitScope.ticketCommitScope(store.executionScope(undefined, unbindable), unbindable.files, unbindable.ref),
+    [],
+    'a ticket with no declared files gets no synthesized fragment to chase',
+  );
 });

@@ -1,26 +1,17 @@
 import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { isIgnoredDirectory } from '../../ignored-directories.js';
 import type { FreshnessContributor, RelevantInputCandidate } from '../../runtime-contract.js';
 import { isPythonPyproject } from './projects.js';
 
-const ignoredDirectories = new Set([
-  '.git', '.eggs', '.mypy_cache', '.nox', '.pytest_cache', '.ruff_cache', '.tox',
-  '__pycache__', 'build', 'dist', 'env', 'node_modules', 'venv', 'virtualenv',
-]);
+// Beyond the shared list: these hold build output rather than the sources a
+// Python project is indexed from, and a TypeScript project may legitimately
+// keep source under the same names.
+const ignoredPythonDirectories = new Set(['build', 'dist', 'env', 'venv', 'virtualenv']);
 const configurationNames = new Set(['pyrightconfig.json', 'pyproject.toml']);
 
 function isPythonSource(fileName: string): boolean {
   return fileName.endsWith('.py') || fileName.endsWith('.pyi');
-}
-
-async function isVirtualEnvironment(directory: string): Promise<boolean> {
-  if (ignoredDirectories.has(path.basename(directory))) return true;
-  try {
-    await access(path.join(directory, 'pyvenv.cfg'));
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 async function isRelevantConfiguration(filePath: string): Promise<boolean> {
@@ -43,7 +34,7 @@ async function inputCandidates(directory: string): Promise<RelevantInputCandidat
   entries.sort((left, right) => left.name.localeCompare(right.name));
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return await isVirtualEnvironment(entryPath) ? [] : inputCandidates(entryPath);
+    if (entry.isDirectory()) return await isIgnoredDirectory(entryPath, ignoredPythonDirectories) ? [] : inputCandidates(entryPath);
     if (!entry.isFile()) return [];
     if (isPythonSource(entry.name)) return [{ absolutePath: entryPath, configuration: false }];
     return await isRelevantConfiguration(entryPath) ? [{ absolutePath: entryPath, configuration: true }] : [];

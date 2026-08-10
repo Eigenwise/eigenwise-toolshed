@@ -709,7 +709,8 @@ function createDispatch(dependencies) {
         });
       }
       t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
-      const declaredFiles = current?.outcome === "released" && Array.isArray(current.declaredFiles) ? current.declaredFiles.slice() : effectiveScope(slug, t.files);
+      const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
+      const declaredFiles = releasedBinding ?? effectiveScope(slug, t.files);
       const readonly = dispatchReadOnly(t);
       const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
       const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;

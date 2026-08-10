@@ -34,35 +34,12 @@ __export(freshness_exports, {
 module.exports = __toCommonJS(freshness_exports);
 var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
+var import_ignored_directories = require("../../ignored-directories.js");
 var import_projects = require("./projects.js");
-const ignoredDirectories = /* @__PURE__ */ new Set([
-  ".git",
-  ".eggs",
-  ".mypy_cache",
-  ".nox",
-  ".pytest_cache",
-  ".ruff_cache",
-  ".tox",
-  "__pycache__",
-  "build",
-  "dist",
-  "env",
-  "node_modules",
-  "venv",
-  "virtualenv"
-]);
+const ignoredPythonDirectories = /* @__PURE__ */ new Set(["build", "dist", "env", "venv", "virtualenv"]);
 const configurationNames = /* @__PURE__ */ new Set(["pyrightconfig.json", "pyproject.toml"]);
 function isPythonSource(fileName) {
   return fileName.endsWith(".py") || fileName.endsWith(".pyi");
-}
-async function isVirtualEnvironment(directory) {
-  if (ignoredDirectories.has(import_node_path.default.basename(directory))) return true;
-  try {
-    await (0, import_promises.access)(import_node_path.default.join(directory, "pyvenv.cfg"));
-    return true;
-  } catch {
-    return false;
-  }
 }
 async function isRelevantConfiguration(filePath) {
   if (import_node_path.default.basename(filePath) === "pyrightconfig.json") return true;
@@ -83,7 +60,7 @@ async function inputCandidates(directory) {
   entries.sort((left, right) => left.name.localeCompare(right.name));
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
-    if (entry.isDirectory()) return await isVirtualEnvironment(entryPath) ? [] : inputCandidates(entryPath);
+    if (entry.isDirectory()) return await (0, import_ignored_directories.isIgnoredDirectory)(entryPath, ignoredPythonDirectories) ? [] : inputCandidates(entryPath);
     if (!entry.isFile()) return [];
     if (isPythonSource(entry.name)) return [{ absolutePath: entryPath, configuration: false }];
     return await isRelevantConfiguration(entryPath) ? [{ absolutePath: entryPath, configuration: true }] : [];

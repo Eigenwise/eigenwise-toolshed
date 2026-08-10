@@ -131,7 +131,8 @@ function effectiveScope(...args) {
   return configLayer.effectiveScope(...args);
 }
 function executionScope(slug, ticket) {
-  return Array.isArray(ticket?.dispatch?.declaredFiles) ? ticket.dispatch.declaredFiles : effectiveScope(slug, ticket?.files);
+  const bound = ticket?.dispatch?.declaredFiles;
+  return Array.isArray(bound) && bound.length ? bound : effectiveScope(slug, ticket?.files);
 }
 let projectsLayer;
 function ensureProject(...args) {

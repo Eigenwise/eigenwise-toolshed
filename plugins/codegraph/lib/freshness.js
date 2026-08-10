@@ -38,10 +38,10 @@ module.exports = __toCommonJS(freshness_exports);
 var import_node_crypto = require("node:crypto");
 var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
+var import_ignored_directories = require("./ignored-directories.js");
 var import_paths = require("./paths.js");
 const relevantExtensions = /* @__PURE__ */ new Set([".ts", ".tsx", ".mts", ".cts", ".js", ".jsx", ".mjs", ".cjs"]);
 const configurationNames = /* @__PURE__ */ new Set(["tsconfig.json", "jsconfig.json"]);
-const ignoredDirectories = /* @__PURE__ */ new Set([".git", "node_modules"]);
 function contentHash(content) {
   return (0, import_node_crypto.createHash)("sha256").update(content).digest("hex");
 }
@@ -68,7 +68,7 @@ async function inputCandidates(directory) {
   const entries = await (0, import_promises.readdir)(directory, { withFileTypes: true });
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
-    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputCandidates(entryPath);
+    if (entry.isDirectory()) return await (0, import_ignored_directories.isIgnoredDirectory)(entryPath) ? [] : inputCandidates(entryPath);
     if (!entry.isFile() || !isRelevantSource(entryPath) && !configurationNames.has(entry.name)) return [];
     return [{ absolutePath: entryPath, configuration: configurationNames.has(entry.name) }];
   }));

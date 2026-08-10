@@ -2,13 +2,13 @@ import { createHash } from 'node:crypto';
 import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { API } from 'typescript/unstable/sync' with { "resolution-mode": "import" };
+import { isIgnoredDirectory } from './ignored-directories.js';
 import { canonicalFilesystemPath, normalizeProjectRelativePath } from './paths.js';
 import type { ProjectDescriptor, SnapshotIdentity } from './model.js';
 import type { FreshnessContributor, RelevantInputCandidate } from './runtime-contract.js';
 
 const relevantExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
 const configurationNames = new Set(['tsconfig.json', 'jsconfig.json']);
-const ignoredDirectories = new Set(['.git', 'node_modules']);
 
 export interface RelevantInput {
   readonly path: string;
@@ -63,7 +63,7 @@ async function inputCandidates(directory: string): Promise<RelevantInputCandidat
   const entries = await readdir(directory, { withFileTypes: true });
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = path.join(directory, entry.name);
-    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputCandidates(entryPath);
+    if (entry.isDirectory()) return await isIgnoredDirectory(entryPath) ? [] : inputCandidates(entryPath);
     if (!entry.isFile() || (!isRelevantSource(entryPath) && !configurationNames.has(entry.name))) return [];
     return [{ absolutePath: entryPath, configuration: configurationNames.has(entry.name) }];
   }));

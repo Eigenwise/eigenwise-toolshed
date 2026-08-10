@@ -806,9 +806,15 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       });
     }
     t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
-    const declaredFiles = current?.outcome === 'released' && Array.isArray(current.declaredFiles)
+    // A released dispatch hands its binding to the next attempt so a
+    // continuation keeps the same worktree scope. An EMPTY released binding
+    // must not be inherited: it pinned the first attempt's missing scope onto
+    // every re-dispatch, so the ticket's files were never re-read and editing
+    // them changed nothing.
+    const releasedBinding = current?.outcome === 'released' && Array.isArray(current.declaredFiles) && current.declaredFiles.length
       ? current.declaredFiles.slice()
-      : effectiveScope(slug, t.files);
+      : null;
+    const declaredFiles = releasedBinding ?? effectiveScope(slug, t.files);
     const readonly = dispatchReadOnly(t);
     const requestedSharedTree = opts.sharedTree === true || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
     const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;

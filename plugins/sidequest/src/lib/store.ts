@@ -97,9 +97,17 @@ function normalizeBoardName(...args: any[]) { return configLayer.normalizeBoardN
 function boardConfig(...args: any[]) { return configLayer.boardConfig(...args); }
 function setBoardConfig(...args: any[]) { return configLayer.setBoardConfig(...args); }
 function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...args); }
+// An empty binding means "nothing was bound", never "bind nothing". Accepting
+// `[]` as an authoritative scope let a dispatch that captured no files override
+// the ticket's real declared paths: the commit gate then saw an empty effective
+// scope with a non-empty ticket.files, appended the release fragment, and
+// demanded `.release/unreleased/<REF>.md` as the only path in scope. Three
+// executors lost their runs to that in one hour, each editing a list the gate
+// was not reading.
 function executionScope(slug?: any, ticket?: any) {
-  return Array.isArray(ticket?.dispatch?.declaredFiles)
-    ? ticket.dispatch.declaredFiles
+  const bound = ticket?.dispatch?.declaredFiles;
+  return Array.isArray(bound) && bound.length
+    ? bound
     : effectiveScope(slug, ticket?.files);
 }
 
