@@ -65,6 +65,18 @@ test('extracts stable Python declarations and classified relationships through P
   assert.deepEqual(first.flatMap((graph) => graph.nodes.map((node) => node.id)).sort(), second.flatMap((graph) => graph.nodes.map((node) => node.id)).sort());
 });
 
+test('records unreachable Python names as unresolved references', async () => {
+  const [project] = await discoverPythonProjects(fixtureRoot);
+  assert.ok(project);
+  const graphs = await new PyrightSemanticExtractor(await pyrightRuntime).extractProject(project);
+  const unreachableGraph = graphs.find((graph) => graph.file === 'pkg/unreachable.py');
+  assert.ok(unreachableGraph);
+  const hasUnresolvedReferenceAt = (line: number) => unreachableGraph.edges.some((edge) => edge.kind === 'references' && edge.resolution === 'unresolved' && edge.evidence.startLine === line);
+  assert.ok(hasUnresolvedReferenceAt(6), 'missing unresolved reference after raise');
+  assert.ok(hasUnresolvedReferenceAt(12), 'missing unresolved reference after return');
+  assert.ok(hasUnresolvedReferenceAt(17), 'missing unresolved reference in a false version-gated branch');
+});
+
 test('keeps Python declaration identities when source lines move', async () => {
   const [project] = await discoverPythonProjects(fixtureRoot);
   assert.ok(project);

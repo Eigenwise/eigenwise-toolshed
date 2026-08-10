@@ -93,7 +93,7 @@ function resolvedDeclarationTarget(evaluator, declarations) {
   return { target: { path: uri.getFilePath(), name, start: numberValue(declarationNode.start) }, uncertainty: null };
 }
 function declarationTarget(evaluator, node) {
-  return resolvedDeclarationTarget(evaluator, evaluator.getDeclInfoForNameNode(node).decls);
+  return resolvedDeclarationTarget(evaluator, evaluator.getDeclInfoForNameNode(node)?.decls ?? []);
 }
 function declarationOwnerStart(node) {
   let current = record(node.parent);
