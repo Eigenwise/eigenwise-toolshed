@@ -128,14 +128,19 @@ function patchIdsForCommits(cwd, commits) {
 }
 function submissionAlreadyOnIntegrationBranch(cwd, submission) {
   const commits = Array.isArray(submission.commits) ? submission.commits.filter((commit) => typeof commit === "string" && commit.length > 0) : [];
+  const changedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths.filter((file) => typeof file === "string" && file.length > 0) : [];
   const integrationBranch = String(submission.integrationBranch || submission.upstream || "").trim();
-  if (!commits.length || !integrationBranch || submission.noOp === true) return false;
+  if (!commits.length || !changedPaths.length || !integrationBranch || submission.noOp === true) return { reconciled: false };
   const submittedPatchIds = patchIdsForCommits(cwd, commits);
-  if (!submittedPatchIds?.size) return false;
+  if (!submittedPatchIds?.size) return { reconciled: false };
   const integrationCommits = gitResult(cwd, ["rev-list", "--no-merges", integrationBranch]);
-  if (!integrationCommits.ok) return false;
+  if (!integrationCommits.ok) return { reconciled: false };
   const integrationPatchIds = patchIdsForCommits(cwd, integrationCommits.value.split(/\r?\n/).filter(Boolean));
-  return integrationPatchIds != null && [...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId));
+  if (integrationPatchIds == null || ![...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId))) return { reconciled: false };
+  const differingPaths = gitResult(cwd, ["diff", "--name-only", integrationBranch, String(submission.commit), "--", ...changedPaths]);
+  if (!differingPaths.ok) return { reconciled: false };
+  const divergedPath = differingPaths.value.split(/\r?\n/).find(Boolean);
+  return divergedPath ? { reconciled: false, divergedPath } : { reconciled: true };
 }
 function repoRoot(cwd) {
   return git(cwd, ["rev-parse", "--show-toplevel"]).trim();
@@ -565,8 +570,18 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef) {
     integrationBranch: submission.integrationBranch,
     base: submission.base
   });
-  const reconciled = !range.ok && range.reason === "expected_upstream_diverged" && submissionAlreadyOnIntegrationBranch(cwd, submission);
-  if (!range.ok && !reconciled) return range;
+  const reconciliation = !range.ok && range.reason === "expected_upstream_diverged" ? submissionAlreadyOnIntegrationBranch(cwd, submission) : { reconciled: false };
+  if (!range.ok && !reconciliation.reconciled) {
+    if (reconciliation.divergedPath) {
+      return Object.assign({}, range, {
+        reason: "reconciled_path_diverged",
+        divergedPath: reconciliation.divergedPath,
+        message: `submitted path diverged at integration tip: ${reconciliation.divergedPath}`
+      });
+    }
+    return range;
+  }
+  const reconciled = reconciliation.reconciled;
   const storedCommits = Array.isArray(submission.commits) ? submission.commits : [];
   const storedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
   const rangeNoOp = reconciled ? false : "noOp" in range && range.noOp === true;

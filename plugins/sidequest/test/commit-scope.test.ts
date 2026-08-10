@@ -32,6 +32,8 @@ interface RangeResult {
   upstreamCommit?: string;
   gitRef?: string;
   reconciled?: boolean;
+  divergedPath?: string;
+  message?: string;
 }
 
 const commitScope = require('../lib/commit-scope.js') as {
@@ -476,6 +478,91 @@ test('SQ-1743: a patch already replayed after an upstream reset revalidates for 
   assert.equal(revalidated.ok, true, `replayed patch was refused: ${revalidated.reason}`);
   assert.equal(revalidated.reconciled, true);
   assert.deepEqual(revalidated.changedPaths, ['plugins/sidequest/replayed.js']);
+});
+
+test('SQ-1749: reconciliation refuses a patch that the integration branch reverted', () => {
+  const root = repo();
+  const main = branchOf(root);
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'discarded-base.js'), 'discarded\n');
+  git(root, ['add', '--', 'plugins/other-plugin/discarded-base.js']);
+  git(root, ['commit', '-m', 'discarded integration base']);
+  git(root, ['checkout', '-q', '-b', 'ticket-work']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'reverted.js'), 'submitted\n');
+  git(root, ['add', '--', 'plugins/sidequest/reverted.js']);
+  git(root, ['commit', '-m', 'ticket work']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-1749', tip);
+  const range = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1749',
+    upstream: main,
+    integrationBranch: main,
+  });
+  assert.equal(range.ok, true, `ticket range was refused: ${range.reason}`);
+
+  git(root, ['checkout', '-q', main]);
+  git(root, ['reset', '--hard', 'HEAD~1']);
+  git(root, ['cherry-pick', tip]);
+  git(root, ['revert', '--no-edit', 'HEAD']);
+
+  const revalidated = commitScope.validateStoredSubmissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1749',
+    upstream: range.upstream,
+    upstreamCommit: range.upstreamCommit,
+    integrationBranch: main,
+    base: range.base,
+    commits: range.commits,
+    changedPaths: range.changedPaths,
+    admittedScope: ['plugins/sidequest/reverted.js'],
+  });
+  assert.equal(revalidated.ok, false);
+  assert.equal(revalidated.reason, 'reconciled_path_diverged');
+  assert.equal(revalidated.divergedPath, 'plugins/sidequest/reverted.js');
+  assert.match(revalidated.message || '', /plugins\/sidequest\/reverted\.js/);
+});
+
+test('SQ-1749: reconciliation refuses a whitespace-variant patch', () => {
+  const root = repo();
+  const main = branchOf(root);
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'discarded-base.js'), 'discarded\n');
+  git(root, ['add', '--', 'plugins/other-plugin/discarded-base.js']);
+  git(root, ['commit', '-m', 'discarded integration base']);
+  git(root, ['checkout', '-q', '-b', 'ticket-work']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'whitespace.js'), 'base \n');
+  git(root, ['add', '--', 'plugins/sidequest/whitespace.js']);
+  git(root, ['commit', '-m', 'ticket whitespace']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-1749', tip);
+  const range = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1749',
+    upstream: main,
+    integrationBranch: main,
+  });
+  assert.equal(range.ok, true, `ticket range was refused: ${range.reason}`);
+
+  git(root, ['checkout', '-q', main]);
+  git(root, ['reset', '--hard', 'HEAD~1']);
+  fs.mkdirSync(path.join(root, 'plugins', 'sidequest'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'whitespace.js'), ' base\n');
+  git(root, ['add', '--', 'plugins/sidequest/whitespace.js']);
+  git(root, ['commit', '-m', 'integration whitespace']);
+
+  const revalidated = commitScope.validateStoredSubmissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1749',
+    upstream: range.upstream,
+    upstreamCommit: range.upstreamCommit,
+    integrationBranch: main,
+    base: range.base,
+    commits: range.commits,
+    changedPaths: range.changedPaths,
+    admittedScope: ['plugins/sidequest/whitespace.js'],
+  });
+  assert.equal(revalidated.ok, false);
+  assert.equal(revalidated.reason, 'reconciled_path_diverged');
+  assert.equal(revalidated.divergedPath, 'plugins/sidequest/whitespace.js');
 });
 
 test('SQ-923: a scoped commit that advanced the integration branch submits against its own parent', () => {

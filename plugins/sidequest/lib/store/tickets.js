@@ -806,7 +806,7 @@ function createTickets(dependencies) {
       if (!t) return null;
       return apply(t);
     } finally {
-      if (locked) releaseLock(lock);
+      if (locked) releaseLock(lock, locked);
     }
   }
   function deleteTicket(slug, idOrRef) {
@@ -825,7 +825,7 @@ function createTickets(dependencies) {
         }
       }
     } finally {
-      if (locked) releaseLock(lock);
+      if (locked) releaseLock(lock, locked);
     }
     if (!ok) return false;
     try {

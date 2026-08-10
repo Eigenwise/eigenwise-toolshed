@@ -26,6 +26,7 @@ const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
+const { createLocks } = require('../src/lib/store/locks.ts');
 const { makeCliRunner } = require('./_helpers.js');
 
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-project-'));
@@ -1163,6 +1164,27 @@ test('SQ-1743: a held delivery lock refuses another integration before it change
   } finally {
     fs.unlinkSync(lock);
   }
+});
+
+test('SQ-1749: a live owner survives expiry and cannot release a replacement lock', () => {
+  const locks = createLocks({ fs, path, ticketsDir: () => SIDEQUEST_HOME, transaction: (fn: any) => fn() });
+  const lock = path.join(SIDEQUEST_HOME, 'delivery-owner.lock');
+  const owner = locks.acquireLock(lock, { wait: false });
+  assert.ok(owner);
+  try {
+    const expired = new Date(Date.now() - 31_000);
+    fs.utimesSync(lock, expired, expired);
+    assert.strictEqual(locks.acquireLock(lock, { wait: false }), false);
+  } finally {
+    assert.deepStrictEqual(locks.releaseLock(lock, owner), { ok: true });
+  }
+
+  fs.writeFileSync(lock, JSON.stringify({ pid: 2_147_483_647, token: 'dead-owner' }));
+  const replacement = locks.acquireLock(lock, { wait: false });
+  assert.ok(replacement);
+  assert.deepStrictEqual(locks.releaseLock(lock, 'dead-owner'), { ok: false, reason: 'lock_owner_lost' });
+  assert.ok(fs.existsSync(lock));
+  assert.deepStrictEqual(locks.releaseLock(lock, replacement), { ok: true });
 });
 
 test('integration reports and records merge conflict paths before aborting', () => {

@@ -519,9 +519,9 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
       outside,
       ticket,
       scopeValidation,
-      message: scopeValidation.reason === 'missing_scope_snapshot'
+      message: scopeValidation.message || (scopeValidation.reason === 'missing_scope_snapshot'
         ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it, or pass the explicit legacy scope override with a recorded reason.`
-        : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(', ')}.`,
+        : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(', ')}.`),
     };
   }
   return { ok: true, ticket, scopeValidation, legacyScopeOverride };
@@ -607,11 +607,14 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
   } catch (error: any) {
     return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
   }
-  if (!acquireLock(lock, { wait: false })) return deliveryInProgress(ticket);
+  const lockLease = acquireLock(lock, { wait: false });
+  if (!lockLease) return deliveryInProgress(ticket);
   try {
+    lockLease.refresh();
     return integrateSubmissionUnlocked(slug, idOrRef, opts);
   } finally {
-    releaseLock(lock);
+    lockLease.refresh();
+    releaseLock(lock, lockLease);
   }
 }
 

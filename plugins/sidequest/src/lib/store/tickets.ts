@@ -879,7 +879,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (!t) return null;
     return apply(t);
   } finally {
-    if (locked) releaseLock(lock);
+    if (locked) releaseLock(lock, locked);
   }
 }
 
@@ -902,7 +902,7 @@ function deleteTicket(slug?: any, idOrRef?: any) {
       }
     }
   } finally {
-    if (locked) releaseLock(lock); // also removes the lock file itself
+    if (locked) releaseLock(lock, locked); // also removes the lock file itself
   }
   if (!ok) return false;
   // Drop any links other tickets had pointing at the one we just removed, so no
