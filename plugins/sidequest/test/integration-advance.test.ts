@@ -369,7 +369,7 @@ function deliveryTicket(label: string, opts: any = {}) {
     title: `delivery ${label}`,
     category: 'codebase-exploration',
     description: 'A submitted fixture delivered through the integrator command.',
-    files: ['feature.txt'],
+    files: opts.files || ['feature.txt'],
   });
   submitFixture(slug, ticket, fixture, opts.verify || null);
   const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
@@ -530,7 +530,7 @@ test('apply refuses an overlapping dirty path and names it without dropping the 
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'apply', '--json']);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /apply refused; uncommitted changes fall inside this ticket's declared scope: feature\.txt/);
+  assert.match(result.stderr, /apply refused; uncommitted changes overlap paths this delivery would write: feature\.txt/);
   assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
   const stored = store.getTicket(slug, ticket.ref);
   assert.equal(stored.status, 'doing');
@@ -552,7 +552,25 @@ test('integrate merge preserves unrelated dirty files', () => {
   assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
 });
 
-test('integrate merge refuses dirty files inside the declared scope', () => {
+test('integrate merge ignores a dirty declared path outside the delivered submission', () => {
+  const { fixture, ticket, runCli } = deliveryTicket('merge-ignores-dirty-declared-path', {
+    files: ['feature.txt', 'docs'],
+  });
+  fs.mkdirSync(path.join(fixture.repo, 'docs'), { recursive: true });
+  commitFile(fixture.repo, 'docs/guide.md', 'committed docs\n');
+  const dirtyDocs = path.join(fixture.repo, 'docs', 'guide.md');
+  fs.writeFileSync(dirtyDocs, 'uncommitted docs\n');
+
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.deepEqual(payload.delivery.ignoredDirtyPaths, ['docs/guide.md']);
+  assert.equal(fs.readFileSync(dirtyDocs, 'utf8'), 'uncommitted docs\n');
+  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M docs/guide.md');
+});
+
+test('integrate merge refuses a dirty path the delivered submission would write', () => {
   const { fixture, slug, ticket, runCli } = deliveryTicket('merge-dirty-scope');
   const scoped = path.join(fixture.repo, 'feature.txt');
   fs.writeFileSync(scoped, 'user edit\n');
@@ -561,7 +579,7 @@ test('integrate merge refuses dirty files inside the declared scope', () => {
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
 
   assert.equal(result.status, 1);
-  assert.match(result.stderr, /merge refused; uncommitted changes fall inside this ticket's declared scope: feature\.txt/);
+  assert.match(result.stderr, /merge refused; uncommitted changes overlap paths this delivery would write: feature\.txt/);
   assert.deepEqual(fs.readFileSync(scoped), before);
   assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'dirty_scope');
 });

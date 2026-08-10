@@ -623,21 +623,14 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
     const staged = integrationGit(repo, ['diff', '--cached', '--name-only']).split(/\r?\n/).filter(Boolean);
     const untracked = integrationGit(repo, ['ls-files', '--others', '--exclude-standard']).split(/\r?\n/).filter(Boolean);
     const dirtyPaths = Array.from(new Set([...dirty, ...staged]));
-    const declaredScope = Array.isArray(admitted.scopeValidation.admittedScope)
-      ? admitted.scopeValidation.admittedScope
-      : Array.isArray(ticket.files) ? ticket.files : [];
-    const integrationScope = Array.from(new Set([
-      ...declaredScope,
-      ...changedPaths,
-    ]));
     const workingPaths = Array.from(new Set([...dirtyPaths, ...untracked]));
-    const scopedDirtyPaths = workingPaths.filter((entry) => commitScope.isInScope(entry, integrationScope));
-    const ignoredDirtyPaths = dirtyPaths.filter((entry) => !commitScope.isInScope(entry, integrationScope));
-    if (scopedDirtyPaths.length) {
+    const deliveredDirtyPaths = workingPaths.filter((entry) => commitScope.isInScope(entry, changedPaths));
+    const ignoredDirtyPaths = dirtyPaths.filter((entry) => !commitScope.isInScope(entry, changedPaths));
+    if (deliveredDirtyPaths.length) {
       return integrationFailure(slug, ticket, {
         reason: 'dirty_scope',
-        dirtyPaths: scopedDirtyPaths,
-        message: `${mode} refused; uncommitted changes fall inside this ticket's declared scope: ${scopedDirtyPaths.join(', ')}.`,
+        dirtyPaths: deliveredDirtyPaths,
+        message: `${mode} refused; uncommitted changes overlap paths this delivery would write: ${deliveredDirtyPaths.join(', ')}.`,
       });
     }
     const before = integrationGit(repo, ['rev-parse', 'HEAD']);
