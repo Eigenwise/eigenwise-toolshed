@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.440.0 (2026-08-10)
+
+### codegraph 0.3.0 → 0.4.0
+
+#### Features
+
+- Codegraph never indexes worktrees, nested checkouts, or virtual environments (SQ-1811)
+  Codegraph indexes your project's source and nothing that merely sits inside it. An agent worktree, a nested clone, a submodule, or a virtual environment is now excluded by one shared policy that reaches project discovery, freshness, the Pyright config, and the TypeScript source filter.
+
+  A worktree used to be skipped only because Pyright excludes dot-directories by default, so a worktree root at any other path would have landed in the graph as a second stale copy of every symbol. Worktrees are recognized two ways, because one is not enough: a `worktrees` or `.worktrees` directory by name, and any directory carrying its own `.git` file or directory. A copied worktree carries no git marker; a worktree placed outside the conventional directory carries no conventional name.
+
+  Virtual environments are found by `pyvenv.cfg` rather than by name, so an environment called anything is still excluded. It remains a resolution input, so imports into installed packages still resolve, but its files never become graph nodes.
+
+  Codegraph now passes its exclusions to Pyright explicitly, including the three Pyright would otherwise supply on its own, because supplying any exclusion silently drops those defaults. Your project's own `exclude` still applies and is added to, never replaced.
+
 ## v3.439.0 (2026-08-10)
 
 ### codegraph 0.2.0 → 0.3.0

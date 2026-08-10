@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.439.0",
+  "version": "3.440.0",
   "plugins": [
     {
       "name": "workbench",
@@ -169,7 +169,7 @@
       "name": "codegraph",
       "source": "./plugins/codegraph",
       "description": "Local semantic graph indexing for TypeScript, JavaScript, and Python projects, including repositories that mix them. Seven MCP tools trace symbol impact, paths, hierarchies, modules, and focused context; stale answers are refused, and pinned runtimes are acquired on first use. Source, paths, symbols, graph facts, and project data stay local.",
-      "version": "0.3.0",
+      "version": "0.4.0",
       "author": {
         "name": "Eigenwise"
       },
