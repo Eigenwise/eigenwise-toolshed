@@ -45,7 +45,7 @@ function isTypeScriptSyncModule(value) {
 }
 function isTypeScriptAstModule(value) {
   if (typeof value !== "object" || value === null) return false;
-  return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isMethodSignatureDeclaration" in value && typeof value.isMethodSignatureDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isPropertyAccessExpression" in value && typeof value.isPropertyAccessExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isNamespaceImport" in value && typeof value.isNamespaceImport === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
+  return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isMethodSignatureDeclaration" in value && typeof value.isMethodSignatureDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isVariableStatement" in value && typeof value.isVariableStatement === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isPropertyAccessExpression" in value && typeof value.isPropertyAccessExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isNamespaceImport" in value && typeof value.isNamespaceImport === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
 }
 async function loadTypeScript() {
   const [syncModule, astModule] = await Promise.all([
@@ -95,7 +95,7 @@ function declarationKind(node, ast) {
   return void 0;
 }
 function isIndexableDeclaration(node, kind, sourceFile, ast) {
-  if (kind === "variable") return node.parent.parent.parent === sourceFile;
+  if (kind === "variable") return ast.isVariableStatement(node.parent.parent) && node.parent.parent.parent === sourceFile;
   if (kind === "method") return ast.isClassDeclaration(node.parent) || ast.isInterfaceDeclaration(node.parent);
   return true;
 }

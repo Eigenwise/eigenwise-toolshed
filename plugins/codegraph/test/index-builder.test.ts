@@ -89,6 +89,9 @@ test('indexes repeated local declarations and object-literal methods into a read
   try {
     await writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({ files: ['index.ts'] }));
     await writeFile(path.join(root, 'index.ts'), [
+      'const retained = true;',
+      'for (const response of [1, 2]) { console.log(response); }',
+      'for (const response of [3, 4]) { console.log(response); }',
       'function first() { const entry = 1; return entry; }',
       'function second() { const entry = 2; return entry; }',
       'const firstObject = { extractProject() { return first(); } };',
@@ -107,7 +110,7 @@ test('indexes repeated local declarations and object-literal methods into a read
 
     assert.equal(result.snapshots.length, 1);
     assert.equal(store.snapshots.length, 1);
-    assert.equal(store.snapshots[0]?.coverage.nodes, 9);
+    assert.equal(store.snapshots[0]?.coverage.nodes, 10);
   } finally {
     await rm(root, { recursive: true, force: true });
   }
