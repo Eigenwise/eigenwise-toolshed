@@ -2,9 +2,10 @@ import { spawn } from 'node:child_process';
 import { createHash, randomUUID } from 'node:crypto';
 import { access, copyFile, link, mkdir, mkdtemp, readFile, readdir, rename, rm, stat, utimes, writeFile } from 'node:fs/promises';
 import { createConnection, createServer, type Server } from 'node:net';
+import { pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { runtimeCacheDirectory } from './paths.js';
-import type { RuntimeAcquirer, SemanticRuntime } from './runtime-contract.js';
+import type { RuntimeAcquirer, SemanticEngineRuntime } from './runtime-contract.js';
 
 const runtimeManifestFile = 'integrity.json';
 const runtimePackageFile = 'package.json';
@@ -16,7 +17,7 @@ const runtimeGenerationsDirectory = 'generations';
 const runtimeLockStaleMilliseconds = 5 * 60 * 1000;
 const runtimeLockRetryMilliseconds = 25;
 const runtimeReclaimProbeTimeoutMilliseconds = 250;
-const inFlightAcquisitions = new Map<string, Promise<SemanticRuntime>>();
+const inFlightAcquisitions = new Map<string, Promise<SemanticEngineRuntime>>();
 
 type JsonRecord = Record<string, unknown>;
 
@@ -230,14 +231,27 @@ export class NpmRuntimeInstaller implements RuntimeInstaller {
   }
 }
 
-class LoadedTypeScriptRuntime implements SemanticRuntime {
+class LoadedTypeScriptRuntime implements SemanticEngineRuntime {
+  readonly id: string;
+  readonly version: string;
   readonly engineId: string;
   readonly engineVersion: string;
   readonly extractors = [];
+  private readonly runtimeDirectory: string;
+  private readonly manifest: RuntimeManifest;
 
-  constructor(engineId: string, engineVersion: string) {
-    this.engineId = engineId;
-    this.engineVersion = engineVersion;
+  constructor(runtimeDirectory: string, manifest: RuntimeManifest) {
+    this.id = manifest.engine.id;
+    this.version = manifest.engine.version;
+    this.engineId = manifest.engine.id;
+    this.engineVersion = manifest.engine.version;
+    this.runtimeDirectory = runtimeDirectory;
+    this.manifest = manifest;
+  }
+
+  async importModule(specifier: string): Promise<unknown> {
+    const modulePath = await runtimeModulePath(this.runtimeDirectory, this.manifest, specifier);
+    return import(pathToFileURL(modulePath).href);
   }
 }
 
@@ -252,6 +266,20 @@ function packageExportPath(packageMetadata: JsonRecord, moduleSpecifier: string,
     throw new SemanticRuntimeError(`runtime package does not export ${moduleSpecifier}`);
   }
   return exports[exportKey];
+}
+
+async function runtimeModulePath(runtimeDirectory: string, manifest: RuntimeManifest, moduleSpecifier: string): Promise<string> {
+  const engineMetadata = await parseJson(path.join(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id, runtimePackageFile));
+  if (!isJsonRecord(engineMetadata) || engineMetadata.version !== manifest.engine.version) {
+    throw new SemanticRuntimeError(`runtime package version mismatch for ${manifest.engine.id}`);
+  }
+  const exportedModuleFile = packageExportPath(engineMetadata, moduleSpecifier, manifest.engine.id);
+  const engineDirectory = path.resolve(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id);
+  const modulePath = path.resolve(engineDirectory, exportedModuleFile);
+  if (!modulePath.startsWith(`${engineDirectory}${path.sep}`)) {
+    throw new SemanticRuntimeError(`runtime module escapes its package: ${exportedModuleFile}`);
+  }
+  return modulePath;
 }
 
 async function validateFileIntegrity(filePath: string, expectedIntegrity: string): Promise<void> {
@@ -305,7 +333,6 @@ async function validatedModulePath(
   manifest: RuntimeManifest,
   platformPackage: string,
 ): Promise<string> {
-  let engineMetadata: JsonRecord | undefined;
   for (const packageName of [manifest.engine.id, platformPackage]) {
     const expected = manifest.packages[packageName];
     if (expected === undefined) {
@@ -315,21 +342,11 @@ async function validatedModulePath(
     if (!isJsonRecord(packageMetadata) || packageMetadata.version !== expected.version) {
       throw new SemanticRuntimeError(`runtime package version mismatch for ${packageName}`);
     }
-    if (packageName === manifest.engine.id) engineMetadata = packageMetadata;
   }
 
-  if (engineMetadata === undefined) {
-    throw new SemanticRuntimeError(`runtime engine package is missing: ${manifest.engine.id}`);
-  }
-  const exportedModuleFile = packageExportPath(engineMetadata, manifest.engine.module, manifest.engine.id);
-  if (exportedModuleFile !== manifest.engine.moduleFile) {
+  const modulePath = await runtimeModulePath(runtimeDirectory, manifest, manifest.engine.module);
+  if (`./${path.relative(path.join(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id), modulePath).split(path.sep).join('/')}` !== manifest.engine.moduleFile) {
     throw new SemanticRuntimeError(`runtime module export changed: ${manifest.engine.module}`);
-  }
-
-  const engineDirectory = path.resolve(runtimeDirectory, runtimeModulesDirectory, manifest.engine.id);
-  const modulePath = path.resolve(engineDirectory, manifest.engine.moduleFile);
-  if (!modulePath.startsWith(`${engineDirectory}${path.sep}`)) {
-    throw new SemanticRuntimeError(`runtime module escapes its package: ${manifest.engine.moduleFile}`);
   }
   return modulePath;
 }
@@ -793,7 +810,7 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     this.userHomeDirectory = options.userHomeDirectory;
   }
 
-  acquire(): Promise<SemanticRuntime> {
+  acquire(): Promise<SemanticEngineRuntime> {
     const cacheDirectory = this.cacheDirectory();
     const existing = inFlightAcquisitions.get(cacheDirectory);
     if (existing !== undefined) return existing;
@@ -812,11 +829,11 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     return runtimeCacheDirectory('7.0.2', this.platform, this.architecture, this.environment, this.userHomeDirectory);
   }
 
-  private async acquireRuntime(cacheDirectory: string): Promise<SemanticRuntime> {
+  private async acquireRuntime(cacheDirectory: string): Promise<SemanticEngineRuntime> {
     return withRuntimeCacheLock(cacheDirectory, (lease) => this.acquireLockedRuntime(cacheDirectory, lease));
   }
 
-  private async acquireLockedRuntime(cacheDirectory: string, lease: RuntimeCacheLease): Promise<SemanticRuntime> {
+  private async acquireLockedRuntime(cacheDirectory: string, lease: RuntimeCacheLease): Promise<SemanticEngineRuntime> {
     const manifest = await readRuntimeManifest(this.runtimeManifestDirectory);
     const packageLock = await readPackageLock(this.runtimeManifestDirectory);
     validateManifestLock(manifest, packageLock);
@@ -827,15 +844,21 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     if (cachedRuntimeDirectory !== undefined) {
       try {
         await validateInstalledRuntime(cachedRuntimeDirectory, runtimeKey, manifest, packageName);
-        return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
+        return new LoadedTypeScriptRuntime(cachedRuntimeDirectory, manifest);
       } catch (error: unknown) {
         await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, error);
-        return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
+        return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
       }
     }
 
     await this.installCache(cacheDirectory, runtimeKey, manifest, packageName, lease);
-    return new LoadedTypeScriptRuntime(manifest.engine.id, manifest.engine.version);
+    return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
+  }
+
+  private async loadedRuntimeDirectory(cacheDirectory: string): Promise<string> {
+    const runtimeDirectory = await currentRuntimeDirectory(cacheDirectory);
+    if (runtimeDirectory === undefined) throw new SemanticRuntimeError('runtime cache was published without a current generation');
+    return runtimeDirectory;
   }
 
   private async replaceIncompleteCache(

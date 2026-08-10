@@ -21,6 +21,8 @@ import type {
 import { createGraphEdgeId, createGraphNodeId, type FileGraph, type GraphEdge, type GraphEdgeKind, type GraphNode, type GraphNodeKind, type LanguageExtractor, type ProjectDescriptor, type ResolutionState, type SourceSpan } from '../model.js';
 import { normalizeProjectRelativePath } from '../paths.js';
 import { discoverProjects } from '../projects.js';
+import { typeScriptFreshnessContributor } from '../freshness.js';
+import { isSemanticEngineRuntime, type RuntimeAcquirer, type SemanticEngineRuntime, type SemanticLanguageProvider } from '../runtime-contract.js';
 
 interface TypeScriptSyncModule {
   readonly API: new () => API;
@@ -79,10 +81,21 @@ function isTypeScriptAstModule(value: unknown): value is TypeScriptAstModule {
     && 'isExportDeclaration' in value && typeof value.isExportDeclaration === 'function';
 }
 
-async function loadTypeScript(): Promise<LoadedTypeScript> {
+function directTypeScriptRuntime(): SemanticEngineRuntime {
+  return {
+    id: 'typescript',
+    version: '7.0.2',
+    engineId: 'typescript',
+    engineVersion: '7.0.2',
+    extractors: [],
+    importModule: importEsmModule,
+  };
+}
+
+async function loadTypeScript(runtime: SemanticEngineRuntime): Promise<LoadedTypeScript> {
   const [syncModule, astModule] = await Promise.all([
-    importEsmModule('typescript/unstable/sync'),
-    importEsmModule('typescript/unstable/ast'),
+    runtime.importModule('typescript/unstable/sync'),
+    runtime.importModule('typescript/unstable/ast'),
   ]);
   if (!isTypeScriptSyncModule(syncModule) || !isTypeScriptAstModule(astModule)) {
     throw new Error('the pinned TypeScript runtime does not expose its sync semantic API');
@@ -416,13 +429,18 @@ function projectForDescriptor(snapshot: Snapshot, descriptor: ProjectDescriptor)
 export class TypeScriptSemanticExtractor implements LanguageExtractor {
   readonly id = 'typescript';
   readonly languages = ['typescript', 'javascript'] as const;
+  private readonly runtime: SemanticEngineRuntime;
+
+  constructor(runtime: SemanticEngineRuntime = directTypeScriptRuntime()) {
+    this.runtime = runtime;
+  }
 
   async discoverProjects(projectRoot: string): Promise<ProjectDescriptor[]> {
     return discoverProjects(projectRoot);
   }
 
   async extractProject(descriptor: ProjectDescriptor): Promise<FileGraph[]> {
-    const loaded = await loadTypeScript();
+    const loaded = await loadTypeScript(this.runtime);
     const snapshot = loaded.api.updateSnapshot(descriptor.configFile === null
       ? { openFiles: [path.join(descriptor.root, 'index.ts')] }
       : { openProjects: [descriptor.configFile] });
@@ -442,6 +460,34 @@ export class TypeScriptSemanticExtractor implements LanguageExtractor {
   }
 }
 
-export function createTypeScriptSemanticExtractor(): TypeScriptSemanticExtractor {
-  return new TypeScriptSemanticExtractor();
+export function createTypeScriptSemanticExtractor(runtime?: SemanticEngineRuntime): TypeScriptSemanticExtractor {
+  return new TypeScriptSemanticExtractor(runtime);
+}
+
+export class TypeScriptLanguageProvider implements SemanticLanguageProvider {
+  readonly id = 'typescript';
+  readonly languages = ['typescript', 'javascript'] as const;
+  readonly freshness = typeScriptFreshnessContributor;
+  private readonly runtime: RuntimeAcquirer;
+
+  constructor(runtime: RuntimeAcquirer) {
+    this.runtime = runtime;
+  }
+
+  async acquireEngine(): Promise<SemanticEngineRuntime> {
+    const runtime = await this.runtime.acquire();
+    if (isSemanticEngineRuntime(runtime)) return runtime;
+    return {
+      id: runtime.engineId,
+      version: runtime.engineVersion,
+      engineId: runtime.engineId,
+      engineVersion: runtime.engineVersion,
+      extractors: [],
+      importModule: importEsmModule,
+    };
+  }
+
+  createExtractor(runtime: SemanticEngineRuntime): TypeScriptSemanticExtractor {
+    return createTypeScriptSemanticExtractor(runtime);
+  }
 }

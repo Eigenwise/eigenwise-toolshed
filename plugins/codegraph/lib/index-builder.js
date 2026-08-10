@@ -36,13 +36,15 @@ var import_node_path = __toESM(require("node:path"));
 var import_freshness = require("./freshness.js");
 var import_model = require("./model.js");
 var import_paths = require("./paths.js");
+var import_runtime_contract = require("./runtime-contract.js");
 function snapshotId(project, manifest, runtime) {
+  const engine = (0, import_runtime_contract.snapshotEngineIdentity)((0, import_runtime_contract.runtimeEngineIdentities)(runtime));
   return (0, import_node_crypto.createHash)("sha256").update([
     project.id,
     manifest.sourceManifestHash,
     manifest.configHash,
-    runtime.engineId,
-    runtime.engineVersion
+    engine.id,
+    engine.version
   ].join("\0")).digest("hex");
 }
 function coverageFor(files) {
@@ -185,21 +187,22 @@ async function extractProject(runtime, project) {
   return extractor.extractProject(project);
 }
 function createSnapshot(project, files, manifest, runtime, indexedAt) {
+  const engine = (0, import_runtime_contract.snapshotEngineIdentity)((0, import_runtime_contract.runtimeEngineIdentities)(runtime));
   const snapshot = {
     schemaVersion: 1,
     snapshotId: snapshotId(project, manifest, runtime),
     projectRootHash: (0, import_paths.projectIdentity)(project.root),
     sourceManifestHash: manifest.sourceManifestHash,
     configHash: manifest.configHash,
-    engineId: runtime.engineId,
-    engineVersion: runtime.engineVersion,
+    engineId: engine.id,
+    engineVersion: engine.version,
     indexedAt
   };
   return { project, snapshot, coverage: coverageFor(files), files };
 }
 async function buildProjectIndex(projectRoot, dependencies) {
   const canonicalRoot = (0, import_paths.canonicalFilesystemPath)(projectRoot);
-  const manifest = await (0, import_freshness.buildRelevantInputManifest)(canonicalRoot);
+  const manifest = await (0, import_freshness.buildRelevantInputManifest)(canonicalRoot, dependencies.freshness);
   const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(canonicalRoot)))).flat().sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,

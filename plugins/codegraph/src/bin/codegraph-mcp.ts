@@ -2,6 +2,8 @@ import { createInterface } from 'node:readline';
 import path from 'node:path';
 import { codegraphStateRoot, projectStateDirectory } from '../lib/paths.js';
 import { invokeCodegraphTool, codegraphToolDefinitions } from '../lib/mcp.js';
+import { TypeScriptLanguageProvider } from '../lib/extractors/typescript.js';
+import { SemanticLanguageProviderRegistry } from '../lib/runtime-contract.js';
 import { TypeScriptRuntimeAcquirer } from '../lib/runtime.js';
 import { CodegraphService } from '../lib/service.js';
 import { GraphStore } from '../lib/store.js';
@@ -14,7 +16,10 @@ const projectRoot = process.env.CODEGRAPH_PROJECT_ROOT ?? process.cwd();
 const stateDirectory = projectStateDirectory(projectRoot);
 const runtimeStateDirectory = codegraphStateRoot();
 const store = GraphStore.open(path.join(stateDirectory, 'graph.sqlite'));
-const service = new CodegraphService({ projectRoot, store, runtime: new TypeScriptRuntimeAcquirer({ stateDirectory: runtimeStateDirectory }) });
+const providers = new SemanticLanguageProviderRegistry([
+  new TypeScriptLanguageProvider(new TypeScriptRuntimeAcquirer({ stateDirectory: runtimeStateDirectory })),
+]);
+const service = new CodegraphService({ projectRoot, store, providers });
 
 function send(id: RpcRequest['id'], value: Record<string, unknown>): void {
   if (id !== undefined) process.stdout.write(`${JSON.stringify({ jsonrpc: '2.0', id, ...value })}\n`);

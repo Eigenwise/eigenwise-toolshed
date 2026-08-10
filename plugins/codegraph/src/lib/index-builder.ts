@@ -3,7 +3,8 @@ import path from 'node:path';
 import { buildRelevantInputManifest, type RelevantInputManifest } from './freshness.js';
 import { createGraphEdgeId, type FileGraph, type GraphCoverage, type GraphEdge, type GraphNode, type ProjectDescriptor, type SnapshotIdentity } from './model.js';
 import { canonicalFilesystemPath, normalizeProjectRelativePath, normalizeProjectRoot, projectIdentity } from './paths.js';
-import type { ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from './runtime-contract.js';
+import type { FreshnessContributor, ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from './runtime-contract.js';
+import { runtimeEngineIdentities, snapshotEngineIdentity } from './runtime-contract.js';
 
 export interface IndexBuildResult {
   readonly snapshots: readonly ProjectGraphSnapshot[];
@@ -13,6 +14,7 @@ export interface IndexBuildResult {
 export interface IndexBuildDependencies {
   readonly runtime: SemanticRuntime;
   readonly store: ProjectSnapshotStore;
+  readonly freshness?: readonly FreshnessContributor[];
   readonly indexedAt?: () => string;
 }
 
@@ -24,12 +26,13 @@ interface ExtractedProject {
 }
 
 function snapshotId(project: ProjectDescriptor, manifest: RelevantInputManifest, runtime: SemanticRuntime): string {
+  const engine = snapshotEngineIdentity(runtimeEngineIdentities(runtime));
   return createHash('sha256').update([
     project.id,
     manifest.sourceManifestHash,
     manifest.configHash,
-    runtime.engineId,
-    runtime.engineVersion,
+    engine.id,
+    engine.version,
   ].join('\0')).digest('hex');
 }
 
@@ -201,14 +204,15 @@ function createSnapshot(
   runtime: SemanticRuntime,
   indexedAt: string,
 ): ProjectGraphSnapshot {
+  const engine = snapshotEngineIdentity(runtimeEngineIdentities(runtime));
   const snapshot: SnapshotIdentity = {
     schemaVersion: 1,
     snapshotId: snapshotId(project, manifest, runtime),
     projectRootHash: projectIdentity(project.root),
     sourceManifestHash: manifest.sourceManifestHash,
     configHash: manifest.configHash,
-    engineId: runtime.engineId,
-    engineVersion: runtime.engineVersion,
+    engineId: engine.id,
+    engineVersion: engine.version,
     indexedAt,
   };
   return { project, snapshot, coverage: coverageFor(files), files };
@@ -220,7 +224,7 @@ export async function buildProjectIndex(
   dependencies: IndexBuildDependencies,
 ): Promise<IndexBuildResult> {
   const canonicalRoot = canonicalFilesystemPath(projectRoot);
-  const manifest = await buildRelevantInputManifest(canonicalRoot);
+  const manifest = await buildRelevantInputManifest(canonicalRoot, dependencies.freshness);
   const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(canonicalRoot))))
     .flat()
     .sort((left, right) => left.id.localeCompare(right.id));

@@ -36,6 +36,7 @@ var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
 var import_freshness = require("./freshness.js");
 var import_index_builder = require("./index-builder.js");
+var import_runtime_contract = require("./runtime-contract.js");
 var import_typescript = require("./extractors/typescript.js");
 var import_queries = require("./queries.js");
 var import_paths = require("./paths.js");
@@ -54,22 +55,25 @@ function emptyResponse(state, snapshot, coverage) {
 function aggregateSnapshot(result, runtime, projectRoot) {
   const source = result.manifest.sourceManifestHash;
   const configuration = result.manifest.configHash;
-  const snapshotId = (0, import_node_crypto.createHash)("sha256").update([projectRoot, source, configuration, runtime.engineId, runtime.engineVersion].join("\0")).digest("hex");
+  const engine = (0, import_runtime_contract.snapshotEngineIdentity)((0, import_runtime_contract.runtimeEngineIdentities)(runtime));
+  const snapshotId = (0, import_node_crypto.createHash)("sha256").update([projectRoot, source, configuration, engine.id, engine.version].join("\0")).digest("hex");
   return {
     schemaVersion: 1,
     snapshotId,
     projectRootHash: (0, import_node_crypto.createHash)("sha256").update(projectRoot).digest("hex"),
     sourceManifestHash: source,
     configHash: configuration,
-    engineId: runtime.engineId,
-    engineVersion: runtime.engineVersion,
+    engineId: engine.id,
+    engineVersion: engine.version,
     indexedAt: (/* @__PURE__ */ new Date()).toISOString()
   };
 }
 class CodegraphService {
   projectRoot;
   store;
-  runtime;
+  providers;
+  legacyRuntime;
+  freshness;
   stateDirectory;
   buildIndex;
   state = { status: "missing", message: messageFor("missing") };
@@ -77,10 +81,16 @@ class CodegraphService {
   constructor(options) {
     this.projectRoot = (0, import_paths.canonicalFilesystemPath)(options.projectRoot);
     this.store = options.store;
-    this.runtime = options.runtime;
+    if (options.providers === void 0 && options.runtime === void 0) {
+      throw new Error("Codegraph requires a semantic language provider registry or runtime acquirer");
+    }
+    this.providers = options.providers;
+    this.legacyRuntime = options.providers === void 0 ? options.runtime : void 0;
+    this.freshness = this.providers?.freshnessContributors() ?? [import_freshness.typeScriptFreshnessContributor];
     this.stateDirectory = (0, import_paths.projectStateDirectory)(this.projectRoot);
     this.buildIndex = options.index ?? ((projectRoot, runtime) => (0, import_index_builder.buildProjectIndex)(projectRoot, {
       runtime,
+      freshness: this.freshness,
       store: { readSnapshot: async () => null, replaceSnapshot: async () => void 0 }
     }));
   }
@@ -99,7 +109,7 @@ class CodegraphService {
       return this.response(this.state, null, null);
     }
     try {
-      const manifest = await (0, import_freshness.buildRelevantInputManifest)(this.projectRoot);
+      const manifest = await (0, import_freshness.buildRelevantInputManifest)(this.projectRoot, this.freshness);
       this.state = (0, import_freshness.snapshotIsFresh)(snapshot, manifest) ? { status: "ready", message: messageFor("ready") } : { status: "stale", message: messageFor("stale") };
     } catch (error) {
       this.state = { status: "error", message: error instanceof Error ? error.message : messageFor("error") };
@@ -116,9 +126,9 @@ class CodegraphService {
   async rebuild() {
     this.state = { status: "acquiring-runtime", message: messageFor("acquiring-runtime") };
     try {
-      const acquired = await this.runtime.acquire();
+      const acquired = this.providers !== void 0 ? await this.providers.acquireRuntime() : await this.legacyRuntime.acquire();
+      const runtime = this.providers === void 0 && acquired.extractors.length === 0 ? { ...acquired, extractors: [(0, import_typescript.createTypeScriptSemanticExtractor)()] } : acquired;
       this.state = { status: "indexing", message: messageFor("indexing") };
-      const runtime = { ...acquired, extractors: [(0, import_typescript.createTypeScriptSemanticExtractor)()] };
       const result = await this.buildIndex(this.projectRoot, runtime);
       const snapshot = aggregateSnapshot(result, runtime, this.projectRoot);
       this.store.replaceSnapshot({

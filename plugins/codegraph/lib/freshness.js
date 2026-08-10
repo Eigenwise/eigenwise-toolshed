@@ -28,9 +28,11 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var freshness_exports = {};
 __export(freshness_exports, {
+  TypeScriptFreshnessContributor: () => TypeScriptFreshnessContributor,
   buildRelevantInputManifest: () => buildRelevantInputManifest,
   projectInputs: () => projectInputs,
-  snapshotIsFresh: () => snapshotIsFresh
+  snapshotIsFresh: () => snapshotIsFresh,
+  typeScriptFreshnessContributor: () => typeScriptFreshnessContributor
 });
 module.exports = __toCommonJS(freshness_exports);
 var import_node_crypto = require("node:crypto");
@@ -62,12 +64,13 @@ async function loadSemanticTypeScript() {
   }
   return semanticTypeScript;
 }
-async function inputPaths(projectRoot, directory = projectRoot) {
+async function inputCandidates(directory) {
   const entries = await (0, import_promises.readdir)(directory, { withFileTypes: true });
   const children = await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
-    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputPaths(projectRoot, entryPath);
-    return entry.isFile() && (isRelevantSource(entryPath) || configurationNames.has(entry.name)) ? [entryPath] : [];
+    if (entry.isDirectory()) return ignoredDirectories.has(entry.name) ? [] : inputCandidates(entryPath);
+    if (!entry.isFile() || !isRelevantSource(entryPath) && !configurationNames.has(entry.name)) return [];
+    return [{ absolutePath: entryPath, configuration: configurationNames.has(entry.name) }];
   }));
   return children.flat();
 }
@@ -83,7 +86,7 @@ async function existingCanonicalPaths(candidates) {
   return existing;
 }
 async function effectiveConfigurationPaths(projectRoot, discoveredInputs) {
-  const rootConfigurations = discoveredInputs.filter((filePath) => configurationNames.has(import_node_path.default.basename(filePath))).map((filePath) => import_node_path.default.resolve(filePath));
+  const rootConfigurations = discoveredInputs.filter((input) => input.configuration).map((input) => import_node_path.default.resolve(input.absolutePath));
   const semanticReads = new Set(rootConfigurations);
   const semanticTypeScript = await loadSemanticTypeScript();
   const api = new semanticTypeScript.API({
@@ -102,6 +105,17 @@ async function effectiveConfigurationPaths(projectRoot, discoveredInputs) {
   }
   return existingCanonicalPaths(semanticReads);
 }
+class TypeScriptFreshnessContributor {
+  async collect(projectRoot) {
+    const discoveredInputs = await inputCandidates(projectRoot);
+    const configurationPaths = await effectiveConfigurationPaths(projectRoot, discoveredInputs);
+    return [
+      ...discoveredInputs.filter((input) => !input.configuration),
+      ...[...configurationPaths].map((absolutePath) => ({ absolutePath, configuration: true }))
+    ];
+  }
+}
+const typeScriptFreshnessContributor = new TypeScriptFreshnessContributor();
 function manifestPath(projectRoot, absolutePath) {
   const relativePath = import_node_path.default.relative(projectRoot, absolutePath);
   if (relativePath !== ".." && !relativePath.startsWith(`..${import_node_path.default.sep}`) && !import_node_path.default.isAbsolute(relativePath)) {
@@ -109,15 +123,26 @@ function manifestPath(projectRoot, absolutePath) {
   }
   return `external-config/${contentHash(import_node_path.default.resolve(absolutePath))}`;
 }
-async function buildRelevantInputManifest(projectRoot) {
+async function normalizedCandidates(projectRoot, contributors) {
+  const candidates = (await Promise.all(contributors.map((contributor) => contributor.collect(projectRoot)))).flat();
+  const configurationByPath = /* @__PURE__ */ new Map();
+  for (const candidate of candidates) {
+    try {
+      await (0, import_promises.access)(candidate.absolutePath);
+      const canonicalPath = (0, import_paths.canonicalFilesystemPath)(candidate.absolutePath);
+      configurationByPath.set(canonicalPath, configurationByPath.get(canonicalPath) === true || candidate.configuration);
+    } catch {
+    }
+  }
+  return configurationByPath;
+}
+async function buildRelevantInputManifest(projectRoot, contributors = [typeScriptFreshnessContributor]) {
   const canonicalRoot = (0, import_paths.canonicalFilesystemPath)(projectRoot);
-  const discoveredInputs = await inputPaths(canonicalRoot);
-  const configurationPaths = await effectiveConfigurationPaths(canonicalRoot, discoveredInputs);
-  const absoluteInputs = [.../* @__PURE__ */ new Set([...discoveredInputs.filter((input) => !configurationNames.has(import_node_path.default.basename(input))), ...configurationPaths])];
-  const inputs = await Promise.all(absoluteInputs.map(async (absolutePath) => ({
+  const candidates = await normalizedCandidates(canonicalRoot, contributors);
+  const inputs = await Promise.all([...candidates].map(async ([absolutePath, configuration]) => ({
     path: manifestPath(canonicalRoot, absolutePath),
     contentHash: contentHash(await (0, import_promises.readFile)(absolutePath, "utf8")),
-    configuration: configurationPaths.has(absolutePath)
+    configuration
   })));
   inputs.sort((left, right) => left.path.localeCompare(right.path));
   const configurationInputs = inputs.filter((input) => input.configuration);
@@ -136,7 +161,9 @@ function projectInputs(manifest, project) {
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  TypeScriptFreshnessContributor,
   buildRelevantInputManifest,
   projectInputs,
-  snapshotIsFresh
+  snapshotIsFresh,
+  typeScriptFreshnessContributor
 });

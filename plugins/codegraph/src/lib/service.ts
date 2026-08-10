@@ -1,20 +1,22 @@
 import { createHash } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import path from 'node:path';
-import { buildRelevantInputManifest, snapshotIsFresh } from './freshness.js';
+import { buildRelevantInputManifest, snapshotIsFresh, typeScriptFreshnessContributor } from './freshness.js';
 import { buildProjectIndex, type IndexBuildResult } from './index-builder.js';
 import type { GraphAvailability, GraphCoverage, GraphResponse, SnapshotIdentity } from './model.js';
+import type { FreshnessContributor, RuntimeAcquirer, SemanticRuntime } from './runtime-contract.js';
+import { runtimeEngineIdentities, SemanticLanguageProviderRegistry, snapshotEngineIdentity } from './runtime-contract.js';
 import { createTypeScriptSemanticExtractor } from './extractors/typescript.js';
 import { impact, shortestPath, hierarchy, modules, context, type SymbolSelector, type TraversalOptions } from './queries.js';
 import type { QueryLimits } from './ranking.js';
-import type { RuntimeAcquirer, SemanticRuntime } from './runtime-contract.js';
 import { GraphStore } from './store.js';
 import { canonicalFilesystemPath, projectStateDirectory } from './paths.js';
 
 export interface CodegraphServiceOptions {
   readonly projectRoot: string;
   readonly store: GraphStore;
-  readonly runtime: RuntimeAcquirer;
+  readonly runtime?: RuntimeAcquirer;
+  readonly providers?: SemanticLanguageProviderRegistry;
   readonly index?: (projectRoot: string, runtime: SemanticRuntime) => Promise<IndexBuildResult>;
 }
 
@@ -40,15 +42,16 @@ function emptyResponse<Result>(state: ServiceState, snapshot: SnapshotIdentity |
 function aggregateSnapshot(result: IndexBuildResult, runtime: SemanticRuntime, projectRoot: string): SnapshotIdentity {
   const source = result.manifest.sourceManifestHash;
   const configuration = result.manifest.configHash;
-  const snapshotId = createHash('sha256').update([projectRoot, source, configuration, runtime.engineId, runtime.engineVersion].join('\0')).digest('hex');
+  const engine = snapshotEngineIdentity(runtimeEngineIdentities(runtime));
+  const snapshotId = createHash('sha256').update([projectRoot, source, configuration, engine.id, engine.version].join('\0')).digest('hex');
   return {
     schemaVersion: 1,
     snapshotId,
     projectRootHash: createHash('sha256').update(projectRoot).digest('hex'),
     sourceManifestHash: source,
     configHash: configuration,
-    engineId: runtime.engineId,
-    engineVersion: runtime.engineVersion,
+    engineId: engine.id,
+    engineVersion: engine.version,
     indexedAt: new Date().toISOString(),
   };
 }
@@ -56,7 +59,9 @@ function aggregateSnapshot(result: IndexBuildResult, runtime: SemanticRuntime, p
 export class CodegraphService {
   private readonly projectRoot: string;
   private readonly store: GraphStore;
-  private readonly runtime: RuntimeAcquirer;
+  private readonly providers: SemanticLanguageProviderRegistry | undefined;
+  private readonly legacyRuntime: RuntimeAcquirer | undefined;
+  private readonly freshness: readonly FreshnessContributor[];
   private readonly stateDirectory: string;
   private readonly buildIndex: (projectRoot: string, runtime: SemanticRuntime) => Promise<IndexBuildResult>;
   private state: ServiceState = { status: 'missing', message: messageFor('missing') };
@@ -65,10 +70,16 @@ export class CodegraphService {
   constructor(options: CodegraphServiceOptions) {
     this.projectRoot = canonicalFilesystemPath(options.projectRoot);
     this.store = options.store;
-    this.runtime = options.runtime;
+    if (options.providers === undefined && options.runtime === undefined) {
+      throw new Error('Codegraph requires a semantic language provider registry or runtime acquirer');
+    }
+    this.providers = options.providers;
+    this.legacyRuntime = options.providers === undefined ? options.runtime : undefined;
+    this.freshness = this.providers?.freshnessContributors() ?? [typeScriptFreshnessContributor];
     this.stateDirectory = projectStateDirectory(this.projectRoot);
     this.buildIndex = options.index ?? ((projectRoot, runtime) => buildProjectIndex(projectRoot, {
       runtime,
+      freshness: this.freshness,
       store: { readSnapshot: async () => null, replaceSnapshot: async () => undefined },
     }));
   }
@@ -88,7 +99,7 @@ export class CodegraphService {
       return this.response(this.state, null, null);
     }
     try {
-      const manifest = await buildRelevantInputManifest(this.projectRoot);
+      const manifest = await buildRelevantInputManifest(this.projectRoot, this.freshness);
       this.state = snapshotIsFresh(snapshot, manifest)
         ? { status: 'ready', message: messageFor('ready') }
         : { status: 'stale', message: messageFor('stale') };
@@ -107,9 +118,13 @@ export class CodegraphService {
   private async rebuild(): Promise<GraphResponse<never>> {
     this.state = { status: 'acquiring-runtime', message: messageFor('acquiring-runtime') };
     try {
-      const acquired = await this.runtime.acquire();
+      const acquired = this.providers !== undefined
+        ? await this.providers.acquireRuntime()
+        : await this.legacyRuntime!.acquire();
+      const runtime = this.providers === undefined && acquired.extractors.length === 0
+        ? { ...acquired, extractors: [createTypeScriptSemanticExtractor()] }
+        : acquired;
       this.state = { status: 'indexing', message: messageFor('indexing') };
-      const runtime: SemanticRuntime = { ...acquired, extractors: [createTypeScriptSemanticExtractor()] };
       const result = await this.buildIndex(this.projectRoot, runtime);
       const snapshot = aggregateSnapshot(result, runtime, this.projectRoot);
       this.store.replaceSnapshot({
