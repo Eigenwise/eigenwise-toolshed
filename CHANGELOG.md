@@ -8,6 +8,18 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.434.0 (2026-08-10)
+
+### sidequest 4.42.4 → 4.42.5
+
+#### Fixes
+
+- Preserve readable retained continuation worktrees (SQ-1737)
+- Use switchboard route markers (SQ-1738)
+  Sidequest dispatches now send the canonical switchboard route marker to model-gateway.
+- Retry Windows registry lock contention (SQ-1742)
+  Sidequest now retries Windows EPERM registry lock contention while writing installed plugin state.
+
 ## v3.433.0 (2026-08-10)
 
 ### codegraph 0.1.3 → 0.1.4
