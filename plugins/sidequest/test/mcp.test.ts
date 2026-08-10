@@ -246,6 +246,9 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(submit.inputSchema.properties.clear, 'submit exposes clear to reject a pending submission without integrating it');
   assert.equal(submit.inputSchema.required.includes('body'), false, 'body is handler-enforced, not schema-required, so clear:true can omit it');
   assert.ok(resp.result.tools.find((tool: any) => tool.name === 'done').inputSchema.required.includes('body'), 'done requires the final report');
+  const groomClose = resp.result.tools.find((tool: any) => tool.name === 'groomClose');
+  assert.ok(groomClose.inputSchema.properties.deliveryCommit, 'groomClose records hand-delivered commits');
+  assert.ok(groomClose.inputSchema.properties.recoveryEvidence, 'groomClose requires terminal-agent evidence before clearing an unclaimed dispatch');
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
   assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'contradiction', 'handback'], 'release classifies reasoned handoffs');

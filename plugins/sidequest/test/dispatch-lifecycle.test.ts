@@ -1340,6 +1340,51 @@ test('a stopped attempt cannot invalidate the next dispatch token', () => {
   assert.equal(store.releaseTicket(slug, ticket.ref, 'attempt-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+test('control plane records a hand delivery after recovering the dead unclaimed retry', () => {
+  const ticket = createFixture('hand-delivered candidate recovery fixture');
+  const candidate = store.prepareDispatch(slug, ticket.ref, { sessionId: `candidate-${Date.now()}` });
+  const owner = `candidate-owner-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: candidate.token,
+    executor: candidate.ticket.dispatchExecutor,
+  }).ok, true);
+  commitFixtureChange();
+  assert.equal(store.submitTicket(slug, ticket.ref, owner, {
+    commit: 'abcdef1234567',
+    source: 'test',
+  }).ok, true);
+
+  const retrySession = `dead-retry-${Date.now()}`;
+  const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: retrySession });
+  const agentName = `dead-retry-agent-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: retrySession,
+    token: retry.token,
+    executor: retry.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(retrySession, retry.ticket.dispatchExecutor, agentName, agentName).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'orchestrator', { source: 'test' }).reason, 'unclaimed_active_dispatch');
+  assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
+    by: 'orchestrator',
+    agentName,
+    evidence: 'TaskStop reported this exact agent terminal after its claim refusal.',
+  }).ok, true);
+
+  const recordedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+    purpose: 'delivery',
+    by: 'orchestrator',
+    reason: 'Resolved the candidate conflict by hand, then ran the declared gate: 100 pass / 0 fail.',
+    deliveryCommit: recordedCommit,
+  });
+  assert.equal(closed.ok, true);
+  assert.equal(closed.ticket.status, 'done');
+  assert.equal(closed.ticket.submission.commit, 'abcdef1234567');
+  assert.equal(closed.ticket.submission.integration.resultingHead, recordedCommit);
+  assert.equal(closed.ticket.completion.delivery.commit, recordedCommit);
+});
+
 test('ordinary, resumed, and reworked launches all carry a readable name and the route prefix', () => {
   const ticket = createFixture('Rebuild the release engine safely');
   const sessionId = `launch-name-${Date.now()}`;

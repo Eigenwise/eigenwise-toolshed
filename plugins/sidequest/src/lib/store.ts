@@ -1597,7 +1597,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
             reason: 'pending_submission',
             ticket: t,
             submission: t.submission,
-            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. If this work already landed on the integration branch by hand, close it with \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha> --reason "why"\` instead of reopening it. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
           };
         }
         reopenedSubmission = t.submission;
@@ -1615,7 +1615,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return {
         ok: false,
         reason: 'unclaimed_active_dispatch',
-        message: `${t.ref} has a newer active dispatch but no claim owned by ${by}. Do not release it from this executor. Wait for the current attempt to finish, then have the orchestrator dispatch once from todo.`,
+        message: `${t.ref} has a newer active dispatch but no claim owned by ${by}. Do not release it from this executor. Wait for the current attempt to finish, then have the orchestrator dispatch once from todo. When the dispatch is provably dead and its work already landed, the orchestrator clears it with \`sidequest groomClose ${t.ref} --by <integrator> --recoveryEvidence "<observed terminal evidence>"\` plus \`--deliveryCommit <sha>\` when the work is already on the integration branch.`,
         ticket: t,
       };
     }
@@ -1820,7 +1820,24 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // submission — stamp it integrated (kept as provenance) so the ticket
     // leaves the ready-for-integration queue the moment it goes done.
     if (t.status === 'done' && pendingSubmission(t)) {
-      t.submission = Object.assign({}, t.submission, { integratedAt: new Date().toISOString() });
+      const integratedAt = new Date().toISOString();
+      const recordedDelivery = opts.recordedDelivery;
+      t.submission = Object.assign({}, t.submission, {
+        integratedAt,
+        ...(recordedDelivery ? {
+          integration: {
+            outcome: 'verified',
+            mode: 'recorded',
+            pinnedCommit: t.submission.commit,
+            resultingHead: recordedDelivery.commit,
+            targetBranch: recordedDelivery.target.branch,
+            targetRef: recordedDelivery.target.upstream,
+            deliveredAt: integratedAt,
+            verifiedAt: integratedAt,
+            evidence: recordedDelivery.evidence,
+          },
+        } : {}),
+      });
     }
     if (dispatch) stampDispatchEvent(t, opts.source || 'cli', now);
     else {
@@ -1940,12 +1957,80 @@ function linkedReviewPass(slug?: any, ticket?: any) {
 }
 
 const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass. Record one with a comment starting reviewed-by: <ref>, or link a completed review-audit ticket.';
+const DELIVERY_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
+
+function recordedDelivery(slug?: any, commit?: any, evidence?: any) {
+  const requestedCommit = String(commit || '').trim();
+  const recordedEvidence = String(evidence || '').trim();
+  if (!DELIVERY_COMMIT_RE.test(requestedCommit)) {
+    return { ok: false, reason: 'delivery_commit_required', message: 'A hand-delivered closure requires the full or abbreviated Git commit that reached the integration branch.' };
+  }
+  if (!recordedEvidence) return { ok: false, reason: 'evidence_required' };
+  const repo = readMeta(slug)?.path;
+  if (!repo) return { ok: false, reason: 'project_unavailable' };
+  let target: any;
+  try {
+    target = integrationTarget(slug);
+    const deliveredCommit = execFileSync('git', ['rev-parse', '--verify', `${requestedCommit}^{commit}`], {
+      cwd: repo,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: 'pipe',
+    }).trim();
+    const targetCommit = integrationTargetCommit(repo, target);
+    execFileSync('git', ['merge-base', '--is-ancestor', deliveredCommit, targetCommit], {
+      cwd: repo,
+      windowsHide: true,
+      stdio: 'pipe',
+    });
+    return { ok: true, commit: deliveredCommit, target, evidence: recordedEvidence };
+  } catch (error: any) {
+    return {
+      ok: false,
+      reason: 'delivery_not_reachable',
+      message: `The recorded delivery commit is not reachable from the configured integration branch: ${String(error?.message || error).trim()}`,
+    };
+  }
+}
+
+function clearUnclaimedDispatch(slug?: any, idOrRef?: any, opts?: any) {
+  const by = String(opts?.by || '').trim();
+  const agentId = String(opts?.agentId || '').trim();
+  const agentName = String(opts?.agentName || '').trim();
+  const evidence = String(opts?.evidence || '').trim();
+  if (!by) return { ok: false, reason: 'identity_required' };
+  if (!evidence) return { ok: false, reason: 'death_evidence_required', message: 'Clearing an unclaimed dispatch requires recorded terminal-agent evidence.' };
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    const state = dispatchState(ticket);
+    if (!ticket || !state || !ticket.dispatchNonce || state.terminalAt) return { ok: false, reason: 'no_unclaimed_dispatch', ticket };
+    if (ticket.claim?.by) return { ok: false, reason: 'claimed', ticket, claim: ticket.claim };
+    if (agentId && String(state.agentId || '') !== agentId) return { ok: false, reason: 'dispatch_identity_mismatch', ticket };
+    if (agentName && String(state.agentName || '') !== agentName) return { ok: false, reason: 'dispatch_identity_mismatch', ticket };
+    const now = new Date().toISOString();
+    setDispatchTerminal(ticket, 'failed', 'control-plane-death-recovery', {
+      failureShape: 'observed_terminal_agent',
+      deathEvidence: { by, agentId: agentId || state.agentId || null, agentName: agentName || state.agentName || null, evidence },
+    });
+    ticket.dispatchNonce = null;
+    ticket.dispatchExecutor = null;
+    const previousStatus = ticket.status;
+    if (!pendingSubmission(ticket)) ticket.status = 'todo';
+    if (ticket.status !== previousStatus) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: now };
+    stampDispatchEvent(ticket, 'control-plane-death-recovery', now);
+    putTicket(slug, ticket);
+    queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
+    return { ok: true, ticket };
+  });
+}
 
 function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const purpose = String(opts.purpose || '').trim();
-  if (!['grooming', 'integration'].includes(purpose)) {
-    throw new Error('control-plane completion requires purpose "grooming" or "integration".');
+  if (!['grooming', 'integration', 'delivery'].includes(purpose)) {
+    throw new Error('control-plane completion requires purpose "grooming", "integration", or "delivery".');
   }
   const ticket = getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: 'not_found' };
@@ -1962,6 +2047,16 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     }
     if (pendingSubmission(ticket)) return { ok: false, reason: 'pending_submission', ticket };
   }
+  if (purpose === 'delivery') {
+    if (ticket.claim?.by || ticket.dispatchNonce || (state && !state.terminalAt)) {
+      return {
+        ok: false,
+        reason: 'active_dispatch',
+        message: `${ticket.ref} still has a live claim or an open dispatch. Record terminal-agent evidence with recoverDispatch before recording a hand delivery.`,
+        ticket,
+      };
+    }
+  }
   if (purpose === 'integration' && !pendingSubmission(ticket)) {
     return {
       ok: false,
@@ -1974,6 +2069,8 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   if (!reason) return { ok: false, reason: 'evidence_required', ticket };
   const by = String(opts.by || '').trim();
   if (!by) return { ok: false, reason: 'identity_required', ticket };
+  const delivery = purpose === 'delivery' ? recordedDelivery(slug, opts.deliveryCommit, reason) : null;
+  if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
   let legacyScopeOverride = false;
   if (purpose === 'integration') {
     const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
@@ -1989,8 +2086,10 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     completionAuthority: CONTROL_PLANE_COMPLETION,
     completionProvenance: Object.assign(
       { authority: 'control-plane', purpose, reason },
+      delivery?.ok ? { delivery: { commit: delivery.commit, targetBranch: delivery.target.branch, targetRef: delivery.target.upstream, evidence: delivery.evidence } } : {},
       legacyScopeOverride ? { legacyScopeOverride: { reason } } : {},
     ),
+    ...(delivery?.ok ? { recordedDelivery: delivery } : {}),
   }));
   return advisory ? Object.assign(result, { advisory }) : result;
 }
@@ -2397,6 +2496,7 @@ module.exports = {
   releaseTicket,
   completeTicket,
   completeTicketAsControlPlane,
+  clearUnclaimedDispatch,
   closeTicketForGrooming,
   makeWorkedBy,
   checkpointTicket,

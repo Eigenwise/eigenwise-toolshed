@@ -374,7 +374,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close an inactive ticket through grooming, or close an integrated submission with integration:true. Requires an evidence reason and records control-plane provenance.',
+    description: 'Close with evidence, including a delivered commit.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -383,6 +383,8 @@ const tools: ToolDefinition[] = [
         by: { type: 'string' },
         reason: { type: 'string' },
         integration: { type: 'boolean' },
+        deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Commit already on the integration branch.' },
+        recoveryEvidence: { type: 'string', description: 'Observed terminal-agent evidence for an unclaimed dispatch.' },
         overrideLegacyScope: { type: 'boolean', description: 'Permit only a legacy submission without an admitted scope snapshot; the required reason is recorded on the ticket.' },
       },
       required: ['ref', 'by', 'reason'],
@@ -393,11 +395,16 @@ const tools: ToolDefinition[] = [
       const reason = String(args.reason || '').trim();
       if (!reason) throw new Error('groomClose: reason is required.');
       const ticket = store.getTicket(slug, args.ref);
-      const purpose = args.integration ? 'integration' : 'grooming';
+      if (args.recoveryEvidence) {
+        const recovered = store.clearUnclaimedDispatch(slug, args.ref, { by, evidence: args.recoveryEvidence });
+        if (!recovered.ok) return mutationAck(slug, recovered);
+      }
+      const purpose = args.integration ? 'integration' : args.deliveryCommit ? 'delivery' : 'grooming';
       const res = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
         purpose,
+        deliveryCommit: args.deliveryCommit,
         overrideLegacyScope: args.overrideLegacyScope === true,
       });
       if (res.ok) closeDispatchExecutor(ticket);
