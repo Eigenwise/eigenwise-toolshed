@@ -1,10 +1,12 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { buildProjectIndex } from '../src/lib/index-builder.ts';
 import type { FileGraph, LanguageExtractor, ProjectDescriptor } from '../src/lib/model.ts';
+import { discoverProjects } from '../src/lib/projects.ts';
 import type { ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from '../src/lib/runtime-contract.ts';
 
 class CapturingStore implements ProjectSnapshotStore {
@@ -31,6 +33,16 @@ function extractor(fail: boolean): LanguageExtractor {
   };
 }
 
+function discoveredProjectExtractor(): LanguageExtractor {
+  return {
+    id: 'fixture', languages: ['typescript'],
+    discoverProjects,
+    async extractProject(): Promise<FileGraph[]> {
+      return [{ file: 'src/entry.ts', contentHash: 'content', nodes: [], edges: [], unresolvedCount: 0, diagnostics: [] }];
+    },
+  };
+}
+
 async function fixtureRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'codegraph-index-'));
   await writeFile(path.join(root, 'entry.ts'), 'export {};\n');
@@ -45,6 +57,30 @@ test('builds a validated snapshot before replacing it', async () => {
   assert.equal(result.snapshots.length, 1);
   assert.equal(store.snapshots.length, 1);
   assert.equal(store.snapshots[0]?.snapshot.indexedAt, '2026-01-01T00:00:00.000Z');
+});
+
+// Project discovery canonicalizes every descriptor root, so an index root left as the caller typed
+// it subtracts two different names for one directory and every file reads as outside the project.
+test('indexes repository-relative paths when the root is an alias of its real path', async () => {
+  const fixtureParent = await mkdtemp(path.join(tmpdir(), 'codegraph-index-aliased-root-'));
+  const realRoot = path.join(fixtureParent, 'project');
+  const aliasedRoot = path.join(fixtureParent, 'alias');
+  try {
+    await mkdir(path.join(realRoot, 'src'), { recursive: true });
+    await writeFile(path.join(realRoot, 'tsconfig.json'), JSON.stringify({ include: ['src/*.ts'] }));
+    await writeFile(path.join(realRoot, 'src', 'entry.ts'), 'export {};\n');
+    await symlink(realRoot, aliasedRoot, 'junction');
+    assert.notEqual(realpathSync.native(aliasedRoot), path.resolve(aliasedRoot));
+
+    const store = new CapturingStore();
+    const runtime: SemanticRuntime = { engineId: 'typescript', engineVersion: '7.0.2', extractors: [discoveredProjectExtractor()] };
+    const result = await buildProjectIndex(aliasedRoot, { runtime, store, indexedAt: () => '2026-01-01T00:00:00.000Z' });
+
+    assert.deepEqual(result.snapshots.flatMap((snapshot) => snapshot.files.map((file) => file.file)), ['src/entry.ts']);
+    assert.equal(result.manifest.inputs.some((input) => input.path === 'src/entry.ts'), true);
+  } finally {
+    await rm(fixtureParent, { recursive: true, force: true });
+  }
 });
 
 test('does not replace a snapshot when extraction fails', async () => {

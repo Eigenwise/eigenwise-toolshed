@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, rename, rm, writeFile } from 'node:fs/promises';
+import { realpathSync } from 'node:fs';
+import { mkdir, mkdtemp, rename, rm, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
@@ -74,6 +75,30 @@ test('manifest includes package-root TypeScript configuration files', async () =
     assert.equal(snapshotIsFresh(snapshot, await buildRelevantInputManifest(root)), false);
   } finally {
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+// GitHub's Windows runner hands tests an 8.3 short temp path while TypeScript resolves packages
+// through their real path, which is the same divergence a junction reproduces on any host.
+test('manifest keeps package configuration project-relative when the root is an alias of its real path', async () => {
+  const fixtureParent = await mkdtemp(path.join(tmpdir(), 'codegraph-freshness-aliased-root-'));
+  const realRoot = path.join(fixtureParent, 'project');
+  const aliasedRoot = path.join(fixtureParent, 'alias');
+  try {
+    const packageDirectory = path.join(realRoot, 'node_modules', '@fixture');
+    await mkdir(packageDirectory, { recursive: true });
+    await writeFile(path.join(packageDirectory, 'tsconfig.json'), JSON.stringify({ compilerOptions: { target: 'ES2020' } }));
+    await writeFile(path.join(realRoot, 'tsconfig.json'), JSON.stringify({ extends: '@fixture/tsconfig.json', files: ['entry.ts'] }));
+    await writeFile(path.join(realRoot, 'entry.ts'), 'export const version = 1;\n');
+    await symlink(realRoot, aliasedRoot, 'junction');
+    assert.notEqual(realpathSync.native(aliasedRoot), path.resolve(aliasedRoot));
+
+    const throughAlias = await buildRelevantInputManifest(aliasedRoot);
+
+    assert.equal(throughAlias.inputs.some((input) => input.path === 'node_modules/@fixture/tsconfig.json' && input.configuration), true);
+    assert.deepEqual(throughAlias, await buildRelevantInputManifest(realRoot));
+  } finally {
+    await rm(fixtureParent, { recursive: true, force: true });
   }
 });
 

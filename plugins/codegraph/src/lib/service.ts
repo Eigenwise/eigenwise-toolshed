@@ -9,7 +9,7 @@ import { impact, shortestPath, hierarchy, modules, context, type SymbolSelector,
 import type { QueryLimits } from './ranking.js';
 import type { RuntimeAcquirer, SemanticRuntime } from './runtime-contract.js';
 import { GraphStore } from './store.js';
-import { projectStateDirectory } from './paths.js';
+import { canonicalFilesystemPath, projectStateDirectory } from './paths.js';
 
 export interface CodegraphServiceOptions {
   readonly projectRoot: string;
@@ -63,7 +63,7 @@ export class CodegraphService {
   private indexing: Promise<GraphResponse<never>> | undefined;
 
   constructor(options: CodegraphServiceOptions) {
-    this.projectRoot = options.projectRoot;
+    this.projectRoot = canonicalFilesystemPath(options.projectRoot);
     this.store = options.store;
     this.runtime = options.runtime;
     this.stateDirectory = projectStateDirectory(this.projectRoot);

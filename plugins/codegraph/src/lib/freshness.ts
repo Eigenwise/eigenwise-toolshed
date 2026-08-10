@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { access, readdir, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { API } from 'typescript/unstable/sync' with { "resolution-mode": "import" };
-import { normalizeProjectRelativePath } from './paths.js';
+import { canonicalFilesystemPath, normalizeProjectRelativePath } from './paths.js';
 import type { ProjectDescriptor, SnapshotIdentity } from './model.js';
 
 const relevantExtensions = new Set(['.ts', '.tsx', '.mts', '.cts', '.js', '.jsx', '.mjs', '.cjs']);
@@ -68,12 +68,12 @@ async function inputPaths(projectRoot: string, directory: string = projectRoot):
   return children.flat();
 }
 
-async function existingPaths(candidates: ReadonlySet<string>): Promise<Set<string>> {
+async function existingCanonicalPaths(candidates: ReadonlySet<string>): Promise<Set<string>> {
   const existing = new Set<string>();
   await Promise.all([...candidates].map(async (candidate) => {
     try {
       await access(candidate);
-      existing.add(candidate);
+      existing.add(canonicalFilesystemPath(candidate));
     } catch { }
   }));
   return existing;
@@ -99,7 +99,7 @@ async function effectiveConfigurationPaths(projectRoot: string, discoveredInputs
   } finally {
     api.close();
   }
-  return existingPaths(semanticReads);
+  return existingCanonicalPaths(semanticReads);
 }
 
 function manifestPath(projectRoot: string, absolutePath: string): string {
@@ -112,11 +112,12 @@ function manifestPath(projectRoot: string, absolutePath: string): string {
 
 /** Hashes every source and effective TypeScript configuration input so filesystem changes invalidate a prior snapshot. */
 export async function buildRelevantInputManifest(projectRoot: string): Promise<RelevantInputManifest> {
-  const discoveredInputs = await inputPaths(projectRoot);
-  const configurationPaths = await effectiveConfigurationPaths(projectRoot, discoveredInputs);
+  const canonicalRoot = canonicalFilesystemPath(projectRoot);
+  const discoveredInputs = await inputPaths(canonicalRoot);
+  const configurationPaths = await effectiveConfigurationPaths(canonicalRoot, discoveredInputs);
   const absoluteInputs = [...new Set([...discoveredInputs.filter((input) => !configurationNames.has(path.basename(input))), ...configurationPaths])];
   const inputs = await Promise.all(absoluteInputs.map(async (absolutePath) => ({
-    path: manifestPath(projectRoot, absolutePath),
+    path: manifestPath(canonicalRoot, absolutePath),
     contentHash: contentHash(await readFile(absolutePath, 'utf8')),
     configuration: configurationPaths.has(absolutePath),
   })));

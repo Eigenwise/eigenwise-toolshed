@@ -57,20 +57,19 @@ function coverageFor(files) {
     externalEdges: edges.filter((edge) => edge.resolution === "external").length
   };
 }
-function repositoryRelativePath(projectRoot, project, file) {
-  return (0, import_paths.normalizeProjectRelativePath)(import_node_path.default.relative(projectRoot, import_node_path.default.resolve(project.root || projectRoot, file)));
-}
-function withRepositoryRelativePaths(projectRoot, project, files) {
+function withRepositoryRelativePaths(canonicalProjectRoot, project, files) {
+  const canonicalProjectPath = (0, import_paths.canonicalFilesystemPath)(project.root === "" ? canonicalProjectRoot : project.root);
+  const repositoryRelativePath = (file) => (0, import_paths.normalizeProjectRelativePath)(import_node_path.default.relative(canonicalProjectRoot, import_node_path.default.resolve(canonicalProjectPath, file)));
   return files.map((fileGraph) => ({
     ...fileGraph,
-    file: repositoryRelativePath(projectRoot, project, fileGraph.file),
+    file: repositoryRelativePath(fileGraph.file),
     nodes: fileGraph.nodes.map((node) => ({
       ...node,
-      declaration: { ...node.declaration, file: repositoryRelativePath(projectRoot, project, node.declaration.file) }
+      declaration: { ...node.declaration, file: repositoryRelativePath(node.declaration.file) }
     })),
     edges: fileGraph.edges.map((edge) => ({
       ...edge,
-      evidence: { ...edge.evidence, file: repositoryRelativePath(projectRoot, project, edge.evidence.file) }
+      evidence: { ...edge.evidence, file: repositoryRelativePath(edge.evidence.file) }
     }))
   }));
 }
@@ -116,11 +115,12 @@ function createSnapshot(project, files, manifest, runtime, indexedAt) {
   return { project, snapshot, coverage: coverageFor(files), files };
 }
 async function buildProjectIndex(projectRoot, dependencies) {
-  const manifest = await (0, import_freshness.buildRelevantInputManifest)(projectRoot);
-  const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(projectRoot)))).flat().sort((left, right) => left.id.localeCompare(right.id));
+  const canonicalRoot = (0, import_paths.canonicalFilesystemPath)(projectRoot);
+  const manifest = await (0, import_freshness.buildRelevantInputManifest)(canonicalRoot);
+  const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(canonicalRoot)))).flat().sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,
-    files: withRepositoryRelativePaths(projectRoot, project, await extractProject(dependencies.runtime, project))
+    files: withRepositoryRelativePaths(canonicalRoot, project, await extractProject(dependencies.runtime, project))
   })));
   for (const result of extracted) validateFiles(result.files);
   const indexedAt = (dependencies.indexedAt ?? (() => (/* @__PURE__ */ new Date()).toISOString()))();

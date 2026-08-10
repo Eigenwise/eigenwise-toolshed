@@ -28,6 +28,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var paths_exports = {};
 __export(paths_exports, {
+  canonicalFilesystemPath: () => canonicalFilesystemPath,
   codegraphStateRoot: () => codegraphStateRoot,
   normalizeProjectRelativePath: () => normalizeProjectRelativePath,
   normalizeProjectRoot: () => normalizeProjectRoot,
@@ -58,17 +59,17 @@ function normalizeProjectRelativePath(pathValue) {
   }
   return relativePath;
 }
-function canonicalProjectRoot(projectRoot) {
-  const resolvedRoot = import_node_path.default.resolve(projectRoot);
+function canonicalFilesystemPath(pathValue) {
+  const resolvedPath = import_node_path.default.resolve(pathValue);
   try {
-    return import_node_fs.realpathSync.native(resolvedRoot);
+    return import_node_fs.realpathSync.native(resolvedPath);
   } catch (error) {
-    if (error instanceof Error && "code" in error && error.code === "ENOENT") return resolvedRoot;
+    if (error instanceof Error && "code" in error && error.code === "ENOENT") return resolvedPath;
     throw error;
   }
 }
 function normalizeProjectRoot(projectRoot) {
-  const canonicalRoot = normalizedPath(canonicalProjectRoot(projectRoot));
+  const canonicalRoot = normalizedPath(canonicalFilesystemPath(projectRoot));
   return process.platform === "win32" ? canonicalRoot.toLowerCase() : canonicalRoot;
 }
 function projectIdentity(projectRoot) {
@@ -91,6 +92,7 @@ function runtimeCacheDirectory(engineVersion, platform = process.platform, archi
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  canonicalFilesystemPath,
   codegraphStateRoot,
   normalizeProjectRelativePath,
   normalizeProjectRoot,

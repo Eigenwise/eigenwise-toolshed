@@ -71,12 +71,12 @@ async function inputPaths(projectRoot, directory = projectRoot) {
   }));
   return children.flat();
 }
-async function existingPaths(candidates) {
+async function existingCanonicalPaths(candidates) {
   const existing = /* @__PURE__ */ new Set();
   await Promise.all([...candidates].map(async (candidate) => {
     try {
       await (0, import_promises.access)(candidate);
-      existing.add(candidate);
+      existing.add((0, import_paths.canonicalFilesystemPath)(candidate));
     } catch {
     }
   }));
@@ -100,7 +100,7 @@ async function effectiveConfigurationPaths(projectRoot, discoveredInputs) {
   } finally {
     api.close();
   }
-  return existingPaths(semanticReads);
+  return existingCanonicalPaths(semanticReads);
 }
 function manifestPath(projectRoot, absolutePath) {
   const relativePath = import_node_path.default.relative(projectRoot, absolutePath);
@@ -110,11 +110,12 @@ function manifestPath(projectRoot, absolutePath) {
   return `external-config/${contentHash(import_node_path.default.resolve(absolutePath))}`;
 }
 async function buildRelevantInputManifest(projectRoot) {
-  const discoveredInputs = await inputPaths(projectRoot);
-  const configurationPaths = await effectiveConfigurationPaths(projectRoot, discoveredInputs);
+  const canonicalRoot = (0, import_paths.canonicalFilesystemPath)(projectRoot);
+  const discoveredInputs = await inputPaths(canonicalRoot);
+  const configurationPaths = await effectiveConfigurationPaths(canonicalRoot, discoveredInputs);
   const absoluteInputs = [.../* @__PURE__ */ new Set([...discoveredInputs.filter((input) => !configurationNames.has(import_node_path.default.basename(input))), ...configurationPaths])];
   const inputs = await Promise.all(absoluteInputs.map(async (absolutePath) => ({
-    path: manifestPath(projectRoot, absolutePath),
+    path: manifestPath(canonicalRoot, absolutePath),
     contentHash: contentHash(await (0, import_promises.readFile)(absolutePath, "utf8")),
     configuration: configurationPaths.has(absolutePath)
   })));

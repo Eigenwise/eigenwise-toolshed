@@ -26,18 +26,24 @@ export function normalizeProjectRelativePath(pathValue: string): string {
   return relativePath;
 }
 
-function canonicalProjectRoot(projectRoot: string): string {
-  const resolvedRoot = path.resolve(projectRoot);
+/**
+ * Resolves junctions, symlinks, and Windows 8.3 short names. A caller can reach one directory
+ * through several names — GitHub's Windows runner hands tests `C:\Users\RUNNER~1\...` while
+ * TypeScript reports the same files under `C:\Users\runneradmin\...` — and only paths reduced to
+ * this one form can be compared or subtracted from each other.
+ */
+export function canonicalFilesystemPath(pathValue: string): string {
+  const resolvedPath = path.resolve(pathValue);
   try {
-    return realpathSync.native(resolvedRoot);
+    return realpathSync.native(resolvedPath);
   } catch (error: unknown) {
-    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return resolvedRoot;
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return resolvedPath;
     throw error;
   }
 }
 
 export function normalizeProjectRoot(projectRoot: string): string {
-  const canonicalRoot = normalizedPath(canonicalProjectRoot(projectRoot));
+  const canonicalRoot = normalizedPath(canonicalFilesystemPath(projectRoot));
   return process.platform === 'win32' ? canonicalRoot.toLowerCase() : canonicalRoot;
 }
 

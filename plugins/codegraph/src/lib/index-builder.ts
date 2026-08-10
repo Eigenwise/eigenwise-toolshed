@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { buildRelevantInputManifest, type RelevantInputManifest } from './freshness.js';
-import { normalizeProjectRelativePath, projectIdentity } from './paths.js';
+import { canonicalFilesystemPath, normalizeProjectRelativePath, projectIdentity } from './paths.js';
 import type { FileGraph, GraphCoverage, ProjectDescriptor, SnapshotIdentity } from './model.js';
 import type { ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from './runtime-contract.js';
 
@@ -40,25 +40,24 @@ function coverageFor(files: readonly FileGraph[]): GraphCoverage {
   };
 }
 
-function repositoryRelativePath(projectRoot: string, project: ProjectDescriptor, file: string): string {
-  return normalizeProjectRelativePath(path.relative(projectRoot, path.resolve(project.root || projectRoot, file)));
-}
-
 function withRepositoryRelativePaths(
-  projectRoot: string,
+  canonicalProjectRoot: string,
   project: ProjectDescriptor,
   files: readonly FileGraph[],
 ): FileGraph[] {
+  const canonicalProjectPath = canonicalFilesystemPath(project.root === '' ? canonicalProjectRoot : project.root);
+  const repositoryRelativePath = (file: string): string =>
+    normalizeProjectRelativePath(path.relative(canonicalProjectRoot, path.resolve(canonicalProjectPath, file)));
   return files.map((fileGraph) => ({
     ...fileGraph,
-    file: repositoryRelativePath(projectRoot, project, fileGraph.file),
+    file: repositoryRelativePath(fileGraph.file),
     nodes: fileGraph.nodes.map((node) => ({
       ...node,
-      declaration: { ...node.declaration, file: repositoryRelativePath(projectRoot, project, node.declaration.file) },
+      declaration: { ...node.declaration, file: repositoryRelativePath(node.declaration.file) },
     })),
     edges: fileGraph.edges.map((edge) => ({
       ...edge,
-      evidence: { ...edge.evidence, file: repositoryRelativePath(projectRoot, project, edge.evidence.file) },
+      evidence: { ...edge.evidence, file: repositoryRelativePath(edge.evidence.file) },
     })),
   }));
 }
@@ -118,13 +117,14 @@ export async function buildProjectIndex(
   projectRoot: string,
   dependencies: IndexBuildDependencies,
 ): Promise<IndexBuildResult> {
-  const manifest = await buildRelevantInputManifest(projectRoot);
-  const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(projectRoot))))
+  const canonicalRoot = canonicalFilesystemPath(projectRoot);
+  const manifest = await buildRelevantInputManifest(canonicalRoot);
+  const projects = (await Promise.all(dependencies.runtime.extractors.map((extractor) => extractor.discoverProjects(canonicalRoot))))
     .flat()
     .sort((left, right) => left.id.localeCompare(right.id));
   const extracted = await Promise.all(projects.map(async (project) => ({
     project,
-    files: withRepositoryRelativePaths(projectRoot, project, await extractProject(dependencies.runtime, project)),
+    files: withRepositoryRelativePaths(canonicalRoot, project, await extractProject(dependencies.runtime, project)),
   })));
   for (const result of extracted) validateFiles(result.files);
 

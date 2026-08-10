@@ -75,7 +75,7 @@ class CodegraphService {
   state = { status: "missing", message: messageFor("missing") };
   indexing;
   constructor(options) {
-    this.projectRoot = options.projectRoot;
+    this.projectRoot = (0, import_paths.canonicalFilesystemPath)(options.projectRoot);
     this.store = options.store;
     this.runtime = options.runtime;
     this.stateDirectory = (0, import_paths.projectStateDirectory)(this.projectRoot);

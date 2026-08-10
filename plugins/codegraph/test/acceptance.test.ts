@@ -112,7 +112,7 @@ test('Codegraph US-50 acceptance oracle exercises the real runtime, graph, lifec
     assert.equal(missing.results.length, 0);
 
     const indexed = responseOf(await invokeCodegraphTool(service, 'codegraph_index'));
-    assert.equal(indexed.status, 'ready');
+    assert.equal(indexed.status, 'ready', indexed.message);
     assert.equal(indexed.snapshot?.engineId, 'typescript');
     assert.equal(indexed.snapshot?.engineVersion, '7.0.2');
     assert.equal(indexed.coverage?.projects, 2);
