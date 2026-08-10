@@ -187,6 +187,10 @@ test('resolves npm CLI candidates from injected Windows and Unix runtime layouts
         nodeExecutablePath: path.join(runtimeDirectory, 'unix', 'bin', 'node'),
         npmCliPath: path.join(runtimeDirectory, 'unix', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
       },
+      {
+        nodeExecutablePath: path.join(runtimeDirectory, 'debian', 'bin', 'node'),
+        npmCliPath: path.join(runtimeDirectory, 'debian', 'share', 'nodejs', 'npm', 'bin', 'npm-cli.js'),
+      },
     ];
     for (const layout of layouts) {
       await mkdir(path.dirname(layout.npmCliPath), { recursive: true });
@@ -196,6 +200,23 @@ test('resolves npm CLI candidates from injected Windows and Unix runtime layouts
   } finally {
     await rm(runtimeDirectory, { recursive: true, force: true });
   }
+});
+
+test('names every npm CLI candidate when no layout matches', async () => {
+  const nodeExecutablePath = path.join('missing', 'bin', 'node');
+  const expectedCandidates = [
+    path.join('missing', 'bin', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join('missing', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join('missing', 'share', 'nodejs', 'npm', 'bin', 'npm-cli.js'),
+  ];
+  await assert.rejects(
+    resolveNpmCliPath(nodeExecutablePath),
+    (error: unknown) => {
+      assert.ok(error instanceof SemanticRuntimeError);
+      assert.equal(error.message, `npm CLI was not found; checked: ${expectedCandidates.join(', ')}`);
+      return true;
+    },
+  );
 });
 
 test('surfaces failed npm install output', async () => {

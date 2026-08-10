@@ -212,12 +212,14 @@ function waitForProcess(command, arguments_, workingDirectory) {
     });
   });
 }
+const npmCliRelativePaths = [
+  ["node_modules", "npm", "bin", "npm-cli.js"],
+  ["..", "lib", "node_modules", "npm", "bin", "npm-cli.js"],
+  ["..", "share", "nodejs", "npm", "bin", "npm-cli.js"]
+];
 function npmCliCandidatePaths(nodeExecutablePath) {
   const nodeDirectory = import_node_path.default.dirname(nodeExecutablePath);
-  return [
-    import_node_path.default.join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
-    import_node_path.default.join(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")
-  ];
+  return npmCliRelativePaths.map((relativePath) => import_node_path.default.join(nodeDirectory, ...relativePath));
 }
 async function resolveNpmCliPath(nodeExecutablePath = process.execPath) {
   const candidatePaths = npmCliCandidatePaths(nodeExecutablePath);

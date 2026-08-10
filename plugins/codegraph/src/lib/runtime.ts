@@ -272,12 +272,15 @@ function waitForProcess(command: string, arguments_: readonly string[], workingD
   });
 }
 
+const npmCliRelativePaths = [
+  ['node_modules', 'npm', 'bin', 'npm-cli.js'],
+  ['..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'],
+  ['..', 'share', 'nodejs', 'npm', 'bin', 'npm-cli.js'],
+] as const;
+
 function npmCliCandidatePaths(nodeExecutablePath: string): readonly string[] {
   const nodeDirectory = path.dirname(nodeExecutablePath);
-  return [
-    path.join(nodeDirectory, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-    path.join(nodeDirectory, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
-  ];
+  return npmCliRelativePaths.map((relativePath) => path.join(nodeDirectory, ...relativePath));
 }
 
 export async function resolveNpmCliPath(nodeExecutablePath: string = process.execPath): Promise<string> {
