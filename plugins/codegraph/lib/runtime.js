@@ -36,6 +36,7 @@ __export(runtime_exports, {
   reclaimObservedRuntimeLock: () => reclaimObservedRuntimeLock,
   recoverLegacyRuntimeReclaim: () => recoverLegacyRuntimeReclaim,
   recoverRuntimeReclaim: () => recoverRuntimeReclaim,
+  resolveNpmCliPath: () => resolveNpmCliPath,
   runtimePlatformPackage: () => runtimePlatformPackage
 });
 module.exports = __toCommonJS(runtime_exports);
@@ -161,29 +162,81 @@ async function copyRuntimeManifest(runtimeManifestDirectory, stageDirectory) {
     (0, import_promises.copyFile)(import_node_path.default.join(runtimeManifestDirectory, runtimePackageLockFile), import_node_path.default.join(stageDirectory, runtimePackageLockFile))
   ]);
 }
+const runtimeProcessOutputTailLength = 8192;
+function appendOutputTail(output, chunk) {
+  const combinedOutput = output + chunk.toString();
+  return combinedOutput.length <= runtimeProcessOutputTailLength ? combinedOutput : combinedOutput.slice(-runtimeProcessOutputTailLength);
+}
+function describeCommand(command, arguments_) {
+  return [command, ...arguments_].map((argument) => JSON.stringify(argument)).join(" ");
+}
+function processFailure(command, arguments_, workingDirectory, detail, output) {
+  return new SemanticRuntimeError(
+    `runtime command failed: ${describeCommand(command, arguments_)}; cwd: ${workingDirectory}; ${detail}; stdout tail: ${JSON.stringify(output.standardOutput)}; stderr tail: ${JSON.stringify(output.standardError)}`
+  );
+}
 function waitForProcess(command, arguments_, workingDirectory) {
   return new Promise((resolve, reject) => {
     const child = (0, import_node_child_process.spawn)(command, arguments_, {
       cwd: workingDirectory,
       shell: false,
-      stdio: "ignore",
+      stdio: ["ignore", "pipe", "pipe"],
       windowsHide: true
     });
-    child.once("error", reject);
-    child.once("exit", (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new SemanticRuntimeError(`runtime install failed with exit code ${code ?? "unknown"}`));
-      }
+    let standardOutput = "";
+    let standardError = "";
+    let settled = false;
+    const finish = (action) => {
+      if (settled) return;
+      settled = true;
+      action();
+    };
+    child.stdout?.on("data", (chunk) => {
+      standardOutput = appendOutputTail(standardOutput, chunk);
+    });
+    child.stderr?.on("data", (chunk) => {
+      standardError = appendOutputTail(standardError, chunk);
+    });
+    child.once("error", (error) => {
+      finish(() => reject(processFailure(command, arguments_, workingDirectory, `could not start: ${error.message}`, { standardError, standardOutput })));
+    });
+    child.once("close", (code) => {
+      finish(() => {
+        const output = { standardError, standardOutput };
+        if (code === 0) {
+          resolve(output);
+        } else {
+          reject(processFailure(command, arguments_, workingDirectory, `exit code: ${code ?? "unknown"}`, output));
+        }
+      });
     });
   });
 }
+function npmCliCandidatePaths(nodeExecutablePath) {
+  const nodeDirectory = import_node_path.default.dirname(nodeExecutablePath);
+  return [
+    import_node_path.default.join(nodeDirectory, "node_modules", "npm", "bin", "npm-cli.js"),
+    import_node_path.default.join(nodeDirectory, "..", "lib", "node_modules", "npm", "bin", "npm-cli.js")
+  ];
+}
+async function resolveNpmCliPath(nodeExecutablePath = process.execPath) {
+  const candidatePaths = npmCliCandidatePaths(nodeExecutablePath);
+  for (const candidatePath of candidatePaths) {
+    if (await exists(candidatePath)) return candidatePath;
+  }
+  throw new SemanticRuntimeError(`npm CLI was not found; checked: ${candidatePaths.join(", ")}`);
+}
 class NpmRuntimeInstaller {
+  nodeExecutablePath;
+  configuredNpmCliPath;
+  constructor(options = {}) {
+    this.nodeExecutablePath = options.nodeExecutablePath ?? process.execPath;
+    this.configuredNpmCliPath = options.npmCliPath;
+  }
   async install(stageDirectory, runtimeManifestDirectory) {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
-    const npmCli = import_node_path.default.join(import_node_path.default.dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js");
-    await waitForProcess(process.execPath, [npmCli, "ci", "--ignore-scripts", "--omit=dev", "--omit=optional", "--no-audit", "--fund=false"], stageDirectory);
+    const npmCliPath = this.configuredNpmCliPath ?? await resolveNpmCliPath(this.nodeExecutablePath);
+    await waitForProcess(this.nodeExecutablePath, [npmCliPath, "ci", "--ignore-scripts", "--omit=dev", "--omit=optional", "--no-audit", "--fund=false"], stageDirectory);
   }
 }
 class LoadedTypeScriptRuntime {
@@ -859,5 +912,6 @@ class PinnedNpmRuntimeAcquirer {
   reclaimObservedRuntimeLock,
   recoverLegacyRuntimeReclaim,
   recoverRuntimeReclaim,
+  resolveNpmCliPath,
   runtimePlatformPackage
 });

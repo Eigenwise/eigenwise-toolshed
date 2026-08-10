@@ -204,30 +204,108 @@ async function copyRuntimeManifest(runtimeManifestDirectory: string, stageDirect
   ]);
 }
 
-function waitForProcess(command: string, arguments_: readonly string[], workingDirectory: string): Promise<void> {
+const runtimeProcessOutputTailLength = 8_192;
+
+interface RuntimeProcessOutput {
+  standardError: string;
+  standardOutput: string;
+}
+
+function appendOutputTail(output: string, chunk: Buffer): string {
+  const combinedOutput = output + chunk.toString();
+  return combinedOutput.length <= runtimeProcessOutputTailLength
+    ? combinedOutput
+    : combinedOutput.slice(-runtimeProcessOutputTailLength);
+}
+
+function describeCommand(command: string, arguments_: readonly string[]): string {
+  return [command, ...arguments_].map((argument) => JSON.stringify(argument)).join(' ');
+}
+
+function processFailure(
+  command: string,
+  arguments_: readonly string[],
+  workingDirectory: string,
+  detail: string,
+  output: RuntimeProcessOutput,
+): SemanticRuntimeError {
+  return new SemanticRuntimeError(
+    `runtime command failed: ${describeCommand(command, arguments_)}; cwd: ${workingDirectory}; ${detail}; stdout tail: ${JSON.stringify(output.standardOutput)}; stderr tail: ${JSON.stringify(output.standardError)}`,
+  );
+}
+
+function waitForProcess(command: string, arguments_: readonly string[], workingDirectory: string): Promise<RuntimeProcessOutput> {
   return new Promise((resolve, reject) => {
     const child = spawn(command, arguments_, {
       cwd: workingDirectory,
       shell: false,
-      stdio: 'ignore',
+      stdio: ['ignore', 'pipe', 'pipe'],
       windowsHide: true,
     });
-    child.once('error', reject);
-    child.once('exit', (code) => {
-      if (code === 0) {
-        resolve();
-      } else {
-        reject(new SemanticRuntimeError(`runtime install failed with exit code ${code ?? 'unknown'}`));
-      }
+    let standardOutput = '';
+    let standardError = '';
+    let settled = false;
+    const finish = (action: () => void): void => {
+      if (settled) return;
+      settled = true;
+      action();
+    };
+    child.stdout?.on('data', (chunk: Buffer) => {
+      standardOutput = appendOutputTail(standardOutput, chunk);
+    });
+    child.stderr?.on('data', (chunk: Buffer) => {
+      standardError = appendOutputTail(standardError, chunk);
+    });
+    child.once('error', (error) => {
+      finish(() => reject(processFailure(command, arguments_, workingDirectory, `could not start: ${error.message}`, { standardError, standardOutput })));
+    });
+    child.once('close', (code) => {
+      finish(() => {
+        const output = { standardError, standardOutput };
+        if (code === 0) {
+          resolve(output);
+        } else {
+          reject(processFailure(command, arguments_, workingDirectory, `exit code: ${code ?? 'unknown'}`, output));
+        }
+      });
     });
   });
 }
 
+function npmCliCandidatePaths(nodeExecutablePath: string): readonly string[] {
+  const nodeDirectory = path.dirname(nodeExecutablePath);
+  return [
+    path.join(nodeDirectory, 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+    path.join(nodeDirectory, '..', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+  ];
+}
+
+export async function resolveNpmCliPath(nodeExecutablePath: string = process.execPath): Promise<string> {
+  const candidatePaths = npmCliCandidatePaths(nodeExecutablePath);
+  for (const candidatePath of candidatePaths) {
+    if (await exists(candidatePath)) return candidatePath;
+  }
+  throw new SemanticRuntimeError(`npm CLI was not found; checked: ${candidatePaths.join(', ')}`);
+}
+
+export interface NpmRuntimeInstallerOptions {
+  nodeExecutablePath?: string;
+  npmCliPath?: string;
+}
+
 export class NpmRuntimeInstaller implements RuntimeInstaller {
+  private readonly nodeExecutablePath: string;
+  private readonly configuredNpmCliPath: string | undefined;
+
+  constructor(options: NpmRuntimeInstallerOptions = {}) {
+    this.nodeExecutablePath = options.nodeExecutablePath ?? process.execPath;
+    this.configuredNpmCliPath = options.npmCliPath;
+  }
+
   async install(stageDirectory: string, runtimeManifestDirectory: string): Promise<void> {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
-    const npmCli = path.join(path.dirname(process.execPath), 'node_modules', 'npm', 'bin', 'npm-cli.js');
-    await waitForProcess(process.execPath, [npmCli, 'ci', '--ignore-scripts', '--omit=dev', '--omit=optional', '--no-audit', '--fund=false'], stageDirectory);
+    const npmCliPath = this.configuredNpmCliPath ?? await resolveNpmCliPath(this.nodeExecutablePath);
+    await waitForProcess(this.nodeExecutablePath, [npmCliPath, 'ci', '--ignore-scripts', '--omit=dev', '--omit=optional', '--no-audit', '--fund=false'], stageDirectory);
   }
 }
 

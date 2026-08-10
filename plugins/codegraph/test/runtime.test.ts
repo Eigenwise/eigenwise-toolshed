@@ -6,9 +6,11 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import {
+  NpmRuntimeInstaller,
   reclaimObservedRuntimeLock,
   recoverLegacyRuntimeReclaim,
   recoverRuntimeReclaim,
+  resolveNpmCliPath,
   runtimePlatformPackage,
   SemanticRuntimeError,
   TypeScriptRuntimeAcquirer,
@@ -172,6 +174,51 @@ function createAcquirer(
     stateDirectory,
   });
 }
+
+test('resolves npm CLI candidates from injected Windows and Unix runtime layouts', async () => {
+  const runtimeDirectory = await temporaryDirectory('codegraph-npm-runtime-');
+  try {
+    const layouts = [
+      {
+        nodeExecutablePath: path.join(runtimeDirectory, 'windows', 'node.exe'),
+        npmCliPath: path.join(runtimeDirectory, 'windows', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      },
+      {
+        nodeExecutablePath: path.join(runtimeDirectory, 'unix', 'bin', 'node'),
+        npmCliPath: path.join(runtimeDirectory, 'unix', 'lib', 'node_modules', 'npm', 'bin', 'npm-cli.js'),
+      },
+    ];
+    for (const layout of layouts) {
+      await mkdir(path.dirname(layout.npmCliPath), { recursive: true });
+      await writeFile(layout.npmCliPath, '', 'utf8');
+      assert.equal(await resolveNpmCliPath(layout.nodeExecutablePath), layout.npmCliPath);
+    }
+  } finally {
+    await rm(runtimeDirectory, { recursive: true, force: true });
+  }
+});
+
+test('surfaces failed npm install output', async () => {
+  const stageDirectory = await temporaryDirectory('codegraph-npm-stage-');
+  const npmCliScript = path.join(stageDirectory, 'failing-npm-cli.js');
+  try {
+    await writeFile(npmCliScript, "process.stdout.write('npm install output\\n'); process.stderr.write('npm install error\\n'); process.exit(19);", 'utf8');
+
+    await assert.rejects(
+      new NpmRuntimeInstaller({ npmCliPath: npmCliScript }).install(stageDirectory, fixtureManifestDirectory),
+      (error: unknown) => {
+        assert.ok(error instanceof SemanticRuntimeError);
+        assert.match(error.message, /npm install output/);
+        assert.match(error.message, /npm install error/);
+        assert.match(error.message, /cwd:/);
+        assert.match(error.message, /exit code: 19/);
+        return true;
+      },
+    );
+  } finally {
+    await rm(stageDirectory, { recursive: true, force: true });
+  }
+});
 
 test('acquires the pinned runtime from a local fixture and reuses the complete cache', async () => {
   const stateDirectory = await temporaryDirectory('codegraph-runtime-state-');
