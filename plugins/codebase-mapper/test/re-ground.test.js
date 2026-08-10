@@ -385,7 +385,7 @@ test('overlapping Stop processes with distinct prompt ids atomically claim one b
   const stateFile = path.join(state, 'stop-veto-' + require('node:crypto').createHash('sha256').update(sessionId).digest('hex') + '.json');
   const lockDirectory = stateFile + '.lock-v2';
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  publishStateLock(lockDirectory, process.pid);
+  const fixtureOwnerFile = publishStateLock(lockDirectory, process.pid);
   const stop = {
     hook_event_name: 'Stop',
     session_id: sessionId,
@@ -397,7 +397,9 @@ test('overlapping Stop processes with distinct prompt ids atomically claim one b
     hookAsync(startHook, directory, state, { ...stop, prompt_id: 'first-host-prompt' }),
     hookAsync(startHook, directory, state, { ...stop, prompt_id: 'second-host-prompt' }),
   ]);
-  setTimeout(() => fs.rmSync(lockDirectory, { recursive: true, force: true }), 100);
+  await waitForLockContenders(lockDirectory, 2);
+  fs.rmSync(fixtureOwnerFile, { force: true });
+  fs.rmdirSync(lockDirectory);
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
