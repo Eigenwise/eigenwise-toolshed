@@ -235,10 +235,14 @@ class NpmRuntimeInstaller {
     this.nodeExecutablePath = options.nodeExecutablePath ?? process.execPath;
     this.configuredNpmCliPath = options.npmCliPath;
   }
-  async install(stageDirectory, runtimeManifestDirectory) {
+  async install(stageDirectory, runtimeManifestDirectory, requiredPackage) {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
     const npmCliPath = this.configuredNpmCliPath ?? await resolveNpmCliPath(this.nodeExecutablePath);
-    await waitForProcess(this.nodeExecutablePath, [npmCliPath, "ci", "--ignore-scripts", "--omit=dev", "--omit=optional", "--no-audit", "--fund=false"], stageDirectory);
+    const npmArguments = ["--ignore-scripts", "--omit=dev", "--omit=optional", "--no-audit", "--fund=false"];
+    await waitForProcess(this.nodeExecutablePath, [npmCliPath, "ci", ...npmArguments], stageDirectory);
+    if (requiredPackage !== void 0) {
+      await waitForProcess(this.nodeExecutablePath, [npmCliPath, "install", ...npmArguments, "--no-save", "--package-lock=false", `${requiredPackage.name}@${requiredPackage.version}`], stageDirectory);
+    }
   }
 }
 class LoadedTypeScriptRuntime {
@@ -756,6 +760,9 @@ class TypeScriptRuntimeAcquirer {
     const packageLock = await readPackageLock(this.runtimeManifestDirectory);
     validateManifestLock(manifest, packageLock);
     const packageName = runtimePlatformPackage(manifest, this.platform, this.architecture);
+    const packageIntegrity = manifest.packages[packageName];
+    if (packageIntegrity === void 0) throw new SemanticRuntimeError(`runtime platform package is not pinned: ${packageName}`);
+    const requiredPackage = { name: packageName, version: packageIntegrity.version };
     const runtimeKey = platformKey(this.platform, this.architecture);
     const cachedRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => void 0);
     if (cachedRuntimeDirectory !== void 0) {
@@ -763,11 +770,11 @@ class TypeScriptRuntimeAcquirer {
         await validateInstalledRuntime(cachedRuntimeDirectory, runtimeKey, manifest, packageName);
         return new LoadedTypeScriptRuntime(cachedRuntimeDirectory, manifest);
       } catch (error) {
-        await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, error);
+        await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage, lease, error);
         return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
       }
     }
-    await this.installCache(cacheDirectory, runtimeKey, manifest, packageName, lease);
+    await this.installCache(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage, lease);
     return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
   }
   async loadedRuntimeDirectory(cacheDirectory) {
@@ -775,8 +782,8 @@ class TypeScriptRuntimeAcquirer {
     if (runtimeDirectory === void 0) throw new SemanticRuntimeError("runtime cache was published without a current generation");
     return runtimeDirectory;
   }
-  async replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, previousError) {
-    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);
+  async replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage, lease, previousError) {
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage);
     try {
       await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
     } catch (error) {
@@ -785,8 +792,8 @@ class TypeScriptRuntimeAcquirer {
       throw new SemanticRuntimeError(`runtime cache recovery failed after ${String(previousError)}: ${detail}`);
     }
   }
-  async installCache(cacheDirectory, runtimeKey, manifest, packageName, lease) {
-    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);
+  async installCache(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage, lease) {
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage);
     try {
       await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
     } catch (error) {
@@ -799,10 +806,10 @@ class TypeScriptRuntimeAcquirer {
       throw error;
     }
   }
-  async createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName) {
+  async createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage) {
     const stageDirectory = await createStageDirectory(cacheDirectory);
     try {
-      await this.installer.install(stageDirectory, this.runtimeManifestDirectory);
+      await this.installer.install(stageDirectory, this.runtimeManifestDirectory, requiredPackage);
       await validateInstalledRuntime(stageDirectory, runtimeKey, manifest, packageName);
       return stageDirectory;
     } catch (error) {
