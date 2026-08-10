@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.2.2 (2026-08-10)
+
+Released in v3.441.0, up from 0.2.1.
+
+### Fixes
+
+- Retire Codegraph (SQ-1812)
+  Codegraph is gone: the plugin, its marketplace entry, its docs page, and its MCP server. It never earned its keep next to the tools already in the shed. Grep, LSP, and Codebase Mapper cover the same ground without a pinned Pyright, a pinned TypeScript, a SQLite graph, and a 16-second query.
+
+  Nothing else depended on it. Quartermaster's setup skill no longer has to explain why not to recommend it.
+
+  If you have it installed, remove it in `/plugin` and delete `~/.claude/codegraph` (the graph snapshots and the pinned runtimes, which run to a gigabyte or so). Nothing else on disk is left behind.
+
 ## 0.2.1 (2026-08-10)
 
 Released in v3.438.0, up from 0.2.0.
