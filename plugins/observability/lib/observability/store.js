@@ -242,6 +242,7 @@ function openObservabilityStore(databaseFile, options = {}) {
   const createId = options.randomUUID || randomUUID;
   const outboxEnabled = options.outboxEnabled !== false;
   const busyTimeoutMs = Number(options.busyTimeoutMs || 5000);
+  const maxDatabaseBytes = Math.max(1, Number(options.maxDatabaseBytes) || DEFAULT_MAX_DATABASE_BYTES);
   const database = new DatabaseSync(databaseFile, { readOnly, timeout: busyTimeoutMs });
   if (!readOnly) {
     database.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
@@ -701,19 +702,14 @@ function openObservabilityStore(databaseFile, options = {}) {
     return {
       databaseBytes,
       walBytes,
-      maxDatabaseBytes: DEFAULT_MAX_DATABASE_BYTES,
+      maxDatabaseBytes,
       maxWalBytes: DEFAULT_MAX_WAL_BYTES,
-      overDatabaseLimit: databaseBytes > DEFAULT_MAX_DATABASE_BYTES,
+      overDatabaseLimit: databaseBytes > maxDatabaseBytes,
       overWalLimit: walBytes > DEFAULT_MAX_WAL_BYTES,
     };
   }
 
-  function prune(options = {}) {
-    assertOpen();
-    const retentionDays = options.retentionDays === undefined
-      ? DEFAULT_RETENTION_DAYS
-      : Number(options.retentionDays);
-    const cutoff = retentionCutoff(now, retentionDays);
+  function countsBefore(cutoff) {
     const counts = database.prepare(`
       SELECT
         (SELECT COUNT(*) FROM observation WHERE observed_at < ?) AS observations,
@@ -722,6 +718,58 @@ function openObservabilityStore(databaseFile, options = {}) {
         (SELECT COUNT(*) FROM observation_dedupe WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)) AS dedupe,
         (SELECT COUNT(*) FROM otlp_outbox WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)) AS outbox
     `).get(cutoff, cutoff, cutoff, cutoff, cutoff);
+    return Object.fromEntries(Object.entries(counts).map(([name, count]) => [name, Number(count)]));
+  }
+
+  function deleteBefore(cutoff) {
+    transaction(() => {
+      database.prepare(`
+        INSERT INTO observability_meta (key, value) VALUES ('retention_prune_active', '1')
+        ON CONFLICT(key) DO UPDATE SET value = excluded.value
+      `).run();
+      database.prepare('DELETE FROM measurement WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+      database.prepare('DELETE FROM link WHERE from_event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+      database.prepare('DELETE FROM otlp_outbox WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+      database.prepare('DELETE FROM observation_dedupe WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
+      database.prepare('DELETE FROM observation WHERE observed_at < ?').run(cutoff);
+      database.prepare("DELETE FROM observability_meta WHERE key = 'retention_prune_active'").run();
+    });
+  }
+
+  function usedDatabaseBytes() {
+    const pageSize = Number(database.prepare('PRAGMA page_size').get().page_size);
+    const pageCount = Number(database.prepare('PRAGMA page_count').get().page_count);
+    const freePages = Number(database.prepare('PRAGMA freelist_count').get().freelist_count);
+    return (pageCount - freePages) * pageSize;
+  }
+
+  function sizePrune() {
+    const result = { counts: { observations: 0, measurements: 0, links: 0, dedupe: 0, outbox: 0 }, days: 0 };
+    while (usedDatabaseBytes() > maxDatabaseBytes) {
+      const oldest = database.prepare('SELECT observed_at FROM observation ORDER BY observed_at ASC LIMIT 1').get();
+      if (!oldest) break;
+      const cutoffDate = new Date(oldest.observed_at);
+      cutoffDate.setUTCHours(24, 0, 0, 0);
+      const cutoff = cutoffDate.toISOString();
+      const counts = countsBefore(cutoff);
+      if (counts.observations === 0) break;
+      deleteBefore(cutoff);
+      for (const [name, count] of Object.entries(counts)) result.counts[name] += count;
+      result.days += 1;
+    }
+    if (result.counts.observations > 0) database.exec('VACUUM');
+    result.checkpoint = checkpoint();
+    result.storage = storageMetrics();
+    return result;
+  }
+
+  function prune(options = {}) {
+    assertOpen();
+    const retentionDays = options.retentionDays === undefined
+      ? DEFAULT_RETENTION_DAYS
+      : Number(options.retentionDays);
+    const cutoff = retentionCutoff(now, retentionDays);
+    const counts = countsBefore(cutoff);
     const pageSize = Number(database.prepare('PRAGMA page_size').get().page_size);
     const pagesBefore = database.prepare('PRAGMA page_count').get();
     const freePagesBefore = database.prepare('PRAGMA freelist_count').get();
@@ -729,36 +777,31 @@ function openObservabilityStore(databaseFile, options = {}) {
     const totalObservations = Number(database.prepare('SELECT COUNT(*) AS count FROM observation').get().count);
     const estimatedReclaimableBytes = totalObservations === 0
       ? 0
-      : Math.round(databaseBytes * Number(counts.observations) / totalObservations);
+      : Math.round(databaseBytes * counts.observations / totalObservations);
     const result = {
       cutoff,
       retentionDays,
       dryRun: options.dryRun === true,
-      counts: Object.fromEntries(Object.entries(counts).map(([name, count]) => [name, Number(count)])),
+      counts,
       databaseBytes,
       estimatedReclaimableBytes,
       reusableBytes: 0,
     };
     if (result.dryRun) return result;
 
-    if (result.counts.observations > 0) {
-      transaction(() => {
-        database.prepare(`
-          INSERT INTO observability_meta (key, value) VALUES ('retention_prune_active', '1')
-          ON CONFLICT(key) DO UPDATE SET value = excluded.value
-        `).run();
-        database.prepare('DELETE FROM measurement WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-        database.prepare('DELETE FROM link WHERE from_event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-        database.prepare('DELETE FROM otlp_outbox WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-        database.prepare('DELETE FROM observation_dedupe WHERE event_id IN (SELECT event_id FROM observation WHERE observed_at < ?)').run(cutoff);
-        database.prepare('DELETE FROM observation WHERE observed_at < ?').run(cutoff);
-        database.prepare("DELETE FROM observability_meta WHERE key = 'retention_prune_active'").run();
-      });
+    if (counts.observations > 0) {
+      deleteBefore(cutoff);
       const freePagesAfter = database.prepare('PRAGMA freelist_count').get();
       result.reusableBytes = Math.max(0, Number(freePagesAfter.freelist_count) - Number(freePagesBefore.freelist_count)) * pageSize;
     }
     result.checkpoint = checkpoint();
     result.storage = storageMetrics();
+    if (result.storage.overDatabaseLimit && counts.observations > 0) {
+      database.exec('VACUUM');
+      result.checkpoint = checkpoint();
+      result.storage = storageMetrics();
+    }
+    if (result.storage.overDatabaseLimit) result.sizePrune = sizePrune();
     return result;
   }
 
