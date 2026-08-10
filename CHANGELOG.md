@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.443.0 (2026-08-11)
+
+### observability 0.7.3 → 0.7.4
+
+#### Fixes
+
+- Raise the observability database cap to 4GB (SQ-1813)
+  The 1 GB cap was passed within two days on a machine writing about 625 MB of telemetry a day, and 30-day retention could never bring it back under. The default is now 4 GB, so size pruning starts roughly a week in rather than immediately, and it drops whole oldest days when it does.
+
 ## v3.442.0 (2026-08-11)
 
 ### observability 0.7.2 → 0.7.3
