@@ -229,7 +229,7 @@ hand-pick either. Legacy complexity maps to bands at read time (1–3/4–6/7–
    `mode: "bypassPermissions"` + a unique `name` (omitting `model` inherits the pricey session
    model). This includes Haiku: use the stable executor and model the dispatch returned, never a
    plain generic Agent. **Codex routes** (`exec.model` null): `model` OMITTED — the prompt's
-   `[switchboard-route ...]` marker carries the real model; any `model` value silently runs
+   `[sidequest-route ...]` marker carries the real model; any `model` value silently runs
    Anthropic. Effort rides **verbatim** — a mismatched claim is refused. Detail and fallbacks:
    `references/routing-details.md`.
 4. **Claim by resolved route:** `next --model X` / `ready --model X` filter by resolved route.

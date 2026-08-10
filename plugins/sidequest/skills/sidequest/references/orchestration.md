@@ -383,7 +383,7 @@ path. It inspects every readable attachment and reports missing or unreadable pa
 Stable executors are
 ready from session start. Claude routes pass `model: exec.model`; Codex routes
 omit `model`: the shared `sidequest-exec-dispatch-<effort>` def pins the virtual `claude-codex-auto`,
-and `spawn.prompt` ends with `[switchboard-route model=... effort=...]`, which tells the codex-gateway shim which real
+and `spawn.prompt` ends with `[sidequest-route model=... effort=...]`, which tells the codex-gateway shim which real
 model and effort to run, so pass the prompt verbatim, never write another such line, and never batch tickets
 stamped with different models into one spawn. The gateway route log records both values per dispatch; a marker effort that differs from the board stamp in an audit means the prompt was hand-edited. All five effort levels for both Claude builtins and Codex
 dispatch are always provisioned. Route edits change only board data; the executor def set

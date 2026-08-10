@@ -94,7 +94,7 @@ test('dispatch model stays routable when omitted from the default model listing'
 
   const v2Response = await request(shimPort, '/v1/messages', JSON.stringify({
     model: 'claude-codex-auto',
-    messages: [{ role: 'user', content: '[switchboard-route model=gpt-5.6-terra effort=xhigh] dispatch ticket' }],
+    messages: [{ role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=xhigh] dispatch ticket' }],
     output_config: { preserve: true },
   }));
   assert.equal(v2Response.status, 200);
@@ -186,10 +186,12 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
   t.after(() => child.kill());
   await waitForHealthz(shimPort);
 
+  const retiredMarker = `[${['switch', 'board-route'].join('')} model=gpt-5.6-terra]`;
   for (const content of [
     'no route marker',
-    '[switchboard-route model=GPT-5.6-terra]',
-    '[switchboard-route model=gpt-5.6-terra] [sidequest-route model=gpt-5.6-terra]',
+    '[sidequest-route model=GPT-5.6-terra]',
+    retiredMarker,
+    '[sidequest-route model=gpt-5.6-terra] [sidequest-route model=gpt-5.6-terra]',
   ]) {
     const response = await request(shimPort, '/v1/messages', JSON.stringify({
       model: 'claude-codex-auto', messages: [{ role: 'user', content }],
@@ -199,7 +201,7 @@ test('dispatch model rejects missing and malformed route markers', async (t) => 
       type: 'error',
       error: {
         type: 'invalid_request_error',
-        message: 'model-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
+        message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=...] marker in the conversation; redispatch the ticket',
       },
     });
   }
@@ -209,7 +211,7 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
   // Canonical marker in a plain-string user message resolves.
   assert.deepEqual(
     gw.dispatchRouteFromMessages([
-      { role: 'user', content: '[switchboard-route model=gpt-5.6-terra effort=high] work the ticket' },
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-terra effort=high] work the ticket' },
     ]),
     { model: 'gpt-5.6-terra', effort: 'high' },
   );
@@ -267,9 +269,9 @@ test('dispatchRouteFromMessages scans only user-authored text blocks', () => {
 
   // Any duplicate or conflicting qualifying marker is rejected.
   for (const messages of [
-    [{ role: 'user', content: '[switchboard-route model=gpt-5.6-sol effort=low] [switchboard-route model=gpt-5.6-sol effort=low]' }],
+    [{ role: 'user', content: '[sidequest-route model=gpt-5.6-sol effort=low] [sidequest-route model=gpt-5.6-sol effort=low]' }],
     [
-      { role: 'user', content: '[switchboard-route model=gpt-5.6-sol effort=low]' },
+      { role: 'user', content: '[sidequest-route model=gpt-5.6-sol effort=low]' },
       { role: 'user', content: [{ type: 'text', text: '[sidequest-route model=gpt-5.6-terra effort=xhigh]' }] },
     ],
   ]) {
@@ -340,7 +342,7 @@ test('dispatch route ignores markers echoed through tool_result blocks end-to-en
     type: 'error',
     error: {
       type: 'invalid_request_error',
-      message: 'model-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
+      message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=...] marker in the conversation; redispatch the ticket',
     },
   });
   assert.equal(forwarded.length, 1);

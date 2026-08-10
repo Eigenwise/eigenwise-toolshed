@@ -147,7 +147,7 @@ test('dispatch model reuses a session route after compaction and logs cache hits
   const canonical = await request(
     shimPort,
     '/v1/messages',
-    dispatchBody('[switchboard-route model=gpt-5.6-sol effort=xhigh] work the ticket'),
+    dispatchBody('[sidequest-route model=gpt-5.6-sol effort=xhigh] work the ticket'),
     'canonical-session',
   );
   const compacted = await request(
@@ -238,7 +238,7 @@ test('dispatch route survives a shim restart before a compacted continuation', a
   const initial = await request(
     shimPort,
     '/v1/messages',
-    dispatchBody('[switchboard-route model=gpt-5.6-terra effort=high] work the ticket'),
+    dispatchBody('[sidequest-route model=gpt-5.6-terra effort=high] work the ticket'),
     'restart-session',
   );
   child.kill();

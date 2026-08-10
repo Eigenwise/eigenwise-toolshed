@@ -312,7 +312,7 @@ function gatewayModel(id, backend = 'codex') {
   };
 }
 
-const ROUTE_MARKER_RE = /\[(switchboard-route|sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
+const ROUTE_MARKER_RE = /\[(sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63})(?: effort=(low|medium|high|xhigh|max))?\]/g;
 const configuredDispatchCacheTtlMs = Number(process.env.CODEX_GATEWAY_DISPATCH_CACHE_TTL_MS);
 const DISPATCH_CACHE_TTL_MS = Number.isFinite(configuredDispatchCacheTtlMs) && configuredDispatchCacheTtlMs > 0
   ? configuredDispatchCacheTtlMs
@@ -1867,7 +1867,7 @@ function runWorker() {
                   type: 'error',
                   error: {
                     type: 'invalid_request_error',
-                    message: 'model-gateway: dispatch model requires exactly one [switchboard-route model=...] marker in the conversation; [sidequest-route ...] remains temporarily accepted for compatibility; redispatch the ticket',
+                    message: 'model-gateway: dispatch model requires exactly one [sidequest-route model=...] marker in the conversation; redispatch the ticket',
                   },
                 });
                 routeTelemetry.setRoute({
