@@ -36,7 +36,8 @@ export function isPythonPyproject(contents: string): boolean {
 }
 
 async function isVirtualEnvironment(directory: string): Promise<boolean> {
-  if (ignoredDirectories.has(path.basename(directory))) return true;
+  const directoryName = path.basename(directory);
+  if (directoryName.startsWith('.') || ignoredDirectories.has(directoryName)) return true;
   try {
     await access(path.join(directory, virtualEnvironmentMarker));
     return true;

@@ -71,7 +71,7 @@ async function configurationFiles(directory) {
   const nestedFiles = await Promise.all(entries.map(async (entry) => {
     const entryPath = import_node_path.default.join(directory, entry.name);
     if (entry.isDirectory()) {
-      return ignoredDirectories.has(entry.name) ? [] : configurationFiles(entryPath);
+      return ignoredDirectories.has(entry.name) || entry.name.startsWith(".") ? [] : configurationFiles(entryPath);
     }
     return entry.isFile() && configurationNames.has(entry.name) ? [entryPath] : [];
   }));

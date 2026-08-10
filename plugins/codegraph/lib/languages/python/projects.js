@@ -66,7 +66,8 @@ function isPythonPyproject(contents) {
   return /^\s*requires-python\s*=/mi.test(contents) || /^\s*\[tool\.(?:pyright|poetry|hatch(?:\.[^\]]+)?|pdm|setuptools(?:\.[^\]]+)?|flit(?:\.[^\]]+)?|uv(?:\.[^\]]+)?)\]/mi.test(contents) || /^\s*build-backend\s*=\s*["']([^"']+)["']/mi.test(contents) && isPythonBuildBackend(contents.match(/^\s*build-backend\s*=\s*["']([^"']+)["']/mi)?.[1] ?? "");
 }
 async function isVirtualEnvironment(directory) {
-  if (ignoredDirectories.has(import_node_path.default.basename(directory))) return true;
+  const directoryName = import_node_path.default.basename(directory);
+  if (directoryName.startsWith(".") || ignoredDirectories.has(directoryName)) return true;
   try {
     await (0, import_promises.access)(import_node_path.default.join(directory, virtualEnvironmentMarker));
     return true;

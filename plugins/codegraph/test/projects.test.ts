@@ -9,7 +9,9 @@ async function createProjectRoot(): Promise<string> {
   const root = await mkdtemp(path.join(tmpdir(), 'codegraph-projects-'));
   await mkdir(path.join(root, 'packages', 'library', 'src'), { recursive: true });
   await mkdir(path.join(root, 'packages', 'web', 'src'), { recursive: true });
+  await mkdir(path.join(root, '.claude', 'worktrees', 'agent'), { recursive: true });
   await writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({ references: [{ path: './packages/library' }, { path: './packages/web' }] }));
+  await writeFile(path.join(root, '.claude', 'worktrees', 'agent', 'tsconfig.json'), JSON.stringify({ include: ['**/*.ts'] }));
   await writeFile(path.join(root, 'packages', 'library', 'tsconfig.json'), JSON.stringify({ include: ['src/**/*.ts'] }));
   await writeFile(path.join(root, 'packages', 'web', 'jsconfig.json'), JSON.stringify({ include: ['src/**/*.js'] }));
   return root;

@@ -15,6 +15,12 @@ test('discovers Python pyproject projects with source and stub inputs', async ()
   assert.equal(path.basename(projects[0]?.configFile ?? ''), 'pyproject.toml');
 });
 
+test('ignores Python projects nested in dot-directories', async () => {
+  const projects = await discoverPythonProjects(path.join(fixtureRoot, 'dot-directory'));
+
+  assert.deepEqual(projects.map((project) => path.relative(path.join(fixtureRoot, 'dot-directory'), project.root)), ['']);
+});
+
 test('uses source roots and a deterministic namespace-package fallback without configuration', async () => {
   const root = await mkdtemp(path.join(tmpdir(), 'codegraph-python-source-root-'));
   try {
