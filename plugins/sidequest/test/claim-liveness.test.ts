@@ -530,6 +530,18 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
+    body: '[sidequest:negative-control] target= ; assertion= ; npm run test:files test/fixture.test.js failed=1',
+    source: 'mcp',
+  }).ok, true);
+  const blankEvidence = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(blankEvidence.reason, 'negative_control_evidence_required');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
     body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=0',
     source: 'mcp',
   }).ok, true);

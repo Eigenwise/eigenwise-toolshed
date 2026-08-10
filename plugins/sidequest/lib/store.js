@@ -725,6 +725,7 @@ function negativeControlResult(ticket, expectedTestNames = []) {
     if (waiverReason) return waiverReason.length >= 20 ? { kind: "waived" } : { kind: "short_waiver" };
     const failed = markerLine.match(/^\[sidequest:negative-control\]\s+target=([^;]+);\s*assertion=([^;]+);\s*(.+?)\s+failed=(\d+)/);
     if (failed) {
+      if (!failed[1]?.trim() || !failed[2]?.trim()) return { kind: "missing_target_or_assertion" };
       if (Number(failed[4]) === 0) return { kind: "zero_failures" };
       const failureKind = negativeControlFailureKind(body);
       if (failureKind) return { kind: failureKind };
