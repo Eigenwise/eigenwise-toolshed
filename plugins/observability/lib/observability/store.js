@@ -41,7 +41,10 @@ const USAGE_NAMES = new Set([
 ]);
 
 const DEFAULT_RETENTION_DAYS = 30;
-const DEFAULT_MAX_DATABASE_BYTES = 1024 * 1024 * 1024;
+// A busy machine writes ~625MB/day, so the old 1GB cap was passed in two days and 30-day
+// retention could never bring it back under. 4GB holds about a week of that, which is the
+// point where size pruning starts doing the work retention was never going to do.
+const DEFAULT_MAX_DATABASE_BYTES = 4 * 1024 * 1024 * 1024;
 const DEFAULT_MAX_SIZE_PRUNE_DAYS = 3;
 const DEFAULT_MAX_WAL_BYTES = 64 * 1024 * 1024;
 
