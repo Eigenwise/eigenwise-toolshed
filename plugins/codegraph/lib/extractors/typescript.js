@@ -34,6 +34,7 @@ __export(typescript_exports, {
 });
 module.exports = __toCommonJS(typescript_exports);
 var import_node_crypto = require("node:crypto");
+var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
 var import_model = require("../model.js");
 var import_paths = require("../paths.js");
@@ -371,10 +372,56 @@ class TypeScriptSemanticExtractor {
 function createTypeScriptSemanticExtractor(runtime) {
   return new TypeScriptSemanticExtractor(runtime);
 }
+function objectRecord(value) {
+  return typeof value === "object" && value !== null ? value : null;
+}
+function stringValues(value) {
+  return Array.isArray(value) ? value.filter((candidate) => typeof candidate === "string") : [];
+}
+async function existingDirectories(candidates) {
+  const existing = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await (0, import_promises.access)(candidate);
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return existing.filter((candidate) => candidate !== null);
+}
+async function configuredTypeScriptDependencyPaths(project) {
+  if (project.configFile === null) return null;
+  let configuration;
+  try {
+    configuration = objectRecord(JSON.parse(await (0, import_promises.readFile)(project.configFile, "utf8")));
+  } catch {
+    return null;
+  }
+  const compilerOptions = objectRecord(configuration?.compilerOptions);
+  const typeRoots = stringValues(compilerOptions?.typeRoots);
+  const pathMappings = objectRecord(compilerOptions?.paths);
+  const nodeModuleMappings = Object.values(pathMappings ?? {}).flatMap(stringValues).filter((mapping) => mapping.replaceAll("\\", "/").split("/").includes("node_modules"));
+  const candidates = [
+    ...typeRoots,
+    ...nodeModuleMappings.map((mapping) => mapping.replace(/[/\\]?\*.*$/, ""))
+  ].map((candidate) => import_node_path.default.resolve(import_node_path.default.dirname(project.configFile), candidate));
+  return candidates.length === 0 ? null : existingDirectories([...new Set(candidates)].sort((left, right) => left.localeCompare(right)));
+}
+const typeScriptDependencyEnvironment = {
+  async discover(project) {
+    const configured = await configuredTypeScriptDependencyPaths(project);
+    if (configured !== null) {
+      return configured.length === 0 ? { state: "absent", absolutePaths: [] } : { state: "configured", absolutePaths: configured };
+    }
+    const conventional = await existingDirectories([import_node_path.default.join(project.root, "node_modules")]);
+    return conventional.length === 0 ? { state: "absent", absolutePaths: [] } : { state: "conventional", absolutePaths: conventional };
+  }
+};
 class TypeScriptLanguageProvider {
   id = "typescript";
   languages = ["typescript", "javascript"];
   freshness = import_freshness.typeScriptFreshnessContributor;
+  dependencyEnvironment = typeScriptDependencyEnvironment;
   runtime;
   constructor(runtime) {
     this.runtime = runtime;

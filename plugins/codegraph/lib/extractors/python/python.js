@@ -33,6 +33,7 @@ __export(python_exports, {
 });
 module.exports = __toCommonJS(python_exports);
 var import_node_crypto = require("node:crypto");
+var import_promises = require("node:fs/promises");
 var import_node_path = __toESM(require("node:path"));
 var import_model = require("../../model.js");
 var import_paths = require("../../paths.js");
@@ -225,6 +226,58 @@ class PyrightSemanticExtractor {
     }
   }
 }
+function configuredEnvironmentValues(contents) {
+  const venvPath = contents.match(/(?:"venvPath"|venvPath)\s*[:=]\s*["']([^"']+)["']/)?.[1];
+  const venv = contents.match(/(?:"venv"|venv)\s*[:=]\s*["']([^"']+)["']/)?.[1];
+  const pythonPath = contents.match(/(?:"pythonPath"|pythonPath)\s*[:=]\s*["']([^"']+)["']/)?.[1];
+  if (venvPath === void 0 && venv === void 0 && pythonPath === void 0) return null;
+  return [venvPath === void 0 ? void 0 : venv === void 0 ? venvPath : import_node_path.default.join(venvPath, venv), pythonPath].filter((candidate) => candidate !== void 0);
+}
+async function accessiblePaths(candidates) {
+  const accessible = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await (0, import_promises.access)(candidate);
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return accessible.filter((candidate) => candidate !== null);
+}
+async function configuredPythonDependencyPaths(project) {
+  if (project.configFile === null) return null;
+  let configured;
+  try {
+    configured = configuredEnvironmentValues(await (0, import_promises.readFile)(project.configFile, "utf8"));
+  } catch {
+    return null;
+  }
+  if (configured === null) return null;
+  const configurationRoot = import_node_path.default.dirname(project.configFile);
+  return accessiblePaths(configured.map((candidate) => import_node_path.default.resolve(configurationRoot, candidate)));
+}
+async function conventionalPythonDependencyPaths(project) {
+  const candidates = [import_node_path.default.join(project.root, ".venv"), import_node_path.default.join(project.root, "venv")];
+  const environments = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await (0, import_promises.access)(import_node_path.default.join(candidate, "pyvenv.cfg"));
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return environments.filter((candidate) => candidate !== null);
+}
+const pythonDependencyEnvironment = {
+  async discover(project) {
+    const configured = await configuredPythonDependencyPaths(project);
+    if (configured !== null) {
+      return configured.length === 0 ? { state: "absent", absolutePaths: [] } : { state: "configured", absolutePaths: configured };
+    }
+    const conventional = await conventionalPythonDependencyPaths(project);
+    return conventional.length === 0 ? { state: "absent", absolutePaths: [] } : { state: "conventional", absolutePaths: conventional };
+  }
+};
 class PythonLanguageProvider {
   constructor(runtime = new import_runtime.PyrightRuntimeAcquirer()) {
     this.runtime = runtime;
@@ -233,6 +286,7 @@ class PythonLanguageProvider {
   id = "python";
   languages = ["python"];
   freshness = import_freshness.pythonFreshnessContributor;
+  dependencyEnvironment = pythonDependencyEnvironment;
   async acquireEngine() {
     const runtime = await this.runtime.acquire();
     if (!(0, import_runtime_contract.isSemanticEngineRuntime)(runtime)) throw new Error("Pyright runtime must provide module loading");

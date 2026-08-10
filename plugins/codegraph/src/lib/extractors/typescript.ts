@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { access, readFile } from 'node:fs/promises';
 import path from 'node:path';
 import type { API, Checker, Project, Snapshot, Symbol as TypeScriptSymbol } from 'typescript/unstable/sync' with { "resolution-mode": "import" };
 import type {
@@ -22,7 +23,7 @@ import { createGraphEdgeId, createGraphNodeId, type FileGraph, type GraphEdge, t
 import { normalizeProjectRelativePath } from '../paths.js';
 import { discoverProjects } from '../projects.js';
 import { typeScriptFreshnessContributor } from '../freshness.js';
-import { isSemanticEngineRuntime, type RuntimeAcquirer, type SemanticEngineRuntime, type SemanticLanguageProvider } from '../runtime-contract.js';
+import { isSemanticEngineRuntime, type DependencyEnvironmentDiscovery, type RuntimeAcquirer, type SemanticEngineRuntime, type SemanticLanguageProvider } from '../runtime-contract.js';
 
 interface TypeScriptSyncModule {
   readonly API: new () => API;
@@ -464,10 +465,66 @@ export function createTypeScriptSemanticExtractor(runtime?: SemanticEngineRuntim
   return new TypeScriptSemanticExtractor(runtime);
 }
 
+function objectRecord(value: unknown): Readonly<Record<string, unknown>> | null {
+  return typeof value === 'object' && value !== null ? value as Readonly<Record<string, unknown>> : null;
+}
+
+function stringValues(value: unknown): readonly string[] {
+  return Array.isArray(value) ? value.filter((candidate): candidate is string => typeof candidate === 'string') : [];
+}
+
+async function existingDirectories(candidates: readonly string[]): Promise<readonly string[]> {
+  const existing = await Promise.all(candidates.map(async (candidate) => {
+    try {
+      await access(candidate);
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return existing.filter((candidate): candidate is string => candidate !== null);
+}
+
+async function configuredTypeScriptDependencyPaths(project: ProjectDescriptor): Promise<readonly string[] | null> {
+  if (project.configFile === null) return null;
+  let configuration: Readonly<Record<string, unknown>> | null;
+  try {
+    configuration = objectRecord(JSON.parse(await readFile(project.configFile, 'utf8')));
+  } catch {
+    return null;
+  }
+  const compilerOptions = objectRecord(configuration?.compilerOptions);
+  const typeRoots = stringValues(compilerOptions?.typeRoots);
+  const pathMappings = objectRecord(compilerOptions?.paths);
+  const nodeModuleMappings = Object.values(pathMappings ?? {}).flatMap(stringValues)
+    .filter((mapping) => mapping.replaceAll('\\', '/').split('/').includes('node_modules'));
+  const candidates = [
+    ...typeRoots,
+    ...nodeModuleMappings.map((mapping) => mapping.replace(/[/\\]?\*.*$/, '')),
+  ].map((candidate) => path.resolve(path.dirname(project.configFile!), candidate));
+  return candidates.length === 0 ? null : existingDirectories([...new Set(candidates)].sort((left, right) => left.localeCompare(right)));
+}
+
+const typeScriptDependencyEnvironment: DependencyEnvironmentDiscovery = {
+  async discover(project) {
+    const configured = await configuredTypeScriptDependencyPaths(project);
+    if (configured !== null) {
+      return configured.length === 0
+        ? { state: 'absent', absolutePaths: [] }
+        : { state: 'configured', absolutePaths: configured };
+    }
+    const conventional = await existingDirectories([path.join(project.root, 'node_modules')]);
+    return conventional.length === 0
+      ? { state: 'absent', absolutePaths: [] }
+      : { state: 'conventional', absolutePaths: conventional };
+  },
+};
+
 export class TypeScriptLanguageProvider implements SemanticLanguageProvider {
   readonly id = 'typescript';
   readonly languages = ['typescript', 'javascript'] as const;
   readonly freshness = typeScriptFreshnessContributor;
+  readonly dependencyEnvironment = typeScriptDependencyEnvironment;
   private readonly runtime: RuntimeAcquirer;
 
   constructor(runtime: RuntimeAcquirer) {

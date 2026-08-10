@@ -81,6 +81,17 @@ export interface ProjectDescriptor {
   language: GraphLanguage;
 }
 
+export type DependencyEnvironmentState = 'configured' | 'conventional' | 'absent';
+
+export type ProjectDependencyEnvironment =
+  | { readonly state: 'configured' | 'conventional'; readonly absolutePaths: readonly string[] }
+  | { readonly state: 'absent'; readonly absolutePaths: readonly [] };
+
+export interface DependencyEnvironmentCoverage {
+  readonly projectId: string;
+  readonly state: DependencyEnvironmentState;
+}
+
 export interface LanguageExtractor {
   readonly id: string;
   readonly languages: readonly GraphLanguage[];
@@ -117,6 +128,7 @@ export interface GraphCoverage {
   ambiguousEdges: number;
   dynamicEdges: number;
   externalEdges: number;
+  dependencyEnvironments: readonly DependencyEnvironmentCoverage[];
 }
 
 export interface GraphResponse<Result> {

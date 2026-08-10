@@ -3,6 +3,7 @@ import type {
   GraphCoverage,
   GraphLanguage,
   LanguageExtractor,
+  ProjectDependencyEnvironment,
   ProjectDescriptor,
   SnapshotIdentity,
 } from './model.js';
@@ -28,10 +29,15 @@ export interface FreshnessContributor {
   collect(projectRoot: string): Promise<readonly RelevantInputCandidate[]>;
 }
 
+export interface DependencyEnvironmentDiscovery {
+  discover(project: ProjectDescriptor): Promise<ProjectDependencyEnvironment>;
+}
+
 export interface SemanticLanguageProvider {
   readonly id: string;
   readonly languages: readonly GraphLanguage[];
   readonly freshness: FreshnessContributor;
+  readonly dependencyEnvironment: DependencyEnvironmentDiscovery;
   acquireEngine(): Promise<SemanticEngineRuntime>;
   createExtractor(runtime: SemanticEngineRuntime): LanguageExtractor;
 }
@@ -41,6 +47,7 @@ export interface SemanticRuntime {
   readonly engineId: string;
   readonly engineVersion: string;
   readonly extractors: readonly LanguageExtractor[];
+  readonly dependencyEnvironmentFor?: (project: ProjectDescriptor) => Promise<ProjectDependencyEnvironment>;
 }
 
 export interface RuntimeAcquirer {
@@ -84,7 +91,18 @@ export class SemanticLanguageProviderRegistry {
       .sort(({ provider: left }, { provider: right }) => left.id.localeCompare(right.id))
       .map(({ provider, runtime }) => provider.createExtractor(runtime));
     const identity = snapshotEngineIdentity(engines);
-    return { engines, engineId: identity.id, engineVersion: identity.version, extractors };
+    return {
+      engines,
+      engineId: identity.id,
+      engineVersion: identity.version,
+      extractors,
+      dependencyEnvironmentFor: async (project) => {
+        const provider = this.providers.find((candidate) => candidate.languages.includes(project.language));
+        return provider === undefined
+          ? { state: 'absent', absolutePaths: [] }
+          : provider.dependencyEnvironment.discover(project);
+      },
+    };
   }
 }
 

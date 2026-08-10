@@ -23,7 +23,7 @@ __export(schema_exports, {
   validateGraphDatabase: () => validateGraphDatabase
 });
 module.exports = __toCommonJS(schema_exports);
-const GRAPH_SCHEMA_VERSION = 1;
+const GRAPH_SCHEMA_VERSION = 2;
 const schemaVersionOne = `
 CREATE TABLE snapshots (
   snapshot_id TEXT PRIMARY KEY,
@@ -110,6 +110,15 @@ CREATE TABLE file_ownership (
   FOREIGN KEY (snapshot_id, node_id) REFERENCES nodes(snapshot_id, node_id)
 ) STRICT;
 `;
+const schemaVersionTwo = `
+CREATE TABLE dependency_environments (
+  snapshot_id TEXT NOT NULL REFERENCES snapshots(snapshot_id) ON DELETE CASCADE,
+  project_id TEXT NOT NULL,
+  state TEXT NOT NULL CHECK (state IN ('configured', 'conventional', 'absent')),
+  PRIMARY KEY (snapshot_id, project_id),
+  FOREIGN KEY (snapshot_id, project_id) REFERENCES projects(snapshot_id, project_id)
+) STRICT;
+`;
 function databaseVersion(database) {
   const row = database.prepare("PRAGMA user_version").get();
   return row?.user_version ?? 0;
@@ -124,6 +133,7 @@ function migrateGraphSchema(database) {
   database.exec("BEGIN IMMEDIATE");
   try {
     if (version === 0) database.exec(schemaVersionOne);
+    if (version <= 1) database.exec(schemaVersionTwo);
     database.exec(`PRAGMA user_version = ${GRAPH_SCHEMA_VERSION}`);
     database.exec("COMMIT");
   } catch (error) {

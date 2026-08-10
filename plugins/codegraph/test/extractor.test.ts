@@ -1,11 +1,28 @@
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { TypeScriptSemanticExtractor } from '../src/lib/extractors/typescript.ts';
+import { TypeScriptLanguageProvider, TypeScriptSemanticExtractor } from '../src/lib/extractors/typescript.ts';
 
 const fixtureRoot = path.join(process.cwd(), 'test', 'fixtures', 'projects', 'semantic');
+
+test('TypeScript dependency discovery prefers configured paths over node_modules', async () => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'codegraph-typescript-environment-'));
+  try {
+    await mkdir(path.join(root, 'node_modules'));
+    await mkdir(path.join(root, 'types'));
+    const configFile = path.join(root, 'tsconfig.json');
+    await writeFile(configFile, JSON.stringify({ compilerOptions: { typeRoots: ['types'] } }));
+    const provider = new TypeScriptLanguageProvider({ acquire: async () => { throw new Error('not used'); } });
+    assert.ok(provider.dependencyEnvironment);
+    assert.deepEqual(await provider.dependencyEnvironment.discover({
+      id: 'typescript-project', root, configFile, language: 'typescript',
+    }), { state: 'configured', absolutePaths: [path.join(root, 'types')] });
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
 
 async function extractFixture(files: Readonly<Record<string, string>>) {
   const root = await mkdtemp(path.join(os.tmpdir(), 'codegraph-semantic-'));

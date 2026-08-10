@@ -52,7 +52,16 @@ class SemanticLanguageProviderRegistry {
     const engines = acquiredProviders.map(({ runtime }) => ({ id: runtime.id, version: runtime.version })).sort((left, right) => left.id.localeCompare(right.id) || left.version.localeCompare(right.version));
     const extractors = acquiredProviders.sort(({ provider: left }, { provider: right }) => left.id.localeCompare(right.id)).map(({ provider, runtime }) => provider.createExtractor(runtime));
     const identity = snapshotEngineIdentity(engines);
-    return { engines, engineId: identity.id, engineVersion: identity.version, extractors };
+    return {
+      engines,
+      engineId: identity.id,
+      engineVersion: identity.version,
+      extractors,
+      dependencyEnvironmentFor: async (project) => {
+        const provider = this.providers.find((candidate) => candidate.languages.includes(project.language));
+        return provider === void 0 ? { state: "absent", absolutePaths: [] } : provider.dependencyEnvironment.discover(project);
+      }
+    };
   }
 }
 function snapshotEngineIdentity(engines) {

@@ -134,6 +134,7 @@ class CodegraphService {
       this.store.replaceSnapshot({
         snapshot,
         projects: result.snapshots.map((entry) => entry.project),
+        dependencyEnvironments: result.snapshots.flatMap((entry) => entry.coverage.dependencyEnvironments),
         files: result.snapshots.flatMap((entry) => entry.files)
       });
       this.state = { status: "ready", message: messageFor("ready") };

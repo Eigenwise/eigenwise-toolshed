@@ -17,7 +17,7 @@ test('writes, validates, replaces, and reopens a complete snapshot', () => {
   try {
     const store = GraphStore.open(databasePath);
     store.replaceSnapshot(graph());
-    assert.deepEqual(store.coverage(), { projects: 1, files: 1, nodes: 2, edges: 2, unresolvedEdges: 1, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0 });
+    assert.deepEqual(store.coverage(), { projects: 1, files: 1, nodes: 2, edges: 2, unresolvedEdges: 1, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0, dependencyEnvironments: [{ projectId: 'project', state: 'absent' }] });
     store.validate();
     store.replaceSnapshot(graph('second'));
     assert.equal(store.snapshot()?.snapshotId, 'second');
