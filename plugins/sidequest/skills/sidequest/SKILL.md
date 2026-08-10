@@ -191,7 +191,7 @@ delegated implementation or investigation work needs a ticketed route.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
 submit verified commits → read each thread, use scoped verification for each ticket, then run the
-full suite once while publishing the wave in one transaction → re-plan, spawn the next. Don't accept a file list as proof of coverage. Prevent
+full suite once while publishing the wave in one transaction → re-plan, spawn the next. Don't accept a green suite as proof of coverage; review execution evidence. Prevent
 executor mini-sessions from the spawn side: **the ticket is the spec** (the cheaper the model,
 the more patch-level the detail); **scope the spawn prompt only with logistics**, the ticket
 contract traveling in full and unnarrowed;

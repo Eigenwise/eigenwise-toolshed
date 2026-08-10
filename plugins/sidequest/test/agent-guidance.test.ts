@@ -27,6 +27,10 @@ test('published guidance excludes retired instructions', () => {
   assert.match(executorTemplate, /wait for corrected evidence or a decision through `SendMessage` so the same executor can continue/);
   assert.match(skill, /For useful work\s+needing a decision, `SendMessage` the same agent and keep its claim and worktree/);
   assert.match(orchestration, /Correct the live worker before replacing it/);
+  assert.match(skill, /Don't accept a green suite as proof of coverage; review execution evidence/);
+  assert.match(executorTemplate, /name the assertion in the test that ran and was not skipped/);
+  assert.match(executorTemplate, /state that the state directory started empty/);
+  assert.match(executorTemplate, /both names must cover the changed behavior, not an unrelated test/);
 
   for (const source of [skill, orchestration]) {
     assert.doesNotMatch(source, new RegExp('native' + '_agent', 'i'));

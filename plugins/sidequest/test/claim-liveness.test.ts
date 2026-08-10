@@ -504,7 +504,7 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by: 'another-executor',
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1',
     source: 'mcp',
   }).ok, true);
   const wrongAuthor = store.addComment(slug, ticket.ref, {
@@ -517,7 +517,32 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=0',
+    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+    source: 'mcp',
+  }).ok, true);
+  const missingEvidence = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(missingEvidence.reason, 'negative_control_evidence_required');
+  assert.match(missingEvidence.message, /must name the broken target and the assertion that failed/);
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target= ; assertion= ; npm run test:files test/fixture.test.js failed=1',
+    source: 'mcp',
+  }).ok, true);
+  const blankEvidence = store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:verify-complete]',
+    source: 'mcp',
+  });
+  assert.equal(blankEvidence.reason, 'negative_control_evidence_required');
+
+  assert.equal(store.addComment(slug, ticket.ref, {
+    by,
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=0',
     source: 'mcp',
   }).ok, true);
   const zeroFailures = store.addComment(slug, ticket.ref, {
@@ -531,7 +556,7 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 (expected ImportError after reverting non-test changes)',
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 (expected ImportError after reverting non-test changes)',
     source: 'mcp',
   }).ok, true);
   const importError = store.addComment(slug, ticket.ref, {
@@ -544,7 +569,7 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 collection error after reverting non-test changes',
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 collection error after reverting non-test changes',
     source: 'mcp',
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {
@@ -566,7 +591,7 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1',
     source: 'mcp',
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {
@@ -581,8 +606,8 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
 test('negative-control markers accept context after failed counts', () => {
   const controls = [
-    '[sidequest:negative-control] node --import tsx --test plugins/sidequest/test/agentsync.test.ts failed=1 exit=1',
-    '[sidequest:negative-control] uv run pytest failed=1. Restoring the source made it fail; 5 passed.',
+    '[sidequest:negative-control] target=plugins/sidequest/src/lib/agentsync.ts:1; assertion=briefing contains the requested evidence; node --import tsx --test plugins/sidequest/test/agentsync.test.ts failed=1 exit=1',
+    '[sidequest:negative-control] target=python fixture behavior; assertion=fixture rejects the reverted behavior; uv run pytest failed=1. Restoring the source made it fail; 5 passed.',
   ];
   for (const [index, body] of controls.entries()) {
     const by = `negative-control-context-${index}`;
@@ -623,7 +648,7 @@ test('negative controls account for every added named test', () => {
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 exit=1\n[sidequest:negative-control-test] failed a different test',
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 exit=1\n[sidequest:negative-control-test] failed a different test',
     source: 'mcp',
   }).ok, true);
   const missingTest = store.addComment(slug, ticket.ref, {
@@ -636,7 +661,7 @@ test('negative controls account for every added named test', () => {
 
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: `[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1 trailing context\n[sidequest:negative-control-test] failed ${testName}`,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1 trailing context\n[sidequest:negative-control-test] failed ${testName}`,
     source: 'mcp',
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {
@@ -665,7 +690,7 @@ test('negative controls account for tests in added files', () => {
   fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'added-fixture.test.js'), `test('${testName}', () => {});\n`);
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: '[sidequest:negative-control] npm run test:files test/added-fixture.test.js failed=1',
+    body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=added fixture catches the changed value; npm run test:files test/added-fixture.test.js failed=1',
     source: 'mcp',
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {
@@ -685,7 +710,7 @@ test('negative controls allow a plainly identified unaffected test', () => {
   fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'fixture.test.js'), `test('${testName}', () => {});\n`);
   assert.equal(store.addComment(slug, ticket.ref, {
     by,
-    body: `[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1\n[sidequest:negative-control-test] unaffected ${testName} because it verifies an independent formatter`,
+    body: `[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1\n[sidequest:negative-control-test] unaffected ${testName} because it verifies an independent formatter`,
     source: 'mcp',
   }).ok, true);
   assert.equal(store.addComment(slug, ticket.ref, {
