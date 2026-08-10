@@ -48,7 +48,12 @@ interface RuntimeCachePointer {
 }
 
 export interface RuntimeInstaller {
-  install(stageDirectory: string, runtimeManifestDirectory: string): Promise<void>;
+  install(stageDirectory: string, runtimeManifestDirectory: string, requiredPackage?: RuntimePackage): Promise<void>;
+}
+
+interface RuntimePackage {
+  name: string;
+  version: string;
 }
 
 interface RuntimeCacheLease {
@@ -305,10 +310,14 @@ export class NpmRuntimeInstaller implements RuntimeInstaller {
     this.configuredNpmCliPath = options.npmCliPath;
   }
 
-  async install(stageDirectory: string, runtimeManifestDirectory: string): Promise<void> {
+  async install(stageDirectory: string, runtimeManifestDirectory: string, requiredPackage?: RuntimePackage): Promise<void> {
     await copyRuntimeManifest(runtimeManifestDirectory, stageDirectory);
     const npmCliPath = this.configuredNpmCliPath ?? await resolveNpmCliPath(this.nodeExecutablePath);
-    await waitForProcess(this.nodeExecutablePath, [npmCliPath, 'ci', '--ignore-scripts', '--omit=dev', '--omit=optional', '--no-audit', '--fund=false'], stageDirectory);
+    const npmArguments = ['--ignore-scripts', '--omit=dev', '--omit=optional', '--no-audit', '--fund=false'];
+    await waitForProcess(this.nodeExecutablePath, [npmCliPath, 'ci', ...npmArguments], stageDirectory);
+    if (requiredPackage !== undefined) {
+      await waitForProcess(this.nodeExecutablePath, [npmCliPath, 'install', ...npmArguments, '--no-save', '--package-lock=false', `${requiredPackage.name}@${requiredPackage.version}`], stageDirectory);
+    }
   }
 }
 
@@ -927,6 +936,9 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     const packageLock = await readPackageLock(this.runtimeManifestDirectory);
     validateManifestLock(manifest, packageLock);
     const packageName = runtimePlatformPackage(manifest, this.platform, this.architecture);
+    const packageIntegrity = manifest.packages[packageName];
+    if (packageIntegrity === undefined) throw new SemanticRuntimeError(`runtime platform package is not pinned: ${packageName}`);
+    const requiredPackage = { name: packageName, version: packageIntegrity.version };
     const runtimeKey = platformKey(this.platform, this.architecture);
 
     const cachedRuntimeDirectory = await currentRuntimeDirectory(cacheDirectory).catch(() => undefined);
@@ -935,12 +947,12 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
         await validateInstalledRuntime(cachedRuntimeDirectory, runtimeKey, manifest, packageName);
         return new LoadedTypeScriptRuntime(cachedRuntimeDirectory, manifest);
       } catch (error: unknown) {
-        await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, lease, error);
+        await this.replaceIncompleteCache(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage, lease, error);
         return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
       }
     }
 
-    await this.installCache(cacheDirectory, runtimeKey, manifest, packageName, lease);
+    await this.installCache(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage, lease);
     return new LoadedTypeScriptRuntime(await this.loadedRuntimeDirectory(cacheDirectory), manifest);
   }
 
@@ -955,10 +967,11 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     runtimeKey: string,
     manifest: RuntimeManifest,
     packageName: string,
+    requiredPackage: RuntimePackage,
     lease: RuntimeCacheLease,
     previousError: unknown,
   ): Promise<void> {
-    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage);
     try {
       await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
     } catch (error: unknown) {
@@ -973,9 +986,10 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     runtimeKey: string,
     manifest: RuntimeManifest,
     packageName: string,
+    requiredPackage: RuntimePackage,
     lease: RuntimeCacheLease,
   ): Promise<void> {
-    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName);
+    const stageDirectory = await this.createValidatedStage(cacheDirectory, runtimeKey, manifest, packageName, requiredPackage);
     try {
       await publishRuntimeStage(cacheDirectory, stageDirectory, lease);
     } catch (error: unknown) {
@@ -989,10 +1003,16 @@ export class TypeScriptRuntimeAcquirer implements RuntimeAcquirer {
     }
   }
 
-  private async createValidatedStage(cacheDirectory: string, runtimeKey: string, manifest: RuntimeManifest, packageName: string): Promise<string> {
+  private async createValidatedStage(
+    cacheDirectory: string,
+    runtimeKey: string,
+    manifest: RuntimeManifest,
+    packageName: string,
+    requiredPackage: RuntimePackage,
+  ): Promise<string> {
     const stageDirectory = await createStageDirectory(cacheDirectory);
     try {
-      await this.installer.install(stageDirectory, this.runtimeManifestDirectory);
+      await this.installer.install(stageDirectory, this.runtimeManifestDirectory, requiredPackage);
       await validateInstalledRuntime(stageDirectory, runtimeKey, manifest, packageName);
       return stageDirectory;
     } catch (error: unknown) {

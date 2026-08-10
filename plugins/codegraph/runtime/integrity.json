@@ -15,12 +15,12 @@
     "win32-x64": "@typescript/typescript-win32-x64"
   },
   "installedTreeIntegrity": {
-    "darwin-arm64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
-    "darwin-x64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
-    "linux-arm64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
-    "linux-x64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
-    "win32-arm64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw==",
-    "win32-x64": "sha512-a5F+4NDu7skiD2JpeAoyZkgS3xkYCpmj4m4luSSe/z+x5HopAie2oVdj39PKBZyPPf8D8Hn3fYZnM975Zmbvkw=="
+    "darwin-arm64": "sha512-6+3MjAeYI0EQduM6jOsYjYbpxC86yJaacpJ41MEFY0eLy6mEqzpAggWOV8JlBxwSLMacdxkBwjuE6HEzQQp1/A==",
+    "darwin-x64": "sha512-Gcbw0O7HGPbB3ZnnmGU1ei5qWH1/MGCRGCPuQCoN0EOBDA50dzGu4l3x4+bwGSJMEuVwjwozX5gqD2uFKm7ZIA==",
+    "linux-arm64": "sha512-hIKMy2jLbZlTJ/nfayDh9x8qvfXPL1utPLHyC815zhHosfXbQy+9GdtFNmkjuJ+yR4p6x3ejs8h6PhPUUv0tWQ==",
+    "linux-x64": "sha512-YMqKRFpCM5mrp6jNSgXs6wCM23VUsWyrKL70TtH6VQSVfQnnHAQof/+bJf1wIjGbv+S5tfS4+Ano9hI777jevw==",
+    "win32-arm64": "sha512-auVFhL1AA8FNTSYFUHjksb9BHzNkz0pTEWDI9GxxshsZTXLl1ZddSb+8MVmzHvgS1Sxc5fHf36BARUMCmFoY9w==",
+    "win32-x64": "sha512-WRlQYSlfJHStx1oQU+ZuJO1d7iVeLfqvUFJhKMGeL/KGNBhgAfZgXOjfzIXS/ogTa+mo/792w/Q6FgY8SeAmgg=="
   },
   "packages": {
     "typescript": {
