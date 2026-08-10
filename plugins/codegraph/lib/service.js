@@ -49,6 +49,9 @@ function messageFor(status) {
   if (status === "error") return "Codegraph could not read the graph.";
   return "ok";
 }
+function emptySnapshotMessage() {
+  return "Codegraph snapshot has no indexed source files. Check project configuration, then run codegraph_index.";
+}
 function emptyResponse(state, snapshot, coverage) {
   return { status: state.status, snapshot, coverage, results: [], omitted: 0, nextCursor: null, tokenEstimate: 0, message: state.message };
 }
@@ -108,13 +111,19 @@ class CodegraphService {
       this.state = { status: "missing", message: messageFor("missing") };
       return this.response(this.state, null, null);
     }
+    const coverage = this.store.coverage(snapshot.snapshotId);
+    if (this.state.status === "error") return this.response(this.state, snapshot, coverage);
+    if (coverage?.files === 0) {
+      this.state = { status: "missing", message: emptySnapshotMessage() };
+      return this.response(this.state, snapshot, coverage);
+    }
     try {
       const manifest = await (0, import_freshness.buildRelevantInputManifest)(this.projectRoot, this.freshness);
       this.state = (0, import_freshness.snapshotIsFresh)(snapshot, manifest) ? { status: "ready", message: messageFor("ready") } : { status: "stale", message: messageFor("stale") };
     } catch (error) {
       this.state = { status: "error", message: error instanceof Error ? error.message : messageFor("error") };
     }
-    return this.response(this.state, snapshot, this.store.coverage(snapshot.snapshotId));
+    return this.response(this.state, snapshot, coverage);
   }
   async index() {
     if (this.indexing !== void 0) return this.indexing;
@@ -136,8 +145,9 @@ class CodegraphService {
         projects: result.snapshots.map((entry) => entry.project),
         files: result.snapshots.flatMap((entry) => entry.files)
       });
-      this.state = { status: "ready", message: messageFor("ready") };
-      return this.response(this.state, snapshot, this.store.coverage(snapshot.snapshotId));
+      const coverage = this.store.coverage(snapshot.snapshotId);
+      this.state = coverage?.files === 0 ? { status: "missing", message: emptySnapshotMessage() } : { status: "ready", message: messageFor("ready") };
+      return this.response(this.state, snapshot, coverage);
     } catch (error) {
       const message = error instanceof Error ? error.message : messageFor("error");
       this.state = { status: "error", message };

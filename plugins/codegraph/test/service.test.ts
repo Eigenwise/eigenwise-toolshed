@@ -11,7 +11,7 @@ import { projectIdentity } from '../src/lib/paths.ts';
 import { CodegraphService } from '../src/lib/service.ts';
 import { GraphStore } from '../src/lib/store.ts';
 
-test('index publishes a ready zero-fact snapshot', async () => {
+test('reports a zero-file snapshot as missing', async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'codegraph-service-'));
   try {
     const service = new CodegraphService({
@@ -21,11 +21,63 @@ test('index publishes a ready zero-fact snapshot', async () => {
       index: async (root): Promise<IndexBuildResult> => ({ snapshots: [], manifest: await buildRelevantInputManifest(root) }),
     });
     const indexed = await service.index();
-    assert.equal(indexed.status, 'ready');
+    assert.equal(indexed.status, 'missing');
+    assert.match(indexed.message, /no indexed source files/);
     assert.equal(indexed.results.length, 0);
     const status = await service.status();
-    assert.equal(status.status, 'ready');
+    assert.equal(status.status, 'missing');
+    assert.match(status.message, /no indexed source files/);
     assert.equal(status.coverage?.files, 0);
+  } finally {
+    await rm(projectRoot, { recursive: true, force: true });
+  }
+});
+
+test('reports a failed refresh instead of the previous ready snapshot', async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'codegraph-service-failed-refresh-'));
+  try {
+    let shouldFail = false;
+    const service = new CodegraphService({
+      projectRoot,
+      store: GraphStore.open(':memory:'),
+      runtime: { acquire: async () => ({ engineId: 'test-engine', engineVersion: '1.0.0', extractors: [] }) },
+      index: async (root): Promise<IndexBuildResult> => {
+        if (shouldFail) throw new Error('simulated refresh failure');
+        return {
+          manifest: await buildRelevantInputManifest(root),
+          snapshots: [{
+            project: { id: 'fixture', root, configFile: null, language: 'typescript' },
+            snapshot: {
+              schemaVersion: 1,
+              snapshotId: 'fixture',
+              projectRootHash: 'fixture',
+              sourceManifestHash: 'fixture',
+              configHash: 'fixture',
+              engineId: 'fixture',
+              engineVersion: '1.0.0',
+              indexedAt: '2026-08-10T00:00:00.000Z',
+            },
+            coverage: { projects: 1, files: 1, nodes: 0, edges: 0, unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0 },
+            files: [{ file: 'source.ts', contentHash: 'fixture', nodes: [], edges: [], unresolvedCount: 0, diagnostics: [] }],
+          }],
+        };
+      },
+    });
+    const indexed = await service.index();
+    assert.equal(indexed.status, 'ready');
+
+    shouldFail = true;
+    const failed = await service.index();
+    assert.equal(failed.status, 'error');
+    assert.match(failed.message, /simulated refresh failure/);
+    assert.equal(failed.snapshot?.snapshotId, indexed.snapshot?.snapshotId);
+
+    const status = await service.status();
+    assert.equal(status.status, 'error');
+    assert.match(status.message, /simulated refresh failure/);
+    const query = await service.context('fixture', { tokenBudget: 500, maxResults: 1 });
+    assert.equal(query.status, 'error');
+    assert.equal(query.results.length, 0);
   } finally {
     await rm(projectRoot, { recursive: true, force: true });
   }
