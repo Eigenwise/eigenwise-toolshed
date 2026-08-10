@@ -376,6 +376,12 @@ async function validateFileIntegrity(filePath: string, expectedIntegrity: string
   }
 }
 
+// npm writes launcher shims into node_modules/.bin whose form is platform-specific:
+// .cmd and .ps1 files on Windows, symlinks on Linux and macOS. Hashing them would make
+// one pinned `any` tree integrity unsatisfiable on both. Nothing here is ever executed;
+// the engine module is imported by path and separately pinned by engine.moduleIntegrity.
+const generatedLauncherDirectory = '.bin';
+
 async function installedTreeIntegrity(directory: string): Promise<string> {
   const hash = createHash('sha512');
   async function hashDirectory(currentDirectory: string): Promise<void> {
@@ -384,7 +390,7 @@ async function installedTreeIntegrity(directory: string): Promise<string> {
     for (const entry of entries) {
       const entryPath = path.join(currentDirectory, entry.name);
       if (entry.isDirectory()) {
-        await hashDirectory(entryPath);
+        if (entry.name !== generatedLauncherDirectory) await hashDirectory(entryPath);
         continue;
       }
       if (!entry.isFile()) {
@@ -407,7 +413,7 @@ async function validateInstalledTree(runtimeDirectory: string, runtimeKey: strin
   }
   const actualIntegrity = await installedTreeIntegrity(path.join(runtimeDirectory, runtimeModulesDirectory));
   if (actualIntegrity !== expectedIntegrity) {
-    throw new SemanticRuntimeError(`runtime tree integrity mismatch: ${runtimeKey}`);
+    throw new SemanticRuntimeError(`runtime tree integrity mismatch: ${runtimeKey}; expected ${expectedIntegrity}; actual ${actualIntegrity}`);
   }
 }
 

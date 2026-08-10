@@ -8,7 +8,7 @@
   },
   "platformPackages": {},
   "installedTreeIntegrity": {
-    "any": "sha512-JJNaUxTslcJUPW5k7A5ljYlLq9euy9Va4aD3SU5KwjpEz/BKCAZGfukv2wUgi6T50Sm07lZJWf67RfGtElBJLg=="
+    "any": "sha512-dACknaKKOT4RGABBvq8D/7Q3v+YES2HRNAXJwLuqa97RUnmEU1eViHSTEz+WgwktTcxs6mCDVCo5tsYvBAg6nw=="
   },
   "packages": {
     "pyright": {

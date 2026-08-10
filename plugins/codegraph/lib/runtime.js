@@ -297,6 +297,7 @@ async function validateFileIntegrity(filePath, expectedIntegrity) {
     throw new SemanticRuntimeError(`runtime module integrity mismatch: ${filePath}`);
   }
 }
+const generatedLauncherDirectory = ".bin";
 async function installedTreeIntegrity(directory) {
   const hash = (0, import_node_crypto.createHash)("sha512");
   async function hashDirectory(currentDirectory) {
@@ -305,7 +306,7 @@ async function installedTreeIntegrity(directory) {
     for (const entry of entries) {
       const entryPath = import_node_path.default.join(currentDirectory, entry.name);
       if (entry.isDirectory()) {
-        await hashDirectory(entryPath);
+        if (entry.name !== generatedLauncherDirectory) await hashDirectory(entryPath);
         continue;
       }
       if (!entry.isFile()) {
@@ -327,7 +328,7 @@ async function validateInstalledTree(runtimeDirectory, runtimeKey, manifest) {
   }
   const actualIntegrity = await installedTreeIntegrity(import_node_path.default.join(runtimeDirectory, runtimeModulesDirectory));
   if (actualIntegrity !== expectedIntegrity) {
-    throw new SemanticRuntimeError(`runtime tree integrity mismatch: ${runtimeKey}`);
+    throw new SemanticRuntimeError(`runtime tree integrity mismatch: ${runtimeKey}; expected ${expectedIntegrity}; actual ${actualIntegrity}`);
   }
 }
 async function validatedModulePath(runtimeDirectory, manifest, platformPackage) {
