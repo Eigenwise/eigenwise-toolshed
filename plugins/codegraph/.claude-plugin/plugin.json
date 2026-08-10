@@ -1,6 +1,6 @@
 {
   "name": "codegraph",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Local semantic graph indexing for TypeScript and JavaScript projects. Seven MCP tools trace symbol impact, paths, hierarchies, modules, and focused context; stale answers are refused, and a pinned runtime is acquired on first use. Source, paths, symbols, graph facts, and project data stay local.",
   "author": {
     "name": "Eigenwise",

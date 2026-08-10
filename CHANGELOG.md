@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.435.0 (2026-08-10)
+
+### codegraph 0.1.4 → 0.1.5
+
+#### Fixes
+
+- Prove Python relationships through Pyright (SQ-1750)
+  Use Pyright evaluator results for Python inheritance and ambiguous relationship facts.
+- Never report a resolved Python relationship without a target (SQ-1758) [`31b1b88`](https://github.com/Eigenwise/eigenwise-toolshed/commit/31b1b88)
+- Python tests acquire the pinned Pyright runtime (SQ-1761) [`77faeae`](https://github.com/Eigenwise/eigenwise-toolshed/commit/77faeaed14bba7099cbbaa555d54487ba17cff85)
+  Python semantic tests now acquire the pinned runtime instead of depending on a hand-run local install.
+- Resolve npm CLI across Node runtime layouts (SQ-1764)
+  Pyright runtime acquisition now finds npm from both Windows and Unix Node installations and reports failed install output.
+- Make the Pyright runtime tree integrity check portable (SQ-1769) [`0789709`](https://github.com/Eigenwise/eigenwise-toolshed/commit/0789709e)
+
 ## v3.434.0 (2026-08-10)
 
 ### sidequest 4.42.4 → 4.42.5
