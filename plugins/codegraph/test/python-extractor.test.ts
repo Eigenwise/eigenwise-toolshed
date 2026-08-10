@@ -2,33 +2,36 @@ import assert from 'node:assert/strict';
 import { readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import test from 'node:test';
-import { pathToFileURL } from 'node:url';
 import { PyrightCompatibilityError } from '../src/lib/extractors/python/pyright-adapter.ts';
 import { PyrightSemanticExtractor } from '../src/lib/extractors/python/python.ts';
 import { discoverPythonProjects } from '../src/lib/languages/python/projects.ts';
+import { PyrightRuntimeAcquirer } from '../src/lib/languages/python/runtime.ts';
+import type { SemanticEngineRuntime } from '../src/lib/runtime-contract.ts';
 
 const fixtureRoot = path.join(__dirname, 'fixtures', 'python-semantic');
-const runtimeRoot = path.join(__dirname, '..', 'runtime-pyright', 'node_modules');
+const pyrightRuntime = new PyrightRuntimeAcquirer().acquire();
 
-function pyrightRuntime() {
+function mismatchedPyrightRuntime(runtime: SemanticEngineRuntime): SemanticEngineRuntime {
   return {
-    id: 'pyright', version: '1.1.411', engineId: 'pyright', engineVersion: '1.1.411', extractors: [],
-    importModule(specifier: string): Promise<unknown> {
-      return import(pathToFileURL(path.join(runtimeRoot, specifier)).href);
-    },
+    id: runtime.id,
+    version: '1.1.410',
+    engineId: runtime.engineId,
+    engineVersion: '1.1.410',
+    extractors: runtime.extractors,
+    importModule: runtime.importModule.bind(runtime),
   };
 }
 
 test('rejects a mismatched Pyright engine before extraction', async () => {
   const [project] = await discoverPythonProjects(fixtureRoot);
   assert.ok(project);
-  await assert.rejects(new PyrightSemanticExtractor({ ...pyrightRuntime(), version: '1.1.410', engineVersion: '1.1.410' }).extractProject(project), PyrightCompatibilityError);
+  await assert.rejects(new PyrightSemanticExtractor(mismatchedPyrightRuntime(await pyrightRuntime)).extractProject(project), PyrightCompatibilityError);
 });
 
 test('extracts stable Python declarations and classified relationships through Pyright analysis', async () => {
   const [project] = await discoverPythonProjects(fixtureRoot);
   assert.ok(project);
-  const extractor = new PyrightSemanticExtractor(pyrightRuntime());
+  const extractor = new PyrightSemanticExtractor(await pyrightRuntime);
   const first = await extractor.extractProject(project);
   const second = await extractor.extractProject(project);
   const nodes = first.flatMap((graph) => graph.nodes);
@@ -67,7 +70,7 @@ test('keeps Python declaration identities when source lines move', async () => {
   assert.ok(project);
   const file = path.join(fixtureRoot, 'pkg', 'base.py');
   const original = await readFile(file, 'utf8');
-  const extractor = new PyrightSemanticExtractor(pyrightRuntime());
+  const extractor = new PyrightSemanticExtractor(await pyrightRuntime);
   const before = await extractor.extractProject(project);
   try {
     await writeFile(file, `\n\n${original}`);
