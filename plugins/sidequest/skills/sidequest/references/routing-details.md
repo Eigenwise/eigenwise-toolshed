@@ -72,7 +72,7 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   `exec.agent` (`sidequest-exec-dispatch-<effort>`) with `mode: "bypassPermissions"`, a unique
   `name`, and the `model` parameter OMITTED entirely — `exec.model` is null precisely so you leave
   it out. The def pins the virtual `claude-codex-auto`; the REAL model rides the spawn prompt's
-  `[sidequest-route model=... effort=...]` marker, which the codex-gateway shim resolves per
+  `[switchboard-route model=... effort=...]` marker, which the codex-gateway shim resolves per
   request — so the marker must reach the spawn prompt intact, and one spawn carries exactly one
   marker (never batch tickets stamped with different models). Passing ANY `model` value
   (`fable|opus|sonnet|haiku`) overrides the pin and silently runs Anthropic instead. Never

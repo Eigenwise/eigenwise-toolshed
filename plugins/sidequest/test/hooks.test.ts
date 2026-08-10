@@ -296,7 +296,7 @@ test('pre-tool hook: a spawn prompt naming another ticket still records its laun
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const command = `node "C:\\\\launcher\\\\sidequest-launcher.js" briefing ${ticket.ref} --token ${prepared.token} --project "${BOARD_PATH}"`;
   const prompt = [
-    '[sidequest-route model=gpt-5.6-terra effort=high]',
+    '[switchboard-route model=gpt-5.6-terra effort=high]',
     '',
     'Implementation context:',
     `Title: ${ticket.title}`,
@@ -420,7 +420,7 @@ test('pre-tool hook: every stable readonly executor remains allowed and forced t
       tool_input: {
         subagent_type: stableReadOnlyDispatchName(effort),
         model: 'fable',
-        prompt: `Review SQ-1.\n[sidequest-route model=gpt-5.6-sol effort=${effort}]`,
+        prompt: `Review SQ-1.\n[switchboard-route model=gpt-5.6-sol effort=${effort}]`,
       },
     });
     assert.equal(dispatch.hookSpecificOutput.permissionDecision, undefined);
@@ -932,7 +932,7 @@ test('pre-tool hook keeps builtin models and strips a stable dispatch executor m
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq210-dispatch',
-      prompt: 'work SQ-210\n[sidequest-route model=codex-gpt-5-6-terra effort=high]',
+      prompt: 'work SQ-210\n[switchboard-route model=codex-gpt-5-6-terra effort=high]',
     },
   });
   assert.equal(dispatch.hookSpecificOutput.updatedInput.model, undefined);
@@ -1217,7 +1217,7 @@ test('pre-tool hook: stable dispatch executor strips model even when a ref resol
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'w-dispatch',
-      prompt: `work ${t.ref} --project "${slug}"\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
+      prompt: `work ${t.ref} --project "${slug}"\n[switchboard-route model=codex-gpt-5-6-terra effort=high]`,
     },
   });
   assert.equal(out.hookSpecificOutput.updatedInput.model, undefined);
@@ -1244,7 +1244,7 @@ function runForceBypassWithEnv(toolInput?: any, envOverrides?: any) {
 
 test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a dispatch executor spawn', () => {
   const out = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', name: 'sq-env-codex', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'sq-env-codex', prompt: 'work SQ-1\n[switchboard-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }
   );
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
@@ -1263,7 +1263,7 @@ test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a builtin executor sp
 
 test('pre-tool hook: an unset CLAUDE_CODE_SUBAGENT_MODEL leaves the spawn alone', () => {
   const out = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
+    { subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1\n[switchboard-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: '' }
   );
   assert.ok(!out.hookSpecificOutput.permissionDecision, 'no override -> no deny');
@@ -2950,13 +2950,13 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   const a = fixtureTicket('SQ-347 dispatch batch A', 'codex-gpt-5-6-terra', 'high');
   const b = fixtureTicket('SQ-347 dispatch batch B', 'codex-gpt-5-6-sol', 'high');
   const proseSibling = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[switchboard-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.ok(!proseSibling.hookSpecificOutput.permissionDecision, 'a prose sibling ref must not create a mixed batch');
   assert.equal(proseSibling.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
   const mixed = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[switchboard-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[switchboard-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
@@ -2965,7 +2965,7 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /Split the batch/);
   assert.doesNotMatch(mixed.hookSpecificOutput.permissionDecisionReason, /fresh dispatch briefing/);
   const same = runForceBypassWithEnv(
-    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
+    { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[switchboard-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[switchboard-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');
@@ -2980,7 +2980,7 @@ test('pre-tool hook: legacy per-effort executor still rejects a route marker wit
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'sidequest-exec-dispatch-high', name: 'w-dispatch-mismatch',
-      prompt: 'work SQ-377\n[sidequest-route model=codex-gpt-5-6-terra effort=medium]',
+      prompt: 'work SQ-377\n[switchboard-route model=codex-gpt-5-6-terra effort=medium]',
     },
   });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
@@ -2992,7 +2992,7 @@ test('pre-tool hook: the collapsed dispatch executor accepts any marker effort',
     tool_name: 'Agent',
     tool_input: {
       subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-collapsed',
-      prompt: 'work SQ-377\n[sidequest-route model=codex-gpt-5-6-terra effort=medium]',
+      prompt: 'work SQ-377\n[switchboard-route model=codex-gpt-5-6-terra effort=medium]',
     },
   });
   assert.notEqual(out?.hookSpecificOutput?.permissionDecision, 'deny');
@@ -3020,11 +3020,17 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
       subagent_type: prepared.ticket.dispatchExecutor,
       name: prepared.ticket.dispatch.launchName,
       description: prepared.ticket.dispatch.description,
-      prompt: `Ref: ${ticket.ref}\n[sidequest-route model=gpt-5.6-terra effort=high]\n--project "${projectPath}" --token ${prepared.token}`,
+      prompt: `Ref: ${ticket.ref}\n[switchboard-route model=gpt-5.6-terra effort=high]\n--project "${projectPath}" --token ${prepared.token}`,
     };
     const exact = runForceBypassWithEnv(base, { SIDEQUEST_DISCOVERY_DIRS: catalog });
     assert.ok(!exact.hookSpecificOutput.permissionDecision, 'the production marker form must be allowed');
     assert.equal(exact.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+    const legacy = runForceBypassWithEnv(
+      { ...base, prompt: base.prompt.replace('switchboard-route', 'sidequest-route') },
+      { SIDEQUEST_DISCOVERY_DIRS: catalog }
+    );
+    assert.ok(!legacy.hookSpecificOutput.permissionDecision, 'an in-flight legacy marker must remain valid');
 
     const drifted = runForceBypassWithEnv(
       { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol') },
@@ -3055,7 +3061,7 @@ test('pre-tool hook: a prepared Codex route requires its marker and executor cla
     const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `route-class-${++sqSeq}` });
     const projectPath = store.readMeta(slug).path;
     const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
-    const marker = '[sidequest-route model=gpt-5.6-terra effort=high]';
+    const marker = '[switchboard-route model=gpt-5.6-terra effort=high]';
     const cases = [
       { type: 'sidequest-exec-dispatch', acceptsMarker: true },
       { type: 'sidequest-exec-dispatch-readonly', acceptsMarker: true },
@@ -3128,7 +3134,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
     tool_input: {
       ...base,
       subagent_type: 'sidequest-exec-dispatch',
-      prompt: `${prompt}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
+      prompt: `${prompt}\n[switchboard-route model=codex-gpt-5-6-terra effort=high]`,
     },
   });
   assert.equal(driftedRoute.hookSpecificOutput.permissionDecision, 'deny');
@@ -3141,7 +3147,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
     tool_input: {
       ...base,
       subagent_type: 'sidequest-exec-dispatch',
-      prompt: `[sidequest-route model=sonnet effort=high]\nFIRST action: run \`node "sidequest-launcher.js" brief ${ticket.ref} --token ${prepared.token} --project "${projectPath}"\``,
+      prompt: `[switchboard-route model=sonnet effort=high]\nFIRST action: run \`node "sidequest-launcher.js" brief ${ticket.ref} --token ${prepared.token} --project "${projectPath}"\``,
     },
   });
   assert.equal(driftedBriefing.hookSpecificOutput.permissionDecision, 'deny');
@@ -3233,7 +3239,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
       const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
       assert.equal(prepared.ticket.dispatchExecutor, expectedExecutor);
       const marker = expectedExecutor.includes('dispatch')
-        ? `\n[sidequest-route model=${prepared.ticket.dispatch.route.marker} effort=${effort}]`
+        ? `\n[switchboard-route model=${prepared.ticket.dispatch.route.marker} effort=${effort}]`
         : '';
       const prompt = `Ref: ${ticket.ref}${marker}\n--project "${projectPath}" --token ${prepared.token}`;
       const launch = runHookOutput(FORCE_BYPASS, {

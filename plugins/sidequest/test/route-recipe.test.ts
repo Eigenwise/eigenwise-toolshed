@@ -53,7 +53,7 @@ test('route returns the live workflow recipe as JSON', () => {
     runsLabel: 'Codex Terra',
     agent: {
       model: 'claude-codex-auto',
-      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n',
+      promptPrefix: '[switchboard-route model=gpt-5.6-terra effort=medium]\n\n',
     },
     effortCarrier: 'marker',
     warnings: [],
@@ -92,7 +92,7 @@ test('route resolves a ticket override without changing its sibling recipe', () 
   const overrideRecipe = jsonCli('route', 'workflow-override', '--ticket', overridden.body.ticket.ref);
   assert.equal(overrideRecipe.result.status, 0, overrideRecipe.result.stderr);
   assert.deepEqual(overrideRecipe.body.route, { model: 'codex-sol', effort: 'high' });
-  assert.equal(overrideRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-sol effort=high]\n\n');
+  assert.equal(overrideRecipe.body.agent.promptPrefix, '[switchboard-route model=gpt-5.6-sol effort=high]\n\n');
   assert.deepEqual(overrideRecipe.body.ticket, {
     ref: overridden.body.ticket.ref,
     route: { model: 'codex-sol', effort: 'high' },
@@ -101,7 +101,7 @@ test('route resolves a ticket override without changing its sibling recipe', () 
   const siblingRecipe = jsonCli('route', 'workflow-override', '--ticket', sibling.body.ticket.ref);
   assert.equal(siblingRecipe.result.status, 0, siblingRecipe.result.stderr);
   assert.deepEqual(siblingRecipe.body.route, { model: 'codex-terra', effort: 'medium' });
-  assert.equal(siblingRecipe.body.agent.promptPrefix, '[sidequest-route model=gpt-5.6-terra effort=medium]\n\n');
+  assert.equal(siblingRecipe.body.agent.promptPrefix, '[switchboard-route model=gpt-5.6-terra effort=medium]\n\n');
 });
 
 export {};

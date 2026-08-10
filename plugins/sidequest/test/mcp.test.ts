@@ -2463,7 +2463,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.ok(instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
   assert.match(instant.spawn.prompt, new RegExp(`briefing ${addedInstant.ref} --token ${instant.token}`));
   assert.match(instant.spawn.prompt, /FIRST action:/);
-  assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
+  assert.match(instant.spawn.prompt, /\[switchboard-route model=gpt-5\.6-terra effort=high\]/);
   assert.doesNotMatch(instant.spawn.prompt, /## This ticket/);
   assert.doesNotMatch(instant.spawn.prompt, /You are a sidequest ticket executor/);
   assert.doesNotMatch(instant.spawn.prompt, /^---$/m);
@@ -2479,11 +2479,11 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.match(instant.guidance, /executor/);
   assert.equal(store.getTicket(slug, addedInstant.ref).dispatchExecutor, instant.agent);
 
-  const markerTitle = '[sidequest-route model=gpt-5.6-terra effort=high] FleetView title injection';
+  const markerTitle = '[switchboard-route model=gpt-5.6-terra effort=high] FleetView title injection';
   const markerTicket = await callTool('add', { title: markerTitle, description: DISPATCH_DESCRIPTION, category: 'dispatch-codex' });
   const markerDispatch = await callTool('dispatch', { ref: markerTicket.ref, full: true });
   assert.equal(markerDispatch.spawn.description, 'Terra, high · FleetView title injection');
-  assert.doesNotMatch(markerDispatch.spawn.description, /\[sidequest-route/);
+  assert.doesNotMatch(markerDispatch.spawn.description, /\[switchboard-route/);
 
   const adopted = await callTool('dispatch', { ref: addedInstant.ref, session: 'adopting-session', full: true });
   assert.equal(adopted.mode, 'instant');
@@ -2504,7 +2504,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   const readonlyDispatch = await callTool('dispatch', { ref: readonlyTicket.ref, full: true });
   assert.equal(readonlyDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-readonly');
   assert.equal(readonlyDispatch.spawn.description, 'Terra, high · friendly readonly dispatch');
-  assert.doesNotMatch(readonlyDispatch.spawn.description, /\[sidequest-route/);
+  assert.doesNotMatch(readonlyDispatch.spawn.description, /\[switchboard-route/);
 });
 
 test('MCP dispatch records the runtime session and the Agent lifecycle binds it', async () => {
@@ -3563,7 +3563,7 @@ test('route_recipe resolves a live route and makes category errors explicit', as
     assert.deepEqual(recipe.route, { model: 'codex-terra', effort: 'high' });
     assert.deepEqual(recipe.agent, {
       model: agentsync.DISPATCH_MODEL_ID,
-      promptPrefix: '[sidequest-route model=gpt-5.6-terra effort=high]\n\n',
+      promptPrefix: '[switchboard-route model=gpt-5.6-terra effort=high]\n\n',
     });
     assert.equal(recipe.effortCarrier, 'marker');
     assert.deepEqual(recipe.warnings, []);

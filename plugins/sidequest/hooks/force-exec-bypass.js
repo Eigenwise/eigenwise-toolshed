@@ -389,7 +389,7 @@ function resolveStampedModel(input) {
   if (models.size !== 1) return { status: "conflicting", refs, models: [...models] };
   return { status: "ok", refs, model: [...models][0] };
 }
-var ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
+var ROUTE_MARKER_RE = /^\[(?:switchboard-route|sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
 function dispatchRouteMarkers(input) {
   const prompt = toolInputOf(input)?.prompt;
   if (typeof prompt !== "string" || !prompt) return [];

@@ -30,14 +30,15 @@ function defaultAgentsDir() {
 }
 const DISPATCH_MODEL_ID = "claude-codex-auto";
 const ROUTE_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
-const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+const EMITTED_ROUTE_MARKER_RE = /^\[switchboard-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+const ROUTE_MARKER_RE = /^\[(?:switchboard-route|sidequest-route) model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
 function routeMarker(dispatchModel, effort) {
   const model = String(dispatchModel || "");
   const markerEffort = String(effort || "");
   if (!ROUTE_MODEL_RE.test(model)) throw new Error(`dispatch model id is not marker-safe: ${dispatchModel}`);
   if (!EXEC_EFFORTS.includes(markerEffort)) throw new Error(`dispatch effort is not marker-safe: ${effort}`);
-  const marker = `[sidequest-route model=${model} effort=${markerEffort}]`;
-  if (!ROUTE_MARKER_RE.test(marker)) throw new Error("dispatch route marker does not match the gateway grammar.");
+  const marker = `[switchboard-route model=${model} effort=${markerEffort}]`;
+  if (!EMITTED_ROUTE_MARKER_RE.test(marker)) throw new Error("dispatch route marker does not match the gateway grammar.");
   return marker;
 }
 function workflowRecipe(category, resolved) {
@@ -108,7 +109,7 @@ ${ticketBrief2}` : ""}`);
 function dispatchNote() {
   return `
 
-_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[sidequest-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
+_This agent is the shared Sidequest executor for every Codex-backed route at every effort. Its \`model: ${DISPATCH_MODEL_ID}\` pin is virtual: the codex-gateway shim resolves the real Codex model AND the reasoning effort from the \`[switchboard-route model=... effort=...]\` line in your spawn prompt, so NEVER write, quote, or echo such a line anywhere else. If the gateway reports a missing route marker, stop and report it — the orchestrator must redispatch. Refuse a batch whose tickets are stamped with different models or efforts: one spawn carries exactly one route marker._`;
 }
 function collapseEffortProse(body) {
   return body.split("Executes one or more sidequest tickets at high reasoning effort.").join("Executes one or more sidequest tickets at the reasoning effort set by the dispatch route marker.").split("running at **high** reasoning effort").join("running at the reasoning effort your dispatch route marker sets");

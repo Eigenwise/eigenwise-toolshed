@@ -322,7 +322,7 @@ function resolveStampedModel(input: HookInput): ResolveResult {
   return { status: 'ok', refs, model: [...models][0] };
 }
 
-const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
+const ROUTE_MARKER_RE = /^\[(?:switchboard-route|sidequest-route) model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
 
 function dispatchRouteMarkers(input: HookInput): Array<{ model: string; effort: string }> {
   const prompt = toolInputOf(input)?.prompt;
