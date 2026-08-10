@@ -1,6 +1,6 @@
 # Observability setup
 
-This skill owns the observability interview. `/workbench:init-workspace` hands off to it after telemetry
+This skill owns the observability interview. `/quartermaster:setup` hands off to it after telemetry
 consent, and it also runs standalone. This plugin must be installed at user scope: the observer is one
 process per machine.
 

@@ -36,12 +36,12 @@ This README is a signpost. The guides are over there.
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | The one user-scope install, and the front door to the rest of the shed: workspace setup, Toolshed updates, health checks, and the freshness guard. Use `/init-workspace`, `/update-toolshed`, and `/workbench-doctor`. |
+| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | A user-scope install and the shed's caretaker: Toolshed updates, health checks, and the freshness guard. Use `/update-toolshed` and `/workbench-doctor`. |
+| [**quartermaster**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/) | Outfits your workspaces and keeps them earning their keep. `/quartermaster:setup` sets up a project (Toolshed core, stack plugins, rules, permissions) grounded in your actual session history; `/quartermaster:retro` mines recent transcripts for friction and proposes fixes one at a time, then reports next retro whether they worked. |
 | [**observability**](https://eigenwise.github.io/eigenwise-toolshed/observability/) | Local, metadata-only telemetry: a loopback observer writing to SQLite on your machine, an optional statusline for live context and usage, and an OpenTelemetry Collector that can forward redacted signals to Grafana. Off until you opt a repository in. |
 | [**model-gateway**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) | Puts ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker through a local gateway. |
 | [**sidequest**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
 | [**codebase-mapper**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
-| [**playbook**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/playbook/) | Practice skills for fanning out across parallel agents and verifying without burning the clock, plus retros that mine your transcripts for work you keep redoing. |
 | [**live-rules**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
 
 *More tools will move into the shed over time.*
@@ -54,23 +54,23 @@ Use this path for a first install:
    ```text
    /plugin marketplace add Eigenwise/eigenwise-toolshed
    ```
-2. Install Workbench at user scope:
+2. Install Workbench and Quartermaster at user scope:
    ```text
    /plugin install workbench@eigenwise-toolshed --scope user
+   /plugin install quartermaster@eigenwise-toolshed --scope user
    ```
 3. Reload the plugins:
    ```text
    /reload-plugins
    ```
-4. In any project, run `/workbench:init-workspace` or ask **"set up a Claude workspace here"**. It interviews you, then installs and configures every other plugin for that project. You do not need to install them by hand.
-
-Workbench is the workspace manager, so install it once at user scope and use it everywhere.
+4. In any project, run `/quartermaster:setup` or ask **"set up a Claude workspace here"**. It mines your session history, interviews you, then installs and configures every other plugin for that project. You do not need to install them by hand.
 
 | Plugin scope | Use it for |
 |--------------|------------|
-| **Workbench: user** | It manages every workspace. A second project-scoped copy loads its hooks twice, and `init-workspace` requires the user-scope install. |
+| **Workbench: user** | It keeps every workspace fresh and healthy. A second project-scoped copy loads its hooks twice. |
+| **Quartermaster: user** | Its session tallies, retros, and decision ledger span every project. |
 | **Model Gateway: user, required** | Its wiring is global-only and writes `~/.claude/settings.json`. Its keepalive hook must be live in every project and every executor worktree. There is no project-scoped wiring anymore. |
-| **Everything else: project** | Sidequest, codebase-mapper, live-rules, and playbook keep their config with the repo. `init-workspace` installs them for you. |
+| **Everything else: project** | Sidequest, codebase-mapper, and live-rules keep their config with the repo. `/quartermaster:setup` installs them for you. |
 
 <details>
 <summary>Installing by hand instead</summary>
@@ -78,10 +78,10 @@ Workbench is the workspace manager, so install it once at user scope and use it 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
 /plugin install workbench@eigenwise-toolshed --scope user
+/plugin install quartermaster@eigenwise-toolshed --scope user
 /plugin install model-gateway@eigenwise-toolshed --scope user
 /plugin install sidequest@eigenwise-toolshed
 /plugin install codebase-mapper@eigenwise-toolshed
-/plugin install playbook@eigenwise-toolshed
 /plugin install live-rules@eigenwise-toolshed
 ```
 

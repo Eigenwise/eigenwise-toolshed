@@ -1,0 +1,28 @@
+{
+  "description": "quartermaster: a SessionEnd tally of this session's friction (streamed locally, no LLM, no network) and a SessionStart one-liner that suggests a retrospective once enough unanalyzed sessions or friction events pile up. Neither hook analyzes content or changes anything; all recommendations happen inside the retro skill with per-item user approval.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "startup",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-nudge.js\"",
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end-tally.js\"",
+            "timeout": 30
+          }
+        ]
+      }
+    ]
+  }
+}

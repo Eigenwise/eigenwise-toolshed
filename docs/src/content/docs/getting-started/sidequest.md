@@ -14,7 +14,7 @@ Install Sidequest for the project you are working in:
 /plugin install sidequest@eigenwise-toolshed --scope project
 ```
 
-Reload Claude Code or start a new session after installing. You can also run `/workbench:init-workspace` and let Workbench install and configure Sidequest for the project.
+Reload Claude Code or start a new session after installing. You can also run `/quartermaster:setup` and let Quartermaster install and configure Sidequest for the project.
 
 Sidequest is local. The dashboard runs on your machine and ticket data stays in the local Sidequest store.
 

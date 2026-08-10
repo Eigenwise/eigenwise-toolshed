@@ -137,7 +137,7 @@ function workflowRecipe(category?: any, resolved?: any) {
 // file is user-scoped rather than plugin-scoped so Claude Code honors its
 // permissionMode: bypassPermissions frontmatter. `name` and `effort` are
 // required; `modelId`, `marker`, and `extraNote` are optional.
-const EXECUTOR_SKILLS = ['playbook:verify-discipline'];
+const EXECUTOR_SKILLS = ['sidequest:verify-discipline'];
 
 // Never emit a `tools:` line. `default` is a --allowedTools CLI sentinel, not a valid
 // agent-frontmatter tool name, so `tools: default, Skill(...)` became an allow-list that

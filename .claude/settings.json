@@ -13,7 +13,6 @@
     "sidequest@eigenwise-toolshed": true,
     "svelte@svelte": true,
     "codebase-mapper@eigenwise-toolshed": true,
-    "playbook@eigenwise-toolshed": true,
     "observability@eigenwise-toolshed": true,
     "codegraph@eigenwise-toolshed": true
   }

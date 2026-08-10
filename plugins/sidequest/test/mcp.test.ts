@@ -1182,11 +1182,11 @@ test('verify commands reject direct multi-plugin directory chaining', () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-multi-plugin-verify-')).slug;
   assert.throws(() => store.createTicket(project, {
     title: 'unsafe multi-plugin verify',
-    executorVerify: 'cd plugins/sidequest && npm test; cd plugins/playbook && npm test',
+    executorVerify: 'cd plugins/sidequest && npm test; cd plugins/workbench && npm test',
   }), /Verify cannot use `;` command chaining/);
   assert.doesNotThrow(() => store.createTicket(project, {
     title: 'safe multi-plugin verify',
-    executorVerify: '(cd plugins/sidequest && npm test) && (cd plugins/playbook && npm test)',
+    executorVerify: '(cd plugins/sidequest && npm test) && (cd plugins/workbench && npm test)',
   }));
 });
 

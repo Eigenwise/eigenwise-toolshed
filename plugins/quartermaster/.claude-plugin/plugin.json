@@ -1,0 +1,10 @@
+{
+  "name": "quartermaster",
+  "version": "0.1.0",
+  "description": "Looks back at your Claude Code sessions and turns the friction into setup fixes: plugins worth installing, rules worth writing, permissions worth allowing. A SessionEnd hook tallies each session locally (no LLM, no network); a retro skill mines the history and proposes changes one at a time, each needing your approval; the next retro reports whether what you applied actually reduced the friction it targeted. Also sets up new projects from what your history shows you keep needing.",
+  "author": { "name": "Eigenwise", "email": "kenny@eigenwise.io" },
+  "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/quartermaster",
+  "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
+  "license": "MIT",
+  "keywords": ["retrospective", "self-improvement", "transcripts", "friction", "recommendations", "plugins", "rules", "permissions", "setup", "developer-experience"]
+}

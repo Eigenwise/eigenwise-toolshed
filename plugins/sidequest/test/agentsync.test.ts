@@ -572,7 +572,7 @@ test('stable executors preload only declared skills', () => {
   ]) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     const frontmatter = parseExecutorFrontmatter(body);
-    assert.deepStrictEqual(frontmatter.skills, ['playbook:verify-discipline']);
+    assert.deepStrictEqual(frontmatter.skills, ['sidequest:verify-discipline']);
     assert.equal(Object.hasOwn(frontmatter, 'tools'), false);
   }
 

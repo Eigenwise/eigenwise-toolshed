@@ -38,7 +38,7 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 - [Trace symbol relationships across a project](./getting-started/codegraph/)
 - [Keep a project map nearby](./getting-started/codebase-mapper/)
 - [Load project rules when they apply](./getting-started/live-rules/)
-- [Keep working practice and experiments bounded](./getting-started/playbook/)
+- [Set up workspaces and run retros with hindsight](./getting-started/quartermaster/)
 - [Run a human-judged comparison](./getting-started/experiments/)
 - [View selected local usage](./observability/)
 

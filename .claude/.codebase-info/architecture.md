@@ -4,7 +4,7 @@ Last Updated: 2026-08-10
 
 ## Repository shape
 
-The repository is a plugin marketplace. Eight plugins are published: `plugins/sidequest`, `plugins/workbench`, `plugins/observability`, `plugins/model-gateway`, `plugins/live-rules`, `plugins/codebase-mapper`, `plugins/codegraph`, and `plugins/playbook`, with marketplace metadata in `.claude-plugin/marketplace.json`. `plugins/test-support` is shared test support, not a plugin.
+The repository is a plugin marketplace. Eight plugins are published: `plugins/sidequest`, `plugins/workbench`, `plugins/observability`, `plugins/model-gateway`, `plugins/live-rules`, `plugins/codebase-mapper`, `plugins/codegraph`, and `plugins/quartermaster`, with marketplace metadata in `.claude-plugin/marketplace.json`. `plugins/test-support` is shared test support, not a plugin.
 
 ## Runtime flow
 

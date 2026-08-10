@@ -69,7 +69,7 @@ function workflowRecipe(category, resolved) {
   }
   return recipe;
 }
-const EXECUTOR_SKILLS = ["playbook:verify-discipline"];
+const EXECUTOR_SKILLS = ["sidequest:verify-discipline"];
 const READ_ONLY_DENIED_TOOLS = [
   "Edit",
   "Write",
