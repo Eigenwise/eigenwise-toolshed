@@ -3,8 +3,16 @@ import test from 'node:test';
 import { loadPyrightAdapter, PyrightCompatibilityError } from '../src/lib/extractors/python/pyright-adapter.ts';
 
 const internalModuleFactories = {
+  1294: (module: { exports: Record<string, unknown> }) => { module.exports.ensureTomlModuleLoaded = async () => undefined; },
+  1784: (module: { exports: Record<string, unknown> }) => {
+    module.exports.RealTempFile = class RealTempFile {};
+    module.exports.WorkspaceFileWatcherProvider = class WorkspaceFileWatcherProvider {};
+    module.exports.createFromRealFileSystem = () => ({});
+  },
   2439: (module: { exports: Record<string, unknown> }) => { module.exports.AnalyzerService = class AnalyzerService {}; },
+  2965: (module: { exports: Record<string, unknown> }) => { module.exports.PyrightFileSystem = class PyrightFileSystem {}; },
   3252: (module: { exports: Record<string, unknown> }) => { module.exports.Uri = {}; },
+  4471: (module: { exports: Record<string, unknown> }) => { module.exports.createServiceProvider = () => ({}); },
   5668: (module: { exports: Record<string, unknown> }) => { module.exports.Program = class Program {}; },
   8779: (module: { exports: Record<string, unknown> }) => { module.exports.AnalyzerServiceExecutor = {}; },
   9401: (module: { exports: Record<string, unknown> }) => { module.exports.ParseTreeWalker = class ParseTreeWalker {}; },

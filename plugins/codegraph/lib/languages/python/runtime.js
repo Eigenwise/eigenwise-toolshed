@@ -45,7 +45,7 @@ class PyrightRuntimeAcquirer {
       cacheIdentity: "any",
       engineVersion: pyrightEngineVersion,
       installer: options.installer ?? new import_runtime.NpmRuntimeInstaller(),
-      runtimeManifestDirectory: options.runtimeManifestDirectory ?? import_node_path.default.resolve(__dirname, "..", "..", "..", "runtime-pyright")
+      runtimeManifestDirectory: options.runtimeManifestDirectory ?? import_node_path.default.resolve(__dirname, "..", "..", "..", "..", "runtime-pyright")
     });
   }
   acquire() {
