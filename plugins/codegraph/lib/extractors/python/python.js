@@ -50,6 +50,9 @@ function sourceSpan(file, content, start, length) {
   const column = start - Math.max(before.lastIndexOf("\n"), before.lastIndexOf("\r"));
   return { file, startLine: line, startColumn: column, endLine: line, endColumn: column + length };
 }
+function resolvedRelationship(targetId, resolutionWithoutTarget) {
+  return targetId === null ? { resolution: resolutionWithoutTarget, targetId: null } : { resolution: "resolved", targetId };
+}
 function addEdge(edges, edge) {
   const id = (0, import_model.createGraphEdgeId)(edge);
   if (!edges.some((candidate) => candidate.id === id)) edges.push({ ...edge, id });
@@ -153,47 +156,47 @@ function addResolvedAliases(parsedFiles) {
       const evidence = parsedFile.graph.nodes.find((node) => node.id === sourceId2)?.declaration ?? sourceSpan(parsedFile.graph.file, "", declaration.start, declaration.length);
       for (const baseTarget of declaration.baseTargets) {
         const targetId2 = baseTarget.target === null ? null : targetsByLocation.get(`${import_node_path.default.resolve(baseTarget.target.path)}:${baseTarget.target.start}`) ?? targetNodes.get(`${import_node_path.default.resolve(baseTarget.target.path)}:${baseTarget.target.name}`) ?? null;
-        const resolution = baseTarget.uncertainty ?? (targetId2 === null ? "external" : "resolved");
+        const relationship = baseTarget.uncertainty === null ? resolvedRelationship(targetId2, "external") : resolvedRelationship(null, baseTarget.uncertainty);
         addEdge(parsedFile.graph.edges, {
           kind: "extends",
           sourceId: sourceId2,
-          targetId: resolution === "resolved" ? targetId2 : null,
-          resolution,
+          targetId: relationship.targetId,
+          resolution: relationship.resolution,
           evidence,
-          reason: resolution === "resolved" ? void 0 : resolution === "external" ? "Pyright resolved a base class outside this project" : "Pyright did not prove one project-owned base class"
+          reason: relationship.resolution === "resolved" ? void 0 : relationship.resolution === "external" ? "Pyright resolved a base class outside this project" : "Pyright did not prove one project-owned base class"
         });
       }
     }
     const moduleId = parsedFile.graph.nodes[0].id;
     const sourceId = (ownerStart) => ownerStart === null ? moduleId : parsedFile.ownerNodeIds.get(ownerStart) ?? moduleId;
     const targetId = (target) => targetsByLocation.get(`${import_node_path.default.resolve(target.path)}:${target.start}`) ?? targetNodes.get(`${import_node_path.default.resolve(target.path)}:${target.name}`) ?? null;
-    const relationResolution = (target, uncertainty) => {
-      if (uncertainty !== null || parsedFile.moduleDynamic) return uncertainty ?? "ambiguous";
-      if (target === null) return "dynamic";
-      return projectFiles.has(import_node_path.default.resolve(target.path)) ? "resolved" : "external";
+    const callResolution = (target, resolvedTargetId, uncertainty) => {
+      if (uncertainty !== null || parsedFile.moduleDynamic) return resolvedRelationship(null, uncertainty ?? "ambiguous");
+      if (target === null) return resolvedRelationship(null, "dynamic");
+      return resolvedRelationship(resolvedTargetId, projectFiles.has(import_node_path.default.resolve(target.path)) ? "unresolved" : "external");
     };
     for (const call of parsedFile.calls) {
       const resolvedTargetId = call.target === null ? null : targetId(call.target);
-      const resolution = relationResolution(call.target, parsedFile.uncertainOwnerStarts.has(call.ownerStart ?? -1) ? "ambiguous" : call.uncertainty);
+      const relationship = callResolution(call.target, resolvedTargetId, parsedFile.uncertainOwnerStarts.has(call.ownerStart ?? -1) ? "ambiguous" : call.uncertainty);
       addEdge(parsedFile.graph.edges, {
         kind: "calls",
         sourceId: sourceId(call.ownerStart),
-        targetId: resolution === "resolved" ? resolvedTargetId : null,
-        resolution,
+        targetId: relationship.targetId,
+        resolution: relationship.resolution,
         evidence: sourceSpan(parsedFile.graph.file, parsedFile.content, call.start, call.length),
-        reason: resolution === "resolved" ? void 0 : resolution === "external" ? "Pyright resolved a target outside this project" : "Pyright could not prove a stable project-owned call target"
+        reason: relationship.resolution === "resolved" ? void 0 : relationship.resolution === "external" ? "Pyright resolved a target outside this project" : "Pyright could not prove a stable project-owned call target"
       });
     }
     for (const reference of parsedFile.references) {
       const resolvedTargetId = reference.target === null ? null : targetId(reference.target);
-      const resolution = reference.uncertainty ?? (parsedFile.moduleDynamic || parsedFile.uncertainOwnerStarts.has(reference.ownerStart ?? -1) ? "ambiguous" : resolvedTargetId !== null ? "resolved" : reference.target !== null && projectFiles.has(import_node_path.default.resolve(reference.target.path)) ? "unresolved" : "external");
+      const relationship = reference.uncertainty !== null ? resolvedRelationship(null, reference.uncertainty) : parsedFile.moduleDynamic || parsedFile.uncertainOwnerStarts.has(reference.ownerStart ?? -1) ? resolvedRelationship(null, "ambiguous") : resolvedRelationship(resolvedTargetId, reference.target !== null && projectFiles.has(import_node_path.default.resolve(reference.target.path)) ? "unresolved" : "external");
       addEdge(parsedFile.graph.edges, {
         kind: "references",
         sourceId: sourceId(reference.ownerStart),
-        targetId: resolution === "resolved" ? resolvedTargetId : null,
-        resolution,
+        targetId: relationship.targetId,
+        resolution: relationship.resolution,
         evidence: sourceSpan(parsedFile.graph.file, parsedFile.content, reference.start, reference.length),
-        reason: resolution === "resolved" ? void 0 : resolution === "external" ? "Pyright resolved a target outside this project" : "Pyright could not prove a stable project-owned reference target"
+        reason: relationship.resolution === "resolved" ? void 0 : relationship.resolution === "external" ? "Pyright resolved a target outside this project" : "Pyright could not prove a stable project-owned reference target"
       });
     }
     parsedFile.graph.unresolvedCount = parsedFile.graph.edges.filter((edge) => edge.resolution === "unresolved").length;

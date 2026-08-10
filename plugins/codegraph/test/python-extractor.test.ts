@@ -42,13 +42,13 @@ test('extracts stable Python declarations and classified relationships through P
     assert.ok(node, `missing node ${qualifiedName}`);
     return node.id;
   };
-  const edge = (kind: string, source: string, target: string | null) => {
-    const relationship = edges.find((candidate) => candidate.kind === kind && candidate.sourceId === source && candidate.targetId === target);
+  const edge = (kind: string, source: string, target: string | null, resolution?: string) => {
+    const relationship = edges.find((candidate) => candidate.kind === kind && candidate.sourceId === source && candidate.targetId === target && (resolution === undefined || candidate.resolution === resolution));
     assert.ok(relationship, `missing ${kind} edge from ${source} to ${target}: ${JSON.stringify(edges.filter((candidate) => candidate.kind === kind && candidate.sourceId === source).map((candidate) => ({ targetId: candidate.targetId, resolution: candidate.resolution })))}`);
     return relationship;
   };
   assert.equal(edge('extends', nodeId('pkg.api.Child'), nodeId('pkg.base.Base')).resolution, 'resolved');
-  assert.ok(edges.some((candidate) => candidate.kind === 'calls' && candidate.sourceId === nodeId('pkg.adverse.patched_call') && candidate.resolution !== 'ambiguous'));
+  assert.equal(edge('calls', nodeId('pkg.adverse.patched_call'), null, 'unresolved').resolution, 'unresolved');
   const initModule = first.find((graph) => graph.file === 'pkg/__init__.py')?.nodes[0];
   assert.ok(initModule);
   assert.equal(edge('imports', initModule.id, nodeId('pkg.base.Base')).resolution, 'resolved');
