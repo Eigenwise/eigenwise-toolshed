@@ -108,18 +108,6 @@ function declarationQualifier(symbol, fallbackName) {
   }
   return names.join(".");
 }
-function edgeId(kind, sourceId, targetId, resolution, evidence, reason) {
-  return (0, import_node_crypto.createHash)("sha256").update([
-    kind,
-    sourceId,
-    targetId ?? "",
-    resolution,
-    evidence.file,
-    String(evidence.startLine),
-    String(evidence.startColumn),
-    reason ?? ""
-  ].join("\0")).digest("hex");
-}
 function isExported(node, sourceFile) {
   return /^export\s/.test(node.getText(sourceFile).trimStart());
 }
@@ -176,7 +164,7 @@ function identifiersWithin(node, ast) {
   return identifiers;
 }
 function addEdge(edges, edge) {
-  const id = edgeId(edge.kind, edge.sourceId, edge.targetId, edge.resolution, edge.evidence, edge.reason);
+  const id = (0, import_model.createGraphEdgeId)(edge);
   if (!edges.some((candidate) => candidate.id === id)) edges.push({ ...edge, id });
 }
 function collectNodes(project, checker, ast, sourceFiles) {

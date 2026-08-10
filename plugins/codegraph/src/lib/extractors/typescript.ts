@@ -18,7 +18,7 @@ import type {
   VariableDeclaration,
   VariableStatement,
 } from 'typescript/unstable/ast' with { "resolution-mode": "import" };
-import { createGraphNodeId, type FileGraph, type GraphEdge, type GraphEdgeKind, type GraphNode, type GraphNodeKind, type LanguageExtractor, type ProjectDescriptor, type ResolutionState, type SourceSpan } from '../model.js';
+import { createGraphEdgeId, createGraphNodeId, type FileGraph, type GraphEdge, type GraphEdgeKind, type GraphNode, type GraphNodeKind, type LanguageExtractor, type ProjectDescriptor, type ResolutionState, type SourceSpan } from '../model.js';
 import { normalizeProjectRelativePath } from '../paths.js';
 import { discoverProjects } from '../projects.js';
 
@@ -151,19 +151,6 @@ function declarationQualifier(symbol: TypeScriptSymbol, fallbackName: string): s
   return names.join('.');
 }
 
-function edgeId(kind: GraphEdgeKind, sourceId: string, targetId: string | null, resolution: ResolutionState, evidence: SourceSpan, reason: string | undefined): string {
-  return createHash('sha256').update([
-    kind,
-    sourceId,
-    targetId ?? '',
-    resolution,
-    evidence.file,
-    String(evidence.startLine),
-    String(evidence.startColumn),
-    reason ?? '',
-  ].join('\0')).digest('hex');
-}
-
 function isExported(node: Node, sourceFile: SourceFile): boolean {
   return /^export\s/.test(node.getText(sourceFile).trimStart());
 }
@@ -237,7 +224,7 @@ function identifiersWithin(node: Node, ast: TypeScriptAstModule): Identifier[] {
 }
 
 function addEdge(edges: GraphEdge[], edge: Omit<GraphEdge, 'id'>): void {
-  const id = edgeId(edge.kind, edge.sourceId, edge.targetId, edge.resolution, edge.evidence, edge.reason);
+  const id = createGraphEdgeId(edge);
   if (!edges.some((candidate) => candidate.id === id)) edges.push({ ...edge, id });
 }
 
