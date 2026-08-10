@@ -7,6 +7,17 @@ function createDispatch(dependencies) {
   function dispatchState(ticket) {
     return ticket && ticket.dispatch && typeof ticket.dispatch === "object" ? ticket.dispatch : null;
   }
+  function executorClaimDispatchRefusal(slug, sessionId) {
+    const callerSessionId = String(sessionId || "").trim();
+    if (!callerSessionId) return null;
+    for (const ticket of listTickets(slug)) {
+      const state = dispatchState(ticket);
+      const dispatchingSessionId = String(state?.preparedBy?.sessionId || "").trim();
+      if (!ticket?.claim?.by || !state || state.terminalAt || state.sessionId !== callerSessionId || dispatchingSessionId === callerSessionId || claimReclaimable(ticket)) continue;
+      return `dispatch: dispatch is orchestrator-owned while you hold ${ticket.ref}. File the follow-up with \`add\`, link it to ${ticket.ref}, report the new ref in your submission comment, and the orchestrator will dispatch it.`;
+    }
+    return null;
+  }
   function dispatchPreparationAttribution(opts) {
     return {
       sessionId: opts?.sessionId ? String(opts.sessionId) : null,
@@ -612,6 +623,8 @@ function createDispatch(dependencies) {
     const projectPath = readMeta(slug)?.path;
     const found = getTicket(slug, idOrRef);
     if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+    const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
+    if (executorClaimRefusal) throw new Error(executorClaimRefusal);
     const initialNoDeclaredFileScope = !dispatchReadOnly(found) && Array.isArray(found.contracts?.changes) && found.contracts.changes.length > 0 && !normalizeFiles(found.files).length;
     if (initialNoDeclaredFileScope && opts.allowUnscoped !== true) {
       throw new Error(`prepare dispatch: ${found.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
@@ -1222,6 +1235,7 @@ function createDispatch(dependencies) {
   return {
     dispatchTokenPrefix,
     dispatchState,
+    executorClaimDispatchRefusal,
     sharedTreeArtifactRequested,
     categoryArtifactRoot,
     sharedTreeArtifactMode,
