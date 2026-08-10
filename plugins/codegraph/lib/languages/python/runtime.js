@@ -34,18 +34,21 @@ __export(runtime_exports, {
 });
 module.exports = __toCommonJS(runtime_exports);
 var import_node_path = __toESM(require("node:path"));
+var import_paths = require("../../paths.js");
 var import_runtime = require("../../runtime.js");
 const pyrightEngineId = "pyright";
 const pyrightEngineVersion = "1.1.411";
 class PyrightRuntimeAcquirer {
   runtime;
+  manifestDirectory;
   constructor(options = {}) {
+    this.manifestDirectory = options.runtimeManifestDirectory ?? import_node_path.default.join((0, import_paths.pluginRootDirectory)(__dirname), "runtime-pyright");
     this.runtime = new import_runtime.PinnedNpmRuntimeAcquirer({
       ...options,
       cacheIdentity: "any",
       engineVersion: pyrightEngineVersion,
       installer: options.installer ?? new import_runtime.NpmRuntimeInstaller(),
-      runtimeManifestDirectory: options.runtimeManifestDirectory ?? import_node_path.default.resolve(__dirname, "..", "..", "..", "..", "runtime-pyright")
+      runtimeManifestDirectory: this.manifestDirectory
     });
   }
   acquire() {

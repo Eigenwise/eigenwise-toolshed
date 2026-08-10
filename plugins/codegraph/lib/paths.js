@@ -32,6 +32,7 @@ __export(paths_exports, {
   codegraphStateRoot: () => codegraphStateRoot,
   normalizeProjectRelativePath: () => normalizeProjectRelativePath,
   normalizeProjectRoot: () => normalizeProjectRoot,
+  pluginRootDirectory: () => pluginRootDirectory,
   projectIdentity: () => projectIdentity,
   projectStateDirectory: () => projectStateDirectory,
   runtimeCacheDirectory: () => runtimeCacheDirectory
@@ -41,6 +42,15 @@ var import_node_crypto = require("node:crypto");
 var import_node_fs = require("node:fs");
 var import_node_os = require("node:os");
 var import_node_path = __toESM(require("node:path"));
+function pluginRootDirectory(fromDirectory) {
+  let current = import_node_path.default.resolve(fromDirectory);
+  for (; ; ) {
+    if ((0, import_node_fs.existsSync)(import_node_path.default.join(current, "package.json"))) return current;
+    const parent = import_node_path.default.dirname(current);
+    if (parent === current) throw new Error(`codegraph plugin root not found above ${fromDirectory}`);
+    current = parent;
+  }
+}
 const projectPathSeparator = "/";
 function normalizedPath(pathValue) {
   return pathValue.replaceAll("\\", projectPathSeparator);
@@ -96,6 +106,7 @@ function runtimeCacheDirectory(engineVersion, platform = process.platform, archi
   codegraphStateRoot,
   normalizeProjectRelativePath,
   normalizeProjectRoot,
+  pluginRootDirectory,
   projectIdentity,
   projectStateDirectory,
   runtimeCacheDirectory

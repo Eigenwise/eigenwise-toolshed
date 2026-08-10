@@ -1,7 +1,21 @@
 import { createHash } from 'node:crypto';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import path from 'node:path';
+
+// Counting `..` hops to reach the plugin root gives a different answer from src/
+// than from the compiled lib/, because the build drops the src segment. Tests run
+// from src and shipped code runs from lib, so a hop count that satisfies one is
+// silently wrong in the other. Anchor on the package manifest instead.
+export function pluginRootDirectory(fromDirectory: string): string {
+  let current = path.resolve(fromDirectory);
+  for (;;) {
+    if (existsSync(path.join(current, 'package.json'))) return current;
+    const parent = path.dirname(current);
+    if (parent === current) throw new Error(`codegraph plugin root not found above ${fromDirectory}`);
+    current = parent;
+  }
+}
 
 const projectPathSeparator = '/';
 

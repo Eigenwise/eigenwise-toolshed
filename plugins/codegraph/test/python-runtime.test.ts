@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
 import test from 'node:test';
 import { loadPyrightAdapter, PyrightCompatibilityError } from '../src/lib/extractors/python/pyright-adapter.ts';
+import { PyrightRuntimeAcquirer } from '../src/lib/languages/python/runtime.ts';
 
 const internalModuleFactories = {
   1294: (module: { exports: Record<string, unknown> }) => { module.exports.ensureTomlModuleLoaded = async () => undefined; },
@@ -33,6 +37,23 @@ test('loads the pinned Pyright webpack semantic modules', async () => {
   });
   assert.equal(typeof adapter.AnalyzerService, 'function');
   assert.equal(typeof adapter.Program, 'function');
+});
+
+// The shipped plugin loads this acquirer from lib/, one directory shallower than the src/ tree
+// every other Python test runs against. Asserting only the source build is what let a manifest
+// path that resolved above the plugin root reach a release.
+test('finds the pinned runtime manifest from both the source and compiled builds', () => {
+  const pluginRoot = path.resolve(__dirname, '..');
+  const expectedDirectory = path.join(pluginRoot, 'runtime-pyright');
+  assert.equal(new PyrightRuntimeAcquirer().manifestDirectory, expectedDirectory, 'source build resolved the wrong manifest directory');
+
+  const compiledDirectory = execFileSync(
+    process.execPath,
+    ['-e', 'process.stdout.write(new (require(process.argv[1]).PyrightRuntimeAcquirer)().manifestDirectory)', path.join(pluginRoot, 'lib', 'languages', 'python', 'runtime.js')],
+    { encoding: 'utf8' },
+  );
+  assert.equal(compiledDirectory, expectedDirectory, 'compiled build resolved the wrong manifest directory');
+  assert.ok(existsSync(path.join(expectedDirectory, 'integrity.json')), 'the resolved directory holds no pinned manifest');
 });
 
 test('rejects a mismatched Pyright engine before loading internals', async () => {
