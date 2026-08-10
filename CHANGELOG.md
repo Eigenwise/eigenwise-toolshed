@@ -8,6 +8,64 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.437.0 (2026-08-10)
+
+### codegraph 0.1.6 → 0.1.7
+
+#### Fixes
+
+- Skip agent worktrees during Codegraph discovery (SQ-1780)
+  Codegraph skips dot-directories such as Claude agent worktrees when discovering Python and TypeScript projects.
+- Keep Codegraph from querying empty or failed indexes (SQ-1782)
+  Codegraph now reports empty snapshots as missing, and a failed refresh reports the failure for the rest of that session instead of presenting the older snapshot as ready. The older snapshot is kept on disk. A failure is not yet remembered across a restart.
+- Fix first-use TypeScript runtime install (SQ-1783)
+  Codegraph now installs the pinned platform runtime package during a cold TypeScript runtime acquisition.
+- Report project dependency environments (SQ-1784)
+  Codegraph now reports configured, conventional, or absent dependency environments for each TypeScript and Python project.
+- Silence Pyright index logs (SQ-1791)
+  Python indexing no longer writes Pyright configuration and analysis logs to stdout.
+
+### model-gateway 0.48.3 → 0.48.4
+
+#### Fixes
+
+- Rename the Sidequest route marker (SQ-1778)
+  Sidequest dispatches now use the `sidequest-route` marker, and Model Gateway accepts only that marker.
+
+### quartermaster 0.1.0 → 0.2.0
+
+#### Features
+
+- Add quartermaster; retire playbook and init-workspace (QM-1)
+  quartermaster joins the shed: transcript-mining retros with a decision ledger and outcome verification, plus a history-grounded workspace setup skill that replaces workbench's init-workspace. playbook is retired; its verify-discipline skill moves into sidequest (executor skill pin updated to sidequest:verify-discipline).
+
+### sidequest 4.42.6 → 4.43.0
+
+#### Features
+
+- Add quartermaster; retire playbook and init-workspace (QM-1)
+  quartermaster joins the shed: transcript-mining retros with a decision ledger and outcome verification, plus a history-grounded workspace setup skill that replaces workbench's init-workspace. playbook is retired; its verify-discipline skill moves into sidequest (executor skill pin updated to sidequest:verify-discipline).
+
+#### Fixes
+
+- Serialize Sidequest delivery recovery (SQ-1743)
+  Prevent concurrent delivery rollbacks from resetting another delivered change, and recover replayed submissions after a target reset.
+- Guard Sidequest delivery ownership (SQ-1749)
+  Prevent stale delivery locks from releasing a current owner, and refuse patch-id reconciliation when declared content differs.
+- Rename the Sidequest route marker (SQ-1778)
+  Sidequest dispatches now use the `sidequest-route` marker, and Model Gateway accepts only that marker.
+- Ignore unrelated dirty files during Sidequest integration (SQ-1786)
+  Sidequest integration now allows dirty files outside the submitted delivery while still refusing files the delivery would overwrite.
+- Clarify blocked submission holds (SQ-1790)
+  Sidequest now tells orchestrators to record a blocked integration on the ticket instead of attempting an unavailable checkpoint.
+
+### workbench 0.84.0 → 0.85.0
+
+#### Features
+
+- Add quartermaster; retire playbook and init-workspace (QM-1)
+  quartermaster joins the shed: transcript-mining retros with a decision ledger and outcome verification, plus a history-grounded workspace setup skill that replaces workbench's init-workspace. playbook is retired; its verify-discipline skill moves into sidequest (executor skill pin updated to sidequest:verify-discipline).
+
 ## v3.436.0 (2026-08-10)
 
 ### codegraph 0.1.5 → 0.1.6

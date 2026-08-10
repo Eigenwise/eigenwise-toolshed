@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.2.0 (2026-08-10)
+
+Released in v3.437.0, up from 0.1.0.
+
+### Features
+
+- Add quartermaster; retire playbook and init-workspace (QM-1)
+  quartermaster joins the shed: transcript-mining retros with a decision ledger and outcome verification, plus a history-grounded workspace setup skill that replaces workbench's init-workspace. playbook is retired; its verify-discipline skill moves into sidequest (executor skill pin updated to sidequest:verify-discipline).
+
 ## 0.1.0
 
 Initial release.
