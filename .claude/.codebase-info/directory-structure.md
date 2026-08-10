@@ -10,7 +10,7 @@ Last Updated: 2026-08-10
 - `plugins/model-gateway/`: local model gateway CLI, registry hook, skills, and tests.
 - `plugins/live-rules/`: rule-management skills and prompt/edit/session hooks.
 - `plugins/codebase-mapper/`: map-generation/update skills and context injection hooks.
-- `plugins/codegraph/`: semantic graph MCP server, pinned TypeScript runtime acquisition, extractor, graph store, bounded queries, hooks, and tests.
+- `plugins/codegraph/`: semantic graph MCP server, pluggable TypeScript/JavaScript and Python providers, pinned TypeScript and Pyright runtime manifests, extractors, graph store, bounded queries, hooks, and tests. Python discovery and freshness live under `src/lib/languages/python/`; Python semantic fixtures live under `test/fixtures/python-semantic/`.
 - `plugins/playbook/`: practice skills (`fan-out`, `pick-model`, `verify-discipline`, `retro`, `skill-retro`), transcript miner CLI, streaming detectors under `lib/detectors/`, and an opt-in session-nudge hook.
 - `plugins/test-support/`: JavaScript test scanner shared by Workbench, Observability, and Model Gateway tests.
 - `docs/`: Astro/Starlight prose, generated reference source, scripts, and synthetic screenshots.
