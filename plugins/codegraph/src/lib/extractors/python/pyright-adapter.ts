@@ -167,7 +167,7 @@ interface PyrightDeclarationInfo {
 }
 
 interface PyrightEvaluator {
-  getDeclInfoForNameNode(node: unknown): PyrightDeclarationInfo;
+  getDeclInfoForNameNode(node: unknown): PyrightDeclarationInfo | undefined;
   getTypeOfClass(node: unknown): unknown;
   resolveAliasDeclaration(declaration: unknown): unknown;
 }
@@ -226,7 +226,7 @@ function resolvedDeclarationTarget(evaluator: PyrightEvaluator, declarations: re
 }
 
 function declarationTarget(evaluator: PyrightEvaluator, node: unknown): PyrightSemanticTargetResult {
-  return resolvedDeclarationTarget(evaluator, evaluator.getDeclInfoForNameNode(node).decls);
+  return resolvedDeclarationTarget(evaluator, evaluator.getDeclInfoForNameNode(node)?.decls ?? []);
 }
 
 function declarationOwnerStart(node: Record<string, unknown>): number | null {
