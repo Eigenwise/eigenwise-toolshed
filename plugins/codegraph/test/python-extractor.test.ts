@@ -1,5 +1,7 @@
 import assert from 'node:assert/strict';
+import { spawn, type ChildProcess } from 'node:child_process';
 import { readFile, writeFile } from 'node:fs/promises';
+import { type Readable } from 'node:stream';
 import path from 'node:path';
 import test from 'node:test';
 import { PyrightCompatibilityError } from '../src/lib/extractors/python/pyright-adapter.ts';
@@ -9,7 +11,46 @@ import { PyrightRuntimeAcquirer } from '../src/lib/languages/python/runtime.ts';
 import type { SemanticEngineRuntime } from '../src/lib/runtime-contract.ts';
 
 const fixtureRoot = path.join(__dirname, 'fixtures', 'python-semantic');
+const codegraphRoot = path.resolve(__dirname, '..');
 const pyrightRuntime = new PyrightRuntimeAcquirer().acquire();
+
+async function readStream(stream: Readable): Promise<string> {
+  stream.setEncoding('utf8');
+  let output = '';
+  for await (const chunk of stream) output += String(chunk);
+  return output;
+}
+
+function waitForExit(child: ChildProcess): Promise<number | null> {
+  return new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('close', resolve);
+  });
+}
+
+async function extractProjectInChild(projectRoot: string): Promise<string> {
+  const extractorModule = path.join(codegraphRoot, 'lib', 'extractors', 'python', 'python.js');
+  const projectsModule = path.join(codegraphRoot, 'lib', 'languages', 'python', 'projects.js');
+  const runtimeModule = path.join(codegraphRoot, 'lib', 'languages', 'python', 'runtime.js');
+  const extraction = [
+    `const { PyrightSemanticExtractor } = require(${JSON.stringify(extractorModule)});`,
+    `const { discoverPythonProjects } = require(${JSON.stringify(projectsModule)});`,
+    `const { PyrightRuntimeAcquirer } = require(${JSON.stringify(runtimeModule)});`,
+    'void (async () => {',
+    `const [project] = await discoverPythonProjects(${JSON.stringify(projectRoot)});`,
+    "if (!project) throw new Error('Python fixture project was not discovered');",
+    'await new PyrightSemanticExtractor(await new PyrightRuntimeAcquirer().acquire()).extractProject(project);',
+    '})();',
+  ].join('\n');
+  const child = spawn(process.execPath, ['--eval', extraction], {
+    cwd: codegraphRoot,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  if (child.stdout === null || child.stderr === null) throw new Error('Python extraction child did not expose output streams');
+  const [stdout, stderr, exitCode] = await Promise.all([readStream(child.stdout), readStream(child.stderr), waitForExit(child)]);
+  if (exitCode !== 0) throw new Error(`Python extraction child exited ${exitCode}: ${stderr}`);
+  return stdout;
+}
 
 function mismatchedPyrightRuntime(runtime: SemanticEngineRuntime): SemanticEngineRuntime {
   return {
@@ -26,6 +67,10 @@ test('rejects a mismatched Pyright engine before extraction', async () => {
   const [project] = await discoverPythonProjects(fixtureRoot);
   assert.ok(project);
   await assert.rejects(new PyrightSemanticExtractor(mismatchedPyrightRuntime(await pyrightRuntime)).extractProject(project), PyrightCompatibilityError);
+});
+
+test('keeps Pyright extraction silent on stdout', async () => {
+  assert.equal(await extractProjectInChild(fixtureRoot), '');
 });
 
 test('extracts stable Python declarations and classified relationships through Pyright analysis', async () => {

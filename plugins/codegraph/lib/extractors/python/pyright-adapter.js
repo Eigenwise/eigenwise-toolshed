@@ -216,15 +216,15 @@ function semanticFiles(program) {
   });
 }
 function createAnalysisService(AnalyzerService, serviceProvider, Uri, nodeFileSystem, pyrightFileSystem, projectRoot, configFile) {
-  const console = { log: (_message) => void 0, info: (_message) => void 0, warn: (_message) => void 0, error: (_message) => void 0 };
+  const analysisConsole = { log: (_message) => void 0, info: (_message) => void 0, warn: (_message) => void 0, error: (_message) => void 0 };
   const tempFile = new nodeFileSystem.RealTempFile();
   const fileSystem = new pyrightFileSystem.PyrightFileSystem(nodeFileSystem.createFromRealFileSystem(
     tempFile,
-    console,
-    new nodeFileSystem.WorkspaceFileWatcherProvider(console)
+    analysisConsole,
+    new nodeFileSystem.WorkspaceFileWatcherProvider(analysisConsole)
   ));
-  const provider = serviceProvider.createServiceProvider(fileSystem, console, tempFile);
-  const service = new AnalyzerService("codegraph", provider, {});
+  const provider = serviceProvider.createServiceProvider(fileSystem, analysisConsole, tempFile);
+  const service = new AnalyzerService("codegraph", provider, { console: analysisConsole });
   if (typeof service !== "object" || service === null || !("test_program" in service) || !("dispose" in service) || !("setOptions" in service) || !("enumerateSourceFiles" in service)) {
     throw new PyrightCompatibilityError("AnalyzerService does not expose the pinned analysis program");
   }
