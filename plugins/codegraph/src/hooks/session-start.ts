@@ -3,13 +3,23 @@ import path from 'node:path';
 import { projectStateDirectory } from '../lib/paths.js';
 
 const maximumContextBytes = 1_024;
-const allowedStatuses = new Set(['ready', 'missing', 'stale', 'unavailable']);
+const allowedStatuses = new Set(['ready', 'missing', 'stale', 'unavailable', 'error']);
 
 interface HookInput { cwd?: unknown }
-interface StatusPointer { status?: unknown; snapshotId?: unknown }
 
-function pointer(status: string, snapshotId?: string): string {
-  const detail = snapshotId === undefined ? '' : ` (${snapshotId.slice(0, 12)})`;
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function failureReason(value: unknown): string | undefined {
+  if (!isRecord(value) || typeof value.reason !== 'string' || value.reason.length === 0) return undefined;
+  return value.reason;
+}
+
+function pointer(status: string, snapshotId?: string, reason?: string): string {
+  const detail = status === 'error'
+    ? reason === undefined ? '' : ` (last index failed: ${reason})`
+    : snapshotId === undefined ? '' : ` (${snapshotId.slice(0, 12)})`;
   return `Codegraph: ${status}${detail}. Use codegraph_status for details and codegraph_index to refresh.`;
 }
 
@@ -22,12 +32,19 @@ async function readHookInput(): Promise<HookInput> {
 async function statusPointer(root: string): Promise<string> {
   try {
     const raw = await readFile(path.join(projectStateDirectory(root), 'status.json'), 'utf8');
-    const value = JSON.parse(raw) as StatusPointer;
-    if (typeof value.status === 'string' && allowedStatuses.has(value.status)) {
-      return pointer(value.status, typeof value.snapshotId === 'string' ? value.snapshotId : undefined);
+    const value: unknown = JSON.parse(raw);
+    if (!isRecord(value) || typeof value.status !== 'string' || !allowedStatuses.has(value.status)) {
+      return pointer('error', undefined, 'status metadata is malformed');
     }
-  } catch { /* A missing metadata pointer is an expected first-run state. */ }
-  return pointer('missing');
+    if (value.status === 'error') {
+      const reason = failureReason(value.failure);
+      return reason === undefined ? pointer('error', undefined, 'status metadata is malformed') : pointer('error', undefined, reason);
+    }
+    return pointer(value.status, typeof value.snapshotId === 'string' ? value.snapshotId : undefined);
+  } catch (error: unknown) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return pointer('missing');
+    return pointer('error', undefined, 'status metadata is malformed');
+  }
 }
 
 async function main(): Promise<void> {

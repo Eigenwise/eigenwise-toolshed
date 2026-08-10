@@ -7,7 +7,7 @@ import { buildRelevantInputManifest } from '../src/lib/freshness.ts';
 import { buildProjectIndex, type IndexBuildResult } from '../src/lib/index-builder.ts';
 import type { FileGraph, LanguageExtractor, ProjectDescriptor } from '../src/lib/model.ts';
 import type { SemanticRuntime } from '../src/lib/runtime-contract.ts';
-import { projectIdentity } from '../src/lib/paths.ts';
+import { projectIdentity, projectStateDirectory } from '../src/lib/paths.ts';
 import { CodegraphService } from '../src/lib/service.ts';
 import { GraphStore } from '../src/lib/store.ts';
 
@@ -33,36 +33,35 @@ test('reports a zero-file snapshot as missing', async () => {
   }
 });
 
-test('reports a failed refresh instead of the previous ready snapshot', async () => {
+test('preserves a failed refresh across service construction until a later index succeeds', async () => {
   const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'codegraph-service-failed-refresh-'));
   try {
     let shouldFail = false;
-    const service = new CodegraphService({
-      projectRoot,
-      store: GraphStore.open(':memory:'),
-      runtime: { acquire: async () => ({ engineId: 'test-engine', engineVersion: '1.0.0', extractors: [] }) },
-      index: async (root): Promise<IndexBuildResult> => {
-        if (shouldFail) throw new Error('simulated refresh failure');
-        return {
-          manifest: await buildRelevantInputManifest(root),
-          snapshots: [{
-            project: { id: 'fixture', root, configFile: null, language: 'typescript' },
-            snapshot: {
-              schemaVersion: 1,
-              snapshotId: 'fixture',
-              projectRootHash: 'fixture',
-              sourceManifestHash: 'fixture',
-              configHash: 'fixture',
-              engineId: 'fixture',
-              engineVersion: '1.0.0',
-              indexedAt: '2026-08-10T00:00:00.000Z',
-            },
-            coverage: { projects: 1, files: 1, nodes: 0, edges: 0, unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0, dependencyEnvironments: [{ projectId: 'fixture', state: 'absent' }] },
-            files: [{ file: 'source.ts', contentHash: 'fixture', nodes: [], edges: [], unresolvedCount: 0, diagnostics: [] }],
-          }],
-        };
-      },
-    });
+    const store = GraphStore.open(':memory:');
+    const runtime = { acquire: async () => ({ engineId: 'test-engine', engineVersion: '1.0.0', extractors: [] }) };
+    const buildFixtureIndex = async (root: string): Promise<IndexBuildResult> => {
+      if (shouldFail) throw new Error('simulated refresh failure');
+      return {
+        manifest: await buildRelevantInputManifest(root),
+        snapshots: [{
+          project: { id: 'fixture', root, configFile: null, language: 'typescript' },
+          snapshot: {
+            schemaVersion: 1,
+            snapshotId: 'fixture',
+            projectRootHash: 'fixture',
+            sourceManifestHash: 'fixture',
+            configHash: 'fixture',
+            engineId: 'fixture',
+            engineVersion: '1.0.0',
+            indexedAt: '2026-08-10T00:00:00.000Z',
+          },
+          coverage: { projects: 1, files: 1, nodes: 0, edges: 0, unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0, dependencyEnvironments: [{ projectId: 'fixture', state: 'absent' }] },
+          files: [{ file: 'source.ts', contentHash: 'fixture', nodes: [], edges: [], unresolvedCount: 0, diagnostics: [] }],
+        }],
+      };
+    };
+    const createService = (): CodegraphService => new CodegraphService({ projectRoot, store, runtime, index: buildFixtureIndex });
+    const service = createService();
     const indexed = await service.index();
     assert.equal(indexed.status, 'ready');
 
@@ -72,14 +71,68 @@ test('reports a failed refresh instead of the previous ready snapshot', async ()
     assert.match(failed.message, /simulated refresh failure/);
     assert.equal(failed.snapshot?.snapshotId, indexed.snapshot?.snapshotId);
 
-    const status = await service.status();
-    assert.equal(status.status, 'error');
-    assert.match(status.message, /simulated refresh failure/);
-    const query = await service.context('fixture', { tokenBudget: 500, maxResults: 1 });
+    const restartedService = createService();
+    const restartedStatus = await restartedService.status();
+    assert.equal(restartedStatus.status, 'error');
+    assert.match(restartedStatus.message, /simulated refresh failure/);
+    assert.equal(restartedStatus.snapshot?.snapshotId, indexed.snapshot?.snapshotId);
+    const query = await restartedService.context('fixture', { tokenBudget: 500, maxResults: 1 });
     assert.equal(query.status, 'error');
     assert.equal(query.results.length, 0);
+
+    shouldFail = false;
+    const recovered = await restartedService.index();
+    assert.equal(recovered.status, 'ready');
+    assert.equal((await restartedService.status()).status, 'ready');
   } finally {
-    await rm(projectRoot, { recursive: true, force: true });
+    await Promise.all([
+      rm(projectRoot, { recursive: true, force: true }),
+      rm(projectStateDirectory(projectRoot), { recursive: true, force: true }),
+    ]);
+  }
+});
+
+test('does not report a retained snapshot as ready without a valid status record', async () => {
+  const projectRoot = await mkdtemp(path.join(os.tmpdir(), 'codegraph-service-status-record-'));
+  try {
+    const store = GraphStore.open(':memory:');
+    const runtime = { acquire: async () => ({ engineId: 'test-engine', engineVersion: '1.0.0', extractors: [] }) };
+    const buildFixtureIndex = async (root: string): Promise<IndexBuildResult> => ({
+      manifest: await buildRelevantInputManifest(root),
+      snapshots: [{
+        project: { id: 'fixture', root, configFile: null, language: 'typescript' },
+        snapshot: {
+          schemaVersion: 1,
+          snapshotId: 'fixture',
+          projectRootHash: 'fixture',
+          sourceManifestHash: 'fixture',
+          configHash: 'fixture',
+          engineId: 'fixture',
+          engineVersion: '1.0.0',
+          indexedAt: '2026-08-10T00:00:00.000Z',
+        },
+        coverage: { projects: 1, files: 1, nodes: 0, edges: 0, unresolvedEdges: 0, ambiguousEdges: 0, dynamicEdges: 0, externalEdges: 0, dependencyEnvironments: [{ projectId: 'fixture', state: 'absent' }] },
+        files: [{ file: 'source.ts', contentHash: 'fixture', nodes: [], edges: [], unresolvedCount: 0, diagnostics: [] }],
+      }],
+    });
+    const createService = (): CodegraphService => new CodegraphService({ projectRoot, store, runtime, index: buildFixtureIndex });
+    assert.equal((await createService().index()).status, 'ready');
+
+    const statusFile = path.join(projectStateDirectory(projectRoot), 'status.json');
+    await rm(statusFile);
+    const missingStatus = await createService().status();
+    assert.equal(missingStatus.status, 'error');
+    assert.match(missingStatus.message, /status metadata is missing/);
+
+    await writeFile(statusFile, '{');
+    const malformedStatus = await createService().status();
+    assert.equal(malformedStatus.status, 'error');
+    assert.match(malformedStatus.message, /status metadata is malformed/);
+  } finally {
+    await Promise.all([
+      rm(projectRoot, { recursive: true, force: true }),
+      rm(projectStateDirectory(projectRoot), { recursive: true, force: true }),
+    ]);
   }
 });
 
