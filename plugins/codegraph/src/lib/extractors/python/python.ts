@@ -199,8 +199,11 @@ export class PyrightSemanticExtractor implements LanguageExtractor {
   }
 
   async extractProject(project: ProjectDescriptor): Promise<FileGraph[]> {
-    const adapter = await loadPyrightAdapter(this.runtime);
-    const service = adapter.createAnalysisService(project.root, project.configFile);
+    const [adapter, virtualEnvironmentPath] = await Promise.all([
+      loadPyrightAdapter(this.runtime),
+      pyrightVirtualEnvironmentPath(project),
+    ]);
+    const service = await adapter.createAnalysisService(project.root, project.configFile, virtualEnvironmentPath);
     try {
       while (service.analyze()) undefined;
       const parsedFiles = service.semanticFiles().map((semanticFile) => parseSemanticFile(project, semanticFile));
@@ -273,6 +276,20 @@ const pythonDependencyEnvironment: DependencyEnvironmentDiscovery = {
       : { state: 'conventional', absolutePaths: conventional };
   },
 };
+
+async function pyrightVirtualEnvironmentPath(project: ProjectDescriptor): Promise<string | null> {
+  const environment = await pythonDependencyEnvironment.discover(project);
+  if (environment.state === 'absent') return null;
+  const candidates = await Promise.all(environment.absolutePaths.map(async (candidate) => {
+    try {
+      await access(path.join(candidate, 'pyvenv.cfg'));
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return candidates.find((candidate): candidate is string => candidate !== null) ?? null;
+}
 
 export class PythonLanguageProvider implements SemanticLanguageProvider {
   readonly id = 'python';

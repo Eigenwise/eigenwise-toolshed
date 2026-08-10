@@ -1,7 +1,9 @@
 "use strict";
+var __create = Object.create;
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
+var __getProtoOf = Object.getPrototypeOf;
 var __hasOwnProp = Object.prototype.hasOwnProperty;
 var __export = (target, all) => {
   for (var name in all)
@@ -15,6 +17,14 @@ var __copyProps = (to, from, except, desc) => {
   }
   return to;
 };
+var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__getProtoOf(mod)) : {}, __copyProps(
+  // If the importer is in node compatibility mode or this is not an ESM
+  // file that has been converted to a CommonJS file using a Babel-
+  // compatible transform (i.e. "__esModule" has not been set), then set
+  // "default" to the CommonJS "module.exports" for node compatibility.
+  isNodeMode || !mod || !mod.__esModule ? __defProp(target, "default", { value: mod, enumerable: true }) : target,
+  mod
+));
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var pyright_adapter_exports = {};
 __export(pyright_adapter_exports, {
@@ -22,7 +32,10 @@ __export(pyright_adapter_exports, {
   loadPyrightAdapter: () => loadPyrightAdapter
 });
 module.exports = __toCommonJS(pyright_adapter_exports);
+var import_node_crypto = require("node:crypto");
+var import_promises = require("node:fs/promises");
 var import_node_module = require("node:module");
+var import_node_path = __toESM(require("node:path"));
 const internalChunkId = 223;
 const vendorChunkId = 474;
 const analyzerServiceModuleId = 2439;
@@ -215,7 +228,18 @@ function semanticFiles(program) {
     };
   });
 }
-function createAnalysisService(AnalyzerService, serviceProvider, Uri, nodeFileSystem, pyrightFileSystem, projectRoot, configFile) {
+async function environmentConfigFile(projectRoot, configFile, virtualEnvironmentPath) {
+  if (virtualEnvironmentPath === null || configFile?.endsWith(".toml") === true) return { path: configFile, temporary: null };
+  const configurationDirectory = configFile === null ? projectRoot : import_node_path.default.dirname(configFile);
+  const temporary = import_node_path.default.join(configurationDirectory, `.codegraph-pyright-${(0, import_node_crypto.randomUUID)()}.json`);
+  await (0, import_promises.writeFile)(temporary, JSON.stringify({
+    ...configFile === null ? {} : { extends: import_node_path.default.basename(configFile) },
+    venvPath: import_node_path.default.dirname(virtualEnvironmentPath),
+    venv: import_node_path.default.basename(virtualEnvironmentPath)
+  }));
+  return { path: temporary, temporary };
+}
+async function createAnalysisService(AnalyzerService, serviceProvider, Uri, nodeFileSystem, pyrightFileSystem, projectRoot, configFile, virtualEnvironmentPath) {
   const analysisConsole = { log: (_message) => void 0, info: (_message) => void 0, warn: (_message) => void 0, error: (_message) => void 0 };
   const tempFile = new nodeFileSystem.RealTempFile();
   const fileSystem = new pyrightFileSystem.PyrightFileSystem(nodeFileSystem.createFromRealFileSystem(
@@ -229,19 +253,24 @@ function createAnalysisService(AnalyzerService, serviceProvider, Uri, nodeFileSy
     throw new PyrightCompatibilityError("AnalyzerService does not expose the pinned analysis program");
   }
   const candidate = service;
-  candidate.setOptions({
-    executionRoot: projectRoot,
-    configFilePath: configFile ?? void 0,
-    configSettings: {
-      includeFileSpecs: [],
-      excludeFileSpecs: [],
-      ignoreFileSpecs: [],
-      diagnosticSeverityOverrides: {},
-      diagnosticBooleanOverrides: {}
-    },
-    languageServerSettings: {}
-  });
-  while (!candidate.enumerateSourceFiles()) ;
+  const analysisConfig = await environmentConfigFile(projectRoot, configFile, virtualEnvironmentPath);
+  try {
+    candidate.setOptions({
+      executionRoot: projectRoot,
+      configFilePath: analysisConfig.path ?? void 0,
+      configSettings: {
+        includeFileSpecs: [],
+        excludeFileSpecs: [],
+        ignoreFileSpecs: [],
+        diagnosticSeverityOverrides: {},
+        diagnosticBooleanOverrides: {}
+      },
+      languageServerSettings: {}
+    });
+    while (!candidate.enumerateSourceFiles()) ;
+  } finally {
+    if (analysisConfig.temporary !== null) await (0, import_promises.rm)(analysisConfig.temporary, { force: true });
+  }
   return {
     analyze() {
       return candidate.test_program.analyze();
@@ -350,7 +379,7 @@ async function loadPyrightAdapter(runtime) {
     ParseTreeWalker: requiredExport(walker, parseTreeWalkerModuleId, "ParseTreeWalker"),
     Program: requiredExport(program, programModuleId, "Program"),
     Uri,
-    createAnalysisService(projectRoot, configFile) {
+    async createAnalysisService(projectRoot, configFile, virtualEnvironmentPath) {
       return createAnalysisService(
         AnalyzerService,
         { createServiceProvider: requiredExport(serviceProvider, serviceProviderModuleId, "createServiceProvider") },
@@ -362,7 +391,8 @@ async function loadPyrightAdapter(runtime) {
         },
         { PyrightFileSystem: requiredExport(pyrightFileSystem, pyrightFileSystemModuleId, "PyrightFileSystem") },
         projectRoot,
-        configFile
+        configFile,
+        virtualEnvironmentPath
       );
     }
   };

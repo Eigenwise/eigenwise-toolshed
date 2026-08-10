@@ -214,8 +214,11 @@ class PyrightSemanticExtractor {
     return (0, import_projects.discoverPythonProjects)(projectRoot);
   }
   async extractProject(project) {
-    const adapter = await (0, import_pyright_adapter.loadPyrightAdapter)(this.runtime);
-    const service = adapter.createAnalysisService(project.root, project.configFile);
+    const [adapter, virtualEnvironmentPath] = await Promise.all([
+      (0, import_pyright_adapter.loadPyrightAdapter)(this.runtime),
+      pyrightVirtualEnvironmentPath(project)
+    ]);
+    const service = await adapter.createAnalysisService(project.root, project.configFile, virtualEnvironmentPath);
     try {
       while (service.analyze()) ;
       const parsedFiles = service.semanticFiles().map((semanticFile) => parseSemanticFile(project, semanticFile));
@@ -278,6 +281,19 @@ const pythonDependencyEnvironment = {
     return conventional.length === 0 ? { state: "absent", absolutePaths: [] } : { state: "conventional", absolutePaths: conventional };
   }
 };
+async function pyrightVirtualEnvironmentPath(project) {
+  const environment = await pythonDependencyEnvironment.discover(project);
+  if (environment.state === "absent") return null;
+  const candidates = await Promise.all(environment.absolutePaths.map(async (candidate) => {
+    try {
+      await (0, import_promises.access)(import_node_path.default.join(candidate, "pyvenv.cfg"));
+      return candidate;
+    } catch {
+      return null;
+    }
+  }));
+  return candidates.find((candidate) => candidate !== null) ?? null;
+}
 class PythonLanguageProvider {
   constructor(runtime = new import_runtime.PyrightRuntimeAcquirer()) {
     this.runtime = runtime;

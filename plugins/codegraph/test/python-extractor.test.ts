@@ -72,6 +72,44 @@ test('Python dependency discovery prefers an explicit Pyright environment over .
   }
 });
 
+test('uses a project-local virtual environment for Pyright import resolution', async () => {
+  const parent = await mkdtemp(path.join(os.tmpdir(), 'codegraph-python-environment-resolution-'));
+  const environmentRoot = path.join(parent, 'with-environment');
+  const absentRoot = path.join(parent, 'without-environment');
+  const source = 'from fixture_dependency import available\navailable()\n';
+  try {
+    const environment = path.join(environmentRoot, '.venv');
+    const environmentProcess = spawn(process.platform === 'win32' ? 'python' : 'python3', ['-m', 'venv', environment], { stdio: ['ignore', 'pipe', 'pipe'] });
+    if (environmentProcess.stdout === null || environmentProcess.stderr === null) throw new Error('Python virtual-environment process did not expose output streams');
+    const [environmentOutput, environmentError, environmentExitCode] = await Promise.all([
+      readStream(environmentProcess.stdout),
+      readStream(environmentProcess.stderr),
+      waitForExit(environmentProcess),
+    ]);
+    assert.equal(environmentExitCode, 0, `Python virtual-environment creation failed: ${environmentOutput}${environmentError}`);
+    await mkdir(path.join(environment, 'Lib', 'site-packages', 'fixture_dependency'), { recursive: true });
+    await mkdir(path.join(environment, 'lib', 'python3.11', 'site-packages', 'fixture_dependency'), { recursive: true });
+    await mkdir(absentRoot, { recursive: true });
+    await Promise.all([
+      writeFile(path.join(environment, 'Lib', 'site-packages', 'fixture_dependency', '__init__.py'), 'def available() -> None:\n    pass\n'),
+      writeFile(path.join(environment, 'lib', 'python3.11', 'site-packages', 'fixture_dependency', '__init__.py'), 'def available() -> None:\n    pass\n'),
+      writeFile(path.join(environmentRoot, 'pyrightconfig.json'), JSON.stringify({ include: ['main.py'] })),
+      writeFile(path.join(environmentRoot, 'main.py'), source),
+      writeFile(path.join(absentRoot, 'pyrightconfig.json'), JSON.stringify({ include: ['main.py'] })),
+      writeFile(path.join(absentRoot, 'main.py'), source),
+    ]);
+    const extractor = new PyrightSemanticExtractor(await pyrightRuntime);
+    const importResolutions = async (id: string, root: string): Promise<string[]> => {
+      const graphs = await extractor.extractProject({ id, root, configFile: path.join(root, 'pyrightconfig.json'), language: 'python' });
+      return graphs.flatMap((graph) => graph.edges).filter((edge) => edge.kind === 'imports').map((edge) => edge.resolution);
+    };
+    assert.deepEqual(await importResolutions('with-environment', environmentRoot), ['resolved']);
+    assert.deepEqual(await importResolutions('without-environment', absentRoot), ['external']);
+  } finally {
+    await rm(parent, { recursive: true, force: true });
+  }
+});
+
 function mismatchedPyrightRuntime(runtime: SemanticEngineRuntime): SemanticEngineRuntime {
   return {
     id: runtime.id,

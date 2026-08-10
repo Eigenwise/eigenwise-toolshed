@@ -1,4 +1,7 @@
+import { randomUUID } from 'node:crypto';
+import { rm, writeFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
+import path from 'node:path';
 import type { SemanticEngineRuntime } from '../../runtime-contract.js';
 
 const internalChunkId = 223;
@@ -87,7 +90,7 @@ export interface PyrightAdapter {
   readonly ParseTreeWalker: new (...arguments_: unknown[]) => unknown;
   readonly Program: new (...arguments_: unknown[]) => unknown;
   readonly Uri: UriModule;
-  createAnalysisService(projectRoot: string, configFile: string | null): PyrightAnalysisService;
+  createAnalysisService(projectRoot: string, configFile: string | null, virtualEnvironmentPath: string | null): Promise<PyrightAnalysisService>;
 }
 
 export class PyrightCompatibilityError extends Error {
@@ -365,7 +368,19 @@ function semanticFiles(program: PyrightProgram): PyrightSemanticFile[] {
   });
 }
 
-function createAnalysisService(
+async function environmentConfigFile(projectRoot: string, configFile: string | null, virtualEnvironmentPath: string | null): Promise<{ readonly path: string | null; readonly temporary: string | null }> {
+  if (virtualEnvironmentPath === null || configFile?.endsWith('.toml') === true) return { path: configFile, temporary: null };
+  const configurationDirectory = configFile === null ? projectRoot : path.dirname(configFile);
+  const temporary = path.join(configurationDirectory, `.codegraph-pyright-${randomUUID()}.json`);
+  await writeFile(temporary, JSON.stringify({
+    ...(configFile === null ? {} : { extends: path.basename(configFile) }),
+    venvPath: path.dirname(virtualEnvironmentPath),
+    venv: path.basename(virtualEnvironmentPath),
+  }));
+  return { path: temporary, temporary };
+}
+
+async function createAnalysisService(
   AnalyzerService: new (...arguments_: unknown[]) => unknown,
   serviceProvider: ServiceProviderModule,
   Uri: UriModule,
@@ -373,7 +388,8 @@ function createAnalysisService(
   pyrightFileSystem: PyrightFileSystemModule,
   projectRoot: string,
   configFile: string | null,
-): PyrightAnalysisService {
+  virtualEnvironmentPath: string | null,
+): Promise<PyrightAnalysisService> {
   const analysisConsole = { log: (_message: string) => undefined, info: (_message: string) => undefined, warn: (_message: string) => undefined, error: (_message: string) => undefined };
   const tempFile = new nodeFileSystem.RealTempFile();
   const fileSystem = new pyrightFileSystem.PyrightFileSystem(nodeFileSystem.createFromRealFileSystem(
@@ -387,19 +403,24 @@ function createAnalysisService(
     throw new PyrightCompatibilityError('AnalyzerService does not expose the pinned analysis program');
   }
   const candidate = service as AnalyzerServiceInstance;
-  candidate.setOptions({
-    executionRoot: projectRoot,
-    configFilePath: configFile ?? undefined,
-    configSettings: {
-      includeFileSpecs: [],
-      excludeFileSpecs: [],
-      ignoreFileSpecs: [],
-      diagnosticSeverityOverrides: {},
-      diagnosticBooleanOverrides: {},
-    },
-    languageServerSettings: {},
-  });
-  while (!candidate.enumerateSourceFiles()) undefined;
+  const analysisConfig = await environmentConfigFile(projectRoot, configFile, virtualEnvironmentPath);
+  try {
+    candidate.setOptions({
+      executionRoot: projectRoot,
+      configFilePath: analysisConfig.path ?? undefined,
+      configSettings: {
+        includeFileSpecs: [],
+        excludeFileSpecs: [],
+        ignoreFileSpecs: [],
+        diagnosticSeverityOverrides: {},
+        diagnosticBooleanOverrides: {},
+      },
+      languageServerSettings: {},
+    });
+    while (!candidate.enumerateSourceFiles()) undefined;
+  } finally {
+    if (analysisConfig.temporary !== null) await rm(analysisConfig.temporary, { force: true });
+  }
   return {
     analyze(): boolean {
       return candidate.test_program.analyze();
@@ -514,7 +535,7 @@ export async function loadPyrightAdapter(runtime: SemanticEngineRuntime): Promis
     ParseTreeWalker: requiredExport<PyrightAdapter['ParseTreeWalker']>(walker, parseTreeWalkerModuleId, 'ParseTreeWalker'),
     Program: requiredExport<PyrightAdapter['Program']>(program, programModuleId, 'Program'),
     Uri,
-    createAnalysisService(projectRoot, configFile) {
+    async createAnalysisService(projectRoot, configFile, virtualEnvironmentPath) {
       return createAnalysisService(
         AnalyzerService,
         { createServiceProvider: requiredExport<ServiceProviderModule['createServiceProvider']>(serviceProvider, serviceProviderModuleId, 'createServiceProvider') },
@@ -527,6 +548,7 @@ export async function loadPyrightAdapter(runtime: SemanticEngineRuntime): Promis
         { PyrightFileSystem: requiredExport<PyrightFileSystemModule['PyrightFileSystem']>(pyrightFileSystem, pyrightFileSystemModuleId, 'PyrightFileSystem') },
         projectRoot,
         configFile,
+        virtualEnvironmentPath,
       );
     },
   };
