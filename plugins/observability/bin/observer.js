@@ -171,6 +171,14 @@ function createObserver(options = {}) {
   });
 
   let maintenanceStatus = { failed: false, lastRunAt: null };
+  const spoolStatus = {
+    consecutive_failures: 0,
+    last_error: null,
+    last_quarantined_at: null,
+    last_quarantined_file: null,
+    last_success_at: null,
+  };
+  const logger = options.logger || console;
   let retireOutdatedObserver = () => {};
   const server = http.createServer(async (request, response) => {
     try {
@@ -179,15 +187,17 @@ function createObserver(options = {}) {
         const [outboxHealth] = store.queryView('outbox_health', { limit: 1 });
         const versionError = staleObserverError();
         const outboxStalled = outbox.enabled && outboxIsStalled(outboxHealth, outboxRetryIntervalMs);
-        jsonResponse(response, versionError || outboxStalled ? 503 : 200, {
-          ok: !versionError && !outboxStalled,
+        const spoolFailed = spoolStatus.consecutive_failures > 0;
+        jsonResponse(response, versionError || outboxStalled || spoolFailed ? 503 : 200, {
+          ok: !versionError && !outboxStalled && !spoolFailed,
           pid: process.pid,
           pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
           outbox: outboxHealth,
+          spool: spoolStatus,
           storage: store.storageMetrics(),
           maintenance: maintenanceStatus,
-          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : undefined,
+          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : spoolFailed ? 'hook_spool_drain_failed' : undefined,
         });
         if (versionError) setImmediate(retireOutdatedObserver);
         return;
@@ -262,12 +272,24 @@ function createObserver(options = {}) {
   let retiring = false;
   let drainingSpool = false;
   const spoolPath = options.hookSpoolFile || process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath();
-  const drainSpool = () => {
+  const drainSpool = async () => {
     if (drainingSpool) return null;
     drainingSpool = true;
     try {
-      return drainHookSpool({ spoolPath, store, projectId: options.projectId });
-    } catch {
+      return await drainHookSpool({
+        spoolPath,
+        store,
+        projectId: options.projectId,
+        drainBudgetMs: options.hookSpoolDrainBudgetMs,
+        failureState: spoolStatus,
+        failureThreshold: options.hookSpoolFailureThreshold,
+      });
+    } catch (error) {
+      logger.error('Observer hook spool drain failed', {
+        code: typeof error?.code === 'string' ? error.code : 'hook_spool_drain_failed',
+        message: error instanceof Error ? error.message : String(error),
+        file: `${spoolPath}.draining`,
+      });
       return null;
     } finally {
       drainingSpool = false;
@@ -363,7 +385,7 @@ function createObserver(options = {}) {
         clearInterval(staleVersionTimer);
         staleVersionTimer = null;
       }
-      drainSpool();
+      await drainSpool();
       await drainOutbox();
       if (started) {
         await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));

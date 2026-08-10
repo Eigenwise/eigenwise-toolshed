@@ -289,7 +289,7 @@ test('runs the disposable demo through setup, local OTLP, hooks, SDK, tools, rou
   const spoolPath = path.join(dataDir, 'hook-spool.jsonl');
   assert.equal(spool(spoolPath, hook({ hook_event_name: 'Stop', session_id: 'session-demo', reason: 'manual_compact' }, '2026-07-19T12:00:04.400Z')), true);
   assert.equal(JSON.parse(fs.readFileSync(spoolPath, 'utf8')).source, 'hook');
-  assert.deepEqual(drainHookSpool({ spoolPath, store: observerStore, projectId: PROJECT_ID }), {
+  assert.deepEqual(await drainHookSpool({ spoolPath, store: observerStore, projectId: PROJECT_ID }), {
     drained: 1, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0,
   });
   assert.equal(observerStore.database.prepare("SELECT COUNT(*) AS count FROM observation WHERE event_name = 'hook.stop' AND observed_at = '2026-07-19T12:00:04.400Z'").get().count, 1);

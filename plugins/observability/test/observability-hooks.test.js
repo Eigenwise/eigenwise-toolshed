@@ -336,7 +336,7 @@ test('Stop hook flushes once, stays silent on re-entry, and fails open', (t) => 
   assert.match(manifest.description, /stays silent on stop_hook_active re-entry/);
 });
 
-test('hook spool drains into the observer store and replays idempotently', (t) => {
+test('hook spool drains into the observer store and replays idempotently', async (t) => {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-hook-drain-'));
   const spoolPath = path.join(dir, 'hook-spool.jsonl');
   const store = openObservabilityStore(path.join(dir, 'observability.db'), { outboxEnabled: false });
@@ -353,7 +353,7 @@ test('hook spool drains into the observer store and replays idempotently', (t) =
   fs.appendFileSync(spoolPath, '{malformed}\n');
 
   const projectId = 'a'.repeat(64);
-  const result = drainHookSpool({ spoolPath, store, projectId, batchSize: 1 });
+  const result = await drainHookSpool({ spoolPath, store, projectId, batchSize: 1 });
   assert.deepEqual(result, { drained: 1, duplicates: 1, rejected: 0, malformed: 1, droppedBytes: 0 });
   assert.equal(fs.existsSync(spoolPath), false);
   const [tool] = store.queryView('tool_calls');
