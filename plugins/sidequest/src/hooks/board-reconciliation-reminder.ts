@@ -257,7 +257,7 @@ function reconciliationMessage(data: HookInput): Reminder | null {
       : 'Continue working on the board.';
     const action = submissions.length ? 'Integrate pending submissions now.' : closeActionable;
     const holdWaits = waits.length
-      ? ' If integration cannot proceed, checkpoint and hold; never release it as complete.'
+      ? ' If integration cannot proceed, record why as a ticket comment and hold the submission; never release it as complete.'
       : '';
     const signature = JSON.stringify(open.map((ticket) => ({
       ref: ticket.ref || '',

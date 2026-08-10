@@ -2057,7 +2057,7 @@ test('stop reminder: reviewed submissions stay held until integration', () => {
   assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null);
 });
 
-test('stop reminder: checkpoint refusal does not repeat an audited submission hold during active repair', () => {
+test('stop reminder: tells orchestrators to comment on a submitted integration hold', () => {
   const sessionId = `reconcile-held-repair-${++sqSeq}`;
   const by = 'reconcile-held-repair-worker';
   const submitted = addTicket('audited submission awaiting repair');
@@ -2089,6 +2089,8 @@ test('stop reminder: checkpoint refusal does not repeat an audited submission ho
   const input = { session_id: sessionId, cwd: BOARD_PATH, stop_hook_active: false };
   const first = runHookOutput(BOARD_RECONCILIATION_REMINDER, input);
   assert.match(first.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+  assert.match(first.hookSpecificOutput.additionalContext, /record why as a ticket comment and hold the submission/);
+  assert.doesNotMatch(first.hookSpecificOutput.additionalContext, /checkpoint and hold/);
   assert.doesNotMatch(first.hookSpecificOutput.additionalContext, new RegExp(repair.ref));
 
   const checkpoint = store.checkpointTicket(slug, submitted.ref, by, {
