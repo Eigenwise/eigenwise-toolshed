@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
 import { buildProjectIndex } from '../src/lib/index-builder.ts';
+import { TypeScriptSemanticExtractor } from '../src/lib/extractors/typescript.ts';
 import type { FileGraph, LanguageExtractor, ProjectDescriptor } from '../src/lib/model.ts';
 import { discoverProjects } from '../src/lib/projects.ts';
 import type { ProjectGraphSnapshot, ProjectSnapshotStore, SemanticRuntime } from '../src/lib/runtime-contract.ts';
@@ -80,6 +81,35 @@ test('indexes repository-relative paths when the root is an alias of its real pa
     assert.equal(result.manifest.inputs.some((input) => input.path === 'src/entry.ts'), true);
   } finally {
     await rm(fixtureParent, { recursive: true, force: true });
+  }
+});
+
+test('indexes repeated local declarations and object-literal methods into a ready snapshot', async () => {
+  const root = await mkdtemp(path.join(tmpdir(), 'codegraph-duplicate-symbols-'));
+  try {
+    await writeFile(path.join(root, 'tsconfig.json'), JSON.stringify({ files: ['index.ts'] }));
+    await writeFile(path.join(root, 'index.ts'), [
+      'function first() { const entry = 1; return entry; }',
+      'function second() { const entry = 2; return entry; }',
+      'const firstObject = { extractProject() { return first(); } };',
+      'const secondObject = { extractProject() { return second(); } };',
+      'class Worker { run() {} }',
+      'interface WorkerShape { run(): void; }',
+    ].join('\n'));
+
+    const store = new CapturingStore();
+    const runtime: SemanticRuntime = {
+      engineId: 'typescript',
+      engineVersion: '7.0.2',
+      extractors: [new TypeScriptSemanticExtractor()],
+    };
+    const result = await buildProjectIndex(root, { runtime, store });
+
+    assert.equal(result.snapshots.length, 1);
+    assert.equal(store.snapshots.length, 1);
+    assert.equal(store.snapshots[0]?.coverage.nodes, 9);
+  } finally {
+    await rm(root, { recursive: true, force: true });
   }
 });
 

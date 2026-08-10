@@ -45,7 +45,7 @@ function isTypeScriptSyncModule(value) {
 }
 function isTypeScriptAstModule(value) {
   if (typeof value !== "object" || value === null) return false;
-  return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isPropertyAccessExpression" in value && typeof value.isPropertyAccessExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isNamespaceImport" in value && typeof value.isNamespaceImport === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
+  return "isIdentifier" in value && typeof value.isIdentifier === "function" && "isClassDeclaration" in value && typeof value.isClassDeclaration === "function" && "isInterfaceDeclaration" in value && typeof value.isInterfaceDeclaration === "function" && "isFunctionDeclaration" in value && typeof value.isFunctionDeclaration === "function" && "isMethodDeclaration" in value && typeof value.isMethodDeclaration === "function" && "isMethodSignatureDeclaration" in value && typeof value.isMethodSignatureDeclaration === "function" && "isConstructorDeclaration" in value && typeof value.isConstructorDeclaration === "function" && "isVariableDeclaration" in value && typeof value.isVariableDeclaration === "function" && "isCallExpression" in value && typeof value.isCallExpression === "function" && "isPropertyAccessExpression" in value && typeof value.isPropertyAccessExpression === "function" && "isImportDeclaration" in value && typeof value.isImportDeclaration === "function" && "isNamespaceImport" in value && typeof value.isNamespaceImport === "function" && "isExportDeclaration" in value && typeof value.isExportDeclaration === "function";
 }
 async function loadTypeScript() {
   const [syncModule, astModule] = await Promise.all([
@@ -80,7 +80,7 @@ function isProjectSource(project, sourceFile) {
   return relative !== "" && !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative) && /\.[cm]?[jt]sx?$/i.test(sourceFile.fileName);
 }
 function declarationName(node, ast) {
-  if (ast.isClassDeclaration(node) || ast.isInterfaceDeclaration(node) || ast.isFunctionDeclaration(node) || ast.isMethodDeclaration(node) || ast.isVariableDeclaration(node)) {
+  if (ast.isClassDeclaration(node) || ast.isInterfaceDeclaration(node) || ast.isFunctionDeclaration(node) || ast.isMethodDeclaration(node) || ast.isMethodSignatureDeclaration(node) || ast.isVariableDeclaration(node)) {
     return node.name !== void 0 && ast.isIdentifier(node.name) ? node.name : void 0;
   }
   return void 0;
@@ -89,10 +89,15 @@ function declarationKind(node, ast) {
   if (ast.isClassDeclaration(node)) return "class";
   if (ast.isInterfaceDeclaration(node)) return "interface";
   if (ast.isFunctionDeclaration(node)) return "function";
-  if (ast.isMethodDeclaration(node)) return "method";
+  if (ast.isMethodDeclaration(node) || ast.isMethodSignatureDeclaration(node)) return "method";
   if (ast.isConstructorDeclaration(node)) return "constructor";
   if (ast.isVariableDeclaration(node)) return "variable";
   return void 0;
+}
+function isIndexableDeclaration(node, kind, sourceFile, ast) {
+  if (kind === "variable") return node.parent.parent.parent === sourceFile;
+  if (kind === "method") return ast.isClassDeclaration(node.parent) || ast.isInterfaceDeclaration(node.parent);
+  return true;
 }
 function declarationQualifier(symbol, fallbackName) {
   const names = [fallbackName];
@@ -201,7 +206,7 @@ function collectNodes(project, checker, ast, sourceFiles) {
     const visit = (node) => {
       const kind = declarationKind(node, ast);
       const name = declarationName(node, ast);
-      if (kind !== void 0 && name !== void 0) {
+      if (kind !== void 0 && name !== void 0 && isIndexableDeclaration(node, kind, sourceFile, ast)) {
         const symbol = checker.getSymbolAtLocation(name);
         if (symbol !== void 0) {
           const qualifiedName = declarationQualifier(symbol, name.text);
