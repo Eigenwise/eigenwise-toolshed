@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.430.0 (2026-08-10)
+
+### codebase-mapper 2.14.3 → 2.14.4
+
+#### Fixes
+
+- Fix Codebase Mapper Stop concurrency test cleanup (SQ-1721) [`ab64edf`](https://github.com/Eigenwise/eigenwise-toolshed/commit/ab64edf6901a3641e8bc9b4151746591f5ac543c)
+  Make the overlapping Stop test clean up its lock generation deterministically.
+
+### codegraph 0.1.0 → 0.1.1
+
+#### Fixes
+
+- Fix Codegraph indexing through an aliased project root (SQ-1723)
+  Resolve junctions, symlinks, and Windows 8.3 short names before comparing a project root against the paths TypeScript reports, so indexing and freshness work when a project is reached through an alias of its real directory.
+
 ## v3.429.0 (2026-08-10)
 
 ### codebase-mapper 2.14.2 → 2.14.3

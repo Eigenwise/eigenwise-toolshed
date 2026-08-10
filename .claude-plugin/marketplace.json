@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.429.0",
+  "version": "3.430.0",
   "plugins": [
     {
       "name": "workbench",
@@ -100,7 +100,7 @@
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
       "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
-      "version": "2.14.3",
+      "version": "2.14.4",
       "author": {
         "name": "Eigenwise"
       },
@@ -169,7 +169,7 @@
       "name": "codegraph",
       "source": "./plugins/codegraph",
       "description": "Local semantic graph indexing for TypeScript and JavaScript projects. Seven MCP tools trace symbol impact, paths, hierarchies, modules, and focused context; stale answers are refused, and a pinned runtime is acquired on first use. Source, paths, symbols, graph facts, and project data stay local.",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "author": {
         "name": "Eigenwise"
       },
