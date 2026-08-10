@@ -3,7 +3,7 @@
 const { resolveSuite } = require('../suite-resolver.js');
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -559,6 +559,19 @@ function rollbackPostMergeVerification(repo: string, before: string) {
   integrationGit(repo, ['reset', '--merge', before]);
 }
 
+function deliveryLockPath(repo: string) {
+  return path.resolve(repo, integrationGit(repo, ['rev-parse', '--git-common-dir']), 'sidequest-delivery.lock');
+}
+
+function deliveryInProgress(ticket: any) {
+  return {
+    ok: false,
+    reason: 'delivery_in_progress',
+    ticket,
+    message: `Integration is already delivering another submission into this checkout. Retry ${ticket.ref} after that delivery finishes.`,
+  };
+}
+
 function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string) {
   const verificationMessage = `${ticket.ref} verification failed after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;
   try {
@@ -580,6 +593,29 @@ function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo:
 }
 
 function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
+  const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+  if (!admitted.ok) return admitted;
+  const ticket = admitted.ticket;
+  const project = readMeta(slug);
+  const repo = project?.path;
+  const target = opts.target;
+  if (!repo || !target || !target.branch) return { ok: false, reason: 'integration_target_unavailable', ticket };
+  let lock: string;
+  try {
+    lock = deliveryLockPath(repo);
+  } catch (error: any) {
+    return { ok: false, reason: 'integration_target_unavailable', ticket, message: integrationGitError(error) };
+  }
+  if (!acquireLock(lock, { wait: false })) return deliveryInProgress(ticket);
+  try {
+    return integrateSubmissionUnlocked(slug, idOrRef, opts);
+  } finally {
+    releaseLock(lock);
+  }
+}
+
+function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
   if (!admitted.ok) return admitted;
@@ -618,6 +654,29 @@ function integrateSubmission(slug?: any, idOrRef?: any, opts?: any) {
     const currentBranch = integrationGit(repo, ['branch', '--show-current']);
     if (currentBranch !== target.branch) {
       return integrationFailure(slug, ticket, { reason: 'branch_not_checked_out', message: `${target.branch} must be checked out before integration; currently on ${currentBranch || 'detached HEAD'}.` });
+    }
+    if (admitted.scopeValidation.reconciled) {
+      const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
+      const verify = verifyDeliveredSubmission(slug, ticket, opts);
+      const acceptedVerify = ['passed', 'none', 'skipped', 'manual'].includes(verify.status);
+      if (!acceptedVerify) {
+        return integrationFailure(slug, ticket, {
+          reason: 'verify_failed_existing_delivery',
+          verify,
+          message: `${ticket.ref} is already on ${target.branch}, but verification failed: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`,
+        });
+      }
+      delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
+      const result = updateSubmissionIntegration(slug, ticket.id, {
+        outcome: 'delivered',
+        deliveredAt: new Date().toISOString(),
+        resultingHead,
+        verify,
+        reconciled: true,
+        deliveredFiles: changedPaths,
+        ignoredDirtyPaths: [],
+      });
+      return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result);
     }
     const dirty = integrationGit(repo, ['diff', '--name-only']).split(/\r?\n/).filter(Boolean);
     const staged = integrationGit(repo, ['diff', '--cached', '--name-only']).split(/\r?\n/).filter(Boolean);

@@ -61,6 +61,49 @@ function gitResult(cwd: string, args: readonly string[]): GitResult {
   }
 }
 
+function patchIds(cwd: string, args: readonly string[]): GitResult {
+  try {
+    const patches = git(cwd, args);
+    if (!patches.trim()) return { ok: true, value: '' };
+    return {
+      ok: true,
+      value: execFileSync('git', ['patch-id', '--stable'], {
+        cwd,
+        encoding: 'utf8',
+        input: patches,
+        windowsHide: true,
+      }).trim(),
+    };
+  } catch (error) {
+    return { ok: false, message: errorMessage(error) };
+  }
+}
+
+function patchIdsForCommits(cwd: string, commits: string[]): Set<string> | null {
+  const ids = new Set<string>();
+  for (const commit of commits) {
+    const result = patchIds(cwd, ['show', '--format=', '--no-ext-diff', commit]);
+    if (!result.ok) return null;
+    for (const line of result.value.split(/\r?\n/).filter(Boolean)) {
+      const patchId = line.split(/\s+/)[0];
+      if (patchId) ids.add(patchId);
+    }
+  }
+  return ids;
+}
+
+function submissionAlreadyOnIntegrationBranch(cwd: string, submission: UnknownRecord): boolean {
+  const commits = Array.isArray(submission.commits) ? submission.commits.filter((commit): commit is string => typeof commit === 'string' && commit.length > 0) : [];
+  const integrationBranch = String(submission.integrationBranch || submission.upstream || '').trim();
+  if (!commits.length || !integrationBranch || submission.noOp === true) return false;
+  const submittedPatchIds = patchIdsForCommits(cwd, commits);
+  if (!submittedPatchIds?.size) return false;
+  const integrationCommits = gitResult(cwd, ['rev-list', '--no-merges', integrationBranch]);
+  if (!integrationCommits.ok) return false;
+  const integrationPatchIds = patchIdsForCommits(cwd, integrationCommits.value.split(/\r?\n/).filter(Boolean));
+  return integrationPatchIds != null && [...submittedPatchIds].every((patchId) => integrationPatchIds.has(patchId));
+}
+
 export function repoRoot(cwd: string): string {
   return git(cwd, ['rev-parse', '--show-toplevel']).trim();
 }
@@ -575,18 +618,19 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     integrationBranch: submission.integrationBranch,
     base: submission.base,
   });
-  if (!range.ok) return range;
+  const reconciled = !range.ok && range.reason === 'expected_upstream_diverged' && submissionAlreadyOnIntegrationBranch(cwd, submission);
+  if (!range.ok && !reconciled) return range;
   const storedCommits = Array.isArray(submission.commits) ? submission.commits : [];
-  const rangeNoOp = 'noOp' in range && range.noOp === true;
-  const rangeCommits = 'commits' in range && Array.isArray(range.commits) ? range.commits : [];
-  const rangeChangedPaths = 'changedPaths' in range && Array.isArray(range.changedPaths) ? range.changedPaths : [];
+  const storedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
+  const rangeNoOp = reconciled ? false : 'noOp' in range && range.noOp === true;
+  const rangeCommits = reconciled ? storedCommits : 'commits' in range && Array.isArray(range.commits) ? range.commits : [];
+  const rangeChangedPaths = reconciled ? storedPaths : 'changedPaths' in range && Array.isArray(range.changedPaths) ? range.changedPaths : [];
   if (Boolean(submission.noOp) !== rangeNoOp) {
     return Object.assign({}, range, { ok: false, reason: 'no_op_changed', storedNoOp: Boolean(submission.noOp) });
   }
   if (storedCommits.length && JSON.stringify(storedCommits) !== JSON.stringify(rangeCommits)) {
     return Object.assign({}, range, { ok: false, reason: 'range_changed', storedCommits });
   }
-  const storedPaths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
   if (storedPaths.length && JSON.stringify(storedPaths) !== JSON.stringify(rangeChangedPaths)) {
     return Object.assign({}, range, { ok: false, reason: 'changed_paths_changed', storedPaths });
   }
@@ -601,7 +645,13 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
   const submissionScope = ticketCommitScope(admittedScope, admittedScope, ticketRef);
   const scopeValidation = validatePaths(submissionScope, rangeChangedPaths);
   if (!scopeValidation.ok) return Object.assign({}, range, scopeValidation, { admittedScope });
-  return Object.assign({}, range, { admittedScope });
+  return Object.assign({}, range, {
+    ok: true,
+    commits: rangeCommits,
+    changedPaths: rangeChangedPaths,
+    admittedScope,
+    ...(reconciled ? { reconciled: true } : {}),
+  });
 }
 
 export function commitScoped(cwd: string, message: unknown, files: unknown) {

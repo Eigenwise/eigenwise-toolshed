@@ -12,10 +12,10 @@ function createLocks(dependencies) {
     const delay = Number(process.env.SIDEQUEST_TEST_CLAIM_LOCK_DELAY_MS);
     return Number.isInteger(delay) && delay > 0 ? delay : 0;
   }
-  function acquireLock(lockPath) {
+  function acquireLock(lockPath, options = {}) {
     const STALE_LOCK_MS = 3e4;
     const RETRY_MS = 10;
-    const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
+    const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         const fd = fs.openSync(lockPath, "wx");

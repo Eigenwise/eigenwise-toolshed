@@ -1140,6 +1140,31 @@ test('integration rolls back when post-merge verification fails', () => {
   assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verify_failed_post_merge');
 });
 
+test('SQ-1743: a held delivery lock refuses another integration before it changes the checkout', () => {
+  cleanBranch();
+  const t = addTicket('delivery lock', { files: ['lib/delivery-lock.js'] });
+  assert.strictEqual(runCli(['claim', t.ref, '--by', 'delivery-lock-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'delivery-lock.js'), 'locked\n');
+  git(['add', 'lib/delivery-lock.js']);
+  git(['commit', '-m', 'delivery lock candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(t, commit);
+  assert.strictEqual(runCli(['submit', t.ref, '--by', 'delivery-lock-worker', '--commit', commit]).status, 0);
+  const before = git(['rev-parse', 'HEAD']);
+  const lock = path.resolve(PROJECT_DIR, git(['rev-parse', '--git-common-dir']), 'sidequest-delivery.lock');
+  fs.writeFileSync(lock, 'another integration\n');
+  try {
+    const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+    const refused = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'delivery_in_progress');
+    assert.strictEqual(git(['rev-parse', 'HEAD']), before);
+  } finally {
+    fs.unlinkSync(lock);
+  }
+});
+
 test('integration reports and records merge conflict paths before aborting', () => {
   cleanBranch();
   const t = addTicket('merge conflict paths', { files: ['lib/merge-conflict.js'] });

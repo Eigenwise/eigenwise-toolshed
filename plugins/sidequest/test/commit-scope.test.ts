@@ -31,6 +31,7 @@ interface RangeResult {
   upstream?: string;
   upstreamCommit?: string;
   gitRef?: string;
+  reconciled?: boolean;
 }
 
 const commitScope = require('../lib/commit-scope.js') as {
@@ -435,6 +436,46 @@ test('SQ-923: a greenfield root commit submits against the empty tree instead of
   assert.equal(revalidated.ok, true, `stored root-commit submission failed revalidation: ${revalidated.reason}`);
   assert.deepEqual(revalidated.commits, [tip]);
   assert.equal(commitScope.validateCommitRangeScope(root, range.commits!, ['src']).ok, true);
+});
+
+test('SQ-1743: a patch already replayed after an upstream reset revalidates for closure', () => {
+  const root = repo();
+  const main = branchOf(root);
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'discarded-base.js'), 'discarded\n');
+  git(root, ['add', '--', 'plugins/other-plugin/discarded-base.js']);
+  git(root, ['commit', '-m', 'discarded integration base']);
+  git(root, ['checkout', '-q', '-b', 'ticket-work']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'replayed.js'), 'replayed\n');
+  git(root, ['add', '--', 'plugins/sidequest/replayed.js']);
+  git(root, ['commit', '-m', 'ticket work']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-1743', tip);
+  const range = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1743',
+    upstream: main,
+    integrationBranch: main,
+  });
+  assert.equal(range.ok, true, `ticket range was refused: ${range.reason}`);
+
+  git(root, ['checkout', '-q', main]);
+  git(root, ['reset', '--hard', 'HEAD~1']);
+  git(root, ['cherry-pick', tip]);
+
+  const revalidated = commitScope.validateStoredSubmissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1743',
+    upstream: range.upstream,
+    upstreamCommit: range.upstreamCommit,
+    integrationBranch: main,
+    base: range.base,
+    commits: range.commits,
+    changedPaths: range.changedPaths,
+    admittedScope: ['plugins/sidequest/replayed.js'],
+  });
+  assert.equal(revalidated.ok, true, `replayed patch was refused: ${revalidated.reason}`);
+  assert.equal(revalidated.reconciled, true);
+  assert.deepEqual(revalidated.changedPaths, ['plugins/sidequest/replayed.js']);
 });
 
 test('SQ-923: a scoped commit that advanced the integration branch submits against its own parent', () => {

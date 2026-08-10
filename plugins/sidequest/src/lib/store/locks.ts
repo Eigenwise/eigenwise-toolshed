@@ -18,10 +18,10 @@ function createLocks(dependencies: any) {
     return Number.isInteger(delay) && delay > 0 ? delay : 0;
   }
 
-  function acquireLock(lockPath?: any) {
+  function acquireLock(lockPath?: any, options: any = {}) {
     const STALE_LOCK_MS = 30000;
     const RETRY_MS = 10;
-    const MAX_ATTEMPTS = STALE_LOCK_MS / RETRY_MS;
+    const MAX_ATTEMPTS = options.wait === false ? 2 : STALE_LOCK_MS / RETRY_MS;
     for (let attempt = 0; attempt < MAX_ATTEMPTS; attempt++) {
       try {
         const fd = fs.openSync(lockPath, 'wx');
