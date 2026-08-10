@@ -80,6 +80,32 @@ test('resolves namespace imports, aliases, and qualified base classes through mo
   }
 });
 
+test('indexes statically owned declarations without local or object-literal collisions', async () => {
+  const { root, graphs } = await extractFixture({
+    'tsconfig.json': JSON.stringify({ files: ['index.ts'] }),
+    'index.ts': [
+      'const retained = true;',
+      'function first() { const entry = 1; return entry; }',
+      'function second() { const entry = 2; return entry; }',
+      'const firstObject = { extractProject() { return first(); } };',
+      'const secondObject = { extractProject() { return second(); } };',
+      'class Worker { run() {} }',
+      'interface WorkerShape { run(): void; }',
+    ].join('\n'),
+  });
+  try {
+    const nodes = graphs.flatMap((graph) => graph.nodes);
+    assert.equal(nodes.filter((node) => node.name === 'entry' && node.kind === 'variable').length, 0);
+    assert.equal(nodes.filter((node) => node.name === 'extractProject' && node.kind === 'method').length, 0);
+    assert.ok(nodes.some((node) => node.name === 'retained' && node.kind === 'variable'));
+    assert.ok(nodes.some((node) => node.qualifiedName === 'Worker.run' && node.kind === 'method'));
+    assert.ok(nodes.some((node) => node.qualifiedName === 'WorkerShape.run' && node.kind === 'method'));
+    assert.equal(new Set(nodes.map((node) => node.id)).size, nodes.length);
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test('resolves statically known member calls to their method declaration', async () => {
   const { root, graphs } = await extractFixture({
     'tsconfig.json': JSON.stringify({ files: ['index.ts'] }),

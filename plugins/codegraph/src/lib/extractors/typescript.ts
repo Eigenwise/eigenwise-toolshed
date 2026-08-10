@@ -10,6 +10,7 @@ import type {
   ImportDeclaration,
   InterfaceDeclaration,
   MethodDeclaration,
+  MethodSignatureDeclaration,
   NamespaceImport,
   Node,
   PropertyAccessExpression,
@@ -31,6 +32,7 @@ interface TypeScriptAstModule {
   isInterfaceDeclaration(node: Node): node is InterfaceDeclaration;
   isFunctionDeclaration(node: Node): node is FunctionDeclaration;
   isMethodDeclaration(node: Node): node is MethodDeclaration;
+  isMethodSignatureDeclaration(node: Node): node is MethodSignatureDeclaration;
   isConstructorDeclaration(node: Node): node is ConstructorDeclaration;
   isVariableDeclaration(node: Node): node is VariableDeclaration;
   isCallExpression(node: Node): node is CallExpression;
@@ -64,6 +66,7 @@ function isTypeScriptAstModule(value: unknown): value is TypeScriptAstModule {
     && 'isInterfaceDeclaration' in value && typeof value.isInterfaceDeclaration === 'function'
     && 'isFunctionDeclaration' in value && typeof value.isFunctionDeclaration === 'function'
     && 'isMethodDeclaration' in value && typeof value.isMethodDeclaration === 'function'
+    && 'isMethodSignatureDeclaration' in value && typeof value.isMethodSignatureDeclaration === 'function'
     && 'isConstructorDeclaration' in value && typeof value.isConstructorDeclaration === 'function'
     && 'isVariableDeclaration' in value && typeof value.isVariableDeclaration === 'function'
     && 'isCallExpression' in value && typeof value.isCallExpression === 'function'
@@ -113,7 +116,7 @@ function isProjectSource(project: ProjectDescriptor, sourceFile: SourceFile): bo
 
 function declarationName(node: Node, ast: TypeScriptAstModule): Identifier | undefined {
   if (ast.isClassDeclaration(node) || ast.isInterfaceDeclaration(node) || ast.isFunctionDeclaration(node)
-    || ast.isMethodDeclaration(node) || ast.isVariableDeclaration(node)) {
+    || ast.isMethodDeclaration(node) || ast.isMethodSignatureDeclaration(node) || ast.isVariableDeclaration(node)) {
     return node.name !== undefined && ast.isIdentifier(node.name) ? node.name : undefined;
   }
   return undefined;
@@ -123,10 +126,16 @@ function declarationKind(node: Node, ast: TypeScriptAstModule): GraphNodeKind | 
   if (ast.isClassDeclaration(node)) return 'class';
   if (ast.isInterfaceDeclaration(node)) return 'interface';
   if (ast.isFunctionDeclaration(node)) return 'function';
-  if (ast.isMethodDeclaration(node)) return 'method';
+  if (ast.isMethodDeclaration(node) || ast.isMethodSignatureDeclaration(node)) return 'method';
   if (ast.isConstructorDeclaration(node)) return 'constructor';
   if (ast.isVariableDeclaration(node)) return 'variable';
   return undefined;
+}
+
+function isIndexableDeclaration(node: Node, kind: GraphNodeKind, sourceFile: SourceFile, ast: TypeScriptAstModule): boolean {
+  if (kind === 'variable') return node.parent.parent.parent === sourceFile;
+  if (kind === 'method') return ast.isClassDeclaration(node.parent) || ast.isInterfaceDeclaration(node.parent);
+  return true;
 }
 
 function declarationQualifier(symbol: TypeScriptSymbol, fallbackName: string): string {
@@ -263,7 +272,7 @@ function collectNodes(
     const visit = (node: Node): void => {
       const kind = declarationKind(node, ast);
       const name = declarationName(node, ast);
-      if (kind !== undefined && name !== undefined) {
+      if (kind !== undefined && name !== undefined && isIndexableDeclaration(node, kind, sourceFile, ast)) {
         const symbol = checker.getSymbolAtLocation(name);
         if (symbol !== undefined) {
           const qualifiedName = declarationQualifier(symbol, name.text);
