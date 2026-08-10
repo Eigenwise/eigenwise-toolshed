@@ -8,6 +8,34 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.439.0 (2026-08-10)
+
+### codegraph 0.2.0 → 0.3.0
+
+#### Features
+
+- Python indexing actually reaches the shipped MCP entrypoint (SQ-1730)
+  Python support landed in 0.2.0 complete and unreachable: bin/codegraph-mcp.js was hand-written JavaScript beside a src/bin TypeScript copy that nothing compiled, and only the hand-written one shipped. It never registered PythonLanguageProvider, so a Python project indexed to an empty snapshot with no error. bin/ is now generated from src/bin, build-check hashes it, and the provider list moved to one factory both the source and the compiled artifact are tested against.
+
+#### Fixes
+
+- Freshness stops walking virtualenvs and build caches on every query (SQ-1808)
+  Each language kept its own ignore list, so the TypeScript contributor re-walked a Python project's whole virtualenv on every status and every query. Both contributors now share one policy that probes for pyvenv.cfg rather than trusting directory names, while keeping their language-specific extras.
+
+### model-gateway 0.48.4 → 0.48.5
+
+#### Fixes
+
+- Gateway setup no longer crashes when wiring lives outside the selected scope, and unwire keeps alias pins it never wrote (SQ-1806)
+  isWired() and wiredMode() disagreed once a project wired itself in its own settings.local.json: setup threw 'Cannot read properties of null (reading scope)', and compat-mode sync silently stopped. wiredMode() now resolves through the same precedence and reports the file-backed definition a write can actually change. Separately, `env --remove` deleted every ANTHROPIC_DEFAULT_*_MODEL key by name; it now removes a pin only when it still holds a value the gateway wrote.
+
+### sidequest 4.44.0 → 4.44.1
+
+#### Fixes
+
+- An empty dispatch binding no longer overrides the ticket's declared files (SQ-1807)
+  A dispatch that captured no files was treated as an authoritative empty scope, because Array.isArray([]) is true. The commit gate then saw an empty effective scope beside a non-empty ticket.files, appended the release fragment, and demanded `.release/unreleased/<REF>.md` as the only path in scope, in projects with no such convention. A released dispatch also handed its empty binding to the next attempt, so re-dispatch never re-read the ticket and editing its files changed nothing. Cost three executor runs on one ticket before it was root-caused.
+
 ## v3.438.0 (2026-08-10)
 
 ### codegraph 0.1.7 → 0.2.0
