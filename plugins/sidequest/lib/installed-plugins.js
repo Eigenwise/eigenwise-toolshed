@@ -52,7 +52,7 @@ function acquireRegistryLock(registryPath) {
     try {
       return { descriptor: import_node_fs.default.openSync(lockPath, "wx"), path: lockPath };
     } catch (error) {
-      if (errorCode(error) !== "EEXIST" || Date.now() >= deadline) throw error;
+      if (!["EEXIST", "EPERM"].includes(errorCode(error) ?? "") || Date.now() >= deadline) throw error;
       waitForRegistryLock();
     }
   }

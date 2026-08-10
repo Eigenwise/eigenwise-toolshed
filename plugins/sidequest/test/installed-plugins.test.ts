@@ -18,11 +18,26 @@ function writeRegistry(registryPath: string, installPath: string): void {
   }));
 }
 
-function runRegistryWriter(registryPath: string, installPath: string): Promise<void> {
+function runRegistryWriter(registryPath: string, installPath: string, injectWindowsLockContention = false): Promise<void> {
   const writer = spawn(process.execPath, ['--import', 'tsx', '--eval', `
-    const { writeInstalledPluginsAtomically } = require(${JSON.stringify(pluginRegistryModulePath)});
     const registryPath = process.env.SQ_REGISTRY_PATH;
     const installPath = process.env.SQ_INSTALL_PATH;
+    if (process.env.SQ_INJECT_WINDOWS_LOCK_CONTENTION === '1') {
+      const fs = require('node:fs');
+      const openSync = fs.openSync;
+      let shouldInjectWindowsLockContention = true;
+      fs.openSync = (...openArguments) => {
+        if (shouldInjectWindowsLockContention && openArguments[0] === \`\${registryPath}.lock\` && openArguments[1] === 'wx') {
+          shouldInjectWindowsLockContention = false;
+          const error = new Error('simulated Windows registry lock contention');
+          error.code = 'EPERM';
+          throw error;
+        }
+        return openSync(...openArguments);
+      };
+      require('node:module').syncBuiltinESMExports();
+    }
+    const { writeInstalledPluginsAtomically } = require(${JSON.stringify(pluginRegistryModulePath)});
     for (let index = 0; index < 80; index += 1) {
       writeInstalledPluginsAtomically(registryPath, JSON.stringify({
         plugins: {
@@ -32,7 +47,12 @@ function runRegistryWriter(registryPath: string, installPath: string): Promise<v
       }));
     }
   `], {
-    env: { ...process.env, SQ_REGISTRY_PATH: registryPath, SQ_INSTALL_PATH: installPath },
+    env: {
+      ...process.env,
+      SQ_INJECT_WINDOWS_LOCK_CONTENTION: injectWindowsLockContention ? '1' : '0',
+      SQ_REGISTRY_PATH: registryPath,
+      SQ_INSTALL_PATH: installPath,
+    },
     stdio: ['ignore', 'ignore', 'pipe'],
     windowsHide: true,
   });
@@ -68,7 +88,7 @@ test('atomic registry fixture writes keep lockfile-overlap dispatch preflight re
   }, 0);
 
   try {
-    await Promise.all([runRegistryWriter(registryPath, installPath), runRegistryWriter(registryPath, installPath)]);
+    await Promise.all([runRegistryWriter(registryPath, installPath, true), runRegistryWriter(registryPath, installPath)]);
   } finally {
     clearInterval(reader);
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });

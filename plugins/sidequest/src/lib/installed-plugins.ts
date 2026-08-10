@@ -24,7 +24,7 @@ function acquireRegistryLock(registryPath: string): { descriptor: number; path: 
     try {
       return { descriptor: fs.openSync(lockPath, 'wx'), path: lockPath };
     } catch (error: unknown) {
-      if (errorCode(error) !== 'EEXIST' || Date.now() >= deadline) throw error;
+      if (!['EEXIST', 'EPERM'].includes(errorCode(error) ?? '') || Date.now() >= deadline) throw error;
       waitForRegistryLock();
     }
   }
