@@ -2619,6 +2619,40 @@ test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async 
   assert.match(agentsync.renderTicketBriefing(stored, dispatched.token), /\[sidequest-artifact-mode\]/);
 });
 
+test('native_agent refuses an executor-held claim instead of opening a second spawn path', async () => {
+  const slug = store.ensureProject(PROJ).slug;
+  store.setCategory({ id: 'native-dispatch-guard', name: 'Native dispatch guard', route: { model: 'sonnet', effort: 'high' } });
+  const held = store.createTicket(slug, {
+    title: 'native agent held claim',
+    category: 'native-dispatch-guard',
+    files: ['plugins/sidequest'],
+  });
+  const executorSessionId = `native-agent-dispatch-guard-${Date.now()}`;
+  const heldDispatch = store.prepareDispatch(slug, held.ref, { sessionId: MCP_SESSION_ID });
+  assert.equal(store.claimTicket(slug, held.ref, 'native-agent-dispatch-guard', {
+    token: heldDispatch.token,
+    executor: heldDispatch.ticket.dispatchExecutor,
+    sessionId: executorSessionId,
+  }).ok, true);
+  const subordinate = store.createTicket(slug, {
+    title: 'native agent subordinate',
+    category: 'native-dispatch-guard',
+    files: ['plugins/sidequest'],
+  });
+
+  const originalSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = executorSessionId;
+  try {
+    await assert.rejects(
+      () => callHandler('native_agent', { ref: subordinate.ref, prompt: 'Implement the ticket.' }),
+      /dispatch is orchestrator-owned while you hold SQ-\d+\. File the follow-up with `add`, link it to SQ-\d+, report the new ref in your submission comment, and the orchestrator will dispatch it/,
+    );
+  } finally {
+    process.env.CLAUDE_CODE_SESSION_ID = originalSessionId;
+    assert.equal(store.releaseTicket(slug, held.ref, 'native-agent-dispatch-guard', { status: 'todo', source: 'test' }).ok, true);
+  }
+});
+
 test('native_agent carries ticket anchors and verify command through its stable fallback', async () => {
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);
   try {
@@ -3357,6 +3391,7 @@ test('MCP claim binds an unlaunched isolated dispatch with its prepared token', 
   assert.equal(dispatch.bindSource, 'claim_token');
   assert.equal(dispatch.sessionId, MCP_SESSION_ID);
   assert.ok(dispatch.boundAt);
+  assert.equal(store.releaseTicket(slug, added.ref, 'mcp-token-bound-agent', { status: 'todo', source: 'test' }).ok, true);
 });
 
 test('MCP blocks no-dispatch routed claims and records an explicit direct research bypass', async () => {

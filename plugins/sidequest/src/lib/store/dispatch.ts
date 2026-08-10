@@ -11,6 +11,18 @@ function dispatchState(ticket?: any) {
   return ticket && ticket.dispatch && typeof ticket.dispatch === 'object' ? ticket.dispatch : null;
 }
 
+function executorClaimDispatchRefusal(slug?: any, sessionId?: any) {
+  const callerSessionId = String(sessionId || '').trim();
+  if (!callerSessionId) return null;
+  for (const ticket of listTickets(slug)) {
+    const state = dispatchState(ticket);
+    const dispatchingSessionId = String(state?.preparedBy?.sessionId || '').trim();
+    if (!ticket?.claim?.by || !state || state.terminalAt || state.sessionId !== callerSessionId || dispatchingSessionId === callerSessionId || claimReclaimable(ticket)) continue;
+    return `dispatch: dispatch is orchestrator-owned while you hold ${ticket.ref}. File the follow-up with \`add\`, link it to ${ticket.ref}, report the new ref in your submission comment, and the orchestrator will dispatch it.`;
+  }
+  return null;
+}
+
 function dispatchPreparationAttribution(opts?: any) {
   return {
     sessionId: opts?.sessionId ? String(opts.sessionId) : null,
@@ -695,6 +707,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const projectPath = readMeta(slug)?.path;
   const found = getTicket(slug, idOrRef);
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
+  const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
+  if (executorClaimRefusal) throw new Error(executorClaimRefusal);
   const initialNoDeclaredFileScope = !dispatchReadOnly(found)
     && Array.isArray(found.contracts?.changes) && found.contracts.changes.length > 0
     && !normalizeFiles(found.files).length;
@@ -1375,6 +1389,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
   return {
     dispatchTokenPrefix,
     dispatchState,
+    executorClaimDispatchRefusal,
     sharedTreeArtifactRequested,
     categoryArtifactRoot,
     sharedTreeArtifactMode,

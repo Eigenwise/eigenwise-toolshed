@@ -246,7 +246,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch for a ticket. It returns a stable executor spawn spec and token. Pass spawn unchanged to Agent. Ordinary isolated dispatches use a native worktree; retained-worktree continuations omit native isolation so the executor can EnterWorktree into the retained worktree. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current spawn. The claim stays gated on the returned token and executor.",
+    description: "Prepare a token-gated dispatch for a ticket. It returns a stable executor spawn spec and token. Dispatch is orchestrator-owned while the caller holds an active executor claim. Ordinary isolated dispatches use a native worktree; retained-worktree continuations omit native isolation so the executor can EnterWorktree into the retained worktree. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current spawn. The claim stays gated on the returned token and executor.",
     inputSchema: {
       type: "object",
       properties: {
@@ -321,7 +321,7 @@ const tools = [
   },
   {
     name: "native_agent",
-    description: "Return a stable native Agent spawn spec for a ticket. Claude Code snapshots agent definitions at session start, so temporary definitions written mid-session cannot be safely spawned. The returned executor is already registered, uses the ticket runtime, and must be passed to Agent unchanged.",
+    description: "Return a stable native Agent spawn spec for a ticket. Executors holding an active claim cannot create a spawn. Claude Code snapshots agent definitions at session start, so temporary definitions written mid-session cannot be safely spawned. The returned executor is already registered, uses the ticket runtime, and must be passed to Agent unchanged.",
     inputSchema: {
       type: "object",
       properties: {
@@ -343,6 +343,9 @@ const tools = [
       }
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
+      const sessionId = sessionOf(args);
+      const executorClaimRefusal = store.executorClaimDispatchRefusal(slug, sessionId);
+      if (executorClaimRefusal) throw new Error(executorClaimRefusal);
       const route = store.resolveTicketRoute(ticket, ticket.category);
       if (!route || !route.exec) throw new Error(`native_agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
       const resolved = route.exec;
@@ -359,7 +362,7 @@ const tools = [
         launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
         description: agentsync.spawnDescription(ticket, resolved),
         isolation: agentsync.ticketIsolation(ticket, sharedTree),
-        sessionId: sessionOf(args),
+        sessionId,
         prompt
       });
       return Object.assign({

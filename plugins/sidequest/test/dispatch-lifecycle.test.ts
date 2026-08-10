@@ -62,6 +62,29 @@ function createFixture(title?: any, category = 'dispatch.lifecycle') {
   });
 }
 
+test('executors cannot prepare a subordinate dispatch while the orchestrator can', () => {
+  const executorSessionId = `executor-dispatch-guard-${Date.now()}`;
+  const orchestratorSessionId = `orchestrator-dispatch-guard-${Date.now()}`;
+  const held = createFixture('executor-held dispatch guard');
+  const heldDispatch = store.prepareDispatch(slug, held.ref, { sessionId: orchestratorSessionId });
+  assert.equal(store.claimTicket(slug, held.ref, 'executor-dispatch-guard', {
+    token: heldDispatch.token,
+    executor: heldDispatch.ticket.dispatchExecutor,
+    sessionId: executorSessionId,
+  }).ok, true);
+
+  const subordinate = createFixture('subordinate dispatch guard');
+  assert.throws(
+    () => store.prepareDispatch(slug, subordinate.ref, { sessionId: executorSessionId }),
+    /dispatch is orchestrator-owned while you hold SQ-\d+\. File the follow-up with `add`, link it to SQ-\d+, report the new ref in your submission comment, and the orchestrator will dispatch it/,
+  );
+
+  const orchestrated = store.prepareDispatch(slug, subordinate.ref, { sessionId: orchestratorSessionId });
+  assert.equal(orchestrated.ok, true);
+  assert.equal(store.releaseTicket(slug, held.ref, 'executor-dispatch-guard', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.releaseTicket(slug, subordinate.ref, 'orchestrator-dispatch-guard', { force: true, status: 'todo', source: 'test' }).ok, true);
+});
+
 function windowsShortPathAlias(directory = '') {
   if (process.platform !== 'win32') return null;
   const result = spawnSync('cmd.exe', ['/d', '/s', '/c', `for %I in ("${directory}") do @echo %~sI`], {

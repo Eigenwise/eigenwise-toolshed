@@ -453,6 +453,7 @@ const EXECUTOR_VERIFY_MAX = 1e3;
 const MANUAL_VERIFY_PREFIX = "manual:";
 const {
   dispatchTokenPrefix,
+  executorClaimDispatchRefusal,
   sharedTreeArtifactRequested,
   categoryArtifactRoot,
   sharedTreeArtifactMode,
@@ -2245,6 +2246,7 @@ module.exports = {
   deleteTicket,
   dispatchReadOnly,
   stableExecutorName,
+  executorClaimDispatchRefusal,
   prepareDispatch,
   readDispatchBriefing,
   isSupersededDispatchToken,
