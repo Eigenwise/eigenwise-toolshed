@@ -77,7 +77,7 @@ const OPAQUE_SEGMENT = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$|^[0-9a-f]{16
 
 /**
  * Reduces a touched file to the area it lives in, as the two directory segments closest to it
- * ("poker_ai/hand_history"). Taking the tail rather than the head keeps this meaningful for
+ * ("src/ingest"). Taking the tail rather than the head keeps this meaningful for
  * absolute paths and identical across machines, where a leading drive or home directory is not.
  * Returns null for scratch space, so a session's temp directory cannot outrank its real work.
  */
