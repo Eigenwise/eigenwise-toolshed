@@ -15,6 +15,8 @@ const promptHook = path.join(root, 'hooks', 'remind.js');
 const startHook = path.join(root, 'hooks', 'inject-context.js');
 const hooksConfig = require('../hooks/hooks.json');
 
+const TEST_LOCK_WAIT_MS = 5_000;
+
 function project() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codebase-mapper-'));
   const mapDirectory = path.join(directory, '.claude', '.codebase-info');
@@ -61,6 +63,7 @@ function hookAsync(script, projectDir, stateDirectory, data, envOverrides = {}) 
       env: {
         ...ambient,
         CODEBASE_MAPPER_STATE_DIR: stateDirectory,
+        CODEBASE_MAPPER_TEST_STATE_LOCK_WAIT_MS: String(TEST_LOCK_WAIT_MS),
         ...envOverrides,
       },
       windowsHide: true,
@@ -79,7 +82,7 @@ function hookAsync(script, projectDir, stateDirectory, data, envOverrides = {}) 
 async function waitForLockContenders(lockFile, count) {
   const directory = path.dirname(lockFile);
   const prefix = path.basename(lockFile) + '.';
-  const deadline = Date.now() + 2000;
+  const deadline = Date.now() + TEST_LOCK_WAIT_MS;
   while (Date.now() < deadline) {
     if (fs.readdirSync(directory).filter((name) => name.startsWith(prefix)).length >= count) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -88,7 +91,7 @@ async function waitForLockContenders(lockFile, count) {
 }
 
 async function waitForPath(file) {
-  const deadline = Date.now() + 2000;
+  const deadline = Date.now() + TEST_LOCK_WAIT_MS;
   while (Date.now() < deadline) {
     if (fs.existsSync(file)) return;
     await new Promise((resolve) => setTimeout(resolve, 5));
@@ -358,7 +361,7 @@ test('overlapping prompt-less Stop processes atomically claim one veto', async (
   const stateFile = path.join(state, 'stop-veto-' + require('node:crypto').createHash('sha256').update(sessionId).digest('hex') + '.json');
   const lockDirectory = stateFile + '.lock-v2';
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  publishStateLock(lockDirectory, process.pid);
+  const fixtureOwnerFile = publishStateLock(lockDirectory, process.pid);
   const stop = {
     hook_event_name: 'Stop',
     session_id: sessionId,
@@ -370,7 +373,9 @@ test('overlapping prompt-less Stop processes atomically claim one veto', async (
     hookAsync(startHook, directory, state, stop),
     hookAsync(startHook, directory, state, stop),
   ]);
-  setTimeout(() => fs.rmSync(lockDirectory, { recursive: true, force: true }), 100);
+  await waitForLockContenders(lockDirectory, 2);
+  fs.rmSync(fixtureOwnerFile, { force: true });
+  fs.rmdirSync(lockDirectory);
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
@@ -444,7 +449,7 @@ test('transcript path presence and value cannot split one Stop batch', async () 
   const stateFile = path.join(state, 'stop-veto-' + crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
   const lockDirectory = stateFile + '.lock-v2';
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  publishStateLock(lockDirectory, process.pid);
+  const fixtureOwnerFile = publishStateLock(lockDirectory, process.pid);
   const stop = {
     hook_event_name: 'Stop',
     session_id: sessionId,
@@ -458,7 +463,8 @@ test('transcript path presence and value cannot split one Stop batch', async () 
     hookAsync(startHook, directory, state, { ...stop, transcript_path: path.join(directory, 'second.jsonl') }),
   ]);
   await waitForLockContenders(lockDirectory, 3);
-  fs.rmSync(lockDirectory, { recursive: true, force: true });
+  fs.rmSync(fixtureOwnerFile, { force: true });
+  fs.rmdirSync(lockDirectory);
 
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0, 0]);

@@ -15,6 +15,11 @@ const STATE_LOCK_WAIT_MS = 500;
 const STATE_LOCK_RETRY_MS = 5;
 const stateLockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
+function stateLockWaitMs() {
+  const testWaitMs = Number(process.env.CODEBASE_MAPPER_TEST_STATE_LOCK_WAIT_MS);
+  return Number.isSafeInteger(testWaitMs) && testWaitMs > STATE_LOCK_WAIT_MS ? testWaitMs : STATE_LOCK_WAIT_MS;
+}
+
 function readStdin() {
   try {
     const raw = fs.readFileSync(0, 'utf8');
@@ -172,7 +177,7 @@ function acquireStateLock(file) {
   const ownerName = `owner-${generation}`;
   const candidateDirectory = `${lockDirectory}.${generation}`;
   const publishedOwnerFile = path.join(lockDirectory, ownerName);
-  const deadline = Date.now() + STATE_LOCK_WAIT_MS;
+  const deadline = Date.now() + stateLockWaitMs();
   fs.mkdirSync(path.dirname(file), { recursive: true });
   try {
     fs.mkdirSync(candidateDirectory);
