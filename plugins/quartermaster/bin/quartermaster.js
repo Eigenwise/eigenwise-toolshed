@@ -8,13 +8,13 @@ const { mine } = require('../lib/mine.js');
 const { readAvailable, readInstalled, searchAvailable } = require('../lib/catalog.js');
 const {
   appendDecision,
-  markRetro,
+  markResupply,
   readDecisions,
   statusFor,
   verifyDecisions,
 } = require('../lib/state.js');
 
-const USAGE = `quartermaster - mine recent Claude Code sessions for what could have gone better
+const USAGE = `quartermaster - mine recent Claude Code sessions for what would make the work easier
 
 Usage:
   quartermaster mine [--project <path>] [--days <n>] [--sessions <n>] [--all-projects] [--no-subagents]
@@ -25,7 +25,7 @@ Usage:
                           [--kind <k>] [--signal denials|interrupts|corrections|toolErrors|any]
                           [--project <path>] [--detail <text>]
   quartermaster verify [--project <path>]
-  quartermaster mark-retro [--project <path>]
+  quartermaster mark-resupply [--project <path>]
 
 Everything prints JSON. Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
 `;
@@ -134,9 +134,12 @@ async function main(argv = process.argv.slice(2)) {
     case 'verify':
       printJson(verifyDecisions(options.projectPath));
       return;
+    // mark-retro is the pre-rename spelling, still accepted so a skill file or note that predates
+    // the rename keeps working instead of failing at the last step of a completed pass.
     case 'mark-retro':
-      markRetro(options.projectPath);
-      printJson({ ok: true, lastRetroAt: new Date().toISOString() });
+    case 'mark-resupply':
+      markResupply(options.projectPath);
+      printJson({ ok: true, lastResupplyAt: new Date().toISOString() });
       return;
     default:
       throw new Error(`Unknown command: ${options.command}\n\n${USAGE}`);

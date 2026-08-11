@@ -1,5 +1,5 @@
 ---
-name: retro
+name: resupply
 description: >-
   Turn recent sessions into the capabilities that make the user's goals cheaper to reach: the
   measurement nobody can currently run, the manual work a plugin or skill should own, the knowledge
@@ -10,7 +10,7 @@ description: >-
   verify.
 ---
 
-# Quartermaster retro
+# Quartermaster resupply
 
 One question drives this skill: **what is missing from this workspace that would make the user's
 goals easier to reach?** Then build or install that one thing, with their approval.
@@ -20,13 +20,13 @@ yourself.
 
 ## Why capability and not friction
 
-The obvious way to run a retro is to hunt for what went wrong: denials, corrections, interrupts,
+The obvious way to run a pass like this is to hunt for what went wrong: denials, corrections, interrupts,
 repeated commands. That is worth doing, and it is the last thing on the list here, because
 **removing friction returns the user to par while adding capability moves par.**
 
 The most valuable improvements tend to leave no friction trace at all. When someone needs a
 measurement that does not exist yet, nothing errors, nothing gets denied, nobody gets corrected,
-and it happens exactly once, so every repetition threshold misses it. A retro that only counts
+and it happens exactly once, so every repetition threshold misses it. A pass that only counts
 pain is structurally blind to the highest-value thing it could find.
 
 So lead with what the user is trying to do, and treat the friction counts as one input to that
@@ -60,7 +60,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mine --project "${CLAUDE_PROJE
 ```
 
 Default window is 30 days / 40 sessions. Add `--all-projects` only if the user asks for a global
-retro (much slower). The output is a bounded JSON aggregate: per-session tallies with wall-clock
+pass (much slower). The output is a bounded JSON aggregate: per-session tallies with wall-clock
 and prompt counts, top repeated commands, plugin/skill/MCP attribution, web search and fetch
 domains, friction counts with a few clipped quotes, and `decisions` with fingerprints of what was
 already applied or rejected.
@@ -161,7 +161,7 @@ Seven findings maximum, best first. For each: the evidence, the goal it serves, 
 or diff, and the cost (for plugin installs, `claude plugin details <name>` when context cost is
 relevant). Wait for an explicit yes or no before touching anything or moving on. Never batch-apply.
 
-If the signals are thin, say so and stop. An empty retro is a valid result, and inventing work to
+If the signals are thin, say so and stop. An empty pass is a valid result, and inventing work to
 look useful is how these turn into noise the user learns to skip.
 
 ### 7. Record and close
@@ -176,12 +176,12 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decisions add --project "${CLA
   --signal denials|interrupts|corrections|toolErrors|any
 ```
 
-`--signal` is what the next retro verifies against. For a capability that no friction counter
-tracks, use `any` and say in the title what to look for instead, so the next retro can ask whether
+`--signal` is what the next pass verifies against. For a capability that no friction counter
+tracks, use `any` and say in the title what to look for instead, so the next pass can ask whether
 the new skill or plugin shows up in attribution at all.
 
-Then `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mark-retro --project
-"${CLAUDE_PROJECT_DIR}"` and summarize: what was added, what was declined, and what the next retro
+Then `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" mark-resupply --project
+"${CLAUDE_PROJECT_DIR}"` and summarize: what was added, what was declined, and what the next pass
 will check.
 
 ## Guidelines
@@ -190,7 +190,7 @@ will check.
   approval with the exact change visible first.
 - Rank by the goal, not by the count. A single missing measurement can outrank thirty denials, and
   a well-attested annoyance that serves no goal is still noise.
-- Seven findings maximum. A retro that surfaces thirty gets skimmed; the tools that tried
+- Seven findings maximum. A pass that surfaces thirty gets skimmed; the tools that tried
   continuous suggestion drowned their users.
 - Attribution counts are evidence of use; absence is only a hint. Say "no recorded tool activity in
   the window", never "unused". Hook-only and context-injection plugins legitimately show nothing.
@@ -208,4 +208,4 @@ will check.
 - [ ] Existing plugins and skills were searched before anything new was proposed
 - [ ] Every proposal showed the exact change and got an explicit yes or no
 - [ ] Every decision, including rejections, was recorded with a fingerprint
-- [ ] mark-retro ran at the end
+- [ ] mark-resupply ran at the end

@@ -9,7 +9,8 @@ const { test, beforeEach } = require('node:test');
 const {
   appendDecision,
   markNudged,
-  markRetro,
+  markResupply,
+  projectStateFile,
   readProjectState,
   recordSessionTally,
   rejectedFingerprints,
@@ -51,17 +52,34 @@ test('statusFor nudges on friction threshold and respects cooldown', () => {
   assert.equal(statusFor(PROJECT, environment, now).shouldNudge, false, 'cooldown after nudge');
 });
 
-test('statusFor nudges on session count and resets after retro', () => {
+test('statusFor nudges on session count and resets after a resupply pass', () => {
   const now = Date.now();
   for (let index = 0; index < 9; index += 1) {
     recordSessionTally(PROJECT, `session-${index}`, tallyWith(), environment, now - (index + 5) * DAY_MS);
   }
   assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, '9 sessions over default 8');
 
-  markRetro(PROJECT, environment, now - 4 * DAY_MS);
+  markResupply(PROJECT, environment, now - 4 * DAY_MS);
   const status = statusFor(PROJECT, environment, now);
   assert.equal(status.unanalyzedSessions, 0);
   assert.equal(status.shouldNudge, false);
+});
+
+test('state written before the rename keeps its history under the new key', () => {
+  const now = Date.now();
+  for (let index = 0; index < 9; index += 1) {
+    recordSessionTally(PROJECT, `session-${index}`, tallyWith(), environment, now - (index + 5) * DAY_MS);
+  }
+  // Simulate an install that last ran a pass under the old spelling.
+  const file = projectStateFile(PROJECT, environment);
+  const onDisk = JSON.parse(fs.readFileSync(file, 'utf8'));
+  delete onDisk.lastResupplyAt;
+  onDisk.lastRetroAt = new Date(now - 4 * DAY_MS).toISOString();
+  fs.writeFileSync(file, JSON.stringify(onDisk), 'utf8');
+
+  const status = statusFor(PROJECT, environment, now);
+  assert.equal(status.lastResupplyAt, onDisk.lastRetroAt, 'old key is read forward');
+  assert.equal(status.unanalyzedSessions, 0, 'sessions before the old pass are still counted as reviewed');
 });
 
 test('decisions ledger separates applied from rejected fingerprints', () => {

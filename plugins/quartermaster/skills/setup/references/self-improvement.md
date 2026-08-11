@@ -2,7 +2,7 @@
 
 Every workspace gets a baked-in self-improvement loop. It's what makes the setup a **starting point
 that keeps sharpening itself** instead of a static scaffold that goes stale. The mechanism is
-deliberately simple: a global live rule (re-injected every prompt) plus the on-demand `retro` skill
+deliberately simple: a global live rule (re-injected every prompt) plus the on-demand `resupply` skill
 for a deeper pass. No hook, no background process, it rides the live-rules mechanism that's already
 installed.
 
@@ -34,14 +34,14 @@ is not "did anything go wrong", it's "what was missing here that I needed".
 - **A tool that would have done this for you**: check what's already installed, then propose one.
 Look at what exists before building; a lot of what feels missing is installed under a name you
 didn't think of. Keep it to one improvement, as its own step and commit. If the work genuinely
-needed nothing new, skip silently. For a deeper periodic pass, run `retro`.
+needed nothing new, skip silently. For a deeper periodic pass, run `resupply`.
 ```
 
 ## Why a rule and not a hook
 
 - A **hook** (like a `Stop` hook) fires deterministically but can't judge whether a turn was worth
   reflecting on: it either nags on everything or needs brittle path-matching to guess. A read-only
-  Q&A turn shouldn't trigger a retro; a hairy debugging session should.
+  Q&A turn shouldn't trigger a pass; a hairy debugging session should.
 - A **live rule** leaves that judgment to Claude, where it belongs, and stays in front of the model
   on every prompt so it doesn't get forgotten mid-session. It also costs nothing to disable
   (`enabled: false`) or tune, like any other rule.
@@ -72,10 +72,10 @@ of opinion, and the same ground gets re-argued in later sessions because nothing
 **The last row is the loop eating its own tail:** when the workspace setup didn't cover this stack
 well, the improvement is to teach the catalog, so the next project of that kind starts better.
 
-## The `retro` skill (deeper, on-demand)
+## The `resupply` skill (deeper, on-demand)
 
-The rule handles the lightweight, in-the-moment case. The `retro` skill is the periodic deep pass:
-run it (or say "let's do a retro" / "what would make this easier") and it names the user's current
+The rule handles the lightweight, in-the-moment case. The `resupply` skill is the periodic deep pass:
+run it (or say "what would make this easier" / "what are we missing") and it names the user's current
 goal, mines recent sessions for what's missing against that goal, and proposes a batch of
 improvements across skills, plugins, the map, `CLAUDE.md`, and rules, applying the ones the user
 approves. Point users at it in the Phase 5 wrap-up.

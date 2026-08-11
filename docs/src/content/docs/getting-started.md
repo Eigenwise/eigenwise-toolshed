@@ -37,7 +37,7 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 - [Add GPT or Grok subscription models](./getting-started/model-gateway/)
 - [Keep a project map nearby](./getting-started/codebase-mapper/)
 - [Load project rules when they apply](./getting-started/live-rules/)
-- [Set up workspaces and run retros with hindsight](./getting-started/quartermaster/)
+- [Set up workspaces, and work out what they are short of](./getting-started/quartermaster/)
 - [Run a human-judged comparison](./getting-started/experiments/)
 - [View selected local usage](./observability/)
 

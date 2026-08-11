@@ -3,7 +3,7 @@
 Looks at your recent Claude Code sessions and asks what would make your goals easier to reach:
 a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving,
 permissions worth allowing, plugins worth installing or disabling. Every change is proposed one at
-a time and applied only when you say yes. The next retro then tells you whether the last round
+a time and applied only when you say yes. The next pass then tells you whether the last round
 actually helped.
 
 Friction is in there, at the bottom of the list. Fixing what went wrong gets you back to the speed
@@ -23,7 +23,7 @@ Quartermaster spans every project, so install it once at user scope:
 /plugin install quartermaster@eigenwise-toolshed --scope user
 ```
 
-Then `/quartermaster:setup` in a project, or `/quartermaster:retro` after some real sessions.
+Then `/quartermaster:setup` in a project, or `/quartermaster:resupply` after some real sessions.
 
 ## How it works
 
@@ -32,9 +32,9 @@ Two cheap hooks and two skills. The hooks never analyze content and never call a
 - **SessionEnd hook**: streams the transcript that just ended and records a small tally per
   session (prompts, denials, interrupts, corrections, tool errors) under
   `~/.claude/quartermaster-state/`. Local file reads only.
-- **SessionStart hook**: once enough unanalyzed sessions or friction events pile up, injects one
-  line suggesting a retro. Cooldown of 72h between nudges; silent otherwise.
-- **retro skill**: asks what you're working toward, then runs the miner (`bin/quartermaster.js
+- **SessionStart hook**: once enough unreviewed sessions or friction events pile up, injects one
+  line suggesting a resupply pass. Cooldown of 72h between nudges; silent otherwise.
+- **resupply skill**: asks what you're working toward, then runs the miner (`bin/quartermaster.js
   mine`), which streams recent transcripts and emits a bounded JSON aggregate: per-session cost,
   top repeated commands, per-plugin/skill/MCP attribution, fetch domains, friction counts with
   short quotes. The skill ranks what's missing against your goal (something unmeasurable, then
@@ -51,7 +51,7 @@ every marketplace manifest already on the machine. No network calls from the scr
 ## Why the loop closes
 
 Every applied recommendation records what it targets. `bin/quartermaster.js verify` compares that
-signal per session before and after the decision, so the retro opens with a track record ("the
+signal per session before and after the decision, so each pass opens with a track record ("the
 allowlist rule: denials went 2.1 to 0.3 per session") and proposes rolling back what didn't work.
 For a capability no counter tracks, the check is whether the new skill or plugin shows up in
 attribution at all. Rejections are remembered so the same advice doesn't come back.
@@ -65,7 +65,7 @@ node bin/quartermaster.js catalog [--query <terms>] [--installed]
 node bin/quartermaster.js decisions list
 node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected ...
 node bin/quartermaster.js verify [--project <path>]
-node bin/quartermaster.js mark-retro [--project <path>]
+node bin/quartermaster.js mark-resupply [--project <path>]
 ```
 
 Everything prints JSON. Node stdlib only, no dependencies, cross-platform.
@@ -76,14 +76,14 @@ Environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `QUARTERMASTER_MIN_SESSIONS` | 8 | Unanalyzed sessions before a nudge |
+| `QUARTERMASTER_MIN_SESSIONS` | 8 | Unreviewed sessions before a nudge |
 | `QUARTERMASTER_MIN_FRICTION` | 12 | Friction events (denials + interrupts + corrections) before a nudge |
-| `QUARTERMASTER_NUDGE_HOURS` | 72 | Cooldown between nudges, and after a retro |
+| `QUARTERMASTER_NUDGE_HOURS` | 72 | Cooldown between nudges, and after a resupply pass |
 | `QUARTERMASTER_STATE_DIR` | `~/.claude/quartermaster-state` | Where tallies and the decision ledger live |
 
 ## Privacy
 
 Transcripts are read locally by a script and reduced to counts plus a handful of clipped quotes
-(max 300 chars each). Raw transcripts are never loaded into model context; the retro skill is
+(max 300 chars each). Raw transcripts are never loaded into model context; the resupply skill is
 explicitly forbidden from opening them. State files contain tallies and decisions, not
 conversation content.

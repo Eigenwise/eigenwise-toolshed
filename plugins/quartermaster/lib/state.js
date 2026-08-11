@@ -56,13 +56,19 @@ function writeJsonAtomic(file, value) {
 }
 
 function readProjectState(projectDir, env = process.env) {
-  return readJson(projectStateFile(projectDir, env), {
+  const state = readJson(projectStateFile(projectDir, env), {
     version: 1,
     projectDir: String(projectDir),
     sessions: [],
-    lastRetroAt: null,
+    lastResupplyAt: null,
     lastNudgeAt: null,
   });
+  // State written before the skill was renamed carries lastRetroAt. Reading it forward keeps an
+  // existing install's history intact, so the first run after an update does not look like a
+  // project that has never been reviewed.
+  if (state.lastResupplyAt === undefined) state.lastResupplyAt = state.lastRetroAt ?? null;
+  delete state.lastRetroAt;
+  return state;
 }
 
 function recordSessionTally(projectDir, sessionId, tally, env = process.env, now = Date.now()) {
@@ -88,11 +94,11 @@ function sessionsSince(state, isoTimestamp) {
 function statusFor(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   const thresholds = nudgeThresholds(env);
-  const unanalyzed = sessionsSince(state, state.lastRetroAt);
+  const unanalyzed = sessionsSince(state, state.lastResupplyAt);
   const friction = unanalyzed.reduce((total, session) => total + frictionOf(session.tally), 0);
 
   const nudgedRecently = state.lastNudgeAt && now - Date.parse(state.lastNudgeAt) < thresholds.cooldownHours * HOUR_MS;
-  const retroRecently = state.lastRetroAt && now - Date.parse(state.lastRetroAt) < thresholds.cooldownHours * HOUR_MS;
+  const resuppliedRecently = state.lastResupplyAt && now - Date.parse(state.lastResupplyAt) < thresholds.cooldownHours * HOUR_MS;
   const overThreshold = unanalyzed.length >= thresholds.minSessions || friction >= thresholds.minFriction;
 
   return {
@@ -100,10 +106,10 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
     trackedSessions: state.sessions.length,
     unanalyzedSessions: unanalyzed.length,
     frictionEvents: friction,
-    lastRetroAt: state.lastRetroAt,
+    lastResupplyAt: state.lastResupplyAt,
     lastNudgeAt: state.lastNudgeAt,
     thresholds,
-    shouldNudge: Boolean(overThreshold && !nudgedRecently && !retroRecently),
+    shouldNudge: Boolean(overThreshold && !nudgedRecently && !resuppliedRecently),
   };
 }
 
@@ -113,16 +119,16 @@ function markNudged(projectDir, env = process.env, now = Date.now()) {
   writeJsonAtomic(projectStateFile(projectDir, env), state);
 }
 
-function markRetro(projectDir, env = process.env, now = Date.now()) {
+function markResupply(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
-  state.lastRetroAt = new Date(now).toISOString();
+  state.lastResupplyAt = new Date(now).toISOString();
   writeJsonAtomic(projectStateFile(projectDir, env), state);
   return state;
 }
 
 /**
- * Every recommendation the retro surfaces gets recorded here, applied or rejected. Rejections are
- * the important half: they are what stops the same advice from being surfaced forever.
+ * Every recommendation surfaced gets recorded here, applied or rejected. Rejections are the
+ * important half: they are what stops the same advice from being surfaced forever.
  */
 function appendDecision(decision, env = process.env, now = Date.now()) {
   const file = decisionsFile(env);
@@ -168,8 +174,8 @@ function rejectedFingerprints(env = process.env) {
 
 /**
  * Compares per-session friction before and after each applied decision, using the tallies the
- * SessionEnd hook has been recording. This is what turns the retro from "plausible suggestions"
- * into "suggestions with a track record".
+ * SessionEnd hook has been recording. This is what turns the recommendations from "plausible"
+ * into "with a track record".
  */
 function verifyDecisions(projectDir, env = process.env) {
   const state = readProjectState(projectDir, env);
@@ -209,7 +215,7 @@ module.exports = {
   decisionsFile,
   frictionOf,
   markNudged,
-  markRetro,
+  markResupply,
   nudgeThresholds,
   projectStateFile,
   readDecisions,

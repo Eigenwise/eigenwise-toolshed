@@ -141,7 +141,7 @@ it yourself. Fix what fails and re-verify; report what you confirmed, concretely
 
 ### 7. Record and hand over
 
-Record every decision, applied and rejected, exactly as the retro skill does:
+Record every decision, applied and rejected, exactly as the resupply skill does:
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decisions add --project "${CLAUDE_PROJECT_DIR}" \
@@ -151,15 +151,15 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decisions add --project "${CLA
 Close with what they got, a short next-actions list using only what was installed and verified,
 a reminder to commit `.claude/`, and a pointer to
 https://eigenwise.github.io/eigenwise-toolshed/getting-started/ naming the page for each plugin
-just installed. The quartermaster retro will pick it up from here: once real sessions exist, it
-asks what would make the user's goals easier to reach and whether this setup is earning its place.
+just installed. `/quartermaster:resupply` picks it up from here: once real sessions exist, it asks
+what would make the user's current work easier and whether this setup is earning its place.
 
 ## Guidelines
 
 - Orchestrate, don't reinvent: the other plugins' skills own their domains. You write the glue
   and the sequencing.
 - Less is the feature. A project with four well-chosen, verified pieces beats fifteen
-  speculative ones; the retro catches what was missed.
+  speculative ones; a later resupply pass catches what was missed.
 - Never clobber. Merge into existing `.claude/` files; a user's rules and config survive.
 - No stack is baked into this skill. Stack specifics live in the reference catalog; extend it
   when you meet a stack it does not cover.

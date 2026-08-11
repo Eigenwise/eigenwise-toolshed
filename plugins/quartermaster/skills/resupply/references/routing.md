@@ -99,5 +99,5 @@ checking the plugin is not hook-only or context-injection-only.
 ## 9. No destination
 
 Some expense is situational: a genuinely hard problem, an experiment, a one-off bad day. Naming it
-and moving on beats inventing a rule for it. Not every finding deserves an action, and a retro that
+and moving on beats inventing a rule for it. Not every finding deserves an action, and a pass that
 proposes nothing is a real outcome.

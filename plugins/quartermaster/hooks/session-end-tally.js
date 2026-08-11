@@ -4,7 +4,7 @@
 /**
  * SessionEnd: tally this one session's friction (denials, interrupts, corrections, errors) into
  * the project's state file. Cheap by design: one streamed pass over the transcript that just
- * ended, no LLM, no network, nothing injected. The retro skill and the SessionStart nudge read
+ * ended, no LLM, no network, nothing injected. The resupply skill and the SessionStart nudge read
  * these tallies later.
  */
 
