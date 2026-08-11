@@ -75,7 +75,8 @@ well, the improvement is to teach the catalog, so the next project of that kind 
 ## The `resupply` skill (deeper, on-demand)
 
 The rule handles the lightweight, in-the-moment case. The `resupply` skill is the periodic deep pass:
-run it (or say "what would make this easier" / "what are we missing") and it names the user's current
-goal, mines recent sessions for what's missing against that goal, and proposes a batch of
-improvements across skills, plugins, the map, `CLAUDE.md`, and rules, applying the ones the user
-approves. Point users at it in the Phase 5 wrap-up.
+run it (or say "what would make this easier" / "what are we missing") and it reads recent sessions
+for what the user was working toward, taken from each session's own title, its opening ask, and any
+explicit `/goal`, then ranks what's missing against that and proposes improvements across skills,
+plugins, the map, `CLAUDE.md`, and rules, applying the ones the user approves. Point users at it in
+the Phase 5 wrap-up.

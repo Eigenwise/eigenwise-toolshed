@@ -15,11 +15,16 @@ and because no friction counter will ever surface it.
   assertion nobody can re-check.
 - Scope it to one question with a defensible answer. "Does the output match the reference on the
   real corpus" is an instrument; "is the pipeline good" is not.
+- This is not only a code move. A standard that cannot be checked shows up anywhere: whether a
+  document still covers what it claims, whether an export matches its source, whether deployed
+  config matches the repo, whether a dataset has the rows it should. The instrument differs; the
+  reasoning does not.
 - Have it report its own weaknesses next to its numbers: what the sample excludes, which
   population it actually measured, what it cannot separate. An instrument that names its blind
   spot can be trusted; one that hides it produces confident wrong conclusions.
 - Check for an existing one first (`ls .claude/skills/`, `catalog --installed`). Test suites,
-  benchmarks, and linters are instruments too, and extending one beats writing a second.
+  benchmarks, linters, and validation scripts are instruments too, and extending one beats writing
+  a second that measures nearly the same thing.
 - Fingerprint: `skill:<name>`.
 
 ## 2. Plugin install
