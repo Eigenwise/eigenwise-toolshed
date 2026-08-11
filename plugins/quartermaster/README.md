@@ -39,9 +39,10 @@ Two cheap hooks and two skills. The hooks never analyze content and never call a
   first real prompt, any explicit `/goal` and whether that goal was ever met, plus a `humanDriven`
   flag so hook-spawned sessions can't pass as your work. Alongside that: the areas of the tree the
   work landed in, per-session cost, top repeated commands, attribution, fetch domains, and friction
-  counts with short quotes. The skill ranks what's missing against that purpose (something
-  unmeasurable, then manual work, then re-derived knowledge, then friction) into at most 7 findings,
-  each routed to a destination (a measurement built as a skill, plugin install, workflow skill, map
+  counts with short quotes. The skill looks for what's missing against that purpose (something
+  unmeasurable, then manual work, then re-derived knowledge, then friction), and leads with whatever
+  the history actually attests rather than with whatever it found first: at most 7 findings, each
+  routed to a destination (a measurement built as a skill, plugin install, workflow skill, map
   or CLAUDE.md knowledge, rule, permission allowlist entry, disable) and each individually approved.
   Applied and rejected decisions land in a ledger; rejected recommendations are never surfaced again.
 - **setup skill**: for new or freshly cloned projects. Mines all projects, reads the new project's

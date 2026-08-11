@@ -4,6 +4,10 @@ One finding, one destination. Prefer the highest entry that fits: things that ad
 things that remove an annoyance, installable things beat written rules, and written rules beat
 asking the user to remember.
 
+This orders *destinations*, not findings. A finding's rank in what you propose comes from how well
+the evidence carries it, so a measurement you inferred from one session title still lands below a
+denial pattern you can count, even though its destination sits at the top of this list.
+
 ## 1. Measurement skill (an instrument)
 
 For a standard the user cares about that nothing can currently check: correctness, reliability,
@@ -89,8 +93,8 @@ For `permission-rule` denials that keep hitting the same safe pattern.
   `Bash(npm test:*)` or `Read(src/**)`. Global patterns go in `~/.claude/settings.json`.
 - Show the exact rule strings and which denied calls they would have allowed. Never propose a
   blanket allow (`Bash(*)`); scope to the observed pattern.
-- `user-rejected` denials are NOT allowlist material: the user said no to the action itself. Those
-  route to a rule about not doing the thing.
+- `user-rejected` denials belong in a rule about not doing the thing, not on the allowlist: the user
+  said no to the action itself, so allowing it is the opposite of what they asked for.
 - Fingerprint: `permission:<tool>:<pattern>`.
 
 ## 8. Plugin disable / uninstall
