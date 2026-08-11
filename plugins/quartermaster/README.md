@@ -32,8 +32,12 @@ Two cheap hooks and two skills. The hooks never analyze content and never call a
 - **SessionEnd hook**: streams the transcript that just ended and records a small tally per
   session (prompts, denials, interrupts, corrections, tool errors) under
   `~/.claude/quartermaster-state/`. Local file reads only.
-- **SessionStart hook**: once enough unreviewed sessions or friction events pile up, injects one
-  line suggesting a resupply pass. Cooldown of 72h between nudges; silent otherwise.
+- **SessionStart hook**: injects the capability-capture charter, one short paragraph asking Claude
+  to notice mid-session when the thing it is doing for the third time should become a skill, a
+  codebase-map entry, a rule, or a committed measurement, and to offer capturing it right then.
+  Skipped in projects where setup already seeded the stronger per-prompt self-improvement live
+  rule. Once enough unreviewed sessions or friction events pile up, the same hook also has Claude
+  run a resupply pass at the next natural pause; cooldown of 24h between nudges.
 - **resupply skill**: runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
   and emits a bounded JSON aggregate. Each session carries **what it was for**: its own title, its
   first real prompt, any explicit `/goal` and whether that goal was ever met, plus a `humanDriven`
@@ -79,9 +83,9 @@ Environment variables, all optional:
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `QUARTERMASTER_MIN_SESSIONS` | 8 | Unreviewed sessions before a nudge |
-| `QUARTERMASTER_MIN_FRICTION` | 12 | Friction events (denials + interrupts + corrections) before a nudge |
-| `QUARTERMASTER_NUDGE_HOURS` | 72 | Cooldown between nudges, and after a resupply pass |
+| `QUARTERMASTER_MIN_SESSIONS` | 4 | Unreviewed sessions before a nudge |
+| `QUARTERMASTER_MIN_FRICTION` | 6 | Friction events (denials + interrupts + corrections) before a nudge |
+| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between nudges, and after a resupply pass |
 | `QUARTERMASTER_STATE_DIR` | `~/.claude/quartermaster-state` | Where tallies and the decision ledger live |
 
 ## Privacy

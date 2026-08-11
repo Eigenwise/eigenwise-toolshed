@@ -37,6 +37,14 @@ didn't think of. Keep it to one improvement, as its own step and commit. If the 
 needed nothing new, skip silently. For a deeper periodic pass, run `resupply`.
 ```
 
+## The fallback when this rule is absent
+
+Quartermaster's own SessionStart hook injects a condensed version of this charter once per session
+in any project that does not have this rule file at
+`.claude/live-rules/rules/self-improvement.md`. Seeding the rule supersedes the hook line: the
+hook checks for that exact path and stays silent when it exists, and the rule is stronger because
+live-rules re-injects it on every prompt instead of once at session start.
+
 ## Why a rule and not a hook
 
 - A **hook** (like a `Stop` hook) fires deterministically but can't judge whether a turn was worth

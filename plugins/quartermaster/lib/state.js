@@ -10,9 +10,9 @@ const MAX_TRACKED_SESSIONS = 200;
 const HOUR_MS = 3600000;
 
 const NUDGE_DEFAULTS = {
-  minSessions: 8,
-  minFriction: 12,
-  cooldownHours: 72,
+  minSessions: 4,
+  minFriction: 6,
+  cooldownHours: 24,
 };
 
 function nudgeThresholds(env = process.env) {

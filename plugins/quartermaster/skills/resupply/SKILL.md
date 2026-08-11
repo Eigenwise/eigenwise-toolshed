@@ -6,9 +6,11 @@ description: >-
   setup pushing back. Reads recent sessions for what the user was actually working toward, then
   proposes one item at a time for approval. Use whenever the user asks what would make this easier
   or faster, what they are missing, why something keeps being hard, or what could have gone better;
-  when they want to improve their Claude Code setup, tooling, or workflow; when they accept the
-  quartermaster nudge; after a long or expensive stretch of work; or when they are starting a goal
-  they have no way to verify.
+  when they want to improve their Claude Code setup, tooling, or workflow; whenever the
+  quartermaster nudge fires, without waiting to be asked; proactively at a natural pause after a
+  long or expensive stretch of work; or when they are starting a goal they have no way to verify.
+  Every recommendation needs the user's per-item approval, so running the pass itself needs no
+  permission.
 ---
 
 # Quartermaster resupply

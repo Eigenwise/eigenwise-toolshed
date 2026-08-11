@@ -24,9 +24,13 @@ In any project, new or existing:
 
 It reads the project, mines your history across all projects (which plugins you lean on, which permission denials repeat, which corrections you keep giving), interviews you briefly, and proposes a plan: Toolshed core (codebase-mapper, live-rules, sidequest where it fits), stack plugins, starter rules, and permission allowlist entries. Every item is approved individually before anything is installed or written, and the result is verified against a really-loaded session rather than assumed.
 
+## The in-the-moment loop
+
+Most self-improvement happens without any pass at all. A SessionStart line keeps one question in front of Claude while it works: is this the thing being done for the third time that should become a skill, a codebase-map entry, a rule, or a committed measurement? When it notices one, it says so and offers to capture it right then; if nothing was missing, it stays silent. Workspaces that ran setup get the stronger version, a live rule re-injected on every prompt, and the session line steps aside for it.
+
 ## Resupply an existing workspace
 
-After a stretch of real work, or when the SessionStart nudge suggests it:
+After a stretch of real work, or automatically when the SessionStart nudge fires:
 
 > /quartermaster:resupply
 
@@ -42,7 +46,7 @@ Findings route to the cheapest durable fix: a measurement built as a committed s
 
 ## How the loop closes
 
-A SessionEnd hook tallies each session locally: no LLM, no network, one streamed pass. Applied recommendations record what they target, and `verify` compares that signal per session before and after. For a capability no counter tracks, the check is whether the new skill or plugin shows up in attribution at all. A SessionStart nudge (one line, 72-hour cooldown) fires only when enough unreviewed sessions or friction pile up. Nothing is ever analyzed or changed without you asking.
+A SessionEnd hook tallies each session locally: no LLM, no network, one streamed pass. Applied recommendations record what they target, and `verify` compares that signal per session before and after. For a capability no counter tracks, the check is whether the new skill or plugin shows up in attribution at all. A SessionStart nudge (one line, 24-hour cooldown) fires only when enough unreviewed sessions or friction pile up, and has Claude run a pass at the next natural pause without being asked. The pass only reads and proposes; nothing is ever changed without your per-item approval.
 
 ## What it stores
 

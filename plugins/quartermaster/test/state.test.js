@@ -46,7 +46,7 @@ test('statusFor nudges on friction threshold and respects cooldown', () => {
   for (let index = 0; index < 4; index += 1) {
     recordSessionTally(PROJECT, `session-${index}`, tallyWith({ denials: 3, interrupts: 1 }), environment, now - index * DAY_MS);
   }
-  assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, 'friction 16 over default 12');
+  assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, 'friction 16 over default 6');
 
   markNudged(PROJECT, environment, now);
   assert.equal(statusFor(PROJECT, environment, now).shouldNudge, false, 'cooldown after nudge');
@@ -57,7 +57,7 @@ test('statusFor nudges on session count and resets after a resupply pass', () =>
   for (let index = 0; index < 9; index += 1) {
     recordSessionTally(PROJECT, `session-${index}`, tallyWith(), environment, now - (index + 5) * DAY_MS);
   }
-  assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, '9 sessions over default 8');
+  assert.equal(statusFor(PROJECT, environment, now).shouldNudge, true, '9 sessions over default 4');
 
   markResupply(PROJECT, environment, now - 4 * DAY_MS);
   const status = statusFor(PROJECT, environment, now);
