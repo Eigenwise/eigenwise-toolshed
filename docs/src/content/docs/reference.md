@@ -10,8 +10,8 @@ Use the guides for decisions and daily workflows. Use this reference when Claude
 - [Workbench](/reference/workbench/) sets up and maintains a Claude Code workspace.
 - [Observability](/reference/observability/) records selected local, metadata-only telemetry.
 - [Model Gateway](/reference/model-gateway/) adds ChatGPT, Codex, and Grok subscription models to Claude Code.
-- [Sidequest](/reference/sidequest/) captures and runs planned work.
 - [Codebase Mapper](/reference/codebase-mapper/) keeps a project map close at hand.
-- [Playbook](/reference/playbook/) holds working practice, session retros, and transcript tools.
 - [Live Rules](/reference/live-rules/) loads project rules when they apply.
+- [Sidequest](/reference/sidequest/) captures and runs planned work.
+- [Quartermaster](/reference/quartermaster/) works out what a workspace is short of and gets it.
 - [Marketplace versions](/reference/marketplace/) lists the shipped plugin versions.
