@@ -152,7 +152,7 @@ Close with what they got, a short next-actions list using only what was installe
 a reminder to commit `.claude/`, and a pointer to
 https://eigenwise.github.io/eigenwise-toolshed/getting-started/ naming the page for each plugin
 just installed. The quartermaster retro will pick it up from here: once real sessions exist, it
-checks whether this setup actually reduced friction.
+asks what would make the user's goals easier to reach and whether this setup is earning its place.
 
 ## Guidelines
 

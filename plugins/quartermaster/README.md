@@ -1,9 +1,14 @@
 # quartermaster
 
-Looks back at your Claude Code sessions and turns the friction into setup fixes: plugins worth
-installing, rules worth writing, permissions worth allowing, plugins worth disabling. Every change
-is proposed one at a time and applied only when you say yes. The next retro then tells you whether
-the last round of changes actually reduced the friction it targeted.
+Looks at your recent Claude Code sessions and asks what would make your goals easier to reach:
+a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving,
+permissions worth allowing, plugins worth installing or disabling. Every change is proposed one at
+a time and applied only when you say yes. The next retro then tells you whether the last round
+actually helped.
+
+Friction is in there, at the bottom of the list. Fixing what went wrong gets you back to the speed
+you already expected; adding a capability you never had moves that baseline, and the best
+capabilities leave no friction trace at all.
 
 It also outfits workspaces: the setup skill mines your history across all projects, interviews
 you briefly, and installs and verifies the Toolshed core plus stack plugins for a new or existing
@@ -29,12 +34,14 @@ Two cheap hooks and two skills. The hooks never analyze content and never call a
   `~/.claude/quartermaster-state/`. Local file reads only.
 - **SessionStart hook**: once enough unanalyzed sessions or friction events pile up, injects one
   line suggesting a retro. Cooldown of 72h between nudges; silent otherwise.
-- **retro skill**: runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
-  and emits a bounded JSON aggregate: friction counts with short quotes, per-plugin/skill/MCP
-  attribution, top repeated commands, denial targets. The skill turns that into at most 7
-  findings, each routed to a destination (plugin install, live-rule or CLAUDE.md rule, permission
-  allowlist entry, disable, new skill) and each individually approved. Applied and rejected
-  decisions land in a ledger; rejected recommendations are never surfaced again.
+- **retro skill**: asks what you're working toward, then runs the miner (`bin/quartermaster.js
+  mine`), which streams recent transcripts and emits a bounded JSON aggregate: per-session cost,
+  top repeated commands, per-plugin/skill/MCP attribution, fetch domains, friction counts with
+  short quotes. The skill ranks what's missing against your goal (something unmeasurable, then
+  manual work, then re-derived knowledge, then friction) into at most 7 findings, each routed to a
+  destination (a measurement built as a skill, plugin install, workflow skill, map or CLAUDE.md
+  knowledge, rule, permission allowlist entry, disable) and each individually approved. Applied and
+  rejected decisions land in a ledger; rejected recommendations are never surfaced again.
 - **setup skill**: for new or freshly cloned projects. Mines all projects, reads the new project's
   stack, proposes a baseline. Same approval and ledger contract.
 
@@ -43,10 +50,11 @@ every marketplace manifest already on the machine. No network calls from the scr
 
 ## Why the loop closes
 
-Every applied recommendation records which friction signal it targets. `bin/quartermaster.js
-verify` compares that signal per session before and after the decision, so the retro opens with a
-track record ("the allowlist rule: denials went 2.1 to 0.3 per session") and proposes rolling back
-what didn't work. Rejections are remembered so the same advice doesn't come back.
+Every applied recommendation records what it targets. `bin/quartermaster.js verify` compares that
+signal per session before and after the decision, so the retro opens with a track record ("the
+allowlist rule: denials went 2.1 to 0.3 per session") and proposes rolling back what didn't work.
+For a capability no counter tracks, the check is whether the new skill or plugin shows up in
+attribution at all. Rejections are remembered so the same advice doesn't come back.
 
 ## CLI
 

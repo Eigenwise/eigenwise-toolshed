@@ -42,14 +42,14 @@ function main() {
     const recent = countRecentTranscripts(projectDir, 14);
     if (recent < FIRST_RUN_MIN_TRANSCRIPTS) return;
     markNudged(projectDir);
-    emit(`quartermaster is newly installed and found ${recent} recent sessions for this project. When convenient, suggest running the quartermaster retro skill for a first retrospective: it mines those transcripts for friction and setup gaps, and every recommendation needs the user's approval. Do not run it unprompted; mention it once and move on.`);
+    emit(`quartermaster is newly installed and found ${recent} recent sessions for this project. When convenient, suggest running the quartermaster retro skill for a first pass: it mines those transcripts for what would make the user's goals easier to reach, and every recommendation needs their approval. Do not run it unprompted; mention it once and move on.`);
     return;
   }
 
   const status = statusFor(projectDir);
   if (!status.shouldNudge) return;
   markNudged(projectDir);
-  emit(`quartermaster: ${status.unanalyzedSessions} sessions since the last retrospective, with ${status.frictionEvents} friction events recorded (permission denials, interrupts, corrections). When a natural pause comes, suggest running the quartermaster retro skill to review what could have gone better. Nothing has been analyzed or changed; mention it once and move on.`);
+  emit(`quartermaster: ${status.unanalyzedSessions} sessions since the last retro, with ${status.frictionEvents} friction events recorded (permission denials, interrupts, corrections). When a natural pause comes, suggest running the quartermaster retro skill to look at what would make the current work easier. Nothing has been analyzed or changed; mention it once and move on.`);
 }
 
 try {
