@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.453.0 (2026-08-11)
+
+### sidequest 4.45.0 → 4.46.0
+
+#### Features
+
+- Agent-list rows stop showing raw route markers (SQ-1827)
+  FleetView showed two kinds of executor labels: the readable "GPT-5.6 Sol, high · <title>" next to a raw "[sidequest-route ...]" tag. The board stored a proper description in both cases; Claude Code previews the prompt's first line for some rows, and the dispatch stub put the route marker there. The marker now rides at the end of the stub (the gateway's marker scan is position-independent, only the count matters), so any first-line preview shows "Implementation context:" and the ticket title. agentSpawn also strips markers embedded anywhere in a supplied label instead of only rejecting exact-match ones, falling back to the generic label only when nothing readable remains.
+
 ## v3.452.0 (2026-08-11)
 
 ### workbench 0.86.1 → 0.86.2
