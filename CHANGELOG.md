@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.446.0 (2026-08-11)
+
+### observability 0.7.4 → 0.7.5
+
+#### Fixes
+
+- Keep recharge rollups responsive (SQ-1818)
+  Keep session-end recharge rollups from blocking telemetry ingestion on long sessions.
+- Resume partially drained hook spools (SQ-1819)
+  Hook spool drains now keep committed rows out of later attempts and report drains that remain stuck past their deadline.
+
 ## v3.445.0 (2026-08-11)
 
 ### model-gateway 0.48.5 → 0.48.6
