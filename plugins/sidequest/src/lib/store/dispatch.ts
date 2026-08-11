@@ -810,11 +810,17 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     // continuation keeps the same worktree scope. An EMPTY released binding
     // must not be inherited: it pinned the first attempt's missing scope onto
     // every re-dispatch, so the ticket's files were never re-read and editing
-    // them changed nothing.
+    // them changed nothing. A STALE one has the same disease: files expanded
+    // between a handback and the re-dispatch must reach the new binding, so the
+    // carryover unions with the current effective scope instead of replacing it
+    // (the-bot-resurrection SQ-825: a path granted after a handback never
+    // entered the redispatch binding and had to ship as an out-of-band commit).
     const releasedBinding = current?.outcome === 'released' && Array.isArray(current.declaredFiles) && current.declaredFiles.length
       ? current.declaredFiles.slice()
       : null;
-    const declaredFiles = releasedBinding ?? effectiveScope(slug, t.files);
+    const declaredFiles = releasedBinding
+      ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t.files)]))
+      : effectiveScope(slug, t.files);
     const readonly = dispatchReadOnly(t);
     const requestedSharedTree = opts.sharedTree === true || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
     const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;

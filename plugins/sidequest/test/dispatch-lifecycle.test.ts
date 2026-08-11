@@ -1668,4 +1668,27 @@ test('an explicit missing integration branch refuses with its exact ref', () => 
   assert.equal(store.getTicket(slug, ticket.ref).dispatch, undefined);
 });
 
+test('a re-dispatch after a handback picks up files declared since the release', () => {
+  const sessionId = `released-binding-expansion-${Date.now()}`;
+  const ticket = createFixture('released binding unions with expanded scope');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  assert.deepEqual(prepared.ticket.dispatch.declaredFiles, ['tracked.js']);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'expansion-worker', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'expansion-worker', {
+    status: 'todo',
+    source: 'test',
+    releaseKind: 'handback',
+    releaseReason: 'A stale pin outside the dispatched binding blocks verify.',
+  }).ok, true);
+  assert.ok(store.getTicket(slug, ticket.ref).dispatch.terminalAt);
+  store.updateTicket(slug, ticket.ref, { files: ['tracked.js', 'late-addition.js'] });
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['tracked.js', 'late-addition.js']);
+  const redispatched = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+  assert.deepEqual(redispatched.ticket.dispatch.declaredFiles.slice().sort(), ['late-addition.js', 'tracked.js']);
+});
+
 export {};

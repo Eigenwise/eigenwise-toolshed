@@ -2010,4 +2010,45 @@ test('SQ-1328: concurrent shared-tree submissions attribute foreign working path
   assert.match(escapedSubmission.message, /never stash, revert, or include foreign paths/);
 });
 
+test('a submit after a terminal dispatch is gated on current ticket scope, not the dead binding', () => {
+  const ticket = addTicket('terminal dispatch binding must not gate the submit', { files: ['lib/original.js'], category: 'submission.fixture' });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'terminal-binding', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'terminal-binding-worker', {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId: 'terminal-binding',
+  }).ok, true);
+  assert.strictEqual(store.releaseTicket(slug, ticket.ref, 'terminal-binding-worker', {
+    status: 'todo',
+    source: 'mcp',
+    releaseKind: 'handback',
+    releaseReason: 'A stale pin outside the dispatched binding blocks verify.',
+  }).ok, true);
+  assert.ok(store.getTicket(slug, ticket.ref).dispatch.terminalAt);
+  store.updateTicket(slug, ticket.ref, { files: ['lib/original.js', 'lib/granted-late.js'] });
+  assert.deepStrictEqual(store.getTicket(slug, ticket.ref).files, ['lib/original.js', 'lib/granted-late.js']);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'orchestrator-main', {
+    direct: true, reason: 'Finishing the granted-path edit inline after the handback.',
+  }).ok, true);
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'original.js'), 'original\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'granted-late.js'), 'granted\n');
+  git(['add', 'lib/original.js', 'lib/granted-late.js']);
+  git(['commit', '-m', 'granted-path candidate']);
+  const grantedCommit = git(['rev-parse', 'HEAD']);
+  pin(ticket, grantedCommit);
+  const grantedBase = git(['rev-parse', 'origin/main']);
+  const submission = store.submitTicket(slug, ticket.ref, 'orchestrator-main', {
+    commit: grantedCommit,
+    range: {
+      base: grantedBase,
+      upstream: 'origin/main',
+      upstreamCommit: grantedBase,
+      commits: [grantedCommit],
+      changedPaths: ['lib/granted-late.js', 'lib/original.js'],
+    },
+  });
+  assert.strictEqual(submission.ok, true, submission.message);
+  assert.ok(submission.ticket.submission.admittedScope.includes('lib/granted-late.js'));
+});
+
 export {};

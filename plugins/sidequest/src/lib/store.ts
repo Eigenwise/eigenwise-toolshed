@@ -104,8 +104,15 @@ function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...a
 // demanded `.release/unreleased/<REF>.md` as the only path in scope. Three
 // executors lost their runs to that in one hour, each editing a list the gate
 // was not reading.
+// A TERMINAL dispatch's binding is history, not authority. After a release the
+// orchestrator can expand ticket.files or grant scope and finish the work under
+// a direct claim, and syncLiveDispatchScope rightly never rewrites a dead
+// dispatch — so an orchestrator submit was gated on the dead binding while
+// pulse reported enforced: null for it, and a granted path had to land as an
+// out-of-band commit (the-bot-resurrection SQ-825, three refused submits).
 function executionScope(slug?: any, ticket?: any) {
-  const bound = ticket?.dispatch?.declaredFiles;
+  const dispatch = ticket?.dispatch;
+  const bound = dispatch && !dispatch.terminalAt ? dispatch.declaredFiles : null;
   return Array.isArray(bound) && bound.length
     ? bound
     : effectiveScope(slug, ticket?.files);
