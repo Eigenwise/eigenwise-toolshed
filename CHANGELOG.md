@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.447.0 (2026-08-11)
+
+### observability 0.7.5 → 0.7.6
+
+#### Fixes
+
+- Drop idle projects from the Cost by project panel (SQ-1821)
+  Projects with no priced usage in the window no longer render as permanent $0.00 rows in the Cost by project legend and tooltips.
+
 ## v3.446.0 (2026-08-11)
 
 ### observability 0.7.4 → 0.7.5
