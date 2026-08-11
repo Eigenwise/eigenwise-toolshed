@@ -67,10 +67,12 @@ Weigh them like this:
   resumed repeatedly, and its title describes only its opening subject. For those, `goal`,
   `areasTop`, and the top commands say far more about purpose than the title does.
 
-Then state your read in one or two lines and let the user correct it, rather than asking them to
+Then state your read in one or two lines and ask them to correct it, rather than asking them to
 explain themselves from scratch: "the last three weeks look like they went into the ingest path and
-its tests, with an open goal about it not dropping rows. Is that still what matters?" Only fall back
-to a real question when the signals are genuinely thin or contradictory.
+its tests, with an open goal about it not dropping rows. Is that still what matters?" Say the
+invitation out loud, in a sentence. A read delivered as settled fact is something they have to argue
+with; the same read offered for correction costs them one line either way. Only fall back to a real
+question when the signals are genuinely thin or contradictory.
 
 Two goal shapes matter, because they need different things:
 
@@ -97,7 +99,8 @@ work is what makes the next one credible.
 
 ### 4. Find the gaps
 
-Four questions, in value order. Spend your attention at the top.
+Four questions, in value order. Spend your attention at the top. This is the order to look in, not
+the order to propose in: step 6 ranks what you actually find.
 
 #### 4a. Is there something the user cannot measure?
 
@@ -113,6 +116,12 @@ Tells, none of which appear as friction:
 - A property asserted rather than demonstrated: it "should be" correct, fast enough, safe.
 - The same question reopened across sessions with a different answer each time.
 
+Those tells are not equally strong, and the difference decides where the finding ranks. A goal
+restated across sessions and never met, a check re-improvised dozens of times, one question answered
+two different ways: that is the aggregate telling you the instrument is missing. A single session
+title plus a habit is you inferring it. Raise either one, but only the attested kind outranks a cheap
+fix you are certain about.
+
 The fix is a **measurement built as a skill**, with its scripts committed beside it. A number that
 will be cited later needs something re-runnable behind it, and a scratch script is gone by then.
 This holds outside code too: whether a document covers what it claims, whether an export matches
@@ -122,6 +131,11 @@ Have the instrument state its own limits when you propose it. A measurement buil
 was available usually carries a bias (a sample that only includes successes, a population that is
 not the real one), and one that names its blind spot can be trusted where one that hides it is
 worse than nothing.
+
+When nothing in the window states a standard at all, the honest answer is usually that there is
+nothing to build here. A project shipping small changes against a check that already works does not
+need an instrument invented for it, and proposing one anyway spends the user's attention on your
+guess instead of their evidence.
 
 #### 4b. What is being done by hand that the workspace should own?
 
@@ -175,6 +189,17 @@ Seven findings maximum, best first. For each: the evidence, the purpose it serve
 or diff, and the cost (for plugin installs, `claude plugin details <name>` when context cost is
 relevant). Wait for an explicit yes or no before touching anything or moving on. Never batch-apply.
 
+Best first means value weighted by how well the evidence carries it, not step 4's search order. An
+attested measurement gap is the strongest thing you can lead with. An inferred one belongs below the
+cheap fixes you are sure of, labelled as inferred so the user can drop it in one line. Then stand by
+the order: a list that opens in one ranking and closes in another tells the user you never decided,
+and makes them redo the ranking themselves.
+
+Shape the reply so it can be read from the top: the answer in a sentence or two, your read on
+purpose, the findings, and then what you looked at and are not proposing. That last part earns its
+space, because it says which silences you checked. Without it a short list looks like a shallow pass
+instead of a finished one.
+
 If the signals are thin, say so and stop. Proposing nothing is a valid outcome, and inventing work
 to look useful is how these passes turn into noise the user learns to skip.
 
@@ -212,6 +237,10 @@ will check.
   the window", never "unused". Hook-only and context-injection plugins legitimately show nothing.
 - Quotes and titles are the user's own words back at them. Keep them short and only where they
   carry the finding.
+- Every number you cite is the aggregate's number, as it reports it. Rounding a count, attributing a
+  command to a session the aggregate never tied it to, or printing a command as run when you inferred
+  the answer instead: each one turns a pass the user could check into one they have to trust, and the
+  whole value of mining is that they do not have to. If you did not run it, do not show it as run.
 
 ## Success criteria
 
@@ -220,6 +249,8 @@ will check.
 - [ ] Sessions were weighed by effort, with `humanDriven: false` excluded from the purpose read
 - [ ] Past decisions were verified and reported before new findings
 - [ ] Unmeasurable standard goals were checked for before friction was
+- [ ] Nothing was proposed as a missing measurement on inference alone without saying so
+- [ ] The findings were ranked once, and the closing order matched the order they were presented in
 - [ ] Existing plugins and skills were searched before anything new was proposed
 - [ ] Every proposal showed the exact change and got an explicit yes or no
 - [ ] Every decision, including rejections, was recorded with a fingerprint
