@@ -8,12 +8,16 @@ desktop.ini
 .vscode/
 
 # Claude Code local settings + tool artifacts (never commit to this public repo)
-# — everything under .claude/ is ignored EXCEPT shared project settings and
-# team live rules. settings.local.json (per-machine overrides) stays ignored.
+# — everything under .claude/ is ignored EXCEPT shared project settings, team
+# live rules, and the codebase map (tracked so sessions and CI share one map;
+# without the negation, git add warns and agents wrongly conclude it is
+# local-only). settings.local.json (per-machine overrides) stays ignored.
 .claude/*
 !.claude/settings.json
 !.claude/live-rules/
 !.claude/live-rules/**
+!.claude/.codebase-info/
+!.claude/.codebase-info/**
 .playwright-mcp/
 
 # Node (only relevant if a plugin ever adds tooling)
