@@ -89,7 +89,9 @@ function defaultAgentsDir() {
 const DISPATCH_MODEL_ID = 'claude-codex-auto';
 const ROUTE_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 const EMITTED_ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
-const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+// Unanchored: a marker EMBEDDED in a label (leading whitespace, trailing title
+// text) must still be caught, or the raw tag leaks into the agent-list row.
+const EMBEDDED_ROUTE_MARKER_RE = /\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)\]/gi;
 
 // The exact marker grammar the shim scans for. Throws rather than emitting a
 // marker the gateway would silently ignore (which would 400 the whole run).
@@ -1160,21 +1162,28 @@ function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
     '--project',
     quotedShellArgument(project),
   ].join(' ');
+  // The route marker rides at the END of the stub: Claude Code's agent list
+  // previews the prompt's first line for some rows even when a description was
+  // supplied, and a marker-first prompt renders as a raw route tag next to the
+  // other rows' readable labels. The gateway's scan is position-independent
+  // (routeMarkersInText runs an unanchored global regex over all user-authored
+  // text and only the marker COUNT matters), so last-line placement routes
+  // identically.
   return [
-    ...(marker ? [marker, ''] : []),
     'Implementation context:',
     dispatchTicketContext(ticket, project),
     '',
     'Fetch the token-gated briefing for comments, attachments, claim, verification, and lifecycle details.',
     `FIRST action: run \`${command}\` and execute exactly what it prints.`,
+    ...(marker ? ['', marker] : []),
   ].join('\n');
 }
 
 function agentSpawn(name?: any, isolation?: any, model?: any, agentType?: any, prompt?: any, description?: any) {
-  const suppliedLabel = typeof description === 'string' ? description : '';
-  const taskLabel = suppliedLabel && !ROUTE_MARKER_RE.test(suppliedLabel)
-    ? suppliedLabel
-    : 'Sidequest ticket executor.';
+  const suppliedLabel = typeof description === 'string'
+    ? description.replace(EMBEDDED_ROUTE_MARKER_RE, '').replace(/\s+/g, ' ').trim()
+    : '';
+  const taskLabel = suppliedLabel || 'Sidequest ticket executor.';
   return Object.assign({ subagent_type: agentType || name, name, mode: 'bypassPermissions', description: taskLabel },
     isolation ? { isolation } : {}, model ? { model } : {}, prompt ? { prompt } : {});
 }

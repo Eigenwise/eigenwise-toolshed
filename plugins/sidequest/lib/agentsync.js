@@ -31,7 +31,7 @@ function defaultAgentsDir() {
 const DISPATCH_MODEL_ID = "claude-codex-auto";
 const ROUTE_MODEL_RE = /^[a-z0-9][a-z0-9.-]{0,63}$/;
 const EMITTED_ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
-const ROUTE_MARKER_RE = /^\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(low|medium|high|xhigh|max)\]$/;
+const EMBEDDED_ROUTE_MARKER_RE = /\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)\]/gi;
 function routeMarker(dispatchModel, effort) {
   const model = String(dispatchModel || "");
   const markerEffort = String(effort || "");
@@ -949,17 +949,17 @@ function renderDispatchStub(ticket, nonce, projectPath) {
     quotedShellArgument(project)
   ].join(" ");
   return [
-    ...marker ? [marker, ""] : [],
     "Implementation context:",
     dispatchTicketContext(ticket, project),
     "",
     "Fetch the token-gated briefing for comments, attachments, claim, verification, and lifecycle details.",
-    `FIRST action: run \`${command}\` and execute exactly what it prints.`
+    `FIRST action: run \`${command}\` and execute exactly what it prints.`,
+    ...marker ? ["", marker] : []
   ].join("\n");
 }
 function agentSpawn(name, isolation, model, agentType, prompt, description) {
-  const suppliedLabel = typeof description === "string" ? description : "";
-  const taskLabel = suppliedLabel && !ROUTE_MARKER_RE.test(suppliedLabel) ? suppliedLabel : "Sidequest ticket executor.";
+  const suppliedLabel = typeof description === "string" ? description.replace(EMBEDDED_ROUTE_MARKER_RE, "").replace(/\s+/g, " ").trim() : "";
+  const taskLabel = suppliedLabel || "Sidequest ticket executor.";
   return Object.assign(
     { subagent_type: agentType || name, name, mode: "bypassPermissions", description: taskLabel },
     isolation ? { isolation } : {},

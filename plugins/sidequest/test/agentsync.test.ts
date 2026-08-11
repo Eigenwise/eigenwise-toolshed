@@ -420,10 +420,16 @@ test('Agent spawn preserves the routed nested review description', () => {
   const legacyMarkerDescription = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, '[sidequest-route model=gpt-5.6-terra effort=high]');
   const whitespaceDescription = '  GPT-5.6 Terra, high · Keep this exact label  ';
   const whitespaceCall = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt, whitespaceDescription);
+  // A marker EMBEDDED in a label (the FleetView "both kinds of tags" report:
+  // an old prepared record whose stored label was the raw prompt head) must be
+  // stripped, keeping the readable remainder instead of falling back.
+  const embeddedMarkerCall = agentsync.agentSpawn('sidequest-exec-dispatch', 'worktree', undefined, undefined, dispatchedReview.prompt,
+    '[sidequest-route model=gpt-5.6-luna effort=medium]\n\nIncremental codebase-map refresh');
   assert.equal(missingDescription.description, 'Sidequest ticket executor.');
   assert.equal(markerDescription.description, 'Sidequest ticket executor.');
   assert.equal(legacyMarkerDescription.description, 'Sidequest ticket executor.');
-  assert.equal(whitespaceCall.description, whitespaceDescription);
+  assert.equal(whitespaceCall.description, 'GPT-5.6 Terra, high · Keep this exact label');
+  assert.equal(embeddedMarkerCall.description, 'Incremental codebase-map refresh');
 });
 
 test('sync protects generation-two executors from legacy marker GC and prunes legacy definitions', () => {
@@ -814,7 +820,11 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
-  assert.ok(stub.startsWith('[sidequest-route model=gpt-5.6-terra effort=high]\n'));
+  // The marker rides at the END so Claude Code's agent-list preview of the
+  // prompt's first line shows readable context instead of a raw route tag.
+  assert.ok(stub.startsWith('Implementation context:\n'));
+  assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
+  assert.equal(stub.match(/\[sidequest-route /g)!.length, 1);
   assert.ok(Buffer.byteLength(stub) < 1600, `spawn context is ${Buffer.byteLength(stub)} bytes`);
   assert.match(stub, /Title: Instant dispatch/);
   assert.match(stub, /Description:\ny{128}/);
