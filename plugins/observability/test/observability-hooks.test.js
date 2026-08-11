@@ -269,6 +269,37 @@ test('session end records exact recharge-weighted result bytes by tool', (t) => 
   assert.equal(values['Read:recharge_weighted_tool_result_bytes'], readBytes);
 });
 
+test('recharge rollup searches later turns through the session event index', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-recharge-query-plan-'));
+  const store = openObservabilityStore(path.join(directory, 'observability.db'), { outboxEnabled: false });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+
+  const plan = store.database.prepare(`
+    EXPLAIN QUERY PLAN
+    SELECT SUM(result.value * (
+      SELECT COUNT(*)
+      FROM observation AS later_turn
+      WHERE later_turn.session_id = tool.session_id
+        AND later_turn.event_name = 'hook.stop'
+        AND later_turn.observed_at >= tool.observed_at
+    ))
+    FROM observation AS tool
+    JOIN measurement AS result ON result.event_id = tool.event_id
+    WHERE tool.session_id = ?
+      AND tool.event_name = 'hook.post_tool_use'
+      AND result.name = 'tool_result_bytes'
+  `).all('session-recharge');
+
+  assert.equal(
+    plan.some((row) => row.detail.includes('SEARCH later_turn USING COVERING INDEX observation_session_event_idx')),
+    true,
+    JSON.stringify(plan),
+  );
+});
+
 test('hook observations never carry prompt, tool payloads, cwd, or transcript paths', () => {
   const observation = buildObservation({
     hook_event_name: 'PostToolUse',
