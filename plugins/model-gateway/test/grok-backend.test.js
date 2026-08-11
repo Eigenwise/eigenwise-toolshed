@@ -34,8 +34,8 @@ test('translates Anthropic messages, tools, and effort to Responses input', () =
   assert.equal(request.tools[0].type, 'function');
 });
 
-test('strips effort for Grok models without reasoning support', () => {
-  const request = grok.translateRequest({ output_config: { effort: 'high' } }, 'grok-build');
+test('omits effort for a Grok model without documented reasoning support', () => {
+  const request = grok.translateRequest({ output_config: { effort: 'high' } }, 'grok-unknown');
   assert.equal(request.reasoning, undefined);
 });
 test('omits empty assistant messages for tool-only turns', () => {
@@ -80,6 +80,29 @@ test('reads the CLI version and sends the required Grok headers', (t) => {
   assert.equal(headers['x-grok-client-version'], '0.2.112');
   assert.equal(headers['x-grok-model-override'], 'grok-4.5');
   assert.equal(headers['user-agent'], 'xai-grok-build/0.2.112');
+});
+
+test('reads the current Grok catalog from the CLI cache', (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-grok-catalog-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const file = path.join(directory, 'models_cache.json');
+  fs.writeFileSync(file, JSON.stringify({
+    models: {
+      'grok-4.5': {
+        info: {
+          id: 'grok-4.5',
+          context_window: 500000,
+          supports_reasoning_effort: true,
+        },
+      },
+    },
+  }));
+
+  assert.deepEqual(grok.grokModelsFromCache({ file }), [
+    { id: 'grok-4.5', context: 500000, reasoning: true },
+  ]);
+  assert.deepEqual(grok.grokModelIdsFromCache({ file }), ['grok-4.5']);
+  assert.deepEqual(grok.GROK_MODELS, [{ id: 'grok-4.5', context: 500000, reasoning: true }]);
 });
 
 test('translates Responses completions and stream events to Anthropic messages', () => {
@@ -258,6 +281,13 @@ test('the shim lists and routes claude-prefixed Grok models', async (t) => {
   fs.writeFileSync(path.join(authDirectory, 'auth.json'), JSON.stringify({
     'https://auth.x.ai::fixture-client': { key: 'fixture-token', refresh_token: 'fixture-refresh', expires_at: Date.now() + 3600000, oidc_client_id: 'fixture-client' },
   }));
+  fs.writeFileSync(path.join(authDirectory, 'models_cache.json'), JSON.stringify({
+    models: {
+      'grok-4.5': {
+        info: { id: 'grok-4.5', context_window: 500000, supports_reasoning_effort: true },
+      },
+    },
+  }));
   const observed = [];
   const upstream = http.createServer((req, res) => {
     const chunks = [];
@@ -277,9 +307,10 @@ test('the shim lists and routes claude-prefixed Grok models', async (t) => {
     stdio: 'ignore',
   });
   t.after(() => child.kill());
+  let models;
   for (let retry = 0; retry < 100; retry += 1) {
     try {
-      const models = await new Promise((resolve, reject) => http.get(`http://127.0.0.1:${shimPort}/v1/models`, (res) => {
+      models = await new Promise((resolve, reject) => http.get(`http://127.0.0.1:${shimPort}/v1/models`, (res) => {
         const chunks = [];
         res.on('data', (chunk) => chunks.push(chunk));
         res.on('end', () => resolve(JSON.parse(Buffer.concat(chunks).toString())));
@@ -288,10 +319,11 @@ test('the shim lists and routes claude-prefixed Grok models', async (t) => {
     } catch {}
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-build', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
+  assert.deepEqual(models.data.filter((model) => model.id.startsWith('claude-grok-')).map((model) => model.id), ['claude-grok-4.5']);
+  const response = await request(shimPort, JSON.stringify({ model: 'claude-grok-4.5', max_tokens: 10, output_config: { effort: 'high' }, messages: [{ role: 'user', content: 'hello' }] }));
   assert.equal(response.status, 200);
   assert.equal(JSON.parse(response.body).content[0].text, 'hello');
-  assert.equal(observed[0].headers['x-grok-model-override'], 'grok-build');
+  assert.equal(observed[0].headers['x-grok-model-override'], 'grok-4.5');
   assert.equal(observed[0].headers['x-grok-client-version'], '0.2.112');
-  assert.equal(observed[0].body.reasoning, undefined);
+  assert.deepEqual(observed[0].body.reasoning, { effort: 'high' });
 });

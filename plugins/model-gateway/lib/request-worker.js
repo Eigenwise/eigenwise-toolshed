@@ -177,10 +177,8 @@ const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
   'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-  'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
-  'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
-const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS.map((model) => model.id);
+const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
 // Advertised to Claude Code as max_input_tokens for Codex models.
 //
@@ -296,10 +294,10 @@ function noteCompactEvent(attempt, event) {
   if (COMPACT_FATAL_ERROR_TYPES.has(event.error?.type)) attempt.fatal = true;
 }
 
-function gatewayModel(id, backend = 'codex') {
+function gatewayModel(id, backend = 'codex', grokModels = DEFAULT_GROK_MODELS) {
   const prefix = backend === 'grok' ? GROK_PREFIX : PREFIX;
   const context = backend === 'grok'
-    ? (grokBackend.GROK_MODELS.find((model) => model.id === id)?.context || 131072)
+    ? (grokModels.find((model) => model.id === id)?.context || 131072)
     : CODEX_COMPACT_CONTEXT_WINDOW;
   const advertised = backend === 'grok'
     ? `${prefix}${grokBackend.grokPickerId(id)}`
@@ -1088,12 +1086,13 @@ function runWorker() {
     // api.anthropic.com, so a local models.json is held to the same family rule.
     if (Array.isArray(ids)) ids = ids.filter((id) => typeof id === 'string' && (id === 'auto' || CODEX_FAMILY_RE.test(id)));
     if (!Array.isArray(ids) || !ids.length) ids = DEFAULT_MODELS;
-    const grokIds = grokBackend.grokModelIdsFromCache();
+    const grokModels = grokBackend.grokModelsFromCache();
+    const advertisedGrokModels = grokModels.length ? grokModels : DEFAULT_GROK_MODELS;
     modelCache = {
       at: Date.now(),
       data: [
         ...[...ids.filter((id) => id !== 'auto'), ...(LIST_DISPATCH_MODEL ? ['auto'] : [])].map((id) => gatewayModel(id)),
-        ...[...(grokIds.length ? grokIds : DEFAULT_GROK_MODELS)].map((id) => gatewayModel(id, 'grok')),
+        ...advertisedGrokModels.map((model) => gatewayModel(model.id, 'grok', advertisedGrokModels)),
       ],
     };
   }
