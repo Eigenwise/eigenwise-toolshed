@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.448.0",
+  "version": "3.449.0",
   "plugins": [
     {
       "name": "workbench",
@@ -100,7 +100,7 @@
       "name": "codebase-mapper",
       "source": "./plugins/codebase-mapper",
       "description": "A self-maintaining codebase map: atomic docs Claude loads at the start of each session and keeps in sync as the code changes. Any stack; greenfield or existing.",
-      "version": "2.14.4",
+      "version": "2.15.0",
       "author": {
         "name": "Eigenwise"
       },

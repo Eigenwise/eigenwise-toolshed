@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.449.0 (2026-08-11)
+
+### codebase-mapper 2.14.4 → 2.15.0
+
+#### Features
+
+- Mapper skills get the map committed, .map-state.json included (SQ-1824)
+  Both skills now commit the map themselves (outside shared-tree artifact mode) instead of reminding the user, explicitly including `.map-state.json`, and detect the broad `.claude/*` gitignore that made `git add` warn and agents wrongly treat the map as local-only, adding the `.codebase-info` negations in the same commit.
+
 ## v3.448.0 (2026-08-11)
 
 ### quartermaster 0.3.0 → 0.4.0
