@@ -948,6 +948,8 @@ test('release and submission clear retain structured rework attempts', () => {
 test('ordinary isolated dispatches preserve native worktree isolation', () => {
   const ticket = createFixture('ordinary isolation fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `ordinary-isolation-${Date.now()}` });
+  prepared.ticket.dispatch.integrationTarget = { mode: 'local', branch: 'main' };
+  const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug, PROJECT);
   const spawn = agentsync.agentSpawn(
     prepared.ticket.dispatch.launchName,
     agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree),
@@ -957,6 +959,8 @@ test('ordinary isolated dispatches preserve native worktree isolation', () => {
     'ordinary isolation fixture',
   );
   assert.equal(spawn.isolation, 'worktree');
+  assert.match(briefing, new RegExp(`git reset --hard ${prepared.ticket.dispatch.baseCommit}`));
+  assert.doesNotMatch(briefing, /git rebase --onto/);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'ordinary-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
@@ -997,6 +1001,7 @@ test('released handbacks carry registered native worktrees into continuation dis
     const releasedAt = store.getTicket(slug, ticket.ref).dispatch.terminalAt;
 
     const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    continued.ticket.dispatch.integrationTarget = { mode: 'local', branch: 'main' };
     assert.deepEqual(continued.ticket.dispatch.continuation, {
       mode: 'retained_worktree_resume',
       ticketRef: ticket.ref,
@@ -1021,6 +1026,9 @@ test('released handbacks carry registered native worktrees into continuation dis
     assert.equal(Object.hasOwn(spawn, 'isolation'), false);
     assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
     assert.ok(briefing.includes(`git rev-parse HEAD\` equals \`${checkpoint}\``));
+    assert.match(briefing, new RegExp(`git rebase --onto ${continued.ticket.dispatch.baseCommit} ${continued.ticket.dispatch.continuation.baseCommit}`));
+    assert.match(briefing, /If the rebase conflicts, stop and report the conflict/);
+    assert.doesNotMatch(briefing, new RegExp(`git reset --hard ${continued.ticket.dispatch.baseCommit}`));
     assert.doesNotMatch(briefing, /git cherry-pick/);
     assert.ok(store.dispatchWarnings(continued.ticket, slug).some((warning?: any) => warning.includes(`at ${checkpoint}`)));
 

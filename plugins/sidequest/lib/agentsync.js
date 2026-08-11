@@ -394,6 +394,16 @@ function ticketWorktreeSync(ticket, projectPath) {
   if (dispatch?.sharedTree !== false || !root || !target || !commit) return null;
   const branch = String(target.mode === "remote" ? `refs/remotes/origin/${target.branch}` : target.branch || "").trim();
   if (!branch) return null;
+  const continuation = dispatch?.continuation;
+  const checkpointBase = String(continuation?.baseCommit || "").trim();
+  const checkpoint = continuation?.mode === "retained_worktree_resume" && checkpointBase && continuation.commit;
+  if (checkpoint) {
+    return [
+      `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
+      `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+      "If the rebase conflicts, stop and report the conflict. Do not reset the retained checkpoint or resolve toward either side."
+    ].join(" ");
+  }
   return [
     `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
     `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git reset --hard ${commit}\`.`,
