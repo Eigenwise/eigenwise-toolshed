@@ -198,9 +198,17 @@ It records the current date, the full `HEAD` SHA (or `null` outside git), every 
 and hashes of the final bytes. It atomically replaces `.map-state.json` last so a hook can only see
 old hashes or a safely detectable stale manifest.
 
-Finally, tell the user the map is ready, remind them to **commit `.claude/.codebase-info/`** so their
-team and every future session share it, and note that the plugin's hook will surface it
-automatically from now on.
+Finally, get the map committed (outside shared-tree artifact mode, where committing is forbidden).
+A map that only exists in one working tree helps nobody else and goes stale silently, and the
+manifest is what makes staleness detectable, so the commit must include **every generated doc AND
+`.map-state.json`** — leaving the manifest out is the most common miss. Before staging, check the
+repo's ignore rules: a broad `.claude/*` ignore swallows the map and makes `git add` warn, which
+reads as "this is local-only" when it is not. If `git check-ignore .claude/.codebase-info/INDEX.md`
+matches, add the negations (`!.claude/.codebase-info/`, `!.claude/.codebase-info/**`) to
+`.gitignore` in the same commit. Commit the map as its own commit; if the user's flow means you
+should not commit right now, say plainly that `.claude/.codebase-info/` including `.map-state.json`
+still needs committing, and tell them the plugin's hook will surface the map automatically from
+now on.
 
 ## Greenfield projects
 
@@ -248,7 +256,8 @@ For hundreds or thousands of source files, do not try to read everything seriall
 - [ ] Every doc has a real `Last Updated` date and verified file paths
 - [ ] `.map-state.json` written with date, HEAD SHA (or null), and the document list
 - [ ] `CLAUDE.md` left untouched
-- [ ] User reminded to commit `.claude/.codebase-info/`
+- [ ] Map committed, all docs plus `.map-state.json`, with `.gitignore` negations added if a
+      `.claude/*` rule was swallowing it (or the user told plainly it still needs committing)
 
 ## References
 

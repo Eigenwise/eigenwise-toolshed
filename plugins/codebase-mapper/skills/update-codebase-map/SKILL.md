@@ -166,8 +166,14 @@ git repo), hashes the final bytes, and atomically replaces `.map-state.json` las
 interrupted write can leave hashes stale; that is safe because hooks hash live files and treat the
 manifest only as a consistency check.
 
-Then summarize for the user: which docs you updated, created, or removed, and why. Remind them to
-commit the changes so the team and future sessions stay in sync.
+Then summarize for the user: which docs you updated, created, or removed, and why. Commit the
+refreshed map (outside shared-tree artifact mode, where committing is forbidden), and make sure the
+commit includes **`.map-state.json` alongside the edited docs**: an uncommitted manifest means every
+other checkout sees stale hashes and re-flags docs that are actually current. If `git check-ignore
+.claude/.codebase-info/INDEX.md` matches (a broad `.claude/*` rule), add `!.claude/.codebase-info/`
+and `!.claude/.codebase-info/**` to `.gitignore` in the same commit; the ignore warning on `git add`
+does not mean the map is local-only. If committing right now would be wrong for the user's flow, say
+plainly that the map changes including `.map-state.json` still need committing.
 
 ## Guidelines
 
@@ -189,3 +195,5 @@ commit the changes so the team and future sessions stay in sync.
 - [ ] `Last Updated` dates current on every touched doc
 - [ ] `CLAUDE.md` left untouched
 - [ ] `.map-state.json` rewritten with today's date, current commit, and document list
+- [ ] Map changes committed including `.map-state.json` (or the user told plainly they still need
+      committing)
