@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.0 (2026-08-11)
+
+Released in v3.448.0, up from 0.3.0.
+
+### Features
+
+- Carry the capability-capture charter into every session and run resupply proactively (SQ-1822)
+  The SessionStart hook now keeps the capability-capture charter in front of Claude (turn the task done three times into a skill, map entry, rule, or measurement, offered in the moment), stepping aside where setup seeded the per-prompt live rule. The resupply nudge has Claude run the pass at the next natural pause instead of merely suggesting it, and fires sooner: 4 sessions / 6 friction events / 24h cooldown.
+
 ## 0.3.0 (2026-08-11)
 
 Released in v3.444.0, up from 0.2.2.
