@@ -8,6 +8,21 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.445.0 (2026-08-11)
+
+### model-gateway 0.48.5 → 0.48.6
+
+#### Fixes
+
+- Refresh model gateway catalogs (SQ-1269)
+  Model Gateway now advertises current Codex and Grok subscription models, using the Grok CLI cache when available.
+
+### sidequest 4.44.1 → 4.44.2
+
+#### Fixes
+
+- Preserve retained continuation checkpoints during worktree sync (SQ-1745)
+
 ## v3.444.0 (2026-08-11)
 
 ### quartermaster 0.2.2 → 0.3.0
