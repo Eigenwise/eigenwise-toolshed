@@ -129,6 +129,9 @@ test('prices every active model label and token type from one table', () => {
   assert.match(projectTargets[0].expr, /workbench_attribute_project_name = "atlas"/);
   assert.equal(projectTargets[1].legendFormat, 'Other / unattributed');
   assert.match(projectTargets[1].expr, /workbench_attribute_project_name !~ "atlas"/);
+  for (const target of projectTargets) {
+    assert.doesNotMatch(target.expr, /vector\(0\)/, `${target.legendFormat} would render as a permanent $0.00 row`);
+  }
   assert.match(gatewayTotalCostExpression('$__range'), /gateway\.token\.usage/);
 });
 

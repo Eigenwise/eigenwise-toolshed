@@ -137,11 +137,18 @@ function gatewayTotalCostExpression(bucket = '$bucket', extraFilter = '') {
   return gatewayCostExpression(gatewayModelPriceEntries(), bucket, extraFilter);
 }
 
+// No vector(0) fallback here: with it, a project with no priced usage in the window renders as
+// a permanent $0.00 row in the legend and tooltip instead of dropping out. Stat panels keep the
+// fallback so an idle range still reads $0 rather than "no data".
+function gatewayProjectCostExpression(extraFilter) {
+  return `sum(${gatewayModelCostExpression(gatewayModelPriceEntries(), '$bucket', extraFilter)})`;
+}
+
 function gatewayProjectCostTargets(projects) {
   const targets = projects.map(({ project_name: projectName }, index) => ({
     refId: `P${index + 1}`,
     datasource: { type: 'loki', uid: 'loki' },
-    expr: gatewayTotalCostExpression('$bucket', ` | workbench_attribute_project_name = ${JSON.stringify(projectName)}`),
+    expr: gatewayProjectCostExpression(` | workbench_attribute_project_name = ${JSON.stringify(projectName)}`),
     legendFormat: projectName,
   }));
   const knownProjects = projects.map(({ project_name: projectName }) => escapeLogqlRegex(projectName)).join('|');
@@ -151,7 +158,7 @@ function gatewayProjectCostTargets(projects) {
   targets.push({
     refId: `P${targets.length + 1}`,
     datasource: { type: 'loki', uid: 'loki' },
-    expr: gatewayTotalCostExpression('$bucket', otherProjectsFilter),
+    expr: gatewayProjectCostExpression(otherProjectsFilter),
     legendFormat: 'Other / unattributed',
   });
   return targets;
