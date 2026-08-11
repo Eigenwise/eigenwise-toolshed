@@ -6,7 +6,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const { DEFAULT_RETENTION_DAYS, openObservabilityStore } = require('../lib/observability/store.js');
-const { drainHookSpool } = require('../lib/observability/hook-spool.js');
+const { DEFAULT_DRAIN_BUDGET_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { defaultSpoolPath } = require('../hooks/observability.js');
 const { createOutboxDrainer } = require('../lib/observability/outbox.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
@@ -143,6 +143,8 @@ function createObserver(options = {}) {
   const pluginVersion = options.pluginVersion || ownPluginVersion();
   const getInstalledPluginVersion = options.getInstalledPluginVersion || (() => installedPluginVersion(options.home));
   const outboxRetryIntervalMs = Math.max(250, Number(options.outboxIntervalMs) || 1000);
+  const hookSpoolDrainBudgetMs = Math.max(10, Math.min(60_000, Number(options.hookSpoolDrainBudgetMs) || DEFAULT_DRAIN_BUDGET_MS));
+  const hookSpoolStallMs = Math.max(100, hookSpoolDrainBudgetMs * 4);
   const staleObserverError = () => observerVersionError(pluginVersion, getInstalledPluginVersion());
   const overriddenOutbox = options.outboxEndpoint
     ? { enabled: true, endpoint: options.outboxEndpoint, headers: options.outboxHeaders || {}, allowRemote: false }
@@ -177,6 +179,7 @@ function createObserver(options = {}) {
     last_quarantined_at: null,
     last_quarantined_file: null,
     last_success_at: null,
+    in_flight_at: null,
   };
   const logger = options.logger || console;
   let retireOutdatedObserver = () => {};
@@ -187,7 +190,9 @@ function createObserver(options = {}) {
         const [outboxHealth] = store.queryView('outbox_health', { limit: 1 });
         const versionError = staleObserverError();
         const outboxStalled = outbox.enabled && outboxIsStalled(outboxHealth, outboxRetryIntervalMs);
-        const spoolFailed = spoolStatus.consecutive_failures > 0;
+        const spoolDrainStartedAt = Date.parse(spoolStatus.in_flight_at || '');
+        const spoolStalled = Number.isFinite(spoolDrainStartedAt) && Date.now() - spoolDrainStartedAt > hookSpoolStallMs;
+        const spoolFailed = spoolStatus.consecutive_failures > 0 || spoolStalled;
         jsonResponse(response, versionError || outboxStalled || spoolFailed ? 503 : 200, {
           ok: !versionError && !outboxStalled && !spoolFailed,
           pid: process.pid,
@@ -197,7 +202,7 @@ function createObserver(options = {}) {
           spool: spoolStatus,
           storage: store.storageMetrics(),
           maintenance: maintenanceStatus,
-          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : spoolFailed ? 'hook_spool_drain_failed' : undefined,
+          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : spoolStalled ? 'hook_spool_drain_stalled' : spoolFailed ? 'hook_spool_drain_failed' : undefined,
         });
         if (versionError) setImmediate(retireOutdatedObserver);
         return;
@@ -275,12 +280,13 @@ function createObserver(options = {}) {
   const drainSpool = async () => {
     if (drainingSpool) return null;
     drainingSpool = true;
+    spoolStatus.in_flight_at = new Date().toISOString();
     try {
       return await drainHookSpool({
         spoolPath,
         store,
         projectId: options.projectId,
-        drainBudgetMs: options.hookSpoolDrainBudgetMs,
+        drainBudgetMs: hookSpoolDrainBudgetMs,
         failureState: spoolStatus,
         failureThreshold: options.hookSpoolFailureThreshold,
       });
@@ -292,6 +298,7 @@ function createObserver(options = {}) {
       });
       return null;
     } finally {
+      spoolStatus.in_flight_at = null;
       drainingSpool = false;
     }
   };
