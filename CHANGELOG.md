@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.452.0 (2026-08-11)
+
+### workbench 0.86.1 → 0.86.2
+
+#### Fixes
+
+- Doctor audit stops reporting a healthy model gateway as down (SQ-1826)
+  The session-start audit parsed the model-gateway doctor's output with regexes that no longer matched its healthy phrasings: the proxy line says "answering /v1/models" (not "running"), and the version line carries the binary name before the number. Every healthy gateway reported "proxy or router is down" plus "proxy is missing or has no readable version". The parser now accepts the real phrasings, and a drift test pins them against the model-gateway source so a rewording fails the suite instead of shipping a false alarm.
+
 ## v3.451.0 (2026-08-11)
 
 ### sidequest 4.44.2 → 4.45.0
