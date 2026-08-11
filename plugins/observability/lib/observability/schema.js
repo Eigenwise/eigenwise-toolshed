@@ -385,6 +385,7 @@ const TABLE_SQL = `
   CREATE INDEX IF NOT EXISTS observation_observed_at_idx ON observation(observed_at);
   CREATE INDEX IF NOT EXISTS observation_event_request_idx ON observation(event_name, request_id);
   CREATE INDEX IF NOT EXISTS observation_session_idx ON observation(session_id, observed_at);
+  CREATE INDEX IF NOT EXISTS observation_session_event_idx ON observation(session_id, event_name, observed_at);
   CREATE INDEX IF NOT EXISTS observation_request_idx ON observation(request_id, observed_at);
   CREATE INDEX IF NOT EXISTS observation_trace_idx ON observation(trace_id, span_id);
   CREATE INDEX IF NOT EXISTS observation_agent_idx ON observation(agent_id, parent_agent_id);
