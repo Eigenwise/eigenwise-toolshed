@@ -548,16 +548,20 @@ test('quarantines repeatedly failing hook spools, logs their error, and keeps he
   });
 });
 
-test('hook spool drain yields at its time budget', async (t) => {
+test('hook spool drain keeps committed rows out of the next attempt after its budget expires', async (t) => {
   const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-budget-spool-'));
   t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
   const spoolPath = path.join(spoolDirectory, 'hook-spool.jsonl');
   fs.writeFileSync(spoolPath, '{"event":"one"}\n{"event":"two"}\n');
   const state = { consecutive_failures: 0, last_error: null };
+  let ingestCalls = 0;
   const store = {
     ingestBatch() {
-      const deadline = Date.now() + 20;
-      while (Date.now() < deadline) {}
+      ingestCalls += 1;
+      if (ingestCalls === 1) {
+        const deadline = Date.now() + 20;
+        while (Date.now() < deadline) {}
+      }
       return [{ accepted: true, duplicate: false }];
     },
   };
@@ -566,8 +570,41 @@ test('hook spool drain yields at its time budget', async (t) => {
     drainHookSpool({ spoolPath, store, batchSize: 1, drainBudgetMs: 10, failureState: state }),
     { code: 'HOOK_SPOOL_DRAIN_TIMEOUT' },
   );
-  assert.equal(state.consecutive_failures, 1);
-  assert.equal(fs.existsSync(`${spoolPath}.draining`), true);
+  assert.equal(state.consecutive_failures, 0);
+  assert.equal(fs.readFileSync(`${spoolPath}.draining`, 'utf8'), '{"event":"two"}\n');
+  assert.deepEqual(
+    await drainHookSpool({ spoolPath, store, batchSize: 1, drainBudgetMs: 100, failureState: state }),
+    { drained: 1, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0 },
+  );
+  assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
+});
+
+test('health reports a hook spool drain that remains in flight past its deadline', async (t) => {
+  const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-stalled-spool-'));
+  t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
+  const spoolPath = path.join(spoolDirectory, 'hook-spool.jsonl');
+  fs.writeFileSync(spoolPath, '{"event":"one"}\n');
+  const observer = createObserver({
+    store: {
+      ingestBatch() { return new Promise(() => {}); },
+      queryView() { return [{ pending_count: 0 }]; },
+      storageMetrics() { return {}; },
+    },
+    host: '127.0.0.1',
+    port: 0,
+    hookSpoolFile: spoolPath,
+    hookSpoolDrainBudgetMs: 10,
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+  await new Promise((resolve) => setTimeout(resolve, 120));
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+  assert.equal(response.status, 503);
+  const health = await response.json();
+  assert.equal(health.error, 'hook_spool_drain_stalled');
+  assert.match(health.spool.in_flight_at, /^\d{4}-\d{2}-\d{2}T/);
 });
 
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {
