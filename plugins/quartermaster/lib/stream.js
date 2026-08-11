@@ -78,10 +78,31 @@ async function streamTranscript(source, collector) {
       collector.onEvent({ ...base, kind: 'interrupt' });
     }
 
+    // A session's own title is the cheapest statement of what it was about: one line, already
+    // written, present in about nine sessions out of ten. Everything else about purpose has to be
+    // inferred, so this is the anchor.
+    if (record.type === 'ai-title') {
+      collector.onEvent({ ...base, kind: 'session_title', title: record.aiTitle ?? null });
+      continue;
+    }
+
+    // An explicit /goal is rare (a couple of percent of sessions) but it is the user stating a
+    // standard in their own words, which is worth more than any inference when it is there.
+    if (record.type === 'queue-operation') {
+      const content = String(record.content ?? '');
+      if (content.startsWith('Goal set:')) {
+        collector.onEvent({ ...base, kind: 'goal', condition: content.slice('Goal set:'.length), met: null });
+      }
+      continue;
+    }
+
     if (record.type === 'attachment') {
       const attachment = record.attachment ?? {};
       if (attachment.hookEvent && Number(attachment.exitCode) !== 0) {
         collector.onEvent({ ...base, kind: 'hook_error', hookName: attachment.hookName ?? attachment.hookEvent });
+      }
+      if (attachment.type === 'goal_status') {
+        collector.onEvent({ ...base, kind: 'goal', condition: attachment.condition ?? null, met: attachment.met === true });
       }
       continue;
     }

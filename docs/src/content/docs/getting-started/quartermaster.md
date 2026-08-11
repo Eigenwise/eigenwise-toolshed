@@ -30,9 +30,11 @@ After a stretch of real work, or when the SessionStart nudge suggests it:
 
 > /quartermaster:resupply
 
-The miner streams your recent transcripts (subagents included) and emits a bounded aggregate: repeated commands, per-plugin and per-MCP attribution, documentation lookups, per-session cost, and friction (denials with their targets, interrupts, corrections with themes).
+The miner streams your recent transcripts (subagents included) and emits a bounded aggregate. Every session carries what it was for: its own title, its first real prompt, any explicit `/goal` and whether that goal was ever met. An explicit goal is the strongest signal and also the rarest, so the title and the opening ask carry most sessions. Sessions nobody typed into twice are flagged, because a hook that spawns fifty review sessions would otherwise report its purpose back to you as yours.
 
-The skill establishes what you were working toward, then ranks what is missing against it, in value order: something you have no way to measure, work you keep doing by hand, knowledge you keep re-deriving, and only then the setup pushing back. At most seven findings, each proposed one at a time with evidence and the exact change. Say no and that recommendation never comes back; say yes and the next pass reports whether it helped.
+Alongside that: the areas of the tree your work landed in, repeated commands, per-plugin and per-MCP attribution, documentation lookups, per-session cost, and friction (denials with their targets, interrupts, corrections with themes).
+
+The skill ranks what is missing against that purpose, in value order: something you have no way to measure, work you keep doing by hand, knowledge you keep re-deriving, and only then the setup pushing back. At most seven findings, each proposed one at a time with evidence and the exact change. Say no and that recommendation never comes back; say yes and the next pass reports whether it helped.
 
 Friction is last on purpose. Fixing what went wrong returns you to the speed you already expected; adding a capability you never had moves that baseline, and the best capabilities leave no friction trace at all. A measurement you are missing throws no errors, gets nothing denied, and happens exactly once, so anything that watches for repeated pain will never find it.
 
@@ -44,4 +46,4 @@ A SessionEnd hook tallies each session locally: no LLM, no network, one streamed
 
 ## What it stores
 
-Tallies and decisions live under `~/.claude/quartermaster-state/`: per-session counters and a decision ledger with fingerprints. Raw transcripts are never loaded into model context; the resupply skill is explicitly forbidden from opening them. Quotes shown as evidence are clipped to 300 characters.
+Tallies and decisions live under `~/.claude/quartermaster-state/`: per-session counters and a decision ledger with fingerprints. Raw transcripts are never loaded into model context; the resupply skill is explicitly forbidden from opening them. Everything taken from a transcript is clipped: session titles to 120 characters, opening asks to 240, goal conditions and evidence quotes to 300. Paths are reduced to the two directory segments nearest the file, and scratch directories are dropped entirely.

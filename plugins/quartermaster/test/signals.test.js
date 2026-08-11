@@ -114,3 +114,86 @@ test('tallyFromSignals flattens per-session counts', async () => {
   assert.equal(tally.prompts, 2);
   assert.equal(tally.corrections, 1);
 });
+
+test('captures session purpose from title, opening ask, and area touched', async () => {
+  const signals = await collect([
+    { type: 'ai-title', aiTitle: 'Make the ingest pipeline reliable', sessionId: 'session-1' },
+    userPrompt('The ingest job keeps dropping rows and I need it to stop.'),
+    userPrompt('try the retry path'),
+    assistantToolUse('Edit', { file_path: 'C:\\work\\app\\src\\ingest\\loader.py' }),
+    assistantToolUse('Edit', { file_path: '/home/me/app/src/ingest/parser.py' }),
+  ]);
+
+  const [session] = signals.sessions;
+  assert.equal(session.title, 'Make the ingest pipeline reliable');
+  assert.match(session.openingAsk, /keeps dropping rows/);
+  assert.equal(session.humanDriven, true, 'two prompts is a person, not a hook');
+  assert.equal(signals.purpose.areasTop[0].name, 'src/ingest', 'area is the tail, so it matches across machines');
+  assert.equal(signals.purpose.areasTop[0].count, 2);
+});
+
+test('a one-prompt session is not treated as the user own purpose', async () => {
+  const signals = await collect([
+    { type: 'ai-title', aiTitle: 'Review change for security issues', sessionId: 'session-1' },
+    userPrompt('Review this change for security vulnerabilities.'),
+    assistantToolUse('Read', { file_path: '/repo/src/api/routes.js' }),
+  ]);
+
+  const [session] = signals.sessions;
+  assert.equal(session.title, 'Review change for security issues');
+  assert.equal(session.humanDriven, false, 'hook-spawned sessions must be distinguishable');
+});
+
+test('goals are deduplicated and a satisfied goal counts as met', async () => {
+  const condition = 'make the parser handle every real input';
+  const signals = await collect([
+    { type: 'queue-operation', operation: 'enqueue', content: `Goal set: ${condition}`, timestamp: '2026-08-01T10:00:00Z' },
+    { type: 'attachment', attachment: { type: 'goal_status', met: false, condition }, timestamp: '2026-08-01T10:05:00Z' },
+    { type: 'attachment', attachment: { type: 'goal_status', met: false, condition }, timestamp: '2026-08-01T10:09:00Z' },
+    { type: 'attachment', attachment: { type: 'goal_status', met: true, condition }, timestamp: '2026-08-01T10:30:00Z' },
+  ]);
+
+  assert.equal(signals.purpose.goals.set, 1, 'one goal, not four records');
+  assert.equal(signals.purpose.goals.met, 1);
+  assert.equal(signals.sessions[0].goal.condition, condition);
+  assert.equal(signals.sessions[0].goal.met, true);
+});
+
+test('an unmet goal stays unmet', async () => {
+  const signals = await collect([
+    { type: 'attachment', attachment: { type: 'goal_status', met: false, condition: 'get the build under two minutes' }, timestamp: '2026-08-01T10:05:00Z' },
+  ]);
+
+  assert.equal(signals.purpose.goals.set, 1);
+  assert.equal(signals.purpose.goals.met, 0);
+  assert.equal(signals.sessions[0].goal.met, false);
+});
+
+test('purpose fields stay absent rather than invented when a session has none', async () => {
+  const signals = await collect([assistantToolUse('Bash', { command: 'git status' })]);
+  const [session] = signals.sessions;
+  assert.equal(session.title, null);
+  assert.equal(session.openingAsk, null);
+  assert.equal(session.goal, null);
+  assert.equal(signals.purpose.goals.set, 0);
+});
+
+test('the opening ask skips harness prompts and takes the first real one', async () => {
+  const signals = await collect([
+    userPrompt('<command-name>/clear</command-name> <command-message>clear</command-message>'),
+    userPrompt('<local-command-stdout></local-command-stdout>'),
+    userPrompt('the export job silently drops duplicate rows, find out why'),
+  ]);
+
+  assert.match(signals.sessions[0].openingAsk, /export job silently drops/);
+});
+
+test('scratch space and per-session directories never rank as an area', async () => {
+  const signals = await collect([
+    assistantToolUse('Write', { file_path: '/tmp/claude/3f2a1c8d-4b5e-6f70-8192-a3b4c5d6e7f8/scratchpad/probe.py' }),
+    assistantToolUse('Write', { file_path: '/repo/node_modules/left-pad/index.js' }),
+    assistantToolUse('Edit', { file_path: '/repo/services/billing/invoice.rb' }),
+  ]);
+
+  assert.deepEqual(signals.purpose.areasTop.map((area) => area.name), ['services/billing']);
+});

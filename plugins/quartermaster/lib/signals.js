@@ -3,11 +3,19 @@
 const MAX_SAMPLES = 12;
 const QUOTE_CHARS = 300;
 const TOP_LIMIT = 15;
+const TITLE_CHARS = 120;
+const ASK_CHARS = 240;
+const GOAL_CHARS = 300;
 
 // Openers that mean the previous turn went the wrong way, matched at the start of the prompt where
 // a correction almost always lands, so an incidental "actually" mid-paragraph does not trip it.
 const CORRECTION_OPENERS = /^\s*(?:no\b|nope\b|stop\b|wrong\b|don'?t\b|do not\b|actually\b|not (?:like )?that\b|that'?s not\b|revert\b|undo\b|never\b|please (?:don'?t|stop)\b)/i;
 const CORRECTION_PHRASES = /\b(?:i (?:already )?(?:told|said|asked)|you keep|again,|why did you|i didn'?t ask|that'?s wrong|not what i)\b/i;
+
+// A prompt that opens with a markup tag is the harness talking, not the user: a slash-command
+// wrapper, piped command output, a hook's injected line. Taking one of these as the opening ask
+// reports "/clear" back as what the user wanted.
+const HARNESS_PROMPT = /^\s*<[a-z][a-z-]*>/i;
 
 const CORRECTION_THEMES = [
   ['commit/git', /\b(?:commit(?:s|ted|ting)?|push(?:es|ed|ing)?|branch(?:es|ed|ing)?|merg(?:e|es|ed|ing)|rebas(?:e|es|ed|ing)|git)\b/],
@@ -59,6 +67,29 @@ function normalizeCommand(rawCommand) {
   }
   if (SUBCOMMAND_EXECUTABLES.has(executable) && next) return `${executable} ${next.toLowerCase()}`;
   return executable;
+}
+
+// Directories that hold throwaway work, and per-session identifiers, both of which would otherwise
+// rank as areas the user was working in. A scratch file is written to be deleted; its path says
+// nothing about the purpose it served.
+const THROWAWAY_SEGMENTS = new Set(['scratchpad', 'tmp', 'temp', 'node_modules', '__pycache__', '.venv', '.git']);
+const OPAQUE_SEGMENT = /^[0-9a-f]{8}(-[0-9a-f]{4}){3}-[0-9a-f]{12}$|^[0-9a-f]{16,}$/i;
+
+/**
+ * Reduces a touched file to the area it lives in, as the two directory segments closest to it
+ * ("poker_ai/hand_history"). Taking the tail rather than the head keeps this meaningful for
+ * absolute paths and identical across machines, where a leading drive or home directory is not.
+ * Returns null for scratch space, so a session's temp directory cannot outrank its real work.
+ */
+function areaOf(filePath) {
+  const normalized = String(filePath ?? '').replace(/\\/g, '/');
+  if (!normalized.includes('/')) return null;
+  const segments = normalized.split('/').filter(Boolean);
+  segments.pop();
+  if (segments.some((segment) => THROWAWAY_SEGMENTS.has(segment.toLowerCase()) || OPAQUE_SEGMENT.test(segment))) {
+    return null;
+  }
+  return segments.length ? segments.slice(-2).join('/') : null;
 }
 
 function hostnameOf(url) {
@@ -114,11 +145,14 @@ function createSignalCollector() {
   const attributionMcpServers = new Map();
   const commands = new Map();
   const webFetchDomains = new Map();
+  const areas = new Map();
+  const goalsByCondition = new Map();
   const totals = { interrupts: 0, apiErrors: 0, toolErrors: 0, denials: 0, webSearches: 0 };
   let lastAction = null;
 
   const sessionTally = (sessionId) => {
-    const entry = perSession.get(sessionId) ?? { ...emptyTally(), firstMs: null, lastMs: null };
+    const entry = perSession.get(sessionId)
+      ?? { ...emptyTally(), firstMs: null, lastMs: null, title: null, openingAsk: null, goal: null };
     perSession.set(sessionId, entry);
     return entry;
   };
@@ -132,6 +166,21 @@ function createSignalCollector() {
       }
 
       switch (event.kind) {
+        case 'session_title':
+          if (event.title && !tally.title) tally.title = clip(event.title, TITLE_CHARS);
+          return;
+        case 'goal': {
+          if (!event.condition) return;
+          const condition = clip(event.condition, GOAL_CHARS);
+          // goal_status repeats every turn while a goal is open, so dedupe by condition and let a
+          // single met:true win: a goal that was ever satisfied is not an unmet goal.
+          if (!tally.goal) tally.goal = { condition, met: event.met === true };
+          else if (event.met === true) tally.goal.met = true;
+          const existing = goalsByCondition.get(condition);
+          if (!existing) goalsByCondition.set(condition, { met: event.met === true, sessionId: event.sessionId });
+          else if (event.met === true) existing.met = true;
+          return;
+        }
         case 'interrupt':
           totals.interrupts += 1;
           tally.interrupts += 1;
@@ -148,6 +197,7 @@ function createSignalCollector() {
           bump(attributionPlugins, event.attributionPlugin, event.sessionId);
           bump(attributionSkills, event.attributionSkill, event.sessionId);
           bump(attributionMcpServers, event.attributionMcpServer, event.sessionId);
+          bump(areas, areaOf(event.input?.file_path), event.sessionId);
           if (SHELL_TOOLS.has(event.name)) bump(commands, normalizeCommand(event.input?.command), event.sessionId);
           if (event.name === 'WebSearch') totals.webSearches += 1;
           if (event.name === 'WebFetch') bump(webFetchDomains, hostnameOf(event.input?.url), event.sessionId);
@@ -183,6 +233,9 @@ function createSignalCollector() {
             return;
           }
           tally.prompts += 1;
+          // The opening ask is the fallback when a session has no title: it is what the user came
+          // in wanting, before any of the work reshaped it.
+          if (!tally.openingAsk && !HARNESS_PROMPT.test(text)) tally.openingAsk = clip(text, ASK_CHARS);
           if (!CORRECTION_OPENERS.test(text) && !CORRECTION_PHRASES.test(text)) return;
           tally.corrections += 1;
           if (corrections.length < MAX_SAMPLES * 3) {
@@ -216,10 +269,29 @@ function createSignalCollector() {
           denials: tally.denials,
           interrupts: tally.interrupts,
           corrections: tally.corrections,
+          title: tally.title,
+          openingAsk: tally.openingAsk,
+          goal: tally.goal,
+          // A session nobody typed into twice was almost certainly spawned by a hook or a harness.
+          // Its title states that machinery's purpose, not the user's, and there are often many
+          // more of them than real sessions, so counting titles without this flag would report the
+          // automation back to the user as their own goal.
+          humanDriven: tally.prompts >= 2,
         }))
         .sort((a, b) => String(b.startedAt).localeCompare(String(a.startedAt)));
 
+      const goals = [...goalsByCondition.entries()]
+        .map(([condition, entry]) => ({ condition, met: entry.met, sessionId: entry.sessionId }));
+
       return {
+        purpose: {
+          goals: {
+            set: goals.length,
+            met: goals.filter((goal) => goal.met).length,
+            samples: goals.slice(0, MAX_SAMPLES),
+          },
+          areasTop: topOf(areas, 12),
+        },
         friction: {
           interrupts: totals.interrupts,
           apiErrors: totals.apiErrors,

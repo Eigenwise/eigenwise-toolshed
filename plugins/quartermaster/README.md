@@ -34,14 +34,16 @@ Two cheap hooks and two skills. The hooks never analyze content and never call a
   `~/.claude/quartermaster-state/`. Local file reads only.
 - **SessionStart hook**: once enough unreviewed sessions or friction events pile up, injects one
   line suggesting a resupply pass. Cooldown of 72h between nudges; silent otherwise.
-- **resupply skill**: asks what you're working toward, then runs the miner (`bin/quartermaster.js
-  mine`), which streams recent transcripts and emits a bounded JSON aggregate: per-session cost,
-  top repeated commands, per-plugin/skill/MCP attribution, fetch domains, friction counts with
-  short quotes. The skill ranks what's missing against your goal (something unmeasurable, then
-  manual work, then re-derived knowledge, then friction) into at most 7 findings, each routed to a
-  destination (a measurement built as a skill, plugin install, workflow skill, map or CLAUDE.md
-  knowledge, rule, permission allowlist entry, disable) and each individually approved. Applied and
-  rejected decisions land in a ledger; rejected recommendations are never surfaced again.
+- **resupply skill**: runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
+  and emits a bounded JSON aggregate. Each session carries **what it was for**: its own title, its
+  first real prompt, any explicit `/goal` and whether that goal was ever met, plus a `humanDriven`
+  flag so hook-spawned sessions can't pass as your work. Alongside that: the areas of the tree the
+  work landed in, per-session cost, top repeated commands, attribution, fetch domains, and friction
+  counts with short quotes. The skill ranks what's missing against that purpose (something
+  unmeasurable, then manual work, then re-derived knowledge, then friction) into at most 7 findings,
+  each routed to a destination (a measurement built as a skill, plugin install, workflow skill, map
+  or CLAUDE.md knowledge, rule, permission allowlist entry, disable) and each individually approved.
+  Applied and rejected decisions land in a ledger; rejected recommendations are never surfaced again.
 - **setup skill**: for new or freshly cloned projects. Mines all projects, reads the new project's
   stack, proposes a baseline. Same approval and ledger contract.
 
