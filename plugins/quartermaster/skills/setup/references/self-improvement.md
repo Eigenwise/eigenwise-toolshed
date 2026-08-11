@@ -6,10 +6,10 @@ deliberately simple: a global live rule (re-injected every prompt) plus the on-d
 for a deeper pass. No hook, no background process, it rides the live-rules mechanism that's already
 installed.
 
-The rule is written around one question: **what would have made this easier?** That is deliberately
-not "what went wrong". Fixing what went wrong returns the workspace to the speed the user already
-expected; adding a capability it never had moves that baseline. The highest-value improvements
-almost never announce themselves as errors.
+The rule is written around one question: **what would have made this easier?** Fixing what went
+wrong returns the workspace to the speed the user already expected; adding a capability it never had
+moves that baseline. The highest-value improvements almost never announce themselves as errors, so a
+rule that asked about errors would miss them.
 
 ## Install this atomic rule
 
@@ -22,8 +22,8 @@ Ship it on every workspace as `.claude/live-rules/rules/self-improvement.md`, gl
 description: Self-improvement: build the capability that makes the next goal cheaper
 priority: 40
 ---
-When you finish a chunk of work, ask what would have made it easier, and build that. The question
-is not "did anything go wrong", it's "what was missing here that I needed".
+When you finish a chunk of work, ask what was missing that you needed, and build that. Look past
+whether anything went wrong: the gaps that cost the most raise no errors at all.
 - **A claim you couldn't check** (is it correct? fast enough? complete?) is the most expensive gap
   of all: with no way to measure it, every fix underneath is a guess and the same argument reopens
   a week later. Build the measurement first, as a skill with its scripts committed in the repo, so
