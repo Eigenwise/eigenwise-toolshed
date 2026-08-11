@@ -881,10 +881,8 @@ const PLAN_TOOLS = ['EnterPlanMode', 'ExitPlanMode'];
 
 const DEFAULT_MODELS = [
   'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna',
-  'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
-  'gpt-5.3-codex', 'gpt-5.3-codex-spark', 'gpt-5.2',
 ];
-const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS.map((model) => model.id);
+const DEFAULT_GROK_MODELS = grokBackend.GROK_MODELS;
 
 // Advertised to Claude Code as max_input_tokens for Codex models.
 //

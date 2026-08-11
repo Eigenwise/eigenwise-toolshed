@@ -9,9 +9,6 @@ const GROK_TOKEN_ENDPOINT = 'https://auth.x.ai/oauth/token';
 const GROK_VERSION_FALLBACK = '0.2.112';
 const GROK_MODELS = [
   { id: 'grok-4.5', context: 500000, reasoning: true },
-  { id: 'grok-build', context: 500000, reasoning: false },
-  { id: 'grok-4.3', context: 131072, reasoning: true },
-  { id: 'grok-4.1-fast', context: 131072, reasoning: false },
 ];
 
 function grokDirectory(home = os.homedir()) {
@@ -423,13 +420,37 @@ function grokModelFromPicker(id, models = GROK_MODELS.map((model) => model.id)) 
   return match || `grok-${id}`;
 }
 
-function grokModelIdsFromCache({ file = grokModelCachePath() } = {}) {
+function grokModelsFromCache({ file = grokModelCachePath() } = {}) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
-    const values = Array.isArray(parsed) ? parsed : Array.isArray(parsed?.models) ? parsed.models : Array.isArray(parsed?.data) ? parsed.data : [];
-    const ids = values.map((model) => typeof model === 'string' ? model : model?.id).filter((id) => /^grok-[a-z0-9.-]+$/i.test(id));
-    return [...new Set(ids)];
+    const values = Array.isArray(parsed)
+      ? parsed
+      : Array.isArray(parsed?.models)
+        ? parsed.models
+        : Array.isArray(parsed?.data)
+          ? parsed.data
+          : parsed?.models && typeof parsed.models === 'object'
+            ? Object.values(parsed.models)
+            : [];
+    const models = new Map();
+    for (const value of values) {
+      const details = value?.info && typeof value.info === 'object' ? value.info : value;
+      const id = typeof value === 'string' ? value : details?.id || details?.model;
+      if (typeof id !== 'string' || !/^grok-[a-z0-9.-]+$/i.test(id) || models.has(id)) continue;
+      const fallback = GROK_MODELS.find((model) => model.id === id);
+      const context = Number(details?.context_window);
+      models.set(id, {
+        id,
+        context: Number.isFinite(context) && context > 0 ? context : fallback?.context || 131072,
+        reasoning: typeof details?.supports_reasoning_effort === 'boolean' ? details.supports_reasoning_effort : fallback?.reasoning === true,
+      });
+    }
+    return [...models.values()];
   } catch { return []; }
+}
+
+function grokModelIdsFromCache(options) {
+  return grokModelsFromCache(options).map((model) => model.id);
 }
 
 module.exports = {
@@ -442,6 +463,7 @@ module.exports = {
   grokAccessToken,
   grokHeaders,
   grokModelFromPicker,
+  grokModelsFromCache,
   grokModelIdsFromCache,
   grokPickerId,
   readGrokAuth,
