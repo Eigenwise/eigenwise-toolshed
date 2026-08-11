@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.451.0 (2026-08-11)
+
+### sidequest 4.44.2 → 4.45.0
+
+#### Features
+
+- Scope grants now reach re-dispatches and post-release submits (SQ-1825)
+  Files declared after an executor handback now enter the next dispatch's binding (the released binding is unioned with the current effective scope instead of replacing it), and the submit gate stops enforcing a terminal dispatch's frozen binding: once a dispatch is dead, admitted scope comes from the ticket's current files, matching what pulse already reports. Previously a path the orchestrator declared and granted mid-ticket stayed refused through every later submit and had to ship as an out-of-band commit (the-bot-resurrection SQ-825, three refused submits).
+
 ## v3.450.0 (2026-08-11)
 
 ### codebase-mapper 2.15.0 → 2.15.1
