@@ -437,3 +437,75 @@ test('hooks.json registers the freshness hooks and nothing observability owns', 
   assert.ok(!all.includes('observability'), 'observability hooks belong to the observability plugin');
   assert.ok(!all.includes('request-body-preflight'), 'the request-body preflight belongs to the observability plugin');
 });
+
+test('parses a healthy gateway doctor report, including the prefixed version line', () => {
+  const { parseGatewayDoctorOutput } = require('../hooks/session-start-freshness.js');
+  const healthy = [
+    'binary: C:/Users/user/.claude/model-gateway/bin/claude-code-proxy.exe',
+    'version: claude-code-proxy 0.1.33',
+    'codex auth: authenticated',
+    'grok auth: present (0.2.112)',
+    'proxy (claude-code-proxy) on :18765: answering /v1/models',
+    'models advertised to Claude Code: 19',
+    'shim (model router) on :18764: running (serving 0.48.6)',
+    'serving shim version: 0.48.6',
+  ].join('\n');
+
+  assert.deepEqual(parseGatewayDoctorOutput(healthy), {
+    available: true,
+    proxyVersion: '0.1.33',
+    auth: true,
+    proxy: true,
+    shim: true,
+  });
+});
+
+test('parses a down gateway doctor report as down', () => {
+  const { parseGatewayDoctorOutput } = require('../hooks/session-start-freshness.js');
+  const down = [
+    'version: claude-code-proxy 0.1.33',
+    'codex auth: MISSING',
+    'proxy (claude-code-proxy) on :18765: DOWN',
+    'shim (model router) on :18764: DOWN',
+  ].join('\n');
+
+  const parsed = parseGatewayDoctorOutput(down);
+  assert.equal(parsed.auth, false);
+  assert.equal(parsed.proxy, false);
+  assert.equal(parsed.shim, false);
+});
+
+test('a healthy doctor report produces no gateway problems from the audit', () => {
+  const { parseGatewayDoctorOutput } = require('../hooks/session-start-freshness.js');
+  const healthy = [
+    'version: claude-code-proxy 0.1.33',
+    'codex auth: authenticated',
+    'proxy (claude-code-proxy) on :18765: answering /v1/models',
+    'shim (model router) on :18764: running (serving 0.48.6)',
+  ].join('\n');
+
+  const result = audit(fixture({
+    registry: {
+      plugins: {
+        'model-gateway@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0', installPath: 'C:/gateway' }],
+      },
+    },
+    manifestFor: () => ({ plugins: [{ name: 'model-gateway', version: '1.0.0' }] }),
+    checkGateway: () => ({ minProxyVersion: '0.1.14', ...parseGatewayDoctorOutput(healthy) }),
+  }));
+
+  assert.doesNotMatch(result.problems.join('\n'), /model-gateway/);
+});
+
+test('the doctor phrasings the audit parses still exist in model-gateway', () => {
+  const commandsSource = fs.readFileSync(
+    path.join(__dirname, '..', '..', 'model-gateway', 'lib', 'commands.js'),
+    'utf8',
+  );
+  assert.match(commandsSource, /proxy \(claude-code-proxy\)[^\n]*answering \/v1\/models/,
+    'model-gateway reworded the healthy proxy line; update parseGatewayDoctorOutput in session-start-freshness.js');
+  assert.match(commandsSource, /shim \(model router\)[^\n]*running/,
+    'model-gateway reworded the healthy shim line; update parseGatewayDoctorOutput in session-start-freshness.js');
+  assert.match(commandsSource, /codex auth: \$\{[^}]*'authenticated'/,
+    'model-gateway reworded the codex auth line; update parseGatewayDoctorOutput in session-start-freshness.js');
+});

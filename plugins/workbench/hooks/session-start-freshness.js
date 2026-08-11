@@ -57,21 +57,29 @@ function runVersion(command, args, timeout = 1000) {
   }
 }
 
+// Parses the model-gateway doctor's human output. Its version line carries the
+// binary name before the number ("version: claude-code-proxy 0.1.33"), and the
+// healthy proxy state reads "answering /v1/models", not "running" — matching
+// only "running" reported a healthy gateway as down. The phrasings are pinned
+// against plugins/model-gateway/lib/commands.js by a drift test.
+function parseGatewayDoctorOutput(output) {
+  const auth = output.match(/^codex auth:\s*(.+)$/m)?.[1];
+  return {
+    available: true,
+    proxyVersion: output.match(/^version:.*?(\d+\.\d+\.\d+\S*)\s*$/m)?.[1],
+    auth: /authenticated/i.test(auth || '') && !/not authenticated/i.test(auth || ''),
+    proxy: /^proxy \(claude-code-proxy\).*(answering \/v1\/models|running)/im.test(output),
+    shim: /^shim \(model router\).*running/im.test(output),
+  };
+}
+
 function localGatewayCheck(gateway) {
   if (!gateway?.installPath) return { available: false };
   const gatewayScript = path.join(gateway.installPath, 'bin', 'model-gateway.js');
   if (!fs.existsSync(gatewayScript)) return { available: false };
   const output = runVersion(process.execPath, [gatewayScript, 'doctor'], 3000);
   if (!output) return { available: false };
-  const proxy = output.match(/^version:\s*(.+)$/m)?.[1];
-  const auth = output.match(/^codex auth:\s*(.+)$/m)?.[1];
-  return {
-    available: true,
-    proxyVersion: proxy,
-    auth: /authenticated/i.test(auth || '') && !/not authenticated/i.test(auth || ''),
-    proxy: /proxy \(claude-code-proxy\).*running/i.test(output),
-    shim: /shim \(model router\).*running/i.test(output),
-  };
+  return parseGatewayDoctorOutput(output);
 }
 
 function sidequestBoards(home) {
@@ -371,6 +379,7 @@ module.exports = {
   installedFreshness,
   loadedPluginVersion,
   newerWorkbenchVersion,
+  parseGatewayDoctorOutput,
   pluginInstances,
   sourceFreshness,
   systemMessage,
