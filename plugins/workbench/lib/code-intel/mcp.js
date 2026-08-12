@@ -76,7 +76,7 @@ function bindProject(args) {
 function clientFor(rootDir, file) {
   const language = languageForFile(file);
   if (!language) throw new Error(`No language server is available for ${path.extname(file) || 'files without an extension'}.`);
-  const bound = registry.clientForRoot(rootDir, language);
+  const bound = registry.clientForRoot(rootDir, language, file);
   if (bound.error) throw new Error(bound.error);
   return bound.client;
 }
