@@ -1067,7 +1067,10 @@ function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?
   if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
     return { ok: false, reason: 'token' };
   }
-  return { ok: true, ticket };
+  // The caller renders the briefing with this token; returning only the ticket
+  // made cmdBriefing fall back to its raw --token option, which is empty in
+  // --token-file mode, so every token-file briefing threw (SQ-1866).
+  return { ok: true, ticket, token: receivedToken };
 }
 
 function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {

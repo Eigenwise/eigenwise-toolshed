@@ -1729,6 +1729,17 @@ test('dispatch token files authenticate the briefing and claim without transcrib
   assert.ok(path.isAbsolute(tokenFile));
   assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), prepared.token);
   assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, tokenFile).ok, true);
+
+  // The store seam above went green while the shipped CLI threw "dispatch
+  // briefing nonce is required" on every --token-file call: cmdBriefing rendered
+  // with its raw --token option instead of the token the store resolved from the
+  // file. Only running the executor's actual first command catches that wiring.
+  const cliBriefing = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'briefing', ticket.ref, '--token-file', tokenFile, '--project', PROJECT,
+  ], { encoding: 'utf8', env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT }) });
+  assert.equal(cliBriefing.status, 0, `briefing --token-file must render: ${cliBriefing.stderr}${cliBriefing.stdout}`);
+  assert.match(cliBriefing.stdout, new RegExp(ticket.ref));
   assert.equal(store.claimTicket(slug, ticket.ref, 'token-file-worker', {
     tokenFile,
     executor: prepared.ticket.dispatchExecutor,

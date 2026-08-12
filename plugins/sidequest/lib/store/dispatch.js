@@ -926,7 +926,7 @@ function createDispatch(dependencies) {
     if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
       return { ok: false, reason: "token" };
     }
-    return { ok: true, ticket };
+    return { ok: true, ticket, token: receivedToken };
   }
   function recordDispatchLaunch(slug, idOrRef, opts) {
     opts = opts || {};

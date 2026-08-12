@@ -82,7 +82,7 @@ async function cmdBriefing(opts: any, positional: any) {
         : 'dispatch token was refused or its token file was unavailable. Re-run the exact briefing command from this executor prompt; do not re-run dispatch.';
     fail(`briefing: ${message}`);
   }
-  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug, meta.path), meta.path));
+  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, result.token, slug, meta.path), meta.path));
 }
 
 async function cmdTempCleanup(opts: any, positional: any) {
