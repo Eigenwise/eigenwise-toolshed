@@ -592,10 +592,14 @@ export function submissionRange(cwd: string, options: unknown) {
   if (!rootCommit && !noOp) {
     const parents = gitResult(cwd, ['rev-list', '--parents', `${effectiveBase}..${tip.value}`]);
     if (!parents.ok) return { ok: false, reason: 'git_error', message: parents.message };
+    // A merge already reachable from the integration branch is the integrator's,
+    // not this submission's, so refusing it would strand every executor whose base
+    // predates an integration (SQ-1875).
     const mergeCommit = parents.value
       .split(/\r?\n/)
       .map((line) => line.trim().split(/\s+/))
-      .find((parents) => parents.length > 2 && (!integrationBranch.ok || !isAncestor(cwd, parents[0]!, integrationBranch.value)));
+      .find(([commit, ...parentCommits]) => parentCommits.length > 1
+        && (!integrationBranch.ok || !isAncestor(cwd, commit!, integrationBranch.value)));
     if (mergeCommit) return { ok: false, reason: 'merge_commit', commit: mergeCommit[0] };
   }
 
