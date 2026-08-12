@@ -9,7 +9,17 @@ const { streamTranscript } = require('./stream.js');
 
 const MIN_APPROVALS = 3;
 const ENABLED_SETTING = 'autoApprovePermissions';
-const DESTRUCTIVE_COMMAND = /(?:^|[;&|]\s*)(?:rm|del|rmdir|remove-item|taskkill|kill|format)\b|\bgit\s+push\b[^\n]*\s--force(?:\b|=)|\bgit\s+reset\s+--hard\b|\b(?:drop|truncate)\b/i;
+// Anchoring on the start of the command missed every wrapped form (`sudo rm`,
+// `xargs rm`, `find . -exec rm`), so the verb is matched as a word anywhere.
+const DESTRUCTIVE_WORD = /^(?:rm|rmdir|rd|del|erase|unlink|shred|rimraf|remove-item|ri|taskkill|kill|killall|pkill|format|mkfs|dd|diskpart|drop|truncate)$/i;
+const DESTRUCTIVE_PHRASE = /\bgit\s+(?:push[^\n]*(?:\s--force(?:\b|=)|\s-f\b)|reset\s+--hard\b|clean\b[^\n]*\s-[a-z]*[fdx]|branch[^\n]*\s-D\b|rm\b)|\b(?:docker|kubectl|podman)\s+(?:rm|rmi|delete|prune|system\s+prune)\b|\bnpm\s+unpublish\b|\bfind\b[^\n]*\s-delete\b|\b(?:drop|truncate)\s+(?:table|database)\b/i;
+
+// A rule is a PREFIX wildcard, so it grants far more than the command that
+// earned it: `git push origin main` would become `Bash(git push:*)`, which also
+// permits `git push --force`. These never get a rule, however often approved.
+const ARBITRARY_EXECUTION = /^(?:node|nodejs|deno|bun|python|python2|python3|py|ruby|perl|php|sh|bash|zsh|dash|pwsh|powershell|cmd|wsl|ssh|eval|exec|npx|pnpx|uvx|env|sudo|doas|xargs|start|call)$/i;
+const NEEDS_SUBCOMMAND = /^(?:git|docker|podman|kubectl|helm|terraform|aws|gcloud|az|npm|pnpm|yarn|cargo|go|dotnet|gh|systemctl|sc|net)$/i;
+const DESTRUCTIVE_FAMILY = /^(?:git\s+(?:push|reset|clean|branch|rm|checkout|restore)|docker\s+\S+|podman\s+\S+|kubectl\s+\S+|npm\s+(?:publish|unpublish|version))$/i;
 
 function settingsFile(projectDir) {
   return path.join(projectDir, '.claude', 'settings.local.json');
@@ -51,8 +61,30 @@ function ruleFor(fingerprint) {
   return match ? `Bash(${match[1]}:*)` : fingerprint.slice('permission:'.length);
 }
 
+function commandWords(command) {
+  return String(command ?? '')
+    .split(/[\s;&|(){}<>]+/)
+    .filter(Boolean)
+    .map((word) => word.replace(/^.*[\\/]/, '').replace(/\.exe$/i, ''));
+}
+
 function isDestructive(input) {
-  return DESTRUCTIVE_COMMAND.test(String(input?.command ?? ''));
+  const command = String(input?.command ?? '');
+  return commandWords(command).some((word) => DESTRUCTIVE_WORD.test(word)) || DESTRUCTIVE_PHRASE.test(command);
+}
+
+// The rule, not the observed command, is what gets granted, so it carries its
+// own veto: anything that runs caller-supplied code, a bare tool whose
+// subcommands differ wildly in blast radius, or a family with a destructive
+// sibling the wildcard would cover.
+function ruleTooBroad(fingerprint) {
+  const match = /^permission:Bash:(.+)$/.exec(fingerprint);
+  if (!match) return false;
+  const prefix = match[1];
+  const [executable] = prefix.split(' ');
+  if (ARBITRARY_EXECUTION.test(executable)) return true;
+  if (!prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable)) return true;
+  return DESTRUCTIVE_FAMILY.test(prefix);
 }
 
 function createPermissionCollector() {
@@ -62,9 +94,13 @@ function createPermissionCollector() {
     if (!fingerprint) return null;
     let entry = fingerprints.get(fingerprint);
     if (!entry) {
-      entry = { fingerprint, input, approvals: 0, denials: 0, destructive: isDestructive(input) };
+      entry = { fingerprint, input, approvals: 0, denials: 0, destructive: ruleTooBroad(fingerprint) };
       fingerprints.set(fingerprint, entry);
     }
+    // One destructive sighting condemns the fingerprint: `git push origin main`
+    // and `git push --force` share a prefix, and the first must not earn a rule
+    // that covers the second.
+    if (isDestructive(input)) entry.destructive = true;
     return entry;
   };
   return {

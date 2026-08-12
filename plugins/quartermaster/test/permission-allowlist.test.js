@@ -99,6 +99,39 @@ test('denylisted destructive commands never enter the allowlist', async () => {
   assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), false);
 });
 
+test('a destructive verb is caught behind a wrapper, not only at the command start', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, Array.from({ length: 5 }, () => permissionTranscript('sudo rm -rf /var/tmp/build')));
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.additions.length, 0);
+  assert.equal(result.blocked.length, 1);
+});
+
+test('an approved command never earns a rule whose wildcard covers a destructive sibling', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, Array.from({ length: 5 }, () => permissionTranscript('git push origin main')));
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.additions.length, 0, 'Bash(git push:*) would also permit git push --force');
+  assert.equal(result.blocked[0].fingerprint, 'permission:Bash:git push');
+});
+
+test('an interpreter never earns a rule, because its wildcard runs arbitrary code', async () => {
+  const projectDir = temporaryProject();
+  enablePermissionAutomation(projectDir);
+  const environment = writeWindow(projectDir, Array.from({ length: 5 }, () => permissionTranscript('node scripts/report.js')));
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.additions.length, 0);
+  assert.match(result.blocked[0].fingerprint, /^permission:Bash:node\b/);
+});
+
 test('enabling automation writes only the project-local opt-in marker', () => {
   const projectDir = temporaryProject();
 
