@@ -43,7 +43,11 @@ test('C++ code intelligence refuses missing and stale compile databases with the
   fs.unlinkSync(project.databasePath);
   const missing = cpp.validateFile(project.rootDir, project.sourcePath, { PATH: '' });
   assert.match(missing.error, /needs a current compile_commands\.json/);
-  assert.match(missing.error, /cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON/);
+  assert.match(missing.error, new RegExp(cpp.REGENERATE_COMMAND_ENV));
+  assert.doesNotMatch(missing.error, /--preset \S/);
+
+  const configured = cpp.validateFile(project.rootDir, project.sourcePath, { PATH: '', [cpp.REGENERATE_COMMAND_ENV]: 'cmake --preset local-dev' });
+  assert.match(configured.error, /Run cmake --preset local-dev to regenerate it\./);
 
   fs.writeFileSync(project.databasePath, JSON.stringify([{ directory: project.rootDir, file: project.sourcePath, arguments: [process.execPath, '-c', project.sourcePath] }]));
   fs.utimesSync(path.join(project.rootDir, 'CMakeLists.txt'), new Date(), new Date(Date.now() + 5_000));

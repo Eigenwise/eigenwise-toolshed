@@ -6,7 +6,7 @@ const path = require('node:path');
 
 const LANGUAGE_SERVER_ENV = 'WORKBENCH_CODE_INTEL_CPP_LANGUAGE_SERVER';
 const COMPILE_COMMANDS_ENV = 'WORKBENCH_CODE_INTEL_CPP_COMPILE_COMMANDS';
-const REGENERATE_COMMAND = 'cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON';
+const REGENERATE_COMMAND_ENV = 'WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND';
 const MINIMUM_CLANGD_MAJOR_VERSION = 16;
 
 function languageIdFor(filePath) {
@@ -60,8 +60,18 @@ function compileCommandsPath(rootDir, env) {
   return configuredPath ? path.resolve(configuredPath) : path.join(rootDir, 'compile_commands.json');
 }
 
-function repairMessage(databasePath, problem) {
-  return `C++ code intelligence needs a current compile_commands.json at ${databasePath}. ${problem} Run ${REGENERATE_COMMAND} to regenerate it; Workbench never runs CMake or a build for a query.`;
+// The regenerate step belongs to the project, not to Workbench: a preset name,
+// generator, and toolchain are per-project and unguessable. Name the user's own
+// command when they configured one, otherwise say what has to be true and how to
+// make the next refusal actionable.
+function repairInstruction(env) {
+  const configured = String(env[REGENERATE_COMMAND_ENV] || '').trim();
+  if (configured) return `Run ${configured} to regenerate it.`;
+  return `Regenerate it with this project's own configure step, then set ${REGENERATE_COMMAND_ENV} so this message can name that exact command. CMake emits the database with -DCMAKE_EXPORT_COMPILE_COMMANDS=ON or CMAKE_EXPORT_COMPILE_COMMANDS in the preset's cacheVariables.`;
+}
+
+function repairMessage(databasePath, problem, env) {
+  return `C++ code intelligence needs a current compile_commands.json at ${databasePath}. ${problem} ${repairInstruction(env)} Workbench never runs CMake or a build for a query.`;
 }
 
 function commandExecutable(command) {
@@ -82,17 +92,17 @@ function validateCompileCommands(rootDir, filePath, env = process.env) {
   try {
     databaseStat = fs.statSync(databasePath);
   } catch {
-    return { error: repairMessage(databasePath, 'The database is missing or unreadable.') };
+    return { error: repairMessage(databasePath, 'The database is missing or unreadable.', env) };
   }
-  if (!databaseStat.isFile()) return { error: repairMessage(databasePath, 'The database path is not a file.') };
+  if (!databaseStat.isFile()) return { error: repairMessage(databasePath, 'The database path is not a file.', env) };
   let commands;
   try {
     commands = JSON.parse(fs.readFileSync(databasePath, 'utf8'));
   } catch {
-    return { error: repairMessage(databasePath, 'The database is not parseable JSON.') };
+    return { error: repairMessage(databasePath, 'The database is not parseable JSON.', env) };
   }
   if (!Array.isArray(commands) || commands.length === 0) {
-    return { error: repairMessage(databasePath, 'The database has no translation units.') };
+    return { error: repairMessage(databasePath, 'The database has no translation units.', env) };
   }
   if (filePath) {
     const queryPath = fs.realpathSync.native(filePath);
@@ -108,18 +118,18 @@ function validateCompileCommands(rootDir, filePath, env = process.env) {
       } catch {}
     }
     if (!queryCommand) {
-      return { error: repairMessage(databasePath, `The database does not cover ${filePath}.`) };
+      return { error: repairMessage(databasePath, `The database does not cover ${filePath}.`, env) };
     }
     const executable = Array.isArray(queryCommand.arguments) ? queryCommand.arguments[0] : commandExecutable(queryCommand.command || '');
     if (!commandPathResolves(executable, queryCommand.directory, env)) {
-      return { error: repairMessage(databasePath, 'The translation unit command path does not resolve.') };
+      return { error: repairMessage(databasePath, 'The translation unit command path does not resolve.', env) };
     }
   }
   for (const inputName of ['CMakeLists.txt', 'CMakePresets.json', '.clangd']) {
     const inputPath = path.join(rootDir, inputName);
     try {
       if (fs.statSync(inputPath).mtimeMs > databaseStat.mtimeMs) {
-        return { error: repairMessage(databasePath, `${inputName} is newer than the database.`) };
+        return { error: repairMessage(databasePath, `${inputName} is newer than the database.`, env) };
       }
     } catch {}
   }
@@ -155,6 +165,6 @@ module.exports = {
   languageIdFor,
   LANGUAGE_SERVER_ENV,
   COMPILE_COMMANDS_ENV,
-  REGENERATE_COMMAND,
+  REGENERATE_COMMAND_ENV,
   MINIMUM_CLANGD_MAJOR_VERSION,
 };

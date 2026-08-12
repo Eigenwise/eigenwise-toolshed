@@ -101,7 +101,7 @@ Workbench serves C and C++ through `clangd`. Check the current root without conf
 node -e "const { locateLanguageServer } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/code-intel/language-server-locator.js'); const outcome = locateLanguageServer('cpp', process.cwd()); console.log(outcome.error || ('ok: ' + outcome.backend + ' at ' + outcome.command));"
 ```
 
-An error beginning `C++ code intelligence needs a current compile_commands.json` is a diagnosable setup state. Report it verbatim and tell the user to run `cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. Do not run that command in the doctor. Workbench refuses a missing, invalid, stale, or incomplete database rather than guessing a compiler or emitting misleading include-not-found diagnostics. Skip this check when the root has no C or C++ source.
+An error beginning `C++ code intelligence needs a current compile_commands.json` is a diagnosable setup state. Report it verbatim: it already names the repair. Never substitute a CMake command of your own, and never run one from the doctor. When the message asks for `WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND`, that means the project has not recorded its configure command yet, so the fix is to read the project's own preset or build script and set that variable. Workbench refuses a missing, invalid, stale, or incomplete database rather than guessing a compiler or emitting misleading include-not-found diagnostics. Skip this check when the root has no C or C++ source.
 
 ## Agent teams
 

@@ -42,11 +42,16 @@ Claude uses the bundled update or doctor skill, tells you what it found, and ask
 
 Workbench includes a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects the language server. Each call binds to an explicit project root and uses that project's own TypeScript install. TypeScript 7 projects use the native TypeScript language server. TypeScript 5 projects use `typescript-language-server` instead.
 
-C and C++ files use `clangd`. Before the tools can answer, provide a current `compile_commands.json` covering the queried translation unit. In a CMake project, generate it with:
+C and C++ files use `clangd`. Before the tools can answer, provide a current `compile_commands.json` covering the queried translation unit. A CMake project emits one by adding `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to its own configure command, or `CMAKE_EXPORT_COMPILE_COMMANDS` to the preset's `cacheVariables`. Workbench never runs that step for you, and it will not guess your preset or generator.
+
+Point Workbench at the database and tell it how to rebuild one:
 
 ```text
-cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+WORKBENCH_CODE_INTEL_CPP_COMPILE_COMMANDS=build-ninja/compile_commands.json
+WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND=cmake --preset your-preset -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
 ```
+
+The database defaults to `compile_commands.json` at the project root. Setting the regenerate command is optional, and worth it: refusals name that command instead of describing the general case.
 
 Workbench refuses a missing, invalid, stale, or incomplete database rather than guessing a toolchain or emitting misleading diagnostics. C++ reference results can be marked incomplete while clangd is building its background index. Retry or narrow the query.
 
