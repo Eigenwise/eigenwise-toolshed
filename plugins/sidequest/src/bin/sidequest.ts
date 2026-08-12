@@ -19,6 +19,8 @@ const ALIASES: any = {
   s: 'status',
   b: 'by',
   m: 'body',
+  message: 'message',
+  append: 'append',
 };
 
 function parseArgs(argv: any) {

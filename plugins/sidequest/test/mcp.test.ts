@@ -723,6 +723,80 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
 });
 
+test('MCP accepts curated natural aliases and names each accepted mapping', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-argument-aliases-'))).slug;
+  const first = store.createTicket(project, { title: 'Alias source', source: 'test' });
+  const second = store.createTicket(project, { title: 'Alias target', source: 'test' });
+  const story = store.createStory(project, { title: 'Alias story' });
+  store.updateTicket(project, first.ref, { storyId: story.ref });
+  assert.equal(store.claimTicket(project, first.ref, 'alias-worker', { direct: true }).ok, true);
+
+  const comment = await callTool('comment', { project, ref: first.ref, message: 'Accepted through message.', by: 'alias-worker' });
+  assert.deepEqual(comment.acceptedAliases, ['accepted message as body']);
+  assert.equal(store.getTicket(project, first.ref).comments.at(-1).body, 'Accepted through message.');
+
+  const shortComment = await callTool('comment', { project, ref: first.ref, m: 'Accepted through m.', by: 'alias-worker' });
+  assert.deepEqual(shortComment.acceptedAliases, ['accepted m as body']);
+  assert.equal(store.getTicket(project, first.ref).comments.at(-1).body, 'Accepted through m.');
+
+  const link = await callTool('link', { project, ref: first.ref, type: 'related', target: second.ref });
+  assert.deepEqual(link.acceptedAliases, ['accepted type as verb', 'accepted target as to', 'accepted ref as from']);
+  assert.equal(link.type, 'related');
+
+  const log = await callTool('story_log', {
+    project, story: story.ref, ref: first.ref, by: 'alias-worker', append: 'DISCOVERY: aliases shorten failed calls.',
+  });
+  assert.deepEqual(log.acceptedAliases, ['accepted append as entry']);
+  assert.equal(log.story.entries[0].text, 'aliases shorten failed calls.');
+
+  const added = await callTool('add', {
+    project, title: 'Medium is normal', priority: 'medium', complexity: 1, why: 'Exercise the compatibility priority alias over the MCP surface.',
+  });
+  assert.deepEqual(added.acceptedAliases, ['accepted priority "medium" as "normal"']);
+  assert.equal(store.getTicket(project, added.ref).priority, 'normal');
+});
+
+test('MCP suggests a unique close argument and preserves unrelated unknown-argument errors', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-argument-suggestions-'))).slug;
+  const close = await callToolRaw('comment', { project, ref: 'SQ-1', bodz: 'typo' });
+  assert.equal(close.isError, true);
+  assert.match(close.content[0].text, /comment: unknown argument "bodz" — comment accepts: .*body, by\. did you mean body\?/);
+
+  const distant = await callToolRaw('comment', { project, ref: 'SQ-1', unrelated: 'value' });
+  assert.equal(distant.isError, true);
+  assert.match(distant.content[0].text, /comment: unknown argument "unrelated" — comment accepts: .*body, by\.$/);
+  assert.doesNotMatch(distant.content[0].text, /did you mean/);
+});
+
+test('MCP list accepts brief output shaping and advertises it in the schema', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-list-brief-'))).slug;
+  store.createTicket(project, { title: 'Brief list row', source: 'test' });
+  const listed = await callTool('list', { project, brief: true });
+  assert.equal(listed.tickets.length, 1);
+  assert.equal(Object.hasOwn(listed.tickets[0], 'description'), false, 'brief list rows omit full ticket bodies');
+  const descriptor = mcp.toolDescriptors().find((tool: any) => tool.name === 'list');
+  assert.match(descriptor.inputSchema.properties.brief.description, /One compact row per ticket/);
+});
+
+test('CLI accepts natural aliases and list output flags', () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-argument-aliases-'))).slug;
+  const first = store.createTicket(project, { title: 'CLI alias source', source: 'test' });
+  const second = store.createTicket(project, { title: 'CLI alias target', source: 'test' });
+  const comment = runCli(['comment', first.ref, '--message', 'CLI message alias', '--project', project, '--json']);
+  assert.deepEqual(comment.acceptedAliases, ['accepted message as body']);
+  assert.equal(store.getTicket(project, first.ref).comments.at(-1).body, 'CLI message alias');
+
+  const link = runCli(['link', '--ref', first.ref, '--type', 'related', '--target', second.ref, '--project', project, '--json']);
+  assert.deepEqual(link.acceptedAliases, ['accepted ref as from', 'accepted type as verb', 'accepted target as to']);
+
+  const brief = runCli(['list', '--project', project, '--brief']);
+  assert.equal(brief.tickets.length, 2);
+  assert.equal(Object.hasOwn(brief.tickets[0], 'description'), false, 'CLI --brief uses compact ticket rows');
+
+  const added = runCli(['add', '--title', 'CLI medium priority', '--priority', 'medium', '--complexity', '1', '--why', 'Exercise the CLI compatibility priority alias for normal priority.', '--project', project, '--json']);
+  assert.equal(added.ticket.priority, 'normal');
+});
+
 test('MCP rejects unsupported write and read parameters before they can be ignored', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-strict-arguments-'))).slug;
   const story = store.createStory(project, { title: 'Strict arguments' });

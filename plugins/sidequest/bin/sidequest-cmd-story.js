@@ -102,7 +102,8 @@ async function cmdStory(opts, positional) {
     }
     case "log": {
       if (!idOrRef) fail("story log: pass a story ref, e.g. sidequest story log US-1 [--body-file path]");
-      const entry = await bodyFromOpts(opts, "story log");
+      const acceptedAppend = opts.body == null && opts.append != null;
+      const entry = await bodyFromOpts(acceptedAppend ? Object.assign({}, opts, { body: opts.append }) : opts, "story log");
       if (opts.rotate && entry !== void 0) fail("story log: pass an entry or --rotate, not both");
       const by = workerId(opts);
       let story;
@@ -132,7 +133,8 @@ async function cmdStory(opts, positional) {
           omittedEntries: log.omittedEntries,
           archivedEntries: log.archivedEntries
         },
-        ...advisory ? { advisory } : {}
+        ...advisory ? { advisory } : {},
+        ...acceptedAppend ? { acceptedAliases: ["accepted append as entry"] } : {}
       };
       if (opts.json) {
         process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
@@ -144,6 +146,7 @@ async function cmdStory(opts, positional) {
       }
       if (log.omittedEntries) console.log(`  ${log.omittedEntries} history entries omitted; pass --full for the complete history.`);
       if (advisory) console.log(`  ${advisory}`);
+      if (acceptedAppend) console.log("  accepted append as entry");
       return;
     }
     case "update":

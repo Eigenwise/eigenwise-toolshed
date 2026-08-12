@@ -103,6 +103,7 @@ const tools = [
         status: { type: "string", enum: ["todo", "doing", "done"] },
         archived: { type: "boolean" },
         detail: { type: "boolean", description: "Audit only: full bodies and comment threads. Orchestration uses default brief rows; liveness uses changes/pulse." },
+        brief: { type: "boolean", description: "One compact row per ticket. This is the default unless detail:true." },
         cursor: { type: "string", description: "nextCursor from the prior page." },
         limit: { type: "integer", minimum: 0, description: "Exact page size." },
         all: { type: "boolean", description: "Include every non-archived status, including done." }
@@ -116,7 +117,7 @@ const tools = [
         return { project: slug, projectName: meta.name, ticket: ticketWithContextHandles(slug, ticket) };
       }
       const status = args.status == null && !args.all ? ["todo", "doing"] : args.status;
-      const brief = !args.detail;
+      const brief = args.detail ? false : args.brief !== false;
       const maxChars = args.limit == null && !args.all ? LIST_CHAR_BUDGET : null;
       const payload = store.listPayload(slug, {
         status,

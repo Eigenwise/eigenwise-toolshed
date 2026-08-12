@@ -93,9 +93,46 @@ async function enqueueMutation(board, operation) {
     if (mutationTails.get(board) === tail) mutationTails.delete(board);
   }
 }
-function validateToolArguments(tool, args) {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
+const ARGUMENT_ALIASES = {
+  comment: { message: "body", m: "body" },
+  link: { type: "verb", target: "to", ref: "from" },
+  story_log: { append: "entry" }
+};
+function editDistance(left, right) {
+  let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
+  for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
+    const current = [leftIndex];
+    for (let rightIndex = 1; rightIndex <= right.length; rightIndex += 1) {
+      current[rightIndex] = Math.min(
+        (previous[rightIndex] ?? 0) + 1,
+        (current[rightIndex - 1] ?? 0) + 1,
+        (previous[rightIndex - 1] ?? 0) + (left[leftIndex - 1] === right[rightIndex - 1] ? 0 : 1)
+      );
+    }
+    previous = current;
+  }
+  return previous[right.length] ?? 0;
+}
+function argumentSuggestion(key, allowed) {
+  const matches = Array.from(allowed).filter((accepted) => editDistance(key, accepted) <= 2);
+  return matches.length === 1 ? ` did you mean ${matches[0]}?` : "";
+}
+function validateToolArguments(tool, rawArgs) {
+  if (!rawArgs || typeof rawArgs !== "object" || Array.isArray(rawArgs)) {
     throw new Error(`${tool.name}: arguments must be an object.`);
+  }
+  const args = { ...rawArgs };
+  const aliases = [];
+  for (const [from, to] of Object.entries(ARGUMENT_ALIASES[tool.name] || {})) {
+    if (args[from] === void 0) continue;
+    if (args[to] !== void 0) throw new Error(`${tool.name}: pass either ${from} or ${to}, not both.`);
+    args[to] = args[from];
+    delete args[from];
+    aliases.push(`accepted ${from} as ${to}`);
+  }
+  if (args.priority === "medium") {
+    args.priority = "normal";
+    aliases.push('accepted priority "medium" as "normal"');
   }
   const allowed = new Set(Object.keys(tool.inputSchema.properties || {}));
   if (tool.name === "dispatch") allowed.add("session");
@@ -104,7 +141,8 @@ function validateToolArguments(tool, args) {
   if (unknown.length) {
     const quoted = unknown.map((key) => `"${key}"`).join(", ");
     const accepted = Object.keys(properties).join(", ");
-    throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? "" : "s"} ${quoted} — ${tool.name} accepts: ${accepted}.`);
+    const suggestion = unknown.length === 1 && unknown[0] !== void 0 ? argumentSuggestion(unknown[0], allowed) : "";
+    throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? "" : "s"} ${quoted} — ${tool.name} accepts: ${accepted}.${suggestion}`);
   }
   for (const [key, value] of Object.entries(args)) {
     const values = properties[key]?.enum;
@@ -112,15 +150,19 @@ function validateToolArguments(tool, args) {
       throw new Error(`${tool.name}: ${key} received ${JSON.stringify(value)} — must be one of: ${values.join(", ")}.`);
     }
   }
+  return { args, aliases };
 }
-async function runTool(tool, args) {
-  validateToolArguments(tool, args);
+function acknowledgeAliases(output, aliases) {
+  return aliases.length && output && typeof output === "object" ? Object.assign(output, { acceptedAliases: aliases }) : output;
+}
+async function runTool(tool, rawArgs) {
+  const { args, aliases } = validateToolArguments(tool, rawArgs);
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
-    return tool.name === "context_page" ? output : boundedReadPayload(tool.name, output);
+    return acknowledgeAliases(tool.name === "context_page" ? output : boundedReadPayload(tool.name, output), aliases);
   }
   const board = mutationQueueKey(tool.name, args);
-  return enqueueMutation(board, () => tool.handler(args));
+  return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
@@ -133,7 +175,10 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
     full: "Whole bodies; bypasses elision.",
     since: "Comment id or ISO timestamp."
   },
-  list: { detail: "Full comments; default for status." },
+  list: {
+    detail: "Full comments; default for status.",
+    brief: "One compact row per ticket."
+  },
   release: {
     command: "Required for blocker/contradiction.",
     outputTail: "Required blocker/contradiction output."
