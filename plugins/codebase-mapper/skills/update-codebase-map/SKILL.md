@@ -51,25 +51,30 @@ A true no-op stays inline: report that no documented behavior, structure, interf
 convention changed, then leave the map alone. Do not create a ticket merely to refresh timestamps or
 state.
 
-For a meaningful refresh, inspect the session tool roster before reading further. The handoff requires
-the native `Agent` tool plus Sidequest `category_list`, `add`, `comment`, `dispatch`, and `pulse`. Do not
-probe the Sidequest CLI or dashboard. Read the live `codebase-exploration` category and hand off only
-when it is enabled and its contract permits one bounded documentation-artifact write while keeping
-project source read-only.
+For an incremental refresh, work inline in the invoking session when the diff since the stored
+`gitCommit` touches fewer than ~15 files across already-mapped areas and adds or removes no top-level
+aspect. Apply Steps 3 through 5 directly. Do not create a ticket or dispatch an agent for this case.
+
+Use the handoff only for a full remap or a large structural drift: a new subsystem, a deleted service,
+or the first Dockerfile or datastore. For that case, inspect the session tool roster before reading
+further. The handoff requires the native `Agent` tool plus Sidequest `category_list`, `add`, `comment`,
+`dispatch`, and `pulse`. Do not probe the Sidequest CLI or dashboard. Read the live
+`codebase-exploration` category and hand off only when it is enabled and its contract permits one bounded
+documentation-artifact write while keeping project source read-only.
 
 - When the tools are absent, continue inline without an error banner.
 - When Sidequest is present but the category is missing, disabled, or still read-only, continue inline
   and say: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
 - When it is ready, create one `codebase-exploration` artifact ticket with
   `files: [".claude/.codebase-info/"]` and this exact clause. Creating and dispatching this ticket is the
-  required default for a meaningful refresh; do it immediately without checking in with the user:
-  `Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.`
+  required default for a full remap or large structural drift; do it immediately without checking in with
+  the user: `Artifact write carve-out: write only .claude/.codebase-info/**; all project source is read-only.`
 
-The incremental ticket records the stored `gitCommit`, current `HEAD`, initial dirty-source status
-outside `.claude/.codebase-info/`, and the current map document list. Its writer diffs from stored state
-through the visible working tree, reassesses the warranted docs, preserves intentional manual map edits,
-touches only affected docs, and replaces `.map-state.json` last. It must inspect the shared tree, verify
-every cited path, skip generated/vendor/secret material, never touch `CLAUDE.md`, and never invoke
+The handoff ticket records the stored `gitCommit`, current `HEAD`, initial dirty-source status outside
+`.claude/.codebase-info/`, and the current map document list. Its writer diffs from stored state through
+the visible working tree, reassesses the warranted docs, preserves intentional manual map edits, touches
+only affected docs, and replaces `.map-state.json` last. It must inspect the shared tree, verify every
+cited path, skip generated/vendor/secret material, never touch `CLAUDE.md`, and never invoke
 `map-codebase` or create nested mapping tickets. Include this lifecycle marker verbatim:
 
 ```text
