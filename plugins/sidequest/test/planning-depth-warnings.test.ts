@@ -36,7 +36,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const WARNING = 'Planning-depth warning: complexity 4+ tickets should include executor anchors, an exact verify command, and declared file scope before dispatch; missing: executor anchors, verify command, file scope.';
 const MISSING_SCOPE_WARNING = 'Planning-depth warning: declared file scope does not exist in the repo: missing/scope.js.';
-const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.';
+const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 const PRESCRIPTIVE_HARD_WARNING = 'coding.hard is for unknown approaches; this description already spells out the fix, which usually means coding.normal. Recheck the category.';
 const BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output lib. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
 const HOOK_BUILD_OUTPUT_WARNING = 'Planning-depth warning: declared source scope under ./src omits tracked build output hooks. Include the generated output in this ticket; content-hashed output gets one rebuild ticket per wave.';
@@ -464,12 +464,12 @@ test('coding.hard add warns only when the description prescribes a fix', () => {
   assert.deepStrictEqual(normal.warnings, [NO_SCOPE_WARNING]);
 });
 
-test('add warns for a write-scope ticket with no declared files, not when files are declared or the category is readonly', () => {
+test('add warns for a write-scope ticket with no declared files, and dispatch refuses without a rescuing policy', () => {
   const scopedFile = path.join(PROJ, 'lib', 'existing.js');
   fs.mkdirSync(path.dirname(scopedFile), { recursive: true });
   fs.writeFileSync(scopedFile, 'existing\n');
 
-  const noFiles = cliJson(['add', '-t', 'no scope declared', '--category', 'coding.normal', '--description', 'The fixture leaves file scope empty so dispatch must refuse it unless the caller makes an explicit choice.', '--changes', 'planning warning dispatch behavior']);
+  const noFiles = cliJson(['add', '-t', 'no scope declared', '--category', 'coding.normal', '--description', 'The fixture leaves file scope and change contracts empty, so dispatch must refuse unless a board policy can grant the first scope request.']);
   assert.deepStrictEqual(noFiles.warnings, [NO_SCOPE_WARNING]);
 
   const refused = cliResult(['dispatch', noFiles.ticket.ref, '--unverified-transport']);
@@ -479,6 +479,22 @@ test('add warns for a write-scope ticket with no declared files, not when files 
   const overridden = cliResult(['dispatch', noFiles.ticket.ref, '--unverified-transport', '--allow-unscoped']);
   assert.strictEqual(overridden.status, 0, overridden.stderr + overridden.stdout);
   assert.ok(JSON.parse(overridden.stdout).warnings.includes(`Dispatch warning: ${NO_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`));
+
+  const policyProject = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'policy-board');
+  fs.mkdirSync(policyProject, { recursive: true });
+  const policyConfig = cliJsonAt(policyProject, ['board-config', '--auto-approve-scope', 'generated/**']);
+  assert.deepStrictEqual(policyConfig.autoApproveScope, ['generated/**']);
+  const policyTicket = cliJsonAt(policyProject, ['add', '-t', 'scope can be rescued', '--category', 'coding.normal', '--description', 'The board policy can grant the executor first scope request even though this ticket declares no files.']);
+  assert.doesNotMatch(policyTicket.warnings.join('\n'), /no file scope declared/);
+  const policyDispatch = cliResultAt(policyProject, ['dispatch', policyTicket.ticket.ref, '--unverified-transport']);
+  assert.strictEqual(policyDispatch.status, 0, policyDispatch.stderr + policyDispatch.stdout);
+  const policyDispatchPayload = JSON.parse(policyDispatch.stdout);
+  assert.doesNotMatch(policyDispatchPayload.warnings.join('\n'), /no file scope declared/);
+  const policyClaim = cliJsonAt(policyProject, ['claim', policyTicket.ticket.ref, '--by', 'policy-worker', '--token', policyDispatchPayload.token, '--executor', policyDispatchPayload.agent]);
+  assert.equal(policyClaim.ok, true, policyClaim.reason);
+  const policyScope = cliJsonAt(policyProject, ['scope-request', policyTicket.ticket.ref, '--by', 'policy-worker', '--file', 'generated/output.js']);
+  assert.deepStrictEqual(policyScope.approved, ['generated/output.js']);
+  assert.deepStrictEqual(policyScope.refused, []);
 
   const withFiles = cliJson(['add', '-t', 'scope declared', '--category', 'coding.normal', '--description', 'Add a thing.', '--file', 'lib/existing.js']);
   assert.deepStrictEqual(withFiles.warnings, []);

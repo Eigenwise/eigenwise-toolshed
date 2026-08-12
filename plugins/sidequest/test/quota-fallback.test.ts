@@ -84,7 +84,7 @@ function runHook(script?: any, payload?: any) {
 }
 
 function launch(ticket?: any, sessionId?: any) {
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const preTool = runHook(FORCE_BYPASS, {
     session_id: sessionId,
     cwd: PROJECT,
@@ -149,7 +149,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(pulse.dispatch.attempts[0].outcome, 'quota_exhausted');
   assert.equal(pulse.dispatch.attempts[0].failure.signature, "You've reached your Fable 5 limit");
 
-  const adopted = store.prepareDispatch(slug, ticket.ref, { sessionId: 'quota-store-adopted' });
+  const adopted = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'quota-store-adopted' });
   assert.equal(adopted.reused, true);
   assert.equal(adopted.token, recovered.token);
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-store-adopted');
@@ -194,7 +194,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
 
 test('quota recovery cannot prepare a ticket parked before launch', () => {
   const ticket = createFixture('parked quota recovery');
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'parked-quota-session' });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'parked-quota-session' });
   assert.equal(store.releaseTicket(slug, ticket.ref, undefined, { status: 'todo', source: 'orchestrator', force: true }).ok, true);
 
   const parked = store.getTicket(slug, ticket.ref);
@@ -233,7 +233,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   assert.match(hookOutput.systemMessage, /configured fallback dispatch/);
   assert.match(hookOutput.systemMessage, new RegExp(ticket.ref));
 
-  const cli = spawnSync(process.execPath, [BIN, 'dispatch', ticket.ref, '--project', PROJECT, '--session', 'quota-cli-adopted', '--unverified-transport', '--json'], {
+  const cli = spawnSync(process.execPath, [BIN, 'dispatch', ticket.ref, '--project', PROJECT, '--session', 'quota-cli-adopted', '--allow-unscoped', '--unverified-transport', '--json'], {
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT, SIDEQUEST_DISCOVERY_DIRS: DISCOVERY },
   });
@@ -249,7 +249,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
   const previousMcpRuntimeSessionId = process.env.CLAUDE_CODE_SESSION_ID;
   process.env.CLAUDE_CODE_SESSION_ID = mcpRuntimeSessionId;
   try {
-    const mcpDispatch = await callTool('dispatch', {
+    const mcpDispatch = await callTool('dispatch', { allowUnscoped: true,
       project: PROJECT,
       ref: ticket.ref,
       full: true,
@@ -408,7 +408,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   assert.equal(store.classifyDispatchFailure('unexpected launch failure'), 'unknown');
 
   const released = createFixture('released attempt');
-  const preparedRelease = store.prepareDispatch(slug, released.ref, { sessionId: 'released-attempt' });
+  const preparedRelease = store.prepareDispatch(slug, released.ref, { allowUnscoped: true, sessionId: 'released-attempt' });
   assert.equal(store.claimTicket(slug, released.ref, 'released-worker', {
     token: preparedRelease.token,
     executor: preparedRelease.ticket.dispatchExecutor,
@@ -417,7 +417,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   assert.equal(store.getTicket(slug, released.ref).dispatch.attempts.at(-1).failureShape, 'unknown');
 
   const submitted = createFixture('submitted attempt');
-  const preparedSubmission = store.prepareDispatch(slug, submitted.ref, { sessionId: 'submitted-attempt' });
+  const preparedSubmission = store.prepareDispatch(slug, submitted.ref, { allowUnscoped: true, sessionId: 'submitted-attempt' });
   assert.equal(store.claimTicket(slug, submitted.ref, 'submitted-worker', {
     token: preparedSubmission.token,
     executor: preparedSubmission.ticket.dispatchExecutor,
@@ -426,7 +426,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   assert.equal(store.getTicket(slug, submitted.ref).dispatch.attempts.at(-1).failureShape, 'unknown');
 
   const stopped = createFixture('stopped attempt');
-  const preparedStopped = store.prepareDispatch(slug, stopped.ref, { sessionId: 'stopped-attempt' });
+  const preparedStopped = store.prepareDispatch(slug, stopped.ref, { allowUnscoped: true, sessionId: 'stopped-attempt' });
   assert.equal(store.recordDispatchLaunch(slug, stopped.ref, {
     sessionId: 'stopped-attempt',
     token: preparedStopped.token,
@@ -443,7 +443,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   assert.equal(store.getTicket(slug, stopped.ref).dispatch.failureShape, 'agent_terminal');
 
   const reconciled = createFixture('reconciled attempt');
-  const preparedReconciled = store.prepareDispatch(slug, reconciled.ref, { sessionId: 'reconciled-attempt' });
+  const preparedReconciled = store.prepareDispatch(slug, reconciled.ref, { allowUnscoped: true, sessionId: 'reconciled-attempt' });
   assert.equal(store.recordDispatchLaunch(slug, reconciled.ref, {
     sessionId: 'reconciled-attempt',
     token: preparedReconciled.token,
@@ -458,7 +458,7 @@ test('dispatch failures have closed shapes and terminal attempts stay bounded', 
   for (let index = 0; index < 9; index++) {
     const sessionId = `bounded-attempt-${index}`;
     const taskName = `bounded-agent-${index}`;
-    const prepared = store.prepareDispatch(slug, bounded.ref, { sessionId, allowRepeatFailure: true });
+    const prepared = store.prepareDispatch(slug, bounded.ref, { allowUnscoped: true, sessionId, allowRepeatFailure: true });
     assert.equal(store.recordDispatchLaunch(slug, bounded.ref, {
       sessionId,
       token: prepared.token,

@@ -1,7 +1,8 @@
 "use strict";
 const { resolveSuite } = require("../suite-resolver.js");
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require("../worktrees.js");
-function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
+const { unscopedWriteCannotAutoApprove } = require("./dispatch.js");
+function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
   const DISPATCH_DESCRIPTION_MIN = 80;
   const WARNING_RETURN_LIMIT = 3;
   const servedWarnings = /* @__PURE__ */ new Map();
@@ -333,11 +334,14 @@ ${String(ticket?.description || "")}`;
     if (!outside.length) return null;
     return `Readonly category contradicts declared write intent outside its artifact roots: ${outside.join(", ")}. Resolve the category or set an explicit readonly override before dispatch.`;
   }
-  function noDeclaredScopeWarning(ticket) {
-    if (dispatchReadOnly(ticket)) return null;
-    if (Array.isArray(ticket.files) && ticket.files.length) return null;
+  function noDeclaredScopeWarning(ticket, slug) {
+    if (!unscopedWriteCannotAutoApprove(ticket, {
+      dispatchReadOnly,
+      normalizeFiles,
+      autoApproveScope: slug ? boardConfig(slug)?.autoApproveScope : []
+    })) return null;
     if (Number(ticket?.complexity) >= 4) return null;
-    return "Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.";
+    return "Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.";
   }
   const BROWSER_REVIEW_CATEGORIES = /* @__PURE__ */ new Set(["visual-evaluation", "visual-review"]);
   function readonlyBrowserReviewWarning(ticket) {
@@ -845,7 +849,7 @@ ${String(ticket?.description || "")}`;
   }
   function dispatchWarnings(ticket, slug) {
     const warnings = dispatchUncertaintyWarnings(ticket, slug);
-    const noScope = noDeclaredScopeWarning(ticket);
+    const noScope = noDeclaredScopeWarning(ticket, slug);
     if (noScope) warnings.push(`Dispatch warning: ${noScope.replace("Planning-depth warning: ", "")}`);
     const projectPath = slug ? readMeta(slug)?.path : null;
     const visibility = worktreeVisibilityWarning(ticket, projectPath);
@@ -979,7 +983,7 @@ ${String(ticket?.description || "")}`;
     if (!embedsCompleteEdit(ticket && ticket.description)) return [];
     return ["Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier."];
   }
-  function ticketPlanningWarnings(ticket, projectPath) {
+  function ticketPlanningWarnings(ticket, projectPath, slug) {
     if (!ticket) return [];
     const warnings = [];
     const outside = externalDeclaredFiles(ticket.files);
@@ -1000,7 +1004,7 @@ ${String(ticket?.description || "")}`;
     if (quantitativePremise) warnings.push(quantitativePremise);
     const contradiction = readonlyCategoryWriteIntentWarning(ticket);
     if (contradiction) warnings.push(contradiction);
-    const noScope = noDeclaredScopeWarning(ticket);
+    const noScope = noDeclaredScopeWarning(ticket, slug);
     if (noScope) warnings.push(noScope);
     const browserReview = readonlyBrowserReviewWarning(ticket);
     if (browserReview) warnings.push(browserReview);

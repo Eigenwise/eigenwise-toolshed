@@ -2,8 +2,9 @@
 
 const { resolveSuite } = require('../suite-resolver.js');
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require('../worktrees.js');
+const { unscopedWriteCannotAutoApprove } = require('./dispatch.js');
 
-function createWarnings({ categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }: any) {
+function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }: any) {
 const DISPATCH_DESCRIPTION_MIN = 80;
   const WARNING_RETURN_LIMIT = 3;
   const servedWarnings = new Map<string, Set<string>>();
@@ -295,11 +296,14 @@ function readonlyCategoryWriteIntentWarning(ticket?: any) {
 
 // The complexity 4+ message below already names missing file scope, so skip this one there
 // to avoid reporting the same gap twice.
-function noDeclaredScopeWarning(ticket?: any) {
-  if (dispatchReadOnly(ticket)) return null;
-  if (Array.isArray(ticket.files) && ticket.files.length) return null;
+function noDeclaredScopeWarning(ticket?: any, slug?: any) {
+  if (!unscopedWriteCannotAutoApprove(ticket, {
+    dispatchReadOnly,
+    normalizeFiles,
+    autoApproveScope: slug ? boardConfig(slug)?.autoApproveScope : [],
+  })) return null;
   if (Number(ticket?.complexity) >= 4) return null;
-  return 'Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.';
+  return 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 }
 
 // `visual-review` predates its rename to `visual-evaluation`; existing boards keep the legacy id.
@@ -858,7 +862,7 @@ function composeWorktreeWarning(ticket?: any, projectPath?: any) {
 
 function dispatchWarnings(ticket?: any, slug?: any) {
   const warnings: any[] = dispatchUncertaintyWarnings(ticket, slug);
-  const noScope = noDeclaredScopeWarning(ticket);
+  const noScope = noDeclaredScopeWarning(ticket, slug);
   if (noScope) warnings.push(`Dispatch warning: ${noScope.replace('Planning-depth warning: ', '')}`);
   const projectPath = slug ? readMeta(slug)?.path : null;
   const visibility = worktreeVisibilityWarning(ticket, projectPath);
@@ -1012,7 +1016,7 @@ function presolvedRoutingWarnings(ticket?: any) {
   return ['Planning-depth warning: this description embeds what looks like a complete edit; route by remaining uncertainty, so a fully resolved approach belongs on coding.easy or direct-ok, not a judgment tier.'];
 }
 
-function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
+function ticketPlanningWarnings(ticket?: any, projectPath?: any, slug?: any) {
   if (!ticket) return [];
   const warnings: any[] = [];
   const outside = externalDeclaredFiles(ticket.files);
@@ -1033,7 +1037,7 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   if (quantitativePremise) warnings.push(quantitativePremise);
   const contradiction = readonlyCategoryWriteIntentWarning(ticket);
   if (contradiction) warnings.push(contradiction);
-  const noScope = noDeclaredScopeWarning(ticket);
+  const noScope = noDeclaredScopeWarning(ticket, slug);
   if (noScope) warnings.push(noScope);
   const browserReview = readonlyBrowserReviewWarning(ticket);
   if (browserReview) warnings.push(browserReview);

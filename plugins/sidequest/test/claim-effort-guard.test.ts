@@ -101,7 +101,7 @@ function prepareBoundDispatch(slug: string, ref: string) {
   const sessionId = `bound-claim-${ref}`;
   const agentName = `bound-claim-agent-${ref}`;
   const agentId = `bound-claim-id-${ref}`;
-  const prepared = store.prepareDispatch(slug, ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ref, { allowUnscoped: true, sessionId });
   assert.equal(store.recordDispatchLaunch(slug, ref, {
     sessionId,
     token: prepared.token,
@@ -175,7 +175,7 @@ test('the store requires a dispatch nonce, rejects a wrong one, and accepts its 
   const missing = store.claimTicket(slug, ref, 'store-no-token', { executor: routed.exec.agent, effort: routed.effort });
   assert.equal(missing.ok, false);
   assert.equal(missing.reason, 'dispatch_required');
-  const prepared = store.prepareDispatch(slug, ref);
+  const prepared = store.prepareDispatch(slug, ref, { allowUnscoped: true });
   const wrong = store.claimTicket(slug, ref, 'store-wrong-token', { token: 'wrong-token', executor: prepared.ticket.dispatchExecutor });
   assert.equal(wrong.ok, false);
   assert.equal(wrong.reason, 'token');
@@ -317,7 +317,7 @@ test('claims sweep releases idle unassociated claims, audits release, and leaves
 test('a re-dispatch rotates the token against a constant stable executor and rejects the stale token', () => {
   const slug = store.ensureProject(PROJ).slug;
   const ref = seed('guard.codex');
-  const first = store.prepareDispatch(slug, ref);
+  const first = store.prepareDispatch(slug, ref, { allowUnscoped: true });
   const second = prepareBoundDispatch(slug, ref);
 
   assert.equal(first.ticket.dispatchExecutor, second.ticket.dispatchExecutor);
@@ -332,12 +332,12 @@ test('a re-dispatch rotates the token against a constant stable executor and rej
 test('fresh redispatch briefing includes every comment added after preparation and refuses a foreign project', () => {
   const slug = store.ensureProject(PROJ).slug;
   const ref = seed('guard.codex');
-  store.prepareDispatch(slug, ref);
+  store.prepareDispatch(slug, ref, { allowUnscoped: true });
   const first = store.addComment(slug, ref, { by: 'scout', kind: 'comment', body: 'First comment added before redispatch.' });
   const second = store.addComment(slug, ref, { by: 'reviewer', kind: 'warning', body: 'Second comment added before redispatch.' });
   assert.equal(first.ok, true);
   assert.equal(second.ok, true);
-  const redispatched = store.prepareDispatch(slug, ref);
+  const redispatched = store.prepareDispatch(slug, ref, { allowUnscoped: true });
   const briefing = runCli(['briefing', ref, '--token', redispatched.token]);
   assert.equal(briefing.status, 0, briefing.stderr);
   assert.ok(briefing.stdout.includes(first.comment.body));
@@ -363,7 +363,7 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
     description: 'invalid-token-secret-測試',
     category: 'guard.codex',
   });
-  const invalidDispatch = store.prepareDispatch(slug, invalid.ref);
+  const invalidDispatch = store.prepareDispatch(slug, invalid.ref, { allowUnscoped: true });
   assertRefused(invalid.ref, 'definitely-invalid-token', 'invalid-token-secret-測試');
 
   const terminal = store.createTicket(slug, {
@@ -371,7 +371,7 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
     description: 'terminal-token-secret-測試',
     category: 'guard.codex',
   });
-  const terminalDispatch = store.prepareDispatch(slug, terminal.ref);
+  const terminalDispatch = store.prepareDispatch(slug, terminal.ref, { allowUnscoped: true });
   assert.equal(store.claimTicket(slug, terminal.ref, 'terminal-worker', {
     token: terminalDispatch.token,
     executor: terminalDispatch.ticket.dispatchExecutor,
@@ -384,8 +384,8 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
     description: 'prior-token-secret-測試',
     category: 'guard.codex',
   });
-  const first = store.prepareDispatch(slug, prior.ref);
-  const second = store.prepareDispatch(slug, prior.ref);
+  const first = store.prepareDispatch(slug, prior.ref, { allowUnscoped: true });
+  const second = store.prepareDispatch(slug, prior.ref, { allowUnscoped: true });
   assert.notEqual(first.token, second.token);
   assertRefused(prior.ref, first.token, 'prior-token-secret-測試');
   const current = runCli(['briefing', prior.ref, '--token', second.token]);
@@ -423,7 +423,7 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
   // These pre-SQ-1017 tests exercise CLI dispatch's spawn/payload shape, not
   // the transport gate, so they use the escape hatch to keep the CLI path
   // exercised without simulating a real MCP-connected session.
-  const dispatched = cliJson(['dispatch', created.ref, '--unverified-transport']);
+  const dispatched = cliJson(['dispatch', created.ref, '--unverified-transport', '--allow-unscoped']);
   const serializedSpawn = JSON.stringify(dispatched.spawn);
   const spawnBytes = Buffer.byteLength(serializedSpawn, 'utf8');
   const launchPayloadCeiling = 32 * 1024 * 1024;
@@ -444,7 +444,7 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
 
 test('instant dispatch returns a stable executor, fetch stub, and token', () => {
   const ref = seed('guard.codex');
-  const dispatched = cliJson(['dispatch', ref, '--unverified-transport']);
+  const dispatched = cliJson(['dispatch', ref, '--unverified-transport', '--allow-unscoped']);
   assert.equal(dispatched.ref, ref);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-dispatch');
@@ -465,7 +465,7 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
 test('dispatch always returns the stable executor and does not write a ticket definition', () => {
   const ref = seed('guard.codex');
   const agents = path.join(SIDEQUEST_HOME, 'agents');
-  const dispatched = cliJson(['dispatch', ref, '--unverified-transport']);
+  const dispatched = cliJson(['dispatch', ref, '--unverified-transport', '--allow-unscoped']);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-dispatch');
   assert.equal(ticket(ref).dispatchExecutor, dispatched.agent);
@@ -475,7 +475,7 @@ test('dispatch always returns the stable executor and does not write a ticket de
 
 test('instant dispatch sends Haiku through its stable executor with a Haiku spawn model', () => {
   const ref = seed('guard.haiku');
-  const dispatched = cliJson(['dispatch', ref, '--unverified-transport']);
+  const dispatched = cliJson(['dispatch', ref, '--unverified-transport', '--allow-unscoped']);
   assert.equal(dispatched.mode, 'instant');
   assert.equal(dispatched.agent, 'sidequest-exec-medium');
   assert.equal(dispatched.spawn.subagent_type, 'sidequest-exec-medium');
@@ -525,7 +525,7 @@ test('SQ-1017: dispatch refuses when the target project has no Sidequest install
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'no install fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse dispatch cleanly. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
     assert.throws(
-      () => store.prepareDispatch(slug, ref),
+      () => store.prepareDispatch(slug, ref, { allowUnscoped: true }),
       (err?: any) => {
         assert.match(err.message, /no install/i);
         assert.match(err.message, /claude plugin install sidequest@eigenwise-toolshed --scope project/);
@@ -550,7 +550,7 @@ test('SQ-1017: dispatch succeeds once an exact-project install advertising the b
   try {
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'good install fixture', '-d', 'Where: SQ-1017 fixture. Contract: allow dispatch through. Verify: inspect the prepared token.', '--category', 'guard.claude', '--project', project]).ticket.ref;
-    const prepared = store.prepareDispatch(slug, ref);
+    const prepared = store.prepareDispatch(slug, ref, { allowUnscoped: true });
     assert.equal(prepared.ok, true);
     assert.ok(prepared.token);
   } finally {
@@ -571,7 +571,7 @@ test('SQ-1017: dispatch refuses a stale registry entry whose install path no lon
   try {
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'stale install fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse a dangling install path. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
-    assert.throws(() => store.prepareDispatch(slug, ref), /claude plugin install sidequest@eigenwise-toolshed --scope project/);
+    assert.throws(() => store.prepareDispatch(slug, ref, { allowUnscoped: true }), /claude plugin install sidequest@eigenwise-toolshed --scope project/);
   } finally {
     process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
   }
@@ -588,7 +588,7 @@ test('SQ-1017: dispatch refuses an install whose manifest no longer declares the
   try {
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'no mcp fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse an install with no board MCP. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
-    assert.throws(() => store.prepareDispatch(slug, ref), /board MCP server/);
+    assert.throws(() => store.prepareDispatch(slug, ref, { allowUnscoped: true }), /board MCP server/);
   } finally {
     process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
   }
@@ -605,7 +605,7 @@ test('SQ-1017: dispatch fails loud, naming the registry path, when the registry 
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'corrupt registry fixture', '-d', 'Where: SQ-1017 fixture. Contract: fail loud on an unreadable registry. Verify: inspect the thrown message.', '--category', 'guard.claude', '--project', project]).ticket.ref;
     assert.throws(
-      () => store.prepareDispatch(slug, ref),
+      () => store.prepareDispatch(slug, ref, { allowUnscoped: true }),
       (err?: any) => {
         assert.match(err.message, new RegExp(registryPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
         return true;
@@ -657,13 +657,13 @@ test('SQ-1017: CLI dispatch refuses unverified transport even when the target pr
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'transport fixture', '-d', 'Where: SQ-1017 fixture. Contract: refuse unverified CLI transport. Verify: inspect the CLI stderr.', '--category', 'guard.claude', '--project', project]).ticket.ref;
     const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_CLAUDE_HOME: claudeHome, CLAUDE_PROJECT_DIR: project });
-    const refused = spawnSync(process.execPath, [BIN, 'dispatch', ref, '--project', project], { encoding: 'utf8', env });
+    const refused = spawnSync(process.execPath, [BIN, 'dispatch', ref, '--project', project, '--allow-unscoped'], { encoding: 'utf8', env });
     assert.notEqual(refused.status, 0);
     assert.match(refused.stdout + refused.stderr, /unverified-transport/);
     assert.match(refused.stdout + refused.stderr, /reload-plugins/);
     assert.equal(store.getTicket(slug, ref).dispatchNonce, null, 'a refused CLI transport preflight must not mutate the ticket');
 
-    const allowed = spawnSync(process.execPath, [BIN, 'dispatch', ref, '--project', project, '--unverified-transport', '--json'], { encoding: 'utf8', env });
+    const allowed = spawnSync(process.execPath, [BIN, 'dispatch', ref, '--project', project, '--allow-unscoped', '--unverified-transport', '--json'], { encoding: 'utf8', env });
     assert.equal(allowed.status, 0, allowed.stderr + allowed.stdout);
     const payload = JSON.parse(allowed.stdout);
     assert.ok(payload.token);
@@ -680,8 +680,8 @@ test('SQ-1017: store.prepareDispatch succeeds for MCP transport against the same
   try {
     const slug = store.ensureProject(project).slug;
     const ref = cliJson(['add', '-t', 'mcp transport fixture', '-d', 'Where: SQ-1017 fixture. Contract: MCP transport is trusted. Verify: inspect the prepared token.', '--category', 'guard.claude', '--project', project]).ticket.ref;
-    assert.throws(() => store.prepareDispatch(slug, ref, { transport: 'cli' }), /unverified-transport/);
-    const prepared = store.prepareDispatch(slug, ref, { transport: 'mcp' });
+    assert.throws(() => store.prepareDispatch(slug, ref, { allowUnscoped: true, transport: 'cli' }), /unverified-transport/);
+    const prepared = store.prepareDispatch(slug, ref, { allowUnscoped: true, transport: 'mcp' });
     assert.equal(prepared.ok, true);
     assert.ok(prepared.token);
   } finally {

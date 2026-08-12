@@ -60,7 +60,7 @@ test('dead Codex refuses before creating dispatch state', () => {
   });
   const before = store.getTicket(slug, ticket.ref);
   assert.throws(
-    () => store.prepareDispatch(slug, ticket.ref, { sessionId: 'dead-codex' }),
+    () => store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'dead-codex' }),
     new RegExp(PROXY_DOWN.message.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')),
   );
   const after = store.getTicket(slug, ticket.ref);
@@ -86,7 +86,7 @@ test('a Codex route never falls through to a Claude fallback', () => {
   assert.equal(resolved.model, 'codex-gpt-missing');
   assert.equal(resolved.exec, null);
   assert.throws(
-    () => store.prepareDispatch(slug, ticket.ref, { sessionId: 'cross-provider' }),
+    () => store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'cross-provider' }),
     /Codex dispatch refused: configured route codex-gpt-missing is not available/,
   );
   assert.equal(store.getTicket(slug, ticket.ref).dispatchNonce, null);
@@ -104,7 +104,7 @@ test('same-provider fallback is prepared with its reason and re-derives when the
     source: 'test',
   });
 
-  const degraded = store.prepareDispatch(slug, ticket.ref, { sessionId: 'degraded-roster' });
+  const degraded = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'degraded-roster' });
   assert.deepEqual(degraded.ticket.dispatch.route, { model: 'codex-gpt-fallback', effort: 'medium', marker: 'gpt-fallback' });
   assert.equal(degraded.ticket.dispatch.fallbackReason, 'category fallback replaced unavailable codex-gpt-recovered.');
 
@@ -118,7 +118,7 @@ test('same-provider fallback is prepared with its reason and re-derives when the
     label: 'Recovered Codex model',
   }], READY);
 
-  const recovered = store.prepareDispatch(slug, ticket.ref, { sessionId: 'recovered-roster' });
+  const recovered = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'recovered-roster' });
   assert.notEqual(recovered.token, degraded.token);
   assert.deepEqual(recovered.ticket.dispatch.route, { model: 'codex-gpt-recovered', effort: 'medium', marker: 'gpt-recovered' });
   assert.equal(recovered.ticket.dispatch.fallbackReason, undefined);

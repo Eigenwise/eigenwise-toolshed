@@ -276,8 +276,9 @@ function staleWorktreeCwdWarning(...args) {
 function dispatchUncertaintyWarnings(...args) {
   return warningsLayer.dispatchUncertaintyWarnings(...args);
 }
-function dispatchWarnings(...args) {
-  return warningsLayer.dispatchWarnings(...args);
+function dispatchWarnings(ticket, slug) {
+  const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
+  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
 }
 function dispatchDeclaredFiles(...args) {
   return warningsLayer.dispatchDeclaredFiles(...args);
@@ -303,8 +304,9 @@ function embedsCompleteEdit(...args) {
 function presolvedRoutingWarnings(...args) {
   return warningsLayer.presolvedRoutingWarnings(...args);
 }
-function ticketPlanningWarnings(...args) {
-  return warningsLayer.ticketPlanningWarnings(...args);
+function ticketPlanningWarnings(ticket, projectPath) {
+  const project = projectPath ? findProject(projectPath) : null;
+  return warningsLayer.ticketPlanningWarnings(ticket, projectPath, project?.ok ? project.slug : null);
 }
 function presentWarnings(...args) {
   return warningsLayer.presentWarnings(...args);
@@ -516,6 +518,7 @@ const {
   assertDispatchTransport,
   assertSidequestInstall,
   availableRoute: (...args) => availableRoute(...args),
+  boardConfig,
   claimReclaimable: (...args) => claimReclaimable(...args),
   claimVerification: (...args) => claimVerification(...args),
   commitScope,
@@ -2188,6 +2191,7 @@ projectsLayer = createProjects({
   transaction
 });
 warningsLayer = createWarnings({
+  boardConfig,
   categoryReadOnly,
   claimReclaimable,
   coerceEffort,

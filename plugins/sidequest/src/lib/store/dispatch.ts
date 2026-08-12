@@ -1,7 +1,14 @@
 'use strict';
 
+function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
+  const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
+  return !dispatchReadOnly(ticket)
+    && !normalizeFiles(ticket?.files).length
+    && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
+}
+
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -811,9 +818,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
   const executorClaimRefusal = executorClaimDispatchRefusal(slug, opts.sessionId);
   if (executorClaimRefusal) throw new Error(executorClaimRefusal);
-  const initialNoDeclaredFileScope = !dispatchReadOnly(found)
-    && Array.isArray(found.contracts?.changes) && found.contracts.changes.length > 0
-    && !normalizeFiles(found.files).length;
+  const initialNoDeclaredFileScope = unscopedWriteCannotAutoApprove(found, {
+    dispatchReadOnly,
+    normalizeFiles,
+    autoApproveScope: boardConfig(slug)?.autoApproveScope,
+  });
   if (initialNoDeclaredFileScope && opts.allowUnscoped !== true) {
     throw new Error(`prepare dispatch: ${found.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
   }
@@ -900,9 +909,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (refusal) throw new Error(refusal);
     const preparedExec = resolveExec(t.model, t.effort);
     if (!preparedExec) throw new Error(`prepare dispatch: ${t.ref} has no executable route.`);
-    const noDeclaredFileScope = !dispatchReadOnly(t)
-      && Array.isArray(t.contracts?.changes) && t.contracts.changes.length > 0
-      && !normalizeFiles(t.files).length;
+    const noDeclaredFileScope = unscopedWriteCannotAutoApprove(t, {
+      dispatchReadOnly,
+      normalizeFiles,
+      autoApproveScope: boardConfig(slug)?.autoApproveScope,
+    });
     if (noDeclaredFileScope && opts.allowUnscoped !== true) {
       throw new Error(`prepare dispatch: ${t.ref} has no declared file scope for write work. Add files, or pass allowUnscoped:true to explicitly accept that the executor can block on its first write and end without a submission.`);
     }
@@ -1572,4 +1583,4 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
   };
 }
 
-module.exports = { createDispatch };
+module.exports = { createDispatch, unscopedWriteCannotAutoApprove };

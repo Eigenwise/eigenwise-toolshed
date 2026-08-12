@@ -96,7 +96,7 @@ test('CLI dispatch exposes the routed executor API model', () => {
     category: 'api-model-dispatch',
     description: 'Where: API model dispatch fixture. Contract: expose the routed executor model through CLI dispatch. Verify: inspect the JSON response.',
   });
-  const res = runCli(['dispatch', t.ref, '--unverified-transport']);
+  const res = runCli(['dispatch', t.ref, '--unverified-transport', '--allow-unscoped']);
   assert.strictEqual(res.status, 0, res.stderr);
   const dispatched = JSON.parse(res.stdout);
   assert.equal(dispatched.exec.runsModel, 'opus');

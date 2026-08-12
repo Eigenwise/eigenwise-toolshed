@@ -46,7 +46,7 @@ const contextPacket = require('../lib/context-packet.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
-const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket. The executor will block at its first write, request scope, and may end before a ruling with no submission. Declare files now, or dispatch only with an explicit unscoped override.';
+const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 
 // Write a fake model-gateway catalog (mirrors test/discovery.test.js) so a
 // discovered+enabled custom slug can be exercised over the MCP surface.
@@ -188,7 +188,7 @@ function createLinkedWorktree(primary?: any) {
 }
 
 function claimDispatchedTicket(project?: any, ticket?: any, by?: any, sharedTree?: any) {
-  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree });
   assert.equal(store.claimTicket(project, ticket.ref, by, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -355,7 +355,7 @@ test('context_page reads the frozen dispatch story contract after the live contr
   const ticket = store.createTicket(project, {
     title: 'Retrieve frozen dispatch contract', storyId: story.id, category: 'frozen-snapshot-context', source: 'test',
   });
-  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'frozen-contract-session' });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'frozen-contract-session' });
   const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
   const retrievalMatch = briefing.match(/mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
   assert.ok(retrievalMatch, 'oversized frozen contracts include a context_page retrieval');
@@ -401,7 +401,7 @@ test('briefings preserve an explicit frozen absence when contracts appear after 
     const ticket = store.createTicket(project, {
       title: 'Preserve frozen absence', storyId: story.id, category: 'frozen-absence-context', source: 'test',
     });
-    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'frozen-absence-session' });
+    const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'frozen-absence-session' });
     assert.equal(prepared.ticket.dispatch.storyContract, null);
     store.updateStory(project, story.ref, { executionContract: liveContract });
     const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'frozen-absence-token', project, project);
@@ -424,7 +424,7 @@ test('context_page recovers every omitted task-and-scope field from a briefing',
   const ticket = store.createTicket(project, {
     title: 'Recover oversized task context', description, files, category: 'task-context-category', source: 'test',
   });
-  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'task-context-session' });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'task-context-session' });
   const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'task-context-token', project, project);
   const retrievalMatch = briefing.match(/task-and-scope (?:budget|truncated) [^\n]*mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
   assert.ok(retrievalMatch, 'oversized task context includes a typed context_page retrieval');
@@ -948,14 +948,14 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const isolatedTicket = store.createTicket(isolatedProject, {
     title: 'default board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/work.ts'],
   });
-  const isolated = await callTool('dispatch', { project: isolatedProject, ref: isolatedTicket.ref, full: true });
+  const isolated = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: isolatedTicket.ref, full: true });
   assert.equal(isolated.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, isolatedTicket.ref).dispatch.sharedTree, false);
 
   const scopeLessTicket = store.createTicket(isolatedProject, {
     title: 'scope-less default board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
   });
-  const scopeLess = await callTool('dispatch', { project: isolatedProject, ref: scopeLessTicket.ref, full: true });
+  const scopeLess = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: scopeLessTicket.ref, full: true });
   assert.equal(scopeLess.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, scopeLessTicket.ref).dispatch.sharedTree, false);
 
@@ -963,11 +963,11 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const readonlyTicket = store.createTicket(isolatedProject, {
     title: 'zero-scope read-only shared checkout', description: DISPATCH_DESCRIPTION, category: 'readonly-zero-scope',
   });
-  const readonly = await callTool('dispatch', { project: isolatedProject, ref: readonlyTicket.ref, full: true });
+  const readonly = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, full: true });
   assert.equal(readonly.spawn.isolation, undefined);
   assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, true);
   assert.match(readonly.spawn.prompt, /zero-scope read-only shared checkout/);
-  const explicitlyIsolated = await callTool('dispatch', { project: isolatedProject, ref: readonlyTicket.ref, sharedTree: false, full: true });
+  const explicitlyIsolated = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, sharedTree: false, full: true });
   assert.equal(explicitlyIsolated.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, false);
 
@@ -985,7 +985,7 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const sharedTicket = store.createTicket(sharedProject, {
     title: 'scope-less disabled board isolation', description: DISPATCH_DESCRIPTION, category: 'coding.normal',
   });
-  const shared = await callTool('dispatch', { project: sharedProject, ref: sharedTicket.ref, full: true });
+  const shared = await callTool('dispatch', { allowUnscoped: true, project: sharedProject, ref: sharedTicket.ref, full: true });
   assert.equal(shared.spawn.isolation, undefined);
   assert.equal(store.getTicket(sharedProject, sharedTicket.ref).dispatch.sharedTree, true);
   const legacyShared = await callHandler('native_agent', { project: sharedProject, ref: sharedTicket.ref, prompt: 'Implement the ticket.' });
@@ -994,7 +994,7 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
   const overriddenTicket = store.createTicket(sharedProject, {
     title: 'forced shared tree', description: DISPATCH_DESCRIPTION, category: 'coding.normal', files: ['src/other.ts'],
   });
-  const overridden = await callTool('dispatch', { project: sharedProject, ref: overriddenTicket.ref, sharedTree: false, full: true });
+  const overridden = await callTool('dispatch', { allowUnscoped: true, project: sharedProject, ref: overriddenTicket.ref, sharedTree: false, full: true });
   assert.equal(overridden.spawn.isolation, undefined);
   assert.equal(store.getTicket(sharedProject, overriddenTicket.ref).dispatch.sharedTree, true);
   assert.match(store.getTicket(sharedProject, overriddenTicket.ref).dispatch.worktreeWarning, /explicit sharedTree:false was overridden/);
@@ -1035,7 +1035,7 @@ test('write acks and pulse stay lean: no body echoes, no lifecycle noise by defa
   assert.ok(!JSON.stringify(ack).includes('durable handoff body'), 'ack must not echo the body text');
 
 
-  store.prepareDispatch(project, ticket.ref, { sessionId: 'shape-session' });
+  store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'shape-session' });
   const pulse = await callTool('pulse', { project, ref: ticket.ref });
   assert.ok(pulse.dispatch, 'pulse still reports dispatch state');
   assert.ok(pulse.dispatch.state, 'slim dispatch keeps state');
@@ -1076,7 +1076,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(fullCategories.retrieval.tool, 'context_page');
 
   const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
-  const dispatched = await callToolRaw('dispatch', { project, ref: ticket.ref });
+  const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
   assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1220, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
   assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn']);
@@ -1085,7 +1085,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(dispatchPayload.guidance, undefined);
 
   const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging', files: ['fixture.ts'] });
-  const warningDispatch = await callToolRaw('dispatch', { project, ref: warningTicket.ref });
+  const warningDispatch = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: warningTicket.ref });
   assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1220, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
   assert.equal(JSON.parse(warningDispatch.content[0].text).warnings, undefined);
 
@@ -1231,7 +1231,7 @@ test('dispatch refuses an older loaded Sidequest before it records a launch bind
       category: 'general',
       files: ['src'],
     });
-    await assert.rejects(() => callTool('dispatch', { project, ref: ticket.ref, full: true }), /Sidequest: loaded \d+\.\d+\.\d+, installed 99\.99\.99\. Run \/reload-plugins/);
+    await assert.rejects(() => callTool('dispatch', { allowUnscoped: true, project, ref: ticket.ref, full: true }), /Sidequest: loaded \d+\.\d+\.\d+, installed 99\.99\.99\. Run \/reload-plugins/);
     const unlaunched = store.getTicket(project, ticket.ref);
     assert.equal(unlaunched.dispatchNonce, null);
     assert.equal(unlaunched.dispatchExecutor, null);
@@ -1273,7 +1273,7 @@ test('dispatch keeps freshness silent with an isolated matching install', async 
       category: 'general',
       files: ['src'],
     });
-    const dispatched = await callTool('dispatch', { project, ref: ticket.ref, full: true });
+    const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: ticket.ref, full: true });
     assert.deepEqual(dispatched.warnings, []);
   } finally {
     if (originalClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
@@ -1295,7 +1295,7 @@ test('dispatch warns about external output outside the repo worktree', async () 
     files: [scope],
   });
 
-  const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: target.ref, full: true });
 
   assert.deepEqual(dispatched.warnings, [
     `Dispatch warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`,
@@ -1311,7 +1311,7 @@ test('dispatch warns about declared scopes held by in-flight tickets', async () 
     category: 'general',
     files: ['src'],
   });
-  const prepared = store.prepareDispatch(project, inFlight.ref);
+  const prepared = store.prepareDispatch(project, inFlight.ref, { allowUnscoped: true });
   assert.equal(store.claimTicket(project, inFlight.ref, 'overlap-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -1324,7 +1324,7 @@ test('dispatch warns about declared scopes held by in-flight tickets', async () 
     files: ['src/lib.rs'],
   });
 
-  const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: target.ref, full: true });
   assert.deepEqual(dispatched.warnings, [
     `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at src/lib.rs — parallel is fine in isolated worktrees unless the same symbols/regions change; assess.`,
   ]);
@@ -1339,7 +1339,7 @@ test('dispatch identifies lockfile-only scope overlaps', async () => {
     category: 'general',
     files: ['Cargo.lock'],
   });
-  store.prepareDispatch(project, inFlight.ref);
+  store.prepareDispatch(project, inFlight.ref, { allowUnscoped: true });
   const target = await callTool('add', {
     project,
     title: 'overlapping lockfile',
@@ -1348,7 +1348,7 @@ test('dispatch identifies lockfile-only scope overlaps', async () => {
     files: ['Cargo.lock'],
   });
 
-  const dispatched = await callTool('dispatch', { project, ref: target.ref, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: target.ref, full: true });
   assert.deepEqual(dispatched.warnings, [
     `Dispatch warning: ${target.ref} overlaps in-flight ${inFlight.ref} at Cargo.lock — parallel is fine in isolated worktrees unless the same symbols/regions change; assess. Only lockfiles overlap; serialize these tickets or regenerate the lockfile at integration.`,
   ]);
@@ -1539,7 +1539,7 @@ test('comment reads stay chronological through the ten-comment threshold', async
   assert.deepEqual(Object.keys(cliComments).sort(), ['comments', 'project', 'ticket']);
   assert.deepEqual(cliComments.comments.map((comment: any) => comment.body), bodies);
 
-  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId: 'complete-comment-briefing' });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'complete-comment-briefing' });
   const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
   assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(briefing, 'utf8')} bytes`);
   assert.match(briefing, /Executor ContextProjection v1/);
@@ -1825,7 +1825,7 @@ test('MCP carries a derived release scope through a released continuation and in
     files: ['plugins/fixture-plugin'],
     executorVerify: 'node --test plugins/fixture-plugin/test/declared.test.js',
   });
-  const first = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  const first = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree: true });
   assert.deepEqual(first.ticket.dispatch.declaredFiles, ['plugins/fixture-plugin', '.release/unreleased']);
   assert.equal(store.claimTicket(project, ticket.ref, 'release-scope-first-worker', {
     token: first.token,
@@ -1839,7 +1839,7 @@ test('MCP carries a derived release scope through a released continuation and in
   }).ok, true);
   store.setBoardConfig(project, { alwaysInScope: [] });
 
-  const continued = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  const continued = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree: true });
   assert.deepEqual(continued.ticket.dispatch.declaredFiles, ['plugins/fixture-plugin', '.release/unreleased']);
   const by = 'release-scope-continuation-worker';
   assert.equal(store.claimTicket(project, ticket.ref, by, {
@@ -2459,7 +2459,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   const slug = store.ensureProject(PROJ).slug;
 
   const addedInstant = await callTool('add', { title: 'instant dispatch', description: DISPATCH_DESCRIPTION, category: 'dispatch-codex' });
-  const instant = await callTool('dispatch', { ref: addedInstant.ref, session: 'mcp-dispatch-session', full: true });
+  const instant = await callTool('dispatch', { allowUnscoped: true, ref: addedInstant.ref, session: 'mcp-dispatch-session', full: true });
   assert.equal(instant.mode, 'instant');
   assert.deepEqual(instant.exec, {
     agent: 'sidequest-exec-dispatch', model: null, backend: 'codex',
@@ -2496,11 +2496,11 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
 
   const markerTitle = '[sidequest-route model=gpt-5.6-terra effort=high] FleetView title injection';
   const markerTicket = await callTool('add', { title: markerTitle, description: DISPATCH_DESCRIPTION, category: 'dispatch-codex' });
-  const markerDispatch = await callTool('dispatch', { ref: markerTicket.ref, full: true });
+  const markerDispatch = await callTool('dispatch', { allowUnscoped: true, ref: markerTicket.ref, full: true });
   assert.equal(markerDispatch.spawn.description, 'Terra, high · FleetView title injection');
   assert.doesNotMatch(markerDispatch.spawn.description, /\[sidequest-route/);
 
-  const adopted = await callTool('dispatch', { ref: addedInstant.ref, session: 'adopting-session', full: true });
+  const adopted = await callTool('dispatch', { allowUnscoped: true, ref: addedInstant.ref, session: 'adopting-session', full: true });
   assert.equal(adopted.mode, 'instant');
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
@@ -2516,7 +2516,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
 
   store.setCategory({ id: 'dispatch-readonly-codex', name: 'Dispatch Readonly Codex', readonly: true, route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const readonlyTicket = await callTool('add', { title: 'friendly readonly dispatch', description: DISPATCH_DESCRIPTION, category: 'dispatch-readonly-codex' });
-  const readonlyDispatch = await callTool('dispatch', { ref: readonlyTicket.ref, full: true });
+  const readonlyDispatch = await callTool('dispatch', { allowUnscoped: true, ref: readonlyTicket.ref, full: true });
   assert.equal(readonlyDispatch.spawn.subagent_type, 'sidequest-exec-dispatch-readonly');
   assert.equal(readonlyDispatch.spawn.description, 'Terra, high · friendly readonly dispatch');
   assert.doesNotMatch(readonlyDispatch.spawn.description, /\[sidequest-route/);
@@ -2529,9 +2529,9 @@ test('MCP dispatch records the runtime session and the Agent lifecycle binds it'
   const omitted = await callTool('add', { title: 'omitted dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
   const real = await callTool('add', { title: 'runtime dispatch session', description: DISPATCH_DESCRIPTION, category: 'mcp-runtime-session' });
 
-  const friendlyDispatch = await callTool('dispatch', { ref: friendly.ref, session: 'hh6-quant', full: true });
-  await callTool('dispatch', { ref: omitted.ref });
-  await callTool('dispatch', { ref: real.ref, session: MCP_SESSION_ID });
+  const friendlyDispatch = await callTool('dispatch', { allowUnscoped: true, ref: friendly.ref, session: 'hh6-quant', full: true });
+  await callTool('dispatch', { allowUnscoped: true, ref: omitted.ref });
+  await callTool('dispatch', { allowUnscoped: true, ref: real.ref, session: MCP_SESSION_ID });
 
   for (const ref of [friendly.ref, omitted.ref, real.ref]) {
     assert.equal(store.getTicket(slug, ref).dispatch.sessionId, MCP_SESSION_ID);
@@ -2563,7 +2563,7 @@ test('MCP dispatch refuses a caller session label without runtime identity', asy
   delete process.env.CLAUDE_CODE_SESSION_ID;
   delete process.env.CLAUDE_SESSION_ID;
   try {
-    const refused = await callToolRaw('dispatch', { ref: ticket.ref, session: 'hh6-review' });
+    const refused = await callToolRaw('dispatch', { allowUnscoped: true, ref: ticket.ref, session: 'hh6-review' });
     assert.ok(refused.isError);
     assert.equal(refused.content[0].text, 'dispatch: MCP runtime session identity is unavailable. Reload Sidequest in Claude Code and retry; do not pass a session label.');
     assert.equal(store.getTicket(slug, ticket.ref).dispatch, null);
@@ -2577,7 +2577,7 @@ test('MCP dispatch refuses a caller session label without runtime identity', asy
 test('dispatch returns a complete Claude worktree spawn spec', async () => {
   store.setCategory({ id: 'dispatch-fable', name: 'Dispatch Fable', route: { model: 'fable', effort: 'xhigh' } });
   const added = await callTool('add', { title: 'complete instant spawn', description: DISPATCH_DESCRIPTION, category: 'dispatch-fable', files: ['plugins/sidequest'] });
-  const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, ref: added.ref, full: true });
 
   const { prompt, ...spawn } = dispatched.spawn;
   assert.deepStrictEqual(spawn, {
@@ -2608,7 +2608,7 @@ test('MCP dispatch falls back to shared tree when the repo has no commits', asyn
     verify: 'node --test test/work.test.ts',
   });
 
-  const dispatched = await callTool('dispatch', { project: unborn, ref: added.ref, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, project: unborn, ref: added.ref, full: true });
   const stored = store.getTicket(added.project, added.ref);
 
   assert.strictEqual(dispatched.spawn.isolation, undefined);
@@ -2625,7 +2625,7 @@ test('MCP shared-tree dispatch activates the bounded artifact lifecycle', async 
     category: 'dispatch-artifact',
     files: ['.claude/.codebase-info/'],
   });
-  const dispatched = await callTool('dispatch', { ref: added.ref, sharedTree: true, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, ref: added.ref, sharedTree: true, full: true });
   const stored = store.getTicket(added.project, added.ref);
 
   assert.strictEqual(dispatched.spawn.isolation, undefined);
@@ -2643,7 +2643,7 @@ test('native_agent refuses an executor-held claim instead of opening a second sp
     files: ['plugins/sidequest'],
   });
   const executorSessionId = `native-agent-dispatch-guard-${Date.now()}`;
-  const heldDispatch = store.prepareDispatch(slug, held.ref, { sessionId: MCP_SESSION_ID });
+  const heldDispatch = store.prepareDispatch(slug, held.ref, { allowUnscoped: true, sessionId: MCP_SESSION_ID });
   assert.equal(store.claimTicket(slug, held.ref, 'native-agent-dispatch-guard', {
     token: heldDispatch.token,
     executor: heldDispatch.ticket.dispatchExecutor,
@@ -2828,7 +2828,7 @@ test('category stamps stay quiet across MCP server restarts', async () => {
 test('dispatch rejects a thin routed brief but only warns about a missing coding verify command', async () => {
   const added = await callTool('add', { title: 'thin dispatch fixture', category: 'debugging' });
   assert.equal(added.ok, true);
-  const refused = await callToolRaw('dispatch', { ref: added.ref });
+  const refused = await callToolRaw('dispatch', { allowUnscoped: true, ref: added.ref });
   assert.ok(refused.isError);
   assert.match(refused.content[0].text, /executor's entire brief is this ticket/);
 
@@ -2841,7 +2841,7 @@ test('dispatch rejects a thin routed brief but only warns about a missing coding
 
   seedCatalog([{ id: 'claude-gpt-5.6-luna', slug: 'codex-gpt-5-6-luna', label: 'GPT-5.6 Luna' }]);
   const research = await callTool('add', { title: 'research dispatch fixture', description: DISPATCH_DESCRIPTION, category: 'source-lookup' });
-  assert.deepEqual((await callTool('dispatch', { ref: research.ref, full: true })).warnings, []);
+  assert.deepEqual((await callTool('dispatch', { allowUnscoped: true, ref: research.ref, full: true })).warnings, []);
 });
 
 test('readonly false keeps experiment-shaped spikes on the writing executor', async () => {
@@ -2852,7 +2852,7 @@ test('readonly false keeps experiment-shaped spikes on the writing executor', as
     readonly: false,
   });
   assert.equal(store.getTicket(added.project, added.ref).readonlyOverride, false);
-  const dispatched = await callTool('dispatch', { ref: added.ref, full: true });
+  const dispatched = await callTool('dispatch', { allowUnscoped: true, ref: added.ref, full: true });
   assert.doesNotMatch(dispatched.agent, /readonly/);
   assert.match(dispatched.warnings.join('\n'), /readonly override active/);
 
@@ -3133,7 +3133,7 @@ test('MCP release records contradiction probe evidence and accepts a zero exit c
 test('MCP release records an oracle handoff without a separate reason', async () => {
   seedCatalog([{ id: 'claude-gpt-5.6-terra', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
   const added = await callTool('add', { title: 'oracle release fixture', complexity: 2, why: 'exercise the human verdict handoff through the MCP release surface' });
-  const prepared = store.prepareDispatch(added.project, added.ref, { sessionId: `oracle-release-${Date.now()}` });
+  const prepared = store.prepareDispatch(added.project, added.ref, { allowUnscoped: true, sessionId: `oracle-release-${Date.now()}` });
   assert.equal(store.claimTicket(added.project, added.ref, 'mcp-oracle-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -3165,7 +3165,7 @@ test('MCP release records an oracle handoff without a separate reason', async ()
 
 test('MCP verdict creates a missing oracle round and refuses a ticket with no oracle marker', async () => {
   const added = await callTool('add', { title: 'oracle verdict fixture', complexity: 2, why: 'exercise the verdict operation through MCP' });
-  const prepared = store.prepareDispatch(added.project, added.ref, { sessionId: `mcp-verdict-${Date.now()}` });
+  const prepared = store.prepareDispatch(added.project, added.ref, { allowUnscoped: true, sessionId: `mcp-verdict-${Date.now()}` });
   assert.equal(store.claimTicket(added.project, added.ref, 'mcp-verdict-worker', {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
@@ -3343,7 +3343,7 @@ test('MCP dispatch returns the Codex readiness recovery text without preparing s
   try {
     store.setCategory({ id: 'mcp-readiness-refusal', name: 'MCP readiness refusal', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'readiness refusal', description: DISPATCH_DESCRIPTION, category: 'mcp-readiness-refusal' });
-    const refused = await callToolRaw('dispatch', { ref: added.ref });
+    const refused = await callToolRaw('dispatch', { allowUnscoped: true, ref: added.ref });
     assert.ok(refused.isError);
     assert.equal(refused.content[0].text, message);
     const ticket = store.getTicket(added.project, added.ref);
@@ -3369,7 +3369,7 @@ test('MCP dispatch refuses external providers without a ready schema-4 entry', a
       seedCatalogV4([grok], fixture.providers);
       store.setCategory({ id: `mcp-grok-${fixture.id}`, name: `MCP Grok ${fixture.id}`, route: { model: grok.slug, effort: 'high' } });
       const added = await callTool('add', { title: `grok ${fixture.id}`, description: DISPATCH_DESCRIPTION, category: `mcp-grok-${fixture.id}` });
-      const refused = await callToolRaw('dispatch', { ref: added.ref });
+      const refused = await callToolRaw('dispatch', { allowUnscoped: true, ref: added.ref });
       assert.ok(refused.isError);
       assert.match(refused.content[0].text, fixture.expected);
       assert.match(refused.content[0].text, /No Anthropic fallback was used\./);
@@ -3390,7 +3390,7 @@ test('MCP claim binds an unlaunched isolated dispatch with its prepared token', 
   store.setCategory({ id: 'mcp-dispatch-claim', name: 'MCP dispatch claim', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
   const added = await callTool('add', { title: 'nonce through MCP', category: 'mcp-dispatch-claim' });
   const slug = store.ensureProject(PROJ).slug;
-  const prepared = store.prepareDispatch(slug, added.ref, { sessionId: 'mcp-launch-session', sharedTree: false });
+  const prepared = store.prepareDispatch(slug, added.ref, { allowUnscoped: true, sessionId: 'mcp-launch-session', sharedTree: false });
   const refused = await callTool('claim', { ref: added.ref, by: 'mcp-no-token' });
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'token');
@@ -3455,7 +3455,7 @@ test('MCP claim rejects a generic executor for a Codex route', async () => {
     store.setCategory({ id: 'claim-codex', name: 'Claim Codex', route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
     const added = await callTool('add', { title: 'Codex executor guard', category: 'claim-codex' });
     const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ref);
-    const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, added.ref);
+    const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, added.ref, { allowUnscoped: true });
     const rejected = await callTool('claim', { ref: added.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}`, token: prepared.token });
     assert.strictEqual(rejected.ok, false);
     assert.strictEqual(rejected.reason, 'executor_mismatch');
@@ -3670,7 +3670,7 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
         description: DISPATCH_DESCRIPTION,
         verify: 'node --test test/mcp.test.js',
       });
-      const prepared = await callTool('dispatch', { ref: added.ref, full: true });
+      const prepared = await callTool('dispatch', { allowUnscoped: true, ref: added.ref, full: true });
       const by = `mcp-alias-${added.ref}`;
       await callTool('claim', { ref: added.ref, by, executor: prepared.agent, effort: 'high', token: prepared.token });
       await callTool('done', { ref: added.ref, by, body: 'Alias completion evidence', ...(model == null ? {} : { model, effort: 'high' }) });
@@ -3703,7 +3703,7 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
       description: DISPATCH_DESCRIPTION,
       verify: 'node --test test/mcp.test.js',
     });
-    const prepared = await callTool('dispatch', { ref: added.ref, full: true });
+    const prepared = await callTool('dispatch', { allowUnscoped: true, ref: added.ref, full: true });
     const unknown = await callToolRaw('done', { ref: added.ref, by: 'mcp-alias-unknown', model: 'claude-codex-auto', body: 'Unknown-model completion evidence' });
     assert.ok(unknown.isError);
     assert.match(unknown.content[0].text, /expected for .*: codex-gpt-5-6-terra-fast/);
@@ -3848,7 +3848,7 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
     files,
   });
   const sessionId = `sq923-session-${agentId}`;
-  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId });
   assert.equal(prepared.ticket.dispatch.sharedTree, false, 'the fixture dispatch is isolated');
   assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
     token: prepared.token,

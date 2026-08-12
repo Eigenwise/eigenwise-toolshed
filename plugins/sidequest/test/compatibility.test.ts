@@ -162,7 +162,7 @@ test('CLI verdict records an awaiting oracle result', () => {
     const store = require(${JSON.stringify(path.join(ROOT, 'lib', 'store.js'))});
     const { slug } = store.ensureProject(${JSON.stringify(project)});
     const ticket = store.createTicket(slug, { title: 'CLI verdict fixture', complexity: 2, complexityWhy: 'exercise the CLI oracle verdict command' });
-    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'cli-verdict' });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'cli-verdict' });
     store.claimTicket(slug, ticket.ref, 'cli-verdict-worker', { token: prepared.token, executor: prepared.ticket.dispatchExecutor });
     store.releaseTicket(slug, ticket.ref, 'cli-verdict-worker', { status: 'doing', oracle: 'Rank the candidates.', candidate: 'abc1234' });
     process.stdout.write(ticket.ref);
