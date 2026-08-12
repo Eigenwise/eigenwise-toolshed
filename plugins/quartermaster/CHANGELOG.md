@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.1 (2026-08-13)
+
+Released in v3.460.0, up from 0.5.0.
+
+### Fixes
+
+- Learn repeated permission approvals (SQ-1859)
+  Quartermaster can now opt into learning repeatedly approved safe permission rules for each project.
+
 ## 0.5.0 (2026-08-12)
 
 Released in v3.456.0, up from 0.4.1.
