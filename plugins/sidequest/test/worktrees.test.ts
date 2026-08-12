@@ -310,6 +310,28 @@ test('worktrees sweep removes only clean, patch-equivalent, old agent worktrees'
   assert.ok(!fs.existsSync(dirtyOld));
 });
 
+test('worktree sweep preserves old reachable worktrees with tracked changes', async () => {
+  const worktree = agentWorktree('tracked-reachable');
+  try {
+    fs.appendFileSync(path.join(worktree, 'README.md'), 'uncommitted edit\n');
+    makeOld(worktree);
+
+    const result = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 1,
+      upstream: 'origin/main',
+    });
+
+    const entry = entryFor(result, worktree);
+    assert.equal(entry.reason, 'tracked_changes');
+    assert.equal(entry.action, 'keep');
+    assert.ok(fs.existsSync(worktree));
+    assert.equal(git(['status', '--porcelain'], worktree), 'M README.md');
+  } finally {
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+  }
+});
+
 test('worktree sweep salvages an old unintegrated worktree before removing it', async () => {
   const worktree = agentWorktree('salvage-old');
   const recovery = path.join(os.tmpdir(), `sq-worktrees-recovery-${Date.now()}`);
@@ -425,21 +447,23 @@ test('groom-close integration sweeps the dispatched worktree immediately', () =>
   assert.ok(!branchExists(branchName(agentId)));
 });
 
-test('a dirty completed worktree is backed up before removal', () => {
-  const agentId = 'dirty-completed';
-  const worktree = agentWorktree(agentId);
-  const commit = makeCommit(worktree, 'dirty-completed.txt');
-  const ticket = dispatchedTicket(agentId, slug, ['dirty-completed.txt']);
-  submitFixture(ticket, worktree, commit);
-  integrate(commit);
-  fs.writeFileSync(path.join(worktree, 'recovery.txt'), 'recover this diff\n');
+test('a dirty completed worktree remains available for recovery', async () => {
+  const worktree = agentWorktree('dirty-completed');
+  try {
+    fs.appendFileSync(path.join(worktree, 'README.md'), 'recover this diff\n');
+    makeOld(worktree);
 
-  const closed = cliJson(['groom-close', ticket.ref, '--by', 'integrator', '--integration', '--reason', 'Integrated the fixture state into main.', '--json']);
-  assert.equal(closed.worktreeSweep.backups.length, 1);
-  const backup = closed.worktreeSweep.backups[0];
-  assert.ok(fs.existsSync(path.join(backup, 'working-tree.patch')));
-  assert.match(fs.readFileSync(path.join(backup, 'working-tree.patch'), 'utf8'), /recover this diff/);
-  assert.ok(!fs.existsSync(worktree));
+    const result = await worktrees.classifyWorktree(PROJECT, [{
+      ref: 'SQ-DIRTY-COMPLETED', status: 'done', dispatch: { agentId: 'dirty-completed' },
+    }], { worktree }, path.join(PROJECT, 'current'), 0, 'origin/main');
+
+    assert.equal(result.reason, 'tracked_changes');
+    assert.equal(result.action, 'keep');
+    assert.ok(fs.existsSync(worktree));
+    assert.match(fs.readFileSync(path.join(worktree, 'README.md'), 'utf8'), /recover this diff/);
+  } finally {
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+  }
 });
 
 test('a locked worktree is never removed', () => {

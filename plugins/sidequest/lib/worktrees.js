@@ -421,17 +421,20 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   ]);
   const clean = cleanResult.ok ? cleanResult.stdout === "" : false;
   const untracked = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line.startsWith("?? "));
+  const trackedChanges = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line && !line.startsWith("?? "));
   const oldEnough = ageMs != null && ageMs >= minAgeMs;
   const oldEnoughToSalvage = ageMs != null && ageMs >= notIntegratedSalvageAgeMs;
   let action = "keep";
   let reason = "not_integrated";
   if (!cleanResult.ok) reason = "status_unknown";
-  else if (ticket?.archived) {
+  else if (ticket?.archived && !trackedChanges) {
     action = "remove";
     reason = "ticket_archived";
-  } else if (ticket?.status === "done") {
+  } else if (ticket?.status === "done" && !trackedChanges) {
     action = "remove";
     reason = "ticket_done";
+  } else if (trackedChanges && reachable) {
+    reason = "tracked_changes";
   } else if (!oldEnough) reason = "too_young";
   else if (reachable) {
     action = "remove";
