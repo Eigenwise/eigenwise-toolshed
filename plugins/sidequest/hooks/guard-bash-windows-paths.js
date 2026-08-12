@@ -105,12 +105,7 @@ function writeDeny(hookEventName, permissionDecisionReason) {
   });
 }
 
-// src/hooks/guard-bash-windows-paths.ts
-var WINDOWS_PATH = /^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/;
-var CONTAINER_PATH_FLAG = /(?:^|[;&|(]\s*)(?:docker\s+(?:exec|run)|kubectl\s+exec)\b[^\r\n;&|]*?(?:\s(?:-w|-v)\s+|\s--(?:workdir|volume|cwd)(?:=|\s+))(?:"|')?\/(?!\/)[^\s"'`|&;(){}<>]*/im;
-function containerPathIsRewritten(command) {
-  return CONTAINER_PATH_FLAG.test(command);
-}
+// src/hooks/shared/heredocs.ts
 function hereDocAt(command, index) {
   let cursor = index + 2;
   const stripTabs = command[cursor] === "-";
@@ -139,6 +134,13 @@ function skipHereDocBodies(command, index, hereDocs) {
     }
   }
   return cursor;
+}
+
+// src/hooks/guard-bash-windows-paths.ts
+var WINDOWS_PATH = /^[A-Za-z]:\\[^\\\s"'`|&;(){}<>]+\\[^\s"'`|&;(){}<>]*/;
+var CONTAINER_PATH_FLAG = /(?:^|[;&|(]\s*)(?:docker\s+(?:exec|run)|kubectl\s+exec)\b[^\r\n;&|]*?(?:\s(?:-w|-v)\s+|\s--(?:workdir|volume|cwd)(?:=|\s+))(?:"|')?\/(?!\/)[^\s"'`|&;(){}<>]*/im;
+function containerPathIsRewritten(command) {
+  return CONTAINER_PATH_FLAG.test(command);
 }
 function escapedNewline(command, index) {
   let backslashes = 0;

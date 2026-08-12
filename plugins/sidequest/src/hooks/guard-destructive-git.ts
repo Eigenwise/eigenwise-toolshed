@@ -5,6 +5,7 @@ import { execFileSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
+import { withoutHereDocBodies } from './shared/heredocs.js';
 
 const runtimeRequire = createRequire(__filename);
 const store = runtimeRequire(['..', 'lib', 'store'].join('/'));
@@ -232,7 +233,7 @@ function publicationRefusal(label: string, repo: string): string {
 function main(): void {
   const input = readStdin();
   if (!input || !['Bash', 'PowerShell'].includes(stringField(input, 'tool_name'))) return;
-  const command = commandText(input);
+  const command = withoutHereDocBodies(commandText(input));
   const repo = repoRoot(targetRepo(command, stringField(input, 'cwd')));
   const publication = publicationAction(command, stringField(input, 'cwd'));
   if (publication && !publish.publishLockOwnedBySession(publication.repo, stringField(input, 'session_id'))) {

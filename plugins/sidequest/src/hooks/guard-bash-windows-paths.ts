@@ -1,11 +1,7 @@
 #!/usr/bin/env node
 import { readStdin, stringField } from './shared/input.js';
 import { writeContext, writeDeny } from './shared/output.js';
-
-type HereDoc = {
-  delimiter: string;
-  stripTabs: boolean;
-};
+import { hereDocAt, skipHereDocBodies, type HereDoc } from './shared/heredocs.js';
 
 type Quote = 'single' | 'double' | null;
 
@@ -19,39 +15,6 @@ const CONTAINER_PATH_FLAG = /(?:^|[;&|(]\s*)(?:docker\s+(?:exec|run)|kubectl\s+e
 
 function containerPathIsRewritten(command: string): boolean {
   return CONTAINER_PATH_FLAG.test(command);
-}
-
-function hereDocAt(command: string, index: number): { hereDoc: HereDoc; end: number } | null {
-  let cursor = index + 2;
-  const stripTabs = command[cursor] === '-';
-  if (stripTabs) cursor += 1;
-  while (command[cursor] === ' ' || command[cursor] === '\t') cursor += 1;
-
-  const quote = command[cursor];
-  if (quote === "'" || quote === '"') {
-    const end = command.indexOf(quote, cursor + 1);
-    if (end < 0) return null;
-    return { hereDoc: { delimiter: command.slice(cursor + 1, end), stripTabs }, end: end + 1 };
-  }
-
-  const match = command.slice(cursor).match(/^[^\s|&;()<>]+/);
-  if (!match) return null;
-  return { hereDoc: { delimiter: match[0], stripTabs }, end: cursor + match[0].length };
-}
-
-function skipHereDocBodies(command: string, index: number, hereDocs: HereDoc[]): number {
-  let cursor = index;
-  for (const { delimiter, stripTabs } of hereDocs) {
-    while (cursor < command.length) {
-      const lineEnd = command.indexOf('\n', cursor);
-      const end = lineEnd < 0 ? command.length : lineEnd;
-      let line = command.slice(cursor, end).replace(/\r$/, '');
-      if (stripTabs) line = line.replace(/^\t+/, '');
-      cursor = lineEnd < 0 ? command.length : lineEnd + 1;
-      if (line === delimiter) break;
-    }
-  }
-  return cursor;
 }
 
 function escapedNewline(command: string, index: number): boolean {
