@@ -64,7 +64,7 @@ try {
   process.emitWarning = originalEmitWarning;
 }
 const CURRENT_SCHEMA_VERSION = 7;
-const SQLITE_BUSY_TIMEOUT_MS = 5e3;
+const SQLITE_BUSY_TIMEOUT_MS = 15e3;
 const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
 const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100];
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
@@ -99,7 +99,11 @@ const TABLES = {
 };
 const statementCaches = /* @__PURE__ */ new WeakMap();
 function isSqliteBusy(error) {
-  return error instanceof Error && /database is (?:locked|busy)/i.test(error.message);
+  if (!(error instanceof Error)) return false;
+  const code = Reflect.get(error, "code");
+  if (code === "SQLITE_BUSY" || code === "SQLITE_LOCKED") return true;
+  if (/database is (?:locked|busy)/i.test(error.message)) return true;
+  return isSqliteBusy(Reflect.get(error, "cause"));
 }
 function sqliteBusyError(operation, startedAt, cause) {
   const elapsedMs = Date.now() - startedAt;
@@ -675,21 +679,23 @@ function hasRow(database, table, key) {
 function txn(database, fn) {
   const row = retryWhenSqliteBusy("checking schema version before a transaction", () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get());
   if (row) assertWritable(database);
-  retryWhenSqliteBusy("beginning a write transaction", () => database.exec("BEGIN IMMEDIATE"));
-  try {
-    const result = fn();
-    if (isRecord(result) && typeof result.then === "function") {
-      throw new TypeError("SQLite transaction callbacks must be synchronous.");
-    }
-    database.exec("COMMIT");
-    return result;
-  } catch (error) {
+  return retryWhenSqliteBusy("writing transaction", () => {
+    database.exec("BEGIN IMMEDIATE");
     try {
-      database.exec("ROLLBACK");
-    } catch {
+      const result = fn();
+      if (isRecord(result) && typeof result.then === "function") {
+        throw new TypeError("SQLite transaction callbacks must be synchronous.");
+      }
+      database.exec("COMMIT");
+      return result;
+    } catch (error) {
+      try {
+        database.exec("ROLLBACK");
+      } catch {
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
