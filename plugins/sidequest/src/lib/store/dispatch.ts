@@ -254,6 +254,44 @@ function pulseDispatchState(state?: any) {
   return state.outcome || 'prepared';
 }
 
+function supersedableUnclaimedLaunch(ticket?: any, state?: any) {
+  return Boolean(
+    state
+    && state.outcome === 'launched'
+    && state.launchedAt
+    && !state.terminalAt
+    && !state.boundAt
+    && !state.agentId
+    && !state.claimedAt
+    && !(ticket?.claim && ticket.claim.by)
+    && !ticket?.checkpoint
+    && ticket?.dispatchNonce,
+  );
+}
+
+function supersedeUnclaimedLaunch(slug?: any, idOrRef?: any, opts?: any) {
+  const evidence = String(opts?.evidence || '').trim();
+  if (!evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'Superseding an unclaimed launch requires observed failure evidence.' };
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    const state = dispatchState(ticket);
+    if (!supersedableUnclaimedLaunch(ticket, state)) return { ok: false, reason: 'unclaimed_launch_not_supersedable', ticket };
+    setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', { failureShape: 'unclaimed_launch_superseded' });
+    const attempt = state.attempts?.at(-1);
+    if (attempt) attempt.recoveryEvidence = evidence;
+    ticket.dispatchNonce = null;
+    ticket.dispatchExecutor = null;
+    const previousStatus = ticket.status;
+    if (!ticket.submission) ticket.status = 'todo';
+    if (ticket.status !== previousStatus) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: new Date().toISOString() };
+    stampDispatchEvent(ticket, opts?.source || 'control-plane-unclaimed-launch-supersession');
+    putTicket(slug, ticket);
+    return { ok: true, ticket };
+  });
+}
+
 function isolatedDispatchWorktreeMissing(state?: any) {
   const worktree = String(state?.worktree || '').trim();
   return state?.sharedTree === false && Boolean(worktree) && !fs.existsSync(worktree);
@@ -718,6 +756,13 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const verifyError = dispatchVerifyCommandError(found, projectPath);
   if (verifyError) throw new Error(verifyError);
   if (projectPath) assertSidequestInstall(projectPath);
+  if (opts.recoveryEvidence) {
+    const superseded = supersedeUnclaimedLaunch(slug, found.id, {
+      evidence: opts.recoveryEvidence,
+      source: opts.source || opts.transport || 'dispatch',
+    });
+    if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has a bound, claimed, checkpointed, or terminal dispatch that cannot be superseded.`}`);
+  }
   // Registry install proves a future session; it does not prove THIS
   // invocation's session has the board MCP connected (SQ-1017 correction).
   // Only CLI transport needs to prove anything here — omitted/'mcp' callers
@@ -731,7 +776,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by)
       && Boolean(current.launchedAt || current.boundAt);
     if (activeRuntimeAttempt) {
-      throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}). Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.`);
+      const recovery = supersedableUnclaimedLaunch(t, current)
+        ? ` It is unbound and unclaimed, so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`
+        : ' Wait for that executor\'s terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.';
+      throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery}`);
     }
     const repeatFailure = repeatNoCommitDispatchError(t, current);
     if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
@@ -1414,6 +1462,8 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     rederiveUnlaunchedPreparedRoute,
     stampDispatchEvent,
     pulseDispatchState,
+    supersedableUnclaimedLaunch,
+    supersedeUnclaimedLaunch,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,
     terminalDispatchTarget,

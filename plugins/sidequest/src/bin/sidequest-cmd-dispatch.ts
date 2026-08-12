@@ -30,6 +30,7 @@ async function cmdDispatch(opts: any, positional: any) {
       ...(Object.hasOwn(opts, 'shared-tree') ? { sharedTree: opts['shared-tree'] === true } : {}),
       allowRepeatFailure: !!opts['allow-repeat-failure'],
       allowUnscoped: !!opts['allow-unscoped'],
+      recoveryEvidence: opts['recovery-evidence'],
       source: 'cli',
       transport: 'cli',
       allowUnverifiedTransport: unverifiedTransport,
