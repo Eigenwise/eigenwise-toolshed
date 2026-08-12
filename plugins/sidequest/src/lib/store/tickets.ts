@@ -494,8 +494,12 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
         : configuredScope.length && !packageScope.length
           ? 'scope under board policy'
           : 'same-package scope derived from the ticket’s declared files';
+    // A ticket that declares nothing gives the package-scope derivation no root to
+    // work from, so anything the board's own policy does not already cover refuses.
+    // Telling this executor to hand back names the symptom; the fix belongs to
+    // whoever filed the ticket, so say which one it is (SQ-1846).
     const undeclared = !normalizeFiles(t.files).length
-      ? ` This ticket declares no files, so no path can be in scope and every request refuses. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.`
+      ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.`
       : '';
     const body = refused.length
       ? `Scope expansion refused: ${refused.join(', ')}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
