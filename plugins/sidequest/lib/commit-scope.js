@@ -541,8 +541,8 @@ function submissionRange(cwd, options) {
   if (!rootCommit && !noOp) {
     const parents = gitResult(cwd, ["rev-list", "--parents", `${effectiveBase}..${tip.value}`]);
     if (!parents.ok) return { ok: false, reason: "git_error", message: parents.message };
-    const mergeCommit = parents.value.split(/\r?\n/).find((line) => line.trim().split(/\s+/).length > 2);
-    if (mergeCommit) return { ok: false, reason: "merge_commit", commit: mergeCommit.trim().split(/\s+/)[0] };
+    const mergeCommit = parents.value.split(/\r?\n/).map((line) => line.trim().split(/\s+/)).find((parents2) => parents2.length > 2 && (!integrationBranch.ok || !isAncestor(cwd, parents2[0], integrationBranch.value)));
+    if (mergeCommit) return { ok: false, reason: "merge_commit", commit: mergeCommit[0] };
   }
   try {
     return {

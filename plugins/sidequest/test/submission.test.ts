@@ -26,6 +26,7 @@ const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
+const { submissionRangeFailureMessage } = require('../lib/mcp-lifecycle.js');
 const { createLocks } = require('../src/lib/store/locks.ts');
 const { makeCliRunner } = require('./_helpers.js');
 
@@ -282,6 +283,20 @@ test('integration rejects a plugin change when its merged-tree full gate fails',
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && npm ci && npm run test:full');
 });
 
+test('SQ-1875: every submission range reason gives a pinned-base remedy', () => {
+  const ticket = { ref: 'SQ-1875', dispatch: { baseCommit: '1234567890abcdef1234567890abcdef12345678' } };
+  const reasons = ['merge_commit', 'empty_range', 'base_not_reachable', 'range_changed', 'no_op_changed', 'reconciled_path_diverged'];
+  for (const reason of reasons) {
+    const message = submissionRangeFailureMessage(ticket, { reason, commit: 'abcdef1' }, 'refs/sidequest/SQ-1875');
+    assert.match(message, new RegExp(`submit: refused SQ-1875; ${reason}`));
+    assert.match(message, /behind the integration tip is expected/);
+    assert.doesNotMatch(message, /rebase onto|current integration target|origin\/main|\bmain\b/);
+  }
+  const mergeMessage = submissionRangeFailureMessage(ticket, { reason: 'merge_commit', commit: 'abcdef1' }, 'refs/sidequest/SQ-1875');
+  assert.match(mergeMessage, /1234567890abcdef1234567890abcdef12345678/);
+  assert.match(mergeMessage, /Do not use `git pull`/);
+});
+
 test('SQ-971: rejected range submission is quarantined and clean rebase resubmits', async () => {
   cleanBranch();
   const t = addTicket('rejected range preservation', { files: ['lib/rebased.js'] });
@@ -311,8 +326,8 @@ test('SQ-971: rejected range submission is quarantined and clean rebase resubmit
   assert.equal(rejected.ok, false);
   assert.equal(rejected.reason, 'unrecognized_base');
   assert.match(rejected.message, /Preserved .*refs\/sidequest\/SQ-\d+-rejected/);
-  assert.match(rejected.message, /Rebase onto the current origin\/main target/);
-  assert.match(rejected.message, /orchestrator can cherry-pick/);
+  assert.match(rejected.message, /recorded .*base|approved submitted-ticket boundary/);
+  assert.doesNotMatch(rejected.message, /Rebase onto the current|current origin\/main target/);
   assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), rejectedCommit);
   const preserved = store.getTicket(slug, t.ref);
   assert.equal(preserved.claim.by, by);
