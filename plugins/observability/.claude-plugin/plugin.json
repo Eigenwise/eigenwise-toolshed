@@ -9,6 +9,7 @@
   "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/observability",
   "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
   "license": "MIT",
+  "suiteTimeout": 300000,
   "keywords": [
     "observability",
     "telemetry",
