@@ -1,6 +1,6 @@
 # Entry points
 
-Last Updated: 2026-08-10
+Last Updated: 2026-08-12
 
 ## User and runtime entry points
 
@@ -10,7 +10,7 @@ Last Updated: 2026-08-10
 - Dashboard app: `plugins/sidequest/dashboard/app/src/main.ts`; shell is `App.svelte`; API client is `app/src/lib/api.ts`.
 - Model Gateway CLI: `plugins/model-gateway/bin/model-gateway.js`; dispatches setup/login/start/stop/ensure/status/models/catalog/pin/env/doctor/remote-control commands.
 - Model Gateway hook and skills: `plugins/model-gateway/hooks/hooks.json`, `plugins/model-gateway/hooks/registry-writer.js`, and `plugins/model-gateway/skills/{model-gateway,remote-control-compatibility}/SKILL.md`. Registry writing installs `~/.claude/model-gateway/update.js`; CLI `setup`/`ensure` handle atomic proxy replacement and deferred restart.
-- Workbench MCP: `plugins/workbench/.mcp.json` launches `plugins/workbench/bin/code-intel-mcp.js`. It exposes `typescript_definition`, `typescript_references`, and `typescript_diagnostics`; every call requires an explicit project root and is served by the per-root language-server registry in `plugins/workbench/lib/code-intel/`.
+- Workbench MCP: `plugins/workbench/.mcp.json` launches `plugins/workbench/bin/code-intel-mcp.js`. It exposes `definition`, `references`, and `diagnostics`; every call requires an explicit project root and is served by the per-root, per-language server registry in `plugins/workbench/lib/code-intel/`. The queried file's extension selects the language server, so the same three tools answer for TypeScript/JavaScript, Python, and C/C++.
 - Workbench skills: `update-toolshed` and `workbench-doctor` under `plugins/workbench/skills/`; `bin/update-toolshed.js` and `bin/install-workspace-plugins.js` are the bundled programs, with updates handed to the stable Model Gateway updater. Its `hooks/hooks.json` registers only SessionStart freshness and billing-path checks plus a UserPromptSubmit freshness check.
 - Observability skill: `enable-project-telemetry` under `plugins/observability/skills/`; its setup provisions dashboards from opted-in projects, and `hooks/hooks.json` registers the eight lifecycle observers, the SessionStart ensure worker, and the `Agent|Task` request-body preflight.
 - Live-rules skills: `manage-rules` and `add-rule` under `plugins/live-rules/skills/`.

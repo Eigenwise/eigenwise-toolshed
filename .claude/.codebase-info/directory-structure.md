@@ -1,11 +1,11 @@
 # Directory structure
 
-Last Updated: 2026-08-10
+Last Updated: 2026-08-12
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
 - `plugins/sidequest/`: board engine, MCP server, CLI, hooks, dashboard, tests, and committed build output.
-- `plugins/workbench/`: workspace setup, updater, doctor skills, pull-only TypeScript MCP code intelligence under `lib/code-intel/`, and freshness and billing-path hooks.
+- `plugins/workbench/`: workspace setup, updater, doctor skills, pull-only MCP code intelligence under `lib/code-intel/`, with one module per language in `lib/code-intel/language-server-locators/`, and freshness and billing-path hooks.
 - `plugins/observability/`: observer, statusline, Collector setup, and sinks under `observability/sinks/`, plus the eight lifecycle hooks and the `enable-project-telemetry` skill.
 - `plugins/model-gateway/`: local model gateway CLI, registry hook, skills, and tests.
 - `plugins/live-rules/`: rule-management skills and prompt/edit/session hooks.
