@@ -1349,7 +1349,7 @@ function activeSharedTreeClaim(identity?: any) {
 }
 
 function dispatchIdentityAmbiguous(matches: any[], agentName?: any) {
-  return matches.length > 1 && (!agentName || new Set(matches.map((match?: any) => match.slug)).size > 1);
+  return matches.length > 1 && (!agentName || matches.some((match?: any) => match.sharedTree === false) || new Set(matches.map((match?: any) => match.slug)).size > 1);
 }
 
 function dispatchCanBindRuntimeIdentity(state?: any, sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
@@ -1404,7 +1404,7 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
       if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
-      matches.push({ slug: project.slug, id: ticket.id });
+      matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree });
     }
   }
   if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {
@@ -1451,7 +1451,7 @@ function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, age
       const state = dispatchState(ticket);
       if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
       const active = state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed';
-      if (active || state.terminalAt) matches.push({ slug: project.slug, id: ticket.id });
+      if (active || state.terminalAt) matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree });
     }
   }
   if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {

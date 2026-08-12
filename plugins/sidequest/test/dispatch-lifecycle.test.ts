@@ -176,8 +176,8 @@ test('batch launch records every prepared ticket and binds the shared native age
   const first = createFixture('first batch lifecycle fixture');
   const second = createFixture('second batch lifecycle fixture');
   const sessionId = `batch-${Date.now()}`;
-  const firstPrepared = store.prepareDispatch(slug, first.ref, { sessionId });
-  const secondPrepared = store.prepareDispatch(slug, second.ref, { sessionId });
+  const firstPrepared = store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: true });
+  const secondPrepared = store.prepareDispatch(slug, second.ref, { sessionId, sharedTree: true });
   const executor = firstPrepared.ticket.dispatchExecutor;
   assert.deepEqual(firstPrepared.ticket.dispatch.preparedBy, { sessionId, surface: 'store' });
   assert.equal(secondPrepared.ticket.dispatchExecutor, executor);
@@ -224,6 +224,35 @@ test('batch launch records every prepared ticket and binds the shared native age
     assert.equal(pulse.dispatch.state, 'bound');
     assert.ok(pulse.dispatch.boundAt);
     assert.equal(pulse.liveness, 'unknown');
+  }
+});
+
+test('one runtime agent cannot bind concurrently launched isolated dispatches', () => {
+  const first = createFixture('first isolated runtime identity fixture');
+  const second = createFixture('second isolated runtime identity fixture');
+  const sessionId = `isolated-runtime-identity-${Date.now()}`;
+  const agentName = 'isolated-runtime-identity-worker';
+  const prepared = [
+    store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: false }),
+    store.prepareDispatch(slug, second.ref, { sessionId, sharedTree: false }),
+  ];
+  const executor = prepared[0].ticket.dispatchExecutor;
+
+  for (const launch of prepared) {
+    assert.equal(store.recordDispatchLaunch(slug, launch.ticket.ref, {
+      sessionId,
+      token: launch.token,
+      executor,
+      agentName,
+    }).ok, true);
+  }
+
+  const bound = store.bindDispatchAgent(sessionId, executor, 'isolated-runtime-agent', agentName);
+  assert.equal(bound.reason, 'ambiguous');
+  for (const ref of [first.ref, second.ref]) {
+    const dispatch = store.getTicket(slug, ref).dispatch;
+    assert.equal(dispatch.agentId ?? null, null);
+    assert.equal(dispatch.worktree, undefined);
   }
 });
 
