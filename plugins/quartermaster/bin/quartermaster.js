@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const { DEFAULT_DAYS, DEFAULT_SESSIONS } = require('../lib/scan.js');
 const { mine } = require('../lib/mine.js');
+const { applyPermissionAllowlist, enablePermissionAutomation } = require('../lib/permission-allowlist.js');
 const { readAvailable, readInstalled, searchAvailable } = require('../lib/catalog.js');
 const {
   appendDecision,
@@ -26,6 +27,8 @@ Usage:
                           [--project <path>] [--detail <text>]
   quartermaster verify [--project <path>]
   quartermaster mark-resupply [--project <path>]
+  quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>]
+  quartermaster enable-auto-allowlist [--project <path>]
 
 Everything prints JSON. Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
 `;
@@ -133,6 +136,20 @@ async function main(argv = process.argv.slice(2)) {
       return;
     case 'verify':
       printJson(verifyDecisions(options.projectPath));
+      return;
+    case 'allowlist': {
+      const result = await applyPermissionAllowlist(options);
+      for (const addition of result.additions) {
+        process.stdout.write(`added ${addition.fingerprint} after ${addition.approvals} approvals\n`);
+      }
+      for (const blocked of result.blocked) {
+        process.stdout.write(`blocked ${blocked.fingerprint}: destructive command after ${blocked.approvals} approvals\n`);
+      }
+      printJson(result);
+      return;
+    }
+    case 'enable-auto-allowlist':
+      printJson({ ok: true, enabled: enablePermissionAutomation(options.projectPath) });
       return;
     // mark-retro is the pre-rename spelling, still accepted so a skill file or note that predates
     // the rename keeps working instead of failing at the last step of a completed pass.

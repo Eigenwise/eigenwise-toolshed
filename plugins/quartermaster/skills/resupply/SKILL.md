@@ -165,6 +165,20 @@ is installed, otherwise `CLAUDE.md`.
 
 #### 4d. Where is the setup pushing back?
 
+Before ordinary friction findings, check whether the project opted into automatic permission learning:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" allowlist --project "${CLAUDE_PROJECT_DIR}"
+```
+
+It adds only fingerprints with at least three user approvals and no user rejection, records every addition in the decision ledger, and never adds destructive Bash commands. Offer the opt-in after reporting its result:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"
+```
+
+The marker and every learned rule stay in the project's `.claude/settings.local.json`, never a user, global, or shared setting. With no marker, the SessionStart hook exits immediately.
+
 Now the friction: repeated denials on the same safe pattern, corrections clustering on one theme,
 tool errors concentrated in one tool, hook errors. Each is real and each has a cheap fix; they just
 cap out at restoring the speed the user already expected. Note the difference between
