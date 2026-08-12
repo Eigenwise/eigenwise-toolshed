@@ -178,12 +178,17 @@ function boundedList(values?: any, max?: any, label?: any, guidance?: any) {
 }
 
 function boundedFiles(files?: any) {
-  return boundedList(
+  const declaredFiles = boundedList(
     normalizeFiles(files),
     DECLARED_FILES_MAX,
     'declared file scope',
     'Re-scope with directory entries: a declared directory covers every path under it (e.g. plugins/sidequest/test instead of each test file).',
   );
+  const outside = commitScope.validateRelativeScopes(declaredFiles).outside;
+  if (outside.length) {
+    throw new Error(`declared file scope contains paths outside the repo worktree: ${outside.join(', ')}. For genuine non-repo output, classify as non-repo/artifact work; otherwise declare in-repo paths.`);
+  }
+  return declaredFiles;
 }
 
 function boundedLabels(labels?: any) {

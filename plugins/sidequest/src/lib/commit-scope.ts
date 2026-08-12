@@ -174,10 +174,10 @@ function commitScopedPaths(root: string, scopes: readonly string[]): string[] {
   ));
 }
 
-function ignoredUntrackedFile(root: string, scope: string): boolean {
+function ignoredUntrackedScope(root: string, scope: string): boolean {
   const target = path.resolve(root, scope);
   try {
-    if (!fs.lstatSync(target).isFile()) return false;
+    fs.lstatSync(target);
   } catch {
     return false;
   }
@@ -187,7 +187,7 @@ function ignoredUntrackedFile(root: string, scope: string): boolean {
 
 function stageableScopedPaths(root: string, scopes: readonly string[]): string[] {
   const indexed = indexedPaths(root);
-  return scopes.filter((scope) => !ignoredUntrackedFile(root, scope) && (
+  return scopes.filter((scope) => !ignoredUntrackedScope(root, scope) && (
     fs.existsSync(path.resolve(root, scope))
     || indexed.some((file) => isInScope(file, [scope]))
   ));
@@ -686,7 +686,7 @@ export function commitScoped(cwd: string, message: unknown, files: unknown) {
       return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
     }
     const stageableScopes = stageableScopedPaths(root, commitScopes);
-    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedFile(root, scope));
+    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedScope(root, scope));
     if (stageableScopes.length) git(root, ['add', '--all', '--', ...stageableScopes]);
     git(root, ['commit', '--only', '-m', String(message || ''), '--', ...committableScopes]);
     const commit = git(root, ['rev-parse', 'HEAD']).trim();

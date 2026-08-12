@@ -192,10 +192,10 @@ function commitScopedPaths(root, scopes) {
   const tracked = trackedPaths(root);
   return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => isInScope(file, [scope])));
 }
-function ignoredUntrackedFile(root, scope) {
+function ignoredUntrackedScope(root, scope) {
   const target = import_node_path.default.resolve(root, scope);
   try {
-    if (!import_node_fs.default.lstatSync(target).isFile()) return false;
+    import_node_fs.default.lstatSync(target);
   } catch {
     return false;
   }
@@ -204,7 +204,7 @@ function ignoredUntrackedFile(root, scope) {
 }
 function stageableScopedPaths(root, scopes) {
   const indexed = indexedPaths(root);
-  return scopes.filter((scope) => !ignoredUntrackedFile(root, scope) && (import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => isInScope(file, [scope]))));
+  return scopes.filter((scope) => !ignoredUntrackedScope(root, scope) && (import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => isInScope(file, [scope]))));
 }
 function workingPaths(cwd) {
   const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -630,7 +630,7 @@ function commitScoped(cwd, message, files) {
       return { ok: false, reason: "no_existing_scope", missingScopes, unscopedPaths };
     }
     const stageableScopes = stageableScopedPaths(root, commitScopes);
-    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedFile(root, scope));
+    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedScope(root, scope));
     if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
     git(root, ["commit", "--only", "-m", String(message || ""), "--", ...committableScopes]);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();

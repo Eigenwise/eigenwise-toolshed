@@ -275,20 +275,17 @@ test('a greenfield declared anchor warns without refusing the ticket write', () 
   assert.equal(added.ticket.executorAnchors, 'createEntry is at greenfield-anchor/src/entry.js:1');
 });
 
-test('add warns when declared output is outside the repo worktree', () => {
-  const outside = path.join(path.dirname(PROJ), 'external-audition.html');
-  fs.mkdirSync(path.dirname(outside), { recursive: true });
-  fs.writeFileSync(outside, '<main>audition</main>\n');
-  const scope = outside.replace(/\\/g, '/');
-  const warning = `Planning-depth warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`;
-
-  const added = cliJson([
+test('add refuses declared output outside the repo worktree', () => {
+  const scope = path.join(path.dirname(PROJ), 'external-audition.html').replace(/\\/g, '/');
+  const result = cliResult([
     'add', '-t', 'external output', '--complexity', '3',
-    '--why', 'exercise warning coverage for output outside the repository worktree',
+    '--why', 'exercise refusal coverage for output outside the repository worktree',
     '--file', scope,
   ]);
 
-  assert.deepStrictEqual(added.warnings, [warning]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /declared file scope contains paths outside the repo worktree/);
+  assert.match(result.stderr, /classify as non-repo\/artifact work/);
 });
 
 test('claim echoes declared file scope warning for dispatch visibility', () => {
@@ -306,22 +303,17 @@ test('claim echoes declared file scope warning for dispatch visibility', () => {
   ]);
 });
 
-test('claim echoes outside-worktree output guidance for dispatch visibility', () => {
-  const outside = path.join(path.dirname(PROJ), 'external-dispatch-audition.html');
-  fs.mkdirSync(path.dirname(outside), { recursive: true });
-  fs.writeFileSync(outside, '<main>audition</main>\n');
-  const scope = outside.replace(/\\/g, '/');
-  const added = cliJson([
+test('claim cannot reach external-output guidance after declaration refusal', () => {
+  const scope = path.join(path.dirname(PROJ), 'external-dispatch-audition.html').replace(/\\/g, '/');
+  const result = cliResult([
     'add', '-t', 'claim external output', '--complexity', '3',
-    '--why', 'claim a ticket with external output for dispatch warning coverage',
+    '--why', 'claim a ticket with external output for declaration refusal coverage',
     '--file', scope,
     '--label', 'direct-ok',
   ]);
-  const claim = cliJson(['claim', added.ticket.ref, '--by', 'external-scope-warning-worker', '--direct', '--reason', 'The external output fixture requires a local direct claim.']);
 
-  assert.deepStrictEqual(claim.warnings, [
-    `Dispatch context warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`,
-  ]);
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /declared file scope contains paths outside the repo worktree/);
 });
 
 test('add and update warn only for unknown mentioned ticket refs', () => {
