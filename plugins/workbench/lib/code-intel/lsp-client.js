@@ -201,8 +201,9 @@ function createLspClient({ rootDir, recipe, onExit }) {
   });
 
   function respondToServerRequest(message) {
+    const configuration = recipe.workspaceConfiguration || {};
     const result = message.method === 'workspace/configuration' && Array.isArray(message.params?.items)
-      ? message.params.items.map(() => null)
+      ? message.params.items.map((item) => configuration[item.section] || null)
       : null;
     writeMessage({ jsonrpc: '2.0', id: message.id, result });
   }

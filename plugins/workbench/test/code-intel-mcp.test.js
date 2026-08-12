@@ -16,7 +16,7 @@ const {
   DEFAULT_PROTOCOL_VERSION,
 } = require('../lib/code-intel/mcp.js');
 const registry = require('../lib/code-intel/project-registry.js');
-const { NATIVE_SERVER_ENV, LANGUAGE_SERVER_ENV, registerLanguageServerLocator, unregisterLanguageServerLocator } = require('../lib/code-intel/language-server-locator.js');
+const { NATIVE_SERVER_ENV, LANGUAGE_SERVER_ENV, PYRIGHT_SERVER_ENV, PYTHON_INTERPRETER_ENV, registerLanguageServerLocator, unregisterLanguageServerLocator } = require('../lib/code-intel/language-server-locator.js');
 const { fileToUri } = require('../lib/code-intel/lsp-client.js');
 
 const FAKE_SERVER = path.join(__dirname, 'fixtures', 'fake-language-server.js');
@@ -173,6 +173,37 @@ test('a full tools/call round trip binds to the canonical root and reuses one cl
   assert.equal(registry.activeRootCount(), 1);
 });
 
+test('Python packages under one root keep separate interpreter-keyed clients', async (t) => {
+  const rootDir = fs.mkdtempSync(path.join(os.tmpdir(), 'code-intel-python-monorepo-'));
+  const aiFile = path.join(rootDir, 'poker-ai', 'module.py');
+  const gymFile = path.join(rootDir, 'poker-gym', 'module.py');
+  const executableName = process.platform === 'win32' ? 'python.exe' : 'python';
+  for (const filePath of [aiFile, gymFile]) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(aiFile, 'import installed_dependency\n');
+  fs.writeFileSync(gymFile, 'import installed_dependency\n');
+  for (const packageName of ['poker-ai', 'poker-gym']) {
+    const interpreter = path.join(rootDir, packageName, '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', executableName);
+    fs.mkdirSync(path.dirname(interpreter), { recursive: true });
+    fs.writeFileSync(interpreter, '');
+  }
+  const serverLog = path.join(rootDir, 'server.log');
+  withEnv(t, {
+    [PYRIGHT_SERVER_ENV]: FAKE_SERVER,
+    [PYTHON_INTERPRETER_ENV]: undefined,
+    VIRTUAL_ENV: undefined,
+    PATH: '',
+    FAKE_LSP_PULL: '1',
+    FAKE_LSP_LOG: serverLog,
+  });
+  t.after(() => registry.shutdownAll());
+
+  const ai = await callTool('diagnostics', { root: rootDir, files: [aiFile] });
+  const gym = await callTool('diagnostics', { root: rootDir, files: [gymFile] });
+  assert.equal(ai.isError, undefined, ai.content?.[0]?.text);
+  assert.equal(gym.isError, undefined, gym.content?.[0]?.text);
+  assert.equal(registry.activeRootCount(), 2, 'package interpreters must retain separate pyright clients');
+});
+
 test('clients for distinct languages share a root without eviction', async (t) => {
   const { rootDir, filePath } = makeProject('code-intel-mcp-multilanguage-');
   const pythonPath = path.join(rootDir, 'main.py');
@@ -190,7 +221,7 @@ test('clients for distinct languages share a root without eviction', async (t) =
       };
     },
   };
-  registerLanguageServerLocator('python-test', pythonLocator);
+  registerLanguageServerLocator('python', pythonLocator);
   withEnv(t, {
     [LANGUAGE_SERVER_ENV]: FAKE_SERVER,
     [NATIVE_SERVER_ENV]: undefined,
@@ -198,7 +229,7 @@ test('clients for distinct languages share a root without eviction', async (t) =
     FAKE_LSP_LOG: serverLog,
   });
   t.after(() => {
-    unregisterLanguageServerLocator('python-test');
+    unregisterLanguageServerLocator('python');
     registry.shutdownAll();
   });
 

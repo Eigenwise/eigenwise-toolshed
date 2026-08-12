@@ -88,25 +88,27 @@ function ensureSweepTimer() {
   sweepTimer.unref();
 }
 
-function clientKey(root, language) {
-  return `${root}\u0000${language}`;
+// Pyright's key includes its resolved interpreter, so package environments under one
+// bound root retain independent clients. Sweep and eviction stay per client entry.
+function clientKey(root, language, serverKey = '') {
+  return `${root}\u0000${language}\u0000${serverKey}`;
 }
 
-function clientForRoot(rawRoot, language = 'typescript') {
+function clientForRoot(rawRoot, language = 'typescript', filePath) {
   const canonical = canonicalizeRoot(rawRoot);
   if (canonical.error) {
     sweep();
     return canonical;
   }
-  const key = clientKey(canonical.key, language);
+  const recipe = locateLanguageServer(language, canonical.rootDir, process.env, filePath);
+  if (recipe.error) return { error: recipe.error };
+  const key = clientKey(canonical.key, language, recipe.serverKey);
   const existing = clients.get(key);
   if (existing && existing.client.isAlive()) {
     existing.client.touch();
     return { client: existing.client, rootDir: canonical.rootDir };
   }
   if (existing) clients.delete(key);
-  const recipe = locateLanguageServer(language, canonical.rootDir);
-  if (recipe.error) return { error: recipe.error };
   const client = createLspClient({
     rootDir: canonical.rootDir,
     recipe,

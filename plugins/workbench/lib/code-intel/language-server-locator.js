@@ -2,10 +2,12 @@
 
 const cpp = require('./language-server-locators/cpp');
 const typescript = require('./language-server-locators/typescript');
+const python = require('./language-server-locators/python');
 
 const LOCATORS = new Map([
   ['typescript', typescript],
   ['cpp', cpp],
+  ['python', python],
 ]);
 
 function languageForFile(filePath) {
@@ -16,13 +18,13 @@ function languageForFile(filePath) {
   return null;
 }
 
-function locateLanguageServer(languageOrRootDir, rootDirOrEnv, env = process.env) {
+function locateLanguageServer(languageOrRootDir, rootDirOrEnv, env = process.env, filePath) {
   const language = LOCATORS.has(languageOrRootDir) ? languageOrRootDir : 'typescript';
   const rootDir = language === languageOrRootDir ? rootDirOrEnv : languageOrRootDir;
   const locatorEnv = language === languageOrRootDir ? env : (rootDirOrEnv || process.env);
   const locator = LOCATORS.get(language);
   if (!locator) return { error: `No language server locator is available for ${language}.` };
-  return locator.locate(rootDir, locatorEnv);
+  return locator.locate(rootDir, locatorEnv, filePath);
 }
 
 function registerLanguageServerLocator(language, locator) {
@@ -44,4 +46,6 @@ module.exports = {
   unregisterLanguageServerLocator,
   NATIVE_SERVER_ENV: typescript.NATIVE_SERVER_ENV,
   LANGUAGE_SERVER_ENV: typescript.LANGUAGE_SERVER_ENV,
+  PYRIGHT_SERVER_ENV: python.PYRIGHT_SERVER_ENV,
+  PYTHON_INTERPRETER_ENV: python.PYTHON_INTERPRETER_ENV,
 };

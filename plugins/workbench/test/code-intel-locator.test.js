@@ -6,7 +6,8 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { locateLanguageServer, NATIVE_SERVER_ENV, LANGUAGE_SERVER_ENV } = require('../lib/code-intel/language-server-locator.js');
+const { locateLanguageServer, languageForFile, NATIVE_SERVER_ENV, LANGUAGE_SERVER_ENV } = require('../lib/code-intel/language-server-locator.js');
+const { resolveInterpreter, PYTHON_INTERPRETER_ENV } = require('../lib/code-intel/language-server-locators/python.js');
 
 const cleanEnv = { PATH: '' };
 
@@ -30,6 +31,47 @@ function plantWrapperCli(baseDir) {
   fs.writeFileSync(cliPath, '');
   return cliPath;
 }
+
+test('Python source and interface files select the Python language server', () => {
+  assert.equal(languageForFile('module.py'), 'python');
+  assert.equal(languageForFile('package.pyi'), 'python');
+});
+
+test('Python without a package virtual environment refuses instead of emitting unresolved-import diagnostics', () => {
+  const root = makeTempDir('code-intel-python-no-venv-');
+  const filePath = path.join(root, 'card-classifiers', 'module.py');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, 'import installed_dependency\n');
+  const outcome = resolveInterpreter(root, filePath, cleanEnv);
+  assert.match(outcome.error, /No Python interpreter is available/);
+  assert.match(outcome.error, /WORKBENCH_CODE_INTEL_PYTHON_INTERPRETER/);
+});
+
+test('Python interpreter resolution uses the nearest package virtual environment from the file', () => {
+  const root = makeTempDir('code-intel-python-monorepo-');
+  const pokerAiFile = path.join(root, 'poker-ai', 'source', 'module.py');
+  const pokerGymFile = path.join(root, 'poker-gym', 'source', 'module.py');
+  for (const filePath of [pokerAiFile, pokerGymFile]) fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const executableName = process.platform === 'win32' ? 'python.exe' : 'python';
+  const pokerAiInterpreter = path.join(root, 'poker-ai', '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', executableName);
+  const pokerGymInterpreter = path.join(root, 'poker-gym', '.venv', process.platform === 'win32' ? 'Scripts' : 'bin', executableName);
+  for (const interpreter of [pokerAiInterpreter, pokerGymInterpreter]) {
+    fs.mkdirSync(path.dirname(interpreter), { recursive: true });
+    fs.writeFileSync(interpreter, '');
+  }
+  assert.equal(resolveInterpreter(root, pokerAiFile, cleanEnv).interpreter, pokerAiInterpreter);
+  assert.equal(resolveInterpreter(root, pokerGymFile, cleanEnv).interpreter, pokerGymInterpreter);
+});
+
+test('Python interpreter override wins over package virtual environments', () => {
+  const root = makeTempDir('code-intel-python-override-');
+  const filePath = path.join(root, 'package', 'module.py');
+  const override = path.join(root, 'interpreter');
+  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  fs.writeFileSync(filePath, '');
+  fs.writeFileSync(override, '');
+  assert.equal(resolveInterpreter(root, filePath, { ...cleanEnv, [PYTHON_INTERPRETER_ENV]: override }).interpreter, override);
+});
 
 test('locator finds the native TypeScript 7 executable in the project', () => {
   const root = makeTempDir('code-intel-locate-native-');

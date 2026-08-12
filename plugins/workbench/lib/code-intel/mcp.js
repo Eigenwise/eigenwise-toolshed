@@ -81,7 +81,7 @@ function clientFor(rootDir, file) {
     const compileDatabase = cpp.validateFile(rootDir, file);
     if (compileDatabase.error) throw new Error(compileDatabase.error);
   }
-  const bound = registry.clientForRoot(rootDir, language);
+  const bound = registry.clientForRoot(rootDir, language, file);
   if (bound.error) throw new Error(bound.error);
   return bound.client;
 }
