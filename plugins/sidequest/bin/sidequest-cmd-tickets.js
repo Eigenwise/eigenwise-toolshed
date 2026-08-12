@@ -131,6 +131,7 @@ function addPreview(opts, category, complexity) {
   };
 }
 async function cmdAdd(opts) {
+  if (opts.priority === "medium") opts.priority = "normal";
   const input = validatedAddInput(opts);
   if (opts["dry-run"]) {
     const ticket2 = addPreview(opts, input.category, input.complexity);
@@ -260,7 +261,7 @@ async function cmdUpdate(opts, positional) {
   if (opts.title != null) patch.title = opts.title;
   if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
   if (opts.status != null) patch.status = opts.status;
-  if (opts.priority != null) patch.priority = opts.priority;
+  if (opts.priority != null) patch.priority = opts.priority === "medium" ? "normal" : opts.priority;
   if (opts["high-stakes"] !== void 0) patch.highStakes = highStakesFromOpts(opts);
   if (opts.label != null) patch.labels = opts.label;
   if (opts.image != null) patch.images = opts.image;

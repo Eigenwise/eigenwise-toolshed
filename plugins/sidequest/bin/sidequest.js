@@ -18,7 +18,9 @@ const ALIASES = {
   i: "image",
   s: "status",
   b: "by",
-  m: "body"
+  m: "body",
+  message: "message",
+  append: "append"
 };
 function parseArgs(argv) {
   const opts = {};

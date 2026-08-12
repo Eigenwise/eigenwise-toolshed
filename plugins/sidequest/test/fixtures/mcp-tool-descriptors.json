@@ -57,6 +57,10 @@
           "type": "boolean",
           "description": "Full comments; default for status."
         },
+        "brief": {
+          "type": "boolean",
+          "description": "One compact row per ticket."
+        },
         "cursor": {
           "type": "string"
         },

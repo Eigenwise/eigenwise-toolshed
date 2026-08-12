@@ -240,18 +240,20 @@ async function cmdUnremind(opts: any, positional: any) {
 async function cmdComment(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('comment: pass a ticket id or ref, e.g. sidequest comment SQ-3 -m "note"');
-  const body = await bodyFromOpts(opts, 'comment');
+  const acceptedMessage = opts.body == null && opts.message != null;
+  const body = await bodyFromOpts(acceptedMessage ? Object.assign({}, opts, { body: opts.message }) : opts, 'comment');
   if (!body || !String(body).trim()) fail('comment: -m/--body or --body-file is required, e.g. sidequest comment SQ-3 -m "note"');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const res = store.addComment(slug, idOrRef, { by, body, source: opts.source || 'cli' });
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, acceptedMessage ? { acceptedAliases: ['accepted message as body'] } : {}), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
   }
   if (res.ok) {
     console.log(`✓ » comment added to ${res.ticket.ref} by "${by}"  — ${meta.name}`);
+    if (acceptedMessage) console.log('  accepted message as body');
     if (res.advisory) console.log(`  advisory: ${res.advisory}`);
   } else {
     process.exitCode = 1;
@@ -294,19 +296,25 @@ async function cmdComments(opts: any, positional: any) {
 
 async function cmdLink(opts: any, positional: any) {
   // sidequest link SQ-1 <blocks|depends-on|related> SQ-2
-  const a = positional[0];
-  const verb = positional[1];
-  const b = positional[2];
+  const a = positional[0] || opts.ref;
+  const verb = positional[1] || opts.type;
+  const b = positional[2] || opts.target;
+  const acceptedAliases = [
+    ...(positional[0] == null && opts.ref != null ? ['accepted ref as from'] : []),
+    ...(positional[1] == null && opts.type != null ? ['accepted type as verb'] : []),
+    ...(positional[2] == null && opts.target != null ? ['accepted target as to'] : []),
+  ];
   if (!a || !verb || !b) fail('link: usage — sidequest link SQ-1 <blocks|depends-on|related> SQ-2');
   const { slug, meta } = await resolveProject(opts);
   const res = store.linkTickets(slug, a, verb, b);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, acceptedAliases.length ? { acceptedAliases } : {}), null, 2) + '\n');
     if (!res.ok) process.exitCode = 1;
     return;
   }
   if (res.ok) {
     console.log(`✓ linked ${res.from.ref} ${res.type} ${res.to.ref}  — ${meta.name}`);
+    for (const acceptedAlias of acceptedAliases) console.log(`  ${acceptedAlias}`);
   } else {
     process.exitCode = 1;
     const messages: any = {
