@@ -188,6 +188,22 @@ test('the suite environment carries no credentials a push could use', async () =
   assert.equal(env.GIT_CONFIG_NOSYSTEM, '1');
 });
 
+test('the suite environment carries no ambient Claude session or agent identity', async () => {
+  const { suiteEnvironment } = await import('../cut.mjs');
+  const env = suiteEnvironment({
+    PATH: '/usr/bin',
+    CLAUDE_CODE_SESSION_ID: 'developer-session',
+    CLAUDE_SESSION_ID: 'legacy-developer-session',
+    SIDEQUEST_SESSION: 'sidequest-developer-session',
+    SIDEQUEST_AGENT: 'developer-agent',
+  });
+
+  for (const name of ['CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'SIDEQUEST_SESSION', 'SIDEQUEST_AGENT']) {
+    assert.equal(env[name], undefined, `${name} must not reach a suite`);
+  }
+  assert.equal(env.PATH, '/usr/bin', 'the rest of the environment survives');
+});
+
 test('a pre-staged file cannot ride into the release commit, even with --allow-dirty', async (t) => {
   const repo = setup(t);
   repo.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });

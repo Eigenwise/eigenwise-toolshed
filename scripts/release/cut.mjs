@@ -56,6 +56,15 @@ const SUITE_CREDENTIAL_DENYLIST = [
   'AWS_ACCESS_KEY_ID', 'AWS_SECRET_ACCESS_KEY', 'GITLAB_TOKEN', 'CI_JOB_TOKEN',
 ];
 
+// A suite run from inside Claude Code inherits a real session and agent identity,
+// and CI has neither. Sidequest reads exactly these when a claim binds an isolated
+// dispatch, so leaving them set let a test that never passed --session bind off the
+// developer's own session and go green locally while CI refused unbound_dispatch.
+// A test that needs an identity sets its own.
+const SUITE_RUNTIME_IDENTITY_DENYLIST = [
+  'CLAUDE_CODE_SESSION_ID', 'CLAUDE_SESSION_ID', 'SIDEQUEST_SESSION', 'SIDEQUEST_AGENT',
+];
+
 function releaseLockOwner() {
   return process.env.SIDEQUEST_AGENT
     || process.env.CLAUDE_CODE_SESSION_ID
@@ -90,6 +99,7 @@ function publishLockReleaseFailure(result) {
 export function suiteEnvironment(base = process.env) {
   const env = { ...base };
   for (const name of SUITE_CREDENTIAL_DENYLIST) delete env[name];
+  for (const name of SUITE_RUNTIME_IDENTITY_DENYLIST) delete env[name];
   for (const name of Object.keys(env)) {
     if (name.startsWith('GIT_CONFIG_')) delete env[name];
   }
