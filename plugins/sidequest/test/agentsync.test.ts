@@ -905,6 +905,7 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(linked.includes('Worktree identity: linked worktree'));
   assert.ok(linked.includes(`Path: ${linkedWorktree}`));
   assert.ok(linked.includes(`Git dir: ${path.join(root, '.git', 'worktrees', 'agent-briefing-worker')}`));
+  assert.match(linked, /harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path/);
   assert.doesNotMatch(linked, /Working directory binding:/);
 
   const shared = agentsync.renderTicketBriefing(Object.assign({}, base, {

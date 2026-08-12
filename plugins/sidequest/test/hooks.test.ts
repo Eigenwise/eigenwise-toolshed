@@ -48,6 +48,7 @@ const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
 const GUARD_BASH_WINDOWS_PATHS = path.join(HOOKS, 'guard-bash-windows-paths.js');
+const GUARD_HEREDOC_ISOLATED = path.join(HOOKS, 'guard-heredoc-isolated.js');
 const GUARD_POWERSHELL_CMD_SHIMS = path.join(HOOKS, 'guard-powershell-cmd-shims.js');
 const REPEATED_COMMAND_WARN = path.join(HOOKS, 'repeated-command-warn.js');
 const INLINE_WORK_NUDGE = path.join(HOOKS, 'inline-work-nudge.js');
@@ -1754,6 +1755,34 @@ test('worktree isolation guard: allows unparseable read and verify-wrapper Bash 
       tool_input: { command },
     }), null, command);
   }
+});
+
+test('heredoc guard: denies a heredoc in a dispatched isolated worktree', () => {
+  const ticket = addStopTicket('heredoc isolation guard');
+  const sessionId = `heredoc-isolated-${++sqSeq}`;
+  const acting = claimStopTicket(ticket, sessionId, 'heredoc-worker');
+  const out = runHookOutput(GUARD_HEREDOC_ISOLATED, {
+    ...acting,
+    tool_name: 'Bash',
+    tool_input: { command: "node - <<'JS'\nconsole.log('probe');\nJS" },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /harness refuses heredocs in isolated worktrees/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /Write the script to your scratchpad and run it by path/);
+});
+
+test('heredoc guard: stays silent for non-isolated and non-heredoc Bash commands', () => {
+  const heredoc = "node - <<'JS'\nconsole.log('probe');\nJS";
+  assert.strictEqual(runHookOutput(GUARD_HEREDOC_ISOLATED, {
+    tool_name: 'Bash',
+    cwd: path.join(BOARD_PATH, 'src'),
+    tool_input: { command: heredoc },
+  }), null);
+  assert.strictEqual(runHookOutput(GUARD_HEREDOC_ISOLATED, {
+    tool_name: 'Bash',
+    cwd: path.join(BOARD_PATH, '.claude', 'worktrees', 'agent-heredoc-fixture'),
+    tool_input: { command: 'node script.js' },
+  }), null);
 });
 
 test('home-delete guard: blocks the 2026-07-16 incident command verbatim', () => {
