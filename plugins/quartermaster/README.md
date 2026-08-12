@@ -27,8 +27,9 @@ Then `/quartermaster:setup` in a project, or `/quartermaster:resupply` after som
 
 ## How it works
 
-Two cheap hooks and two skills. The hooks never analyze content and never call a model.
+Three cheap hooks and two skills. The hooks never call a model.
 
+- **SessionStart auto-allowlist hook**: opt-in only. Once the project enables it, the hook streams the bounded recent-transcript window and appends project-local `permissions.allow` entries for a tool fingerprint approved at least three times with no user rejection. Bash rules use the normalized command prefix. Destructive commands are reported but never added. Every addition is logged to the decision ledger and printed. Enable it with `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"`; it writes only `.claude/settings.local.json`.
 - **SessionEnd hook**: streams the transcript that just ended and records a small tally per
   session (prompts, denials, interrupts, corrections, tool errors) under
   `~/.claude/quartermaster-state/`. Local file reads only.
@@ -73,6 +74,8 @@ node bin/quartermaster.js decisions list
 node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected ...
 node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
+node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40]
+node bin/quartermaster.js enable-auto-allowlist [--project <path>]
 ```
 
 Everything prints JSON. Node stdlib only, no dependencies, cross-platform.
