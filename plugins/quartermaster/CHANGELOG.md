@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.0 (2026-08-12)
+
+Released in v3.456.0, up from 0.4.1.
+
+### Features
+
+- Add C++ code intelligence (SQ-1840)
+  Workbench can use clangd for C and C++ when the project supplies a current compile database.
+
 ## 0.4.1 (2026-08-12)
 
 Released in v3.455.0, up from 0.4.0.

@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.456.0 (2026-08-12)
+
+### quartermaster 0.4.1 → 0.5.0
+
+#### Features
+
+- Add C++ code intelligence (SQ-1840)
+  Workbench can use clangd for C and C++ when the project supplies a current compile database.
+
+### workbench 0.87.0 → 0.88.0
+
+#### Features
+
+- Add Python code intelligence (SQ-1837)
+  Add Pyright code intelligence with package-aware Python interpreter resolution.
+- Add C++ code intelligence (SQ-1840)
+  Workbench can use clangd for C and C++ when the project supplies a current compile database.
+
 ## v3.455.0 (2026-08-12)
 
 ### quartermaster 0.4.0 → 0.4.1
