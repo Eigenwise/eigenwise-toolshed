@@ -494,10 +494,6 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
         : configuredScope.length && !packageScope.length
           ? 'scope under board policy'
           : 'same-package scope derived from the ticket’s declared files';
-    // A ticket that declares nothing refuses EVERY path, always, because the
-    // package-scope derivation has no root to work from. Telling that executor to
-    // hand back names the symptom; the fix belongs to whoever filed the ticket, so
-    // say which one it is (SQ-1846).
     const undeclared = !normalizeFiles(t.files).length
       ? ` This ticket declares no files, so no path can be in scope and every request refuses. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.`
       : '';

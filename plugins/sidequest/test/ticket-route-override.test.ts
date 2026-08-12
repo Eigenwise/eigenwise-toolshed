@@ -50,8 +50,8 @@ test('a ticket route override prepares its own marker and leaves sibling routing
     source: 'test',
   });
 
-  const overrideDispatch = store.prepareDispatch(slug, overridden.ref, { sessionId: 'ticket-override' });
-  const siblingDispatch = store.prepareDispatch(slug, sibling.ref, { sessionId: 'ticket-sibling' });
+  const overrideDispatch = store.prepareDispatch(slug, overridden.ref, { allowUnscoped: true, sessionId: 'ticket-override' });
+  const siblingDispatch = store.prepareDispatch(slug, sibling.ref, { allowUnscoped: true, sessionId: 'ticket-sibling' });
 
   assert.deepEqual(overrideDispatch.ticket.dispatch.route, { model: 'codex-sol', effort: 'high', marker: 'gpt-5.6-sol' });
   assert.deepEqual(siblingDispatch.ticket.dispatch.route, { model: 'codex-terra', effort: 'medium', marker: 'gpt-5.6-terra' });
@@ -67,7 +67,7 @@ test('an unavailable ticket route override refuses instead of falling back', () 
   });
 
   assert.throws(
-    () => store.prepareDispatch(slug, ticket.ref, { sessionId: 'unavailable-ticket-override' }),
+    () => store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'unavailable-ticket-override' }),
     /route override model "codex-unavailable" isn't currently available; explicit route overrides never fall back/,
   );
   assert.equal(store.getTicket(slug, ticket.ref).dispatchNonce, null);

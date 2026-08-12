@@ -174,7 +174,10 @@ function storyContractDriftWarnings(...args: any[]) { return warningsLayer.story
 function crossTicketStateWarnings(...args: any[]) { return warningsLayer.crossTicketStateWarnings(...args); }
 function staleWorktreeCwdWarning(...args: any[]) { return warningsLayer.staleWorktreeCwdWarning(...args); }
 function dispatchUncertaintyWarnings(...args: any[]) { return warningsLayer.dispatchUncertaintyWarnings(...args); }
-function dispatchWarnings(...args: any[]) { return warningsLayer.dispatchWarnings(...args); }
+function dispatchWarnings(ticket?: any, slug?: any) {
+  const project = !slug && process.env.CLAUDE_PROJECT_DIR ? findProject(process.env.CLAUDE_PROJECT_DIR) : null;
+  return warningsLayer.dispatchWarnings(ticket, slug || (project?.ok ? project.slug : null));
+}
 function dispatchDeclaredFiles(...args: any[]) { return warningsLayer.dispatchDeclaredFiles(...args); }
 function externalDeclaredFiles(...args: any[]) { return warningsLayer.externalDeclaredFiles(...args); }
 function nonRepoExternalOutput(...args: any[]) { return warningsLayer.nonRepoExternalOutput(...args); }
@@ -183,7 +186,10 @@ function diffShapedBlock(...args: any[]) { return warningsLayer.diffShapedBlock(
 function evidenceShapedBlock(...args: any[]) { return warningsLayer.evidenceShapedBlock(...args); }
 function embedsCompleteEdit(...args: any[]) { return warningsLayer.embedsCompleteEdit(...args); }
 function presolvedRoutingWarnings(...args: any[]) { return warningsLayer.presolvedRoutingWarnings(...args); }
-function ticketPlanningWarnings(...args: any[]) { return warningsLayer.ticketPlanningWarnings(...args); }
+function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
+  const project = projectPath ? findProject(projectPath) : null;
+  return warningsLayer.ticketPlanningWarnings(ticket, projectPath, project?.ok ? project.slug : null);
+}
 function presentWarnings(...args: any[]) { return warningsLayer.presentWarnings(...args); }
 function normalizeReadonlyOverride(...args: any[]) { return warningsLayer.normalizeReadonlyOverride(...args); }
 function requestedReadonlyOverride(...args: any[]) { return warningsLayer.requestedReadonlyOverride(...args); }
@@ -389,6 +395,7 @@ const {
   assertDispatchTransport,
   assertSidequestInstall,
   availableRoute: (...args: any[]) => availableRoute(...args),
+  boardConfig,
   claimReclaimable: (...args: any[]) => claimReclaimable(...args),
   claimVerification: (...args: any[]) => claimVerification(...args),
   commitScope,
@@ -2341,7 +2348,7 @@ projectsLayer = createProjects({
 });
 
 warningsLayer = createWarnings({
-  categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly,
+  boardConfig, categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly,
   dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles,
   normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory,
 });

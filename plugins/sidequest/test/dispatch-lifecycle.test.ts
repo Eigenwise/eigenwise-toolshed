@@ -308,8 +308,8 @@ test('launched dispatches without an executor identity, claim, or checkpoint are
 test('same-name launches on different projects remain ambiguous', () => {
   const otherProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-other-project-'));
   const otherSlug = store.ensureProject(otherProject).slug;
-  const first = store.createTicket(slug, { title: 'cross-project identity fixture', category: 'dispatch.lifecycle', source: 'test' });
-  const second = store.createTicket(otherSlug, { title: 'cross-project identity fixture', category: 'dispatch.lifecycle', source: 'test' });
+  const first = store.createTicket(slug, { title: 'cross-project identity fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test' });
+  const second = store.createTicket(otherSlug, { title: 'cross-project identity fixture', category: 'dispatch.lifecycle', files: ['tracked.js'], source: 'test' });
   const sessionId = `cross-project-${Date.now()}`;
   const agentName = 'same-project-local-launch-name';
   const firstPrepared = store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: true });
@@ -1518,7 +1518,7 @@ function runTeammateIdle(teammateName?: any) {
 function finishDispatch(title?: any, options: any = {}) {
   const ticket = store.createTicket(slug, { title, category: 'dispatch.lifecycle', source: 'test' });
   const sessionId = options.sessionId || `idle-${ticket.id}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, allowUnscoped: true });
   const executor = prepared.ticket.dispatchExecutor;
   const agentName = options.agentName || `idle-teammate-${ticket.id}`;
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, { sessionId, token: prepared.token, executor, agentName }).ok, true);

@@ -293,7 +293,7 @@ test('pre-tool hook: a spawn prompt naming another ticket still records its laun
     source: 'cli',
   });
   const sessionId = `prompt-extra-refs-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const command = `node "C:\\\\launcher\\\\sidequest-launcher.js" briefing ${ticket.ref} --token ${prepared.token} --project "${BOARD_PATH}"`;
   const prompt = [
     '[sidequest-route model=gpt-5.6-terra effort=high]',
@@ -329,7 +329,7 @@ test('pre-tool hook: an executor cannot redispatch its own active ticket', () =>
     source: 'cli',
   });
   const sessionId = `own-dispatch-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const agentId = `own-dispatch-agent-${sqSeq}`;
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
@@ -368,7 +368,7 @@ test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   const project = store.ensureProject(projectPath).slug;
   const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', source: 'cli' });
   const sessionId = `shared-commit-${++sqSeq}`;
-  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, sharedTree: true });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
   const agentId = `shared-commit-agent-${sqSeq}`;
   assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
     sessionId,
@@ -603,7 +603,7 @@ test('pre-tool hook: a generated per-ticket executor definition owns its ticket 
   // the sole-active-ticket fallback masks a failed identity match (contractify ran
   // SQ-64 and SQ-85 concurrently).
   claimStopTicket(addStopTicket('concurrent generated sibling', { files: ['lib/sibling.js'] }), sessionId, 'generated-sibling');
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const agentName = `asq-${ticket.id}-generated-${sqSeq}`;
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
@@ -847,7 +847,7 @@ test('pre-tool hook: an unbound helper can restore only one declared file to HEA
   const sibling = store.createTicket(project, { title: 'revert sibling', category: 'debugging', files: ['lib/sibling.js'], source: 'cli' });
   const sessionId = `helper-revert-${++sqSeq}`;
   for (const [ticket, agentName] of [[parent, 'revert-owner'], [sibling, 'revert-sibling']] as const) {
-    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId, sharedTree: true });
+    const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: true });
     assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
       sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
     }).ok, true);
@@ -981,7 +981,7 @@ test('task-output guard: blocks Sidequest native task identities and dispatched 
   const sessionId = `task-output-${Date.now()}`;
   const agentName = 'friendly-launch-name';
   const agentId = 'native-task@session-sidequest-guard';
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId, token: prepared.token, executor: prepared.ticket.dispatchExecutor, agentName,
   }).ok, true);
@@ -1301,7 +1301,7 @@ test('peer-guard: a main-thread SendMessage (no agent_type) is allowed', () => {
 test('peer-guard: terminal dispatch blocks delayed steering before delivery', () => {
   const ticket = addEffortTicket('terminal executor cannot be revived', 'high');
   const sessionId = `terminal-message-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const executorName = 'finished-dispatch-worker';
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
@@ -1411,7 +1411,7 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
   const category = 'general';
   const isolated = store.createTicket(isolatedSlug, { title: 'missing worktree cannot be resumed', category, files: ['lib'], source: 'cli' });
   const sessionId = `missing-worktree-${++sqSeq}`;
-  const prepared = store.prepareDispatch(isolatedSlug, isolated.ref, { sessionId, sharedTree: false });
+  const prepared = store.prepareDispatch(isolatedSlug, isolated.ref, { allowUnscoped: true, sessionId, sharedTree: false });
   assert.equal(prepared.ticket.dispatch.sharedTree, false);
   const isolatedName = 'missing-worktree-worker';
   const agentId = `missing-worktree-agent-${sqSeq}`;
@@ -1435,7 +1435,7 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
 
   const shared = store.createTicket(isolatedSlug, { title: 'shared worker remains reachable', category, files: ['lib'], source: 'cli' });
   const sharedSession = `shared-worktree-${++sqSeq}`;
-  const sharedPrepared = store.prepareDispatch(isolatedSlug, shared.ref, { sessionId: sharedSession, sharedTree: true });
+  const sharedPrepared = store.prepareDispatch(isolatedSlug, shared.ref, { allowUnscoped: true, sessionId: sharedSession, sharedTree: true });
   assert.equal(sharedPrepared.ticket.dispatch.sharedTree, true);
   assert.equal(store.recordDispatchLaunch(isolatedSlug, shared.ref, {
     sessionId: sharedSession,
@@ -1496,7 +1496,7 @@ test('teammate-idle: live and scope-paused claims remain alive', () => {
 test('peer-guard: an active dispatch still accepts main-thread steering', () => {
   const ticket = addEffortTicket('active executor accepts steering', 'high');
   const sessionId = `active-message-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const executorName = 'active-dispatch-worker';
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
@@ -1958,7 +1958,7 @@ test('stop reminder: ignores this session\'s live dispatched tickets before and 
   const doing = addTicket('executor is verifying');
   const awaitingClaim = addTicket('executor is bound before its claim');
   claimStopTicket(doing, sessionId, 'reconcile-live-doing');
-  const prepared = store.prepareDispatch(slug, awaitingClaim.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, awaitingClaim.ref, { allowUnscoped: true, sessionId });
   const agentId = `stop-agent-${awaitingClaim.id}-${++sqSeq}`;
   const agentName = `stop-executor-${awaitingClaim.id}-${sqSeq}`;
   assert.equal(store.recordDispatchLaunch(slug, awaitingClaim.ref, {
@@ -2728,7 +2728,7 @@ function addEffortTicket(title?: any, effort?: any) {
 }
 
 function claimStopTicket(ticket?: any, sessionId?: any, by?: any, projectSlug: string = slug) {
-  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { allowUnscoped: true, sessionId });
   const agentId = `stop-agent-${ticket.id}-${++sqSeq}`;
   const agentName = `stop-executor-${ticket.id}-${sqSeq}`;
   assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, {
@@ -3013,7 +3013,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
   process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
   try {
     const ticket = fixtureTicket('SQ-753 marker form regression', 'codex-gpt-5-6-terra', 'high');
-    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `marker-form-${++sqSeq}` });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: `marker-form-${++sqSeq}` });
     assert.equal(prepared.ticket.dispatch.route.model, 'codex-gpt-5-6-terra');
     assert.equal(prepared.ticket.dispatch.route.marker, 'gpt-5.6-terra');
 
@@ -3062,7 +3062,7 @@ test('pre-tool hook: a prepared Codex route requires its marker and executor cla
   process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
   try {
     const ticket = fixtureTicket('SQ-1494 prepared Codex route', 'codex-gpt-5-6-terra', 'high');
-    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `route-class-${++sqSeq}` });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: `route-class-${++sqSeq}` });
     const projectPath = store.readMeta(slug).path;
     const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
     const marker = '[sidequest-route model=gpt-5.6-terra effort=high]';
@@ -3095,7 +3095,7 @@ test('pre-tool hook: a prepared Codex route requires its marker and executor cla
 test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject integrity drift', () => {
   const ticket = addEffortTicket('correct prepared dispatch spawn drift', 'high');
   const sessionId = `description-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const projectPath = store.readMeta(slug).path;
   const description = prepared.ticket.dispatch.description;
   assert.equal(description, `Claude Sonnet, high · ${ticket.title}`);
@@ -3158,7 +3158,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   assert.match(driftedBriefing.hookSpecificOutput.permissionDecisionReason, /briefing command must match the prepared spawn/);
 
   assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, null, expectedName).stopped, true);
-  store.prepareDispatch(slug, ticket.ref, { sessionId });
+  store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const staleToken = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     tool_name: 'Agent',
@@ -3183,7 +3183,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
 test('dispatch ledger records an authoritative launch, agent bind, and claim acknowledgement', () => {
   const ticket = addEffortTicket('dispatch launch acknowledgement', 'high');
   const sessionId = `launch-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const projectPath = store.readMeta(slug).path;
   const prompt = `Work ${ticket.ref} --project "${projectPath}" --token ${prepared.token}`;
   const launch = runHookOutput(FORCE_BYPASS, {
@@ -3240,7 +3240,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
       store.setCategory({ id: category, name: category, route: { model, effort }, fallback: null, readonly: true, enabled: true });
       const ticket = store.createTicket(slug, { title: `readonly ${category} hook fixture`, category, source: 'cli' });
       const sessionId = `readonly-${category}-${++sqSeq}`;
-      const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+      const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
       assert.equal(prepared.ticket.dispatchExecutor, expectedExecutor);
       const marker = expectedExecutor.includes('dispatch')
         ? `\n[sidequest-route model=${prepared.ticket.dispatch.route.marker} effort=${effort}]`
@@ -3294,8 +3294,8 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
   const second = addEffortTicket('second same-type dispatch', 'high');
   const sessionId = `concurrent-${++sqSeq}`;
   const projectPath = store.readMeta(slug).path;
-  const preparedFirst = store.prepareDispatch(slug, first.ref, { sessionId });
-  const preparedSecond = store.prepareDispatch(slug, second.ref, { sessionId });
+  const preparedFirst = store.prepareDispatch(slug, first.ref, { allowUnscoped: true, sessionId });
+  const preparedSecond = store.prepareDispatch(slug, second.ref, { allowUnscoped: true, sessionId });
   const launches = [preparedFirst, preparedSecond].map((prepared) => runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     tool_name: 'Agent',
@@ -3350,7 +3350,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
 test('session start reconciles a reload-lost launch once and leaves it ready to respawn', () => {
   const ticket = addEffortTicket('reload before claim', 'high');
   const sessionId = `reload-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
     token: prepared.token,
@@ -3371,7 +3371,7 @@ test('session start reconciles a reload-lost launch once and leaves it ready to 
 test('subagent stop terminalizes an unclaimed launch so the next dispatch can recover safely', () => {
   const ticket = addEffortTicket('stop before claim', 'high');
   const sessionId = `stop-${++sqSeq}`;
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
     token: prepared.token,
