@@ -180,7 +180,8 @@ Usage:
   sidequest stop                                 stop the running board server
 
   -d/-m accept full markdown (headings, lists, fenced code, blockquotes, links, **bold**/*italic*/inline
-    code) — use real newlines in the value (heredoc or $'...\\n...'), never a literal backslash-n.
+    code). Use real newlines in the value, never a literal backslash-n: $'line one\\nline two' works
+    everywhere, while a heredoc is refused inside an isolated worktree.
 
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
