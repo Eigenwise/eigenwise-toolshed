@@ -682,7 +682,7 @@ test('story contracts keep a durable 256 KiB capacity while reads page with stab
   assert.equal(store.updateStory(project, story.ref, { executionContract: maximum }).executionContract, maximum);
   assert.throws(
     () => store.updateStory(project, story.ref, { executionContract: `${maximum}x` }),
-    /durable capacity of 262144 UTF-8 bytes/,
+    /story execution contract is 262145 UTF-8 bytes, 1 over the 262144-byte capacity\./,
   );
 
   const pulse = await callTool('pulse', { project, ref: ticket.ref });

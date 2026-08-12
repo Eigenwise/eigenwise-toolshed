@@ -35,6 +35,20 @@ function append(storyRef: string, ref: string, by: string, entry: string) {
   return store.appendStoryLogEntry(slug, storyRef, { ref, by, entry });
 }
 
+test('story execution contract errors report measured bytes and overage', () => {
+  const overage = 123;
+  const measuredBytes = store.STORY_EXECUTION_CONTRACT_MAX_BYTES + overage;
+  assert.throws(
+    () => store.createStory(slug, { title: 'Oversized contract', executionContract: 'x'.repeat(measuredBytes) }),
+    (error: Error) => {
+      assert.equal(
+        error.message,
+        `story execution contract is ${measuredBytes} UTF-8 bytes, ${overage} over the ${store.STORY_EXECUTION_CONTRACT_MAX_BYTES}-byte capacity.`,
+      );
+      return true;
+    },
+  );
+});
 test('append normalizes a one-line entry and records ticket attribution', () => {
   const createdStory = story();
   const ticket = member(createdStory.ref);
