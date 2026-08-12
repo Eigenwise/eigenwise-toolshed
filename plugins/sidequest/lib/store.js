@@ -476,6 +476,7 @@ const {
   appendReworkEvent,
   dispatchTokenDigest,
   dispatchTokenMatches,
+  dispatchTokenForRequest,
   isSupersededDispatchToken,
   routingPolicyAffectsTicket,
   expiredPreparedDispatch,
@@ -531,6 +532,7 @@ const {
   fs,
   getCategory: (...args) => getCategory(...args),
   getStory: (...args) => getStory(...args),
+  homeRoot: () => process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest"),
   integrationTarget,
   preferredWorktreeIntegrationTarget,
   agentWorktreePath,
@@ -1449,10 +1451,11 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (opts.direct && isRoutedTicket(t2) && !directClaimReason) return { ok: false, reason: "direct_reason_required", ticket: t2 };
     if (opts.direct && isRoutedTicket(t2) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: "direct_not_allowed", ticket: t2, expectedExecutor: t2.dispatchExecutor || t2.exec?.agent || null };
     const currentDispatch = dispatchState(t2);
+    const providedToken = dispatchTokenForRequest(opts.token, opts.tokenFile);
     const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
     if (opts.direct && t2.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t2 };
     if (opts.direct && t2.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t2 };
-    if (!opts.direct && t2.dispatchNonce && !dispatchTokenMatches(t2.dispatchNonce, opts.token)) return { ok: false, reason: "token", ticket: t2 };
+    if (!opts.direct && t2.dispatchNonce && !dispatchTokenMatches(t2.dispatchNonce, providedToken)) return { ok: false, reason: "token", ticket: t2 };
     if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
     if (t2.status === "done") return { ok: false, reason: "done", ticket: t2 };
@@ -2361,6 +2364,7 @@ module.exports = {
   executorClaimDispatchRefusal,
   prepareDispatch,
   readDispatchBriefing,
+  dispatchTokenForRequest,
   isSupersededDispatchToken,
   recordDispatchLaunch,
   recordDispatchAgentFailure,

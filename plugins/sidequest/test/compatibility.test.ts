@@ -108,8 +108,8 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('changes')?.description, 'Poll ticket changes.');
   assert.match(byName.get('claim')?.description ?? '', /Claim before work/);
   assert.deepEqual(
-    Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token'].includes(name)).sort(),
-    ['by', 'effort', 'executor', 'token'],
+    Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token', 'tokenFile'].includes(name)).sort(),
+    ['by', 'effort', 'executor', 'token', 'tokenFile'],
   );
   const submit = byName.get('submit');
   assert.deepEqual(

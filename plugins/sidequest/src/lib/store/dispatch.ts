@@ -1,7 +1,7 @@
 'use strict';
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -32,6 +32,43 @@ function mintDispatchToken() {
 
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
+}
+
+function dispatchTokenFile(ticket?: any) {
+  return typeof ticket?.dispatch?.tokenFile === 'string' ? ticket.dispatch.tokenFile : null;
+}
+
+function newDispatchTokenFile() {
+  return path.join(homeRoot(), 'dispatch-tokens', `${crypto.randomUUID()}.token`);
+}
+
+function writeDispatchTokenFile(ticket?: any) {
+  const file = dispatchTokenFile(ticket);
+  if (!file) throw new Error('dispatch token file is unavailable');
+  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  fs.writeFileSync(file, `${ticket.dispatchNonce}\n`, { encoding: 'utf8', mode: 0o600 });
+  return file;
+}
+
+function removeDispatchTokenFile(ticket?: any) {
+  const file = dispatchTokenFile(ticket);
+  if (!file) return;
+  try { fs.unlinkSync(file); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+}
+
+function dispatchTokenFromFile(file?: any) {
+  const tokenFile = String(file || '').trim();
+  if (!tokenFile) return null;
+  try {
+    const token = fs.readFileSync(tokenFile, 'utf8').trim();
+    return token && !/[\r\n]/.test(token) ? token : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function dispatchTokenForRequest(token?: any, tokenFile?: any) {
+  return token == null || token === '' ? dispatchTokenFromFile(tokenFile) : token;
 }
 
 function dispatchState(ticket?: any) {
@@ -880,7 +917,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         at: now,
       });
     }
+    const priorTokenFile = dispatchTokenFile(t);
     t.dispatchNonce = mintDispatchToken();
+    if (priorTokenFile) {
+      try { fs.unlinkSync(priorTokenFile); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+    }
     // A released dispatch hands its binding to the next attempt so a
     // continuation keeps the same worktree scope. An EMPTY released binding
     // must not be inherited: it pinned the first attempt's missing scope onto
@@ -972,6 +1013,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ...(artifactMode ? { artifactDirtyBaseline } : {}),
       ...(sharedTree ? { dirtyBaseline: artifactDirtyBaseline || captureDirtyBaseline(slug) } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+      tokenFile: newDispatchTokenFile(),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, preparedExec),
       launchSeq,
@@ -997,19 +1039,21 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ...(supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {}),
       ...(recovery ? { recovery } : {}),
     };
+    writeDispatchTokenFile(t);
     stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
   });
 }
 
-function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any) {
+function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?: any) {
   const ticket = getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: 'not_found' };
   const state = dispatchState(ticket);
+  const receivedToken = dispatchTokenForRequest(token, tokenFile);
   if (!state || !ticket.dispatchNonce) return { ok: false, reason: 'token' };
   if (state.terminalAt) return { ok: false, reason: 'stale' };
-  if (!dispatchTokenMatches(ticket.dispatchNonce, token)) {
+  if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
     return { ok: false, reason: 'token' };
   }
   return { ok: true, ticket };
@@ -1021,7 +1065,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
     }
     const state = dispatchState(t);
@@ -1065,7 +1109,7 @@ function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   const recorded = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
     }
     const state = dispatchState(t);
@@ -1100,7 +1144,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
     }
     if (t.claim && t.claim.by) return { ok: false, reason: 'claimed' };
@@ -1502,6 +1546,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     appendReworkEvent,
     dispatchTokenDigest,
     dispatchTokenMatches,
+    dispatchTokenForRequest,
     isSupersededDispatchToken,
     routingPolicyAffectsTicket,
     refreshPreparedDispatches,

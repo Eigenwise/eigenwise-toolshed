@@ -22,7 +22,8 @@ interface ExecutorClassification {
 }
 interface DispatchLaunch {
   ref: string;
-  token: string;
+  token: string | null;
+  tokenFile: string | null;
 }
 interface ResolveResult {
   status: 'no-refs' | 'error' | 'no-project' | 'ticket-not-found' | 'ticket-not-builtin' | 'conflicting' | 'ok';
@@ -45,6 +46,7 @@ interface Ticket {
     description?: string;
     launchName?: string;
     launchSeq?: number;
+    tokenFile?: string;
     sessionId?: string;
     terminalAt?: string | null;
     route?: { model?: string; effort?: string; marker?: string };
@@ -54,7 +56,8 @@ interface PreparedDispatchSpawn {
   description: string | null;
   name: string;
   ref: string;
-  token: string;
+  token: string | null;
+  tokenFile: string | null;
   project: string;
   route: { model: string; effort: string; marker: string | null } | null;
 }
@@ -203,6 +206,13 @@ function extractProjectArg(prompt: unknown): string | null {
   return match ? match[1] || match[2] || null : null;
 }
 
+function extractDispatchTokenFile(prompt: unknown): string | null {
+  if (typeof prompt !== 'string' || !prompt) return null;
+  const matches = [...prompt.matchAll(/--token-file\s+"([^"]+)"|--token-file[=\s]+(\S+)/g)];
+  const match = matches.at(-1);
+  return match ? match[1] || match[2] || null : null;
+}
+
 function extractDispatchToken(prompt: unknown): string | null {
   if (typeof prompt !== 'string' || !prompt) return null;
   const matches = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)];
@@ -219,7 +229,7 @@ function dispatchRefs(prompt: unknown): string[] {
   if (typeof prompt !== 'string' || !prompt) return [];
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+[^\s`"']+/gi)) {
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+[^\s`"']+|--token-file\s+(?:"[^"]+"|\S+))/gi)) {
     const ref = (match[1] || '').toUpperCase();
     if (ref && !seen.has(ref)) {
       seen.add(ref);
@@ -235,8 +245,8 @@ function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
   const launches = headings.map((match, index) => {
     const next = headings[index + 1];
     const section = prompt.slice(match.index, next ? next.index : prompt.length);
-    return { ref: (match[1] || '').toUpperCase(), token: extractDispatchToken(section) };
-  }).filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.token));
+    return { ref: (match[1] || '').toUpperCase(), token: extractDispatchToken(section), tokenFile: extractDispatchTokenFile(section) };
+  }).filter((launch): launch is DispatchLaunch => Boolean(launch.ref && (launch.token || launch.tokenFile)));
   if (launches.length) return launches;
 
   // The briefing command pairs its ref with its token, so read the pair from
@@ -244,15 +254,15 @@ function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
   // carry ticket title, description, and anchors, and any of those may mention
   // another ticket; counting prompt-wide silently recorded no launch at all,
   // which surfaced later as unbound_dispatch.
-  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+([^\s`"']+)/gi)]
-    .map((match) => ({ ref: (match[1] || '').toUpperCase(), token: match[2] || '' }))
-    .filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.token));
+  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+([^\s`"']+)|--token-file\s+(?:"([^"]+)"|(\S+)))/gi)]
+    .map((match) => ({ ref: (match[1] || '').toUpperCase(), token: match[2] || null, tokenFile: match[3] || match[4] || null }))
+    .filter((launch): launch is DispatchLaunch => Boolean(launch.ref && (launch.token || launch.tokenFile)));
   if (briefings.length) return briefings;
 
   const refs = extractRefs(prompt);
   const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || '');
-  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || '' }));
-  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || '', token: tokens[0] || '' }] : [];
+  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || null, tokenFile: null }));
+  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || '', token: tokens[0] || null, tokenFile: null }] : [];
 }
 
 function toolInputOf(input: HookInput): Record<string, unknown> | null {
@@ -266,8 +276,8 @@ function dispatchAgentName(input: HookInput): string | null {
   const toolInput = toolInputOf(input);
   const dispatched = dispatchRefs(toolInput?.prompt);
   const refs = dispatched.length ? dispatched : extractRefs(toolInput?.prompt);
-  const token = extractDispatchToken(toolInput?.prompt);
-  if (refs.length !== 1 || !token) return null;
+  const launch = dispatched[0];
+  if (refs.length !== 1 || (dispatched.length && !launch)) return null;
   return dispatchLaunchName(refs[0]);
 }
 
@@ -285,6 +295,7 @@ function recordAuthoritativeLaunch(input: HookInput, type: string, agentName: st
     for (const launch of launches) {
       store.recordDispatchLaunch(found.slug, launch.ref, {
         token: launch.token,
+        tokenFile: launch.tokenFile,
         executor: type,
         sessionId,
         agentName: agentName || toolInput.name,
@@ -348,7 +359,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
     if (!found.ok || !found.slug) return { status: 'none' };
     const ticket = store.getTicket(found.slug, launch.ref);
     if (!ticket) return { status: 'none' };
-    if (ticket.dispatchNonce !== launch.token) return { status: 'stale' };
+    if (ticket.dispatchNonce !== launch.token && ticket.dispatch?.tokenFile !== launch.tokenFile) return { status: 'stale' };
     const description = ticket.dispatch?.description;
     const route = ticket.dispatch?.route;
     return {
@@ -361,6 +372,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
           || dispatchLaunchName(ticket.ref || launch.ref, ticket.title, ticket.dispatch?.launchSeq),
         ref: launch.ref,
         token: launch.token,
+        tokenFile: launch.tokenFile,
         project,
         route: typeof route?.model === 'string' && typeof route.effort === 'string'
           ? { model: route.model, effort: route.effort, marker: typeof route.marker === 'string' && route.marker ? route.marker : null }
@@ -380,7 +392,7 @@ function briefingCommandDrifted(prompt: unknown, spawn: PreparedDispatchSpawn): 
   return !/sidequest-launcher\.js["']?\s+briefing\b/i.test(command)
     || refs.length !== 1
     || refs[0] !== spawn.ref
-    || extractDispatchToken(command) !== spawn.token
+    || (spawn.token ? extractDispatchToken(command) !== spawn.token : extractDispatchTokenFile(command) !== spawn.tokenFile)
     || extractProjectArg(command) !== spawn.project;
 }
 
@@ -746,7 +758,8 @@ function main(): void {
     updatedInput.name = preparedSpawn.name;
     corrections.push('name');
   }
-  const launchAgentName = preparedSpawn?.name || dispatchAgentName(input);
+  const requestedAgentName = typeof toolInput.name === 'string' ? toolInput.name : null;
+  const launchAgentName = preparedSpawn?.name || requestedAgentName || dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
 

@@ -229,7 +229,7 @@ function validateSubmissionCandidate(options: any) {
 const tools: ToolDefinition[] = [
   {
     name: 'claim',
-    description: 'Claim a ticket; routed work needs a dispatch token and executor. direct:true needs a recorded inline-safe reason.',
+    description: 'Claim before work; routed work needs executor and token file. direct:true needs an inline-safe reason.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -238,7 +238,8 @@ const tools: ToolDefinition[] = [
         by: { type: 'string', description: 'Unique per-worker id (e.g. claude-<8 hex>).' },
         effort: { type: 'string', enum: store.VALID_EFFORTS },
         executor: { type: 'string', description: 'Exact executor name from the dispatch.' },
-        token: { type: 'string', description: 'Dispatch token (required for routed claims).' },
+        token: { type: 'string', description: 'Legacy token.' },
+        tokenFile: { type: 'string', description: 'Dispatched token-file path.' },
         direct: { type: 'boolean', description: 'Inline-safe exception; requires a recorded reason.' },
         reason: { type: 'string', description: 'Inline-safe rationale (20+ chars, required with direct:true).' },
         force: { type: 'boolean', description: 'Steal a live claim only when certain.' },
@@ -257,7 +258,7 @@ const tools: ToolDefinition[] = [
           : {};
         return Object.assign({ ok: false }, drift, guidance);
       }
-      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, executor: args.executor, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
+      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, tokenFile: args.tokenFile, executor: args.executor, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
       if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
       return mutationAck(slug, res);
     },

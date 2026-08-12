@@ -605,6 +605,9 @@
         "token": {
           "type": "string"
         },
+        "tokenFile": {
+          "type": "string"
+        },
         "direct": {
           "type": "boolean"
         },

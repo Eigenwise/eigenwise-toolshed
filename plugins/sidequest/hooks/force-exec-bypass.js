@@ -296,6 +296,12 @@ function extractProjectArg(prompt) {
   const match = matches.at(-1);
   return match ? match[1] || match[2] || null : null;
 }
+function extractDispatchTokenFile(prompt) {
+  if (typeof prompt !== "string" || !prompt) return null;
+  const matches = [...prompt.matchAll(/--token-file\s+"([^"]+)"|--token-file[=\s]+(\S+)/g)];
+  const match = matches.at(-1);
+  return match ? match[1] || match[2] || null : null;
+}
 function extractDispatchToken(prompt) {
   if (typeof prompt !== "string" || !prompt) return null;
   const matches = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)];
@@ -306,7 +312,7 @@ function dispatchRefs(prompt) {
   if (typeof prompt !== "string" || !prompt) return [];
   const seen = /* @__PURE__ */ new Set();
   const out = [];
-  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+[^\s`"']+/gi)) {
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+[^\s`"']+|--token-file\s+(?:"[^"]+"|\S+))/gi)) {
     const ref = (match[1] || "").toUpperCase();
     if (ref && !seen.has(ref)) {
       seen.add(ref);
@@ -321,15 +327,15 @@ function dispatchLaunches(prompt) {
   const launches = headings.map((match, index) => {
     const next = headings[index + 1];
     const section = prompt.slice(match.index, next ? next.index : prompt.length);
-    return { ref: (match[1] || "").toUpperCase(), token: extractDispatchToken(section) };
-  }).filter((launch) => Boolean(launch.ref && launch.token));
+    return { ref: (match[1] || "").toUpperCase(), token: extractDispatchToken(section), tokenFile: extractDispatchTokenFile(section) };
+  }).filter((launch) => Boolean(launch.ref && (launch.token || launch.tokenFile)));
   if (launches.length) return launches;
-  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token\s+([^\s`"']+)/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), token: match[2] || "" })).filter((launch) => Boolean(launch.ref && launch.token));
+  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+([^\s`"']+)|--token-file\s+(?:"([^"]+)"|(\S+)))/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), token: match[2] || null, tokenFile: match[3] || match[4] || null })).filter((launch) => Boolean(launch.ref && (launch.token || launch.tokenFile)));
   if (briefings.length) return briefings;
   const refs = extractRefs(prompt);
   const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || "");
-  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || "" }));
-  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || "", token: tokens[0] || "" }] : [];
+  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || null, tokenFile: null }));
+  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || "", token: tokens[0] || null, tokenFile: null }] : [];
 }
 function toolInputOf(input) {
   return isRecord(input.tool_input) ? input.tool_input : null;
@@ -338,8 +344,8 @@ function dispatchAgentName(input) {
   const toolInput = toolInputOf(input);
   const dispatched = dispatchRefs(toolInput?.prompt);
   const refs = dispatched.length ? dispatched : extractRefs(toolInput?.prompt);
-  const token = extractDispatchToken(toolInput?.prompt);
-  if (refs.length !== 1 || !token) return null;
+  const launch = dispatched[0];
+  if (refs.length !== 1 || dispatched.length && !launch) return null;
   return dispatchLaunchName(refs[0]);
 }
 function recordAuthoritativeLaunch(input, type, agentName) {
@@ -356,6 +362,7 @@ function recordAuthoritativeLaunch(input, type, agentName) {
     for (const launch of launches) {
       store.recordDispatchLaunch(found.slug, launch.ref, {
         token: launch.token,
+        tokenFile: launch.tokenFile,
         executor: type,
         sessionId,
         agentName: agentName || toolInput.name
@@ -412,7 +419,7 @@ function preparedDispatchValidation(input) {
     if (!found.ok || !found.slug) return { status: "none" };
     const ticket = store.getTicket(found.slug, launch.ref);
     if (!ticket) return { status: "none" };
-    if (ticket.dispatchNonce !== launch.token) return { status: "stale" };
+    if (ticket.dispatchNonce !== launch.token && ticket.dispatch?.tokenFile !== launch.tokenFile) return { status: "stale" };
     const description = ticket.dispatch?.description;
     const route = ticket.dispatch?.route;
     return {
@@ -424,6 +431,7 @@ function preparedDispatchValidation(input) {
         name: ticket.dispatch?.launchName || dispatchLaunchName(ticket.ref || launch.ref, ticket.title, ticket.dispatch?.launchSeq),
         ref: launch.ref,
         token: launch.token,
+        tokenFile: launch.tokenFile,
         project,
         route: typeof route?.model === "string" && typeof route.effort === "string" ? { model: route.model, effort: route.effort, marker: typeof route.marker === "string" && route.marker ? route.marker : null } : null
       }
@@ -437,7 +445,7 @@ function briefingCommandDrifted(prompt, spawn) {
   const command = /FIRST action:\s*run\s+`([^`]+)`/i.exec(prompt)?.[1];
   if (!command) return true;
   const refs = extractRefs(command);
-  return !/sidequest-launcher\.js["']?\s+briefing\b/i.test(command) || refs.length !== 1 || refs[0] !== spawn.ref || extractDispatchToken(command) !== spawn.token || extractProjectArg(command) !== spawn.project;
+  return !/sidequest-launcher\.js["']?\s+briefing\b/i.test(command) || refs.length !== 1 || refs[0] !== spawn.ref || (spawn.token ? extractDispatchToken(command) !== spawn.token : extractDispatchTokenFile(command) !== spawn.tokenFile) || extractProjectArg(command) !== spawn.project;
 }
 function correctionMessage(corrections) {
   return corrections.length ? `sidequest: corrected prepared dispatch ${corrections.join(" and ")}.` : null;
@@ -771,7 +779,8 @@ function main() {
     updatedInput.name = preparedSpawn.name;
     corrections.push("name");
   }
-  const launchAgentName = preparedSpawn?.name || dispatchAgentName(input);
+  const requestedAgentName = typeof toolInput.name === "string" ? toolInput.name : null;
+  const launchAgentName = preparedSpawn?.name || requestedAgentName || dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
   if (classification.kind === "codex_dispatch" || classification.kind === "read_only_codex_dispatch") {

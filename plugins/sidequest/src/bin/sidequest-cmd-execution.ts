@@ -73,19 +73,20 @@ function validateModelFilter(action: any, opts: any) {
   return false;
 }
 
-function executorDriftReason(slug: any, idOrRef: any, claimedEffort: any, executorName: any, token: any, direct: any) {
+function executorDriftReason(slug: any, idOrRef: any, claimedEffort: any, executorName: any, token: any, direct: any, tokenFile?: any) {
+  const resolvedToken = store.dispatchTokenForRequest(token, tokenFile) || token;
   if (direct) return null;
   const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
   if (effortDrift) return effortDrift;
   const t = store.getTicket(slug, idOrRef);
-  if (t && store.isSupersededDispatchToken(t, token)) {
+  if (t && store.isSupersededDispatchToken(t, resolvedToken)) {
     return {
       reason: 'token',
       ref: t.ref,
       message: `${t.ref}'s dispatch was superseded by a newer preparation. Re-run sidequest dispatch ${t.ref} and use its returned token.`,
     };
   }
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
+  if (t && t.dispatchNonce && resolvedToken === t.dispatchNonce && executorName !== t.dispatchExecutor) {
     return {
       reason: 'executor_mismatch',
       ref: t.ref,
@@ -96,7 +97,7 @@ function executorDriftReason(slug: any, idOrRef: any, claimedEffort: any, execut
       message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || 'this executor'}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`,
     };
   }
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
+  if (t && t.dispatchNonce && resolvedToken === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
   if (!executorName) return null;
   if (!t || !t.exec || t.exec.backend !== 'codex') return null;
   const expected = t.exec.agent;
@@ -127,7 +128,7 @@ async function cmdClaim(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   // Guard before claiming so a wrong-tier claim leaves the ticket untouched.
-  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token, !!opts.direct);
+  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token, !!opts.direct, opts['token-file']);
   if (drift) {
     if ((drift as any).reason === 'executor_mismatch') {
       drift.message = claimRefusalMessage('executor_mismatch', idOrRef, store.getTicket(slug, idOrRef) || {}, meta.path);
@@ -140,7 +141,7 @@ async function cmdClaim(opts: any, positional: any) {
     }
     return;
   }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts), requireBoundAgent: true });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, tokenFile: opts['token-file'], executor: opts.executor, source: opts.source || 'cli', sessionId: sessionId(opts), requireBoundAgent: true });
   const warnings = res.ok ? store.presentWarnings(res.ticket, claimPlanningWarnings(res.ticket, meta.path), sessionId(opts)) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });

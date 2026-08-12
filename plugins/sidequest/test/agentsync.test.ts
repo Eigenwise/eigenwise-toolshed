@@ -759,26 +759,28 @@ test('renderDispatchStub keeps its briefing command alive after the dispatched c
     },
   }));
 
+  const tokenFile = path.join(claudeHome, 'dispatch.token');
+  fs.writeFileSync(tokenFile, 'briefing-token\n');
   const stub = agentsync.renderDispatchStub({
     ref: 'SQ-586', title: 'Stable briefing launcher', model: 'opus', effort: 'high',
-    dispatchExecutor: 'sidequest-exec-high', category: {},
+    dispatchExecutor: 'sidequest-exec-high', category: {}, dispatch: { tokenFile },
   }, 'briefing-token', 'C:\\dev\\fixture');
   const launcher = stub.match(/FIRST action: run `node "([^"]+)"/)[1];
   assert.match(launcher, /sidequest-launcher\.js$/);
   assert.doesNotMatch(stub, new RegExp(staleInstall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
 
-  const runBriefing = () => spawnSync(process.execPath, [launcher, 'briefing', 'SQ-586', '--token', 'briefing-token', '--project', 'C:\\dev\\fixture'], {
+  const runBriefing = () => spawnSync(process.execPath, [launcher, 'briefing', 'SQ-586', '--token-file', tokenFile, '--project', 'C:\\dev\\fixture'], {
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_CLAUDE_HOME: claudeHome },
   });
   const intact = runBriefing();
   assert.equal(intact.status, 0, intact.stderr);
-  assert.equal(intact.stdout, 'briefing SQ-586 --token briefing-token --project C:\\dev\\fixture');
+  assert.equal(intact.stdout, `briefing SQ-586 --token-file ${tokenFile} --project C:\\dev\\fixture`);
 
   fs.rmSync(staleInstall, { recursive: true, force: true });
   const recovered = runBriefing();
   assert.equal(recovered.status, 0, recovered.stderr);
-  assert.equal(recovered.stdout, 'briefing SQ-586 --token briefing-token --project C:\\dev\\fixture');
+  assert.equal(recovered.stdout, `briefing SQ-586 --token-file ${tokenFile} --project C:\\dev\\fixture`);
 });
 
 test('SQ-677: fetched briefing carries the complete durable packet while the spawn carries bounded implementation context', () => {
@@ -798,6 +800,7 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
     ],
     assets: ['space file.png', '画像.png', 'missing file.png'],
     category: { id: 'briefing.contract', route: { model: TERRA.slug, effort: 'high' }, contract: 'Plan against the durable packet, then verify end to end.' },
+    dispatch: { tokenFile: 'C:\\dispatch\\instant-token-334.token' },
   };
   const assetDir = path.join(process.env.SIDEQUEST_HOME, 'projects', slug, 'assets', ticket.id);
   fs.mkdirSync(assetDir, { recursive: true });
@@ -832,7 +835,7 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(stub, /Anchors:\nlib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
   assert.doesNotMatch(stub, /Complete comment thread/);
-  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token instant-token-334 --project "C:\\dev\\fixture"`/);
+  assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\\dispatch\\instant-token-334\.token" --project "C:\\dev\\fixture"`/);
 });
 
 test('SQ-677: malformed and foreign asset names stay bounded and inaccessible', () => {

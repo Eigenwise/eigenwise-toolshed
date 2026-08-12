@@ -582,7 +582,7 @@ function briefingCommentBody(comments) {
     ].join("\n"))
   ].join("\n\n");
 }
-function executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
+function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) {
   const claimCall = [
     "mcp__plugin_sidequest_board__claim({",
     `  ref: ${JSON.stringify(ticket.ref)},`,
@@ -590,7 +590,7 @@ function executorSafetyBody(ticket, nonce, project, executor, closeout, worktree
     `  executor: ${JSON.stringify(executor)},`,
     `  effort: ${JSON.stringify(ticket.effort)},`,
     `  project: ${JSON.stringify(project)},`,
-    `  token: ${JSON.stringify(nonce)}`,
+    `  tokenFile: ${JSON.stringify(tokenFile)}`,
     "})"
   ].join("\n");
   const verify = ticket.executorVerifyKind === "attestation" ? `Verify oracle: attestation. Record actual evidence for ${ticket.executorAttestationArtifact}.` : `Verify command: ${ticket.executorVerify || "(No exact verify command was recorded.)"}`;
@@ -791,7 +791,7 @@ This dispatch deliberately runs in the shared checkout. Write only within the de
   const buildItems = (forceContractHandle = false) => {
     const contractRetrieval = storyContractRetrieval(ticket, snapshot, slug || project, forceContractHandle);
     return [
-      { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
+      { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, ticket?.dispatch?.tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
       { id: "execution-contract", kind: "contract", priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
       ...rejectionHistory ? [{ id: "rejection-history", kind: "evidence", priority: 450, order: 3, body: rejectionHistory, retrieval: rejectionRetrieval }] : [],
       { id: "task-and-scope", kind: "task", priority: 300, order: 4, body: taskAndScope, retrieval: taskRetrieval },
@@ -936,6 +936,7 @@ ${anchors}`
 }
 function renderDispatchStub(ticket, nonce, projectPath) {
   const project = String(projectPath || "").trim();
+  const tokenFile = String(ticket?.dispatch?.tokenFile || "").trim();
   if (!project) throw new Error("Dispatch board project path is required.");
   const marker = ticketRouteMarker(ticket);
   const command = [
@@ -943,8 +944,7 @@ function renderDispatchStub(ticket, nonce, projectPath) {
     quotedShellArgument(ensureDispatchLauncher()),
     "briefing",
     String(ticket.ref),
-    "--token",
-    String(nonce).trim(),
+    ...tokenFile ? ["--token-file", quotedShellArgument(tokenFile)] : ["--token", String(nonce).trim()],
     "--project",
     quotedShellArgument(project)
   ].join(" ");
@@ -954,7 +954,7 @@ function renderDispatchStub(ticket, nonce, projectPath) {
     "Implementation context:",
     dispatchTicketContext(ticket, project),
     "",
-    "Token format: lowercase groups are case-insensitive and ignore hyphens or whitespace.",
+    "Use the dispatched token file path exactly.",
     `FIRST action: run \`${command}\` and execute exactly what it prints.`,
     ...marker ? ["", marker] : []
   ].join("\n");
