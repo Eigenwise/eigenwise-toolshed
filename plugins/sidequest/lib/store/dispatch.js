@@ -376,6 +376,8 @@ function createDispatch(dependencies) {
       tokenPrefix: state.tokenPrefix || null,
       preparedAt: state.preparedAt || null,
       launchedAt: state.launchedAt || null,
+      boundAt: state.boundAt || null,
+      claimedAt: state.claimedAt || null,
       sharedTree: state.sharedTree === true,
       outcome,
       failureShape,
@@ -512,20 +514,34 @@ function createDispatch(dependencies) {
     const preparedAt = Date.parse(state.preparedAt);
     return Number.isFinite(preparedAt) && now - preparedAt > preparedDispatchTtlMs();
   }
-  function recentNoCommitAttempts(state) {
+  function recentNoCommitAttemptSelection(state) {
     const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
     const recent = [];
     const rounds = /* @__PURE__ */ new Set();
+    let skippedUnbound = 0;
     for (let index = attempts.length - 1; index >= 0; index -= 1) {
       const attempt = attempts[index];
       if (!attempt?.terminalAt || attempt.release?.kind === "handback") continue;
       const round = String(attempt.preparedAt || attempt.tokenPrefix || attempt.terminalAt);
       if (rounds.has(round)) continue;
       rounds.add(round);
+      if (attempt.boundAt == null && attempt.claimedAt == null) {
+        skippedUnbound += 1;
+        continue;
+      }
       recent.unshift(attempt);
       if (recent.length === 2) break;
     }
-    return recent.length === 2 && recent.every((attempt) => attempt.outcome !== "submitted" && !attempt.commit) ? recent : [];
+    return {
+      attempts: recent.length === 2 && recent.every((attempt) => attempt.outcome !== "submitted" && !attempt.commit) ? recent : [],
+      skippedUnbound
+    };
+  }
+  function recentNoCommitAttempts(state) {
+    return recentNoCommitAttemptSelection(state).attempts;
+  }
+  function skippedUnboundNoCommitAttempts(state) {
+    return recentNoCommitAttemptSelection(state).skippedUnbound >= 2;
   }
   function recordedAttemptSummary(attempt) {
     const kind = attempt?.release?.kind || attempt?.outcome || "unknown";
@@ -744,6 +760,7 @@ function createDispatch(dependencies) {
         throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery2}`);
       }
       const repeatFailure = repeatNoCommitDispatchError(t, current);
+      const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
       if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
       const releasedContinuation = releasedContinuationState(slug, t, current);
       if (t.claim && t.claim.by && !claimReclaimable(t)) {
@@ -897,6 +914,7 @@ function createDispatch(dependencies) {
             priorAttempts: recentNoCommitAttempts(current).length
           }
         } : {},
+        ...unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {},
         ...fallbackReason ? { fallbackReason } : {},
         storyContract: contract,
         ...contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {},

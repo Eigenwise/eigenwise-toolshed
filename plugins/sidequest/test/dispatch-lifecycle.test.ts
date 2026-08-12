@@ -758,6 +758,32 @@ test('dispatch warns when compose bind-mounts the repository root into an isolat
   }
 });
 
+test('dispatch ignores unbound terminal attempts and explains the binding failure', () => {
+  const ticket = createFixture('unbound repeat failure fixture');
+  for (const number of [1, 2]) {
+    const sessionId = `unbound-repeat-${number}-${Date.now()}`;
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      agentName: `unbound-repeat-worker-${number}`,
+    }).ok, true);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      taskName: `unbound-repeat-worker-${number}`,
+      error: 'Agent stopped after max_tokens',
+    }).ok, true);
+  }
+
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `unbound-repeat-3-${Date.now()}` });
+  assert.equal(prepared.ticket.dispatch.repeatFailureOverride, undefined);
+  assert.match(store.dispatchWarnings(prepared.ticket, slug).join('\n'), /last dispatches never bound.*binding.*no allowRepeatFailure/i);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'unbound-repeat-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 test('dispatch blocks a third terminal no-commit attempt unless explicitly overridden', () => {
   const ticket = createFixture('repeat no-commit dispatch fixture');
   for (const number of [1, 2]) {
