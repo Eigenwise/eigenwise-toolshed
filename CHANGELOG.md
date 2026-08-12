@@ -8,6 +8,38 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.457.0 (2026-08-12)
+
+### observability 0.7.6 → 0.7.7
+
+#### Fixes
+
+- Declare the observability suite timeout in its manifest (SQ-1828)
+  The observability suite can exceed Node's 120s per-file test timeout on Windows CI runners. The timeout is now declared as suiteTimeout in the plugin manifest, so every consumer of the suite resolver agrees: the CI matrix, the release cut's verification, and the board's verify command.
+
+### sidequest 4.46.1 → 4.47.0
+
+#### Features
+
+- Pass dispatch credentials by token file (SQ-1834) [`07c96d9`](https://github.com/Eigenwise/eigenwise-toolshed/commit/07c96d96)
+  An executor no longer has to retype a dispatch token into a shell command. The credential is handed over by file, so a model that drops, reorders, or truncates a character in the command can no longer fail its own claim.
+
+#### Fixes
+
+- Show MCP tools/list budget use (SQ-1833)
+  Sidequest now prints the MCP tools/list payload, reserve, remaining headroom, and per-tool byte use after a build. The dispatched tool schema again explains recovery evidence and labels the dispatch result.
+- Say why a scope request was refused, and document --file (SQ-1846)
+  A ticket that declares no files refuses every scope request it can ever make, because package scope is derived from the declared roots. The refusal comment used to name only the refused paths and tell the executor to hand back, so the run ended and the orchestrator re-derived the cause by hand. It now says the ticket declares no files and names the one command that fixes it.
+
+  The CLI help for `add` and `update` never mentioned `--file`, though both have accepted it all along. An orchestrator reading `--help` concluded the CLI could not declare file scope at all and filed unscoped write tickets through it. Both usage lines now carry it, and `add` says what happens to a write ticket without it.
+
+### workbench 0.88.0 → 0.88.1
+
+#### Fixes
+
+- Refuse unconfigured Python packages (SQ-1841)
+  Workbench code intelligence now asks for a package virtual environment instead of using system Python for packages that declare dependencies.
+
 ## v3.456.0 (2026-08-12)
 
 ### quartermaster 0.4.1 → 0.5.0

@@ -5,13 +5,13 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.456.0",
+  "version": "3.457.0",
   "plugins": [
     {
       "name": "workbench",
       "source": "./plugins/workbench",
       "description": "Set up and maintain a Claude Code workspace, and the front door to the rest of the Toolshed: initialize project-side configuration, install and update plugins, diagnose local health, and wire up local observability.",
-      "version": "0.88.0",
+      "version": "0.88.1",
       "author": {
         "name": "Eigenwise"
       },
@@ -31,7 +31,7 @@
       "name": "observability",
       "source": "./plugins/observability",
       "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Prompts, responses, code, tool inputs and results, credentials, and environment values are never stored. Every sink beyond local SQLite is opt-in.",
-      "version": "0.7.6",
+      "version": "0.7.7",
       "author": {
         "name": "Eigenwise"
       },
@@ -77,7 +77,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "4.46.1",
+      "version": "4.47.0",
       "author": {
         "name": "Eigenwise"
       },
