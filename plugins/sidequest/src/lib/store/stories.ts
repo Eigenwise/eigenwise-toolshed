@@ -67,7 +67,8 @@ function normalizeStoryExecutionContract(value?: any) {
   if (!contract) return null;
   const bytes = Buffer.byteLength(contract, 'utf8');
   if (bytes > STORY_EXECUTION_CONTRACT_MAX_BYTES) {
-    throw new Error(`story execution contract exceeds the durable capacity of ${STORY_EXECUTION_CONTRACT_MAX_BYTES} UTF-8 bytes.`);
+    const overage = bytes - STORY_EXECUTION_CONTRACT_MAX_BYTES;
+    throw new Error(`story execution contract is ${bytes} UTF-8 bytes, ${overage} over the ${STORY_EXECUTION_CONTRACT_MAX_BYTES}-byte capacity.`);
   }
   return contract;
 }
