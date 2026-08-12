@@ -171,7 +171,7 @@ Before ordinary friction findings, check whether the project opted into automati
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" allowlist --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-It adds only fingerprints with at least three user approvals and no user rejection, records every addition in the decision ledger, and never adds destructive Bash commands. Offer the opt-in after reporting its result:
+Until the project opts in, that command only reports what it would add: it considers a fingerprint with at least three user approvals and no user rejection, and never considers a destructive Bash command. Report those candidates and offer the opt-in; approving it is what turns on the writing, and every later addition goes to the decision ledger:
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"

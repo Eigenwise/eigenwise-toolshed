@@ -5,7 +5,7 @@ const path = require('node:path');
 
 const { DEFAULT_DAYS, DEFAULT_SESSIONS } = require('../lib/scan.js');
 const { mine } = require('../lib/mine.js');
-const { applyPermissionAllowlist, enablePermissionAutomation } = require('../lib/permission-allowlist.js');
+const { applyPermissionAllowlist, enablePermissionAutomation, ruleFor } = require('../lib/permission-allowlist.js');
 const { readAvailable, readInstalled, searchAvailable } = require('../lib/catalog.js');
 const {
   appendDecision,
@@ -144,6 +144,12 @@ async function main(argv = process.argv.slice(2)) {
       }
       for (const blocked of result.blocked) {
         process.stdout.write(`blocked ${blocked.fingerprint}: destructive command after ${blocked.approvals} approvals\n`);
+      }
+      if (!result.applied) {
+        for (const entry of result.eligible.filter((candidate) => !candidate.destructive)) {
+          process.stdout.write(`would add ${ruleFor(entry.fingerprint)} after ${entry.approvals} approvals\n`);
+        }
+        process.stdout.write(`reported only: this project has not run enable-auto-allowlist\n`);
       }
       printJson(result);
       return;

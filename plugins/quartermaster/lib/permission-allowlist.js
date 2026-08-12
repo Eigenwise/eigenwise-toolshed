@@ -193,6 +193,12 @@ async function applyPermissionAllowlist(options = {}) {
   const collected = await collectPermissionDecisions({ ...options, projectPath: projectDir });
   const eligible = collected.decisions.filter((entry) => entry.approvals >= MIN_APPROVALS && entry.denials === 0);
   const blocked = eligible.filter((entry) => entry.destructive);
+  // Writing permission rules is the opt-in itself, so a caller that has not
+  // enabled the marker only ever gets the report. Without this, `quartermaster
+  // allowlist` silently granted permissions in any project it was run in.
+  if (!permissionAutomationEnabled(projectDir)) {
+    return { projectDir, additions: [], blocked, eligible, applied: false, scanned: collected.window.files.length };
+  }
   const added = appendRulesToSettings(projectDir, eligible.filter((entry) => !entry.destructive).map((entry) => ruleFor(entry.fingerprint)));
   const addedRules = new Set(added);
   const additions = eligible.filter((entry) => addedRules.has(ruleFor(entry.fingerprint)));
@@ -208,7 +214,7 @@ async function applyPermissionAllowlist(options = {}) {
       approvals: entry.approvals,
     }, options.env);
   }
-  return { projectDir, additions, blocked, scanned: collected.window.files.length };
+  return { projectDir, additions, blocked, eligible, applied: true, scanned: collected.window.files.length };
 }
 
 module.exports = {

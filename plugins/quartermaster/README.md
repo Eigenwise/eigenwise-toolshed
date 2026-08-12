@@ -29,7 +29,7 @@ Then `/quartermaster:setup` in a project, or `/quartermaster:resupply` after som
 
 Three cheap hooks and two skills. The hooks never call a model.
 
-- **SessionStart auto-allowlist hook**: opt-in only. Once the project enables it, the hook streams the bounded recent-transcript window and appends project-local `permissions.allow` entries for a tool fingerprint approved at least three times with no user rejection. Bash rules use the normalized command prefix. Destructive commands are reported but never added. Every addition is logged to the decision ledger and printed. Enable it with `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"`; it writes only `.claude/settings.local.json`.
+- **SessionStart auto-allowlist hook**: opt-in only. Once the project enables it, the hook streams the bounded recent-transcript window and appends project-local `permissions.allow` entries for a tool fingerprint approved at least three times with no user rejection. Bash rules use the normalized command prefix. Destructive commands are reported but never added. Every addition is logged to the decision ledger and printed. Enable it with `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"`; it writes only `.claude/settings.local.json`. Before that marker exists, both the hook and the `allowlist` command only report what they would add.
 - **SessionEnd hook**: streams the transcript that just ended and records a small tally per
   session (prompts, denials, interrupts, corrections, tool errors) under
   `~/.claude/quartermaster-state/`. Local file reads only.

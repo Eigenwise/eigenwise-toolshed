@@ -41,7 +41,7 @@ test('always-approved permission fingerprints append project-local allow rules',
   const projectDir = temporaryProject();
   const settingsFile = path.join(projectDir, '.claude', 'settings.local.json');
   fs.mkdirSync(path.dirname(settingsFile), { recursive: true });
-  const before = '{\n  "model": "sonnet",\n  "permissions": {\n    "allow": [\n      "Read"\n    ]\n  }\n}\n';
+  const before = '{\n  "model": "sonnet",\n  "quartermaster": { "autoApprovePermissions": true },\n  "permissions": {\n    "allow": [\n      "Read"\n    ]\n  }\n}\n';
   fs.writeFileSync(settingsFile, before, 'utf8');
   const environment = writeWindow(projectDir, [
     permissionTranscript('npm test -- --unit'),
@@ -55,6 +55,22 @@ test('always-approved permission fingerprints append project-local allow rules',
   assert.equal(result.additions[0].fingerprint, 'permission:Bash:npm test');
   assert.match(after, /"allow": \[\n      "Read",\n      "Bash\(npm test:\*\)"\n    \]/);
   assert.equal(after.replace(',\n      "Bash(npm test:*)"', ''), before);
+});
+
+test('without the opt-in marker the pass reports candidates and writes nothing', async () => {
+  const projectDir = temporaryProject();
+  const environment = writeWindow(projectDir, [
+    permissionTranscript('npm test -- --unit'),
+    permissionTranscript('npm test -- --integration'),
+    permissionTranscript('npm test -- --watch'),
+  ]);
+
+  const result = await applyPermissionAllowlist({ projectPath: projectDir, env: environment });
+
+  assert.equal(result.applied, false);
+  assert.equal(result.additions.length, 0);
+  assert.equal(result.eligible[0].fingerprint, 'permission:Bash:npm test');
+  assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), false);
 });
 
 test('a fingerprint with one denial is not added', async () => {
