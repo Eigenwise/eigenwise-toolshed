@@ -1,9 +1,11 @@
 'use strict';
 
+const cpp = require('./language-server-locators/cpp');
 const typescript = require('./language-server-locators/typescript');
 
 const LOCATORS = new Map([
   ['typescript', typescript],
+  ['cpp', cpp],
 ]);
 
 function languageForFile(filePath) {

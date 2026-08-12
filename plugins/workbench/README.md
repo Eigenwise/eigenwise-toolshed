@@ -29,9 +29,11 @@ Tell Claude what you need:
 
 Workbench updates only Eigenwise Toolshed plugins and Model Gateway when installed. It leaves third-party plugins alone and tells you when an affected session needs `/reload-plugins` or a restart.
 
-## TypeScript code intelligence
+## Code intelligence
 
 Workbench ships a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects the language server. Every call binds to an explicit project root and talks to that project's own TypeScript install (the native TypeScript 7 language server, or `typescript-language-server` for TypeScript 5 projects). TypeScript 7 diagnostics use the server's pull endpoint; the TypeScript 5 fallback has no pull endpoint, so Workbench triggers a fresh check and harvests the push that answers it, correlated to the requested file and version, one call at a time. Results come back only in the response to the call that asked; a location is returned only when its native realpath (symlinks and junctions resolved) is an existing file inside the bound root, everything else (non-file URIs included) is withheld and counted, and every other pushed diagnostic is discarded, so parallel agents working in isolated worktrees never see each other's results, and nothing leaves the machine.
+
+C++ and C files use `clangd`. Before Workbench can answer, provide a current `compile_commands.json` that covers the queried translation unit. Set `WORKBENCH_CODE_INTEL_CPP_COMPILE_COMMANDS` to its path when it is outside the project root. For a CMake project, run `cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. Workbench refuses a missing, invalid, stale, or incomplete database instead of guessing a toolchain or running CMake. Initial C++ reference results may be marked incomplete while clangd builds its background index; retry or narrow the query.
 
 This replaces the official `typescript-lsp` plugin, whose push diagnostics are process-global and blind to which agent owns them. If you have it installed, remove it:
 

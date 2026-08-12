@@ -5,6 +5,7 @@ const path = require('node:path');
 
 const registry = require('./project-registry');
 const { languageForFile } = require('./language-server-locator');
+const cpp = require('./language-server-locators/cpp');
 
 const SERVER_NAME = 'code-intel';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
@@ -76,6 +77,10 @@ function bindProject(args) {
 function clientFor(rootDir, file) {
   const language = languageForFile(file);
   if (!language) throw new Error(`No language server is available for ${path.extname(file) || 'files without an extension'}.`);
+  if (language === 'cpp') {
+    const compileDatabase = cpp.validateFile(rootDir, file);
+    if (compileDatabase.error) throw new Error(compileDatabase.error);
+  }
   const bound = registry.clientForRoot(rootDir, language);
   if (bound.error) throw new Error(bound.error);
   return bound.client;
@@ -277,6 +282,10 @@ async function runReferences(args, signal) {
     references: locationsUnderRoot.slice(0, MAX_REFERENCES),
   };
   if (withheldOutsideRoot) payload.withheldOutsideRoot = withheldOutsideRoot;
+  if (client.backend === 'clangd' && client.indexStatus().active) {
+    payload.incomplete = true;
+    payload.incompleteReason = 'clangd background index is still warming; retry for complete project-wide references or narrow the query.';
+  }
   if (locationsUnderRoot.length > MAX_REFERENCES) payload.truncated = true;
   return fitResponseBudget(payload, (current) => halveInPlace(current.references));
 }

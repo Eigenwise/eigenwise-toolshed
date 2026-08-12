@@ -154,6 +154,7 @@ test('client pulls diagnostics, discards pushes, and answers server requests', a
   await waitFor(() => readLog(logPath).some((record) => record.id === 'fake-server-request-1' && record.method === undefined));
   const initializeRecord = readLog(logPath).find((record) => record.method === 'initialize');
   assert.equal(initializeRecord.params.initializationOptions.disableAutomaticTypingAcquisition, true);
+  assert.equal(initializeRecord.params.capabilities.window.workDoneProgress, true);
 });
 
 test('client resolves definitions 1-based and refreshes changed files', async (t) => {

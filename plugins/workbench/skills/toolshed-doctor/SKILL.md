@@ -93,6 +93,16 @@ the wrong transcript, and that Workbench's pull-only tools replace it. Recommend
 `/plugin uninstall typescript-lsp@claude-plugins-official` and a reload. Do not uninstall it from the
 doctor; only report.
 
+## C and C++ code intelligence
+
+Workbench serves C and C++ through `clangd`. Check the current root without configuring or building it:
+
+```sh
+node -e "const { locateLanguageServer } = require(process.env.CLAUDE_PLUGIN_ROOT + '/lib/code-intel/language-server-locator.js'); const outcome = locateLanguageServer('cpp', process.cwd()); console.log(outcome.error || ('ok: ' + outcome.backend + ' at ' + outcome.command));"
+```
+
+An error beginning `C++ code intelligence needs a current compile_commands.json` is a diagnosable setup state. Report it verbatim and tell the user to run `cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. Do not run that command in the doctor. Workbench refuses a missing, invalid, stale, or incomplete database rather than guessing a compiler or emitting misleading include-not-found diagnostics. Skip this check when the root has no C or C++ source.
+
 ## Agent teams
 
 Check whether a project-level `env` block masks the global agent-teams setting. This is read-only and prints nothing when the project has no `env` block or already enables teams:
