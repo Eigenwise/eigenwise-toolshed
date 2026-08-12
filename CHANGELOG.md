@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.455.0 (2026-08-12)
+
+### quartermaster 0.4.0 → 0.4.1
+
+#### Fixes
+
+- Generalize code-intel tools across languages (SQ-1836) [`94e32b0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/94e32b07)
+  Generalized the code-intel MCP tools from typescript_definition, typescript_references, and typescript_diagnostics to definition, references, and diagnostics; each call now selects its language server from the requested file extension. Client registry keys by (root, language) so one root can host several servers. Quartermaster setup reference updated to the new tool names.
+
+### workbench 0.86.2 → 0.87.0
+
+#### Features
+
+- Generalize code-intel tools across languages (SQ-1836) [`94e32b0`](https://github.com/Eigenwise/eigenwise-toolshed/commit/94e32b07)
+  Generalized the code-intel MCP tools from typescript_definition, typescript_references, and typescript_diagnostics to definition, references, and diagnostics; each call now selects its language server from the requested file extension. Client registry keys by (root, language) so one root can host several servers. Quartermaster setup reference updated to the new tool names.
+
 ## v3.454.0 (2026-08-12)
 
 ### sidequest 4.46.0 → 4.46.1
