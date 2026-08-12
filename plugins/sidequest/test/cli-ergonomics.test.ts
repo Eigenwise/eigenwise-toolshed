@@ -89,13 +89,18 @@ test('add --dry-run validates and previews without writing a board', () => {
   assert.match(second.stdout, /SQ-2/);
 });
 
-test('CLI add accepts both --files and --file for ticket scope', () => {
+test('CLI add and update combine repeated and comma-separated scope flags', () => {
   const env = isolatedEnv();
-  const plural = run(['add', '--title', 'plural scope', '--category', 'general', '--files', 'plugins/a.ts,plugins/b.ts', '--json'], env);
-  assert.equal(plural.status, 0, plural.stderr);
-  assert.deepEqual(JSON.parse(plural.stdout).ticket.files, ['plugins/a.ts', 'plugins/b.ts']);
+  const added = run([
+    'add', '--title', 'combined scope', '--category', 'general',
+    '--file', 'plugins/a.ts', '--files', 'plugins/b.ts,plugins/c.ts', '--json',
+  ], env);
+  assert.equal(added.status, 0, added.stderr);
+  assert.deepEqual(JSON.parse(added.stdout).ticket.files, ['plugins/a.ts', 'plugins/b.ts', 'plugins/c.ts']);
 
-  const singular = run(['add', '--title', 'singular scope', '--category', 'general', '--file', 'plugins/c.ts', '--json'], env);
-  assert.equal(singular.status, 0, singular.stderr);
-  assert.deepEqual(JSON.parse(singular.stdout).ticket.files, ['plugins/c.ts']);
+  const updated = run([
+    'update', 'SQ-1', '--files', 'plugins/d.ts', '--files', 'plugins/e.ts,plugins/f.ts', '--json',
+  ], env);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.deepEqual(JSON.parse(updated.stdout).ticket.files, ['plugins/d.ts', 'plugins/e.ts', 'plugins/f.ts']);
 });
