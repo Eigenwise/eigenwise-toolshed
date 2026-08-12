@@ -22,8 +22,8 @@ try {
 }
 
 export const CURRENT_SCHEMA_VERSION = 7;
-// Board writers normally finish in milliseconds; five-second SQLite waits avoid failing on ordinary handoffs without hiding a wedged writer forever.
-export const SQLITE_BUSY_TIMEOUT_MS = 5_000;
+// Board writers normally finish in milliseconds; fifteen-second SQLite waits avoid failing on ordinary handoffs without hiding a wedged writer forever.
+export const SQLITE_BUSY_TIMEOUT_MS = 15_000;
 const SQLITE_BUSY_RETRY_ATTEMPTS = 3;
 const SQLITE_BUSY_RETRY_DELAYS_MS = [50, 100] as const;
 const busySleep = new Int32Array(new SharedArrayBuffer(4));
@@ -190,7 +190,11 @@ export interface PageOptions {
 const statementCaches = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
 
 function isSqliteBusy(error: unknown): boolean {
-  return error instanceof Error && /database is (?:locked|busy)/i.test(error.message);
+  if (!(error instanceof Error)) return false;
+  const code = Reflect.get(error, 'code');
+  if (code === 'SQLITE_BUSY' || code === 'SQLITE_LOCKED') return true;
+  if (/database is (?:locked|busy)/i.test(error.message)) return true;
+  return isSqliteBusy(Reflect.get(error, 'cause'));
 }
 
 function sqliteBusyError(operation: string, startedAt: number, cause: unknown): Error {
@@ -856,20 +860,22 @@ export function hasRow<N extends TableName>(database: DatabaseSync, table: N, ke
 export function txn<T>(database: DatabaseSync, fn: () => T): T {
   const row = retryWhenSqliteBusy('checking schema version before a transaction', () => prepareCached(database, "SELECT value FROM meta WHERE key = 'schema_version'").get());
   if (row) assertWritable(database);
-  retryWhenSqliteBusy('beginning a write transaction', () => database.exec('BEGIN IMMEDIATE'));
-  try {
-    const result = fn();
-    if (isRecord(result) && typeof result.then === 'function') {
-      throw new TypeError('SQLite transaction callbacks must be synchronous.');
-    }
-    database.exec('COMMIT');
-    return result;
-  } catch (error) {
+  return retryWhenSqliteBusy('writing transaction', () => {
+    database.exec('BEGIN IMMEDIATE');
     try {
-      database.exec('ROLLBACK');
-    } catch {
-      // Preserve the operation error if a rollback is no longer possible.
+      const result = fn();
+      if (isRecord(result) && typeof result.then === 'function') {
+        throw new TypeError('SQLite transaction callbacks must be synchronous.');
+      }
+      database.exec('COMMIT');
+      return result;
+    } catch (error) {
+      try {
+        database.exec('ROLLBACK');
+      } catch {
+        // Preserve the operation error if a rollback is no longer possible.
+      }
+      throw error;
     }
-    throw error;
-  }
+  });
 }

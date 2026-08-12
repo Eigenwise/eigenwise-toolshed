@@ -202,6 +202,43 @@ test('txn waits for a concurrent writer to release its lock', async () => {
   db.close();
 });
 
+test('txn retries a busy mutation after the lock timeout expires', async () => {
+  const { db, homeRoot } = makeDb();
+  db.exec('PRAGMA busy_timeout=50');
+  const childProcess = await holdWriteLock(homeRoot, 250);
+
+  txn(db, () => putRow(db, 'globals', { key: 'after-retry', data: {} }));
+
+  assert.deepStrictEqual(getRow(db, 'globals', 'after-retry'), {});
+  await waitForProcessExit(childProcess);
+  db.close();
+});
+
+test('txn retries a busy mutation raised by its callback', () => {
+  const { db } = makeDb();
+  let attempts = 0;
+
+  assert.strictEqual(txn(db, () => {
+    attempts += 1;
+    if (attempts === 1) throw Object.assign(new Error('database is locked'), { code: 'SQLITE_BUSY' });
+    return 'committed';
+  }), 'committed');
+  assert.strictEqual(attempts, 2);
+  db.close();
+});
+
+test('txn does not retry genuine constraint errors', () => {
+  const { db } = makeDb();
+  const startedAt = Date.now();
+
+  assert.throws(() => txn(db, () => {
+    db.prepare('INSERT INTO projects (slug, data) VALUES (?, ?)').run('duplicate', '{}');
+    db.prepare('INSERT INTO projects (slug, data) VALUES (?, ?)').run('duplicate', '{}');
+  }), /UNIQUE constraint failed: projects\.slug/);
+  assert.ok(Date.now() - startedAt < 500, 'constraint errors must fail immediately');
+  db.close();
+});
+
 test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
   const { db, homeRoot } = makeDb();
   const childProcess = await holdWriteLock(homeRoot, SQLITE_BUSY_TIMEOUT_MS * 4);
@@ -209,7 +246,7 @@ test('txn reports a timed-out SQLite lock with retry diagnostics', async () => {
   try {
     assert.throws(
       () => txn(db, () => putRow(db, 'globals', { key: 'blocked', data: {} })),
-      /Sidequest database stayed locked while beginning a write transaction.*after 3 attempts.*SQLite does not expose the locking process or claim identity/i,
+      /Sidequest database stayed locked while writing transaction.*after 3 attempts.*SQLite does not expose the locking process or claim identity/i,
     );
   } finally {
     childProcess.kill();
