@@ -37,14 +37,33 @@ test('Python source and interface files select the Python language server', () =
   assert.equal(languageForFile('package.pyi'), 'python');
 });
 
-test('Python without a package virtual environment refuses instead of emitting unresolved-import diagnostics', () => {
+test('Python package without a virtual environment refuses despite a Python executable on PATH', () => {
   const root = makeTempDir('code-intel-python-no-venv-');
-  const filePath = path.join(root, 'card-classifiers', 'module.py');
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
+  const packageDir = path.join(root, 'card-classifiers');
+  const filePath = path.join(packageDir, 'module.py');
+  const pythonBinDir = makeTempDir('code-intel-python-path-');
+  const pythonExecutable = path.join(pythonBinDir, process.platform === 'win32' ? 'python.exe' : 'python3');
+  fs.mkdirSync(packageDir, { recursive: true });
   fs.writeFileSync(filePath, 'import installed_dependency\n');
-  const outcome = resolveInterpreter(root, filePath, cleanEnv);
-  assert.match(outcome.error, /No Python interpreter is available/);
+  fs.writeFileSync(path.join(packageDir, 'pyproject.toml'), '[project]\nname = "card-classifiers"\n');
+  fs.writeFileSync(pythonExecutable, '');
+
+  const outcome = resolveInterpreter(root, filePath, { PATH: pythonBinDir });
+
+  assert.match(outcome.error, /card-classifiers/);
+  assert.match(outcome.error, /declares dependencies with no environment/);
   assert.match(outcome.error, /WORKBENCH_CODE_INTEL_PYTHON_INTERPRETER/);
+});
+
+test('Python source outside packaging metadata resolves a Python executable on PATH', () => {
+  const root = makeTempDir('code-intel-python-path-');
+  const filePath = path.join(root, 'maintenance.py');
+  const pythonBinDir = makeTempDir('code-intel-python-path-');
+  const pythonExecutable = path.join(pythonBinDir, process.platform === 'win32' ? 'python.exe' : 'python3');
+  fs.writeFileSync(filePath, 'print("maintenance")\n');
+  fs.writeFileSync(pythonExecutable, '');
+
+  assert.equal(resolveInterpreter(root, filePath, { PATH: pythonBinDir }).interpreter, pythonExecutable);
 });
 
 test('Python interpreter resolution uses the nearest package virtual environment from the file', () => {

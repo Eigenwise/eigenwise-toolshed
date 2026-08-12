@@ -36,6 +36,19 @@ function nearestVirtualEnvironment(filePath, rootDir) {
   }
 }
 
+function nearestPackageDeclaration(filePath, rootDir) {
+  let currentDir = path.dirname(filePath);
+  for (;;) {
+    if (['pyproject.toml', 'setup.py', 'setup.cfg', 'Pipfile', 'requirements.txt'].some((name) => fs.existsSync(path.join(currentDir, name)))) {
+      return currentDir;
+    }
+    if (currentDir === rootDir) return null;
+    const parentDir = path.dirname(currentDir);
+    if (parentDir === currentDir || !isUnderDirectory(rootDir, parentDir)) return null;
+    currentDir = parentDir;
+  }
+}
+
 function executableOnPath(env) {
   const pathValue = env.PATH || env.Path || '';
   const names = process.platform === 'win32' ? ['python.exe', 'python3.exe'] : ['python3', 'python'];
@@ -50,7 +63,7 @@ function executableOnPath(env) {
 }
 
 // Interpreter selection is ordered: explicit override, VIRTUAL_ENV containing the file,
-// nearest .venv or venv from the file to the bound root, then PATH discovery.
+// nearest .venv or venv from the file to the bound root, package-environment refusal, then PATH discovery.
 function resolveInterpreter(rootDir, filePath, env = process.env) {
   const override = env[PYTHON_INTERPRETER_ENV];
   if (override) {
@@ -68,6 +81,13 @@ function resolveInterpreter(rootDir, filePath, env = process.env) {
 
   const nearestInterpreter = nearestVirtualEnvironment(filePath, rootDir);
   if (nearestInterpreter) return { interpreter: nearestInterpreter };
+
+  const packageDirectory = nearestPackageDeclaration(filePath, rootDir);
+  if (packageDirectory) {
+    return {
+      error: `Python package ${packageDirectory} declares dependencies with no environment to resolve them against. Create a virtual environment in ${packageDirectory} or set ${PYTHON_INTERPRETER_ENV}.`,
+    };
+  }
 
   const discoveredInterpreter = executableOnPath(env);
   if (discoveredInterpreter) return { interpreter: discoveredInterpreter };
