@@ -480,6 +480,7 @@ const {
   expiredPreparedDispatch,
   worktreeIsolationWarning,
   prepareDispatch,
+  supersedeUnclaimedLaunch,
   readDispatchBriefing,
   recordDispatchLaunch,
   recordDispatchAgentFailure,

@@ -246,7 +246,7 @@ const tools = [
   },
   {
     name: "dispatch",
-    description: "Prepare a token-gated dispatch for a ticket. It returns a stable executor spawn spec and token. Dispatch is orchestrator-owned while the caller holds an active executor claim. Ordinary isolated dispatches use a native worktree; retained-worktree continuations omit native isolation so the executor can EnterWorktree into the retained worktree. Stable executors are ready from session start, so no definition file is involved. A new dispatch in an adopting session rotates the token and returns a current spawn. The claim stays gated on the returned token and executor.",
+    description: "Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. A new adopting-session dispatch rotates the token and returns a current spawn. Claims require the returned token and executor.",
     inputSchema: {
       type: "object",
       properties: {
@@ -256,6 +256,7 @@ const tools = [
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Explicitly allow a write ticket with no declared file scope." },
         integrationBranch: { type: "string" },
+        recoveryEvidence: { type: "string" },
         full: { type: "boolean", description: "Include token, executor, warnings, and recovery details." }
       },
       required: ["ref"]
@@ -273,6 +274,7 @@ const tools = [
         allowRepeatFailure: args.allowRepeatFailure === true,
         allowUnscoped: args.allowUnscoped === true,
         integrationBranch: args.integrationBranch,
+        recoveryEvidence: args.recoveryEvidence,
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.
         source: "mcp",

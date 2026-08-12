@@ -812,7 +812,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
   assert.ok(headroom >= 1500, `tools/list headroom is ${headroom} bytes, below 1500`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /returns a token and spawn spec/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /Dispatch/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
@@ -2439,7 +2439,7 @@ test('MCP board archive tools match the CLI archive-board lifecycle', async () =
 test('dispatch returns a stable executor, one spawn prompt, and a token', async () => {
   const d = mcp.toolDescriptors().find((t: any) => t.name === 'dispatch');
   assert.ok(d);
-  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'full', 'integrationBranch', 'project', 'ref', 'sharedTree']);
+  assert.deepStrictEqual(Object.keys(d.inputSchema.properties).sort(), ['allowRepeatFailure', 'allowUnscoped', 'full', 'integrationBranch', 'project', 'recoveryEvidence', 'ref', 'sharedTree']);
   assert.deepStrictEqual(d.inputSchema.required, ['ref']);
 
   seedCatalog([{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra', label: 'Terra' }]);

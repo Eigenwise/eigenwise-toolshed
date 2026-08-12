@@ -950,6 +950,41 @@ test('the idle backstop only applies when no executor is associated', () => {
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a bound executor is not idle just because it is quiet');
 });
 
+test('a launched unbound dispatch can be superseded with observed evidence, but a bound or claimed dispatch cannot', () => {
+  const ticket = addRouted('supersedable unclaimed launch');
+  const first = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-supersedable-launch' });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: first.token, executor: first.ticket.dispatchExecutor, sessionId: 'session-supersedable-launch', agentName: 'supersedable-launch-agent',
+  }).ok, true);
+  assert.match(store.pulsePayload(slug, ticket.ref).livenessEvidence, /without a bound runtime identity, claim, or checkpoint/);
+  const replacement = store.prepareDispatch(slug, ticket.ref, {
+    sharedTree: true,
+    sessionId: 'session-supersedable-replacement',
+    recoveryEvidence: 'The executor reported a token claim refusal and exited before binding.',
+  });
+  assert.notEqual(replacement.token, first.token);
+  assert.equal(replacement.ticket.dispatch.attempts.at(-1).failureShape, 'unclaimed_launch_superseded');
+  assert.equal(replacement.ticket.dispatch.attempts.at(-1).recoveryEvidence, 'The executor reported a token claim refusal and exited before binding.');
+
+  const bound = addRouted('bound launch stays protected');
+  const boundPrepared = store.prepareDispatch(slug, bound.ref, { sharedTree: true, sessionId: 'session-bound-protected' });
+  assert.equal(store.recordDispatchLaunch(slug, bound.ref, {
+    token: boundPrepared.token, executor: boundPrepared.ticket.dispatchExecutor, sessionId: 'session-bound-protected', agentName: 'bound-protected-agent',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent('session-bound-protected', boundPrepared.ticket.dispatchExecutor, 'bound-protected-agent', 'bound-protected-agent').ok, true);
+  assert.throws(() => store.prepareDispatch(slug, bound.ref, { sharedTree: true, recoveryEvidence: 'The executor reported a refusal.' }), /cannot be superseded/);
+
+  const claimed = addRouted('claimed launch stays protected');
+  const claimedPrepared = store.prepareDispatch(slug, claimed.ref, { sharedTree: true, sessionId: 'session-claimed-protected' });
+  assert.equal(store.recordDispatchLaunch(slug, claimed.ref, {
+    token: claimedPrepared.token, executor: claimedPrepared.ticket.dispatchExecutor, sessionId: 'session-claimed-protected', agentName: 'claimed-protected-agent',
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, claimed.ref, 'claimed-protected-executor', {
+    token: claimedPrepared.token, executor: claimedPrepared.ticket.dispatchExecutor, sessionId: 'session-claimed-protected',
+  }).ok, true);
+  assert.throws(() => store.prepareDispatch(slug, claimed.ref, { sharedTree: true, recoveryEvidence: 'The executor reported a refusal.' }), /cannot be superseded/);
+});
+
 test('an unbound claimed dispatch reports a binding fault and stays claimed without death evidence', () => {
   const ticket = addRouted('unbound dispatch claim');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-unbound-dispatch' });
