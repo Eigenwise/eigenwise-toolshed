@@ -804,15 +804,27 @@ test('list returns verify while retaining executorVerify for compatibility', asy
   assert.equal(row.executorVerify, ticket.executorVerify);
 });
 
+test('the build budget report itemizes the served MCP descriptors', () => {
+  const report = mcp.toolDescriptorByteReport();
+  assert.equal(report.maxBytes, mcp.MCP_TOOLS_LIST_MAX_BYTES);
+  assert.equal(report.reserveBytes, mcp.MCP_TOOLS_LIST_HEADROOM_BYTES);
+  assert.equal(report.tools[0].name, 'update');
+  assert.ok(report.tools.every((tool: any, index: number) => index === 0 || report.tools[index - 1].bytes >= tool.bytes));
+});
+
 test('tools/list preserves MCP contracts within the payload budget', async (context: { diagnostic(message: string): void }) => {
   const tools = mcp.toolDescriptors();
+  const report = mcp.toolDescriptorByteReport();
   const payloadBytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
   const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
-  context.diagnostic(`tools/list size: ${tools.length} tools, ${payloadBytes} payload bytes, ${headroom} bytes headroom`);
+  context.diagnostic(`tools/list budget: ${tools.length} tools, ${payloadBytes}/${mcp.MCP_TOOLS_LIST_MAX_BYTES} payload bytes, ${headroom}/${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES} bytes headroom; largest: ${report.tools.slice(0, 5).map((tool: any) => `${tool.name}=${tool.bytes}`).join(', ')}`);
+  assert.equal(report.payloadBytes, payloadBytes);
+  assert.equal(report.headroomBytes, headroom);
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
-  assert.ok(headroom >= 1500, `tools/list headroom is ${headroom} bytes, below 1500`);
+  assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /Dispatch/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /returns a token and spawn spec/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /Recovery evidence/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');

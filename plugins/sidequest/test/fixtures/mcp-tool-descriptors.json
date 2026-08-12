@@ -1311,7 +1311,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Dispatch.",
+    "description": "Dispatch; returns a token and spawn spec.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1335,7 +1335,8 @@
           "type": "string"
         },
         "recoveryEvidence": {
-          "type": "string"
+          "type": "string",
+          "description": "Recovery evidence for a failed dispatch."
         },
         "full": {
           "type": "boolean"

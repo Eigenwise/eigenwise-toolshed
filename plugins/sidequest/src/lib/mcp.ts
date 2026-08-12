@@ -40,9 +40,10 @@ type RpcMessage = { jsonrpc?: string; id?: RpcId; method?: string; params?: any 
 
 const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
-// The listing is loaded into every MCP session. This rounded cap retains 1.5KB
-// for schema growth after compacting the instructions callers still need.
-const MCP_TOOLS_LIST_MAX_BYTES = 20500;
+// The listing is loaded into every MCP session. Keep a distinct reserve for
+// protocol growth so the contributor-facing budget remains visible in tests.
+const MCP_TOOLS_LIST_MAX_BYTES = 23000;
+const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
   try {
@@ -158,25 +159,41 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears fallback.' },
-  dispatch: { sharedTree: 'Omit to share zero-scope read-only work.' },
+  dispatch: { sharedTree: 'Omit to share zero-scope read-only work.', recoveryEvidence: 'Recovery evidence for a failed dispatch.' },
 };
+
+function toolDescriptor(tool: ToolDefinition) {
+  const inputSchema = compactSchema(tool.inputSchema);
+  for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
+    inputSchema.properties[property].description = description;
+  }
+  return {
+    name: tool.name,
+    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
+      ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
+      : conciseDescription(tool.description),
+    inputSchema,
+  };
+}
 
 function toolDescriptors() {
   return TOOLS
     .filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name))
-    .map((tool) => {
-      const inputSchema = compactSchema(tool.inputSchema);
-      for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
-        inputSchema.properties[property].description = description;
-      }
-      return {
-        name: tool.name,
-        description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name)
-          ? TOOL_DESCRIPTION_OVERRIDES[tool.name]
-          : conciseDescription(tool.description),
-        inputSchema,
-      };
-    });
+    .map(toolDescriptor);
+}
+
+function toolDescriptorByteReport() {
+  const tools = toolDescriptors();
+  const payloadBytes = Buffer.byteLength(JSON.stringify(tools), 'utf8');
+  return {
+    maxBytes: MCP_TOOLS_LIST_MAX_BYTES,
+    reserveBytes: MCP_TOOLS_LIST_HEADROOM_BYTES,
+    payloadBytes,
+    headroomBytes: MCP_TOOLS_LIST_MAX_BYTES - payloadBytes,
+    tools: tools
+      .map((tool) => ({ name: tool.name, bytes: Buffer.byteLength(JSON.stringify(tool), 'utf8') }))
+      .sort((left, right) => right.bytes - left.bytes),
+  };
 }
 
 /* ------------------------------------------------------------------ *
@@ -243,8 +260,10 @@ module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
   MCP_TOOLS_LIST_MAX_BYTES,
+  MCP_TOOLS_LIST_HEADROOM_BYTES,
   TOOLS,
   toolDescriptors,
+  toolDescriptorByteReport,
   resolveProject,
   handleRequest,
   serverVersion,

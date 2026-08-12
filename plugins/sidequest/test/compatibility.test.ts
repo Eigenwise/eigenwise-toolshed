@@ -10,9 +10,8 @@ import { spawnSync } from 'node:child_process';
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 const FIXTURES = path.join(__dirname, 'fixtures');
-const mcp = require('../lib/mcp.js') as { toolDescriptors(): unknown[]; MCP_TOOLS_LIST_MAX_BYTES: number };
+const mcp = require('../lib/mcp.js') as { toolDescriptors(): unknown[]; MCP_TOOLS_LIST_MAX_BYTES: number; MCP_TOOLS_LIST_HEADROOM_BYTES: number };
 const MCP_DESCRIPTOR_GOLDEN = path.join(FIXTURES, 'mcp-tool-descriptors.json');
-const MINIMUM_MCP_TOOLS_LIST_HEADROOM = 1500;
 
 type RunResult = { status: number | null; stdout: string; stderr: string };
 
@@ -129,13 +128,14 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('release')?.inputSchema.properties?.deliverable?.type, 'string');
   assert.match(byName.get('release')?.description ?? '', /oracle handoff/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description ?? '', /Omit to share zero-scope read-only work/);
+  assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /Recovery evidence/);
 
   const payload = JSON.stringify(descriptors);
   const payloadBytes = Buffer.byteLength(payload, 'utf8');
   const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
   assert.equal(`${JSON.stringify(descriptors, null, 2)}\n`, fs.readFileSync(MCP_DESCRIPTOR_GOLDEN, 'utf8'));
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
-  assert.ok(headroom >= MINIMUM_MCP_TOOLS_LIST_HEADROOM, `tools/list headroom is ${headroom} bytes, below ${MINIMUM_MCP_TOOLS_LIST_HEADROOM}`);
+  assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
 });
 
 test('CLI representative bytes, statuses, and removed commands match goldens', () => {

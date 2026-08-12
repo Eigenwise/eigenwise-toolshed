@@ -299,7 +299,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   link: 'Link tickets.',
   remove: 'Delete ticket; claims need force:true.',
   claim: 'Claim before work; proceed only on ok:true.',
-  dispatch: 'Dispatch.',
+  dispatch: 'Dispatch; returns a token and spawn spec.',
   done: 'Finish; stamp actual model and effort.',
   release: 'Release claim; retain oracle handoff.',
   groomClose: 'Close integrated submission.',
