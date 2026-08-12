@@ -78,11 +78,11 @@ function parseArgs(argv: any) {
 
 
 const HELP_COMMANDS: any = {
-  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--route-model <model> --route-effort <effort>] [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]',
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]   (--file declares write scope; a write ticket without it is refused at dispatch)',
   list: 'sidequest list [--status todo|doing|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]',
@@ -156,11 +156,12 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [--route-model <model> --route-effort <effort>] [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done]
+      --file declares the write scope. A write-capable ticket with no --file is refused at dispatch, because it can never win a scope request.
   sidequest list [--status todo|doing|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]

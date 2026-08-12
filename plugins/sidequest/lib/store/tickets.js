@@ -467,7 +467,8 @@ function createTickets(dependencies) {
       scopeResolution(slug, t, request, state, now, granted, refused);
       if (!Array.isArray(t.comments)) t.comments = [];
       const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "same-package scope derived from the ticket’s declared files";
-      const body = refused.length ? `Scope expansion refused: ${refused.join(", ")}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
+      const undeclared = !normalizeFiles(t.files).length ? ` This ticket declares no files, so no path can be in scope and every request refuses. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.` : "";
+      const body = refused.length ? `Scope expansion refused: ${refused.join(", ")}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
       const comment = createComment({ by: refused.length ? "board" : "board", body, kind: "comment", source: refused.length ? opts.source || "cli" : "policy" }, now);
       t.comments.push(comment);
       t.lastEventType = refused.length ? "scope_refused" : "scope_auto_approved";
