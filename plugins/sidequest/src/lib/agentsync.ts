@@ -868,6 +868,13 @@ function rejectedSubmissionHistoryBody(ticket?: any, retrieval?: any) {
   ].join('\n');
 }
 
+function oracleHandoffPacket(ticket?: any) {
+  const oracle = ticket?.oracle;
+  if (!oracle?.ask) return null;
+  const verdict = oracle.verdict?.text ? ` Human verdict: ${oracle.verdict.text}` : '';
+  return `Oracle handoff: ${ticket.status === 'awaiting-oracle' ? 'awaiting a human verdict' : 'verdict recorded'}. Ask: ${oracle.ask}.${verdict}`;
+}
+
 function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, uncertainty?: any, planDocument?: any, experimentLog?: any, findingCheckpoints?: any, continuation?: any) {
   return [
     '## This ticket',
@@ -884,10 +891,11 @@ ${category.contract || '(No category-specific executor instructions were recorde
     EXECUTOR_CONTRADICTION_RULE,
     ...(findingCheckpoints ? [`Durable finding checkpoints:\n${findingCheckpoints}`] : []),
     ...(continuation ? [continuation] : []),
+    ...(oracleHandoffPacket(ticket) ? [oracleHandoffPacket(ticket)] : []),
     ...(experimentLog ? [`Experiment log:\n${experimentLog}`] : []),
     `Declared files:\n${declaredFiles}`,
     ...(planDocument ? [planDocument] : []),
-    'Scope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix.',
+    'Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle.\n\nScope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix.',
   ].join('\n\n');
 }
 

@@ -1190,7 +1190,7 @@ function newTicketId() {
  *  Projects
  * ------------------------------------------------------------------ */
 
-const VALID_STATUS = ['todo', 'doing', 'done'];
+const VALID_STATUS = ['todo', 'doing', 'awaiting-oracle', 'done'];
 const VALID_PRIORITY = ['low', 'normal', 'high', 'urgent'];
 
 const STORY_PALETTE = ['#c2683f', '#3f8f8a', '#7a5ba8', '#7d8a3f', '#b45573', '#4a72a8', '#c19a3e', '#4f8f6a'];
@@ -1728,10 +1728,13 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
     const oracleRequested = nullableText(opts.oracle);
-    if (oracleRequested && coerceStatus(opts.status || t.status, t.status) !== 'doing') {
-      throw new Error('oracle release must keep the ticket in doing');
+    const oracleRelease = opts.releaseKind === 'oracle';
+    if (oracleRelease && !oracleRequested) throw new Error('oracle release requires a non-empty oracle ask');
+    if (oracleRequested && !oracleRelease) throw new Error('oracle ask requires release kind oracle');
+    if (oracleRelease && coerceStatus(opts.status || 'awaiting-oracle', t.status) !== 'awaiting-oracle') {
+      throw new Error('oracle release must set the ticket to awaiting-oracle');
     }
-    if (oracleRequested && t.oracle) {
+    if (oracleRelease && t.oracle && !t.oracle.verdict) {
       throw new Error('ticket already awaits an oracle verdict');
     }
     if (oracleRequested) oracleMarker(dispatch, opts, null);
@@ -1769,7 +1772,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       comment = createComment(releaseComment, now);
       t.comments.push(comment);
     }
-    if (oracleRequested) {
+    if (oracleRelease) {
       t.oracle = oracleMarker(dispatch, opts, now);
       writeOracleExperimentRound(slug, t);
     }
@@ -1805,6 +1808,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     t.dispatchExecutor = null;
     if (reopenedSubmission) t.submission = null;
     if (opts.status) t.status = coerceStatus(opts.status, t.status);
+    else if (oracleRelease) t.status = 'awaiting-oracle';
     if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
     if (t.status === 'todo' && (previousStatus !== 'todo' || (held && held.by))) {
       appendReworkEvent(t, 'released_to_todo', {

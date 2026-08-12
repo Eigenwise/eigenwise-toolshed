@@ -137,7 +137,7 @@ function listPayload(slug?: any, opts?: any) {
   const project = String(slug || '');
   const filter = {
     archived: !!opts.archived,
-    status: opts.status == null && !opts.all ? ['todo', 'doing'] : opts.status,
+    status: opts.status == null && !opts.all ? ['todo', 'doing', 'awaiting-oracle'] : opts.status,
   };
   const paging = !opts.all && opts.limit == null ? Object.assign({}, opts, { limit: DEFAULT_LIST_PAGE_LIMIT }) : opts;
   const total = countTickets(project, filter);

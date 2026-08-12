@@ -655,7 +655,7 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
   fs.rmSync(worktree, { recursive: true, force: true });
 });
 
-test('oracle releases retain the round marker in pulse, changes, and brief list projections', () => {
+test('oracle releases park awaiting-oracle without repeat guard and retain their worktree continuation', () => {
   const ticket = createFixture('oracle projection fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `oracle-projection-${Date.now()}` });
   assert.equal(store.claimTicket(slug, ticket.ref, 'oracle-projection-worker', {
@@ -664,7 +664,8 @@ test('oracle releases retain the round marker in pulse, changes, and brief list 
   }).ok, true);
 
   assert.equal(store.releaseTicket(slug, ticket.ref, 'oracle-projection-worker', {
-    status: 'doing',
+    status: 'awaiting-oracle',
+    releaseKind: 'oracle',
     oracle: 'Rank the candidates best to worst.',
     candidate: 'abc1234',
     deliverable: 'artifacts/round-1.wav',
@@ -672,11 +673,15 @@ test('oracle releases retain the round marker in pulse, changes, and brief list 
   }).ok, true);
 
   const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.status, 'awaiting-oracle');
   assert.equal(stored.oracle.round, 1);
   const expected = `awaiting oracle since ${stored.oracle.at}, round 1, candidate abc1234, ask: Rank the candidates best to worst.`;
+  assert.equal(store.pulsePayload(slug, ticket.ref).status, 'awaiting-oracle');
   assert.equal(store.pulsePayload(slug, ticket.ref).oracle.summary, expected);
   assert.equal(store.changesPayload(slug, new Date(0).toISOString()).tickets.find((entry?: any) => entry.ref === ticket.ref).oracle.summary, expected);
-  assert.equal(store.listPayload(slug, { brief: true, all: true }).tickets.find((entry?: any) => entry.ref === ticket.ref).oracle.summary, expected);
+  assert.equal(store.listPayload(slug, { brief: true, all: true }).tickets.find((entry?: any) => entry.ref === ticket.ref).status, 'awaiting-oracle');
+  assert.equal(store.prepareDispatch(slug, ticket.ref, { sessionId: `oracle-redispatch-${Date.now()}` }).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'oracle-projection-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('worktree dispatch warnings name ignored missing paths without flagging installed dependencies', () => {

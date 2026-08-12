@@ -251,7 +251,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(groomClose.inputSchema.properties.recoveryEvidence, 'groomClose requires terminal-agent evidence before clearing an unclaimed dispatch');
   const release = resp.result.tools.find((tool: any) => tool.name === 'release');
   assert.ok(release.inputSchema.properties.oracle, 'release exposes an oracle ask');
-  assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'contradiction', 'handback'], 'release classifies reasoned handoffs');
+  assert.deepEqual(release.inputSchema.properties.kind.enum, ['technical_blocker', 'contradiction', 'oracle', 'handback'], 'release classifies reasoned handoffs');
   assert.ok(release.inputSchema.properties.command, 'release exposes command evidence for technical blockers and contradictions');
   assert.match(release.inputSchema.properties.command.description, /Required for blocker\/contradiction/);
   assert.ok(release.inputSchema.properties.exitCode, 'release exposes optional contradiction and required technical-blocker exit-code evidence');
@@ -2984,7 +2984,7 @@ test('status validation fails loudly and directs deletion to remove', async () =
   const added = await callTool('add', { title: 'strict status', complexity: 1, why: 'exercise loud validation for invalid MCP status values' });
   const invalid = await callToolRaw('update', { ref: added.ref, status: 'deleted' });
   assert.ok(invalid.isError);
-  assert.match(invalid.content[0].text, /must be one of: todo, doing, done/);
+  assert.match(invalid.content[0].text, /must be one of: todo, doing, awaiting-oracle, done/);
   assert.throws(() => store.updateTicket(store.ensureProject(PROJ).slug, added.ref, { status: 'deleted' }), /remove tool/i);
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
@@ -3241,7 +3241,7 @@ test('MCP release records an oracle handoff without a separate reason', async ()
     project: added.project,
     ref: added.ref,
     by: 'mcp-oracle-worker',
-    status: 'doing',
+    kind: 'oracle',
     oracle: 'Rank the two rendered candidates without reading the measurements.',
     candidate: 'abc1234',
     deliverable: 'artifacts/comparison.wav',
@@ -3255,6 +3255,7 @@ test('MCP release records an oracle handoff without a separate reason', async ()
     deliverable: 'artifacts/comparison.wav',
     ask: 'Rank the two rendered candidates without reading the measurements.',
   });
+  assert.equal(ticket.status, 'awaiting-oracle');
   assert.equal(ticket.claim, null);
   assert.equal(ticket.comments.at(-1).body, 'Released: Rank the two rendered candidates without reading the measurements.');
   const pulse = await callTool('pulse', { project: added.project, ref: added.ref });
@@ -3269,7 +3270,7 @@ test('MCP verdict creates a missing oracle round and refuses a ticket with no or
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   assert.equal(store.releaseTicket(added.project, added.ref, 'mcp-verdict-worker', {
-    status: 'doing',
+    releaseKind: 'oracle',
     oracle: 'Rank the candidates.',
     candidate: 'abc1234',
   }).ok, true);
@@ -3283,7 +3284,8 @@ test('MCP verdict creates a missing oracle round and refuses a ticket with no or
     constraint: 'Keep the transient below the reference.',
   });
   assert.equal(verdict.ok, true);
-  assert.equal(store.getTicket(added.project, added.ref).oracle, null);
+  assert.equal(store.getTicket(added.project, added.ref).status, 'todo');
+  assert.equal(store.getTicket(added.project, added.ref).oracle.verdict.text, 'Candidate B wins.');
   const experiment = store.experimentPacket(added.project, added.ref);
   const log = fs.readFileSync(store.assetPath(added.project, store.getTicket(added.project, added.ref).id, experiment.asset), 'utf8');
   assert.match(log, /Verdict: "Candidate B wins\." — accepted/);

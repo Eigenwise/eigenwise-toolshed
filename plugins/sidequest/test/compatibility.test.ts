@@ -164,7 +164,7 @@ test('CLI verdict records an awaiting oracle result', () => {
     const ticket = store.createTicket(slug, { title: 'CLI verdict fixture', complexity: 2, complexityWhy: 'exercise the CLI oracle verdict command' });
     const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'cli-verdict' });
     store.claimTicket(slug, ticket.ref, 'cli-verdict-worker', { token: prepared.token, executor: prepared.ticket.dispatchExecutor });
-    store.releaseTicket(slug, ticket.ref, 'cli-verdict-worker', { status: 'doing', oracle: 'Rank the candidates.', candidate: 'abc1234' });
+    store.releaseTicket(slug, ticket.ref, 'cli-verdict-worker', { releaseKind: 'oracle', oracle: 'Rank the candidates.', candidate: 'abc1234' });
     process.stdout.write(ticket.ref);
   `;
   const seeded = spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8', env: { ...process.env, ...env } });

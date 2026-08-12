@@ -237,7 +237,7 @@ async function cmdList(opts: any) {
   // Archived tickets are hidden from the board by default; `--archived` shows only them.
   tickets = opts.archived ? tickets.filter((t: any) => t.archived) : tickets.filter((t: any) => !t.archived);
   if (opts.status) tickets = tickets.filter((t: any) => t.status === String(opts.status).toLowerCase());
-  else if (!opts.all) tickets = tickets.filter((t: any) => t.status === 'todo' || t.status === 'doing');
+  else if (!opts.all) tickets = tickets.filter((t: any) => t.status === 'todo' || t.status === 'doing' || t.status === 'awaiting-oracle');
   if (!tickets.length) {
     console.log(`No tickets in ${meta.name}.`);
     return;

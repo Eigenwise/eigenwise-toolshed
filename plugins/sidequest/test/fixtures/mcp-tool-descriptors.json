@@ -47,6 +47,7 @@
           "enum": [
             "todo",
             "doing",
+            "awaiting-oracle",
             "done"
           ]
         },
@@ -400,6 +401,7 @@
           "enum": [
             "todo",
             "doing",
+            "awaiting-oracle",
             "done"
           ]
         },
@@ -820,7 +822,7 @@
   },
   {
     "name": "release",
-    "description": "Release claim; retain oracle handoff.",
+    "description": "Release claim. Use kind oracle with an ask to park awaiting-oracle, then exit. The oracle handoff stays visible until a verdict is recorded.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -841,6 +843,7 @@
           "enum": [
             "technical_blocker",
             "contradiction",
+            "oracle",
             "handback"
           ]
         },
@@ -869,6 +872,7 @@
           "enum": [
             "todo",
             "doing",
+            "awaiting-oracle",
             "done"
           ]
         },
@@ -1053,6 +1057,7 @@
           "enum": [
             "todo",
             "doing",
+            "awaiting-oracle",
             "done"
           ]
         },
