@@ -4,7 +4,7 @@ const fs = require('node:fs');
 
 const DEFAULT_MAX_BYTES = 8 * 1024 * 1024;
 const DEFAULT_BATCH_SIZE = 256;
-const DEFAULT_DRAIN_BUDGET_MS = 250;
+const DEFAULT_DRAIN_BUDGET_MS = 10_000;
 const DEFAULT_FAILURE_THRESHOLD = 3;
 
 function readBoundedLines(filePath, maxBytes) {
@@ -78,10 +78,15 @@ function drainBudgetMs(options) {
   return Math.max(10, Math.min(60_000, Number(options.drainBudgetMs) || DEFAULT_DRAIN_BUDGET_MS));
 }
 
-function assertWithinBudget(deadline) {
-  if (Date.now() <= deadline) return;
-  const error = new Error('Hook spool drain exceeded its time budget.');
+function assertWithinBudget(deadline, startedAt, budgetMs, remainingEntries) {
+  const now = Date.now();
+  if (now <= deadline) return;
+  const elapsedMs = now - startedAt;
+  const error = new Error(`Hook spool drain exceeded its ${budgetMs}ms time budget after ${elapsedMs}ms with ${remainingEntries} spool entries remaining.`);
   error.code = 'HOOK_SPOOL_DRAIN_TIMEOUT';
+  error.drain_budget_ms = budgetMs;
+  error.drain_elapsed_ms = elapsedMs;
+  error.remaining_spool_entries = remainingEntries;
   throw error;
 }
 
@@ -109,14 +114,16 @@ async function drainHookSpool(options) {
 
     const maxBytes = Math.max(1024, Number(options.maxBytes) || DEFAULT_MAX_BYTES);
     const batchSize = Math.max(1, Math.min(1024, Number(options.batchSize) || DEFAULT_BATCH_SIZE));
-    const deadline = Date.now() + drainBudgetMs(options);
+    const budgetMs = drainBudgetMs(options);
+    const startedAt = Date.now();
+    const deadline = startedAt + budgetMs;
     const { lines, droppedBytes } = readBoundedLines(drainingPath, maxBytes);
     let drained = 0;
     let duplicates = 0;
     let rejected = 0;
     let malformed = 0;
     for (let offset = 0; offset < lines.length; offset += batchSize) {
-      assertWithinBudget(deadline);
+      assertWithinBudget(deadline, startedAt, budgetMs, lines.length - offset);
       const batchLines = lines.slice(offset, offset + batchSize);
       const observations = [];
       for (const line of batchLines) {
@@ -139,7 +146,7 @@ async function drainHookSpool(options) {
       const remainingLines = lines.slice(offset + batchSize);
       if (remainingLines.length === 0) fs.writeFileSync(drainingPath, '');
       else fs.writeFileSync(drainingPath, `${remainingLines.join('\n')}\n`);
-      assertWithinBudget(deadline);
+      assertWithinBudget(deadline, startedAt, budgetMs, remainingLines.length);
       await yieldToEventLoop();
     }
     fs.unlinkSync(drainingPath);

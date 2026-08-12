@@ -12,7 +12,7 @@ const {
   installedPluginVersion,
 } = require('../bin/observer.js');
 const { createOutboxDrainer, flushOutbox } = require('../lib/observability/outbox.js');
-const { drainHookSpool } = require('../lib/observability/hook-spool.js');
+const { DEFAULT_DRAIN_BUDGET_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { RESOLVED_VIEWS } = require('../lib/observability/schema.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
@@ -72,6 +72,10 @@ function requestObservation(overrides = {}) {
 function measurement(name, value, scope = 'request', quality = 'exact_provider') {
   return { name, value, unit: name === 'duration_ms' ? 'ms' : 'tokens', scope, quality };
 }
+
+test('uses a ten-second default hook spool drain budget', () => {
+  assert.equal(DEFAULT_DRAIN_BUDGET_MS, 10_000);
+});
 
 test('opens a single-writer WAL ledger with append-only facts and all resolved views', (t) => {
   const store = temporaryStore(t);
@@ -568,7 +572,13 @@ test('hook spool drain keeps committed rows out of the next attempt after its bu
 
   await assert.rejects(
     drainHookSpool({ spoolPath, store, batchSize: 1, drainBudgetMs: 10, failureState: state }),
-    { code: 'HOOK_SPOOL_DRAIN_TIMEOUT' },
+    (error) => {
+      assert.equal(error.code, 'HOOK_SPOOL_DRAIN_TIMEOUT');
+      assert.match(error.message, /10ms time budget after \d+ms with 1 spool entries remaining/);
+      assert.equal(error.drain_budget_ms, 10);
+      assert.equal(error.remaining_spool_entries, 1);
+      return true;
+    },
   );
   assert.equal(state.consecutive_failures, 0);
   assert.equal(fs.readFileSync(`${spoolPath}.draining`, 'utf8'), '{"event":"two"}\n');
