@@ -980,6 +980,15 @@ test('board_config defaults and stores the integration branch', async () => {
   assert.match(rejected.content[0].text, /integrationBranch must be a valid Git branch name/);
 });
 
+test('board_config defaults and stores the worktree base', async () => {
+  const project = store.ensureProject(createGitWorktree(), 'SQ worktree base').slug;
+  assert.equal((await callTool('board_config', { project })).worktreeBase, 'origin-main');
+  assert.equal((await callTool('board_config', { project, worktreeBase: 'local-main' })).worktreeBase, 'local-main');
+  const rejected = await callToolRaw('board_config', { project, worktreeBase: 'head' });
+  assert.equal(rejected.isError, true);
+  assert.match(rejected.content[0].text, /must be one of: origin-main, local-main/);
+});
+
 test('board_config renames only a board display name', async () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-board-rename-'));
   const project = store.ensureProject(projectPath, 'Original board').slug;

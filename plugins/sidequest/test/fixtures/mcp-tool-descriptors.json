@@ -1857,6 +1857,13 @@
         "worktreeIsolation": {
           "type": "boolean"
         },
+        "worktreeBase": {
+          "type": "string",
+          "enum": [
+            "origin-main",
+            "local-main"
+          ]
+        },
         "notIntegratedSalvageAgeHours": {
           "type": "integer",
           "minimum": 168

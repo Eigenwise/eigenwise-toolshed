@@ -824,6 +824,15 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
   }
 }
 
+function worktreeBaseIntegrationTarget(slug?: any, worktreeBase?: any, repository?: any, branch?: any) {
+  if (worktreeBase === 'local-main') return integrationTarget(slug, { mode: 'local' });
+  try {
+    return integrationTarget(slug, { mode: 'remote' });
+  } catch (_) {
+    return preferredWorktreeIntegrationTarget(repository, branch);
+  }
+}
+
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -994,10 +1003,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const contract = storyExecutionContract(story);
     const contractDrift = t.storyContractDrift || null;
     const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase();
+    const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || 'origin-main';
+    const configuredIntegrationBranch = String(readMeta(slug)?.integrationBranch || 'main');
     const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
     const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
     const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
-      ? preferredWorktreeIntegrationTarget(readMeta(slug)?.path || '', String(readMeta(slug)?.integrationBranch || 'main'))
+      ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || '', configuredIntegrationBranch)
       : null;
     const useIntegrationTarget = explicitIntegrationTarget
       || (isolatedRepositoryDispatch && configuredIntegrationMode !== 'auto')

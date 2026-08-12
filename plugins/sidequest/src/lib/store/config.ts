@@ -161,6 +161,14 @@ function normalizeWorktreeIsolation(value?: any) {
   return value;
 }
 
+function normalizeWorktreeBase(value?: any) {
+  const base = String(value == null ? 'origin-main' : value).trim().toLowerCase();
+  if (!['origin-main', 'local-main'].includes(base)) {
+    throw new Error('worktreeBase must be "origin-main" or "local-main".');
+  }
+  return base;
+}
+
 function normalizeNotIntegratedSalvageAgeHours(value?: any) {
   if (value == null || value === '') return DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS;
   const hours = Number(value);
@@ -268,7 +276,7 @@ function integrationTarget(slug?: any, override?: any) {
   const requested = override && typeof override === 'object' ? override : {};
   const configured = normalizeIntegrationMode(requested.mode ?? meta.integrationMode);
   const mode = configured === 'auto' ? (hasOriginRemote(meta.path) ? 'remote' : 'local') : configured;
-  const branch = normalizeIntegrationBranch(requested.branch ?? override ?? meta.integrationBranch);
+  const branch = normalizeIntegrationBranch(requested.branch ?? (typeof override === 'string' ? override : meta.integrationBranch));
   const upstream = mode === 'local' ? branch : `origin/${branch}`;
   const ref = mode === 'local' ? `refs/heads/${branch}` : `refs/remotes/origin/${branch}`;
   if (!integrationBranchExists(meta.path, ref)) {
@@ -309,6 +317,7 @@ function boardConfig(slug?: any) {
     delivery: normalizeDeliveryMode(meta.delivery),
     integrationVerifyTimeoutMs: normalizeIntegrationVerifyTimeoutMs(meta.integrationVerifyTimeoutMs),
     worktreeIsolation: normalizeWorktreeIsolation(meta.worktreeIsolation),
+    worktreeBase: normalizeWorktreeBase(meta.worktreeBase),
     notIntegratedSalvageAgeHours: normalizeNotIntegratedSalvageAgeHours(meta.notIntegratedSalvageAgeHours),
     autoApproveTestScope: normalizeAutoApproveTestScope(meta.autoApproveTestScope == null ? meta.autoApprovePluginTests : meta.autoApproveTestScope),
     autoApproveScope: normalizeAutoApproveScope(meta.autoApproveScope),
@@ -362,6 +371,9 @@ function setBoardConfig(slug?: any, patch?: any) {
     if (Object.prototype.hasOwnProperty.call(patch, 'worktreeIsolation')) {
       meta.worktreeIsolation = normalizeWorktreeIsolation(patch.worktreeIsolation);
     }
+    if (Object.prototype.hasOwnProperty.call(patch, 'worktreeBase')) {
+      meta.worktreeBase = normalizeWorktreeBase(patch.worktreeBase);
+    }
     if (Object.prototype.hasOwnProperty.call(patch, 'notIntegratedSalvageAgeHours')) {
       meta.notIntegratedSalvageAgeHours = normalizeNotIntegratedSalvageAgeHours(patch.notIntegratedSalvageAgeHours);
     }
@@ -391,7 +403,7 @@ function effectiveScope(slug?: any, files?: any) {
 }
 
 
-  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeNotIntegratedSalvageAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
+  return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }
 
 module.exports = { createConfig };

@@ -214,6 +214,7 @@ async function cmdBoardConfig(opts) {
   if (opts.delivery != null) patch.delivery = opts.delivery;
   if (opts["integration-verify-timeout-ms"] != null) patch.integrationVerifyTimeoutMs = opts["integration-verify-timeout-ms"];
   if (opts["worktree-isolation"] !== void 0) patch.worktreeIsolation = opts["worktree-isolation"];
+  if (opts["worktree-base"] != null) patch.worktreeBase = opts["worktree-base"];
   if (opts["not-integrated-salvage-age-hours"] != null) patch.notIntegratedSalvageAgeHours = opts["not-integrated-salvage-age-hours"];
   if (opts["auto-approve-test-scope"] !== void 0) patch.autoApproveTestScope = opts["auto-approve-test-scope"];
   if (opts["auto-approve-scope"] != null) patch.autoApproveScope = opts["auto-approve-scope"];
@@ -240,6 +241,7 @@ async function cmdBoardConfig(opts) {
   console.log(`delivery: ${payload.delivery}`);
   console.log(`integration verify timeout: ${payload.integrationVerifyTimeoutMs}ms`);
   console.log(`worktree isolation: ${payload.worktreeIsolation ? "enabled" : "disabled"}`);
+  console.log(`worktree base: ${payload.worktreeBase}`);
   console.log(`unintegrated worktree salvage age: ${payload.notIntegratedSalvageAgeHours}h`);
   console.log(`test scope auto-approval: ${payload.autoApproveTestScope ? "enabled" : "disabled"}`);
   console.log(`configured scope auto-approval: ${payload.autoApproveScope.length ? payload.autoApproveScope.join(", ") : "(none)"}`);

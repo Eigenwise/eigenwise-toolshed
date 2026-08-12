@@ -84,7 +84,7 @@ function toolMutates(name?: any, args?: any) {
   if (MUTATING_TOOLS.has(String(name))) return true;
   if (name === 'new_board_profile') return args.profile !== undefined;
   if (name === 'global_fallback') return args.model !== undefined || args.effort !== undefined;
-  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
+  if (name === 'board_config') return args.name !== undefined || args.alwaysInScope != null || args.generatedPairs !== undefined || args.integrationMode != null || args.integrationBranch != null || args.worktreeIsolation !== undefined || args.worktreeBase !== undefined || args.notIntegratedSalvageAgeHours !== undefined || args.autoApproveTestScope !== undefined || args.autoApproveScope !== undefined || args.worktreeSetup !== undefined || args.worktreeDependencyPaths !== undefined;
   return false;
 }
 

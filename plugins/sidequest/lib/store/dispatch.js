@@ -723,6 +723,14 @@ function createDispatch(dependencies) {
       };
     }
   }
+  function worktreeBaseIntegrationTarget(slug, worktreeBase, repository, branch) {
+    if (worktreeBase === "local-main") return integrationTarget(slug, { mode: "local" });
+    try {
+      return integrationTarget(slug, { mode: "remote" });
+    } catch (_) {
+      return preferredWorktreeIntegrationTarget(repository, branch);
+    }
+  }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -862,9 +870,11 @@ function createDispatch(dependencies) {
       const contract = storyExecutionContract(story);
       const contractDrift = t.storyContractDrift || null;
       const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
+      const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "origin-main";
+      const configuredIntegrationBranch = String(readMeta(slug)?.integrationBranch || "main");
       const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
       const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
-      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? preferredWorktreeIntegrationTarget(readMeta(slug)?.path || "", String(readMeta(slug)?.integrationBranch || "main")) : null;
+      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || "", configuredIntegrationBranch) : null;
       const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
       const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
         ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
