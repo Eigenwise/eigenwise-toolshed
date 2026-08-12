@@ -3,6 +3,33 @@
 function createDispatch(dependencies: any) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
+const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
+const DISPATCH_TOKEN_CHARS = 32;
+const DISPATCH_TOKEN_GROUP_SIZE = 4;
+
+function normalizeDispatchToken(token?: any) {
+  return String(token || '').replace(/[\s-]/g, '').toLowerCase();
+}
+
+function dispatchTokenMatches(expected?: any, received?: any) {
+  const expectedToken = normalizeDispatchToken(expected);
+  const receivedToken = normalizeDispatchToken(received);
+  if (!expectedToken || expectedToken.length !== receivedToken.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expectedToken), Buffer.from(receivedToken));
+}
+
+function mintDispatchToken() {
+  let token = '';
+  while (token.length < DISPATCH_TOKEN_CHARS) {
+    for (const byte of crypto.randomBytes(DISPATCH_TOKEN_CHARS)) {
+      if (byte >= 248) continue;
+      token += DISPATCH_TOKEN_ALPHABET[byte % DISPATCH_TOKEN_ALPHABET.length];
+      if (token.length === DISPATCH_TOKEN_CHARS) break;
+    }
+  }
+  return token.match(new RegExp(`.{1,${DISPATCH_TOKEN_GROUP_SIZE}}`, 'g'))?.join('-') || token;
+}
+
 function dispatchTokenPrefix(token?: any) {
   return token ? String(token).slice(0, 12) : null;
 }
@@ -443,12 +470,12 @@ function appendReworkEvent(ticket?: any, kind?: any, details?: any) {
 }
 
 function dispatchTokenDigest(token?: any) {
-  return crypto.createHash('sha256').update(String(token)).digest('hex');
+  return crypto.createHash('sha256').update(normalizeDispatchToken(token)).digest('hex');
 }
 
 function isSupersededDispatchToken(ticket?: any, token?: any) {
   const state = dispatchState(ticket);
-  if (!state || !token || token === ticket.dispatchNonce) return false;
+  if (!state || !token || dispatchTokenMatches(ticket.dispatchNonce, token)) return false;
   return Array.isArray(state.supersededTokens) && state.supersededTokens.some((entry?: any) => entry.digest === dispatchTokenDigest(token));
 }
 
@@ -853,7 +880,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         at: now,
       });
     }
-    t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
+    t.dispatchNonce = mintDispatchToken();
     // A released dispatch hands its binding to the next attempt so a
     // continuation keeps the same worktree scope. An EMPTY released binding
     // must not be inherited: it pinned the first attempt's missing scope onto
@@ -980,7 +1007,9 @@ function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any) {
   const ticket = getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: 'not_found' };
   const state = dispatchState(ticket);
-  if (!state || state.terminalAt || !ticket.dispatchNonce || token !== ticket.dispatchNonce) {
+  if (!state || !ticket.dispatchNonce) return { ok: false, reason: 'token' };
+  if (state.terminalAt) return { ok: false, reason: 'stale' };
+  if (!dispatchTokenMatches(ticket.dispatchNonce, token)) {
     return { ok: false, reason: 'token' };
   }
   return { ok: true, ticket };
@@ -992,7 +1021,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
     }
     const state = dispatchState(t);
@@ -1036,7 +1065,7 @@ function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   const recorded = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
     }
     const state = dispatchState(t);
@@ -1071,7 +1100,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
       return { ok: false, reason: 'not_prepared' };
     }
     if (t.claim && t.claim.by) return { ok: false, reason: 'claimed' };
@@ -1115,7 +1144,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       at: now,
     };
 
-    t.dispatchNonce = crypto.randomBytes(24).toString('base64url');
+    t.dispatchNonce = mintDispatchToken();
     t.dispatchExecutor = fallback.exec.agent;
     // The recovery route replaces the failed one before the card labels are
     // rendered, so the description advertises the model that will actually run.
@@ -1472,6 +1501,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     setDispatchTerminal,
     appendReworkEvent,
     dispatchTokenDigest,
+    dispatchTokenMatches,
     isSupersededDispatchToken,
     routingPolicyAffectsTicket,
     refreshPreparedDispatches,

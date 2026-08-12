@@ -36,6 +36,7 @@ execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: PROJECT 
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
 const agentsync = require('../lib/agentsync.js');
+const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
 const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
@@ -1689,6 +1690,25 @@ test('a re-dispatch after a handback picks up files declared since the release',
   assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['tracked.js', 'late-addition.js']);
   const redispatched = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
   assert.deepEqual(redispatched.ticket.dispatch.declaredFiles.slice().sort(), ['late-addition.js', 'tracked.js']);
+});
+
+test('dispatch tokens accept case and separator normalization but reject transposition with recovery guidance', () => {
+  const ticket = createFixture('transcription-safe dispatch token');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `token-normalization-${Date.now()}` });
+  const normalizedToken = prepared.token.replace(/-/g, '').toUpperCase();
+  const firstTokenGroup = prepared.token.slice(0, 4);
+  const swappedIndex = firstTokenGroup.split('').findIndex((character: string, index: number) => character !== firstTokenGroup[index + 1]);
+  assert.notEqual(swappedIndex, -1);
+  const transposedToken = `${prepared.token.slice(0, swappedIndex)}${prepared.token[swappedIndex + 1]}${prepared.token[swappedIndex]}${prepared.token.slice(swappedIndex + 2)}`;
+
+  assert.match(prepared.token, /^[abcdefghjkmnpqrstuvwxyz23456789]{4}(?:-[abcdefghjkmnpqrstuvwxyz23456789]{4}){7}$/);
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, normalizedToken).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'transposed-token-worker', {
+    token: transposedToken,
+    executor: prepared.ticket.dispatchExecutor,
+  }).reason, 'token');
+  assert.match(claimRefusalMessage('token', ticket.ref), /transcribed incorrectly/);
+  assert.match(claimRefusalMessage('token', ticket.ref), /Re-read the grouped lowercase token/);
 });
 
 export {};

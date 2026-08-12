@@ -256,7 +256,7 @@ const tools = [
         allowRepeatFailure: { type: "boolean" },
         allowUnscoped: { type: "boolean", description: "Explicitly allow a write ticket with no declared file scope." },
         integrationBranch: { type: "string" },
-        recoveryEvidence: { type: "string" },
+        recoveryEvidence: { type: "string", description: "Supersede a launched dispatch that never bound or claimed, when pulse shows no runtime identity, claim, or checkpoint. Pass the observed failure evidence." },
         full: { type: "boolean", description: "Include token, executor, warnings, and recovery details." }
       },
       required: ["ref"]
