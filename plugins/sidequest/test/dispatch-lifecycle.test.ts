@@ -1714,6 +1714,41 @@ test('a dispatch records the configured local integration branch without an over
   }
 });
 
+test('worktreeBase local-main records the local main commit while default dispatches keep origin main', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-'));
+  const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-remote-'));
+  try {
+    execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: repository });
+    execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
+    execFileSync('git', ['config', 'user.name', 'Dispatch Lifecycle Test'], { cwd: repository });
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 1;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: repository });
+    execFileSync('git', ['commit', '--quiet', '-m', 'remote base'], { cwd: repository });
+    execFileSync('git', ['init', '--bare', remote], { windowsHide: true });
+    execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repository });
+    execFileSync('git', ['push', '--quiet', '-u', 'origin', 'main'], { cwd: repository });
+    const originMain = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repository, encoding: 'utf8' }).trim();
+    fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 2;\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'local-only main'], { cwd: repository });
+    const localMain = execFileSync('git', ['rev-parse', 'main'], { cwd: repository, encoding: 'utf8' }).trim();
+    const baseSlug = store.ensureProject(repository, 'dispatch worktree base').slug;
+
+    const defaultTicket = store.createTicket(baseSlug, { title: 'default worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const defaultDispatch = store.prepareDispatch(baseSlug, defaultTicket.ref, { sessionId: 'default-worktree-base' });
+    assert.equal(defaultDispatch.ticket.dispatch.baseCommit, originMain);
+    assert.deepEqual(defaultDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
+
+    store.setBoardConfig(baseSlug, { worktreeBase: 'local-main' });
+    const localTicket = store.createTicket(baseSlug, { title: 'local worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const localDispatch = store.prepareDispatch(baseSlug, localTicket.ref, { sessionId: 'local-worktree-base' });
+    assert.equal(localDispatch.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(localDispatch.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+  } finally {
+    fs.rmSync(repository, { recursive: true, force: true });
+    fs.rmSync(remote, { recursive: true, force: true });
+  }
+});
+
 test('an explicit missing integration branch refuses with its exact ref', () => {
   const branch = `missing-target-${Date.now()}`;
   const ticket = createFixture('missing feature integration target');
