@@ -12,7 +12,7 @@ Last Updated: 2026-08-12
 - **Codebase-mapper** (`plugins/codebase-mapper`): generates atomic project maps, injects the index at session start, and enforces announced map updates through declarative `PreToolUse: Skill` and `Stop` hooks.
 - **Quartermaster** (`plugins/quartermaster`): workspace setup and capability passes grounded in session history. Ships the `setup` and `resupply` skills. The miner streams recent transcripts into a bounded signal aggregate: what each session was for (title, opening ask, any `/goal` and whether it was met, a `humanDriven` flag, the areas of the tree touched) plus attribution, habits, and friction (denials, interrupts, corrections). `lib/scan.js` resolves the window, `lib/stream.js` streams records into `lib/signals.js`, `lib/catalog.js` reads local plugin catalogs for recommendations, and `lib/state.js` keeps per-session tallies and the decision ledger that `verify` checks recommendations against. `bin/quartermaster.js` exposes `mine`, `status`, `catalog`, `decisions`, `verify`, and `mark-resupply`.
 
-The eight published plugin packages use a manifest such as `plugins/model-gateway/.claude-plugin/plugin.json`, skill files under `skills/<name>/SKILL.md`, and `hooks/hooks.json`. Hook runtime files are committed JavaScript.
+The seven published plugin packages use a manifest such as `plugins/model-gateway/.claude-plugin/plugin.json`, skill files under `skills/<name>/SKILL.md`, and `hooks/hooks.json`. Hook runtime files are committed JavaScript.
 
 ## Shared support
 
