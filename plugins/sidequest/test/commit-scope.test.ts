@@ -705,6 +705,66 @@ test('SQ-971: a dispatch baseline excludes merge commits from parent history', (
   assert.notEqual(dispatchBase, git(root, ['merge-base', targetTip, tip]));
 });
 
+test('SQ-1875: an integrated merge below ticket work is not a submitted merge', () => {
+  const root = repo();
+  const main = branchOf(root);
+  const dispatchBase = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['checkout', '-q', '-b', 'integrated-ticket']);
+  fs.writeFileSync(path.join(root, 'plugins', 'other-plugin', 'integrated.js'), 'integrated\n');
+  git(root, ['add', '--', 'plugins/other-plugin/integrated.js']);
+  git(root, ['commit', '-m', 'integrated ticket']);
+  git(root, ['checkout', '-q', main]);
+  git(root, ['merge', '--no-ff', '-m', 'integrate ticket', 'integrated-ticket']);
+  const integratedMerge = git(root, ['rev-parse', 'HEAD']);
+  git(root, ['checkout', '-q', '-b', 'later-ticket', integratedMerge]);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'later.js'), 'later\n');
+  git(root, ['add', '--', 'plugins/sidequest/later.js']);
+  git(root, ['commit', '-m', 'later ticket']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-1875', tip);
+
+  const range = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1875',
+    upstream: main,
+    integrationBranch: main,
+    dispatchBase,
+  });
+
+  assert.equal(range.ok, true, `integrated merge was treated as ticket work: ${range.reason}`);
+  assert.equal(range.commits?.at(-1), tip);
+  assert.equal(range.commits?.includes(integratedMerge), true);
+  assert.equal(range.changedPaths?.includes('plugins/sidequest/later.js'), true);
+});
+
+test('SQ-1875: a merge introduced by the submitted work remains refused', () => {
+  const root = repo();
+  const main = branchOf(root);
+  git(root, ['checkout', '-q', '-b', 'ticket-parent']);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'parent.js'), 'parent\n');
+  git(root, ['add', '--', 'plugins/sidequest/parent.js']);
+  git(root, ['commit', '-m', 'ticket parent']);
+  git(root, ['checkout', '-q', '-b', 'ticket-side', main]);
+  fs.mkdirSync(path.join(root, 'plugins', 'sidequest'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'side.js'), 'side\n');
+  git(root, ['add', '--', 'plugins/sidequest/side.js']);
+  git(root, ['commit', '-m', 'ticket side']);
+  git(root, ['checkout', '-q', 'ticket-parent']);
+  git(root, ['merge', '--no-ff', '-m', 'ticket merge', 'ticket-side']);
+  const tip = git(root, ['rev-parse', 'HEAD']);
+  pin(root, 'refs/sidequest/SQ-1875-merge', tip);
+
+  const range = commitScope.submissionRange(root, {
+    commit: tip,
+    gitRef: 'refs/sidequest/SQ-1875-merge',
+    upstream: main,
+    integrationBranch: main,
+  });
+
+  assert.equal(range.ok, false);
+  assert.equal(range.reason, 'merge_commit');
+});
+
 // SQ-923. `done` on a write-routed dispatch that produced nothing used to be a
 // dead end (27 tickets in three days). Closing it needs proof that the run is a
 // no-op, and that proof is exactly this: nothing uncommitted and nothing

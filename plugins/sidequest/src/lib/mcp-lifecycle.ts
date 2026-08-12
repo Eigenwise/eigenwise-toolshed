@@ -121,13 +121,42 @@ function combinedRefusal(ticket: any, failures: Array<{ reason: string; message:
   };
 }
 
+function dispatchBaseMessage(ticket: any): string {
+  const dispatchBase = String(ticket.dispatch?.baseCommit || '').trim();
+  return dispatchBase
+    ? `the pinned dispatch base commit ${dispatchBase}`
+    : 'the pinned dispatch base commit recorded in the dispatch';
+}
+
+function submissionRangeRemedy(ticket: any, range: any, gitRef: string): string {
+  const reason = String(range.reason || '').trim();
+  const pinnedBase = dispatchBaseMessage(ticket);
+  const remedies: Record<string, string> = {
+    missing_git_ref: `${gitRef} is missing or does not point to the submitted commit. Run \`git update-ref ${gitRef} <commit>\`, then resubmit.`,
+    missing_upstream: `fetch or recreate the recorded integration ref, then resubmit the preserved commit without changing its base.`,
+    missing_commit: `preserve the work commit, restore it in this worktree, update ${gitRef}, and resubmit.`,
+    tip_mismatch: `${gitRef} points to a different commit. Point it back at the submitted commit with \`git update-ref ${gitRef} <commit>\`, then resubmit.`,
+    missing_recorded_upstream: `fetch the recorded upstream commit, then resubmit the preserved commit without changing its base.`,
+    expected_upstream_diverged: `preserve the submission for orchestrator reconciliation; do not replace it by syncing to a branch tip.`,
+    unrelated_history: `rebuild only this ticket's work from ${pinnedBase}, update ${gitRef}, and resubmit.`,
+    missing_base: `restore the recorded base commit, or rebuild only this ticket's work from ${pinnedBase}, then resubmit.`,
+    merge_commit: `the submitted range includes merge commit ${range.commit || 'unknown'}. Do not use \`git pull\`: it creates the refused shape. Submit the pre-merge work commit, or rebuild the work range from ${pinnedBase} without a merge commit.`,
+    empty_range: `the submitted commit has no work beyond its base. Submit the commit that contains this ticket's work, or use the explicit no-op closeout when no work was produced.`,
+    base_not_reachable: `the supplied base no longer reaches the submitted commit. Recreate the ticket work from ${pinnedBase}, preserve only this ticket's commits, update ${gitRef}, and resubmit.`,
+    unrecognized_base: `use the recorded ${pinnedBase} or an approved submitted-ticket boundary, then resubmit only this ticket's commits.`,
+    range_changed: `the stored submission range changed. Preserve the original submission for the orchestrator to reconcile; do not replace it by syncing to a branch tip.`,
+    no_op_changed: `the stored no-op state changed. Preserve the original submission for the orchestrator to reconcile; do not replace it by syncing to a branch tip.`,
+    reconciled_path_diverged: `the already-reconciled path diverged at the integration tip. Preserve the original submission for the orchestrator to reconcile; do not replace it by syncing to a branch tip.`,
+    git_error: `preserve the submitted commit and retry once the Git error is resolved; do not change the range merely because the integration tip advanced.`,
+  };
+  return remedies[reason] || `preserve the submitted commit and inspect the refusal before changing the range. If a new range is necessary, rebuild it from ${pinnedBase}, never from a live branch tip.`;
+}
+
 function submissionRangeFailureMessage(ticket: any, range: any, gitRef: string) {
-  if (range.reason === 'missing_git_ref') {
-    return `submit: refused ${ticket.ref}; missing_git_ref: ${gitRef} is missing or does not point to the submitted commit. Run \`git update-ref ${gitRef} <commit>\`, then resubmit.`;
-  }
+  const reason = String(range.reason || '').trim();
   const validationMessage = String(range.message || '').trim();
-  const detail = `${range.reason}${validationMessage ? `: ${validationMessage}` : ''}`;
-  return `submit: refused ${ticket.ref}; ${detail}. Rebase onto the current integration target, update ${gitRef}, and resubmit.`;
+  const detail = `${reason}${validationMessage ? `: ${validationMessage}` : ''}`;
+  return `submit: refused ${ticket.ref}; ${detail}. Remedy: ${submissionRangeRemedy(ticket, range, gitRef)} A dispatch base behind the integration tip is expected and does not need syncing.`;
 }
 
 function uncommittedScopeFailureMessage(ticket: any, paths: string[]) {
@@ -219,7 +248,7 @@ function validateSubmissionCandidate(options: any) {
   }
   const failures = [...submissionFailures, ...independentFailures];
   if (!range.ok && failures.length === 1 && verify) {
-    const remedy = `Rebase onto the current ${target.upstream} target, update ${gitRef}, and resubmit. Or the orchestrator can cherry-pick a recorded rejection quarantine ref and record the range override.`;
+    const remedy = submissionRangeRemedy(ticket, range, gitRef);
     return preserveRejectedSubmission({ slug, ticket, by, root, commit, gitRef, verify, reason: range.reason, message: range.message || '', remedy, source, force });
   }
   if (failures.length) return combinedRefusal(ticket, failures);
@@ -820,4 +849,4 @@ const tools: ToolDefinition[] = [
   },
 ];
 
-module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, validateSubmissionCandidate };
+module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, validateSubmissionCandidate };
