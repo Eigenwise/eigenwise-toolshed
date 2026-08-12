@@ -849,6 +849,9 @@ ${String(ticket?.description || "")}`;
   }
   function dispatchWarnings(ticket, slug) {
     const warnings = dispatchUncertaintyWarnings(ticket, slug);
+    if (dispatchState(ticket)?.unboundAttemptsSkipped) {
+      warnings.push("Dispatch information: the last dispatches never bound (harness/binding failure). Reload or restart to fix the binding; the ticket is not at fault and no allowRepeatFailure override is required.");
+    }
     const noScope = noDeclaredScopeWarning(ticket, slug);
     if (noScope) warnings.push(`Dispatch warning: ${noScope.replace("Planning-depth warning: ", "")}`);
     const projectPath = slug ? readMeta(slug)?.path : null;
