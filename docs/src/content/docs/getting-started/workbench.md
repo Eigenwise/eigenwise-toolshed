@@ -38,9 +38,17 @@ Tell Claude what you want to do:
 
 Claude uses the bundled update or doctor skill, tells you what it found, and asks you to reload or restart when the installed code is newer than the session. Updates cover the Eigenwise Toolshed marketplace and Model Gateway when it is installed. Third-party plugins are left alone.
 
-## TypeScript code intelligence
+## Code intelligence
 
 Workbench includes a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects the language server. Each call binds to an explicit project root and uses that project's own TypeScript install. TypeScript 7 projects use the native TypeScript language server. TypeScript 5 projects use `typescript-language-server` instead.
+
+C and C++ files use `clangd`. Before the tools can answer, provide a current `compile_commands.json` covering the queried translation unit. In a CMake project, generate it with:
+
+```text
+cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON
+```
+
+Workbench refuses a missing, invalid, stale, or incomplete database rather than guessing a toolchain or emitting misleading diagnostics. C++ reference results can be marked incomplete while clangd is building its background index. Retry or narrow the query.
 
 This replaces the official `typescript-lsp` plugin. Its push diagnostics are process-global and cannot tell which agent owns them, so diagnostics from parallel isolated worktrees can land in the wrong transcript. If it is installed, remove it and reload plugins:
 

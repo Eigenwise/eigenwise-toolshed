@@ -173,6 +173,8 @@ TypeScript is deliberately absent from this table. Workbench itself serves TypeS
 intelligence through its pull-only `code-intel` MCP tools (`definition`, `references`, `diagnostics`),
 which pick a language server from the requested file's extension and talk to the project's own
 TypeScript install.
+
+Workbench also serves C and C++ through `clangd`, so do not propose `clangd-lsp@claude-plugins-official` for a CMake project. Before its code-intel tools can answer, the project must provide a current `compile_commands.json` that covers the queried translation unit. Tell the user to generate it with `cmake --preset ninja-release -DCMAKE_EXPORT_COMPILE_COMMANDS=ON`. Workbench refuses projects without a current database rather than guessing a toolchain or returning wrong answers.
 Do not install `typescript-lsp@claude-plugins-official`: its push diagnostics are process-global and
 blind to which agent owns them, so diagnostics from parallel isolated worktrees leak into the wrong
 transcript. If it is already installed, recommend removing it with

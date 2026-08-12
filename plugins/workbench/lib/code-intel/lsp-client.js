@@ -137,6 +137,8 @@ function createLspClient({ rootDir, recipe, onExit }) {
   let lastUsedAt = Date.now();
   let capabilities = null;
   let readyPromise = null;
+  let indexProgressActive = recipe.backend === 'clangd';
+  let indexProgressObserved = false;
 
   const child = childProcess.spawn(recipe.command, recipe.args, {
     cwd: rootDir,
@@ -211,6 +213,10 @@ function createLspClient({ rootDir, recipe, onExit }) {
       return;
     }
     if (message.method !== undefined) {
+      if (message.method === '$/progress' && message.params?.token === 'backgroundIndexProgress') {
+        indexProgressObserved = true;
+        indexProgressActive = message.params?.value?.kind !== 'end';
+      }
       if (message.method === 'textDocument/publishDiagnostics') {
         const pushedFile = uriToFile(message.params?.uri || '');
         const key = pushedFile === null ? null : filePathKey(pushedFile);
@@ -307,6 +313,7 @@ function createLspClient({ rootDir, recipe, onExit }) {
             publishDiagnostics: {},
           },
           workspace: { workspaceFolders: true },
+          window: { workDoneProgress: true },
         },
       }).then((result) => {
         capabilities = result?.capabilities || {};
@@ -505,6 +512,7 @@ function createLspClient({ rootDir, recipe, onExit }) {
     lastUsedAt: () => lastUsedAt,
     pid: () => child.pid,
     discardStats: () => ({ ...discarded, droppedLateResponses }),
+    indexStatus: () => ({ active: indexProgressActive, observed: indexProgressObserved }),
   };
 }
 
