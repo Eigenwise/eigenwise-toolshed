@@ -1,9 +1,18 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { createRequire } from 'node:module';
 import { build } from 'esbuild';
 
+const require = createRequire(import.meta.url);
+
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
+const budgetReportRequested = process.argv.includes('--mcp-tools-list-budget');
+
+function mcpToolsListBudgetReport() {
+  const mcp = require(path.join(pluginRoot, 'lib', 'mcp.js'));
+  return mcp.toolDescriptorByteReport();
+}
 
 export const nonBundledBuildDirectories = ['lib', 'bin'];
 export const bundledBuildOutputs = [{
@@ -77,3 +86,5 @@ for (const directory of nonBundledBuildDirectories) {
   await buildNonBundled(directory, directory === 'bin' ? '#!/usr/bin/env node' : undefined);
 }
 await buildHooks();
+
+if (budgetReportRequested) process.stdout.write(`${JSON.stringify(mcpToolsListBudgetReport(), null, 2)}\n`);

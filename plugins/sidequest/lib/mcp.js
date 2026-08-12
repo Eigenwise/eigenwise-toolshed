@@ -7,7 +7,8 @@ const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 20500;
+const MCP_TOOLS_LIST_MAX_BYTES = 23e3;
+const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
     return require("../.claude-plugin/plugin.json").version || "0.0.0";
@@ -139,20 +140,32 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears fallback." },
-  dispatch: { sharedTree: "Omit to share zero-scope read-only work." }
+  dispatch: { sharedTree: "Omit to share zero-scope read-only work.", recoveryEvidence: "Recovery evidence for a failed dispatch." }
 };
+function toolDescriptor(tool) {
+  const inputSchema = compactSchema(tool.inputSchema);
+  for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
+    inputSchema.properties[property].description = description;
+  }
+  return {
+    name: tool.name,
+    description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description),
+    inputSchema
+  };
+}
 function toolDescriptors() {
-  return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map((tool) => {
-    const inputSchema = compactSchema(tool.inputSchema);
-    for (const [property, description] of Object.entries(MCP_SCHEMA_PROPERTY_DESCRIPTIONS[tool.name] || {})) {
-      inputSchema.properties[property].description = description;
-    }
-    return {
-      name: tool.name,
-      description: Object.hasOwn(TOOL_DESCRIPTION_OVERRIDES, tool.name) ? TOOL_DESCRIPTION_OVERRIDES[tool.name] : conciseDescription(tool.description),
-      inputSchema
-    };
-  });
+  return TOOLS.filter((tool) => !MCP_CLI_ONLY_TOOLS.has(tool.name)).map(toolDescriptor);
+}
+function toolDescriptorByteReport() {
+  const tools = toolDescriptors();
+  const payloadBytes = Buffer.byteLength(JSON.stringify(tools), "utf8");
+  return {
+    maxBytes: MCP_TOOLS_LIST_MAX_BYTES,
+    reserveBytes: MCP_TOOLS_LIST_HEADROOM_BYTES,
+    payloadBytes,
+    headroomBytes: MCP_TOOLS_LIST_MAX_BYTES - payloadBytes,
+    tools: tools.map((tool) => ({ name: tool.name, bytes: Buffer.byteLength(JSON.stringify(tool), "utf8") })).sort((left, right) => right.bytes - left.bytes)
+  };
 }
 function rpcResult(id, result) {
   return { jsonrpc: "2.0", id, result };
@@ -201,8 +214,10 @@ module.exports = {
   SERVER_NAME,
   DEFAULT_PROTOCOL_VERSION,
   MCP_TOOLS_LIST_MAX_BYTES,
+  MCP_TOOLS_LIST_HEADROOM_BYTES,
   TOOLS,
   toolDescriptors,
+  toolDescriptorByteReport,
   resolveProject,
   handleRequest,
   serverVersion
