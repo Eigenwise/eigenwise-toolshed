@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.459.0 (2026-08-12)
+
+### sidequest 4.47.1 → 4.47.2
+
+#### Fixes
+
+- Fix briefing --token-file rejecting every executor with a missing nonce (SQ-1866)
+  The token-file dispatch flow shipped in 4.47.0 never worked end to end: `briefing --token-file` validated the token, then rendered with the raw `--token` option, which is empty in token-file mode, so every executor's mandatory first command threw "dispatch briefing nonce is required". The briefing now renders with the token the store resolved from the file, and the regression test spawns the compiled CLI the way an executor does, which is the seam the old store-level test missed.
+
 ## v3.458.0 (2026-08-12)
 
 ### sidequest 4.47.0 → 4.47.1
