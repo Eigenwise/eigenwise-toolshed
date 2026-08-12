@@ -170,8 +170,9 @@ knowing the LSP cannot work until the binary exists, or drop the plugin. After r
 binary is still on `PATH` and that the language server responds.
 
 TypeScript is deliberately absent from this table. Workbench itself serves TypeScript/JavaScript code
-intelligence through its pull-only `code-intel` MCP tools (`typescript_definition`,
-`typescript_references`, `typescript_diagnostics`), which talk to the project's own TypeScript install.
+intelligence through its pull-only `code-intel` MCP tools (`definition`, `references`, `diagnostics`),
+which pick a language server from the requested file's extension and talk to the project's own
+TypeScript install.
 Do not install `typescript-lsp@claude-plugins-official`: its push diagnostics are process-global and
 blind to which agent owns them, so diagnostics from parallel isolated worktrees leak into the wrong
 transcript. If it is already installed, recommend removing it with
