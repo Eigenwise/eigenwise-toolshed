@@ -1,6 +1,29 @@
 "use strict";
 function createDispatch(dependencies) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, availableRoute, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const DISPATCH_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
+  const DISPATCH_TOKEN_CHARS = 32;
+  const DISPATCH_TOKEN_GROUP_SIZE = 4;
+  function normalizeDispatchToken(token) {
+    return String(token || "").replace(/[\s-]/g, "").toLowerCase();
+  }
+  function dispatchTokenMatches(expected, received) {
+    const expectedToken = normalizeDispatchToken(expected);
+    const receivedToken = normalizeDispatchToken(received);
+    if (!expectedToken || expectedToken.length !== receivedToken.length) return false;
+    return crypto.timingSafeEqual(Buffer.from(expectedToken), Buffer.from(receivedToken));
+  }
+  function mintDispatchToken() {
+    let token = "";
+    while (token.length < DISPATCH_TOKEN_CHARS) {
+      for (const byte of crypto.randomBytes(DISPATCH_TOKEN_CHARS)) {
+        if (byte >= 248) continue;
+        token += DISPATCH_TOKEN_ALPHABET[byte % DISPATCH_TOKEN_ALPHABET.length];
+        if (token.length === DISPATCH_TOKEN_CHARS) break;
+      }
+    }
+    return token.match(new RegExp(`.{1,${DISPATCH_TOKEN_GROUP_SIZE}}`, "g"))?.join("-") || token;
+  }
   function dispatchTokenPrefix(token) {
     return token ? String(token).slice(0, 12) : null;
   }
@@ -343,11 +366,11 @@ function createDispatch(dependencies) {
     });
   }
   function dispatchTokenDigest(token) {
-    return crypto.createHash("sha256").update(String(token)).digest("hex");
+    return crypto.createHash("sha256").update(normalizeDispatchToken(token)).digest("hex");
   }
   function isSupersededDispatchToken(ticket, token) {
     const state = dispatchState(ticket);
-    if (!state || !token || token === ticket.dispatchNonce) return false;
+    if (!state || !token || dispatchTokenMatches(ticket.dispatchNonce, token)) return false;
     return Array.isArray(state.supersededTokens) && state.supersededTokens.some((entry) => entry.digest === dispatchTokenDigest(token));
   }
   function routingPolicyAffectsTicket(ticket, categoryIds) {
@@ -708,7 +731,7 @@ function createDispatch(dependencies) {
           at: now
         });
       }
-      t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
+      t.dispatchNonce = mintDispatchToken();
       const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
       const declaredFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t.files)])) : effectiveScope(slug, t.files);
       const readonly = dispatchReadOnly(t);
@@ -804,7 +827,9 @@ function createDispatch(dependencies) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
     const state = dispatchState(ticket);
-    if (!state || state.terminalAt || !ticket.dispatchNonce || token !== ticket.dispatchNonce) {
+    if (!state || !ticket.dispatchNonce) return { ok: false, reason: "token" };
+    if (state.terminalAt) return { ok: false, reason: "stale" };
+    if (!dispatchTokenMatches(ticket.dispatchNonce, token)) {
       return { ok: false, reason: "token" };
     }
     return { ok: true, ticket };
@@ -815,7 +840,7 @@ function createDispatch(dependencies) {
     if (!found) return { ok: false, reason: "not_found" };
     return withTicketLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
-      if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+      if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
         return { ok: false, reason: "not_prepared" };
       }
       const state = dispatchState(t);
@@ -856,7 +881,7 @@ function createDispatch(dependencies) {
     if (!found) return { ok: false, reason: "not_found" };
     const recorded = withTicketLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
-      if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+      if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
         return { ok: false, reason: "not_prepared" };
       }
       const state = dispatchState(t);
@@ -890,7 +915,7 @@ function createDispatch(dependencies) {
     if (!found) return { ok: false, reason: "not_found" };
     return withTicketLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
-      if (!t || !t.dispatchNonce || opts.token !== t.dispatchNonce || opts.executor !== t.dispatchExecutor) {
+      if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, opts.token) || opts.executor !== t.dispatchExecutor) {
         return { ok: false, reason: "not_prepared" };
       }
       if (t.claim && t.claim.by) return { ok: false, reason: "claimed" };
@@ -932,7 +957,7 @@ function createDispatch(dependencies) {
         signature: failure.signature,
         at: now
       };
-      t.dispatchNonce = crypto.randomBytes(24).toString("base64url");
+      t.dispatchNonce = mintDispatchToken();
       t.dispatchExecutor = fallback.exec.agent;
       t.model = fallback.model;
       t.effort = fallback.effort;
@@ -1257,6 +1282,7 @@ function createDispatch(dependencies) {
     setDispatchTerminal,
     appendReworkEvent,
     dispatchTokenDigest,
+    dispatchTokenMatches,
     isSupersededDispatchToken,
     routingPolicyAffectsTicket,
     refreshPreparedDispatches,

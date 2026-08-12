@@ -71,7 +71,10 @@ async function cmdBriefing(opts, positional) {
   if (!opts.token) fail("briefing: pass the current dispatch token with --token.");
   const { slug, meta } = await resolveProject(opts);
   const result = store.readDispatchBriefing(slug, idOrRef, opts.token);
-  if (!result.ok) fail(`briefing: ${result.reason === "not_found" ? `no ticket "${idOrRef}".` : "dispatch token was refused; re-run dispatch for a current spawn."}`);
+  if (!result.ok) {
+    const message = result.reason === "not_found" ? `no ticket "${idOrRef}".` : result.reason === "stale" ? "dispatch is no longer current; re-run dispatch for a current spawn." : "dispatch token was refused, likely because it was transcribed incorrectly. Re-read the grouped lowercase token from this executor prompt and retry; do not re-run dispatch.";
+    fail(`briefing: ${message}`);
+  }
   process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug, meta.path), meta.path));
 }
 async function cmdTempCleanup(opts, positional) {

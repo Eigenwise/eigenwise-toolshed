@@ -952,7 +952,7 @@ function renderDispatchStub(ticket, nonce, projectPath) {
     "Implementation context:",
     dispatchTicketContext(ticket, project),
     "",
-    "Fetch the token-gated briefing for comments, attachments, claim, verification, and lifecycle details.",
+    "Token format: lowercase groups are case-insensitive and ignore hyphens or whitespace.",
     `FIRST action: run \`${command}\` and execute exactly what it prints.`,
     ...marker ? ["", marker] : []
   ].join("\n");
