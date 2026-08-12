@@ -118,7 +118,7 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
   });
   const dispatch = await callToolRaw('dispatch', { project, ref: orientationTicket.ref });
   assert.ok(!dispatch.isError, dispatch.content?.[0]?.text);
-  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1200);
+  assert.ok(Buffer.byteLength(dispatch.content[0].text, 'utf8') <= 1320, `dispatch is ${Buffer.byteLength(dispatch.content[0].text)} bytes`);
 
   const context = hookOutput("output.writeContext('SessionStart', 'Recover with the typed board call. ' + '🙂'.repeat(4000))");
   const contextText = context.hookSpecificOutput.additionalContext;

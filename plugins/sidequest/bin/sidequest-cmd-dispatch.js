@@ -63,17 +63,17 @@ async function cmdDispatch(opts, positional) {
     recovery: prepared.recovery || null,
     warnings: presentedWarnings,
     spawn: spawn2,
-    guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} --token ${prepared.token}.`
+    guidance: prepared.recovery ? `Claude quota fallback prepared from ${prepared.recovery.failedModel} to ${prepared.recovery.model}·${prepared.recovery.effort}. Pass spawn unchanged; category policy is unchanged.` : `Pass spawn unchanged to Agent; it claims ${prepared.ticket.ref} with --executor ${agent} and its dispatched token file.`
   }, null, 2) + "\n");
 }
 async function cmdBriefing(opts, positional) {
   const idOrRef = positional[0];
-  if (!idOrRef) fail("briefing: pass a ticket ref, e.g. sidequest briefing SQ-12 --token <token>.");
-  if (!opts.token) fail("briefing: pass the current dispatch token with --token.");
+  if (!idOrRef) fail("briefing: pass a ticket ref, e.g. sidequest briefing SQ-12 --token-file <path>.");
+  if (!opts.token && !opts["token-file"]) fail("briefing: pass the dispatch token file with --token-file.");
   const { slug, meta } = await resolveProject(opts);
-  const result = store.readDispatchBriefing(slug, idOrRef, opts.token);
+  const result = store.readDispatchBriefing(slug, idOrRef, opts.token, opts["token-file"]);
   if (!result.ok) {
-    const message = result.reason === "not_found" ? `no ticket "${idOrRef}".` : result.reason === "stale" ? "dispatch is no longer current; re-run dispatch for a current spawn." : "dispatch token was refused, likely because it was transcribed incorrectly. Re-read the grouped lowercase token from this executor prompt and retry; do not re-run dispatch.";
+    const message = result.reason === "not_found" ? `no ticket "${idOrRef}".` : result.reason === "stale" ? "dispatch is no longer current; re-run dispatch for a current spawn." : "dispatch token was refused or its token file was unavailable. Re-run the exact briefing command from this executor prompt; do not re-run dispatch.";
     fail(`briefing: ${message}`);
   }
   process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, opts.token, slug, meta.path), meta.path));

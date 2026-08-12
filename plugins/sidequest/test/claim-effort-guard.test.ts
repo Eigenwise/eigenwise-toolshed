@@ -454,7 +454,7 @@ test('instant dispatch returns a stable executor, fetch stub, and token', () => 
   assert.ok(Buffer.byteLength(dispatched.spawn.prompt) < 1200);
   assert.match(dispatched.spawn.prompt, /Title: guard fixture/);
   assert.match(dispatched.spawn.prompt, /Where: claim guard fixture/);
-  assert.match(dispatched.spawn.prompt, new RegExp(`briefing ${ref} --token ${dispatched.token}`));
+  assert.ok(dispatched.spawn.prompt.includes(`briefing ${ref} --token-file "${ticket(ref).dispatch.tokenFile}"`));
   assert.match(dispatched.spawn.prompt, /FIRST action:/);
   assert.doesNotMatch(dispatched.spawn.prompt, /## This ticket/);
   assert.doesNotMatch(dispatched.spawn.prompt, /You are a sidequest ticket executor/);

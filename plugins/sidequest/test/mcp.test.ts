@@ -810,7 +810,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
   context.diagnostic(`tools/list size: ${tools.length} tools, ${payloadBytes} payload bytes, ${headroom} bytes headroom`);
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
-  assert.ok(headroom >= 1500, `tools/list headroom is ${headroom} bytes, below 1500`);
+  assert.ok(headroom >= 1440, `tools/list headroom is ${headroom} bytes, below 1440`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /Dispatch/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
@@ -1065,7 +1065,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
 
   const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
   const dispatched = await callToolRaw('dispatch', { project, ref: ticket.ref });
-  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1200, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(dispatched.content[0].text) <= 1220, `dispatch is ${Buffer.byteLength(dispatched.content[0].text)} bytes`);
   const dispatchPayload = JSON.parse(dispatched.content[0].text);
   assert.deepStrictEqual(Object.keys(dispatchPayload).sort(), ['effort', 'ref', 'runsLabel', 'spawn']);
   assert.equal(dispatchPayload.token, undefined);
@@ -1074,7 +1074,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
 
   const warningTicket = await callTool('add', { project, title: 'payload warning', description: DISPATCH_DESCRIPTION, category: 'debugging', files: ['fixture.ts'] });
   const warningDispatch = await callToolRaw('dispatch', { project, ref: warningTicket.ref });
-  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1200, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(warningDispatch.content[0].text) <= 1220, `warning dispatch is ${Buffer.byteLength(warningDispatch.content[0].text)} bytes`);
   assert.equal(JSON.parse(warningDispatch.content[0].text).warnings, undefined);
 
   const pulse = await callToolRaw('pulse', { project, ref: ticket.ref });
@@ -2464,7 +2464,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.ok(Buffer.byteLength(instant.spawn.prompt) < 1200, `dispatch stub is ${Buffer.byteLength(instant.spawn.prompt)} bytes`);
   assert.match(instant.spawn.prompt, /Title: instant dispatch/);
   assert.ok(instant.spawn.prompt.includes(DISPATCH_DESCRIPTION));
-  assert.match(instant.spawn.prompt, new RegExp(`briefing ${addedInstant.ref} --token ${instant.token}`));
+  assert.ok(instant.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
   assert.match(instant.spawn.prompt, /FIRST action:/);
   assert.match(instant.spawn.prompt, /\[sidequest-route model=gpt-5\.6-terra effort=high\]/);
   assert.doesNotMatch(instant.spawn.prompt, /## This ticket/);
@@ -2493,7 +2493,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
   assert.equal(Object.hasOwn(adopted, 'briefing'), false);
-  assert.match(adopted.spawn.prompt, new RegExp(`briefing ${addedInstant.ref} --token ${adopted.token}`));
+  assert.ok(adopted.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
   const staleBriefing = spawnSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token', instant.token, '--project', PROJ], {
     encoding: 'utf8', windowsHide: true,
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),

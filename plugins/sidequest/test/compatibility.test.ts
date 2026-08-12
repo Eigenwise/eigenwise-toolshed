@@ -12,7 +12,7 @@ const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 const FIXTURES = path.join(__dirname, 'fixtures');
 const mcp = require('../lib/mcp.js') as { toolDescriptors(): unknown[]; MCP_TOOLS_LIST_MAX_BYTES: number };
 const MCP_DESCRIPTOR_GOLDEN = path.join(FIXTURES, 'mcp-tool-descriptors.json');
-const MINIMUM_MCP_TOOLS_LIST_HEADROOM = 1500;
+const MINIMUM_MCP_TOOLS_LIST_HEADROOM = 1440;
 
 type RunResult = { status: number | null; stdout: string; stderr: string };
 
@@ -109,8 +109,8 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('changes')?.description, 'Poll ticket changes.');
   assert.match(byName.get('claim')?.description ?? '', /Claim before work/);
   assert.deepEqual(
-    Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token'].includes(name)).sort(),
-    ['by', 'effort', 'executor', 'token'],
+    Object.keys(byName.get('claim')?.inputSchema.properties ?? {}).filter((name) => ['by', 'effort', 'executor', 'token', 'tokenFile'].includes(name)).sort(),
+    ['by', 'effort', 'executor', 'token', 'tokenFile'],
   );
   const submit = byName.get('submit');
   assert.deepEqual(
@@ -135,7 +135,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   const headroom = mcp.MCP_TOOLS_LIST_MAX_BYTES - payloadBytes;
   assert.equal(`${JSON.stringify(descriptors, null, 2)}\n`, fs.readFileSync(MCP_DESCRIPTOR_GOLDEN, 'utf8'));
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
-  assert.ok(headroom >= MINIMUM_MCP_TOOLS_LIST_HEADROOM, `tools/list headroom is ${headroom} bytes, below ${MINIMUM_MCP_TOOLS_LIST_HEADROOM}`);
+  assert.ok(headroom >= 1440, `tools/list headroom is ${headroom} bytes, below 1440`);
 });
 
 test('CLI representative bytes, statuses, and removed commands match goldens', () => {

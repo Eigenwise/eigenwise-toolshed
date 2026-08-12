@@ -1692,6 +1692,21 @@ test('a re-dispatch after a handback picks up files declared since the release',
   assert.deepEqual(redispatched.ticket.dispatch.declaredFiles.slice().sort(), ['late-addition.js', 'tracked.js']);
 });
 
+test('dispatch token files authenticate the briefing and claim without transcribing a secret', () => {
+  const ticket = createFixture('token file dispatch');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `token-file-${Date.now()}` });
+  const tokenFile = prepared.ticket.dispatch.tokenFile;
+
+  assert.ok(path.isAbsolute(tokenFile));
+  assert.equal(fs.readFileSync(tokenFile, 'utf8').trim(), prepared.token);
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, tokenFile).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'token-file-worker', {
+    tokenFile,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, `${tokenFile}.missing`).reason, 'token');
+});
+
 test('dispatch tokens accept case and separator normalization but reject transposition with recovery guidance', () => {
   const ticket = createFixture('transcription-safe dispatch token');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `token-normalization-${Date.now()}` });
