@@ -95,15 +95,6 @@ function filePathKey(filePath) {
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
 }
 
-function languageIdFor(filePath) {
-  const extension = path.extname(filePath).toLowerCase();
-  if (extension === '.tsx') return 'typescriptreact';
-  if (extension === '.jsx') return 'javascriptreact';
-  if (extension === '.js' || extension === '.cjs' || extension === '.mjs') return 'javascript';
-  if (extension === '.json') return 'json';
-  return 'typescript';
-}
-
 function cancellationError(what) {
   const error = new Error(`${what} was cancelled by the requesting tool call.`);
   error.cancelled = true;
@@ -307,7 +298,7 @@ function createLspClient({ rootDir, recipe, onExit }) {
         processId: process.pid,
         rootUri: fileToUri(rootDir),
         workspaceFolders: [{ uri: fileToUri(rootDir), name: path.basename(rootDir) }],
-        initializationOptions: { disableAutomaticTypingAcquisition: true },
+        initializationOptions: recipe.initializationOptions || { disableAutomaticTypingAcquisition: true },
         capabilities: {
           textDocument: {
             definition: {},
@@ -366,7 +357,7 @@ function createLspClient({ rootDir, recipe, onExit }) {
       const uri = fileToUri(filePath);
       openFiles.set(key, { uri, version: 1, mtimeMs: stat.mtimeMs, filePath });
       notify('textDocument/didOpen', {
-        textDocument: { uri, languageId: languageIdFor(filePath), version: 1, text: readFileText(filePath) },
+        textDocument: { uri, languageId: recipe.languageIdFor ? recipe.languageIdFor(filePath) : 'typescript', version: 1, text: readFileText(filePath) },
       });
       return true;
     }

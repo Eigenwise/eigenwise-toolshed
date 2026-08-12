@@ -96,15 +96,15 @@ test('parent and two worktrees each receive only their own pull results, with ze
     assert.equal(initialize.result.serverInfo.name, 'code-intel');
 
     const parentDiagnostics = toolPayload(await server.request('tools/call', {
-      name: 'typescript_diagnostics',
+      name: 'diagnostics',
       arguments: { root: parentRoot, files: ['main.ts'] },
     }));
     const alphaDiagnostics = toolPayload(await server.request('tools/call', {
-      name: 'typescript_diagnostics',
+      name: 'diagnostics',
       arguments: { root: alphaRoot, files: ['main.ts'] },
     }));
     const betaDiagnostics = toolPayload(await server.request('tools/call', {
-      name: 'typescript_diagnostics',
+      name: 'diagnostics',
       arguments: { root: betaRoot, files: [path.join(betaRoot, 'main.ts')] },
     }));
 
@@ -123,7 +123,7 @@ test('parent and two worktrees each receive only their own pull results, with ze
     const parentMain = fs.readFileSync(path.join(parentRoot, 'main.ts'), 'utf8');
     const usageColumn = parentMain.split('\n')[1].indexOf('parentOwnedHelper()') + 2;
     const definition = toolPayload(await server.request('tools/call', {
-      name: 'typescript_definition',
+      name: 'definition',
       arguments: { root: parentRoot, file: 'main.ts', line: 2, column: usageColumn },
     }));
     assert.ok(definition.definitions.some((entry) => entry.file.toLowerCase().endsWith('util.ts')));
@@ -132,7 +132,7 @@ test('parent and two worktrees each receive only their own pull results, with ze
     const alphaUtil = fs.readFileSync(path.join(alphaRoot, 'util.ts'), 'utf8');
     const helperColumn = alphaUtil.indexOf('alphaOwnedHelper') + 2;
     const references = toolPayload(await server.request('tools/call', {
-      name: 'typescript_references',
+      name: 'references',
       arguments: { root: alphaRoot, file: 'util.ts', line: 1, column: helperColumn },
     }));
     assert.ok(references.total >= 2);
@@ -141,13 +141,13 @@ test('parent and two worktrees each receive only their own pull results, with ze
     fs.writeFileSync(path.join(parentRoot, 'main.ts'), parentMain.replace(': string', ': number'));
     fs.utimesSync(path.join(parentRoot, 'main.ts'), new Date(), new Date(Date.now() + 5000));
     const parentAfterFix = toolPayload(await server.request('tools/call', {
-      name: 'typescript_diagnostics',
+      name: 'diagnostics',
       arguments: { root: parentRoot, files: ['main.ts'] },
     }));
     assert.equal(parentAfterFix.totalDiagnostics, 0, 'the on-disk fix must be re-checked, not served stale');
 
     const staleRoot = await server.request('tools/call', {
-      name: 'typescript_diagnostics',
+      name: 'diagnostics',
       arguments: { root: path.join(baseDir, 'sweptWorktree'), files: ['main.ts'] },
     });
     assert.equal(staleRoot.result.isError, true);

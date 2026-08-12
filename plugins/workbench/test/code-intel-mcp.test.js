@@ -16,7 +16,7 @@ const {
   DEFAULT_PROTOCOL_VERSION,
 } = require('../lib/code-intel/mcp.js');
 const registry = require('../lib/code-intel/project-registry.js');
-const { NATIVE_SERVER_ENV, LANGUAGE_SERVER_ENV } = require('../lib/code-intel/language-server-locator.js');
+const { NATIVE_SERVER_ENV, LANGUAGE_SERVER_ENV, registerLanguageServerLocator, unregisterLanguageServerLocator } = require('../lib/code-intel/language-server-locator.js');
 const { fileToUri } = require('../lib/code-intel/lsp-client.js');
 
 const FAKE_SERVER = path.join(__dirname, 'fixtures', 'fake-language-server.js');
@@ -99,7 +99,7 @@ test('notifications and unknown methods follow JSON-RPC rules', async () => {
 test('tools/list stays small and every tool demands an explicit root', async () => {
   const response = await handleRequest({ jsonrpc: '2.0', id: 1, method: 'tools/list' });
   const tools = response.result.tools;
-  assert.deepEqual(tools.map((tool) => tool.name), ['typescript_definition', 'typescript_references', 'typescript_diagnostics']);
+  assert.deepEqual(tools.map((tool) => tool.name), ['definition', 'references', 'diagnostics']);
   for (const tool of tools) {
     assert.ok(tool.inputSchema.required.includes('root'), `${tool.name} must require root`);
   }
@@ -114,32 +114,32 @@ test('argument validation rejects malformed calls with actionable messages', asy
   const unknownTool = await callTool('typescript_hover', { root: rootDir });
   assert.equal(unknownTool.isError, true);
 
-  const unknownArgument = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 1, extra: true });
+  const unknownArgument = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 1, extra: true });
   assert.equal(unknownArgument.isError, true);
   assert.match(unknownArgument.content[0].text, /unknown argument "extra"/);
 
-  const missingRoot = await callTool('typescript_definition', { file: filePath, line: 1, column: 1 });
+  const missingRoot = await callTool('definition', { file: filePath, line: 1, column: 1 });
   assert.match(missingRoot.content[0].text, /root is required/);
 
-  const zeroLine = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 0, column: 1 });
+  const zeroLine = await callTool('definition', { root: rootDir, file: filePath, line: 0, column: 1 });
   assert.match(zeroLine.content[0].text, /line must be an integer >= 1/);
 
-  const emptyFiles = await callTool('typescript_diagnostics', { root: rootDir, files: [] });
+  const emptyFiles = await callTool('diagnostics', { root: rootDir, files: [] });
   assert.match(emptyFiles.content[0].text, /array of 1 to 16 strings/);
 
-  const tooManyFiles = await callTool('typescript_diagnostics', { root: rootDir, files: Array.from({ length: 17 }, () => filePath) });
+  const tooManyFiles = await callTool('diagnostics', { root: rootDir, files: Array.from({ length: 17 }, () => filePath) });
   assert.equal(tooManyFiles.isError, true);
 });
 
 test('a missing root and a file outside the root are refused before any server spawns', async (t) => {
   withEnv(t, { [NATIVE_SERVER_ENV]: undefined, [LANGUAGE_SERVER_ENV]: undefined });
-  const gone = await callTool('typescript_definition', { root: path.join(os.tmpdir(), 'never-existed-root'), file: 'main.ts', line: 1, column: 1 });
+  const gone = await callTool('definition', { root: path.join(os.tmpdir(), 'never-existed-root'), file: 'main.ts', line: 1, column: 1 });
   assert.equal(gone.isError, true);
   assert.match(gone.content[0].text, /project root does not exist/);
 
   const projectA = makeProject('code-intel-mcp-a-');
   const projectB = makeProject('code-intel-mcp-b-');
-  const outside = await callTool('typescript_definition', { root: projectA.rootDir, file: projectB.filePath, line: 1, column: 1 });
+  const outside = await callTool('definition', { root: projectA.rootDir, file: projectB.filePath, line: 1, column: 1 });
   assert.equal(outside.isError, true);
   assert.match(outside.content[0].text, /outside the project root/);
   assert.equal(registry.activeRootCount(), 0);
@@ -148,20 +148,19 @@ test('a missing root and a file outside the root are refused before any server s
 test('a broken server override fails loud in the tool response', async (t) => {
   const { rootDir, filePath } = makeProject();
   withEnv(t, { [NATIVE_SERVER_ENV]: path.join(rootDir, 'missing.exe'), [LANGUAGE_SERVER_ENV]: undefined });
-  const outcome = await callTool('typescript_diagnostics', { root: rootDir, files: [filePath] });
+  const outcome = await callTool('diagnostics', { root: rootDir, files: [filePath] });
   assert.equal(outcome.isError, true);
   assert.ok(outcome.content[0].text.includes(NATIVE_SERVER_ENV));
 });
 
-test('a full tools/call round trip binds to the canonical root and reuses one client per root', async (t) => {
+test('a full tools/call round trip binds to the canonical root and reuses one client per root and language', async (t) => {
   const { rootDir, filePath } = makeProject();
   withEnv(t, { [LANGUAGE_SERVER_ENV]: FAKE_SERVER, [NATIVE_SERVER_ENV]: undefined, FAKE_LSP_PULL: '1', FAKE_LSP_LOG: undefined });
   t.after(() => registry.shutdownAll());
 
-  const outcome = await callTool('typescript_diagnostics', { root: rootDir, files: ['main.ts'] });
+  const outcome = await callTool('diagnostics', { root: rootDir, files: ['main.ts'] });
   assert.equal(outcome.isError, undefined);
   const payload = JSON.parse(outcome.content[0].text);
-  assert.equal(payload.backend, 'typescript-language-server');
   assert.equal(payload.root, fs.realpathSync.native(rootDir));
   assert.equal(payload.totalDiagnostics, 1);
   assert.equal(payload.files[0].diagnostics[0].code, 4242);
@@ -169,9 +168,52 @@ test('a full tools/call round trip binds to the canonical root and reuses one cl
   assert.equal(registry.activeRootCount(), 1);
 
   const differentSpelling = process.platform === 'win32' ? rootDir.toUpperCase() : rootDir;
-  const second = await callTool('typescript_definition', { root: differentSpelling, file: filePath, line: 1, column: 7 });
+  const second = await callTool('definition', { root: differentSpelling, file: filePath, line: 1, column: 7 });
   assert.equal(second.isError, undefined);
   assert.equal(registry.activeRootCount(), 1);
+});
+
+test('clients for distinct languages share a root without eviction', async (t) => {
+  const { rootDir, filePath } = makeProject('code-intel-mcp-multilanguage-');
+  const pythonPath = path.join(rootDir, 'main.py');
+  fs.writeFileSync(pythonPath, 'value = 1\n');
+  const serverLog = path.join(rootDir, 'server.log');
+  const pythonLocator = {
+    extensions: ['.py'],
+    locate() {
+      return {
+        backend: 'python-test',
+        command: process.execPath,
+        args: [FAKE_SERVER, '--stdio'],
+        initializationOptions: {},
+        languageIdFor: () => 'python',
+      };
+    },
+  };
+  registerLanguageServerLocator('python-test', pythonLocator);
+  withEnv(t, {
+    [LANGUAGE_SERVER_ENV]: FAKE_SERVER,
+    [NATIVE_SERVER_ENV]: undefined,
+    FAKE_LSP_PULL: '1',
+    FAKE_LSP_LOG: serverLog,
+  });
+  t.after(() => {
+    unregisterLanguageServerLocator('python-test');
+    registry.shutdownAll();
+  });
+
+  const typescript = await callTool('diagnostics', { root: rootDir, files: [filePath] });
+  const python = await callTool('diagnostics', { root: rootDir, files: [pythonPath] });
+  assert.equal(typescript.isError, undefined, typescript.content?.[0]?.text);
+  assert.equal(python.isError, undefined, python.content?.[0]?.text);
+  assert.equal(registry.activeRootCount(), 2, 'one root keeps one client for each language');
+
+  const calls = fs.readFileSync(serverLog, 'utf8').trim().split('\n').map(JSON.parse);
+  const openedLanguageIds = calls
+    .filter((call) => call.method === 'textDocument/didOpen')
+    .map((call) => call.params.textDocument.languageId)
+    .sort();
+  assert.deepEqual(openedLanguageIds, ['python', 'typescript'], 'each query reaches its language-specific server');
 });
 
 test('definition and reference locations outside the bound root are withheld', async (t) => {
@@ -187,7 +229,7 @@ test('definition and reference locations outside the bound root are withheld', a
   });
   t.after(() => registry.shutdownAll());
 
-  const definition = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const definition = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(definition.isError, undefined, definition.content?.[0]?.text);
   assert.ok(definition.content[0].text.length <= MAX_RESPONSE_CHARS, 'an oversized claimed location path must stay bounded');
   const payload = JSON.parse(definition.content[0].text);
@@ -200,7 +242,7 @@ test('definition and reference locations outside the bound root are withheld', a
     assert.ok(entry.file.length <= 401, 'location paths must be capped');
   }
 
-  const references = await callTool('typescript_references', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const references = await callTool('references', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(references.isError, undefined, references.content?.[0]?.text);
   const referencesPayload = JSON.parse(references.content[0].text);
   assert.equal(referencesPayload.withheldOutsideRoot, 1);
@@ -226,14 +268,14 @@ test('an https location is withheld even when the bound root is the process cwd'
   t.after(() => registry.shutdownAll());
   withWorkingDirectory(t, fs.realpathSync.native(rootDir));
 
-  const definition = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const definition = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(definition.isError, undefined, definition.content?.[0]?.text);
   const payload = JSON.parse(definition.content[0].text);
   assert.equal(payload.withheldOutsideRoot, 1, 'a non-file URI must be withheld, not resolved under the cwd');
   assert.equal(payload.definitions.length, 1);
   assert.ok(!definition.content[0].text.includes('example.com'), 'a non-file URI must never appear in the response');
 
-  const references = await callTool('typescript_references', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const references = await callTool('references', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(references.isError, undefined, references.content?.[0]?.text);
   const referencesPayload = JSON.parse(references.content[0].text);
   assert.equal(referencesPayload.withheldOutsideRoot, 1);
@@ -256,7 +298,7 @@ test('a location that escapes the root through a junction is withheld even when 
   t.after(() => registry.shutdownAll());
   withWorkingDirectory(t, fs.realpathSync.native(rootDir));
 
-  const definition = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const definition = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(definition.isError, undefined, definition.content?.[0]?.text);
   const payload = JSON.parse(definition.content[0].text);
   assert.equal(payload.withheldOutsideRoot, 1, 'a lexically in-root path whose realpath escapes the root must be withheld');
@@ -285,7 +327,7 @@ test('a location through a file symlink that targets outside the root is withhel
   t.after(() => registry.shutdownAll());
   withWorkingDirectory(t, fs.realpathSync.native(rootDir));
 
-  const definition = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const definition = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(definition.isError, undefined, definition.content?.[0]?.text);
   const payload = JSON.parse(definition.content[0].text);
   assert.equal(payload.withheldOutsideRoot, 1, 'a file symlink whose realpath escapes the root must be withheld');
@@ -305,7 +347,7 @@ test('a file named ..in-root.ts is served and returned, not mistaken for parent 
   });
   t.after(() => registry.shutdownAll());
 
-  const definition = await callTool('typescript_definition', { root: rootDir, file: '..in-root.ts', line: 1, column: 7 });
+  const definition = await callTool('definition', { root: rootDir, file: '..in-root.ts', line: 1, column: 7 });
   assert.equal(definition.isError, undefined, definition.content?.[0]?.text);
   const payload = JSON.parse(definition.content[0].text);
   assert.ok(payload.file.endsWith('..in-root.ts'), 'the request target must resolve, not be refused as parent traversal');
@@ -331,7 +373,7 @@ test('a single-slash file: URI naming an in-root file is kept, not withheld as n
   });
   t.after(() => registry.shutdownAll());
 
-  const definition = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const definition = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(definition.isError, undefined, definition.content?.[0]?.text);
   const payload = JSON.parse(definition.content[0].text);
   assert.equal(payload.withheldOutsideRoot, undefined, 'a single-slash file: URI to an in-root file must not be withheld');
@@ -350,7 +392,7 @@ test('a single oversized diagnostic stays inside the response budget', async (t)
   });
   t.after(() => registry.shutdownAll());
 
-  const outcome = await callTool('typescript_diagnostics', { root: rootDir, files: [filePath] });
+  const outcome = await callTool('diagnostics', { root: rootDir, files: [filePath] });
   assert.equal(outcome.isError, undefined, outcome.content?.[0]?.text);
   assert.ok(outcome.content[0].text.length <= MAX_RESPONSE_CHARS, `response must stay bounded, got ${outcome.content[0].text.length} chars`);
   const payload = JSON.parse(outcome.content[0].text);
@@ -362,17 +404,17 @@ test('error responses stay inside the response budget', async (t) => {
   withEnv(t, { [NATIVE_SERVER_ENV]: undefined, [LANGUAGE_SERVER_ENV]: undefined });
 
   const oversizedFile = 'a'.repeat(MAX_RESPONSE_CHARS + 10_000);
-  const definition = await callTool('typescript_definition', { root: rootDir, file: oversizedFile, line: 1, column: 1 });
+  const definition = await callTool('definition', { root: rootDir, file: oversizedFile, line: 1, column: 1 });
   assert.equal(definition.isError, true);
   assert.ok(definition.content[0].text.length <= MAX_RESPONSE_CHARS, `a malformed file error must stay bounded, got ${definition.content[0].text.length} chars`);
   assert.match(definition.content[0].text, /file not found/);
 
-  const diagnostics = await callTool('typescript_diagnostics', { root: rootDir, files: [oversizedFile] });
+  const diagnostics = await callTool('diagnostics', { root: rootDir, files: [oversizedFile] });
   assert.equal(diagnostics.isError, true);
   assert.ok(diagnostics.content[0].text.length <= MAX_RESPONSE_CHARS, `a malformed files entry error must stay bounded, got ${diagnostics.content[0].text.length} chars`);
 
   const hugeArgumentName = 'k'.repeat(MAX_RESPONSE_CHARS + 10_000);
-  const unknownArgument = await callTool('typescript_definition', { root: rootDir, file: 'main.ts', line: 1, column: 1, [hugeArgumentName]: true });
+  const unknownArgument = await callTool('definition', { root: rootDir, file: 'main.ts', line: 1, column: 1, [hugeArgumentName]: true });
   assert.equal(unknownArgument.isError, true);
   assert.ok(unknownArgument.content[0].text.length <= MAX_RESPONSE_CHARS, `an unknown-argument error must stay bounded, got ${unknownArgument.content[0].text.length} chars`);
 
@@ -399,7 +441,7 @@ test('an oversized JSON-RPC id and initialize protocolVersion stay inside the co
     jsonrpc: '2.0',
     id: oversizedId,
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
   });
   assert.equal(refusedCall.error.code, -32600);
   assert.ok(JSON.stringify(refusedCall).length <= MAX_RESPONSE_CHARS);
@@ -438,7 +480,7 @@ test('a successful tools/call envelope stays inside the complete serialized budg
     jsonrpc: '2.0',
     id: 1,
     method: 'tools/call',
-    params: { name: 'typescript_diagnostics', arguments: { root: rootDir, files: [filePath] } },
+    params: { name: 'diagnostics', arguments: { root: rootDir, files: [filePath] } },
   });
   assert.equal(response.result.isError, undefined, response.result.content?.[0]?.text);
   assert.ok(
@@ -467,7 +509,7 @@ test('an object or array JSON-RPC id is refused before dispatch, cancellation, o
     jsonrpc: '2.0',
     id: ['tricky'],
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
   });
   assert.equal(refusedCall.id, null);
   assert.equal(refusedCall.error.code, -32600);
@@ -489,7 +531,7 @@ test('a no-id message is a notification and never receives a response frame', as
     await handleRequest({
       jsonrpc: '2.0',
       method: 'tools/call',
-      params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
+      params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
     }),
     null,
     'a tools/call notification gets no frame',
@@ -521,7 +563,7 @@ test('a malformed cancellation payload is refused before lookup and never aborts
     jsonrpc: '2.0',
     id: null,
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 999, column: 1 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 999, column: 1 } },
   });
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(await handleRequest({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: { sneaky: 'cancel' } } }), null);
@@ -539,7 +581,7 @@ test('a malformed cancellation payload is refused before lookup and never aborts
     jsonrpc: '2.0',
     id: null,
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 1, column: 7 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 1, column: 7 } },
   });
   assert.equal(completed.id, null, 'a completing null-id tools/call must echo id null');
   assert.equal(completed.result.isError, undefined, completed.result.content?.[0]?.text);
@@ -568,7 +610,7 @@ test('an invalid top-level id on a cancellation frame is refused before any abor
     jsonrpc: '2.0',
     id: 77,
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 999, column: 1 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 999, column: 1 } },
   });
   await new Promise((resolve) => setTimeout(resolve, 150));
   const objectFrame = await handleRequest({ jsonrpc: '2.0', id: { sneaky: 'frame' }, method: 'notifications/cancelled', params: { requestId: 77 } });
@@ -597,7 +639,7 @@ test('notifications/cancelled settles the pending tool call with no response and
     jsonrpc: '2.0',
     id: 77,
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 999, column: 1 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 999, column: 1 } },
   });
   await new Promise((resolve) => setTimeout(resolve, 150));
   assert.equal(await handleRequest({ jsonrpc: '2.0', method: 'notifications/cancelled', params: { requestId: 77 } }), null);
@@ -605,7 +647,7 @@ test('notifications/cancelled settles the pending tool call with no response and
   assert.ok(Date.now() - startedAt < 10_000, 'cancellation must settle well before the request timeout');
   assert.equal(registry.activeRootCount(), 1, 'cancellation must not kill the root client');
 
-  const followUp = await callTool('typescript_definition', { root: rootDir, file: filePath, line: 1, column: 7 });
+  const followUp = await callTool('definition', { root: rootDir, file: filePath, line: 1, column: 7 });
   assert.equal(followUp.isError, undefined, followUp.content?.[0]?.text);
 });
 
@@ -685,7 +727,7 @@ test('a numeric id is usable only as a safe integer, and a refused one never rea
     jsonrpc: '2.0',
     id: 1.5,
     method: 'tools/call',
-    params: { name: 'typescript_definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
+    params: { name: 'definition', arguments: { root: rootDir, file: filePath, line: 1, column: 1 } },
   });
   assert.equal(refusedCall.error.code, -32600);
   assert.equal(registry.activeRootCount(), 0, 'a request refused for its id must be refused before any server spawns');
@@ -697,7 +739,7 @@ test('a cancellation naming an equivalent numeric spelling settles the in-flight
   t.after(() => registry.shutdownAll());
 
   const hungCallFrame = (rawId) => JSON.parse(
-    `{"jsonrpc":"2.0","id":${rawId},"method":"tools/call","params":{"name":"typescript_definition","arguments":{"root":${JSON.stringify(rootDir)},"file":${JSON.stringify(filePath)},"line":999,"column":1}}}`,
+    `{"jsonrpc":"2.0","id":${rawId},"method":"tools/call","params":{"name":"definition","arguments":{"root":${JSON.stringify(rootDir)},"file":${JSON.stringify(filePath)},"line":999,"column":1}}}`,
   );
   const cancelFrame = (rawRequestId) => JSON.parse(
     `{"jsonrpc":"2.0","method":"notifications/cancelled","params":{"requestId":${rawRequestId}}}`,
