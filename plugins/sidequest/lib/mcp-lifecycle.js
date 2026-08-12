@@ -548,7 +548,7 @@ const tools = [
           ok: false,
           ticket,
           reason: "outside_scope",
-          message: `commit: refused ${ticket.ref}; declared paths are outside the repo worktree: ${outsideWorktree.join(", ")}. This dispatch cannot commit them. For genuine non-repo output, release and reclassify as non-repo/artifact work; otherwise declare in-repo paths and dispatch again.`
+          message: `commit: refused ${ticket.ref}; declared paths are outside the repo worktree: ${outsideWorktree.join(", ")}. A different control-plane identity must run \`sidequest update ${ticket.ref} --files <in-repo-paths>\` to drop the stale path. For genuine non-repo output, release and reclassify as non-repo/artifact work; otherwise declare in-repo paths and dispatch again.`
         });
       }
       const foreignFragments = commitScope.foreignReleaseFragmentPaths(root, ticket.ref);

@@ -246,21 +246,13 @@ test('read-only done ignores dirty paths outside its declared scope', () => {
   assert.doesNotMatch(JSON.stringify(done), new RegExp(relativePath));
 });
 
-test('non-repo done ignores dirty repository paths outside its external output', () => {
+test('non-repo output is refused at declaration time', () => {
   const outside = path.join(os.tmpdir(), `sq-nonrepo-delta-${process.pid}.html`);
-  const relativePath = 'nonrepo-undisclosed.txt';
-  const created = ticket('external report', 'Write an external report only.', [outside]);
-  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
-  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, true);
-  assert.strictEqual(claim(prepared, 'nonrepo-dirty-worker').ok, true);
-  writeProjectFile(relativePath, 'caller change\n');
 
-  const done = store.completeTicket(slug, created.ref, 'nonrepo-dirty-worker', { source: 'mcp' });
-
-  assert.strictEqual(done.ok, true);
-  assert.strictEqual(done.ticket.status, 'done');
-  assert.strictEqual(done.unscopedPaths, undefined);
-  assert.doesNotMatch(JSON.stringify(done), new RegExp(relativePath));
+  assert.throws(
+    () => ticket('external report', 'Write an external report only.', [outside]),
+    /classify as non-repo\/artifact work/,
+  );
 });
 
 test('read-only dispatches without declared files may close with done', () => {
@@ -315,22 +307,16 @@ test('readonly:false selects the submission-required write path', () => {
   assert.match(done.message, /readonly:false selects this write path/i);
 });
 
-test('read-only dispatches with external output may close with done', () => {
+test('read-only external output is refused at declaration time', () => {
   const outside = path.join(os.tmpdir(), `sq-external-audition-${process.pid}.html`);
-  const created = ticket('external HTML audition', 'Write an external HTML audition.', [outside]);
-  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
-  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, true);
-  assert.strictEqual(claim(prepared, 'external-output-worker').ok, true);
 
-  fs.writeFileSync(outside, '<main>audition</main>\n');
-  const done = store.completeTicket(slug, created.ref, 'external-output-worker', { source: 'mcp' });
-
-  assert.strictEqual(done.ok, true);
-  assert.strictEqual(done.ticket.status, 'done');
-  assert.strictEqual(done.ticket.submission == null, true);
+  assert.throws(
+    () => ticket('external HTML audition', 'Write an external HTML audition.', [outside]),
+    /classify as non-repo\/artifact work/,
+  );
 });
 
-test('repository-category external output still requires submission', () => {
+test('repository-category external output is refused at declaration time', () => {
   store.setCategory({
     id: 'repository-external-output',
     name: 'Repository external output',
@@ -338,22 +324,17 @@ test('repository-category external output still requires submission', () => {
     artifactRoots: [],
   });
   const outside = path.join(os.tmpdir(), `sq-repository-external-${process.pid}.html`);
-  const created = store.createTicket(slug, {
-    title: 'repository external output',
-    description: 'Write external output from a repository-changing category.',
-    category: 'repository-external-output',
-    files: [outside],
-    source: 'mcp',
-  });
-  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
-  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, undefined);
-  assert.strictEqual(claim(prepared, 'repository-external-worker').ok, true);
 
-  const done = store.completeTicket(slug, created.ref, 'repository-external-worker', { source: 'mcp' });
-
-  assert.strictEqual(done.ok, false);
-  assert.strictEqual(done.reason, 'submission_required');
-  assert.match(done.message, /release it for reclassification as non-repo\/artifact work/i);
+  assert.throws(
+    () => store.createTicket(slug, {
+      title: 'repository external output',
+      description: 'Write external output from a repository-changing category.',
+      category: 'repository-external-output',
+      files: [outside],
+      source: 'mcp',
+    }),
+    /classify as non-repo\/artifact work/,
+  );
 });
 
 test('the artifact marker alone does not bypass submit from an isolated dispatch', () => {

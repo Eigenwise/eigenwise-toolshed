@@ -201,12 +201,17 @@ function createTickets(dependencies) {
     return values;
   }
   function boundedFiles(files) {
-    return boundedList(
+    const declaredFiles = boundedList(
       normalizeFiles(files),
       DECLARED_FILES_MAX,
       "declared file scope",
       "Re-scope with directory entries: a declared directory covers every path under it (e.g. plugins/sidequest/test instead of each test file)."
     );
+    const outside = commitScope.validateRelativeScopes(declaredFiles).outside;
+    if (outside.length) {
+      throw new Error(`declared file scope contains paths outside the repo worktree: ${outside.join(", ")}. For genuine non-repo output, classify as non-repo/artifact work; otherwise declare in-repo paths.`);
+    }
+    return declaredFiles;
   }
   function boundedLabels(labels) {
     return boundedList(normalizeLabels(labels), LABELS_MAX, "labels", "Labels route and filter work; drop the ones that do neither.");

@@ -564,6 +564,18 @@ test('add and update persist a declared scope past 20 entries and refuse an over
   assert.equal(rejectedAdd.isError, true);
   assert.match(rejectedAdd.content[0].text, /declared file scope accepts at most/);
 
+  const absolutePath = process.platform === 'win32' ? 'D:\\terge-tuner-data\\design\\generative-tuner-design.md' : '/abs/generative-tuner-design.md';
+  const rejectedAbsoluteAdd = await callToolRaw('add', { project, title: 'outside scope', unclassified: true, files: [absolutePath] });
+  assert.equal(rejectedAbsoluteAdd.isError, true);
+  assert.match(rejectedAbsoluteAdd.content[0].text, /paths outside the repo worktree/);
+  assert.match(rejectedAbsoluteAdd.content[0].text, /non-repo\/artifact work/);
+
+  const rejectedAbsoluteUpdate = await callToolRaw('update', { project, ref: added.ref, files: [absolutePath] });
+  assert.equal(rejectedAbsoluteUpdate.isError, true);
+  assert.match(rejectedAbsoluteUpdate.content[0].text, /paths outside the repo worktree/);
+  assert.match(rejectedAbsoluteUpdate.content[0].text, /declare in-repo paths/);
+  assert.deepEqual(store.getTicket(project, added.ref).files, scope(28), 'an absolute-path refusal leaves the approved scope untouched');
+
   const contracts = await callTool('add', {
     project, title: 'wide contracts', unclassified: true,
     produces: scope(24).map((file) => `Payload:${file}`), consumes: scope(23).map((file) => `Input:${file}`), changes: scope(22).map((file) => `Shape:${file}`),
@@ -1357,11 +1369,10 @@ test('dispatch keeps freshness silent with an isolated matching install', async 
   }
 });
 
-test('dispatch warns about external output outside the repo worktree', async () => {
+test('dispatch refuses external output at declaration time', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-dispatch-external-')).slug;
-  const outside = path.join(os.tmpdir(), `sq-mcp-dispatch-audition-${process.pid}.html`);
-  const scope = outside.replace(/\\/g, '/');
-  const target = await callTool('add', {
+  const scope = path.join(os.tmpdir(), `sq-mcp-dispatch-audition-${process.pid}.html`).replace(/\\/g, '/');
+  const refused = await callToolRaw('add', {
     project,
     title: 'external dispatch output',
     description: DISPATCH_DESCRIPTION,
@@ -1369,11 +1380,9 @@ test('dispatch warns about external output outside the repo worktree', async () 
     files: [scope],
   });
 
-  const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: target.ref, full: true });
-
-  assert.deepEqual(dispatched.warnings, [
-    `Dispatch warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`,
-  ]);
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /paths outside the repo worktree/);
+  assert.match(refused.content[0].text, /classify as non-repo\/artifact work/);
 });
 
 test('dispatch warns about declared scopes held by in-flight tickets', async () => {
@@ -2220,22 +2229,32 @@ test('MCP submit accepts a known submitted commit as an explicit base', async ()
   assert.deepEqual(submission.changedPaths, ['lib/second.js']);
 });
 
-test('MCP commit explains external-output recovery', async () => {
+test('MCP commit explains in-place external-output recovery', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
   const outside = path.join(os.tmpdir(), `sq-mcp-external-output-${process.pid}.html`);
   const ticket = store.createTicket(project, {
-    title: 'MCP external output', files: [outside], complexity: 3,
+    title: 'MCP external output', files: ['lib/allowed.js'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'confirm external output commit refusal names the recovery path',
   });
   const by = 'mcp-external-output-worker';
   assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The external output fixture requires a local direct claim.' })).ok, true);
-
-  const refused = await callTool('commit', { project, ref: ticket.ref, by, message: 'MCP external output', worktree });
+  const originalGetTicket = store.getTicket;
+  store.getTicket = (slug: string, ref: string) => {
+    const found = originalGetTicket(slug, ref);
+    return found?.ref === ticket.ref ? { ...found, files: [outside] } : found;
+  };
+  let refused: any;
+  try {
+    refused = await callTool('commit', { project, ref: ticket.ref, by, message: 'MCP external output', worktree });
+  } finally {
+    store.getTicket = originalGetTicket;
+  }
 
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'outside_scope');
   assert.match(refused.message, /declared paths are outside the repo worktree/i);
+  assert.match(refused.message, /update.*--files.*drop the stale path/i);
   assert.match(refused.message, /release and reclassify as non-repo\/artifact work/i);
 });
 
@@ -2876,20 +2895,18 @@ test('add returns a compact acknowledgement', async () => {
   assert.strictEqual(out.status, 'todo');
 });
 
-test('MCP add warns when declared output is outside the repo worktree', async () => {
-  const outside = path.join(os.tmpdir(), `sq-mcp-add-audition-${process.pid}.html`);
-  fs.writeFileSync(outside, '<main>audition</main>\n');
-  const scope = outside.replace(/\\/g, '/');
-  const added = await callTool('add', {
-    title: 'MCP external output warning',
-    files: [scope],
+test('MCP add refuses declared output outside the repo worktree', async () => {
+  const outside = path.join(os.tmpdir(), `sq-mcp-add-audition-${process.pid}.html`).replace(/\\/g, '/');
+  const refused = await callToolRaw('add', {
+    title: 'MCP external output refusal',
+    files: [outside],
     complexity: 3,
     why: 'confirm planning guidance appears before an external-output executor dispatch',
   });
 
-  assert.deepEqual(added.warnings, [
-    `Planning-depth warning: declared paths are outside the repo worktree: ${scope}. A repo-changing category can't commit them. Use an artifact/non-repo category, or declare in-repo paths.`,
-  ]);
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /paths outside the repo worktree/);
+  assert.match(refused.content[0].text, /non-repo\/artifact work/);
 });
 
 test('MCP add warns when coding.hard already prescribes a fix', async () => {

@@ -228,6 +228,28 @@ test('an over-limit declared scope is refused with the cap, the overflow and the
   );
 });
 
+test('declaring an absolute path is refused with non-repo guidance', () => {
+  const slug = store.ensureProject(repo(), 'absolute declared scope').slug;
+  const absolutePath = process.platform === 'win32' ? 'D:\\terge-tuner-data\\design\\generative-tuner-design.md' : '/abs/generative-tuner-design.md';
+
+  assert.throws(
+    () => store.createTicket(slug, { title: 'outside add', files: [absolutePath], complexity: 2, complexityWhy: 'The ticket must reject external output before dispatch.' }),
+    (error: Error) => /paths outside the repo worktree/.test(error.message) && /non-repo\/artifact work/.test(error.message) && /declare in-repo paths/.test(error.message),
+  );
+});
+
+test('updating declared files with an absolute path is refused with non-repo guidance', () => {
+  const slug = store.ensureProject(repo(), 'absolute updated scope').slug;
+  const ticket = store.createTicket(slug, { title: 'outside update', files: ['plugins/sidequest/worker.js'], complexity: 2, complexityWhy: 'The ticket must reject external output before dispatch.' });
+  const absolutePath = process.platform === 'win32' ? 'D:\\terge-tuner-data\\design\\generative-tuner-design.md' : '/abs/generative-tuner-design.md';
+
+  assert.throws(
+    () => store.updateTicket(slug, ticket.ref, { files: [absolutePath] }),
+    (error: Error) => /paths outside the repo worktree/.test(error.message) && /non-repo\/artifact work/.test(error.message) && /declare in-repo paths/.test(error.message),
+  );
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['plugins/sidequest/worker.js'], 'the refused update changed nothing');
+});
+
 test('missing declared paths warn while existing declared paths commit', () => {
   const root = repo();
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
@@ -239,16 +261,16 @@ test('missing declared paths warn while existing declared paths commit', () => {
   assert.deepEqual(committed.missingScopes, ['plugins/sidequest/phantom.js']);
 });
 
-test('ignored declared files do not block tracked scoped commits', () => {
+test('ignored declared directories do not block tracked scoped commits', () => {
   const root = repo();
   fs.mkdirSync(path.join(root, '.claude'), { recursive: true });
-  fs.writeFileSync(path.join(root, '.gitignore'), '.claude/settings.local.json\n');
+  fs.writeFileSync(path.join(root, '.gitignore'), '.claude/\n');
   git(root, ['add', '.gitignore']);
   git(root, ['commit', '-m', 'ignore local settings']);
   fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker-a.js'), 'a\n');
   fs.writeFileSync(path.join(root, '.claude', 'settings.local.json'), '{"enabled":true}\n');
 
-  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', '.claude/settings.local.json']);
+  const committed = commitScope.commitScoped(root, 'worker a', ['plugins/sidequest/worker-a.js', '.claude']);
   assert.equal(committed.ok, true, committed.message as string);
   assert.deepEqual(committed.paths, ['plugins/sidequest/worker-a.js']);
   assert.deepEqual(commitScope.commitPaths(root, committed.commit), ['plugins/sidequest/worker-a.js']);
