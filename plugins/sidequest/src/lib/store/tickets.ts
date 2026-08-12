@@ -763,6 +763,7 @@ function activeClaimScopeRefusal(ticket?: any, files?: any, patch?: any) {
   if (callerSession && claimedSession && callerSession !== claimedSession) return null;
   const currentFiles = new Set(current.map((file: any) => file.toLowerCase()));
   const nextFiles = new Set(next.map((file: any) => file.toLowerCase()));
+  if (next.every((file: any) => currentFiles.has(file.toLowerCase()))) return null;
   const refused = [
     ...next.filter((file: any) => !currentFiles.has(file.toLowerCase())),
     ...current.filter((file: any) => !nextFiles.has(file.toLowerCase())),
