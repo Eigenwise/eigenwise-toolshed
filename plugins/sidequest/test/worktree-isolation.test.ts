@@ -343,6 +343,25 @@ test('a destructive git command is refused while the shared checkout carries unc
   assert.equal(elsewhere.hookSpecificOutput.permissionDecision, 'deny', 'git -C targets the named repo');
 });
 
+test('destructive Git guard ignores heredoc prose but refuses executable publication commands', () => {
+  const repo = initRepo('sq-destructive-heredoc-');
+  const project = store.ensureProject(repo);
+  store.setBoardConfig(project.slug, { integrationBranch: 'dev' });
+  const payload = (command: string) => ({
+    cwd: repo,
+    session_id: 'other-session',
+    tool_name: 'Bash',
+    tool_input: { command },
+  });
+  const proseOnly = `git commit -F - <<'MESSAGE'\ngit push --force origin main\ngit reset --hard and rm -rf remain guarded in this security note\nMESSAGE`;
+  assert.equal(runHook(GUARD_DESTRUCTIVE, payload(proseOnly)), null, 'commit message prose is not shell code');
+
+  const executablePush = `git commit -F - <<'MESSAGE'\nsecurity note: git push --force remains guarded\nMESSAGE\ngit push --force origin HEAD:main`;
+  const out = runHook(GUARD_DESTRUCTIVE, payload(executablePush));
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /publish lock/);
+});
+
 test('published-branch pushes and manual tags need the current session publish lock', () => {
   const repo = initRepo('sq-published-branch-');
   const project = store.ensureProject(repo);
