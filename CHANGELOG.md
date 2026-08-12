@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.454.0 (2026-08-12)
+
+### sidequest 4.46.0 → 4.46.1
+
+#### Fixes
+
+- Make dispatch tokens easier to copy (SQ-1830)
+  Dispatch tokens now use grouped lowercase characters and explain how to recover from a transcription mistake.
+- Recover unclaimed dispatches (SQ-1831)
+  Dispatch can supersede a launched executor that never bound, claimed, or checkpointed when the orchestrator records the failed-claim evidence.
+- Restore dispatch route labels (SQ-1832)
+  Running executor rows again show the readable model and effort label.
+
 ## v3.453.0 (2026-08-11)
 
 ### sidequest 4.45.0 → 4.46.0
