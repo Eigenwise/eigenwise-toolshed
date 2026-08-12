@@ -2376,6 +2376,30 @@ test('MCP scopeRequest keeps declared bundled hook output one-way: the source ne
 
 
 
+test('MCP update lets the claim holder narrow live dispatch scope but refuses combined additions', async () => {
+  const project = store.ensureProject(committedRepo('sq-mcp-scope-shed-')).slug;
+  const ticket = store.createTicket(project, {
+    title: 'MCP active claim scope shed', files: ['lib/allowed.js', 'screenshots'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'claimed executors can remove an incorrect declared path',
+  });
+  const by = 'mcp-active-scope-shed-worker';
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree: false });
+  assert.equal(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  await callTool('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
+  const narrowed = store.getTicket(project, ticket.ref);
+  assert.deepEqual(narrowed.files, ['lib/allowed.js']);
+  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js'], 'live dispatch scope sheds the removed path');
+
+  const refused = await callToolRaw('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js', 'foreign/new.js'] });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /refusing active-claim scope change for foreign\/new\.js/i);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
+});
+
 test('MCP update makes control-plane scope approval discoverable and guards executor scope rewrites', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-update-'))).slug;
   const ticket = store.createTicket(project, {

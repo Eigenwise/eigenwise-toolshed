@@ -692,6 +692,7 @@ function createTickets(dependencies) {
     if (callerSession && claimedSession && callerSession !== claimedSession) return null;
     const currentFiles = new Set(current.map((file) => file.toLowerCase()));
     const nextFiles = new Set(next.map((file) => file.toLowerCase()));
+    if (next.every((file) => currentFiles.has(file.toLowerCase()))) return null;
     const refused = [
       ...next.filter((file) => !currentFiles.has(file.toLowerCase())),
       ...current.filter((file) => !nextFiles.has(file.toLowerCase()))
