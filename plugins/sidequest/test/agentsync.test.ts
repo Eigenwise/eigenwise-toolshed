@@ -820,9 +820,8 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.match(briefing, /画像\.png/);
   assert.match(briefing, /missing file\.png.*missing or unreadable/s);
   assert.ok(briefing.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
-  // The marker rides at the END so Claude Code's agent-list preview of the
-  // prompt's first line shows readable context instead of a raw route tag.
-  assert.ok(stub.startsWith('Implementation context:\n'));
+  assert.ok(stub.startsWith('GPT-5.6 Terra, high · Instant dispatch\n'), stub);
+  assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
   assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
   assert.equal(stub.match(/\[sidequest-route /g)!.length, 1);
   assert.ok(Buffer.byteLength(stub) < 1600, `spawn context is ${Buffer.byteLength(stub)} bytes`);

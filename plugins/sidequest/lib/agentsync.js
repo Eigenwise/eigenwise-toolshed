@@ -948,7 +948,9 @@ function renderDispatchStub(ticket, nonce, projectPath) {
     "--project",
     quotedShellArgument(project)
   ].join(" ");
+  const label = String(ticket?.dispatch?.description || spawnDescription(ticket, store.resolveExec(ticket?.model, ticket?.effort))).replace(EMBEDDED_ROUTE_MARKER_RE, " ").replace(/\s+/g, " ").trim() || "Sidequest ticket executor.";
   return [
+    label,
     "Implementation context:",
     dispatchTicketContext(ticket, project),
     "",
