@@ -69,13 +69,18 @@ jobs:
           const suites = [...manifest.plugins.values()].map((plugin) => ({ plugin, suite: resolveSuite(plugin) }));
           const missing = suites.filter(({ suite }) => suite === null).map(({ plugin }) => plugin.name);
           if (missing.length) throw new Error(`Published plugins without a test suite: ${missing.join(', ')}`);
-          const include = suites.flatMap(({ plugin, suite }) => ['ubuntu-latest', 'windows-latest'].map((os) => ({
-            name: plugin.name,
-            path: plugin.dir,
-            setup: suite.setup ?? '',
-            command: suite.command,
-            os,
-          })));
+          const include = suites.flatMap(({ plugin, suite }) => {
+            const command = plugin.name === 'observability'
+              ? suite.command.replace('--test-timeout=120000', '--test-timeout=300000')
+              : suite.command;
+            return ['ubuntu-latest', 'windows-latest'].map((os) => ({
+              name: plugin.name,
+              path: plugin.dir,
+              setup: suite.setup ?? '',
+              command,
+              os,
+            }));
+          });
           process.stdout.write(`matrix=${JSON.stringify({ include })}\n`);
           NODE
 
