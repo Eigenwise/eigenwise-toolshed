@@ -1162,14 +1162,12 @@ function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
     '--project',
     quotedShellArgument(project),
   ].join(' ');
-  // The route marker rides at the END of the stub: Claude Code's agent list
-  // previews the prompt's first line for some rows even when a description was
-  // supplied, and a marker-first prompt renders as a raw route tag next to the
-  // other rows' readable labels. The gateway's scan is position-independent
-  // (routeMarkersInText runs an unanchored global regex over all user-authored
-  // text and only the marker COUNT matters), so last-line placement routes
-  // identically.
+  const label = String(ticket?.dispatch?.description || spawnDescription(ticket, store.resolveExec(ticket?.model, ticket?.effort)))
+    .replace(EMBEDDED_ROUTE_MARKER_RE, ' ')
+    .replace(/\s+/g, ' ')
+    .trim() || 'Sidequest ticket executor.';
   return [
+    label,
     'Implementation context:',
     dispatchTicketContext(ticket, project),
     '',
