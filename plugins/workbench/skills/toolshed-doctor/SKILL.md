@@ -67,7 +67,7 @@ From the JSON report, call out outbox queue depth/capacity, drops, schema drops,
 ## TypeScript code intelligence
 
 Workbench serves TypeScript/JavaScript definition, references, and diagnostics through its own pull-only
-`code-intel` MCP server (`typescript_definition`, `typescript_references`, `typescript_diagnostics`). Check
+`code-intel` MCP server (`definition`, `references`, `diagnostics`). Check
 that a language server backend is reachable from the current project. This is read-only:
 
 ```sh

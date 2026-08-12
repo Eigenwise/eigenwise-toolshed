@@ -40,7 +40,7 @@ Claude uses the bundled update or doctor skill, tells you what it found, and ask
 
 ## TypeScript code intelligence
 
-Workbench includes a local `code-intel` MCP server with three pull-only tools: `typescript_definition`, `typescript_references`, and `typescript_diagnostics`. Each call binds to an explicit project root and uses that project's own TypeScript install. TypeScript 7 projects use the native TypeScript language server. TypeScript 5 projects use `typescript-language-server` instead.
+Workbench includes a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects the language server. Each call binds to an explicit project root and uses that project's own TypeScript install. TypeScript 7 projects use the native TypeScript language server. TypeScript 5 projects use `typescript-language-server` instead.
 
 This replaces the official `typescript-lsp` plugin. Its push diagnostics are process-global and cannot tell which agent owns them, so diagnostics from parallel isolated worktrees can land in the wrong transcript. If it is installed, remove it and reload plugins:
 

@@ -4,6 +4,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 
 const registry = require('./project-registry');
+const { languageForFile } = require('./language-server-locator');
 
 const SERVER_NAME = 'code-intel';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
@@ -72,8 +73,10 @@ function bindProject(args) {
   return canonical;
 }
 
-function clientFor(rootDir) {
-  const bound = registry.clientForRoot(rootDir);
+function clientFor(rootDir, file) {
+  const language = languageForFile(file);
+  if (!language) throw new Error(`No language server is available for ${path.extname(file) || 'files without an extension'}.`);
+  const bound = registry.clientForRoot(rootDir, language);
   if (bound.error) throw new Error(bound.error);
   return bound.client;
 }
@@ -243,7 +246,7 @@ function formatDiagnostic(diagnostic) {
 async function runDefinition(args, signal) {
   const { rootDir } = bindProject(args);
   const file = resolveFileUnderRoot(rootDir, args.file);
-  const client = clientFor(rootDir);
+  const client = clientFor(rootDir, file);
   const located = await client.definition(file, args.line, args.column, signal);
   const { locationsUnderRoot, withheldOutsideRoot } = keepOnlyLocationsUnderRoot(rootDir, located);
   const payload = {
@@ -263,7 +266,7 @@ async function runDefinition(args, signal) {
 async function runReferences(args, signal) {
   const { rootDir } = bindProject(args);
   const file = resolveFileUnderRoot(rootDir, args.file);
-  const client = clientFor(rootDir);
+  const client = clientFor(rootDir, file);
   const located = await client.references(file, args.line, args.column, signal);
   const { locationsUnderRoot, withheldOutsideRoot } = keepOnlyLocationsUnderRoot(rootDir, located);
   const payload = {
@@ -281,12 +284,19 @@ async function runReferences(args, signal) {
 async function runDiagnostics(args, signal) {
   const { rootDir } = bindProject(args);
   const files = args.files.map((file) => resolveFileUnderRoot(rootDir, file));
-  const client = clientFor(rootDir);
+  const clientsByLanguage = new Map();
+  const clientForFile = (file) => {
+    const language = languageForFile(file);
+    if (!language) return clientFor(rootDir, file);
+    if (!clientsByLanguage.has(language)) clientsByLanguage.set(language, clientFor(rootDir, file));
+    return clientsByLanguage.get(language);
+  };
+  for (const file of files) clientForFile(file);
   const results = [];
   let totalDiagnostics = 0;
   for (const file of files) {
     try {
-      const diagnostics = await client.diagnostics(file, signal);
+      const diagnostics = await clientForFile(file).diagnostics(file, signal);
       totalDiagnostics += diagnostics.length;
       const entry = { file, diagnostics: diagnostics.slice(0, MAX_DIAGNOSTICS_PER_FILE).map(formatDiagnostic) };
       if (diagnostics.length > MAX_DIAGNOSTICS_PER_FILE) {
@@ -299,7 +309,12 @@ async function runDiagnostics(args, signal) {
       results.push({ file, error: capText(error.message) });
     }
   }
-  const payload = { root: rootDir, backend: client.backend, totalDiagnostics, files: results };
+  const payload = {
+    root: rootDir,
+    backend: clientsByLanguage.size === 1 ? clientsByLanguage.values().next().value.backend : undefined,
+    totalDiagnostics,
+    files: results,
+  };
   return fitResponseBudget(payload, (current) => {
     let longest = null;
     for (const entry of current.files) {
@@ -316,8 +331,8 @@ const FILE_DESCRIPTION = 'File to query, absolute or relative to root. Must be i
 
 const TOOLS = [
   {
-    name: 'typescript_definition',
-    description: 'Find where the TypeScript/JavaScript symbol at a position is defined, via the project\'s own installed TypeScript language server. Pull-only and local: results arrive in this response only, and a location is returned only when its native realpath (symlinks and junctions resolved) is an existing file inside the bound root; non-file URIs, missing targets, and anything outside are withheld (counted in withheldOutsideRoot). Lines and columns are 1-based.',
+    name: 'definition',
+    description: 'Find where the symbol at a position is defined, via the language server for the file extension. Pull-only and local: results arrive in this response only, and a location is returned only when its native realpath (symlinks and junctions resolved) is an existing file inside the bound root; non-file URIs, missing targets, and anything outside are withheld (counted in withheldOutsideRoot). Lines and columns are 1-based.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -331,8 +346,8 @@ const TOOLS = [
     handler: runDefinition,
   },
   {
-    name: 'typescript_references',
-    description: 'List every reference to the TypeScript/JavaScript symbol at a position, via the project\'s own installed TypeScript language server. Pull-only and local: results arrive in this response only, and a location is returned only when its native realpath (symlinks and junctions resolved) is an existing file inside the bound root; non-file URIs, missing targets, and anything outside are withheld (counted in withheldOutsideRoot). Lines and columns are 1-based.',
+    name: 'references',
+    description: 'List every reference to the symbol at a position, via the language server for the file extension. Pull-only and local: results arrive in this response only, and a location is returned only when its native realpath (symlinks and junctions resolved) is an existing file inside the bound root; non-file URIs, missing targets, and anything outside are withheld (counted in withheldOutsideRoot). Lines and columns are 1-based.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -346,8 +361,8 @@ const TOOLS = [
     handler: runReferences,
   },
   {
-    name: 'typescript_diagnostics',
-    description: 'Type-check the named TypeScript/JavaScript files on demand and return their current errors, warnings, and hints. Pull-only and local: diagnostics are computed for this call and returned only here, never pushed into any transcript.',
+    name: 'diagnostics',
+    description: 'Check the named files on demand and return their current errors, warnings, and hints through the language server for each file extension. Pull-only and local: diagnostics are computed for this call and returned only here, never pushed into any transcript.',
     inputSchema: {
       type: 'object',
       properties: {
