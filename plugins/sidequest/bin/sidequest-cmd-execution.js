@@ -209,7 +209,7 @@ async function cmdRelease(opts, positional) {
   const ticket = store.getTicket(slug, idOrRef);
   const res = store.releaseTicket(slug, idOrRef, by, {
     force: !!opts.force,
-    status: opts.status,
+    status: opts["release-kind"] === "oracle" ? "awaiting-oracle" : opts.status,
     oracle: opts.oracle,
     candidate: opts.candidate,
     deliverable: opts.deliverable,

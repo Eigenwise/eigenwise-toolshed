@@ -405,7 +405,7 @@ const tools = [
   },
   {
     name: "release",
-    description: "Release a claim; an oracle ask keeps the ticket doing for a verdict.",
+    description: "Release a claim. Use kind oracle with an oracle ask to park it as awaiting-oracle for a human verdict, then exit. The oracle handoff stays visible until a verdict is recorded.",
     inputSchema: {
       type: "object",
       properties: {
@@ -413,7 +413,7 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         reason: { type: "string" },
-        kind: { type: "string", enum: ["technical_blocker", "contradiction", "handback"] },
+        kind: { type: "string", enum: ["technical_blocker", "contradiction", "oracle", "handback"] },
         command: { type: "string", description: "Required for blocker/contradiction." },
         exitCode: { type: "integer" },
         outputTail: { type: "string", description: "Required blocker/contradiction output." },
@@ -433,7 +433,7 @@ const tools = [
       const evidence = store.technicalBlockerRelease(Object.assign({}, args, { releaseKind: args.kind }));
       if (!evidence.ok) return mutationAck(slug, { ok: false, ticket, reason: evidence.reason, message: evidence.message });
       const res = store.releaseTicket(slug, args.ref, by, {
-        status: args.status,
+        status: args.kind === "oracle" ? "awaiting-oracle" : args.status,
         oracle: args.oracle,
         candidate: args.candidate,
         deliverable: args.deliverable,
@@ -465,12 +465,21 @@ const tools = [
     },
     handler(args) {
       const { slug } = resolveProject(args.project);
-      return mutationAck(slug, store.applyExperimentVerdict(slug, args.ref, {
+      const result = store.applyExperimentVerdict(slug, args.ref, {
         text: args.text,
         outcome: args.outcome,
         why: args.why,
         constraint: args.constraint
-      }));
+      });
+      if (result.ok) {
+        store.addComment(slug, args.ref, {
+          by: "oracle",
+          body: `Oracle verdict (${args.outcome}): ${args.text}`,
+          kind: "comment",
+          source: "mcp"
+        });
+      }
+      return mutationAck(slug, result);
     }
   },
   {

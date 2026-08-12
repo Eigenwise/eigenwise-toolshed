@@ -603,7 +603,7 @@ function recentNoCommitAttemptSelection(state?: any) {
   let skippedUnbound = 0;
   for (let index = attempts.length - 1; index >= 0; index -= 1) {
     const attempt = attempts[index];
-    if (!attempt?.terminalAt || attempt.release?.kind === 'handback') continue;
+    if (!attempt?.terminalAt || attempt.release?.kind === 'handback' || attempt.release?.kind === 'oracle') continue;
     const round = String(attempt.preparedAt || attempt.tokenPrefix || attempt.terminalAt);
     if (rounds.has(round)) continue;
     rounds.add(round);
@@ -793,7 +793,7 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
         }),
       };
     }
-    if (!checkpointCommit && attempt?.release?.kind !== 'handback') {
+    if (!checkpointCommit && !['handback', 'oracle'].includes(attempt?.release?.kind)) {
       return { fallback: continuationFallback('release_has_no_checkpoint_or_handback', worktree) };
     }
     if (checkpointCommit && gitOutput(worktree, ['rev-parse', '--verify', `${checkpointCommit}^{commit}`]) !== commit) {

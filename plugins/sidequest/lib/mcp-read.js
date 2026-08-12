@@ -100,7 +100,7 @@ const tools = [
       properties: {
         project: PROJECT_PROP,
         ref: { type: "string", description: "Return this one ticket in full." },
-        status: { type: "string", enum: ["todo", "doing", "done"] },
+        status: { type: "string", enum: ["todo", "doing", "awaiting-oracle", "done"] },
         archived: { type: "boolean" },
         detail: { type: "boolean", description: "Audit only: full bodies and comment threads. Orchestration uses default brief rows; liveness uses changes/pulse." },
         brief: { type: "boolean", description: "One compact row per ticket. This is the default unless detail:true." },
@@ -116,7 +116,7 @@ const tools = [
         if (!ticket) throw new Error(`list: no ticket "${args.ref}" in ${meta.name}`);
         return { project: slug, projectName: meta.name, ticket: ticketWithContextHandles(slug, ticket) };
       }
-      const status = args.status == null && !args.all ? ["todo", "doing"] : args.status;
+      const status = args.status == null && !args.all ? ["todo", "doing", "awaiting-oracle"] : args.status;
       const brief = args.detail ? false : args.brief !== false;
       const maxChars = args.limit == null && !args.all ? LIST_CHAR_BUDGET : null;
       const payload = store.listPayload(slug, {

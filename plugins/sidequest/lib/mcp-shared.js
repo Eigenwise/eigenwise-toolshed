@@ -238,7 +238,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   claim: "Claim before work; proceed only on ok:true.",
   dispatch: "Dispatch; returns a token and spawn spec.",
   done: "Finish; stamp actual model and effort.",
-  release: "Release claim; retain oracle handoff.",
+  release: "Release claim. Use kind oracle with an ask to park awaiting-oracle, then exit. The oracle handoff stays visible until a verdict is recorded.",
   groomClose: "Close integrated submission.",
   native_agent: "Get native Agent spawn spec.",
   archive: "Archive ticket(s).",
@@ -436,7 +436,7 @@ function listContextArguments(args) {
   return Object.fromEntries(["status", "archived", "detail", "all"].filter((key) => args[key] !== void 0).map((key) => [key, args[key]]));
 }
 function listContextRows(project, args) {
-  const status = args.status == null && !args.all ? ["todo", "doing"] : args.status;
+  const status = args.status == null && !args.all ? ["todo", "doing", "awaiting-oracle"] : args.status;
   const brief = !args.detail;
   const payload = store.listPayload(project, {
     status,

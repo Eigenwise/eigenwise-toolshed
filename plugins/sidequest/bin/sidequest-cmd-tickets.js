@@ -208,7 +208,7 @@ async function cmdList(opts) {
   let tickets = store.listTickets(slug);
   tickets = opts.archived ? tickets.filter((t) => t.archived) : tickets.filter((t) => !t.archived);
   if (opts.status) tickets = tickets.filter((t) => t.status === String(opts.status).toLowerCase());
-  else if (!opts.all) tickets = tickets.filter((t) => t.status === "todo" || t.status === "doing");
+  else if (!opts.all) tickets = tickets.filter((t) => t.status === "todo" || t.status === "doing" || t.status === "awaiting-oracle");
   if (!tickets.length) {
     console.log(`No tickets in ${meta.name}.`);
     return;

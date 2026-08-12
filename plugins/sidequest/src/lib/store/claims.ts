@@ -19,7 +19,7 @@ function createClaims(dependencies: any) {
   const VERIFY_COMPLETE_STATUSES = new Set(['passed', 'failed-suite', 'could-not-run']);
   const VERIFY_COMPLETE_STATUS_ALIASES = new Map([['failed', 'failed-suite']]);
   const NEGATIVE_CONTROL_COMMENT = '[sidequest:negative-control] ';
-  const RELEASE_KINDS = new Set(['handback']);
+  const RELEASE_KINDS = new Set(['handback', 'oracle']);
 
   function technicalBlockerRelease(args?: { releaseKind?: unknown; command?: unknown; exitCode?: unknown; oracle?: unknown; outputTail?: unknown; reason?: unknown }): { ok: true; evidence: { command: string; exitCode?: number; kind: string; outputTail: string } | null; releaseKind: string | null } | { ok: false; message: string; reason: string } {
     const reason = String(args?.reason || '').trim();
@@ -54,11 +54,21 @@ function createClaims(dependencies: any) {
     }
     if (!reason && !oracle && !releaseKind) return { ok: true, releaseKind: null, evidence: null };
     if (!releaseKind && oracle) return { ok: true, releaseKind: null, evidence: null };
+    if (releaseKind === 'oracle') {
+      if (!oracle) {
+        return {
+          ok: false,
+          reason: 'oracle_ask_required',
+          message: 'release: oracle requires a non-empty oracle ask that states what the human must judge. Park the ticket and exit instead of holding its claim for a verdict.',
+        };
+      }
+      return { ok: true, releaseKind, evidence: null };
+    }
     if (RELEASE_KINDS.has(releaseKind)) return { ok: true, releaseKind, evidence: null };
     return {
       ok: false,
       reason: 'release_kind_required',
-      message: 'release: choose kind "technical_blocker" for a failed command, "contradiction" for an absent target with probe evidence, or "handback" for another non-technical release. Technical blockers need command, exitCode, and outputTail; contradictions need command and outputTail.',
+      message: 'release: choose kind "technical_blocker" for a failed command, "contradiction" for an absent target with probe evidence, "oracle" to park for a human verdict, or "handback" for another non-technical release. Technical blockers need command, exitCode, and outputTail; contradictions need command and outputTail.',
     };
   }
 

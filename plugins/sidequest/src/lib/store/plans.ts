@@ -300,7 +300,7 @@ function applyExperimentVerdict(slug?: any, idOrRef?: any, input?: any) {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
     const oracle = ticket.oracle;
-    if (!oracle) {
+    if (!oracle || ticket.status !== 'awaiting-oracle') {
       return {
         ok: false,
         reason: 'no_oracle',
@@ -322,8 +322,12 @@ function applyExperimentVerdict(slug?: any, idOrRef?: any, input?: any) {
     block = replaceExperimentEntryField(block, 'Status', verdictStatus(outcome, oracle.candidate));
     log = `${String(log).slice(0, entry.start)}${block}\n${String(log).slice(entry.end).trimStart()}`;
     log = appendStandingConstraint(log, oracle.round, constraint);
-    clearOracleMarker(ticket);
+    ticket.oracle = Object.assign({}, oracle, { verdict: { text, outcome, why, constraint, at: new Date().toISOString() } });
+    const previousStatus = ticket.status;
+    ticket.status = 'todo';
+    if (previousStatus !== ticket.status) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: new Date().toISOString() };
     const location = writeExperimentLog(slug, ticket, log);
+    putTicket(slug, ticket);
     return Object.assign({ ok: true, round: oracle.round, outcome }, location);
   });
 }

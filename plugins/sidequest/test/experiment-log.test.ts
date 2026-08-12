@@ -104,7 +104,7 @@ test('applyExperimentVerdict preserves the user words, clears the oracle, and re
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   assert.equal(store.releaseTicket(slug, created.ref, 'experiment-verdict-worker', {
-    status: 'doing',
+    releaseKind: 'oracle',
     oracle: 'Rank the candidates.',
     candidate: 'abc1234',
   }).ok, true);
@@ -120,7 +120,7 @@ test('applyExperimentVerdict preserves the user words, clears the oracle, and re
   assert.equal(verdict.ok, true);
   assert.equal(verdict.round, 1);
   const stored = store.getTicket(slug, created.ref);
-  assert.equal(stored.oracle, null);
+  assert.equal(stored.oracle.verdict.text, text);
   const log = fs.readFileSync(store.assetPath(slug, created.id, verdict.asset), 'utf8');
   assert.match(log, /Verdict: "The attack is still too sharp\.\nKeep row B above row C\." — rejected/);
   assert.match(log, /Why it failed: The onset transient dominates the comparison\./);
@@ -142,7 +142,7 @@ test('applyExperimentVerdict creates a missing oracle round and preserves existi
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   assert.equal(store.releaseTicket(slug, created.ref, 'missing-oracle-round-worker', {
-    status: 'doing',
+    releaseKind: 'oracle',
     oracle: 'Rank the candidates.',
     candidate: 'abc1234',
     deliverable: 'artifacts/comparison.wav',
@@ -161,7 +161,7 @@ test('applyExperimentVerdict creates a missing oracle round and preserves existi
   });
 
   assert.equal(verdict.ok, true);
-  assert.equal(store.getTicket(slug, created.ref).oracle, null);
+  assert.equal(store.getTicket(slug, created.ref).oracle.verdict.text, 'Candidate B wins.');
   const log = fs.readFileSync(store.assetPath(slug, created.id, verdict.asset), 'utf8');
   assert.match(log, /## R1 — \d{4}-\d{2}-\d{2} — Oracle verdict/);
   assert.match(log, /Hypothesis: Rank the candidates\./);
