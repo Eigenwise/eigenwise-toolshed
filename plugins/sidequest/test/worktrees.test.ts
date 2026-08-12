@@ -332,6 +332,41 @@ test('worktree sweep preserves old reachable worktrees with tracked changes', as
   }
 });
 
+test('worktree sweep preserves a patch-equivalent worktree with tracked changes', async () => {
+  const worktree = agentWorktree('tracked-equivalent');
+  try {
+    // Land the SAME diff on main under a different message so patch-id matches
+    // while the worktree's own commit stays off main. `integrate` cherry-picks
+    // onto an identical base and can reproduce the identical sha, which lands on
+    // the reachable branch instead and leaves patch_equivalent untested.
+    makeCommit(worktree, 'tracked-equivalent.txt');
+    fs.writeFileSync(path.join(PROJECT, 'tracked-equivalent.txt'), 'tracked-equivalent.txt\n');
+    git(['add', 'tracked-equivalent.txt']);
+    git(['commit', '-m', 'upstream lands the same change under its own message']);
+    git(['push', 'origin', 'main']);
+    git(['fetch', 'origin']);
+
+    fs.appendFileSync(path.join(worktree, 'README.md'), 'uncommitted edit\n');
+    makeOld(worktree);
+
+    const result = await worktrees.sweep(PROJECT, [], {
+      execute: true,
+      minAgeMs: 1,
+      upstream: 'origin/main',
+    });
+
+    const entry = entryFor(result, worktree);
+    assert.equal(entry.reachable, false, 'fixture must exercise the patch-equivalent branch, not the reachable one');
+    assert.equal(entry.patchEquivalent, true);
+    assert.equal(entry.reason, 'tracked_changes');
+    assert.equal(entry.action, 'keep');
+    assert.ok(fs.existsSync(worktree));
+    assert.equal(git(['status', '--porcelain'], worktree), 'M README.md');
+  } finally {
+    if (fs.existsSync(worktree)) git(['worktree', 'remove', '--force', worktree]);
+  }
+});
+
 test('worktree sweep salvages an old unintegrated worktree before removing it', async () => {
   const worktree = agentWorktree('salvage-old');
   const recovery = path.join(os.tmpdir(), `sq-worktrees-recovery-${Date.now()}`);

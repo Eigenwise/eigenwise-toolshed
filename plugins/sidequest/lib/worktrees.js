@@ -433,7 +433,7 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
   } else if (ticket?.status === "done" && !trackedChanges) {
     action = "remove";
     reason = "ticket_done";
-  } else if (trackedChanges && reachable) {
+  } else if (trackedChanges && (reachable || patch.equivalent)) {
     reason = "tracked_changes";
   } else if (!oldEnough) reason = "too_young";
   else if (reachable) {

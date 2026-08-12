@@ -532,7 +532,10 @@ async function classifyWorktree(repo: string, tickets: any[], entry: any, curren
   } else if (ticket?.status === 'done' && !trackedChanges) {
     action = 'remove';
     reason = 'ticket_done';
-  } else if (trackedChanges && reachable) {
+  } else if (trackedChanges && (reachable || patch.equivalent)) {
+    // Both settled-branch reasons below remove the directory, and uncommitted
+    // tracked edits exist nowhere else, so guarding only `reachable` still lost
+    // work through the patch-equivalent branch (SQ-1848 follow-up).
     reason = 'tracked_changes';
   } else if (!oldEnough) reason = 'too_young';
   else if (reachable) {
