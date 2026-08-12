@@ -10,6 +10,7 @@ const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmd
 const { cmdStory } = require('./sidequest-cmd-story');
 
 const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes']);
+const ARRAY_FLAG_ALIASES: Record<string, string> = { files: 'file', labels: 'label' };
 const ALIASES: any = {
   t: 'title',
   d: 'desc',
@@ -42,6 +43,7 @@ function parseArgs(argv: any) {
         key = key.slice(0, eq);
       }
       if (!isLong && ALIASES[key]) key = ALIASES[key];
+      if (ARRAY_FLAG_ALIASES[key]) key = ARRAY_FLAG_ALIASES[key];
       if (key === 'no-open') {
         opts.open = false;
         continue;
@@ -67,8 +69,9 @@ function parseArgs(argv: any) {
       if (key === 'project' && opts.project !== undefined) {
         opts.project = Array.isArray(opts.project) ? opts.project.concat(val) : [opts.project, val];
       } else if (ARRAY_FLAGS.has(key)) {
-        (opts[key] = opts[key] || []).push(val);
+        (opts[key] = opts[key] || []).push(...String(val).split(','));
       } else {
+        if (opts[key] !== undefined) fail(`--${key} cannot be repeated; received "${opts[key]}" and "${val}".`);
         opts[key] = val;
       }
     } else {
