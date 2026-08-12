@@ -1166,6 +1166,12 @@ function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
     .replace(EMBEDDED_ROUTE_MARKER_RE, ' ')
     .replace(/\s+/g, ' ')
     .trim() || 'Sidequest ticket executor.';
+  // Keep the marker LAST and the label FIRST. Claude Code's agent list previews
+  // the prompt's first line for some rows even when a description was supplied,
+  // so a marker-first stub renders as a raw route tag (SQ-1827) and a
+  // label-less one renders as "Implementation context:" (SQ-1832). The gateway's
+  // scan is position-independent, only the marker COUNT matters, so end
+  // placement routes identically.
   return [
     label,
     'Implementation context:',
