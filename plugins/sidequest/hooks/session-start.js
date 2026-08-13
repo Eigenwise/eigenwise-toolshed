@@ -261,13 +261,27 @@ function writeState2(state) {
 function sessionId(data) {
   return stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
 }
+function sessionWorktreePath(start) {
+  const resolved = import_node_path4.default.resolve(start);
+  let candidate = resolved;
+  for (; ; ) {
+    try {
+      if (import_node_fs4.default.existsSync(import_node_path4.default.join(candidate, ".git"))) return candidate;
+    } catch (_) {
+      return resolved;
+    }
+    const parent = import_node_path4.default.dirname(candidate);
+    if (parent === candidate) return resolved;
+    candidate = parent;
+  }
+}
 function currentProject(data, store) {
   const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const currentPath = store.nearestRepoRoot(start);
   const found = store.findProject(currentPath);
   return {
     project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
-    currentPath
+    sessionPath: sessionWorktreePath(start)
   };
 }
 function registerSweepSession(data) {
@@ -275,11 +289,11 @@ function registerSweepSession(data) {
   if (!id) return;
   try {
     const store = require(runtimeModule("store"));
-    const { project, currentPath } = currentProject(data, store);
+    const { project, sessionPath } = currentProject(data, store);
     if (!project) return;
     const state = readState();
     state.sessions = state.sessions || {};
-    state.sessions[id] = currentPath;
+    state.sessions[id] = sessionPath;
     writeState2(state);
   } catch (_) {
   }
