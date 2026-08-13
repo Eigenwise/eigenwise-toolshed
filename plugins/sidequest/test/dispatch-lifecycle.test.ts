@@ -938,7 +938,7 @@ test('repeat failures identify isolated missing-app errors as worktree-shaped', 
     assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test' }).ok, true);
   }
 
-  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /isolated no-commit dispatches.*died at.*worktreeIsolation:false/);
+  assert.throws(() => store.prepareDispatch(slug, ticket.ref), /isolated no-commit dispatches.*died at.*--shared-tree.*sharedTree:true/);
   const overridden = store.prepareDispatch(slug, ticket.ref, { allowRepeatFailure: true });
   assert.equal(store.releaseTicket(slug, ticket.ref, 'repeat-worktree-failure-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
   assert.equal(overridden.ticket.dispatch.repeatFailureOverride.priorAttempts, 2);
