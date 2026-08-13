@@ -1,3 +1,4 @@
+import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { stat } from 'node:fs/promises';
 import os from 'node:os';
@@ -37,7 +38,71 @@ interface Worktrees {
     skipped?: string;
     failures?: Array<{ path: string | null; message: string; suppressed?: boolean }>;
     salvaged?: Array<{ path: string; ref: string; recovery: string }>;
-    orphanBranches?: Array<{ branch: string; action: string; reason: string; subject?: string }>;  }>;
+    orphanBranches?: Array<{ branch: string; action: string; reason: string; subject?: string }>;
+  }>;
+}
+
+type WorktreeProcess = {
+  pid: number;
+  imageName: string;
+  startTime: string;
+  cpuSeconds: number | null;
+  command: string;
+};
+
+type ProcessLister = () => WorktreeProcess[];
+
+function windowsProcesses(): WorktreeProcess[] {
+  try {
+    const result = spawnSync('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CreationDate,KernelModeTime,UserModeTime,CommandLine | ConvertTo-Json -Compress',
+    ], { encoding: 'utf8', timeout: 3000, windowsHide: true });
+    if (result.status !== 0) return [];
+    const parsed = JSON.parse(String(result.stdout || ''));
+    return (Array.isArray(parsed) ? parsed : [parsed]).flatMap((entry) => {
+      const pid = Number(entry?.ProcessId);
+      if (!Number.isInteger(pid) || pid <= 0) return [];
+      const kernelSeconds = Number(entry.KernelModeTime) / 10_000_000;
+      const userSeconds = Number(entry.UserModeTime) / 10_000_000;
+      return [{
+        pid,
+        imageName: String(entry.Name || 'unknown'),
+        startTime: String(entry.CreationDate || ''),
+        cpuSeconds: Number.isFinite(kernelSeconds + userSeconds) ? Math.floor(kernelSeconds + userSeconds) : null,
+        command: String(entry.CommandLine || ''),
+      }];
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+function normalizedWindowsPath(value: string): string {
+  return value.replace(/\//g, '\\').replace(/\\+$/, '').toLowerCase();
+}
+
+function referencesWorktree(command: string, worktreePath: string): boolean {
+  const target = normalizedWindowsPath(worktreePath).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`${target}(?=$|[\\\\/"'\\s])`, 'i').test(normalizedWindowsPath(command));
+}
+
+export function worktreeRemovalFailureNotice(
+  failure: { path: string | null; message: string },
+  options: { platform?: NodeJS.Platform; existsSync?: (pathname: string) => boolean; listProcesses?: ProcessLister } = {}
+): string {
+  const notice = `could not remove ${failure.path || 'a git entry'}: ${failure.message}`;
+  if ((options.platform ?? process.platform) !== 'win32' || !failure.path || !(options.existsSync || fs.existsSync)(failure.path)) return notice;
+  const processes = (options.listProcesses || windowsProcesses)().filter((entry) => referencesWorktree(entry.command, failure.path as string));
+  if (!processes.length) return notice;
+  const details = processes.map((entry) => {
+    const started = entry.startTime ? `, started ${entry.startTime}` : '';
+    const cpu = entry.cpuSeconds === null ? '' : `, CPU ${entry.cpuSeconds}s`;
+    return `pid ${entry.pid} (${entry.imageName}${started}${cpu})`;
+  });
+  return `${notice}. Processes still using it: ${details.join('; ')}. End those PIDs and re-run the sweep.`;
 }
 
 function stateFile(): string {
@@ -200,7 +265,7 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
       }
       for (const failure of result.failures || []) {
         if (!failure.suppressed) {
-          notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || 'a git entry'}: ${failure.message}`);
+          notices.push(`sidequest: worktree sweep for ${project.name || project.slug} ${worktreeRemovalFailureNotice(failure)}`);
         }
       }
       notices.push(...salvageNotices(result.salvaged || []));
