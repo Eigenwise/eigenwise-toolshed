@@ -68,7 +68,9 @@ const COMMAND_FLAGS = {
   merge: ["dry-run"],
   story: ["title", "desc", "description", "color", "body", "body-file", "ref", "by", "rotate", "full"],
   dashboard: ["port", "open"],
-  serve: ["port"],
+  // --handoff-pid is undocumented on purpose: server.ts passes it when a running
+  // dashboard relaunches itself onto a newer install. Refusing it kills the upgrade.
+  serve: ["port", "handoff-pid"],
   stop: []
 };
 const COMMAND_ALIASES = { new: "add", ticket: "add", ls: "list", edit: "update", set: "update", remove: "rm", delete: "rm", complete: "done", finish: "done", open: "dashboard", board: "dashboard" };
