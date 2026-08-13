@@ -22,6 +22,7 @@ const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
 // Codex dispatch executors are effort-collapsed: model AND effort ride the route
 // marker, so the stable set is 2 shared dispatch defs plus the per-effort Claude ladder.
 const STABLE_EXECUTORS = [
+  'sidequest-diagnostic-probe.md',
   'sidequest-exec-dispatch.md',
   'sidequest-exec-dispatch-readonly.md',
   ...EFFORTS.flatMap((effort) => [
@@ -453,13 +454,22 @@ test('executor descriptions pass dispatch payloads without Agent model overrides
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
 
-  for (const file of STABLE_EXECUTORS) {
+  for (const file of STABLE_EXECUTORS.filter((file) => file !== 'sidequest-diagnostic-probe.md')) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
     assert.match(body, /^description: Sidequest ticket executor\.$/m);
     assert.match(body, /Live task label:.*prepared `spawn\.description` is the label Claude Code shows for this run\./);
     assert.match(body, /Pass it through byte-for-byte; never substitute the route marker or prompt text\./);
     assert.doesNotMatch(body, /tickets' model|unique --by id|task\(s\)/);
   }
+});
+
+test('diagnostic probe definition has only read-only tools and a bounded lifetime', () => {
+  const source = agentsync.renderDiagnosticProbe();
+  const frontmatter = parseExecutorFrontmatter(source);
+  assert.deepStrictEqual(frontmatter.tools, ['Read', 'Glob', 'Grep']);
+  assert.deepStrictEqual(frontmatter.maxTurns, ['3']);
+  assert.equal(Object.hasOwn(frontmatter, 'disallowedTools'), false);
+  assert.match(source, /Diagnose only the Agent spawn path/);
 });
 
 test('sync writes the complete stable executor ladder with the smallest valid taxonomy', () => {
@@ -472,7 +482,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
   try {
     assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
     const result = agentsync.syncExecAgents(null, { dir });
-    assert.equal(result.written, 12);
+    assert.equal(result.written, 13);
     assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
     // One collapsed dispatch definition keeps a safe frontmatter effort for internal non-marker calls.
     const dispatch = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
@@ -480,7 +490,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
     assert.match(dispatch, /^effort: high$/m);
     assert.match(dispatch, /\[sidequest-route model=\.\.\. effort=\.\.\.\]/);
     assert.doesNotMatch(dispatch, new RegExp('\\[switch' + 'board-route'));
-    for (const file of STABLE_EXECUTORS) {
+    for (const file of STABLE_EXECUTORS.filter((file) => file !== 'sidequest-diagnostic-probe.md')) {
       const body = fs.readFileSync(path.join(dir, file), 'utf8');
       assert.equal(Object.hasOwn(parseExecutorFrontmatter(body), 'maxTurns'), false, `${file} must be uncapped`);
     }
@@ -535,7 +545,7 @@ test('no executor definition emits a tools allow-list', () => {
   const dir = tmpDir();
   agentsync.syncExecAgents(null, { dir });
 
-  const definitions = fs.readdirSync(dir).filter((file: string) => file.endsWith('.md'));
+  const definitions = fs.readdirSync(dir).filter((file: string) => file.endsWith('.md') && file !== 'sidequest-diagnostic-probe.md');
   assert.ok(definitions.length >= 12, `expected the full executor ladder, got ${definitions.length}`);
   for (const file of definitions) {
     const body = fs.readFileSync(path.join(dir, file), 'utf8');
@@ -647,7 +657,7 @@ test('sync writes route-independent generated executors', () => {
   configure(store, 'sync-terra', { model: TERRA.slug, effort: 'high' }, { model: 'opus', effort: 'high' });
   const dir = tmpDir();
   const result = agentsync.syncExecAgents(null, { dir });
-  assert.equal(result.written, 12);
+  assert.equal(result.written, 13);
   assert.deepStrictEqual(readDir(dir), STABLE_EXECUTORS);
   const body = fs.readFileSync(path.join(dir, 'sidequest-exec-dispatch.md'), 'utf8');
   assert.match(body, /^model: claude-codex-auto$/m);
@@ -691,7 +701,7 @@ test('unchanged install hash skips the full executor ladder comparison', () => {
   const dir = tmpDir();
   const first = agentsync.syncExecAgentsIfChanged(null, { dir });
   assert.equal(first.skipped, false);
-  assert.equal(first.written, 12);
+  assert.equal(first.written, 13);
   const second = agentsync.syncExecAgentsIfChanged(null, { dir });
   assert.deepStrictEqual(second, {
     written: 0,
@@ -1243,7 +1253,7 @@ test('every executor name syncExecAgents writes classifies to a stable kind', ()
   for (const name of names) {
     const { kind } = classify(name);
     assert.ok(
-      ['codex_dispatch', 'claude_builtin', 'read_only_codex_dispatch', 'read_only_claude_builtin'].includes(kind),
+      ['codex_dispatch', 'claude_builtin', 'read_only_codex_dispatch', 'read_only_claude_builtin', 'unknown'].includes(kind),
       `${name} did not classify to a stable kind (got ${kind})`,
     );
   }

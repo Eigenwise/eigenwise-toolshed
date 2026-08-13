@@ -439,6 +439,27 @@ test('pre-tool hook: native Explore and approved harness utilities pass through 
   }
 });
 
+test('pre-tool hook: a bounded read-only diagnostic probe may self-test dispatch', () => {
+  const probe = {
+    subagent_type: 'sidequest-diagnostic-probe',
+    description: 'Sidequest dispatch self-test.',
+    prompt: 'Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool.',
+  };
+  const out = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input: probe });
+  assert.equal(out.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+
+  for (const tool_input of [
+    { ...probe, prompt: 'Implement the new flow.' },
+    { ...probe, isolation: 'worktree' },
+    { ...probe, model: 'sonnet' },
+  ]) {
+    const denied = runHookOutput(FORCE_BYPASS, { tool_name: 'Agent', tool_input });
+    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /reserved for a foreground dispatch self-test/);
+  }
+});
+
 test('pre-tool hook: arbitrary implementation agents are denied and directed to ticketed routes', () => {
   for (const [subagent_type, prompt] of [
     ['web-researcher', 'Research the latest routing guidance.'],
@@ -452,7 +473,8 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
     assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
     assert.match(reason, /Read, Glob, Grep, or WebFetch inline, not WebSearch/);
-    assert.match(reason, /WebSearch is executor-only: file and dispatch a research ticket/);
+    assert.match(reason, /sidequest-diagnostic-probe only: read-only, three turns, foreground, no refs or isolation/);
+    assert.match(reason, /WebSearch is executor-only: file and dispatch a research ticket once dispatch works/);
     assert.match(reason, /quick investigation, needs a ticket: file a spike/);
     assert.match(reason, /codebase-exploration/);
     assert.match(reason, /route it, dispatch it, then spawn the returned executor/);

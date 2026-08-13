@@ -7,6 +7,7 @@ export const READ_ONLY_CLAUDE_PREFIX = 'sidequest-exec-readonly-';
 export const READ_ONLY_DISPATCH_PREFIX = 'sidequest-exec-dispatch-readonly-';
 export const TICKET_PREFIX = 'sidequest-sq-';
 export const LEGACY_TICKET_PREFIX = 'sidequest-ticket-';
+export const DIAGNOSTIC_PROBE_NAME = 'sidequest-diagnostic-probe';
 
 export type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'ticket' | 'legacy_ticket' | 'unknown';
 export interface ExecutorClassification {
@@ -114,6 +115,7 @@ export function classify(name: unknown): ExecutorClassification {
   // DISPATCH_PREFIX ('...dispatch-readonly' starts with '...dispatch-').
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: 'read_only_codex_dispatch', effort: null };
   if (name === DISPATCH_NAME) return { kind: 'codex_dispatch', effort: null };
+  if (name === DIAGNOSTIC_PROBE_NAME) return { kind: 'unknown', effort: null };
 
   // Pre-collapse records still name per-effort executors; classifying them keeps old
   // dispatch records readable so the board can heal by redispatch instead of erroring.

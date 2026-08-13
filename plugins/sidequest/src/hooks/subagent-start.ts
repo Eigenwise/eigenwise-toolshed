@@ -2,6 +2,7 @@
 import { readStdin, stringField } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
+import { DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
 import { diagnosticWorktreeWarning } from './diagnostic-worktree-warning.js';
 
 type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
@@ -19,6 +20,7 @@ function fallbackClassify(type: string): ExecutorClassification {
   if (dispatch) return { kind: 'codex_dispatch', effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
   if (builtin) return { kind: 'claude_builtin', effort: builtin[1] || null };
+  if (type === DIAGNOSTIC_PROBE_NAME) return { kind: 'unknown', effort: null };
   if (/^sidequest-ticket-/.test(type)) return { kind: 'legacy_ticket', effort: null };
   if (/^sidequest-(?:sq-|exec-)/.test(type)) return { kind: 'ticket', effort: null };
   return { kind: 'unknown', effort: null };
@@ -39,7 +41,9 @@ function main(): void {
   const executor = stringField(data, 'agent_type', 'agentType', 'subagent_type');
   const agentId = stringField(data, 'agent_id', 'agentId');
   const agentName = stringField(data, 'agent_name', 'agentName', 'name');
-  if (!sessionId || !executor || (!agentId && !agentName) || classifyExecutor(executor).kind === 'unknown') return;
+  if (!sessionId || !executor || (!agentId && !agentName)) return;
+  const classification = classifyExecutor(executor);
+  if (classification.kind === 'unknown') return;
   try {
     const store = require(runtimeModule('store')) as {
       bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null) => unknown;
