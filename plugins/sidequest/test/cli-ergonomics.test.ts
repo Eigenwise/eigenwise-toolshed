@@ -104,3 +104,29 @@ test('CLI add and update combine repeated and comma-separated scope flags', () =
   assert.equal(updated.status, 0, updated.stderr);
   assert.deepEqual(JSON.parse(updated.stdout).ticket.files, ['plugins/d.ts', 'plugins/e.ts', 'plugins/f.ts']);
 });
+
+test('CLI reads add and update descriptions from --body-file', () => {
+  const env = isolatedEnv();
+  const bodyPath = path.join(env.CLAUDE_PROJECT_DIR!, 'ticket-body.md');
+  fs.writeFileSync(bodyPath, '# Filed from a body file\n\nThe complete description.\n');
+
+  const added = run(['add', '--title', 'body file ticket', '--unclassified', '--body-file', bodyPath, '--json'], env);
+  assert.equal(added.status, 0, added.stderr);
+  assert.equal(JSON.parse(added.stdout).ticket.description, '# Filed from a body file\n\nThe complete description.');
+
+  fs.writeFileSync(bodyPath, 'Replacement description.\n');
+  const updated = run(['update', 'SQ-1', '--body-file', bodyPath, '--json'], env);
+  assert.equal(updated.status, 0, updated.stderr);
+  assert.equal(JSON.parse(updated.stdout).ticket.description, 'Replacement description.');
+});
+
+test('CLI refuses unknown and misapplied flags', () => {
+  const env = isolatedEnv();
+  const unknown = run(['add', '--title', 'unknown flag', '--unclassified', '--mistyped', 'value'], env);
+  assert.equal(unknown.status, 1);
+  assert.match(unknown.stderr, /add: unknown or unsupported flag --mistyped/);
+
+  const misapplied = run(['list', '--body-file', 'description.md'], env);
+  assert.equal(misapplied.status, 1);
+  assert.match(misapplied.stderr, /list: unknown or unsupported flag --body-file/);
+});

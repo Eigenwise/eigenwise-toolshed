@@ -11,6 +11,77 @@ const { cmdStory } = require('./sidequest-cmd-story');
 
 const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes']);
 const ARRAY_FLAG_ALIASES: Record<string, string> = { files: 'file', labels: 'label' };
+const BOOLEAN_FLAGS = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure', 'allow-unscoped']);
+const COMMON_FLAGS = new Set(['help', 'json', 'project', 'source']);
+const COMMAND_FLAGS: Record<string, string[]> = {
+  add: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'unclassified', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'dry-run', 'name'],
+  list: ['status', 'archived', 'brief', 'limit', 'cursor', 'all'],
+  pulse: [],
+  changes: ['since'],
+  update: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'by'],
+  rm: ['force'],
+  profile: ['retired', 'name', 'title', 'description', 'desc', 'from', 'project', 'profile', 'from-project', 'by', 'dry-run'],
+  category: ['profile', 'route-model', 'route-effort', 'fallback-model', 'fallback-effort', 'no-fallback', 'name', 'title', 'description', 'desc', 'contract', 'artifact-roots', 'readonly', 'enabled', 'disabled'],
+  'global-fallback': ['model', 'effort'],
+  claim: ['by', 'token-file', 'token', 'effort', 'executor', 'force', 'direct', 'reason', 'session'],
+  checkpoint: ['by', 'commit', 'worktree', 'verify', 'ttl-minutes'],
+  claims: ['sweep'],
+  worktrees: ['dry-run', 'yes', 'min-age-hours'],
+  'recover-shared': ['project', 'stash', 'yes'],
+  next: ['by', 'priority', 'model', 'category', 'direct', 'reason'],
+  reconcile: ['session', 'reason', 'ref'],
+  work: ['ref'],
+  drain: ['ref'],
+  'groom-close': ['by', 'reason', 'integration', 'override-legacy-scope'],
+  verdict: ['text', 'outcome', 'why', 'constraint'],
+  release: ['by', 'reason', 'oracle', 'release-kind', 'command', 'exit-code', 'output-tail', 'candidate', 'deliverable', 'force', 'status'],
+  'scope-request': ['by', 'file', 'force'],
+  commit: ['by', 'message'],
+  rework: ['by', 'review', 'reason'],
+  integrate: ['by', 'mode', 'skip-verify', 'override-legacy-scope'],
+  publish: ['repo', 'steal', 'force'],
+  assign: ['to', 'by'],
+  unassign: [],
+  remind: ['in', 'at'],
+  unremind: [],
+  done: ['by', 'model', 'effort', 'body', 'body-file', 'force'],
+  submit: ['by', 'commit', 'base', 'gitref', 'git-ref', 'verify', 'worktree', 'body', 'body-file', 'force', 'clear', 'status'],
+  comment: ['by', 'body', 'body-file', 'message'],
+  comments: ['full'],
+  link: ['ref', 'type', 'target'],
+  unlink: [],
+  ready: ['model', 'category', 'brief'],
+  archive: ['done'],
+  unarchive: [],
+  dispatch: ['shared-tree', 'allow-repeat-failure', 'allow-unscoped', 'session', 'unverified-transport', 'recovery-evidence'],
+  briefing: ['token-file', 'token'],
+  temp: ['root'],
+  'cleanup-temp': ['root'],
+  'native-agent': ['prompt', 'shared-tree', 'unverified-transport', 'session', 'dir', 'name'],
+  models: ['full'],
+  route: ['ticket'],
+  'board-config': ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'delivery', 'integration-verify-timeout-ms', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'],
+  projects: ['archived'],
+  routing: ['enabled', 'disabled'],
+  'archive-board': [],
+  'unarchive-board': [],
+  merge: ['dry-run'],
+  story: ['title', 'desc', 'description', 'color', 'body', 'body-file', 'ref', 'by', 'rotate', 'full'],
+  dashboard: ['port', 'open'],
+  serve: ['port'],
+  stop: [],
+};
+const COMMAND_ALIASES: Record<string, string> = { new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm', complete: 'done', finish: 'done', open: 'dashboard', board: 'dashboard' };
+
+function assertCommandFlags(command: any, opts: any) {
+  const canonical = COMMAND_ALIASES[command] || command;
+  const allowed = COMMAND_FLAGS[canonical];
+  if (!allowed) return;
+  const accepted = new Set([...COMMON_FLAGS, ...allowed]);
+  for (const key of Object.keys(opts)) {
+    if (!accepted.has(key)) fail(`${canonical}: unknown or unsupported flag --${key}`);
+  }
+}
 const ALIASES: any = {
   t: 'title',
   d: 'desc',
@@ -57,9 +128,8 @@ function parseArgs(argv: any) {
         continue;
       }
       // Boolean-ish flags don't consume a value.
-      const BOOL = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'override-legacy-scope', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure', 'allow-unscoped']);
       if (val === null) {
-        if (BOOL.has(key)) {
+        if (BOOLEAN_FLAGS.has(key)) {
           opts[key] = true;
           continue;
         }
@@ -83,11 +153,11 @@ function parseArgs(argv: any) {
 
 
 const HELP_COMMANDS: any = {
-  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]   (--file declares write scope; a write ticket without it is refused at dispatch)',
+  add: 'sidequest add -t "title" (--category <id> | --complexity 1-10 --why "motivation" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc|--body-file path] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done] [--dry-run] [--json]   (--file declares write scope; a write ticket without it is refused at dispatch)',
   list: 'sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  update: 'sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
+  update: 'sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]',
@@ -161,12 +231,12 @@ function help() {
     `sidequest — a Trello-light quest log for Claude Code
 
 Usage:
-  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done]
+  sidequest add -t "title" (--category <id> | --complexity 1-10 --why "<motivation>" | --unclassified) [--file <path>]... [--route-model <model> --route-effort <effort>] [-d desc|--body-file path] [-p low|normal|high|urgent] [--high-stakes] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver] [--readonly true|false] [-i image]... [-s todo|doing|done]
       --file declares the write scope. A write-capable ticket with no --file is refused at dispatch, because it can never win a scope request.
   sidequest list [--status todo|doing|awaiting-oracle|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest update <id|SQ-n> [-t title] [-d desc] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
+  sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
   sidequest global-fallback [--model <model> --effort <effort>] [--json]
@@ -321,6 +391,7 @@ async function main() {
     if (!commandHelp(cmd)) help();
     return;
   }
+  assertCommandFlags(cmd, opts);
 
   switch (cmd) {
     case 'add':

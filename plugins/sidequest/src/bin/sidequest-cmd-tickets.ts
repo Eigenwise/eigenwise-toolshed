@@ -13,7 +13,7 @@ const execNames = require('../lib/exec-names');
 const { claimRefusalMessage } = require('../lib/refusal-guidance');
 const { assertSidequestInstall, assertDispatchTransport } = require('../lib/dispatch-preflight');
 
-const { fail, resolveProject } = require('./sidequest-cmd-shared');
+const { bodyFromOpts, fail, resolveProject } = require('./sidequest-cmd-shared');
 const PRIORITY_MARK: any = { urgent: '!!', high: '!', normal: '', low: '·' };
 
 // The human CLI mark names the task's neutral profile and the exact runtime
@@ -125,13 +125,18 @@ function ticketRouteFromOpts(opts: any, allowClear = false) {
   return route;
 }
 
-function addPreview(opts: any, category: any, complexity: any) {
+async function ticketDescriptionFromOpts(opts: any, command: any) {
+  return bodyFromOpts(Object.assign({}, opts, { body: opts.body ?? opts.desc ?? opts.description }), command);
+}
+
+async function addPreview(opts: any, category: any, complexity: any) {
+  const description = await ticketDescriptionFromOpts(opts, 'add');
   const priority = store.VALID_PRIORITY.includes(String(opts.priority || '').toLowerCase())
     ? String(opts.priority).toLowerCase()
     : 'normal';
   return {
     title: String(opts.title).trim().slice(0, 300) || 'Untitled',
-    description: String(opts.desc || opts.description || '').trim(),
+    description: String(description ?? opts.desc ?? opts.description ?? opts.body ?? '').trim(),
     status: String(opts.status || 'todo').toLowerCase(),
     priority,
     highStakes: highStakesFromOpts(opts) || false,
@@ -158,7 +163,7 @@ async function cmdAdd(opts: any) {
   if (opts.priority === 'medium') opts.priority = 'normal';
   const input = validatedAddInput(opts);
   if (opts['dry-run']) {
-    const ticket = addPreview(opts, input.category, input.complexity);
+    const ticket = await addPreview(opts, input.category, input.complexity);
     if (opts.json) {
       process.stdout.write(JSON.stringify({ ok: true, dryRun: true, ticket }, null, 2) + '\n');
       return;
@@ -168,12 +173,13 @@ async function cmdAdd(opts: any) {
     return;
   }
   const { slug, meta } = await resolveProject(opts);
+  const description = await ticketDescriptionFromOpts(opts, 'add');
   const category = input.category == null ? null : categoryIdOrFail(slug, input.category);
   const route = ticketRouteFromOpts(opts);
   const warnings: any = [];
   const created = store.createTicket(slug, {
     title: opts.title,
-    description: opts.desc || opts.description || '',
+    description: description ?? opts.desc ?? opts.description ?? '',
     priority: opts.priority,
     status: opts.status,
     highStakes: highStakesFromOpts(opts),
@@ -288,9 +294,10 @@ async function cmdUpdate(opts: any, positional: any) {
   guardDirectRouting(opts); // --model/--effort are no longer accepted; route via --complexity
   const { slug, meta } = await resolveProject(opts);
   const current = store.getTicket(slug, idOrRef);
+  const description = await ticketDescriptionFromOpts(opts, 'update');
   const patch: any = {};
   if (opts.title != null) patch.title = opts.title;
-  if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
+  if (description != null || opts.desc != null || opts.description != null) patch.description = description ?? (opts.desc != null ? opts.desc : opts.description);
   if (opts.status != null) patch.status = opts.status;
   if (opts.priority != null) patch.priority = opts.priority === 'medium' ? 'normal' : opts.priority;
   if (opts['high-stakes'] !== undefined) patch.highStakes = highStakesFromOpts(opts);
