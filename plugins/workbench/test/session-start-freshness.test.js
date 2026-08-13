@@ -86,6 +86,26 @@ test('keeps other projects out of the SessionStart health context', () => {
   assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
+test('reports stale Sidequest worktree processes but ignores live worktrees', () => {
+  const project = 'C:/work/current';
+  const stalePath = 'C:\\sidequest\\worktrees\\current-3e4fa2ae\\agent-stale';
+  const livePath = 'C:\\sidequest\\worktrees\\current-3e4fa2ae\\agent-live';
+  const result = audit(fixture({
+    currentProject: project,
+    platform: 'win32',
+    sidequestHome: 'C:/sidequest',
+    listProcesses: () => [
+      { pid: 101, startTime: '2026-08-13T09:00:00Z', command: `node "${stalePath}\\gate.js"` },
+      { pid: 102, startTime: '2026-08-13T09:01:00Z', command: `node "${livePath}\\server.js"` },
+    ],
+    existsSync: (pathname) => pathname !== stalePath,
+  }));
+
+  assert.deepEqual(result.staleProcesses, [
+    { pid: 101, startTime: '2026-08-13T09:00:00Z', stalePath },
+  ]);
+});
+
 test('reports freshness problems for the current project', () => {
   const result = audit(fixture({
     currentProject: 'C:/work/one',

@@ -17,8 +17,10 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/update-toolshed.js" --check
 Then run the same read-only session health audit used at startup:
 
 ```sh
-node -e "const { audit } = require(process.env.CLAUDE_PLUGIN_ROOT + '/hooks/session-start-freshness.js'); const result = audit(); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings }, null, 2));"
+node -e "const { audit } = require(process.env.CLAUDE_PLUGIN_ROOT + '/hooks/session-start-freshness.js'); const result = audit({ currentProject: process.cwd() }); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings, staleProcesses: result.staleProcesses }, null, 2));"
 ```
+
+When `staleProcesses` has rows, report each PID, start time, and stale worktree path. They are read-only findings: do not kill any process from the doctor.
 
 ## Observability, when that plugin is installed
 
