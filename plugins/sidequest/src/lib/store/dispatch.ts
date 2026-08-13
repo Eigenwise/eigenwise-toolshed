@@ -1307,6 +1307,7 @@ function dispatchIsolationExpectation(identity?: any) {
         sharedTree: state.sharedTree !== false,
         terminal: terminalWithoutClaim,
         agentId: state.agentId ? String(state.agentId) : null,
+        worktree: state.worktree ? String(state.worktree) : null,
       };
       if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
       else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor) {
@@ -1325,10 +1326,13 @@ function dispatchIsolationExpectation(identity?: any) {
     terminal: matched.some((candidate) => candidate.terminal),
     matchedBy: byAgent.length ? 'agent' : 'session',
     expectedWorktree: agentId && expectation.projectPath
-      ? resolvedAgentWorktree(expectation.projectPath, agentId)
+      ? expectation.worktree || resolvedAgentWorktree(expectation.projectPath, agentId)
       : null,
     expectedWorktrees: agentId && expectation.projectPath
-      ? agentWorktreeCandidates(expectation.projectPath, agentId)
+      ? Array.from(new Set([
+        ...(expectation.worktree ? [expectation.worktree] : []),
+        ...agentWorktreeCandidates(expectation.projectPath, agentId),
+      ]))
       : [],
   };
 }
