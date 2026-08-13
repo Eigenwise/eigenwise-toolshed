@@ -1378,12 +1378,22 @@ test('dispatch keeps freshness silent with an isolated matching install', async 
   }
 });
 
-test('dispatch refuses external output at declaration time', async () => {
+test('read-only external output is accepted while repository-category output is refused', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-dispatch-external-')).slug;
   const scope = path.join(os.tmpdir(), `sq-mcp-dispatch-audition-${process.pid}.html`).replace(/\\/g, '/');
-  const refused = await callToolRaw('add', {
+  const allowed = await callTool('add', {
     project,
     title: 'external dispatch output',
+    description: DISPATCH_DESCRIPTION,
+    category: 'codebase-exploration',
+    files: [scope],
+  });
+  const prepared = store.prepareDispatch(project, allowed.ref, { sharedTree: false });
+  assert.equal(prepared.ticket.dispatch.nonRepoOutput, true);
+
+  const refused = await callToolRaw('add', {
+    project,
+    title: 'repository external dispatch output',
     description: DISPATCH_DESCRIPTION,
     category: 'general',
     files: [scope],

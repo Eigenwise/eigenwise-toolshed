@@ -5,7 +5,7 @@ function createTickets(dependencies: any) {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
     database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, effectiveScope, execFileSync, executorText, fs,
-    getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
+    getCategory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
     ticketLockPath, ticketStoryId, touchClaimActivity, upperRef, withTicketLock,
@@ -76,7 +76,11 @@ function createTicket(slug?: any, fields?: any) {
     route: normalizedTicketRoute(fields.route),
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
     complexityWhy: String(fields.complexityWhy || '').trim().slice(0, 1000), // the mandatory motivation for the score
-    files: boundedFiles(fields.files),          // declared file scope, for parallel-wave planning
+    files: boundedFiles(fields.files, {
+      category: fields.category,
+      readonlyOverride: requestedReadonlyOverride(fields),
+      slug,
+    }),          // declared file scope, for parallel-wave planning
     contracts: boundedContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
@@ -177,7 +181,12 @@ function boundedList(values?: any, max?: any, label?: any, guidance?: any) {
   return values;
 }
 
-function boundedFiles(files?: any) {
+function externalOutputAllowed(context?: any) {
+  if (typeof context?.readonlyOverride === 'boolean') return context.readonlyOverride;
+  return getCategory(context?.category, { project: context?.slug })?.readonly === true;
+}
+
+function boundedFiles(files?: any, context?: any) {
   const declaredFiles = boundedList(
     normalizeFiles(files),
     DECLARED_FILES_MAX,
@@ -185,7 +194,7 @@ function boundedFiles(files?: any) {
     'Re-scope with directory entries: a declared directory covers every path under it (e.g. plugins/sidequest/test instead of each test file).',
   );
   const outside = commitScope.validateRelativeScopes(declaredFiles).outside;
-  if (outside.length) {
+  if (outside.length && !externalOutputAllowed(context)) {
     throw new Error(`declared file scope contains paths outside the repo worktree: ${outside.join(', ')}. For genuine non-repo output, classify as non-repo/artifact work; otherwise declare in-repo paths.`);
   }
   return declaredFiles;
@@ -767,10 +776,10 @@ function sameFiles(left?: any, right?: any) {
     && normalizedLeft.every((file: any) => rightFiles.has(file.toLowerCase()));
 }
 
-function activeClaimScopeRefusal(ticket?: any, files?: any, patch?: any) {
+function activeClaimScopeRefusal(slug?: any, ticket?: any, files?: any, patch?: any) {
   if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
   const current = normalizeFiles(ticket.files);
-  const next = boundedFiles(files);
+  const next = boundedFiles(files, { category: ticket.category, readonlyOverride: ticket.readonlyOverride, slug });
   if (sameFiles(current, next)) return null;
   const caller = String(patch?.by || '').trim();
   if (caller && caller !== ticket.claim.by) return null;
@@ -822,14 +831,23 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) {
-      const scopeRefusal = activeClaimScopeRefusal(t, patch.files, patch);
+      const scopeRefusal = activeClaimScopeRefusal(slug, t, patch.files, patch);
       if (scopeRefusal) throw new Error(scopeRefusal);
-      t.files = boundedFiles(patch.files);
+      t.files = boundedFiles(patch.files, {
+        category: patch.category === undefined ? t.category : patch.category,
+        readonlyOverride: patch.readonly === undefined && patch.readonlyOverride === undefined
+          ? t.readonlyOverride
+          : requestedReadonlyOverride(patch),
+        slug,
+      });
       syncLiveDispatchScope(slug, t);
     }
     if (patch.contracts !== undefined) t.contracts = boundedContracts(patch.contracts);
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
+    if (patch.category !== undefined || patch.readonly !== undefined || patch.readonlyOverride !== undefined) {
+      t.files = boundedFiles(t.files, { category: t.category, readonlyOverride: t.readonlyOverride, slug });
+    }
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
     const nextVerifyKind = patch.executorVerifyKind === undefined ? t.executorVerifyKind : patch.executorVerifyKind;
     const nextAttestationArtifact = patch.executorAttestationArtifact === undefined ? t.executorAttestationArtifact : patch.executorAttestationArtifact;
