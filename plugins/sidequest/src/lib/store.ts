@@ -35,7 +35,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
-const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree } = require('./worktrees.js');
+const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require('./worktrees.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
@@ -418,6 +418,7 @@ const {
   agentWorktreePath,
   agentWorktreeCandidates,
   resolvedAgentWorktree,
+  reclaimUnclaimedDispatchWorktree,
   legacyCategoryForComplexity: (...args: any[]) => legacyCategoryForComplexity(...args),
   listProjects,
   listTickets,

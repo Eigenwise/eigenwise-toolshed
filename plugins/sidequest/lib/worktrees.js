@@ -833,6 +833,38 @@ async function removeCandidate(repo, entry) {
   const extended = await remove(extendedWindowsPath(entry.path));
   return extended.ok ? extended : { ok: false, stderr: `${first.stderr}; extended-path retry: ${extended.stderr}` };
 }
+function reclaimUnclaimedDispatchWorktree(repository, dispatch) {
+  const worktree = String(dispatch?.worktree || "").trim();
+  if (dispatch?.sharedTree !== false || dispatch?.claimedAt || !worktree) return null;
+  const expected = canonicalPath(worktree);
+  const entries = parseWorktreeList(execFileSync("git", ["worktree", "list", "--porcelain"], {
+    cwd: repository,
+    encoding: "utf8",
+    windowsHide: true
+  }));
+  const entry = entries.find((candidate) => canonicalPath(candidate.worktree) === expected);
+  if (!entry) return { worktree, reclaimed: false, reason: "not_registered" };
+  const dirty = execFileSync("git", ["status", "--porcelain"], {
+    cwd: entry.worktree,
+    encoding: "utf8",
+    windowsHide: true
+  }).trim();
+  if (dirty) throw new Error(`never-claimed dispatch worktree ${entry.worktree} has uncommitted changes and cannot be reclaimed.`);
+  const baseCommit = String(dispatch.baseCommit || "").trim();
+  if (baseCommit) {
+    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: entry.worktree,
+      encoding: "utf8",
+      windowsHide: true
+    }).trim();
+    if (head !== baseCommit) throw new Error(`never-claimed dispatch worktree ${entry.worktree} advanced beyond its dispatch base and cannot be reclaimed.`);
+  }
+  execFileSync("git", ["worktree", "remove", entry.worktree], { cwd: repository, windowsHide: true });
+  execFileSync("git", ["worktree", "prune"], { cwd: repository, windowsHide: true });
+  const branch = localBranchName(entry.branch);
+  if (branch) execFileSync("git", ["branch", "-D", "--", branch], { cwd: repository, windowsHide: true });
+  return { worktree: entry.worktree, branch, reclaimed: true };
+}
 async function sweep(repo, tickets, options = {}) {
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0 ? Number(options.minAgeMs) : DEFAULT_MIN_AGE_MS;
   const notIntegratedSalvageAgeMs = Number.isFinite(Number(options.notIntegratedSalvageAgeMs)) && Number(options.notIntegratedSalvageAgeMs) >= 0 ? Number(options.notIntegratedSalvageAgeMs) : DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS;
@@ -969,4 +1001,4 @@ async function sweep(repo, tickets, options = {}) {
     failures
   };
 }
-module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, sweep };
+module.exports = { DEFAULT_MIN_AGE_MS, DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, gitBashPath, canonicalPath, worktreeRoot, legacyWorktreeRoot, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, namedWorktreePath, agentWorktreeRoots, parseWorktreeList, isAgentWorktree, ignoredPathsMissingFromWorktree, provisionWorktree, preferredWorktreeIntegrationTarget, classifyWorktree, advanceIntegrationBranch, reclaimUnclaimedDispatchWorktree, sweep };
