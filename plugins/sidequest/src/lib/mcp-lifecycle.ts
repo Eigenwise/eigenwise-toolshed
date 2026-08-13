@@ -97,16 +97,11 @@ function marketplacePlugins(repoPath: string): ShippedPlugin[] {
 }
 
 function missingReleaseFragment(repoPath: string, ref: string, changedPaths: string[]) {
-  const plugins = marketplacePlugins(repoPath).filter((plugin) => changedPaths.some((changedPath) => changedPath === plugin.source || changedPath.startsWith(`${plugin.source}/`)));
-  if (!plugins.length) return null;
-  const fragmentPath = `.release/unreleased/${ref}.md`;
-  return changedPaths.includes(fragmentPath) && fs.existsSync(path.join(repoPath, fragmentPath))
-    ? null
-    : { fragmentPath, plugins };
+  return store.missingReleaseFragment(repoPath, ref, changedPaths);
 }
 
 function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugins: ShippedPlugin[]): string {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
+  return store.missingReleaseFragmentMessage(ref, fragmentPath, plugins);
 }
 
 function combinedRefusal(ticket: any, failures: Array<{ reason: string; message: string }>) {
