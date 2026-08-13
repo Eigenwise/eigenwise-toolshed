@@ -903,8 +903,14 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
     const currentRoute = activeDispatchRoute(t);
     const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
-    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor
-      && currentExec && stableExecutorName(t) === t.dispatchExecutor) {
+    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor && currentExec) {
+      const currentExecutor = stableExecutorName(t);
+      if (t.dispatchExecutor !== currentExecutor) {
+        const at = new Date().toISOString();
+        current.healedExecutorName = { oldName: t.dispatchExecutor, newName: currentExecutor, at };
+        current.executor = currentExecutor;
+        t.dispatchExecutor = currentExecutor;
+      }
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       // A record prepared before launch naming existed still has to hand back a
       // usable name, and reusing it must not renumber the sequence.
