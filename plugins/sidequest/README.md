@@ -57,7 +57,7 @@ Tell Claude the symptom:
 
 > A submitted ticket is waiting. Check it and finish the integration if it is safe.
 
-Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection.
+Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection. A session loaded with Sidequest 4.48.1 or newer can finish compatible dispatches across a newer installed version, but it reports the skew and still requires a reload before schema-incompatible work.
 
 ## License
 

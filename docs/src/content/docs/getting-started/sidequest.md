@@ -58,7 +58,7 @@ For substantial changes, Claude can turn the request into a story with linked ti
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.
 
-**Claude cannot use Sidequest after an install or upgrade.** Start a new Claude Code session or reload plugins. An already-open session may still have the previous plugin connection.
+**Claude reports an older loaded Sidequest after an upgrade.** Reload plugins or start a new session to pick up the current connection. Sidequest 4.48.1 and newer can finish compatible dispatches across that version skew, and Claude reports it instead of stopping the current release session. Unknown versions, schema changes, and older loaded versions still refuse dispatch until reload.
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.
 
