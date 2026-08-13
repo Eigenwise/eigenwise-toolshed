@@ -323,6 +323,63 @@ test('pre-tool hook: a spawn prompt naming another ticket still records its laun
   assert.ok(launched.dispatch?.launchedAt, 'the launch must be recorded even when the prompt names other tickets');
 });
 
+test('pre-tool hook: a groomClosed executor is denied every later tool call', () => {
+  const ticket = addStopTicket('terminal executor stops after grooming');
+  const stop = claimStopTicket(ticket, `groom-closed-${++sqSeq}`, 'groomed-worker');
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'groomed-worker', {
+    status: 'todo',
+  }).ok, true);
+  assert.equal(store.closeTicketForGrooming(slug, ticket.ref, {
+    by: 'orchestrator',
+    reason: 'The work was delivered outside the executor.',
+  }).ok, true);
+
+  const payload = {
+    session_id: stop.session_id,
+    agent_type: stop.agent_type,
+    agent_id: stop.agent_id,
+    cwd: BOARD_PATH,
+    tool_input: { command: 'git status --short' },
+  };
+  for (const tool_name of ['Bash', 'mcp__plugin_sidequest_board__comment']) {
+    const blocked = runHookOutput(FORCE_BYPASS, { ...payload, tool_name });
+    assert.equal(blocked.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(blocked.hookSpecificOutput.permissionDecisionReason, new RegExp(ticket.ref));
+    assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /groomClosed by orchestrator/);
+    assert.match(blocked.hookSpecificOutput.permissionDecisionReason, /End this turn now without further calls/);
+  }
+});
+
+test('pre-tool hook: terminal guard leaves live and submitted executors alone', () => {
+  const live = addStopTicket('live executor remains allowed');
+  const liveStop = claimStopTicket(live, `terminal-live-${++sqSeq}`, 'live-worker');
+  const liveResult = runHookOutput(FORCE_BYPASS, {
+    session_id: liveStop.session_id,
+    agent_type: liveStop.agent_type,
+    agent_id: liveStop.agent_id,
+    tool_name: 'Bash',
+    tool_input: { command: 'git status --short' },
+  });
+  assert.equal(liveResult, null);
+
+  const submitted = addStopTicket('submitted executor remains allowed');
+  const submittedStop = claimStopTicket(submitted, `terminal-submitted-${++sqSeq}`, 'submitted-worker');
+  assert.equal(store.submitTicket(slug, submitted.ref, 'submitted-worker', {
+    commit: 'a'.repeat(40),
+    range: {
+      base: 'b'.repeat(40), upstream: 'main', upstreamCommit: 'c'.repeat(40), commits: [], changedPaths: [], noOp: true,
+    },
+  }).ok, true);
+  const submittedResult = runHookOutput(FORCE_BYPASS, {
+    session_id: submittedStop.session_id,
+    agent_type: submittedStop.agent_type,
+    agent_id: submittedStop.agent_id,
+    tool_name: 'Bash',
+    tool_input: { command: 'git status --short' },
+  });
+  assert.equal(submittedResult, null);
+});
+
 test('pre-tool hook: an executor cannot redispatch its own active ticket', () => {
   const ticket = store.createTicket(slug, {
     title: 'own dispatch refusal fixture',

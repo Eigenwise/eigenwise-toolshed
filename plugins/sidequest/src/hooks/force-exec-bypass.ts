@@ -37,7 +37,11 @@ interface Ticket {
   ref?: string;
   title?: string;
   files?: unknown;
+  status?: string;
+  archived?: boolean;
   claim?: { by?: string };
+  completion?: { by?: string; purpose?: string; supersededBy?: { ref?: string } };
+  submission?: { supersededBy?: { ref?: string } };
   exec?: { model?: string };
   dispatchNonce?: string;
   dispatch?: {
@@ -65,6 +69,12 @@ interface PreparedDispatchValidation {
   status: 'none' | 'stale' | 'valid';
   spawn?: PreparedDispatchSpawn;
 }
+interface TerminalExecutorTicket {
+  ref: string;
+  closedBy: string;
+  outcome: string;
+}
+
 interface Store {
   findProject: (project: string) => { ok: boolean; slug?: string };
   getTicket: (slug: string, ref: string) => Ticket | null;
@@ -480,6 +490,43 @@ function activeExecutorTicketRefs(input: HookInput): Set<string> {
   }
 }
 
+function terminalExecutorTicket(input: HookInput): TerminalExecutorTicket | null {
+  const agentId = stringField(input, 'agent_id', 'agentId');
+  const executor = stringField(input, 'agent_type', 'agentType', 'subagent_type');
+  const sessionId = stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
+  if (!agentId || !sessionId || !isCurrentExecutor(classifyExecutor(executor))) return null;
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const matches: TerminalExecutorTicket[] = [];
+    for (const project of store.listProjects({ all: true })) {
+      for (const ticket of store.listTickets(project.slug)) {
+        if (!ticket.ref || ticket.dispatch?.sessionId !== sessionId || !ticket.dispatch?.terminalAt || ticket.claim?.by || !dispatchIdentityMatches(ticket, agentId, executor)) continue;
+        if (ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref) {
+          const by = String(ticket.completion?.by || 'the control plane').trim();
+          matches.push({ ref: ticket.ref, closedBy: `superseded by ${ticket.submission?.supersededBy?.ref || ticket.completion?.supersededBy?.ref} through ${by}`, outcome: 'superseded' });
+        } else if (ticket.status === 'done' || ticket.archived) {
+          const by = String(ticket.completion?.by || 'the control plane').trim();
+          const action = ticket.completion?.purpose === 'grooming' ? 'groomClosed' : 'delivered';
+          matches.push({ ref: ticket.ref, closedBy: `${action} by ${by}`, outcome: ticket.archived ? 'archived' : 'done' });
+        }
+      }
+    }
+    return matches.length === 1 ? matches[0] || null : null;
+  } catch (_) {
+    return null;
+  }
+}
+
+function guardTerminalExecutor(input: HookInput): boolean {
+  const terminal = terminalExecutorTicket(input);
+  if (!terminal) return false;
+  writeDeny(
+    'PreToolUse',
+    `sidequest: ${terminal.ref} is closed (${terminal.outcome}; ${terminal.closedBy}). End this turn now without further calls.`,
+  );
+  return true;
+}
+
 function guardOwnTicketDispatch(input: HookInput): boolean {
   const ref = dispatchAttemptRef(input);
   if (!ref || !activeExecutorTicketRefs(input).has(ref)) return false;
@@ -694,6 +741,7 @@ function main(): void {
   const input = readStdin();
   if (!input) return;
   const toolName = stringField(input, 'tool_name');
+  if (guardTerminalExecutor(input)) return;
   if (guardOwnTicketDispatch(input)) return;
   if (toolName === 'SendMessage') {
     guardLateSteer(input);
