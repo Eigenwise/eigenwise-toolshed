@@ -2478,7 +2478,64 @@ test('MCP scopeRequest keeps declared bundled hook output one-way: the source ne
 
 
 
-test('MCP update lets the claim holder narrow live dispatch scope but refuses combined additions', async () => {
+test('shared-tree live dispatches grow their scope without shedding the submission binding', async () => {
+  const updatedWorktree = createGitWorktree();
+  const updatedProject = store.ensureProject(updatedWorktree).slug;
+  const updatedTicket = store.createTicket(updatedProject, {
+    title: 'shared dispatch control-plane scope refresh', files: ['lib/original.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a live shared dispatch must admit its control-plane-approved scope',
+  });
+  const updatedBy = 'shared-scope-update-worker';
+  claimDispatchedTicket(updatedProject, updatedTicket, updatedBy, true);
+
+  await callTool('update', {
+    project: updatedProject, ref: updatedTicket.ref, by: 'control-plane',
+    files: ['lib/original.js', 'lib/updated.js'],
+  });
+  let updated = store.getTicket(updatedProject, updatedTicket.ref);
+  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', 'lib/updated.js']);
+  fs.mkdirSync(path.join(updatedWorktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(updatedWorktree, 'lib', 'updated.js'), 'updated\n');
+  gitAt(updatedWorktree, ['add', 'lib/updated.js']);
+  const updatedCommit = await callTool('commit', {
+    project: updatedProject, ref: updatedTicket.ref, by: updatedBy,
+    message: 'commit control-plane-approved shared scope', worktree: updatedWorktree,
+  });
+  assert.ok(updatedCommit.commit, 'the normal commit gate admits a live shared dispatch scope update');
+
+  await callTool('update', {
+    project: updatedProject, ref: updatedTicket.ref, by: 'control-plane', files: ['lib/original.js'],
+  });
+  updated = store.getTicket(updatedProject, updatedTicket.ref);
+  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', 'lib/updated.js'], 'shared-tree scope updates retain the submission binding when ticket scope sheds a path');
+
+  const grantedWorktree = createGitWorktree();
+  const grantedProject = store.ensureProject(grantedWorktree).slug;
+  assert.equal(store.setBoardConfig(grantedProject, { autoApproveScope: ['lib/*.js'] }).ok, true);
+  const grantedTicket = store.createTicket(grantedProject, {
+    title: 'shared dispatch granted scope refresh', files: ['lib/original.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'a live shared dispatch must admit its granted scope request',
+  });
+  const grantedBy = 'shared-scope-request-worker';
+  claimDispatchedTicket(grantedProject, grantedTicket, grantedBy, true);
+
+  const granted = await callTool('scopeRequest', {
+    project: grantedProject, ref: grantedTicket.ref, by: grantedBy, files: ['lib/granted.js'],
+  });
+  assert.equal(granted.autoApproved, true);
+  const grantedTicketAfterRequest = store.getTicket(grantedProject, grantedTicket.ref);
+  assert.deepEqual(grantedTicketAfterRequest.dispatch.declaredFiles, ['lib/original.js', 'lib/granted.js']);
+  fs.mkdirSync(path.join(grantedWorktree, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(grantedWorktree, 'lib', 'granted.js'), 'granted\n');
+  gitAt(grantedWorktree, ['add', 'lib/granted.js']);
+  const grantedCommit = await callTool('commit', {
+    project: grantedProject, ref: grantedTicket.ref, by: grantedBy,
+    message: 'commit granted shared scope', worktree: grantedWorktree,
+  });
+  assert.ok(grantedCommit.commit, 'the normal commit gate admits a granted shared dispatch scope');
+});
+
+test('MCP update lets the claim holder narrow isolated live dispatch scope but refuses combined additions', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-scope-shed-')).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP active claim scope shed', files: ['lib/allowed.js', 'screenshots'], complexity: 3,

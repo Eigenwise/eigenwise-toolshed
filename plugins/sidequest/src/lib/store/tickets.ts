@@ -214,7 +214,13 @@ function scopeResolution(slug?: any, ticket?: any, request?: any, state?: any, n
 
 function syncLiveDispatchScope(slug?: any, ticket?: any) {
   const dispatch = dispatchState(ticket);
-  if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = effectiveScope(slug, ticket?.files);
+  if (!dispatch || dispatch.terminalAt) return;
+  const refreshed = effectiveScope(slug, ticket?.files);
+  // A shared-tree dispatch's binding preserves the submit gate after a caller
+  // sheds ticket scope; isolated worktrees may instead shed their private scope.
+  dispatch.declaredFiles = dispatch.sharedTree === false
+    ? refreshed
+    : normalizeFiles([...(Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : []), ...refreshed]);
 }
 
 function scopeExpansionCommand(ticket?: any, additions?: any) {
