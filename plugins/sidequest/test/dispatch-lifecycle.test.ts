@@ -1301,6 +1301,28 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
   }
 });
 
+test('reclaiming an unclaimed isolated dispatch removes its untouched worktree and branch', () => {
+  const ticket = createFixture('reclaim unclaimed isolated worktree');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `reclaim-unclaimed-${Date.now()}` });
+  const agentId = `reclaim-unclaimed-agent-${ticket.id}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  const branch = `worktree-agent-${agentId}`;
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit], { cwd: PROJECT });
+  try {
+    const reclaimed = worktrees.reclaimUnclaimedDispatchWorktree(PROJECT, {
+      sharedTree: false,
+      worktree,
+      baseCommit: prepared.ticket.dispatch.baseCommit,
+    });
+    assert.equal(reclaimed.reclaimed, true);
+    assert.equal(fs.existsSync(worktree), false);
+    assert.throws(() => execFileSync('git', ['rev-parse', '--verify', branch], { cwd: PROJECT }), /fatal/);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'reclaim-unclaimed-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
 test('prepared dispatches expire on the configured TTL with an audit comment', () => {
   const ticket = createFixture('prepared expiry fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'prepared-expiry' });
