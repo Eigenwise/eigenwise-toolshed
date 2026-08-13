@@ -8,6 +8,64 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.462.0 (2026-08-13)
+
+### codebase-mapper 2.15.2 → 2.15.3
+
+#### Fixes
+
+- Permit bounded readonly artifacts (SQ-1843)
+  Readonly artifact dispatches can write their declared map scope while Sidequest refuses every other project path.
+- Stop lock teardown is race-safe (SQ-1903)
+  Make Stop-veto lock release tolerate concurrent directory entries during teardown.
+
+### observability 0.7.8 → 0.7.9
+
+#### Fixes
+
+- Cap dense Grafana charts (SQ-1909)
+  Grafana usage dashboards now auto-size time buckets and cap dense cost and context charts at 120 points, so week-long views do not swamp the browser.
+
+### quartermaster 0.5.1 → 0.5.2
+
+#### Fixes
+
+- Add approved optimization rounds (SQ-1908)
+  Quartermaster now proactively offers a focused development-setup optimization round and waits for current approval unless the user has explicitly granted standing permission. Sidequest now keeps specific one-file and one-prompt requests inline by default, while requiring approval before proactive or expanded work unless standing permission covers it.
+
+### sidequest 4.48.1 → 4.49.0
+
+#### Features
+
+- Warn before isolated dispatches fork stale main (SQ-1890)
+
+#### Fixes
+
+- Permit bounded readonly artifacts (SQ-1843)
+  Readonly artifact dispatches can write their declared map scope while Sidequest refuses every other project path.
+- Keep review dispatches on the shared checkout (SQ-1857)
+  Executor briefings now name their local CLI fallback, review-audit dispatches use the shared checkout by default, and isolated executors can inspect it with read-only Git commands.
+- Restore read-only external output dispatch (SQ-1874)
+  Sidequest restores the read-only external-output dispatch route.
+- Preserve control-plane comment authors (SQ-1892)
+  Control-plane comments now retain their own author identity instead of appearing to come from an active executor.
+- Clarify attestation artifact mismatch errors (SQ-1897)
+  Attestation verify errors now show the expected artifact prefix and the submitted first segment.
+- Name processes blocking worktree cleanup (SQ-1898)
+  Worktree cleanup now identifies Windows processes that still reference a directory it could not remove.
+- Stop terminal executor tool calls (SQ-1902)
+  Terminal executor tool calls now stop with the board's recorded closeout evidence.
+- Clarify board dispatch authorization (SQ-1904)
+  Enabled Sidequest boards now explicitly authorize executor dispatch, require visible notice when substantive work stays inline, and allow a 4 KB SessionStart context so the full operating contract and prioritized workforce survive together.
+- Parallel orchestration guidance (SQ-1905)
+  Sidequest now tells orchestrators to split independent item sweeps into concurrent shard tickets while keeping dependent and shared-design work together.
+- Watch GitHub CI (SQ-1906)
+  `sidequest watch` now reports failed GitHub Actions runs and heads that have not reached a green run.
+- Continue compatible dispatches after upgrades (SQ-1907)
+  Sidequest sessions with claim self-heal now continue dispatching across a newer compatible installed version while recording and reporting the skew. Unknown, schema-incompatible, and older loaded versions still require a reload.
+- Add approved optimization rounds (SQ-1908)
+  Quartermaster now proactively offers a focused development-setup optimization round and waits for current approval unless the user has explicitly granted standing permission. Sidequest now keeps specific one-file and one-prompt requests inline by default, while requiring approval before proactive or expanded work unless standing permission covers it.
+
 ## v3.461.0 (2026-08-13)
 
 ### sidequest 4.48.0 → 4.48.1

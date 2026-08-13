@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.2 (2026-08-13)
+
+Released in v3.462.0, up from 0.5.1.
+
+### Fixes
+
+- Add approved optimization rounds (SQ-1908)
+  Quartermaster now proactively offers a focused development-setup optimization round and waits for current approval unless the user has explicitly granted standing permission. Sidequest now keeps specific one-file and one-prompt requests inline by default, while requiring approval before proactive or expanded work unless standing permission covers it.
+
 ## 0.5.1 (2026-08-13)
 
 Released in v3.460.0, up from 0.5.0.
