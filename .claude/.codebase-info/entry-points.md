@@ -1,6 +1,6 @@
 # Entry points
 
-Last Updated: 2026-08-12
+Last Updated: 2026-08-13
 
 ## User and runtime entry points
 
@@ -15,7 +15,7 @@ Last Updated: 2026-08-12
 - Observability skill: `enable-project-telemetry` under `plugins/observability/skills/`; its setup provisions dashboards from opted-in projects, and `hooks/hooks.json` registers the eight lifecycle observers, the SessionStart ensure worker, and the `Agent|Task` request-body preflight.
 - Live-rules skills: `manage-rules` and `add-rule` under `plugins/live-rules/skills/`.
 - Codebase-mapper hooks: `plugins/codebase-mapper/hooks/hooks.json` registers `PreToolUse: Skill` and `Stop`, both invoking `hooks/inject-context.js`; the hook enforces that an announced map update invokes `codebase-mapper:update-codebase-map`. Map creation/update: `plugins/codebase-mapper/skills/map-codebase/SKILL.md` and `update-codebase-map/SKILL.md`.
-- Quartermaster CLI: `plugins/quartermaster/bin/quartermaster.js` with `mine`, `status`, `catalog`, `decisions`, `verify`, `allowlist`, `enable-auto-allowlist`, and `mark-resupply` subcommands (`mark-retro` still accepted, pre-rename spelling); the `resupply` and `setup` skills drive it and never read a transcript directly. Its `hooks/hooks.json` registers a SessionEnd tally and a SessionStart hook combining the always-on capability-capture charter with a threshold-gated resupply nudge. Sidequest ships the `verify-discipline` skill (guidance, no code), which agentsync pins into every executor.
+- Quartermaster CLI: `plugins/quartermaster/bin/quartermaster.js` with `mine`, `status`, `catalog`, `decisions`, `verify`, `allowlist`, `enable-auto-allowlist`, and `mark-resupply` subcommands (`mark-retro` still accepted, pre-rename spelling); the `resupply` and `setup` skills drive it and never read a transcript directly. Its `hooks/hooks.json` registers a SessionEnd tally and a SessionStart hook combining the capability-capture charter with a threshold-gated offer of a focused optimization round. The pass runs after current user approval or explicit standing permission, and each change needs approval unless that standing permission covers its class. Sidequest ships the `verify-discipline` skill (guidance, no code), which agentsync pins into every executor.
 - Windows Sandbox launcher (maintainer-only, gitignored, no docs page): `sandbox/windows/Start-ToolshedSandbox.ps1`; guest entry is `sandbox/windows/bootstrap/Start-ToolshedSandboxGuest.ps1`; contract test is `sandbox/windows/Test-ToolshedSandbox.ps1`.
 
 ## Maintainer entry points
