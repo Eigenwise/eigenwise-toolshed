@@ -249,6 +249,12 @@ test('CLI: a duplicate display name errors demanding the path form, and the path
   assert.notStrictEqual(byPathA.project, byPathB.project);
 });
 
+test('CLI: watch requires an explicit project identity', () => {
+  const res = runCli(['watch', '--interval', '1']);
+  assert.notStrictEqual(res.status, 0, 'watch without --project must fail before registering a cwd board');
+  assert.match(res.stderr, /watch: --project must name the board root or registered board identity/i);
+});
+
 /* ------------------------------------------------------------------ *
  *  SQ-102 — --project with an ABSOLUTE path to a real directory may
  *  create (or reuse) that board, so an agent outside project B can file

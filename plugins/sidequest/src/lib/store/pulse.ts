@@ -336,6 +336,7 @@ function createPulse(dependencies: any) {
 
 function createBoardWatch(dependencies: any) {
   const {
+    board,
     changesPayload,
     ciRunsProvider,
     setTimer = setTimeout,
@@ -343,6 +344,8 @@ function createBoardWatch(dependencies: any) {
     writeLine = (line: string) => process.stdout.write(`${line}\n`),
     watchingAuthor = '',
   } = dependencies;
+  const boardIdentity = String(board || '').trim();
+  if (!boardIdentity) throw new Error('sidequest watch requires an explicit board identity.');
   const seen = new Set<string>();
   const seenCiRuns = new Set<string>();
   const seenUncheckedHeads = new Set<string>();
@@ -386,7 +389,8 @@ function createBoardWatch(dependencies: any) {
 
   function poll(): void {
     try {
-      const changes = changesPayload(cursor);
+      const changes = changesPayload(boardIdentity, cursor);
+      if (changes?.project !== boardIdentity) throw new Error('watch received changes for a different board identity.');
       if (changes?.serverTime) cursor = changes.serverTime;
       for (const ticket of Array.isArray(changes?.tickets) ? changes.tickets : []) {
         const event = actionableEvent(ticket);

@@ -14,14 +14,16 @@ function ticket(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function watch(polls: unknown[], watchingAuthor = 'orchestrator', ciPolls: unknown[] = []) {
+function watch(polls: unknown[], watchingAuthor = 'orchestrator', ciPolls: unknown[] = [], board = 'board-a') {
   const lines: string[] = [];
   const errors: string[] = [];
   const boardWatch = createBoardWatch({
-    changesPayload: () => {
+    board,
+    changesPayload: (requestedBoard: string) => {
+      assert.equal(requestedBoard, board, 'a watch must read only its registered board identity');
       const next = polls.shift();
       if (next instanceof Error) throw next;
-      return next;
+      return { project: board, ...(next as object) };
     },
     ciRunsProvider: ciPolls.length ? () => ciPolls.shift() : undefined,
     watchingAuthor,
@@ -79,6 +81,37 @@ test('watch emits a red GitHub run once across polls', () => {
   boardWatch.poll();
 
   assert.deepEqual(lines, ['CI abcdef failed test 2', 'CI abcdef unchecked - -']);
+});
+
+test('two board watches emit only their own actionable events', () => {
+  const routine = ticket({ ref: 'SQ-A-routine', lastComment: { id: 'a-routine', by: 'executor', body: '[sidequest:verify-complete] passed: normal work.' } });
+  const actionA = ticket({ ref: 'SQ-A-action', lastComment: { id: 'a-action', by: 'executor', body: 'Blocked on a scope request.' } });
+  const actionB = ticket({ ref: 'SQ-B-action', status: 'awaiting-oracle' });
+  const boardA = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [routine, actionA] }], 'orchestrator', [], 'project-a-canonical');
+  const boardB = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [actionB] }], 'orchestrator', [], 'project-b-canonical');
+
+  boardA.boardWatch.poll();
+  boardB.boardWatch.poll();
+
+  assert.deepEqual(boardA.lines, ['SQ-A-action doing comment executor Blocked on a scope request.']);
+  assert.deepEqual(boardB.lines, ['SQ-B-action awaiting-oracle awaiting-oracle - -']);
+});
+
+test('watch rejects missing identity and cross-board payloads', () => {
+  assert.throws(() => createBoardWatch({ changesPayload: () => ({ project: 'project-a', tickets: [] }) }), /explicit board identity/);
+  const lines: string[] = [];
+  const errors: string[] = [];
+  const boardWatch = createBoardWatch({
+    board: 'project-a',
+    changesPayload: () => ({ project: 'project-b', serverTime: '2026-08-13T00:00:01.000Z', tickets: [ticket({ status: 'awaiting-oracle' })] }),
+    writeLine: (line: string) => lines.push(line),
+    writeError: (line: string) => errors.push(line),
+  });
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, []);
+  assert.deepEqual(errors, ['sidequest watch: watch received changes for a different board identity.']);
 });
 
 test('watch ignores green GitHub runs and unavailable providers', () => {
