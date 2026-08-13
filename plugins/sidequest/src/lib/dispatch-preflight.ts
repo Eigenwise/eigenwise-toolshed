@@ -1,6 +1,43 @@
+import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+
+export interface LocalAheadWarning {
+  count: number;
+  message: string;
+}
+
+export function localAheadOfUpstreamWarning(projectPath: string, branch: string): LocalAheadWarning | null {
+  try {
+    const upstream = execFileSync('git', ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], {
+      cwd: projectPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    if (!upstream) return null;
+    const count = Number(execFileSync('git', ['rev-list', '--count', `${upstream}..${branch}`], {
+      cwd: projectPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim());
+    if (!Number.isInteger(count) || count < 1) return null;
+    const remote = execFileSync('git', ['config', '--get', `branch.${branch}.remote`], {
+      cwd: projectPath,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return remote ? {
+      count,
+      message: `Local ${branch} is ${count} commit${count === 1 ? '' : 's'} ahead of ${upstream}; isolated worktrees fork the local tracking ref. Push first: git push ${remote} ${branch}`,
+    } : null;
+  } catch (_) {
+    return null;
+  }
+}
 
 const PLUGIN_ID = 'sidequest@eigenwise-toolshed';
 const REPAIR_COMMAND = 'claude plugin install sidequest@eigenwise-toolshed --scope project';

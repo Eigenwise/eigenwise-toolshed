@@ -227,6 +227,7 @@ function createPulse(dependencies: any) {
         terminalSource: dispatch.terminalSource || null,
         outcome: dispatch.outcome || null,
         failureShape: dispatch.failureShape || null,
+        localAheadWarning: dispatch.localAheadWarning || null,
       } : null,
       checkpoint: checkpointProjection(ticket),
       scope: scopePulse(slug, ticket),

@@ -8,7 +8,7 @@ function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, ensurePythonIoEncoding, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -1033,6 +1033,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         ...(opts.integrationMode != null ? { mode: opts.integrationMode } : {}),
       })
       : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
+    const localAheadWarning = !sharedTree && integrationTargetState
+      ? localAheadOfUpstreamWarning(readMeta(slug)?.path || '', integrationTargetState.branch)
+      : null;
     delete t.storyContractDrift;
     t.dispatch = {
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
@@ -1055,6 +1058,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
         : commitScope.headCommit(readMeta(slug)?.path || ''),
       ...(integrationTargetState ? { integrationTarget: integrationTargetState } : {}),
+      ...(localAheadWarning ? { localAheadWarning } : {}),
       readonly,
       ...(noDeclaredFileScope ? {
         unscopedOverride: {
@@ -1099,7 +1103,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     writeDispatchTokenFile(t);
     stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
-    return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
+    return { ok: true, ticket: t, token: t.dispatchNonce, recovery, ...(localAheadWarning ? { warnings: [localAheadWarning.message] } : {}) };
   });
 }
 
