@@ -70,13 +70,28 @@ function projectCommand(project: Project): string {
   return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
 }
 
-function currentProject(data: HookInput, store: Store): { project: Project | null; currentPath: string } {
+function sessionWorktreePath(start: string): string {
+  const resolved = path.resolve(start);
+  let candidate = resolved;
+  for (;;) {
+    try {
+      if (fs.existsSync(path.join(candidate, '.git'))) return candidate;
+    } catch (_) {
+      return resolved;
+    }
+    const parent = path.dirname(candidate);
+    if (parent === candidate) return resolved;
+    candidate = parent;
+  }
+}
+
+function currentProject(data: HookInput, store: Store): { project: Project | null; sessionPath: string } {
   const start = stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const currentPath = store.nearestRepoRoot(start);
   const found = store.findProject(currentPath);
   return {
     project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
-    currentPath,
+    sessionPath: sessionWorktreePath(start),
   };
 }
 
@@ -85,11 +100,11 @@ export function registerSweepSession(data: HookInput): void {
   if (!id) return;
   try {
     const store = require(runtimeModule('store')) as Store;
-    const { project, currentPath } = currentProject(data, store);
+    const { project, sessionPath } = currentProject(data, store);
     if (!project) return;
     const state = readState();
     state.sessions = state.sessions || {};
-    state.sessions[id] = currentPath;
+    state.sessions[id] = sessionPath;
     writeState(state);
   } catch (_) {
     // A session that cannot be registered is still allowed to start.
@@ -136,7 +151,7 @@ function missingIntegrationTarget(error: unknown): boolean {
 
 export async function sweepWorktrees(data: HookInput, includeKnownProjects: boolean): Promise<string[]> {
   const store = require(runtimeModule('store')) as Store;
-  const { project: current, currentPath } = currentProject(data, store);
+  const { project: current, sessionPath } = currentProject(data, store);
   if (!current) return [];
   const projects = includeKnownProjects
     ? store.worktreeGcProjects(current.slug, MAX_PROJECTS_PER_START)
@@ -173,7 +188,7 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
       const config = store.boardConfig(project.slug);
       const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
         execute: true,
-        currentPath: isCurrentProject ? currentPath : '',
+        currentPath: isCurrentProject ? sessionPath : '',
         livePaths: activePaths,
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,

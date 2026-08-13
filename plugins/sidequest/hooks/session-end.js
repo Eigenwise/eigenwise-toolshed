@@ -88,13 +88,27 @@ function sessionId(data) {
 function projectCommand(project) {
   return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
 }
+function sessionWorktreePath(start) {
+  const resolved = import_node_path2.default.resolve(start);
+  let candidate = resolved;
+  for (; ; ) {
+    try {
+      if (import_node_fs2.default.existsSync(import_node_path2.default.join(candidate, ".git"))) return candidate;
+    } catch (_) {
+      return resolved;
+    }
+    const parent = import_node_path2.default.dirname(candidate);
+    if (parent === candidate) return resolved;
+    candidate = parent;
+  }
+}
 function currentProject(data, store) {
   const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const currentPath = store.nearestRepoRoot(start);
   const found = store.findProject(currentPath);
   return {
     project: found.ok && found.slug && found.meta?.path ? { slug: found.slug, path: found.meta.path } : null,
-    currentPath
+    sessionPath: sessionWorktreePath(start)
   };
 }
 function unregisterSweepSession(data) {
@@ -131,7 +145,7 @@ function missingIntegrationTarget(error) {
 }
 async function sweepWorktrees(data, includeKnownProjects) {
   const store = require(runtimeModule("store"));
-  const { project: current, currentPath } = currentProject(data, store);
+  const { project: current, sessionPath } = currentProject(data, store);
   if (!current) return [];
   const projects = includeKnownProjects ? store.worktreeGcProjects(current.slug, MAX_PROJECTS_PER_START) : [current];
   const notices = [];
@@ -163,7 +177,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
       const config = store.boardConfig(project.slug);
       const result = await worktrees.sweep(project.path, store.worktreeGcTickets(), {
         execute: true,
-        currentPath: isCurrentProject ? currentPath : "",
+        currentPath: isCurrentProject ? sessionPath : "",
         livePaths: activePaths,
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,

@@ -2323,6 +2323,40 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
+test('session-start preserves the live linked worktree that started the sweep', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-live-worktree-'));
+  const worktrees = path.join(repo, '.claude', 'worktrees');
+  const live = path.join(worktrees, 'agent-session-live');
+  const sessionId = `session-live-${crypto.randomUUID()}`;
+  try {
+    gitFixture(['init'], repo);
+    gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
+    gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+    fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+    gitFixture(['add', 'README.md'], repo);
+    gitFixture(['commit', '-m', 'base'], repo);
+    gitFixture(['branch', '-M', 'main'], repo);
+    fs.mkdirSync(worktrees, { recursive: true });
+    gitFixture(['worktree', 'add', '-b', 'worktree-agent-session-live', live, 'main'], repo);
+    fs.writeFileSync(path.join(live, 'live.txt'), 'integrated\n');
+    gitFixture(['add', 'live.txt'], live);
+    gitFixture(['commit', '-m', 'live fixture'], live);
+    const commit = gitFixture(['rev-parse', 'HEAD'], live);
+    gitFixture(['cherry-pick', commit], repo);
+    const aged = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    fs.utimesSync(live, aged, aged);
+    store.ensureProject(repo);
+
+    runHook(SESSION, { session_id: sessionId, source: 'startup', cwd: live }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+
+    assert.ok(fs.existsSync(live), 'the SessionStart sweep must preserve the linked worktree that owns it');
+  } finally {
+    runHook(SESSION_END, { session_id: sessionId, cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+    if (fs.existsSync(live)) gitFixture(['worktree', 'remove', '--force', live], repo);
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
+});
+
 test('session-start sweeps an old removable worktree to completion', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-'));
   const worktrees = path.join(repo, '.claude', 'worktrees');
