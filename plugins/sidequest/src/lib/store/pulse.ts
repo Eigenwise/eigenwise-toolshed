@@ -5,7 +5,9 @@ function createPulse(dependencies: any) {
     boardConfig,
     checkpointProjection,
     claimPulse,
+    commitScope,
     dispatchState,
+    effectiveScope,
     execFileSync,
     getTicket,
     listTickets,
@@ -159,7 +161,7 @@ function createPulse(dependencies: any) {
     };
     const alwaysInScope = new Set(scopePaths(boardConfig(slug)?.alwaysInScope).map(scopePathKey));
     const declared = scopePaths(dispatch.declaredFiles).filter((file) => !alwaysInScope.has(scopePathKey(file)));
-    const ticketFiles = scopePaths(ticket?.files).filter((file) => !alwaysInScope.has(scopePathKey(file)));
+    const ticketFiles = scopePaths(commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref)).filter((file) => !alwaysInScope.has(scopePathKey(file)));
     if (declared.length === ticketFiles.length && declared.every((file, index) => {
       const ticketFile = ticketFiles[index];
       return ticketFile != null && scopePathKey(file) === scopePathKey(ticketFile);
@@ -171,11 +173,11 @@ function createPulse(dependencies: any) {
   // every ruling, and without this an orchestrator has to shell out to the CLI and
   // filter JSON to answer it (Terge_VST, 2026-08-05). `enforced` is what commits are
   // gated on; it differs from `declared` exactly when scopeDriftWarnings fires.
-  function scopePulse(ticket?: any) {
+  function scopePulse(slug?: any, ticket?: any) {
     const dispatch = dispatchState(ticket);
     const resolution = ticket?.scopeResolution;
     return {
-      declared: Array.isArray(ticket?.files) ? ticket.files : [],
+      declared: commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref),
       enforced: dispatch && !dispatch.terminalAt && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : null,
       lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null,
     };
@@ -226,7 +228,7 @@ function createPulse(dependencies: any) {
         failureShape: dispatch.failureShape || null,
       } : null,
       checkpoint: checkpointProjection(ticket),
-      scope: scopePulse(ticket),
+      scope: scopePulse(slug, ticket),
       ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
       ...(warnings.length ? { warnings } : {}),
       submission: submissionProjection(ticket.submission),

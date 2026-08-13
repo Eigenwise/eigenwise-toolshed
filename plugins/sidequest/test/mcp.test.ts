@@ -1109,7 +1109,7 @@ test('pulse exposes an immediate refused scope ruling', async () => {
   await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['lib/b.js'] });
 
   const ruled = await callTool('pulse', { project, ref: ticket.ref });
-  assert.deepEqual(ruled.scope.files, ['lib/a.js']);
+  assert.deepEqual(ruled.scope.files, ['lib/a.js', `.release/unreleased/${ticket.ref}.md`]);
   assert.equal(ruled.scope.request, undefined);
   assert.equal(ruled.scope.lastRuling.state, 'refused');
   assert.deepEqual(ruled.scope.lastRuling.refused, ['lib/b.js']);
@@ -2400,6 +2400,25 @@ test('MCP scopeRequest derives barrel registration without widening past the gov
 
 
 
+test('MCP scopeRequest reports the implicit release fragment as covered for its dispatched ticket', async () => {
+  const fixture = isolatedDispatch('sq-mcp-release-scope-', 'release-scope-worker', ['plugins/sidequest/src/lib/store/tickets.ts']);
+  const fragment = `.release/unreleased/${fixture.ref}.md`;
+
+  const requested = await callTool('scopeRequest', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    files: [fragment],
+  });
+
+  assert.equal(requested.state, 'granted');
+  assert.deepEqual(requested.covered, [fragment]);
+  assert.deepEqual(requested.refused, []);
+  assert.deepEqual(store.getTicket(fixture.project, fixture.ref).dispatch.declaredFiles, [
+    'plugins/sidequest/src/lib/store/tickets.ts', fragment,
+  ]);
+});
+
 test('MCP scopeRequest auto-approves a concrete path inside the declared plugin without ending the attempt', async () => {
   const fixture = isolatedDispatch('sq-mcp-package-scope-', 'a1384package', ['plugins/sidequest/src/lib/store/tickets.ts']);
   const requestedFile = 'plugins/sidequest/src/lib/store/dispatch.ts';
@@ -2492,8 +2511,9 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
     project: updatedProject, ref: updatedTicket.ref, by: 'control-plane',
     files: ['lib/original.js', 'lib/updated.js'],
   });
+  const updatedFragment = `.release/unreleased/${updatedTicket.ref}.md`;
   let updated = store.getTicket(updatedProject, updatedTicket.ref);
-  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', 'lib/updated.js']);
+  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', updatedFragment, 'lib/updated.js']);
   fs.mkdirSync(path.join(updatedWorktree, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(updatedWorktree, 'lib', 'updated.js'), 'updated\n');
   gitAt(updatedWorktree, ['add', 'lib/updated.js']);
@@ -2507,7 +2527,7 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
     project: updatedProject, ref: updatedTicket.ref, by: 'control-plane', files: ['lib/original.js'],
   });
   updated = store.getTicket(updatedProject, updatedTicket.ref);
-  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', 'lib/updated.js'], 'shared-tree scope updates retain the submission binding when ticket scope sheds a path');
+  assert.deepEqual(updated.dispatch.declaredFiles, ['lib/original.js', updatedFragment, 'lib/updated.js'], 'shared-tree scope updates retain the submission binding when ticket scope sheds a path');
 
   const grantedWorktree = createGitWorktree();
   const grantedProject = store.ensureProject(grantedWorktree).slug;
@@ -2524,7 +2544,7 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
   });
   assert.equal(granted.autoApproved, true);
   const grantedTicketAfterRequest = store.getTicket(grantedProject, grantedTicket.ref);
-  assert.deepEqual(grantedTicketAfterRequest.dispatch.declaredFiles, ['lib/original.js', 'lib/granted.js']);
+  assert.deepEqual(grantedTicketAfterRequest.dispatch.declaredFiles, ['lib/original.js', `.release/unreleased/${grantedTicket.ref}.md`, 'lib/granted.js']);
   fs.mkdirSync(path.join(grantedWorktree, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(grantedWorktree, 'lib', 'granted.js'), 'granted\n');
   gitAt(grantedWorktree, ['add', 'lib/granted.js']);
@@ -2551,7 +2571,7 @@ test('MCP update lets the claim holder narrow isolated live dispatch scope but r
   await callTool('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
   const narrowed = store.getTicket(project, ticket.ref);
   assert.deepEqual(narrowed.files, ['lib/allowed.js']);
-  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js'], 'live dispatch scope sheds the removed path');
+  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js', `.release/unreleased/${ticket.ref}.md`], 'live dispatch scope sheds the removed path but retains its ticket-bound release fragment');
 
   const refused = await callToolRaw('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js', 'foreign/new.js'] });
   assert.equal(refused.isError, true);

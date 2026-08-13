@@ -234,7 +234,8 @@ function createTickets(dependencies) {
   function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
     if (!dispatch || dispatch.terminalAt) return;
-    const refreshed = effectiveScope(slug, ticket?.files);
+    const scope = effectiveScope(slug, ticket?.files);
+    const refreshed = dispatch.artifactMode ? scope : commitScope.ticketCommitScope(scope, ticket?.files, ticket?.ref);
     dispatch.declaredFiles = dispatch.sharedTree === false ? refreshed : normalizeFiles([...Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : [], ...refreshed]);
   }
   function scopeExpansionCommand(ticket, additions) {
@@ -443,7 +444,7 @@ function createTickets(dependencies) {
       if (!requested.length) return { ok: false, reason: "files_required", ticket: t };
       const validation = commitScope.validateRelativeScopes(requested);
       if (!validation.ok) return { ok: false, reason: "invalid_scope", ticket: t, paths: validation.outside };
-      const scope = effectiveScope(slug, t.files);
+      const scope = commitScope.ticketCommitScope(effectiveScope(slug, t.files), t.files, t.ref);
       const additions = requested.filter((file) => !commitScope.isInScope(file, scope));
       const covered = requested.filter((file) => commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();

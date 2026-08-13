@@ -158,13 +158,14 @@ test('scope drift ignores always-in-scope paths and preserves declared casing fo
   });
   try {
     const preparedDocsOnly = store.prepareDispatch(scopeDriftSlug, docsOnly.ref, { sessionId: `scope-drift-docs-${Date.now()}` });
-    assert.deepEqual(preparedDocsOnly.ticket.dispatch.declaredFiles, ['tracked.js', 'docs/']);
+    assert.deepEqual(preparedDocsOnly.ticket.dispatch.declaredFiles, ['tracked.js', 'docs/', `.release/unreleased/${docsOnly.ref}.md`]);
+    assert.deepEqual(store.pulsePayload(scopeDriftSlug, docsOnly.ref).scope.declared, ['tracked.js', 'docs/', `.release/unreleased/${docsOnly.ref}.md`]);
     assert.equal(store.pulsePayload(scopeDriftSlug, docsOnly.ref).warnings, undefined);
 
     store.prepareDispatch(scopeDriftSlug, realDrift.ref, { sessionId: `scope-drift-real-${Date.now()}` });
     assert.equal(store.setBoardConfig(scopeDriftSlug, { alwaysInScope: [] }).ok, true);
     assert.deepEqual(store.pulsePayload(scopeDriftSlug, realDrift.ref).warnings, [
-      'Scope drift: this live dispatch enforces CamelCase.js, docs but the ticket declares CamelCase.js. Commits are gated on the dispatch set; re-run update --files to resync.',
+      `Scope drift: this live dispatch enforces .release/unreleased/${realDrift.ref}.md, CamelCase.js, docs but the ticket declares .release/unreleased/${realDrift.ref}.md, CamelCase.js. Commits are gated on the dispatch set; re-run update --files to resync.`,
     ]);
   } finally {
     store.deleteTicket(scopeDriftSlug, docsOnly.ref);
@@ -1790,7 +1791,7 @@ test('a re-dispatch after a handback picks up files declared since the release',
   const sessionId = `released-binding-expansion-${Date.now()}`;
   const ticket = createFixture('released binding unions with expanded scope');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
-  assert.deepEqual(prepared.ticket.dispatch.declaredFiles, ['tracked.js']);
+  assert.deepEqual(prepared.ticket.dispatch.declaredFiles, ['tracked.js', `.release/unreleased/${ticket.ref}.md`]);
   assert.equal(store.claimTicket(slug, ticket.ref, 'expansion-worker', {
     sessionId,
     token: prepared.token,
@@ -1806,7 +1807,7 @@ test('a re-dispatch after a handback picks up files declared since the release',
   store.updateTicket(slug, ticket.ref, { files: ['tracked.js', 'late-addition.js'] });
   assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['tracked.js', 'late-addition.js']);
   const redispatched = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
-  assert.deepEqual(redispatched.ticket.dispatch.declaredFiles.slice().sort(), ['late-addition.js', 'tracked.js']);
+  assert.deepEqual(redispatched.ticket.dispatch.declaredFiles.slice().sort(), [`.release/unreleased/${ticket.ref}.md`, 'late-addition.js', 'tracked.js']);
 });
 
 test('dispatch token files authenticate the briefing and claim without transcribing a secret', () => {

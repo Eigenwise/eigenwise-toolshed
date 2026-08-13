@@ -215,7 +215,10 @@ function scopeResolution(slug?: any, ticket?: any, request?: any, state?: any, n
 function syncLiveDispatchScope(slug?: any, ticket?: any) {
   const dispatch = dispatchState(ticket);
   if (!dispatch || dispatch.terminalAt) return;
-  const refreshed = effectiveScope(slug, ticket?.files);
+  const scope = effectiveScope(slug, ticket?.files);
+  // The implicit release fragment is granted by the dispatch, not declared on the
+  // ticket, so a refresh that only re-read ticket.files would revoke it.
+  const refreshed = dispatch.artifactMode ? scope : commitScope.ticketCommitScope(scope, ticket?.files, ticket?.ref);
   // A shared-tree dispatch's binding preserves the submit gate after a caller
   // sheds ticket scope; isolated worktrees may instead shed their private scope.
   dispatch.declaredFiles = dispatch.sharedTree === false
@@ -468,7 +471,9 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     if (!requested.length) return { ok: false, reason: 'files_required', ticket: t };
     const validation = commitScope.validateRelativeScopes(requested);
     if (!validation.ok) return { ok: false, reason: 'invalid_scope', ticket: t, paths: validation.outside };
-    const scope = effectiveScope(slug, t.files);
+    // Match the commit gate (submissions.ts), which admits the ticket's own release
+    // fragment implicitly; asking for it back must read as covered, not as an addition.
+    const scope = commitScope.ticketCommitScope(effectiveScope(slug, t.files), t.files, t.ref);
     const additions = requested.filter((file?: any) => !commitScope.isInScope(file, scope));
     const covered = requested.filter((file?: any) => commitScope.isInScope(file, scope));
     const now = new Date().toISOString();

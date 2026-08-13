@@ -663,6 +663,13 @@ function oracleHandoffPacket(ticket) {
   const verdict = oracle.verdict?.text ? ` Human verdict: ${oracle.verdict.text}` : "";
   return `Oracle handoff: ${ticket.status === "awaiting-oracle" ? "awaiting a human verdict" : "verdict recorded"}. Ask: ${oracle.ask}.${verdict}`;
 }
+function ticketReleaseFragmentScope(ticket) {
+  const fragment = store.commitScope?.ticketReleaseFragment(ticket?.ref);
+  return fragment ? `
+
+Implicit release fragment (write only this ticket's):
+- ${fragment}` : "";
+}
 function executorTaskBody(ticket, category, declaredFiles, uncertainty, planDocument, experimentLog, findingCheckpoints, continuation) {
   return [
     "## This ticket",
@@ -684,7 +691,7 @@ ${findingCheckpoints}`] : [],
     ...experimentLog ? [`Experiment log:
 ${experimentLog}`] : [],
     `Declared files:
-${declaredFiles}`,
+${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     ...planDocument ? [planDocument] : [],
     "Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle.\n\nScope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix."
   ].join("\n\n");
@@ -937,7 +944,7 @@ function dispatchTicketContext(ticket, projectPath) {
     `Description:
 ${description}`,
     `Declared files:
-${declaredFiles}`,
+${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     `Anchors:
 ${anchors}`
   ].join("\n\n"), DISPATCH_TICKET_CONTEXT_MAX_BYTES, "\n\n[Spawn orientation capped. Full implementation context is in briefing.]");

@@ -4,7 +4,9 @@ function createPulse(dependencies) {
     boardConfig,
     checkpointProjection,
     claimPulse,
+    commitScope,
     dispatchState,
+    effectiveScope,
     execFileSync,
     getTicket,
     listTickets,
@@ -145,18 +147,18 @@ function createPulse(dependencies) {
     };
     const alwaysInScope = new Set(scopePaths(boardConfig(slug)?.alwaysInScope).map(scopePathKey));
     const declared = scopePaths(dispatch.declaredFiles).filter((file) => !alwaysInScope.has(scopePathKey(file)));
-    const ticketFiles = scopePaths(ticket?.files).filter((file) => !alwaysInScope.has(scopePathKey(file)));
+    const ticketFiles = scopePaths(commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref)).filter((file) => !alwaysInScope.has(scopePathKey(file)));
     if (declared.length === ticketFiles.length && declared.every((file, index) => {
       const ticketFile = ticketFiles[index];
       return ticketFile != null && scopePathKey(file) === scopePathKey(ticketFile);
     })) return [];
     return [`Scope drift: this live dispatch enforces ${declared.join(", ") || "(none)"} but the ticket declares ${ticketFiles.join(", ") || "(none)"}. Commits are gated on the dispatch set; re-run update --files to resync.`];
   }
-  function scopePulse(ticket) {
+  function scopePulse(slug, ticket) {
     const dispatch = dispatchState(ticket);
     const resolution = ticket?.scopeResolution;
     return {
-      declared: Array.isArray(ticket?.files) ? ticket.files : [],
+      declared: commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref),
       enforced: dispatch && !dispatch.terminalAt && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : null,
       lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null
     };
@@ -206,7 +208,7 @@ function createPulse(dependencies) {
         failureShape: dispatch.failureShape || null
       } : null,
       checkpoint: checkpointProjection(ticket),
-      scope: scopePulse(ticket),
+      scope: scopePulse(slug, ticket),
       ...oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {},
       ...warnings.length ? { warnings } : {},
       submission: submissionProjection(ticket.submission),

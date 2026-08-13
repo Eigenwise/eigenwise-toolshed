@@ -875,6 +875,11 @@ function oracleHandoffPacket(ticket?: any) {
   return `Oracle handoff: ${ticket.status === 'awaiting-oracle' ? 'awaiting a human verdict' : 'verdict recorded'}. Ask: ${oracle.ask}.${verdict}`;
 }
 
+function ticketReleaseFragmentScope(ticket?: any) {
+  const fragment = store.commitScope?.ticketReleaseFragment(ticket?.ref);
+  return fragment ? `\n\nImplicit release fragment (write only this ticket's):\n- ${fragment}` : '';
+}
+
 function executorTaskBody(ticket?: any, category?: any, declaredFiles?: any, uncertainty?: any, planDocument?: any, experimentLog?: any, findingCheckpoints?: any, continuation?: any) {
   return [
     '## This ticket',
@@ -893,7 +898,7 @@ ${category.contract || '(No category-specific executor instructions were recorde
     ...(continuation ? [continuation] : []),
     ...(oracleHandoffPacket(ticket) ? [oracleHandoffPacket(ticket)] : []),
     ...(experimentLog ? [`Experiment log:\n${experimentLog}`] : []),
-    `Declared files:\n${declaredFiles}`,
+    `Declared files:\n${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     ...(planDocument ? [planDocument] : []),
     'Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle.\n\nScope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix.',
   ].join('\n\n');
@@ -1152,7 +1157,7 @@ function dispatchTicketContext(ticket?: any, projectPath?: any) {
   return boundedPacket([
     `Title: ${title}`,
     `Description:\n${description}`,
-    `Declared files:\n${declaredFiles}`,
+    `Declared files:\n${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     `Anchors:\n${anchors}`,
   ].join('\n\n'), DISPATCH_TICKET_CONTEXT_MAX_BYTES, '\n\n[Spawn orientation capped. Full implementation context is in briefing.]');
 }
