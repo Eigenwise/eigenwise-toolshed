@@ -48,9 +48,10 @@ function attestationErrors(value?: any, artifact?: any) {
   if (!observedArtifact) return ['verifyKind: attestation requires attestationArtifact: name the URL, file, frame, or returned count that was observed.'];
   if (!evidence) return [];
   const expected = `attestation: ${observedArtifact} | `;
+  const receivedArtifact = evidence.split('|', 1)[0]?.trim() || '';
   const evidenceParts = evidence.slice(expected.length).split('|').map((part) => part.trim());
   if (!evidence.startsWith(expected) || evidenceParts.length !== 2 || evidenceParts.some((part) => !part)) {
-    return [`verify must use ${ATTESTATION_FORMAT}; replace <artifact> with attestationArtifact.`];
+    return [`verify must use ${ATTESTATION_FORMAT}; its first segment must equal attestationArtifact verbatim. Expected prefix: \`${expected}\`. Received first segment: \`${receivedArtifact}\`.`];
   }
   return [];
 }

@@ -33,6 +33,14 @@ test('attestation oracle requires an observed artifact and structured evidence',
     store.attestationErrors(`attestation: ${artifact} | provisioned dashboard and 1862px render | all panels rendered with data`, artifact),
     [],
   );
+  const descriptiveArtifact = 'Sidequest overview dashboard';
+  const descriptiveArtifactError = store.attestationErrors(
+    `attestation: ${descriptiveArtifact} | provisioned dashboard and 1862px render | all panels rendered with data`,
+    artifact,
+  )[0];
+  assert.match(descriptiveArtifactError, /first segment must equal attestationArtifact verbatim/);
+  assert.ok(descriptiveArtifactError.includes(`Expected prefix: \`attestation: ${artifact} | \`.`));
+  assert.ok(descriptiveArtifactError.includes(`Received first segment: \`attestation: ${descriptiveArtifact}\`.`));
   assert.match(
     store.attestationErrors(`attestation: ${artifact} | render`, artifact)[0],
     /evidence produced/,

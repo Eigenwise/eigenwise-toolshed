@@ -2074,9 +2074,9 @@ test('MCP rejects incompatible attestation fields on add and update', async () =
       fields: {
         verifyKind: 'attestation',
         attestationArtifact: artifact,
-        verify: `attestation: ${artifact} | incomplete evidence`,
+        verify: 'attestation: Sidequest overview dashboard | provisioned a full render | dashboard data rendered',
       },
-      expected: /verify must use `attestation: <artifact> \| <evidence produced> \| <what it showed>`/,
+      expected: /Expected prefix: `attestation: grafana:\/\/caller-controlled-artifact \| `\. Received first segment: `attestation: Sidequest overview dashboard`\./,
     },
     {
       fields: { attestationArtifact: artifact },
@@ -2093,7 +2093,6 @@ test('MCP rejects incompatible attestation fields on add and update', async () =
     assert.equal(refused.ok, false);
     assert.equal(refused.reason, 'invalid_verify');
     assert.match(refused.message, expected);
-    if (fields.verify) assert.doesNotMatch(refused.message, new RegExp(artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   }
 
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-attestation-update-')), 'attestation update').slug;
