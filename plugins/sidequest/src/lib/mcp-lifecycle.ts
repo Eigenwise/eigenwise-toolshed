@@ -256,10 +256,10 @@ function validateSubmissionCandidate(options: any) {
     const scopedRange = commitScope.validateCommitRangeScope(root, rangeForChecks.commits, scope);
     if (!scopedRange.ok) {
       const validationMessage = scopedRange.reason === 'missing_scope'
-        ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.`
+        ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration. An executor cannot declare its own scope: release with kind "handback", naming the paths this range changes, so the orchestrator can declare them and redispatch.`
         : scopedRange.reason === 'outside_scope'
           ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(', ')}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.`
-          : `submit: could not inspect ${commit} from this worktree: ${scopedRange.message || scopedRange.reason}`;
+          : `submit: could not inspect ${commit} from ${root}: ${scopedRange.message || scopedRange.reason}. If the commit is pinned on ${gitRef} it survives this tree; release with kind "handback" naming this failure so the orchestrator can deliver it from the repository.`;
       submissionFailures.push({ reason: scopedRange.reason, message: validationMessage });
     }
     const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || rangeForChecks.changedPaths);
