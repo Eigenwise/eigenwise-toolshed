@@ -1643,7 +1643,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return {
         ok: false,
         reason: 'unclaimed_active_dispatch',
-        message: `${t.ref} has a newer active dispatch but no claim owned by ${by}. Do not release it from this executor. Wait for the current attempt to finish, then have the orchestrator dispatch once from todo. When the dispatch is provably dead and its work already landed, the orchestrator clears it with \`sidequest groomClose ${t.ref} --by <integrator> --recoveryEvidence "<observed terminal evidence>"\` plus \`--deliveryCommit <sha>\` when the work is already on the integration branch.`,
+        message: `${t.ref} has a newer active dispatch but no claim owned by ${by}. Do not release it from this executor. Wait for the current attempt to finish, then have the orchestrator dispatch once from todo. When the dispatch is provably dead and verified work already landed, the orchestrator delivers it itself with \`sidequest groomClose ${t.ref} --by <integrator> --recoveryEvidence "<observed terminal evidence>" --deliveryCommit <sha>\`. Do not hand that command to a user.`,
         ticket: t,
       };
     }

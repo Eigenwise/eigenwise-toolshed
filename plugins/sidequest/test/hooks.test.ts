@@ -2264,6 +2264,7 @@ test('session-start: stays inside its byte budget and off the retired doctrine',
     `session block is ${ctx.length} chars — budget is ${BUDGET.session}; trim it, don't raise the budget`
   );
   assertNoRetiredDoctrine(ctx, 'session-start');
+  assert.match(ctx, /board path refuses verified work, deliver it yourself through groomClose with deliveryCommit/i);
 });
 
 test('session-start: reports newly provisioned executors once, then stays quiet', () => {
@@ -2467,6 +2468,7 @@ test('session-start compact contexts retain executable safeguards', () => {
     assert.match(ctx, /never\s+TaskOutput/i, `${source} must ban native Agent TaskOutput polling`);
     assert.ok(/list --status(?: |=)doing/.test(ctx), `${source} must retain the CLI fallback`);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
+    assert.match(ctx, /board path refuses verified work, deliver it yourself through groomClose with deliveryCommit/i);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
   }
 });

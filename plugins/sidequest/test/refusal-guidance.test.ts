@@ -38,6 +38,8 @@ test('unbound dispatch guidance tells an executor to present its prepared token'
   const message = claimRefusalMessage('unbound_dispatch', 'SQ-42');
   assert.match(message, /--token/i);
   assert.match(message, /binds the claiming runtime/i);
+  assert.match(message, /comment the refusal evidence and release SQ-42 with kind `technical_blocker`/i);
+  assert.match(message, /Do not hand a command to the user/i);
   assert.doesNotMatch(message, /Do not.*token/i);
 });
 
