@@ -13,6 +13,7 @@ const STOP_VETO_REASON = 'Invoke Skill codebase-mapper:update-codebase-map now. 
 const STOP_VETO_MAX_BYTES = 192;
 const STATE_LOCK_WAIT_MS = 500;
 const STATE_LOCK_RETRY_MS = 5;
+const STATE_LOCK_REMOVE_RETRIES = 10;
 const stateLockWaitBuffer = new Int32Array(new SharedArrayBuffer(Int32Array.BYTES_PER_ELEMENT));
 
 function stateLockWaitMs() {
@@ -208,10 +209,16 @@ function acquireStateLock(file) {
 }
 
 function releaseStateLock(ownerFile) {
-  try {
-    fs.rmSync(ownerFile, { force: true });
-    fs.rmdirSync(path.dirname(ownerFile));
-  } catch (_) {}
+  const lockDirectory = path.dirname(ownerFile);
+  for (let attempt = 0; attempt < STATE_LOCK_REMOVE_RETRIES; attempt += 1) {
+    try {
+      fs.rmSync(ownerFile, { force: true });
+      fs.rmSync(lockDirectory, { recursive: true, force: true });
+      return;
+    } catch (_) {
+      Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
+    }
+  }
 }
 
 function clearStopVetoState(data) {

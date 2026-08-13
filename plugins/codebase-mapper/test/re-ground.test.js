@@ -374,8 +374,7 @@ test('overlapping prompt-less Stop processes atomically claim one veto', async (
     hookAsync(startHook, directory, state, stop),
   ]);
   await waitForLockContenders(lockDirectory, 2);
-  fs.rmSync(fixtureOwnerFile, { force: true });
-  fs.rmdirSync(lockDirectory);
+  fs.rmSync(lockDirectory, { recursive: true, force: true });
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
@@ -403,8 +402,7 @@ test('overlapping Stop processes with distinct prompt ids atomically claim one b
     hookAsync(startHook, directory, state, { ...stop, prompt_id: 'second-host-prompt' }),
   ]);
   await waitForLockContenders(lockDirectory, 2);
-  fs.rmSync(fixtureOwnerFile, { force: true });
-  fs.rmdirSync(lockDirectory);
+  fs.rmSync(lockDirectory, { recursive: true, force: true });
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
@@ -464,7 +462,7 @@ test('transcript path presence and value cannot split one Stop batch', async () 
   ]);
   await waitForLockContenders(lockDirectory, 3);
   fs.rmSync(fixtureOwnerFile, { force: true });
-  fs.rmdirSync(lockDirectory);
+  fs.rmSync(lockDirectory, { recursive: true, force: true });
 
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0, 0]);
