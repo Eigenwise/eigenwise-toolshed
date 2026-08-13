@@ -233,7 +233,9 @@ function createTickets(dependencies) {
   }
   function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
-    if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = effectiveScope(slug, ticket?.files);
+    if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) {
+      dispatch.declaredFiles = commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref);
+    }
   }
   function scopeExpansionCommand(ticket, additions) {
     const ref = String(ticket?.ref || "").trim();
@@ -442,8 +444,9 @@ function createTickets(dependencies) {
       const validation = commitScope.validateRelativeScopes(requested);
       if (!validation.ok) return { ok: false, reason: "invalid_scope", ticket: t, paths: validation.outside };
       const scope = effectiveScope(slug, t.files);
-      const additions = requested.filter((file) => !commitScope.isInScope(file, scope));
-      const covered = requested.filter((file) => commitScope.isInScope(file, scope));
+      const implicitFragment = commitScope.ticketReleaseFragment(t.ref);
+      const additions = requested.filter((file) => file !== implicitFragment && !commitScope.isInScope(file, scope));
+      const covered = requested.filter((file) => file === implicitFragment || commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();
       touchClaimActivity(t, by, now);
       const request = { by, files: additions, requested, covered, at: now };

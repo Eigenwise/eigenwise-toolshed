@@ -125,7 +125,7 @@ test('the Sidequest build layout expands tracked source paths without granting s
     complexityWhy: 'The dispatch snapshot must include the tracked output.',
   });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
-  assert.deepEqual(prepared.ticket.dispatch.declaredFiles, [source, output]);
+  assert.deepEqual(prepared.ticket.dispatch.declaredFiles, [source, output, `.release/unreleased/${ticket.ref}.md`]);
 });
 
 test('ambiguous generated output mappings do not admit a source', () => {

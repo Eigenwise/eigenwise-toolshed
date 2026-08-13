@@ -849,20 +849,22 @@ function createDispatch(dependencies) {
         }
       }
       const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
-      const declaredFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t.files)])) : effectiveScope(slug, t.files);
+      const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t.files)])) : effectiveScope(slug, t.files);
       const readonly = dispatchReadOnly(t);
       const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
       const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
-      const readOnlySharedCheckout = readonly && declaredFiles.length === 0 && !sharedTreeArtifactRequested(t) && !explicitIsolation;
+      const readOnlySharedCheckout = readonly && effectiveFiles.length === 0 && !sharedTreeArtifactRequested(t) && !explicitIsolation;
       const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
       let sharedTree = worktreeIsolation ? requestedSharedTree || readOnlySharedCheckout : true;
-      const nonRepoOutput = nonRepoExternalOutput(t, declaredFiles);
-      const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && declaredFiles.length ? worktreeIsolationWarning(slug) : null;
+      const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
+      const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null;
       if (worktreeWarning) sharedTree = true;
       const category = getCategory(ticketCategory(t), { project: slug });
-      const artifactRoot = sharedTree && declaredFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, declaredFiles[0]) : null;
+      const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
       const artifactMode = Boolean(artifactRoot);
-      const artifactScope = artifactMode ? declaredFiles[0] : null;
+      const releaseFragment = !artifactMode && t.files?.length ? commitScope.ticketReleaseFragment(t.ref) : null;
+      const declaredFiles = releaseFragment && !commitScope.isInScope(releaseFragment, effectiveFiles) ? [...effectiveFiles, releaseFragment] : effectiveFiles;
+      const artifactScope = artifactMode ? effectiveFiles[0] : null;
       const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
       t.dispatchExecutor = stableExecutorName(t, artifactMode);
       const launchSeq = nextDispatchLaunchSeq(current);

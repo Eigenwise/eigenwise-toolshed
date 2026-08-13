@@ -1109,7 +1109,7 @@ test('pulse exposes an immediate refused scope ruling', async () => {
   await callTool('scopeRequest', { project, ref: ticket.ref, by, files: ['lib/b.js'] });
 
   const ruled = await callTool('pulse', { project, ref: ticket.ref });
-  assert.deepEqual(ruled.scope.files, ['lib/a.js']);
+  assert.deepEqual(ruled.scope.files, ['lib/a.js', `.release/unreleased/${ticket.ref}.md`]);
   assert.equal(ruled.scope.request, undefined);
   assert.equal(ruled.scope.lastRuling.state, 'refused');
   assert.deepEqual(ruled.scope.lastRuling.refused, ['lib/b.js']);
@@ -2400,6 +2400,25 @@ test('MCP scopeRequest derives barrel registration without widening past the gov
 
 
 
+test('MCP scopeRequest reports the implicit release fragment as covered for its dispatched ticket', async () => {
+  const fixture = isolatedDispatch('sq-mcp-release-scope-', 'release-scope-worker', ['plugins/sidequest/src/lib/store/tickets.ts']);
+  const fragment = `.release/unreleased/${fixture.ref}.md`;
+
+  const requested = await callTool('scopeRequest', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    files: [fragment],
+  });
+
+  assert.equal(requested.state, 'granted');
+  assert.deepEqual(requested.covered, [fragment]);
+  assert.deepEqual(requested.refused, []);
+  assert.deepEqual(store.getTicket(fixture.project, fixture.ref).dispatch.declaredFiles, [
+    'plugins/sidequest/src/lib/store/tickets.ts', fragment,
+  ]);
+});
+
 test('MCP scopeRequest auto-approves a concrete path inside the declared plugin without ending the attempt', async () => {
   const fixture = isolatedDispatch('sq-mcp-package-scope-', 'a1384package', ['plugins/sidequest/src/lib/store/tickets.ts']);
   const requestedFile = 'plugins/sidequest/src/lib/store/dispatch.ts';
@@ -2494,7 +2513,7 @@ test('MCP update lets the claim holder narrow live dispatch scope but refuses co
   await callTool('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
   const narrowed = store.getTicket(project, ticket.ref);
   assert.deepEqual(narrowed.files, ['lib/allowed.js']);
-  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js'], 'live dispatch scope sheds the removed path');
+  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js', `.release/unreleased/${ticket.ref}.md`], 'live dispatch scope sheds the removed path but retains its ticket-bound release fragment');
 
   const refused = await callToolRaw('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js', 'foreign/new.js'] });
   assert.equal(refused.isError, true);
