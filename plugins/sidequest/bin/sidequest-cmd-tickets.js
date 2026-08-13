@@ -14,7 +14,7 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { fail, resolveProject } = require("./sidequest-cmd-shared");
+const { bodyFromOpts, fail, resolveProject } = require("./sidequest-cmd-shared");
 const PRIORITY_MARK = { urgent: "!!", high: "!", normal: "", low: "·" };
 function modelMark(t) {
   if (!t.model && !t.effort) return "";
@@ -104,11 +104,15 @@ function ticketRouteFromOpts(opts, allowClear = false) {
   if (!store.availableRoute(route.model)) fail(`ticket route override model "${route.model}" isn't currently available.`);
   return route;
 }
-function addPreview(opts, category, complexity) {
+async function ticketDescriptionFromOpts(opts, command) {
+  return bodyFromOpts(Object.assign({}, opts, { body: opts.body ?? opts.desc ?? opts.description }), command);
+}
+async function addPreview(opts, category, complexity) {
+  const description = await ticketDescriptionFromOpts(opts, "add");
   const priority = store.VALID_PRIORITY.includes(String(opts.priority || "").toLowerCase()) ? String(opts.priority).toLowerCase() : "normal";
   return {
     title: String(opts.title).trim().slice(0, 300) || "Untitled",
-    description: String(opts.desc || opts.description || "").trim(),
+    description: String(description ?? opts.desc ?? opts.description ?? opts.body ?? "").trim(),
     status: String(opts.status || "todo").toLowerCase(),
     priority,
     highStakes: highStakesFromOpts(opts) || false,
@@ -134,7 +138,7 @@ async function cmdAdd(opts) {
   if (opts.priority === "medium") opts.priority = "normal";
   const input = validatedAddInput(opts);
   if (opts["dry-run"]) {
-    const ticket2 = addPreview(opts, input.category, input.complexity);
+    const ticket2 = await addPreview(opts, input.category, input.complexity);
     if (opts.json) {
       process.stdout.write(JSON.stringify({ ok: true, dryRun: true, ticket: ticket2 }, null, 2) + "\n");
       return;
@@ -144,12 +148,13 @@ async function cmdAdd(opts) {
     return;
   }
   const { slug, meta } = await resolveProject(opts);
+  const description = await ticketDescriptionFromOpts(opts, "add");
   const category = input.category == null ? null : categoryIdOrFail(slug, input.category);
   const route = ticketRouteFromOpts(opts);
   const warnings = [];
   const created = store.createTicket(slug, {
     title: opts.title,
-    description: opts.desc || opts.description || "",
+    description: description ?? opts.desc ?? opts.description ?? "",
     priority: opts.priority,
     status: opts.status,
     highStakes: highStakesFromOpts(opts),
@@ -257,9 +262,10 @@ async function cmdUpdate(opts, positional) {
   guardDirectRouting(opts);
   const { slug, meta } = await resolveProject(opts);
   const current = store.getTicket(slug, idOrRef);
+  const description = await ticketDescriptionFromOpts(opts, "update");
   const patch = {};
   if (opts.title != null) patch.title = opts.title;
-  if (opts.desc != null || opts.description != null) patch.description = opts.desc != null ? opts.desc : opts.description;
+  if (description != null || opts.desc != null || opts.description != null) patch.description = description ?? (opts.desc != null ? opts.desc : opts.description);
   if (opts.status != null) patch.status = opts.status;
   if (opts.priority != null) patch.priority = opts.priority === "medium" ? "normal" : opts.priority;
   if (opts["high-stakes"] !== void 0) patch.highStakes = highStakesFromOpts(opts);
