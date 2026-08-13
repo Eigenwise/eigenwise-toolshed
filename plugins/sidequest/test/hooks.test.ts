@@ -2229,6 +2229,14 @@ test('session-start excludes the retired generic-agent bypass', () => {
   }
 });
 
+test('session-start: tells orchestrators to arm the board watch when Monitor exists', () => {
+  for (const source of ['', 'compact', 'resume']) {
+    const context = runHookForBudget(SESSION, { session_id: `watch-${source || 'startup'}`, source });
+    assert.match(context, /Arm a persistent Monitor running node "?.+[/\\]bin[/\\]sidequest\.js"? watch --project <path>/);
+    assert.match(context, /Skip it if Monitor is unavailable/);
+  }
+});
+
 test('session-start adds model-specific checkpoint guidance only for eligible models', () => {
   const defaultContext = runHook(SESSION, { session_id: 'checkpoint-none' });
   const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });
