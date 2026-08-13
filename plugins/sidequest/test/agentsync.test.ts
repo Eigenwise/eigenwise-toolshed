@@ -250,6 +250,8 @@ test('SQ-760: oversized briefing packets stay bounded and direct compact comment
   assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(briefing, 'utf8')} bytes`);
   assert.match(briefing, /Executor ContextProjection v1/);
   assert.match(briefing, /Aggregate budget: 24576 bytes/);
+  assert.match(briefing, /Budget tool calls and run the declared verify command early/);
+  assert.match(briefing, /commit and submit the verified portion with evidence and plainly name what remains/);
   assert.match(briefing, /Omitted context/);
   assert.match(briefing, /Retrieve with mcp__plugin_sidequest_board__/);
 });
