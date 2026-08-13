@@ -32,7 +32,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   reconcile: ['session', 'reason', 'ref'],
   work: ['ref'],
   drain: ['ref'],
-  'groom-close': ['by', 'reason', 'integration', 'override-legacy-scope'],
+  'groom-close': ['by', 'reason', 'integration', 'delivery-commit', 'recovery-evidence', 'override-legacy-scope'],
   verdict: ['text', 'outcome', 'why', 'constraint'],
   release: ['by', 'reason', 'oracle', 'release-kind', 'command', 'exit-code', 'output-tail', 'candidate', 'deliverable', 'force', 'status'],
   'scope-request': ['by', 'file', 'force'],
@@ -171,7 +171,7 @@ const HELP_COMMANDS: any = {
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: 'sidequest work|drain',
-  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration] [--override-legacy-scope]',
+  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"]] [--override-legacy-scope]',
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair"',
@@ -261,7 +261,7 @@ Working the board safely (multi-agent):
   sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
-  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration] [--override-legacy-scope]   control-plane closure; --integration consumes a submitted ticket after publish, and the override permits only legacy submissions without a scope snapshot
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"]] [--override-legacy-scope]   control-plane closure; --integration consumes a submitted ticket after publish, --delivery-commit records a hand-delivered commit after release, and the override permits only legacy submissions without a scope snapshot
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling

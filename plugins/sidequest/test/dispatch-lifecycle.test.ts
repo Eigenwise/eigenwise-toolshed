@@ -1477,6 +1477,21 @@ test('control plane records a hand delivery after recovering the dead unclaimed 
   assert.equal(closed.ticket.completion.delivery.commit, recordedCommit);
 });
 
+test('claim holders can release routed write scope without submitting first', () => {
+  const ticket = createFixture('claim-holder release fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `claim-holder-release-${Date.now()}` });
+  const owner = `claim-holder-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, owner, { status: 'todo', source: 'test' }).ok, true);
+  const released = store.getTicket(slug, ticket.ref);
+  assert.equal(released.claim, null);
+  assert.equal(released.dispatchNonce, null);
+});
+
 test('ordinary, resumed, and reworked launches all carry a readable name and the route prefix', () => {
   const ticket = createFixture('Rebuild the release engine safely');
   const sessionId = `launch-name-${Date.now()}`;

@@ -80,22 +80,10 @@ function marketplacePlugins(repoPath) {
   });
 }
 function missingReleaseFragment(repoPath, ref, changedPaths) {
-  const plugins = marketplacePlugins(repoPath).filter((plugin) => changedPaths.some((changedPath) => changedPath === plugin.source || changedPath.startsWith(`${plugin.source}/`)));
-  if (!plugins.length) return null;
-  const fragmentPath = `.release/unreleased/${ref}.md`;
-  return changedPaths.includes(fragmentPath) && fs.existsSync(path.join(repoPath, fragmentPath)) ? null : { fragmentPath, plugins };
+  return store.missingReleaseFragment(repoPath, ref, changedPaths);
 }
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Create it with:
----
-ref: ${ref}
-title: <short user-facing title>
-bump: patch
-plugins:
-${plugins.map((plugin) => `  - ${plugin.name}`).join("\n")}
----
-
-Describe the user-facing change.`;
+  return store.missingReleaseFragmentMessage(ref, fragmentPath, plugins);
 }
 function combinedRefusal(ticket, failures) {
   const primary = failures[0];

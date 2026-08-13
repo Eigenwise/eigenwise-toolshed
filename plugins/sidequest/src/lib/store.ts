@@ -35,6 +35,7 @@ const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
+const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require('./worktrees.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels, providerReadiness } = require('./discovery.js');
@@ -1722,10 +1723,11 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (expectedClaim && (!held?.by || held.by !== expectedClaim.by || held.at !== expectedClaim.at)) {
       return { ok: false, reason: 'claim_changed', ticket: t, claim: held || null };
     }
-    if (!controlPlaneDone && submissionOwner && submissionOwner !== by) {
+    const bypassOwnership = controlPlaneDone && opts.completionAuthority === CONTROL_PLANE_COMPLETION;
+    if (!bypassOwnership && submissionOwner && submissionOwner !== by) {
       return { ok: false, reason: 'not_owner', ticket: t, submission: t.submission, ...(held ? { claim: held } : {}) };
     }
-    if (!controlPlaneDone && heldOwner && heldOwner !== by && !claimReclaimable(t)) {
+    if (!bypassOwnership && heldOwner && heldOwner !== by && !claimReclaimable(t)) {
       return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     }
     const oracleRequested = nullableText(opts.oracle);
@@ -1991,6 +1993,32 @@ function linkedReviewPass(slug?: any, ticket?: any) {
 const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass. Record one with a comment starting reviewed-by: <ref>, or link a completed review-audit ticket.';
 const DELIVERY_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 
+function missingReleaseFragment(repoPath?: any, ref?: any, changedPaths?: any) {
+  const repo = String(repoPath || '').trim();
+  if (!repo) return null;
+  const marketplacePath = path.join(repo, '.claude-plugin', 'marketplace.json');
+  if (!fs.existsSync(marketplacePath)) return null;
+  const manifest = JSON.parse(fs.readFileSync(marketplacePath, 'utf8'));
+  const plugins = Array.isArray(manifest?.plugins) ? manifest.plugins : [];
+  const changed = Array.isArray(changedPaths) ? changedPaths : [];
+  const shipped = plugins.flatMap((plugin: any) => {
+    const name = String(plugin?.name || '').trim();
+    const source = String(plugin?.source || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+    return name && source && !source.startsWith('../') && changed.some((changedPath: any) => changedPath === source || changedPath.startsWith(`${source}/`))
+      ? [{ name, source }]
+      : [];
+  });
+  if (!shipped.length) return null;
+  const fragmentPath = `.release/unreleased/${ref}.md`;
+  return changed.includes(fragmentPath) && fs.existsSync(path.join(repo, fragmentPath))
+    ? null
+    : { fragmentPath, plugins: shipped };
+}
+
+function missingReleaseFragmentMessage(ref?: any, fragmentPath?: any, plugins?: any) {
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin: any) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin: any) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
+}
+
 function recordedDelivery(slug?: any, commit?: any, evidence?: any) {
   const requestedCommit = String(commit || '').trim();
   const recordedEvidence = String(evidence || '').trim();
@@ -2084,7 +2112,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
       return {
         ok: false,
         reason: 'active_dispatch',
-        message: `${ticket.ref} still has a live claim or an open dispatch. Record terminal-agent evidence with recoverDispatch before recording a hand delivery.`,
+        message: `${ticket.ref} still has a live claim or an open dispatch, so hand delivery cannot close it. Release it first: \`sidequest release ${ticket.ref} --by ${ticket.claim?.by ? String(ticket.claim.by) : '<claim holder>'}\`, then re-run this closure with the same evidence. Releasing does not discard work already committed.`,
         ticket,
       };
     }
@@ -2103,6 +2131,13 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   if (!by) return { ok: false, reason: 'identity_required', ticket };
   const delivery = purpose === 'delivery' ? recordedDelivery(slug, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
+  const missingFragment = delivery ? missingReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || '', delivery.commit)) : null;
+  if (missingFragment) return {
+    ok: false,
+    reason: 'missing_release_fragment',
+    message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins),
+    ticket,
+  };
   let legacyScopeOverride = false;
   if (purpose === 'integration') {
     const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
@@ -2531,6 +2566,8 @@ module.exports = {
   releaseTicket,
   completeTicket,
   completeTicketAsControlPlane,
+  missingReleaseFragment,
+  missingReleaseFragmentMessage,
   clearUnclaimedDispatch,
   closeTicketForGrooming,
   makeWorkedBy,

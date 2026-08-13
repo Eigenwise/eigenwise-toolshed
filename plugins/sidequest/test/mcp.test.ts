@@ -1812,6 +1812,24 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
 });
 
+test('MCP delivery closure points live claims at the owning release command', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'live hand delivery closure', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm delivery refusal names a command accepted by the CLI',
+  });
+  const by = 'delivery-claim-holder';
+  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The delivery refusal fixture needs a direct claim.' })).ok, true);
+
+  const refused = await callTool('groomClose', {
+    project, ref: ticket.ref, by: 'integrator', reason: 'Delivered the candidate by hand.', deliveryCommit: gitAt(worktree, ['rev-parse', 'HEAD']),
+  });
+  assert.equal(refused.reason, 'active_dispatch');
+  assert.match(refused.message, new RegExp(`sidequest release ${ticket.ref} --by ${by}`));
+  assert.doesNotMatch(refused.message, /recoverDispatch/);
+});
+
 test('MCP submit requires release fragments for marketplace plugin changes', async () => {
   const missingWorktree = createGitWorktree();
   addMarketplaceFixture(missingWorktree);
