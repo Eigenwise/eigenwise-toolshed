@@ -620,7 +620,7 @@ test('SQ-1862: win32 Python projects receive project-local UTF-8 output settings
   assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { env: { PYTHONIOENCODING: 'utf-8' } });
 });
 
-test('SQ-1862: dispatch reports the next-session Python encoding write', () => {
+test('SQ-1862: dispatch reports the next-session Python encoding write', { skip: process.platform !== 'win32' && 'the dispatch path only writes PYTHONIOENCODING on win32' }, () => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1862-dispatch-python-project-'));
   fs.writeFileSync(path.join(project, 'main.py'), 'print("hello")\n');
   const claudeHome = goodTransportRegistry(project);

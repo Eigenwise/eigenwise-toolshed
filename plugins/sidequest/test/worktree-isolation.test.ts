@@ -192,7 +192,9 @@ test('a harness worktree beneath the invoking linked worktree is allowed', () =>
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
     assert.equal(
       store.getTicket(slug, ticket.ref).dispatch.worktree,
-      process.platform === 'win32' ? fs.realpathSync(harnessWorktree).toLowerCase() : fs.realpathSync(harnessWorktree),
+      // realpathSync.native expands 8.3 short names (runner~1) the way the store's
+      // canonicalization does; plain realpathSync leaves them and diverges on CI.
+      process.platform === 'win32' ? fs.realpathSync.native(harnessWorktree).toLowerCase() : fs.realpathSync(harnessWorktree),
     );
     const target = path.join(harnessWorktree, 'README.md');
     assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, harnessWorktree)), null);

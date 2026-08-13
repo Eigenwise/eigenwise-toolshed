@@ -86,7 +86,7 @@ test('keeps other projects out of the SessionStart health context', () => {
   assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
-test('reports stale Sidequest worktree processes but ignores live worktrees', () => {
+test('reports stale Sidequest worktree processes but ignores live worktrees', { skip: process.platform !== 'win32' && 'worktree root derivation uses host path semantics; the feature is win32-gated' }, () => {
   const project = 'C:/work/current';
   const stalePath = 'C:\\sidequest\\worktrees\\current-3e4fa2ae\\agent-stale';
   const livePath = 'C:\\sidequest\\worktrees\\current-3e4fa2ae\\agent-live';
