@@ -462,6 +462,7 @@ test('transcript path presence and value cannot split one Stop batch', async () 
   ]);
   await waitForLockContenders(lockDirectory, 3);
   fs.rmSync(fixtureOwnerFile, { force: true });
+  fs.writeFileSync(path.join(lockDirectory, 'late-entry'), '');
   fs.rmSync(lockDirectory, { recursive: true, force: true });
 
   const results = await pending;
