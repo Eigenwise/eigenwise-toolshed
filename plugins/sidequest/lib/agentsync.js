@@ -450,9 +450,10 @@ function findingCheckpointPacket(ticket) {
   const category = ticket?.category || {};
   const categoryText = [ticket?.categoryId, category.id, category.name].filter(Boolean).join(" ");
   const readOnly = ticket?.dispatch?.readonly === true;
+  const artifactMode = store.sharedTreeArtifactMode(ticket);
   const analysis = /\b(?:analysis|research|investigation)\b/i.test(categoryText);
   if (!readOnly && !analysis) return null;
-  const durableArtifact = readOnly ? "This is a read-only dispatch, so board comments are its only durable artifact." : "This is analysis, research, or investigation work.";
+  const durableArtifact = artifactMode ? "This shared-tree artifact dispatch may write only its declared artifact scope; board comments hold its findings." : readOnly ? "This is a read-only dispatch, so board comments are its only durable artifact." : "This is analysis, research, or investigation work.";
   return `${durableArtifact} Post each substantive intermediate finding as a ticket comment when it lands, including after a theory pass, a measurement, or a reproduction. Record findings only, not a progress diary. If the run dies, it should lose at most the current step, not the whole investigation.`;
 }
 function ticketWorktreeIdentity(ticket, projectPath) {

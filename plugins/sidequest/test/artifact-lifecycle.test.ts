@@ -105,7 +105,7 @@ test('an explicitly marked shared-tree artifact ticket may close with done after
   assert.strictEqual(prepared.ticket.dispatch.artifactRoot, '.claude/.codebase-info');
   assert.strictEqual(prepared.ticket.dispatch.artifactScope, '.claude/.codebase-info');
   assert.strictEqual(prepared.ticket.dispatch.readonly, true);
-  assert.strictEqual(prepared.ticket.dispatchExecutor, store.resolveExec(prepared.ticket.model, prepared.ticket.effort).agent);
+  assert.strictEqual(prepared.ticket.dispatchExecutor, store.resolveExec(prepared.ticket.model, prepared.ticket.effort).agent, 'artifactRoots authorizes this writable executor only because artifact mode pins one bounded shared-tree scope');
   const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug, PROJECT);
   assert.match(briefing, /shared checkout is the dispatch contract/i);
   assert.match(briefing, /may write only \.claude\/\.codebase-info/i);
@@ -562,6 +562,20 @@ test('artifact completion refuses filesystem indirection created after dispatch'
   assert.strictEqual(fs.readFileSync(path.join(outside, 'escaped.txt'), 'utf8'), 'outside project\n');
   assert.strictEqual(store.getTicket(slug, created.ref).status, 'doing');
   fs.unlinkSync(link);
+});
+
+test('artifact completion refuses a newly dirty path outside its artifact root', () => {
+  const created = ticket('out of root artifact', store.SHARED_TREE_ARTIFACT_MARKER);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.artifactRoot, '.claude/.codebase-info');
+  assert.strictEqual(claim(prepared, 'out-of-root-worker').ok, true);
+  writeProjectFile('.claude/other-artifact.md', 'must not survive completion\n');
+
+  const done = store.completeTicket(slug, created.ref, 'out-of-root-worker', { source: 'mcp' });
+  assert.strictEqual(done.ok, false);
+  assert.strictEqual(done.reason, 'artifact_scope_violation');
+  assert.deepStrictEqual(done.unscopedPaths, ['.claude/other-artifact.md']);
+  assert.match(done.message, /changed paths outside artifact scope \.claude\/\.codebase-info/);
 });
 
 test('artifact completion refuses a newly dirty path outside the dispatch scope', () => {

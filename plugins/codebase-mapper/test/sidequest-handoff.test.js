@@ -49,6 +49,8 @@ test('incremental map refreshes inline and reserves handoff for large drifts', (
 
 test('large incremental map handoff keeps the artifact boundary and retry limit', () => {
   assertArtifactContract(updateSkill, 'incremental map');
+  assert.match(updateSkill, /read-only category with that artifact root is ready/i);
+  assert.match(updateSkill, /refuses every other project path/i);
   assert.match(updateSkill, /Retry once only\s+when a diagnosis changes the\s+launch/);
 });
 

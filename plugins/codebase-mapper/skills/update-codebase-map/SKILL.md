@@ -63,8 +63,10 @@ further. The handoff requires the native `Agent` tool plus Sidequest `category_l
 documentation-artifact write while keeping project source read-only.
 
 - When the tools are absent, continue inline without an error banner.
-- When Sidequest is present but the category is missing, disabled, or still read-only, continue inline
-  and say: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
+- When Sidequest is present but the category is missing, disabled, or does not permit the bounded
+  `.claude/.codebase-info/` artifact root, continue inline and say: `Sidequest is loaded, but its live taxonomy cannot accept map artifacts yet.`
+- A read-only category with that artifact root is ready: shared-tree artifact mode permits the bounded
+  map write and refuses every other project path.
 - When it is ready, create one `codebase-exploration` artifact ticket with
   `files: [".claude/.codebase-info/"]` and this exact clause. Creating and dispatching this ticket is the
   required default for a full remap or large structural drift; do it immediately without checking in with
