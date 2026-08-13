@@ -31,6 +31,7 @@ __export(dispatch_preflight_exports, {
   assertDispatchTransport: () => assertDispatchTransport,
   assertSidequestInstall: () => assertSidequestInstall,
   checkSidequestInstall: () => checkSidequestInstall,
+  ensurePythonIoEncoding: () => ensurePythonIoEncoding,
   installRefusalMessage: () => installRefusalMessage,
   transportRefusalMessage: () => transportRefusalMessage
 });
@@ -42,6 +43,46 @@ const PLUGIN_ID = "sidequest@eigenwise-toolshed";
 const REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
 function claudeHomeDir(opts = {}) {
   return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path.default.join(import_node_os.default.homedir(), ".claude");
+}
+function projectContainsPythonSource(projectPath) {
+  const pending = [projectPath];
+  while (pending.length) {
+    const directory = pending.pop();
+    if (!directory) continue;
+    let entries;
+    try {
+      entries = import_node_fs.default.readdirSync(directory, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name === ".git" || entry.name === "node_modules") continue;
+      const candidate = import_node_path.default.join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(candidate);
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith(".py")) return true;
+    }
+  }
+  return false;
+}
+function ensurePythonIoEncoding(projectPath, opts = {}) {
+  if ((opts.platform || process.platform) !== "win32" || !projectContainsPythonSource(projectPath)) return { written: false };
+  const settingsPath = import_node_path.default.join(projectPath, ".claude", "settings.local.json");
+  let settings = {};
+  try {
+    settings = JSON.parse(import_node_fs.default.readFileSync(settingsPath, "utf8"));
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw new Error(`Dispatch refused: could not read project settings at ${settingsPath}: ${error.message}`);
+  }
+  const environment = settings.env;
+  if (environment != null && (typeof environment !== "object" || Array.isArray(environment))) {
+    throw new Error(`Dispatch refused: project settings env must be an object at ${settingsPath}.`);
+  }
+  if (environment && Object.hasOwn(environment, "PYTHONIOENCODING")) return { written: false, settingsPath };
+  settings.env = { ...environment || {}, PYTHONIOENCODING: "utf-8" };
+  import_node_fs.default.mkdirSync(import_node_path.default.dirname(settingsPath), { recursive: true });
+  import_node_fs.default.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}
+`, "utf8");
+  return { written: true, settingsPath };
 }
 function normalizeDir(value) {
   if (typeof value !== "string" || !value.trim()) return null;
@@ -113,6 +154,7 @@ function assertDispatchTransport(transport, opts = {}) {
   assertDispatchTransport,
   assertSidequestInstall,
   checkSidequestInstall,
+  ensurePythonIoEncoding,
   installRefusalMessage,
   transportRefusalMessage
 });

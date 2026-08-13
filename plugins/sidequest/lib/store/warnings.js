@@ -883,6 +883,10 @@ ${String(ticket?.description || "")}`;
     if (quantitativePremise) warnings.push(`Dispatch warning: ${quantitativePremise.replace("Planning-depth warning: ", "")}`);
     const worktreeWarning = dispatchState(ticket)?.worktreeWarning;
     if (worktreeWarning) warnings.push(worktreeWarning);
+    const pythonIoEncoding = dispatchState(ticket)?.pythonIoEncoding;
+    if (pythonIoEncoding?.written) {
+      warnings.push(`Dispatch update: wrote PYTHONIOENCODING=utf-8 to ${pythonIoEncoding.settingsPath}. Claude Code reads project settings env at session start, so it applies from the next session.`);
+    }
     const continuation = dispatchState(ticket)?.continuation;
     if (continuation?.mode === "retained_worktree_resume") {
       warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);

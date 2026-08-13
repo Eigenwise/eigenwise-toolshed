@@ -9,6 +9,15 @@ export interface InstallCheckOptions {
   claudeHome?: string;
 }
 
+export interface PythonIoEncodingCheckOptions {
+  platform?: NodeJS.Platform;
+}
+
+export interface PythonIoEncodingCheckResult {
+  written: boolean;
+  settingsPath?: string;
+}
+
 export type InstallCheckReason = 'missing' | 'stale' | 'registry_unreadable';
 
 export interface InstallCheckResult {
@@ -21,6 +30,47 @@ export interface InstallCheckResult {
 
 function claudeHomeDir(opts: InstallCheckOptions = {}): string {
   return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || path.join(os.homedir(), '.claude');
+}
+
+function projectContainsPythonSource(projectPath: string): boolean {
+  const pending = [projectPath];
+  while (pending.length) {
+    const directory = pending.pop();
+    if (!directory) continue;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch (_) {
+      continue;
+    }
+    for (const entry of entries) {
+      if (entry.name === '.git' || entry.name === 'node_modules') continue;
+      const candidate = path.join(directory, entry.name);
+      if (entry.isDirectory()) pending.push(candidate);
+      else if (entry.isFile() && entry.name.toLowerCase().endsWith('.py')) return true;
+    }
+  }
+  return false;
+}
+
+export function ensurePythonIoEncoding(projectPath: string, opts: PythonIoEncodingCheckOptions = {}): PythonIoEncodingCheckResult {
+  if ((opts.platform || process.platform) !== 'win32' || !projectContainsPythonSource(projectPath)) return { written: false };
+  const settingsPath = path.join(projectPath, '.claude', 'settings.local.json');
+  let settings: Record<string, unknown> = {};
+  try {
+    settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
+  } catch (error: any) {
+    if (error?.code !== 'ENOENT') throw new Error(`Dispatch refused: could not read project settings at ${settingsPath}: ${error.message}`);
+  }
+  const environment = settings.env;
+  if (environment != null && (typeof environment !== 'object' || Array.isArray(environment))) {
+    throw new Error(`Dispatch refused: project settings env must be an object at ${settingsPath}.`);
+  }
+  if (environment && Object.hasOwn(environment, 'PYTHONIOENCODING')) return { written: false, settingsPath };
+  settings.env = { ...(environment || {}), PYTHONIOENCODING: 'utf-8' };
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  fs.writeFileSync(settingsPath, `${JSON.stringify(settings, null, 2)}\n`, 'utf8');
+  return { written: true, settingsPath };
 }
 
 function normalizeDir(value: unknown): string | null {
