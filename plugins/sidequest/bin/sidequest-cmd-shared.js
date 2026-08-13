@@ -35,6 +35,12 @@ ${lines}`);
   const dir = store.nearestRepoRoot(start);
   return store.ensureProject(dir, opts.name);
 }
+async function resolveWatchProject(opts) {
+  if (!opts.project) fail("watch: --project must name the board root or registered board identity.");
+  const resolved = await resolveProject(opts);
+  if (!resolved?.slug) fail("watch: could not resolve the requested board identity.");
+  return resolved;
+}
 function workerId(opts) {
   return String(
     opts.by || process.env.SIDEQUEST_AGENT || process.env.CLAUDE_SESSION_ID || "agent@" + os.hostname()
@@ -67,4 +73,4 @@ function addBodyComment(slug, idOrRef, by, body, source) {
   if (!body || !String(body).trim()) return null;
   return store.addComment(slug, idOrRef, { by, body, kind: "comment", source });
 }
-module.exports = { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };

@@ -46,6 +46,13 @@ async function resolveProject(opts: any) {
 }
 
 
+async function resolveWatchProject(opts: any) {
+  if (!opts.project) fail('watch: --project must name the board root or registered board identity.');
+  const resolved = await resolveProject(opts);
+  if (!resolved?.slug) fail('watch: could not resolve the requested board identity.');
+  return resolved;
+}
+
 function workerId(opts: any) {
   return String(
     opts.by || process.env.SIDEQUEST_AGENT || process.env.CLAUDE_SESSION_ID || 'agent@' + os.hostname()
@@ -94,4 +101,4 @@ function addBodyComment(slug: any, idOrRef: any, by: any, body: any, source: any
 }
 
 
-module.exports = { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, resolveProject, resolveWatchProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };
