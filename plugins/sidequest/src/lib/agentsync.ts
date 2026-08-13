@@ -832,6 +832,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     ticket.executorVerify && ticket.executorVerifyKind !== 'attestation'
       ? 'Run it through ' + capturedVerifyCommand(ticket.executorVerify) + '; post [sidequest:verify-start] before it only for background verification or an expected no-op, and always post [sidequest:verify-complete] with status first after it exits.'
       : '',
+    'Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted.',
     ...(highStakes.length ? [highStakes.join('\n')] : []),
     closeout || '',
     'Stay within declared scope. If required context is omitted below, fetch it once with its listed retrieval call before editing. Do not guess or silently skip it.',
