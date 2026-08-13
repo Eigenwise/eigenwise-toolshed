@@ -233,7 +233,9 @@ function createTickets(dependencies) {
   }
   function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
-    if (dispatch && dispatch.sharedTree === false && !dispatch.terminalAt) dispatch.declaredFiles = effectiveScope(slug, ticket?.files);
+    if (!dispatch || dispatch.terminalAt) return;
+    const refreshed = effectiveScope(slug, ticket?.files);
+    dispatch.declaredFiles = dispatch.sharedTree === false ? refreshed : normalizeFiles([...Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : [], ...refreshed]);
   }
   function scopeExpansionCommand(ticket, additions) {
     const ref = String(ticket?.ref || "").trim();
