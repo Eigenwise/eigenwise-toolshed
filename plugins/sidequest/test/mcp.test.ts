@@ -735,6 +735,23 @@ test('story_log reads, appends from a claimed member, and rotates after promotio
   assert.match(denied.content[0].text, /rotate:true requires by:"orchestrator"/);
 });
 
+test('MCP comment attribution keeps the control plane distinct from a claim holder', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-comment-attribution-'))).slug;
+  const ticket = store.createTicket(project, { title: 'Comment authoring' });
+  assert.equal(store.claimTicket(project, ticket.ref, 'claim-holder', { direct: true, sessionId: 'executor-session' }).ok, true);
+
+  const controlPlane = freshMcpServer();
+  const controlPlaneComment = await callToolOn(controlPlane, 'comment', { project, ref: ticket.ref, body: 'Control-plane comment.' });
+  assert.ok(controlPlaneComment.commentId, 'control-plane comment is acknowledged');
+  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, `orchestrator-${MCP_SESSION_ID.slice(0, 12)}`);
+
+  await callTool('comment', { project, ref: ticket.ref, body: 'Executor comment.', by: 'claim-holder' });
+  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'claim-holder');
+
+  await callTool('comment', { project, ref: ticket.ref, body: 'Named control-plane comment.', by: 'orchestrator-review' });
+  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'orchestrator-review');
+});
+
 test('MCP accepts curated natural aliases and names each accepted mapping', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-argument-aliases-'))).slug;
   const first = store.createTicket(project, { title: 'Alias source', source: 'test' });
@@ -794,6 +811,9 @@ test('CLI accepts natural aliases and list output flags', () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-argument-aliases-'))).slug;
   const first = store.createTicket(project, { title: 'CLI alias source', source: 'test' });
   const second = store.createTicket(project, { title: 'CLI alias target', source: 'test' });
+  const controlPlaneComment = runCli(['comment', first.ref, '-m', 'CLI control-plane comment', '--project', project, '--json']);
+  assert.equal(controlPlaneComment.comment.by, `orchestrator-${MCP_SESSION_ID.slice(0, 12)}`);
+
   const comment = runCli(['comment', first.ref, '--message', 'CLI message alias', '--project', project, '--json']);
   assert.deepEqual(comment.acceptedAliases, ['accepted message as body']);
   assert.equal(store.getTicket(project, first.ref).comments.at(-1).body, 'CLI message alias');
@@ -3434,11 +3454,11 @@ test('MCP verdict creates a missing oracle round and refuses a ticket with no or
   assert.match(refused.message, /not awaiting an oracle verdict/i);
 });
 
-test('MCP comments default to the active claim holder', async () => {
+test('MCP executor comments without an author keep the active claim holder identity', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-comment-claim-holder')).slug;
   const ticket = store.createTicket(project, {
-    title: 'comment claim holder fixture', complexity: 1,
-    complexityWhy: 'prove an omitted MCP comment author remains eligible for the claimant verification gates',
+    title: 'comment control-plane fixture', complexity: 1,
+    complexityWhy: 'prove an omitted MCP comment author remains distinct from the claim holder',
   });
   const by = 'mcp-comment-claim-holder';
   assert.equal((await callTool('claim', {
@@ -3449,7 +3469,7 @@ test('MCP comments default to the active claim holder', async () => {
   assert.equal((await callTool('comment', {
     project,
     ref: ticket.ref,
-    body: '[sidequest:negative-control] npm run test:files test/fixture.test.js failed=1',
+    body: 'Executor comment without an explicit author.',
   })).ok, true);
 
   assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, by);

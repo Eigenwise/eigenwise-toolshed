@@ -14,7 +14,7 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
-const { fail, resolveProject, workerId, sessionId, bodyFromOpts } = require("./sidequest-cmd-shared");
+const { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts } = require("./sidequest-cmd-shared");
 const { modelMark, PRIORITY_MARK } = require("./sidequest-cmd-tickets");
 const { validateModelFilter } = require("./sidequest-cmd-execution");
 async function cmdSweepClaims(opts) {
@@ -215,7 +215,7 @@ async function cmdComment(opts, positional) {
   const body = await bodyFromOpts(acceptedMessage ? Object.assign({}, opts, { body: opts.message }) : opts, "comment");
   if (!body || !String(body).trim()) fail('comment: -m/--body or --body-file is required, e.g. sidequest comment SQ-3 -m "note"');
   const { slug, meta } = await resolveProject(opts);
-  const by = workerId(opts);
+  const by = controlPlaneIdentity(opts);
   const res = store.addComment(slug, idOrRef, { by, body, source: opts.source || "cli" });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res, acceptedMessage ? { acceptedAliases: ["accepted message as body"] } : {}), null, 2) + "\n");

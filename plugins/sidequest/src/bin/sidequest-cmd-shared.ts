@@ -52,6 +52,15 @@ function workerId(opts: any) {
   );
 }
 
+function controlPlaneIdentity(opts: any) {
+  const explicitBy = String(opts?.by || '').trim();
+  if (explicitBy) return explicitBy;
+  const executorBy = String(process.env.SIDEQUEST_AGENT || '').trim();
+  if (executorBy) return executorBy;
+  const session = sessionId(opts);
+  return session ? `orchestrator-${session.slice(0, 12)}` : 'control-plane';
+}
+
 // The session a claim is taken under, so a SessionEnd / SubagentStop hook can
 // release exactly that session's claims immediately instead of waiting out the
 // TTL (see store.reconcileSession). An explicit --session wins; otherwise fall
@@ -85,4 +94,4 @@ function addBodyComment(slug: any, idOrRef: any, by: any, body: any, source: any
 }
 
 
-module.exports = { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };

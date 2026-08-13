@@ -83,6 +83,13 @@ function sessionOf(args?: any) {
   return runtimeSessionId() || (args && String(args.session || '').trim()) || null;
 }
 
+function controlPlaneIdentity(by?: any, session?: any) {
+  const explicitBy = String(by || '').trim();
+  if (explicitBy) return explicitBy;
+  const sessionId = String(session || runtimeSessionId() || '').trim();
+  return sessionId ? `orchestrator-${sessionId.slice(0, 12)}` : 'control-plane';
+}
+
 function requireDispatchSession() {
   const sessionId = runtimeSessionId();
   if (!sessionId) {
@@ -1164,6 +1171,7 @@ module.exports = {
   resolveProject,
   runtimeSessionId,
   sessionOf,
+  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,
