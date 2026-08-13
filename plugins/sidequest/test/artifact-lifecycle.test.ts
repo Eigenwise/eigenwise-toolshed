@@ -246,13 +246,24 @@ test('read-only done ignores dirty paths outside its declared scope', () => {
   assert.doesNotMatch(JSON.stringify(done), new RegExp(relativePath));
 });
 
-test('non-repo output is refused at declaration time', () => {
+test('readonly override allows external output to dispatch and close with done', () => {
   const outside = path.join(os.tmpdir(), `sq-nonrepo-delta-${process.pid}.html`);
+  const created = store.createTicket(slug, {
+    title: 'external report',
+    description: 'Write an external report only.',
+    category: 'repository-write',
+    readonly: true,
+    files: [outside],
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, true);
+  assert.strictEqual(claim(prepared, 'nonrepo-output-worker').ok, true);
 
-  assert.throws(
-    () => ticket('external report', 'Write an external report only.', [outside]),
-    /classify as non-repo\/artifact work/,
-  );
+  const done = store.completeTicket(slug, created.ref, 'nonrepo-output-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.status, 'done');
 });
 
 test('read-only dispatches without declared files may close with done', () => {
@@ -307,13 +318,18 @@ test('readonly:false selects the submission-required write path', () => {
   assert.match(done.message, /readonly:false selects this write path/i);
 });
 
-test('read-only external output is refused at declaration time', () => {
+test('readonly category external output may dispatch and close with done', () => {
   const outside = path.join(os.tmpdir(), `sq-external-audition-${process.pid}.html`);
+  const created = ticket('external HTML audition', 'Write an external HTML audition.', [outside]);
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: false });
+  assert.strictEqual(prepared.ticket.dispatch.nonRepoOutput, true);
+  assert.strictEqual(claim(prepared, 'external-output-worker').ok, true);
 
-  assert.throws(
-    () => ticket('external HTML audition', 'Write an external HTML audition.', [outside]),
-    /classify as non-repo\/artifact work/,
-  );
+  const done = store.completeTicket(slug, created.ref, 'external-output-worker', { source: 'mcp' });
+
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.status, 'done');
+  assert.strictEqual(done.ticket.submission == null, true);
 });
 
 test('repository-category external output is refused at declaration time', () => {

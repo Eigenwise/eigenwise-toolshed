@@ -959,6 +959,7 @@ const {
   execFileSync,
   executorText,
   fs,
+  getCategory,
   getTicket,
   listTickets,
   makeWorkedBy,
