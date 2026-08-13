@@ -40,6 +40,14 @@ function workerId(opts) {
     opts.by || process.env.SIDEQUEST_AGENT || process.env.CLAUDE_SESSION_ID || "agent@" + os.hostname()
   );
 }
+function controlPlaneIdentity(opts) {
+  const explicitBy = String(opts?.by || "").trim();
+  if (explicitBy) return explicitBy;
+  const executorBy = String(process.env.SIDEQUEST_AGENT || "").trim();
+  if (executorBy) return executorBy;
+  const session = sessionId(opts);
+  return session ? `orchestrator-${session.slice(0, 12)}` : "control-plane";
+}
 function sessionId(opts) {
   const v = opts && opts.session || process.env.CLAUDE_CODE_SESSION_ID || // the id the runtime actually exports to tool subprocesses
   process.env.CLAUDE_SESSION_ID || // tolerated legacy/alt spelling
@@ -59,4 +67,4 @@ function addBodyComment(slug, idOrRef, by, body, source) {
   if (!body || !String(body).trim()) return null;
   return store.addComment(slug, idOrRef, { by, body, kind: "comment", source });
 }
-module.exports = { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment };
+module.exports = { fail, resolveProject, workerId, controlPlaneIdentity, sessionId, bodyFromOpts, addBodyComment };

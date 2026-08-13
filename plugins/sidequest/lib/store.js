@@ -1483,10 +1483,15 @@ function claimTicket(slug, idOrRef, by, opts) {
       return { ok: false, reason: "claimed", ticket: t2, claim: held2 };
     }
     const claimRuntime = currentDispatch ? {
-      sessionId: currentDispatch.sessionId || null,
+      sessionId: currentDispatch.sessionId || opts.sessionId || null,
       executor: currentDispatch.executor || null,
       agentId: currentDispatch.agentId || null,
       agentName: currentDispatch.agentName || null
+    } : opts.sessionId ? {
+      sessionId: String(opts.sessionId),
+      executor: null,
+      agentId: null,
+      agentName: null
     } : null;
     t2.claim = {
       by,

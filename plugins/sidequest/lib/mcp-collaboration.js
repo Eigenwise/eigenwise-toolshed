@@ -15,6 +15,7 @@ const {
   resolveProject,
   runtimeSessionId,
   sessionOf,
+  controlPlaneIdentity,
   requireDispatchSession,
   workflowRecipe,
   requireBy,
@@ -112,9 +113,11 @@ const tools = [
       required: ["ref", "body"]
     },
     handler(args) {
-      const { slug, meta } = resolveProject(args.project);
+      const { slug } = resolveProject(args.project);
       const ticket = store.getTicket(slug, args.ref);
-      const by = args.by || ticket?.claim?.by || "agent";
+      const sessionId = sessionOf(args);
+      const claimSessionId = ticket?.claim?.runtime?.sessionId;
+      const by = args.by || (sessionId && claimSessionId === sessionId ? ticket.claim.by : controlPlaneIdentity(null, sessionId));
       const res = store.addComment(slug, args.ref, { body: args.body, by, kind: "comment", source: "mcp" });
       return mutationAck(slug, res, res.ok ? { commentId: res.comment.id, at: res.comment.at } : null);
     }
