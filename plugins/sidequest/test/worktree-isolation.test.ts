@@ -24,6 +24,7 @@ const agentsync = require('../lib/agentsync.js');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const GUARD_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
+const GUARD_SHARED_CHECKOUT_GIT = path.join(HOOKS, 'guard-shared-checkout-git.js');
 const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 
 function initRepo(prefix: string) {
@@ -343,7 +344,24 @@ test('the dispatch briefing states the isolation contract and the resume trap', 
 
 
 
+test('an isolated executor can inspect but not mutate the shared checkout with git', () => {
+  const agentId = 'shared-git';
+  const { sessionId, executor } = dispatched(agentId);
+  const command = (value: string) => runHook(GUARD_SHARED_CHECKOUT_GIT, {
+    session_id: sessionId,
+    agent_id: agentId,
+    agent_type: executor,
+    cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`),
+    tool_name: 'Bash',
+    tool_input: { command: value },
+  });
 
+  assert.equal(command(`git -C "${PROJECT}" log --oneline`), null, 'read-only Git against the shared checkout stays available');
+  const denied = command(`git -C "${PROJECT}" reset --hard HEAD`);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /mutating git command against the shared checkout/);
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Read-only git commands/);
+});
 
 test('a destructive git command is refused while the shared checkout carries uncommitted work', () => {
   const repo = initRepo('sq-destructive-repo-');
