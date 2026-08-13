@@ -1105,6 +1105,9 @@ test('briefings reject compensating workarounds when the root cause is out of sc
   assert.doesNotMatch(briefing, /ruling is pending/);
   assert.match(briefing, /Never ship a compensating or downstream workaround inside scope instead/);
   assert.match(briefing, /verified workaround is not a substitute for the root fix/);
+  assert.match(briefing, /A user is not a board fallback/);
+  assert.match(briefing, /release with kind `technical_blocker`/);
+  assert.match(agentsync.renderDispatchAgent(), /Never hand a command to the user/);
 });
 
 test('renderTicketBriefing omits closeout when the ticket route is unresolved', () => {

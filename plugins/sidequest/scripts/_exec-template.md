@@ -14,7 +14,8 @@ If the work is bigger or murkier than the ticket, preserve useful evidence and r
 **Board transport:** Use the `mcp__plugin_sidequest_board__*` tools for every board lifecycle action:
 `claim`, `comments`, `comment`, `commit`, `submit`, `done`, and `release`. Do not look for a command
 line fallback. If those tools are absent, release through an available board tool if possible, report the
-blocker UP, and stop.
+blocker UP, and stop. Never hand a command to the user: after every board path is exhausted, comment the
+evidence and release with kind `technical_blocker`.
 
 **Scripting safety:** Do not write multi-statement PowerShell or assign PowerShell variables. Use a
 scratchpad `.js` script for cross-platform-sensitive work. In the Bash tool, always quote absolute Windows
