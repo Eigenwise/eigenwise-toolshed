@@ -1090,6 +1090,14 @@ test('briefings checkpoint findings for read-only and investigation work without
     ...base, category: {}, dispatch: { readonly: true },
   }, 'readonly-checkpoint-token');
   assert.match(readOnly, /board comments are its only durable artifact/);
+  const artifact = agentsync.renderTicketBriefing({
+    ...base, category: {}, dispatch: {
+      readonly: true, sharedTree: true, artifactMode: true,
+      artifactRoot: '.claude/.codebase-info', artifactScope: '.claude/.codebase-info',
+    },
+  }, 'artifact-checkpoint-token');
+  assert.match(artifact, /may write only its declared artifact scope/);
+  assert.doesNotMatch(artifact, /only durable artifact/);
   assert.match(readOnly, /Post each substantive intermediate finding as a ticket comment when it lands/);
   assert.match(readOnly, /theory pass, a measurement, or a reproduction/);
   assert.match(readOnly, /not a progress diary/);
