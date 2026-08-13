@@ -40,12 +40,12 @@ For substantial work:
    `references/ticket-authoring.md`.
 2. **Link dependencies** (`link SQ-4 depends-on SQ-3`); shape a story as design → wave(s) →
    integrate so `ready` serializes the phases.
-3. **File the whole planned wave backlog before dispatching.** After solo-fit chooses wave mode, put every
-   planned ticket for every wave on the board, with declared files, dependency links, and per-ticket verify;
-   then dispatch the entire ready wave in parallel. Dispatch everything whose dependencies are met, always;
-   assess same-file overlap in isolated worktrees, never auto-serialize it. Drip-filing, dispatching, waiting, then filing the next
-   ticket serializes work and hides the plan until the user cannot steer it. Later discoveries still become
-   normal mid-run tickets.
+3. **File the whole planned wave backlog before dispatching.** Give every ticket scope, dependencies, and
+   per-ticket verification; dispatch each ready wave concurrently. Do not drip-file a serial chain.
+
+   **Parallel-first:** Split independent audits, migrations, and reviews into per-item or shard tickets.
+   Dispatch concurrently despite isolated-worktree overlap; large sweeps skim invisibly. Keep
+   sequential/shared-design work together; size shards by items and verify cost.
 4. **Execute proportionally** — "Route execution down" below.
 
 Complexity 4+ needs planning: scope, anchors, a scoped verify. Executors test the changed
