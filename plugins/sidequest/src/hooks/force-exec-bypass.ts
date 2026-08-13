@@ -745,7 +745,7 @@ function main(): void {
       return;
     }
   }
-  if (!isCurrentExecutor(classification) && classification.kind !== 'diagnostic') {
+  if (!isCurrentExecutor(classification)) {
     writeDeny('PreToolUse', agentDenyReason(type, classification));
     return;
   }
