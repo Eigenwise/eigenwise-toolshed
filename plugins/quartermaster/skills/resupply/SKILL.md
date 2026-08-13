@@ -7,10 +7,12 @@ description: >-
   proposes one item at a time for approval. Use whenever the user asks what would make this easier
   or faster, what they are missing, why something keeps being hard, or what could have gone better;
   when they want to improve their Claude Code setup, tooling, or workflow; whenever the
-  quartermaster nudge fires, without waiting to be asked; proactively at a natural pause after a
-  long or expensive stretch of work; or when they are starting a goal they have no way to verify.
-  Every recommendation needs the user's per-item approval, so running the pass itself needs no
-  permission.
+  quartermaster nudge fires, after proactively asking and receiving the user's approval or when the
+  user has explicitly given standing permission for these rounds; proactively offer the round at a
+  natural pause after a long or expensive stretch of work; or when they are starting a goal they have
+  no way to verify. Running the pass requires current or standing user approval. Every recommendation
+  then needs separate per-item approval unless that exact class of change is already covered by the
+  user's explicit standing permission.
 ---
 
 # Quartermaster resupply

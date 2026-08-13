@@ -37,9 +37,11 @@ Three cheap hooks and two skills. The hooks never call a model.
   to notice mid-session when the thing it is doing for the third time should become a skill, a
   codebase-map entry, a rule, or a committed measurement, and to offer capturing it right then.
   Skipped in projects where setup already seeded the stronger per-prompt self-improvement live
-  rule. Once enough unreviewed sessions or friction events pile up, the same hook also has Claude
-  run a resupply pass at the next natural pause; cooldown of 24h between nudges.
-- **resupply skill**: runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
+  rule. Once enough unreviewed sessions or friction events pile up, the same hook proactively asks
+  whether you want a focused optimization round for your development system, setup, tooling, or
+  workflow; cooldown of 24h between offers. It runs the pass after you say yes, or automatically when
+  you have explicitly given standing permission for optimization rounds.
+- **resupply skill**: after the user accepts the optimization round, runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
   and emits a bounded JSON aggregate. Each session carries **what it was for**: its own title, its
   first real prompt, any explicit `/goal` and whether that goal was ever met, plus a `humanDriven`
   flag so hook-spawned sessions can't pass as your work. Alongside that: the areas of the tree the

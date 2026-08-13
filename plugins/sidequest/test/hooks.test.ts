@@ -2237,6 +2237,14 @@ test('session-start: tells orchestrators to arm the board watch when Monitor exi
   }
 });
 
+test('session-start: keeps specific edits inline and proactive changes user-approved', () => {
+  for (const source of ['', 'compact', 'resume']) {
+    const context = runHookForBudget(SESSION, { session_id: `inline-boundary-${source || 'startup'}`, source });
+    assert.match(context, /one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch/i);
+    assert.match(context, /ask before work beyond the approved scope unless explicit standing permission covers it/i);
+  }
+});
+
 test('session-start adds model-specific checkpoint guidance only for eligible models', () => {
   const defaultContext = runHook(SESSION, { session_id: 'checkpoint-none' });
   const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });

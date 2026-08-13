@@ -406,7 +406,10 @@ test('provisions global and active per-project Grafana dashboards', (t) => {
 
   for (const { fileName, dashboard } of dashboards) {
     assert.deepEqual(dashboard.templating.list.map(({ name }) => name), ['bucket'], fileName + ' lost its bucket selector');
-    assert.deepEqual(dashboard.templating.list[0].current, { text: '5m', value: '5m' });
+    assert.deepEqual(dashboard.templating.list[0].current, { text: 'Auto', value: '$__auto' });
+    assert.equal(dashboard.templating.list[0].auto, true);
+    assert.equal(dashboard.templating.list[0].auto_count, 120);
+    assert.equal(dashboard.templating.list[0].auto_min, '1m');
     assert.doesNotMatch(JSON.stringify(dashboard), /\$__auto_interval_/);
     assert.deepEqual(undeclaredVariables(dashboard), []);
   }
@@ -590,6 +593,9 @@ test('Grafana dashboard answers cost, attribution, role, and reliability questio
     assert.match(health.fieldConfig.defaults.noValue, /No samples/);
   }
 
+  for (const title of ['Cost by model', 'Cost by project', 'Context by orchestrator vs executor']) {
+    assert.equal(byTitle.get(title).maxDataPoints, 120, `${title} must cap browser rendering work`);
+  }
   assert.equal(byTitle.get('Total spend').datasource.uid, 'loki');
   assert.equal(byTitle.get('Cost by model').datasource.uid, 'loki');
   assert.equal(byTitle.get('Cost by model').fieldConfig.defaults.decimals, 2);

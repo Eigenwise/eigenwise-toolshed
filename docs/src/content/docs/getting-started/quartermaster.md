@@ -30,7 +30,7 @@ Most self-improvement happens without any pass at all. A SessionStart line keeps
 
 ## Resupply an existing workspace
 
-After a stretch of real work, or automatically when the SessionStart nudge fires:
+After a stretch of real work, run it directly, or accept Quartermaster's proactive offer of a focused optimization round:
 
 > /quartermaster:resupply
 
@@ -46,7 +46,7 @@ Findings route to the cheapest durable fix: a measurement built as a committed s
 
 ## How the loop closes
 
-A SessionEnd hook tallies each session locally: no LLM, no network, one streamed pass. Applied recommendations record what they target, and `verify` compares that signal per session before and after. For a capability no counter tracks, the check is whether the new skill or plugin shows up in attribution at all. A SessionStart nudge (one line, 24-hour cooldown) fires only when enough unreviewed sessions or friction pile up, and has Claude run a pass at the next natural pause without being asked. The pass only reads and proposes; nothing is ever changed without your per-item approval.
+A SessionEnd hook tallies each session locally: no LLM, no network, one streamed pass. Applied recommendations record what they target, and `verify` compares that signal per session before and after. For a capability no counter tracks, the check is whether the new skill or plugin shows up in attribution at all. A SessionStart nudge (one line, 24-hour cooldown) fires only when enough unreviewed sessions or friction pile up, then proactively asks whether you want a focused optimization round for your development system, setup, tooling, or workflow. It mines the sessions after you say yes, or automatically if you have explicitly given standing permission for optimization rounds. Each change is proposed separately unless that standing permission already covers its exact class.
 
 ## What it stores
 

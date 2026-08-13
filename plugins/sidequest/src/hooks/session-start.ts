@@ -58,8 +58,10 @@ function workforceSection(): string {
         description: truncateText(category.description, MAX_WORKFORCE_DESCRIPTION),
       };
     });
+    const priority = new Set(['codebase-exploration', 'debugging', 'spike-investigation', 'source-lookup', 'evidence-research', 'visual-evaluation']);
+    const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
     const bytesFor = (lines: string[]) => Buffer.byteLength([header, ...lines].join('\n'));
-    const base = entries.map((entry) => `${entry.id} — ${entry.route}`);
+    const base = preferred.map((entry) => `${entry.id} — ${entry.route}`);
     if (bytesFor(base) > MAX_WORKFORCE_BYTES) {
       const bounded: string[] = [];
       for (let index = 0; index < base.length; index += 1) {
@@ -69,16 +71,14 @@ function workforceSection(): string {
         bounded.push(line);
       }
     }
-    const priority = new Set(['codebase-exploration', 'debugging', 'spike-investigation', 'source-lookup', 'evidence-research']);
-    const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
     const descriptions = new Map<string, string>();
     for (const entry of preferred) {
       if (!entry.description) continue;
       descriptions.set(entry.id, entry.description);
-      const lines = entries.map((candidate) => `${candidate.id} — ${descriptions.get(candidate.id) ? descriptions.get(candidate.id) + ' ' : ''}${candidate.route}`);
+      const lines = preferred.map((candidate) => `${candidate.id} — ${descriptions.get(candidate.id) ? descriptions.get(candidate.id) + ' ' : ''}${candidate.route}`);
       if (bytesFor(lines) > MAX_WORKFORCE_BYTES) descriptions.delete(entry.id);
     }
-    return [header, ...entries.map((entry) => `${entry.id} — ${descriptions.get(entry.id) || 'enabled'} ${entry.route}`)].join('\n');
+    return [header, ...preferred.map((entry) => `${entry.id} — ${descriptions.get(entry.id) || 'enabled'} ${entry.route}`)].join('\n');
   } catch (_) {
     return '';
   }
@@ -160,18 +160,19 @@ async function main(): Promise<void> {
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; it interrupts you on scope requests, blockers, and failed GitHub CI runs. Skip it if Monitor is unavailable.`;
+  const inlineBoundary = 'Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.';
   const recovery = 'Context is UTF-8 bounded. Omitted details name a typed board retrieval call.';
 
   if (source === 'compact' || source === 'resume') {
     emit(
-      `=== sidequest (active — context restored) ===\n${recovery}\nROLE: ORCHESTRATOR. ${watch} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. TaskStop only after terminal board evidence. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. mcp__plugin_sidequest_board__* first; ${cli} list --status=doing only if MCP is absent.${checkpointingGuidance(data)}`,
+      `=== sidequest (active — context restored) ===\n${recovery}\nROLE: ORCHESTRATOR. ${watch} ${inlineBoundary} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. TaskStop only after terminal board evidence. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. mcp__plugin_sidequest_board__* first; ${cli} list --status=doing only if MCP is absent.${checkpointingGuidance(data)}`,
       restartNotice,
     );
     return;
   }
 
   emit(
-    `=== sidequest (active) ===\n${recovery}\nROLE: ORCHESTRATOR. ${watch} Substantive changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.${checkpointingGuidance(data)}`,
+    `=== sidequest (active) ===\n${recovery}\nROLE: ORCHESTRATOR. ${watch} ${inlineBoundary} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.${checkpointingGuidance(data)}`,
     restartNotice,
   );
 }

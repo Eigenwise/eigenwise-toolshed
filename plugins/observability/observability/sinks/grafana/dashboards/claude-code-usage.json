@@ -44,9 +44,12 @@
         "label": "Bucket",
         "type": "interval",
         "query": "1m,5m,15m,1h,6h,1d",
+        "auto": true,
+        "auto_count": 120,
+        "auto_min": "1m",
         "current": {
-          "text": "5m",
-          "value": "5m"
+          "text": "Auto",
+          "value": "$__auto"
         },
         "hide": 0
       }
@@ -256,6 +259,7 @@
         "h": 8
       },
       "interval": "$bucket",
+      "maxDataPoints": 120,
       "fieldConfig": {
         "defaults": {
           "unit": "currencyUSD",
@@ -348,6 +352,7 @@
         }
       ],
       "interval": "$bucket",
+      "maxDataPoints": 120,
       "description": "List-price-equivalent cost trend across every backend. Usage without a currently active project is grouped as Other / unattributed."
     },
     {
@@ -402,7 +407,7 @@
           "legendFormat": "{{workbench_attribute_agent_role}}"
         }
       ],
-      "maxDataPoints": 60,
+      "maxDataPoints": 120,
       "interval": "$bucket"
     },
     {
