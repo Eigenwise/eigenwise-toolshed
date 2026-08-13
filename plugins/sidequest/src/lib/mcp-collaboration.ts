@@ -63,7 +63,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state,
 } = require('./mcp-shared');
-const { sidequestDispatchRefusal } = require('./plugin-freshness');
+const { sidequestDispatchFreshness } = require('./plugin-freshness');
 
 type ToolDefinition = {
   name: string;
@@ -275,8 +275,8 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, '..') });
-      if (freshnessRefusal) throw new Error(freshnessRefusal);
+      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
+      if (freshness.refusal) throw new Error(freshness.refusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
       const sessionId = requireDispatchSession();
@@ -287,6 +287,7 @@ const tools: ToolDefinition[] = [
         allowUnscoped: args.allowUnscoped === true,
         integrationBranch: args.integrationBranch,
         recoveryEvidence: args.recoveryEvidence,
+        ...(freshness.skew ? { dispatchSkew: freshness.skew } : {}),
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.
         source: 'mcp',
@@ -354,8 +355,8 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, '..') });
-      if (freshnessRefusal) throw new Error(freshnessRefusal);
+      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
+      if (freshness.refusal) throw new Error(freshness.refusal);
       // native_agent does not go through prepareDispatch, so it needs its own
       // copy of the same install preflight (SQ-1017) — see dispatch-preflight.js.
       // Reaching this handler is itself proof the board MCP is connected.

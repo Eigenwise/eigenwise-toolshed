@@ -1046,6 +1046,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
+      ...(opts.dispatchSkew ? { dispatchSkew: opts.dispatchSkew } : {}),
       declaredFiles,
       ...(!sharedTree && releasedContinuation?.continuation ? {
         continuation: releasedContinuation.continuation,

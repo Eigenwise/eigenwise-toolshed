@@ -903,6 +903,10 @@ function dispatchWarnings(ticket?: any, slug?: any) {
   if (pythonIoEncoding?.written) {
     warnings.push(`Dispatch update: wrote PYTHONIOENCODING=utf-8 to ${pythonIoEncoding.settingsPath}. Claude Code reads project settings env at session start, so it applies from the next session.`);
   }
+  const dispatchSkew = dispatchState(ticket)?.dispatchSkew;
+  if (dispatchSkew?.loadedVersion && dispatchSkew?.installedVersion) {
+    warnings.push(`Sidequest dispatch skew: loaded ${dispatchSkew.loadedVersion}, installed ${dispatchSkew.installedVersion}. Claim self-heal bridges this compatible skew; run /reload-plugins or restart Claude Code before the next dispatch. Schema changes and loaded versions before 4.48.1 still refuse.`);
+  }
   const continuation = dispatchState(ticket)?.continuation;
   if (continuation?.mode === 'retained_worktree_resume') {
     warnings.push(`Continuation retains ${continuation.sourceBranch || continuation.sourceWorktree} at ${continuation.commit}. The executor briefing enters it before work.`);

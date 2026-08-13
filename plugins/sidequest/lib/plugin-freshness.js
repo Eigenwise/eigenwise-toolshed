@@ -34,6 +34,7 @@ __export(plugin_freshness_exports, {
   loadedPluginVersion: () => loadedPluginVersion,
   loadedVersionStateFile: () => loadedVersionStateFile,
   reportLoadedSidequestVersion: () => reportLoadedSidequestVersion,
+  sidequestDispatchFreshness: () => sidequestDispatchFreshness,
   sidequestDispatchRefusal: () => sidequestDispatchRefusal,
   sidequestReloadWarning: () => sidequestReloadWarning
 });
@@ -43,6 +44,7 @@ var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
 const SIDEQUEST_PLUGIN_ID = "sidequest@eigenwise-toolshed";
+const CLAIM_SELF_HEAL_VERSION = "4.48.1";
 function claudeHome(options = {}) {
   return options.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path.default.join(import_node_os.default.homedir(), ".claude");
 }
@@ -114,16 +116,38 @@ function installedSidequestVersion(projectPath, options = {}) {
   const selected = projectInstall || installs.find((install) => install.scope === "user");
   return typeof selected?.version === "string" ? selected.version : null;
 }
-function sidequestDispatchRefusal(projectPath, options = {}) {
+function sidequestDispatchFreshness(projectPath, options = {}) {
   const loadedVersion = loadedPluginVersion(options.pluginRoot);
   const installedVersion = installedSidequestVersion(projectPath, options);
-  if (!installedVersion) return "";
+  if (!installedVersion) return { refusal: "", warning: "" };
+  if (!loadedVersion) {
+    return {
+      refusal: `Sidequest: dispatch refused because the loaded or installed plugin version is missing or malformed (loaded unknown, installed ${installedVersion}). The claim self-heal cannot bridge an unknown version or schema boundary. Run /reload-plugins or restart Claude Code before dispatching work.`,
+      warning: ""
+    };
+  }
   const comparison = compareSemver(loadedVersion, installedVersion);
   if (comparison === null) {
-    return `Sidequest: cannot safely dispatch because the loaded or installed plugin version is missing or malformed (loaded ${loadedVersion || "unknown"}, installed ${installedVersion}). Run /reload-plugins or restart Claude Code before dispatching work.`;
+    return {
+      refusal: `Sidequest: dispatch refused because the loaded or installed plugin version is missing or malformed (loaded ${loadedVersion || "unknown"}, installed ${installedVersion}). The claim self-heal cannot bridge an unknown version or schema boundary. Run /reload-plugins or restart Claude Code before dispatching work.`,
+      warning: ""
+    };
   }
-  if (comparison !== -1) return "";
-  return `Sidequest: loaded ${loadedVersion}, installed ${installedVersion}. Run /reload-plugins or restart Claude Code before dispatching work.`;
+  if (comparison !== -1) return { refusal: "", warning: "" };
+  if (compareSemver(loadedVersion, CLAIM_SELF_HEAL_VERSION) === -1) {
+    return {
+      refusal: `Sidequest: dispatch refused because loaded ${loadedVersion}, installed ${installedVersion}, and the loaded version predates claim self-heal ${CLAIM_SELF_HEAL_VERSION}. The claim may derive a different executor. Run /reload-plugins or restart Claude Code before dispatching work.`,
+      warning: ""
+    };
+  }
+  return {
+    refusal: "",
+    warning: `Sidequest dispatch skew: loaded ${loadedVersion}, installed ${installedVersion}. Claim self-heal can bridge this compatible version skew, so dispatch continues; run /reload-plugins or restart Claude Code before the next dispatch. A schema change or a loaded version before ${CLAIM_SELF_HEAL_VERSION} still refuses.`,
+    skew: { loadedVersion, installedVersion, schemaVersion: 1 }
+  };
+}
+function sidequestDispatchRefusal(projectPath, options = {}) {
+  return sidequestDispatchFreshness(projectPath, options).refusal;
 }
 function sidequestReloadWarning(projectPath, options = {}) {
   const loadedVersion = loadedPluginVersion(options.pluginRoot);
@@ -163,6 +187,7 @@ function reportLoadedSidequestVersion(input, options = {}) {
   loadedPluginVersion,
   loadedVersionStateFile,
   reportLoadedSidequestVersion,
+  sidequestDispatchFreshness,
   sidequestDispatchRefusal,
   sidequestReloadWarning
 });

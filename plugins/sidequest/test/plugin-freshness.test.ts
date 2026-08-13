@@ -7,6 +7,7 @@ import test from 'node:test';
 const {
   installedSidequestVersion,
   reportLoadedSidequestVersion,
+  sidequestDispatchFreshness,
   sidequestDispatchRefusal,
   sidequestReloadWarning,
 } = require('../lib/plugin-freshness.js');
@@ -64,6 +65,33 @@ test('dispatch refuses stale or malformed installed Sidequest versions', () => {
 
   writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: 'not-semver' }]);
   assert.match(sidequestDispatchRefusal(project, { claudeHome, pluginRoot }), /missing or malformed/);
+});
+
+test('dispatch permits a heal-capable version skew with a recorded warning', () => {
+  const directory = temporaryDirectory();
+  const claudeHome = path.join(directory, 'claude');
+  const pluginRoot = path.join(directory, 'loaded-sidequest');
+  const project = path.join(directory, 'current');
+  writePluginVersion(pluginRoot, '4.48.1');
+  writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: '4.49.0' }]);
+
+  assert.deepEqual(sidequestDispatchFreshness(project, { claudeHome, pluginRoot }), {
+    refusal: '',
+    warning: 'Sidequest dispatch skew: loaded 4.48.1, installed 4.49.0. Claim self-heal can bridge this compatible version skew, so dispatch continues; run /reload-plugins or restart Claude Code before the next dispatch. A schema change or a loaded version before 4.48.1 still refuses.',
+    skew: { loadedVersion: '4.48.1', installedVersion: '4.49.0', schemaVersion: 1 },
+  });
+});
+
+test('dispatch refuses a version skew that predates claim self-heal', () => {
+  const directory = temporaryDirectory();
+  const claudeHome = path.join(directory, 'claude');
+  const pluginRoot = path.join(directory, 'loaded-sidequest');
+  const project = path.join(directory, 'current');
+  writePluginVersion(pluginRoot, '4.48.0');
+  writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: '4.49.0' }]);
+
+  assert.match(sidequestDispatchRefusal(project, { claudeHome, pluginRoot }), /predates claim self-heal 4\.48\.1/);
+  assert.match(sidequestDispatchRefusal(project, { claudeHome, pluginRoot }), /reload-plugins or restart Claude Code/);
 });
 
 test('records this session loaded version for the Workbench prompt guard', () => {

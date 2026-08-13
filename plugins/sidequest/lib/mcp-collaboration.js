@@ -62,7 +62,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
-const { sidequestDispatchRefusal } = require("./plugin-freshness");
+const { sidequestDispatchFreshness } = require("./plugin-freshness");
 const tools = [
   {
     name: "supersede_submission",
@@ -266,8 +266,8 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, "..") });
-      if (freshnessRefusal) throw new Error(freshnessRefusal);
+      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      if (freshness.refusal) throw new Error(freshness.refusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
       const sessionId = requireDispatchSession();
@@ -278,6 +278,7 @@ const tools = [
         allowUnscoped: args.allowUnscoped === true,
         integrationBranch: args.integrationBranch,
         recoveryEvidence: args.recoveryEvidence,
+        ...freshness.skew ? { dispatchSkew: freshness.skew } : {},
         // Reaching this handler is itself proof the board MCP is connected
         // in this session (SQ-1017); CLI transport carries no such proof.
         source: "mcp",
@@ -340,8 +341,8 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshnessRefusal = sidequestDispatchRefusal(meta.path, { pluginRoot: path.join(__dirname, "..") });
-      if (freshnessRefusal) throw new Error(freshnessRefusal);
+      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      if (freshness.refusal) throw new Error(freshness.refusal);
       if (meta.path) {
         assertSidequestInstall(meta.path);
         assertDispatchTransport("mcp");

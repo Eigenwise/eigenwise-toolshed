@@ -1320,7 +1320,7 @@ test('verify commands reject direct multi-plugin directory chaining', () => {
   }));
 });
 
-test('dispatch refuses an older loaded Sidequest before it records a launch binding', async () => {
+test('dispatch records a heal-capable loaded-version skew and returns its warning', async () => {
   const projectPath = committedRepo('sq-mcp-dispatch-freshness-');
   const project = store.ensureProject(projectPath).slug;
   const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-dispatch-freshness-home-'));
@@ -1346,11 +1346,14 @@ test('dispatch refuses an older loaded Sidequest before it records a launch bind
       category: 'general',
       files: ['src'],
     });
-    await assert.rejects(() => callTool('dispatch', { allowUnscoped: true, project, ref: ticket.ref, full: true }), /Sidequest: loaded \d+\.\d+\.\d+, installed 99\.99\.99\. Run \/reload-plugins/);
-    const unlaunched = store.getTicket(project, ticket.ref);
-    assert.equal(unlaunched.dispatchNonce, null);
-    assert.equal(unlaunched.dispatchExecutor, null);
-    assert.equal(unlaunched.dispatch, undefined);
+    const dispatched = await callTool('dispatch', { allowUnscoped: true, project, ref: ticket.ref, full: true });
+    assert.match(dispatched.warnings.join('\n'), /Sidequest dispatch skew: loaded \d+\.\d+\.\d+, installed 99\.99\.99/);
+    const prepared = store.getTicket(project, ticket.ref);
+    assert.deepEqual(prepared.dispatch?.dispatchSkew, {
+      loadedVersion: JSON.parse(fs.readFileSync(path.join(loadedPluginRoot, '.claude-plugin', 'plugin.json'), 'utf8')).version,
+      installedVersion: '99.99.99',
+      schemaVersion: 1,
+    });
   } finally {
     if (originalClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
     else process.env.SIDEQUEST_CLAUDE_HOME = originalClaudeHome;
