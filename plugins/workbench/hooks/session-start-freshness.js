@@ -96,6 +96,66 @@ function sidequestBoards(home) {
   }
 }
 
+function sidequestWorktreeRoot(project, home, configuredHome = process.env.SIDEQUEST_HOME) {
+  const normalized = normalizedPath(project);
+  const name = path.basename(normalized).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 40) || 'project';
+  const hash = crypto.createHash('sha1').update(normalized).digest('hex').slice(0, 8);
+  return path.join(configuredHome || path.join(home, '.claude', 'sidequest'), 'worktrees', `${name}-${hash}`);
+}
+
+function worktreeRoots(project, home, configuredHome) {
+  if (!project) return [];
+  return [
+    path.join(project, '.claude', 'worktrees'),
+    sidequestWorktreeRoot(project, home, configuredHome),
+  ];
+}
+
+function pathPattern(pathname) {
+  return pathname.replace(/\\/g, '/').split('/').map((part) => part.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')).join('[\\\\/]');
+}
+
+function staleWorktreePaths(command, roots, existsSync = fs.existsSync) {
+  if (typeof command !== 'string') return [];
+  const matches = new Map();
+  for (const root of roots) {
+    const expression = new RegExp(`(${pathPattern(root)}[\\\\/]([^\\\\/"'\\s]+))`, 'gi');
+    for (const match of command.matchAll(expression)) {
+      const pathname = match[1];
+      const key = normalizedPath(pathname);
+      if (!existsSync(pathname)) matches.set(key, pathname);
+    }
+  }
+  return [...matches.values()];
+}
+
+function windowsProcesses(run) {
+  try {
+    const result = run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', 'Get-CimInstance Win32_Process | Select-Object ProcessId,CreationDate,CommandLine | ConvertTo-Json -Compress'], {
+      encoding: 'utf8', timeout: 3000, windowsHide: true,
+    });
+    if (result.status !== 0) return [];
+    const parsed = JSON.parse(String(result.stdout || ''));
+    return (Array.isArray(parsed) ? parsed : [parsed]).flatMap((entry) => {
+      const pid = Number(entry?.ProcessId);
+      return Number.isInteger(pid) && pid > 0 ? [{ pid, startTime: entry.CreationDate || '', command: entry.CommandLine || '' }] : [];
+    });
+  } catch (_) {
+    return [];
+  }
+}
+
+function staleWorktreeProcesses({ project, home, listProcesses, platform = process.platform, existsSync, sidequestHome } = {}) {
+  if (platform !== 'win32' || !project) return [];
+  const processes = listProcesses ? listProcesses() : windowsProcesses(childProcess.spawnSync);
+  const roots = worktreeRoots(project, home, sidequestHome);
+  return processes.flatMap((process) => staleWorktreePaths(process.command, roots, existsSync).map((stalePath) => ({
+    pid: process.pid,
+    startTime: process.startTime,
+    stalePath,
+  })));
+}
+
 function createDebouncer(states = seenStates) {
   return {
     first(state) {
@@ -267,6 +327,14 @@ function audit(options = {}) {
     ...gatewayFreshness(projectInstances, checkGateway),
     ...boardMappings(projectBoards, instances).problems,
   ] : [];
+  const staleProcesses = staleWorktreeProcesses({
+    project: options.currentProject,
+    home,
+    listProcesses: options.listProcesses,
+    platform: options.platform,
+    existsSync: options.existsSync,
+    sidequestHome: options.sidequestHome,
+  });
   return {
     problems: [...new Set(problems)].sort(),
     mappings: mappings.mappings,
@@ -275,6 +343,7 @@ function audit(options = {}) {
     projectInstances,
     projectProblems: [...new Set(projectProblems)].sort(),
     projectUpdates,
+    staleProcesses,
   };
 }
 
@@ -345,7 +414,10 @@ function main() {
     const loadedVersion = loadedPluginVersion();
     reportLoadedPluginVersion(input, 'workbench@eigenwise-toolshed', loadedVersion);
     const result = audit({ currentProject: input.cwd });
-    const context = projectWarning(result.projectProblems);
+    const context = [
+      projectWarning(result.projectProblems),
+      ...result.staleProcesses.map((process) => `Stale worktree process: pid ${process.pid}, started ${process.startTime || 'unknown'}, path ${process.stalePath}`),
+    ].filter(Boolean).join('\n');
     const notice = systemMessage({
       instances: result.projectInstances,
       updates: result.projectUpdates,
@@ -382,6 +454,7 @@ module.exports = {
   parseGatewayDoctorOutput,
   pluginInstances,
   sourceFreshness,
+  staleWorktreeProcesses,
   systemMessage,
   warning,
 };
