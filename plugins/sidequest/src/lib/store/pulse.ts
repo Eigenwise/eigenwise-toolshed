@@ -1,5 +1,53 @@
 'use strict';
 
+const { execFileSync } = require('node:child_process');
+
+function createGitHubCiRunsProvider(projectPath: string) {
+  const command = (program: string, arguments_: string[]) => execFileSync(program, arguments_, {
+    cwd: projectPath,
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'ignore'],
+    windowsHide: true,
+  }).trim();
+  try {
+    const upstream = command('git', ['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+    const [remote, branch] = upstream.split('/', 2);
+    const origin = command('git', ['remote', 'get-url', remote]);
+    if (!remote || !branch || !/github\.com(?::|\/)/i.test(origin)) return null;
+    command('gh', ['auth', 'status']);
+    return () => {
+      try {
+        const remoteHead = command('git', ['ls-remote', remote, `refs/heads/${branch}`]).split(/\s+/, 1)[0];
+        if (!remoteHead) return null;
+        const runs = JSON.parse(command('gh', ['run', 'list', '--branch', branch, '--limit', '100', '--json', 'databaseId,headSha,status,conclusion,name']));
+        const completedRuns = runs.filter((run: any) => run.status === 'completed');
+        const greenRuns = completedRuns.filter((run: any) => run.conclusion === 'success');
+        const lastGreenHeadSha = greenRuns[0]?.headSha || null;
+        const localHead = command('git', ['rev-parse', 'HEAD']);
+        const hasCompletedGreenRun = greenRuns.some((run: any) => run.headSha === remoteHead);
+        const localHeadIsAheadOfGreen = lastGreenHeadSha && command('git', ['merge-base', '--is-ancestor', lastGreenHeadSha, localHead]) === '';
+        return {
+          headSha: remoteHead,
+          lastGreenHeadSha,
+          hasCompletedGreenRun: hasCompletedGreenRun || !localHeadIsAheadOfGreen,
+          runs: completedRuns.map((run: any) => ({
+            id: run.databaseId,
+            headSha: run.headSha,
+            status: run.status,
+            conclusion: run.conclusion,
+            workflowName: run.name,
+            failingJobCount: run.conclusion === 'success' ? 0 : JSON.parse(command('gh', ['run', 'view', String(run.databaseId), '--json', 'jobs'])).jobs.filter((job: any) => job.conclusion === 'failure').length,
+          })),
+        };
+      } catch (_error: unknown) {
+        return null;
+      }
+    };
+  } catch (_error: unknown) {
+    return null;
+  }
+}
+
 function createPulse(dependencies: any) {
   const {
     boardConfig,
@@ -289,12 +337,15 @@ function createPulse(dependencies: any) {
 function createBoardWatch(dependencies: any) {
   const {
     changesPayload,
+    ciRunsProvider,
     setTimer = setTimeout,
     writeError = (line: string) => process.stderr.write(`${line}\n`),
     writeLine = (line: string) => process.stdout.write(`${line}\n`),
     watchingAuthor = '',
   } = dependencies;
   const seen = new Set<string>();
+  const seenCiRuns = new Set<string>();
+  const seenUncheckedHeads = new Set<string>();
   let cursor = new Date().toISOString();
   const commentPattern = /\b(?:out[- ]of[- ]scope|widen scope|scope request|technical_blocker|blocked|handback)\b/i;
   const markerPattern = /^\[sidequest:/i;
@@ -316,6 +367,23 @@ function createBoardWatch(dependencies: any) {
     return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
   }
 
+  function pollCi(): void {
+    if (!ciRunsProvider) return;
+    const ci = ciRunsProvider();
+    if (!ci) return;
+    for (const run of ci.runs || []) {
+      if (run.headSha !== ci.headSha || run.status !== 'completed' || run.conclusion === 'success') continue;
+      const key = `${run.headSha}|${run.id}`;
+      if (seenCiRuns.has(key)) continue;
+      seenCiRuns.add(key);
+      writeLine(`CI ${run.headSha} failed ${run.workflowName} ${run.failingJobCount}`);
+    }
+    if (!ci.hasCompletedGreenRun && ci.headSha !== ci.lastGreenHeadSha && !seenUncheckedHeads.has(ci.headSha)) {
+      seenUncheckedHeads.add(ci.headSha);
+      writeLine(`CI ${ci.headSha} unchecked - -`);
+    }
+  }
+
   function poll(): void {
     try {
       const changes = changesPayload(cursor);
@@ -329,6 +397,7 @@ function createBoardWatch(dependencies: any) {
         seen.add(key);
         writeLine(`${ticket.ref} ${ticket.status} ${event.type} ${event.author || '-'} ${event.excerpt || '-'}`);
       }
+      pollCi();
       return;
     } catch (error: unknown) {
       writeError(`sidequest watch: ${error instanceof Error ? error.message : String(error)}`);
@@ -347,4 +416,4 @@ function createBoardWatch(dependencies: any) {
   return { poll, start };
 }
 
-module.exports = { createPulse, createBoardWatch };
+module.exports = { createPulse, createBoardWatch, createGitHubCiRunsProvider };

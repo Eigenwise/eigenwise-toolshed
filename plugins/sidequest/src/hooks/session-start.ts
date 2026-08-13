@@ -159,7 +159,7 @@ async function main(): Promise<void> {
 
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
-  const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; it interrupts you on scope requests and blockers. Skip it if Monitor is unavailable.`;
+  const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; it interrupts you on scope requests, blockers, and failed GitHub CI runs. Skip it if Monitor is unavailable.`;
   const recovery = 'Context is UTF-8 bounded. Omitted details name a typed board retrieval call.';
 
   if (source === 'compact' || source === 'resume') {

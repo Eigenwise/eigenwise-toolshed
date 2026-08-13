@@ -1,6 +1,6 @@
 'use strict';
 const store = require('../lib/store');
-const { createBoardWatch } = require('../lib/store/pulse');
+const { createBoardWatch, createGitHubCiRunsProvider } = require('../lib/store/pulse');
 const { fail, resolveProject } = require('./sidequest-cmd-shared');
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require('./sidequest-cmd-server');
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require('./sidequest-cmd-tickets');
@@ -161,7 +161,7 @@ const HELP_COMMANDS: any = {
   list: 'sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  watch: 'sidequest watch [--project <path-or-slug>] [--interval <seconds>]  print actionable board events as they arrive',
+  watch: 'sidequest watch [--project <path-or-slug>] [--interval <seconds>]  print board and GitHub CI alerts as they arrive',
   update: 'sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
@@ -241,7 +241,7 @@ Usage:
   sidequest list [--status todo|doing|awaiting-oracle|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest watch [--project <path-or-slug>] [--interval <seconds>]   stream actionable board events (30s default)
+  sidequest watch [--project <path-or-slug>] [--interval <seconds>]   stream actionable board and GitHub CI events (30s default)
   sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
@@ -416,9 +416,10 @@ async function main() {
       await cmdChanges(opts);
       break;
     case 'watch': {
-      const { slug } = await resolveProject(opts);
+      const { slug, meta } = await resolveProject(opts);
       createBoardWatch({
         changesPayload: (since: string) => store.changesPayload(slug, since),
+        ciRunsProvider: createGitHubCiRunsProvider(meta?.path),
         watchingAuthor: process.env.SIDEQUEST_AGENT || process.env.CLAUDE_SESSION_ID || process.env.CLAUDE_CODE_SESSION_ID || '',
       }).start(opts.interval);
       break;
