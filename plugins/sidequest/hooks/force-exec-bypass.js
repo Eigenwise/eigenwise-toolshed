@@ -125,6 +125,7 @@ function runtimeModule(name) {
 
 // src/lib/exec-names.ts
 var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 var AGENT_NAME_MAX_LENGTH = 64;
 var LAUNCH_SLUG_MAX_WORDS = 3;
 var LAUNCH_SLUG_MAX_LENGTH = 24;
@@ -208,11 +209,13 @@ function fallbackClassify(type) {
   if (dispatch) return { kind: "codex_dispatch", effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
   if (builtin) return { kind: "claude_builtin", effort: builtin[1] || null };
+  if (type === DIAGNOSTIC_PROBE_NAME) return { kind: "diagnostic", effort: null };
   if (/^sidequest-ticket-/.test(type)) return { kind: "legacy_ticket", effort: null };
   if (/^sidequest-(?:sq-|exec-)/.test(type)) return { kind: "ticket", effort: null };
   return { kind: "unknown", effort: null };
 }
 function classifyExecutor(type) {
+  if (type === DIAGNOSTIC_PROBE_NAME) return { kind: "diagnostic", effort: null };
   try {
     return require(runtimeModule("exec-names")).classify(type);
   } catch (_) {
@@ -267,6 +270,12 @@ function rewriteExecutorHelper(input, toolInput, type) {
   delete updatedInput.isolation;
   writeToolUpdate(updatedInput, "sidequest: executor helpers run in the background from the parent working tree. If the target is unavailable there, report the visibility block instead of returning clean findings.");
 }
+function isDiagnosticProbe(type, toolInput) {
+  return type === DIAGNOSTIC_PROBE_NAME && toolInput.description === "Sidequest dispatch self-test." && toolInput.prompt === "Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool." && !Object.hasOwn(toolInput, "model") && !Object.hasOwn(toolInput, "isolation");
+}
+function diagnosticProbeDenyReason() {
+  return `sidequest: ${DIAGNOSTIC_PROBE_NAME} is reserved for a foreground dispatch self-test. Use description "Sidequest dispatch self-test." and prompt "Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool." Omit model, ticket refs, isolation, and background mode. Ordinary work needs a ticket.`;
+}
 function agentDenyReason(type, classification) {
   if (type.startsWith("sidequest-")) {
     if (classification.kind === "ticket" || classification.kind === "legacy_ticket") {
@@ -274,7 +283,7 @@ function agentDenyReason(type, classification) {
     }
     return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
-  return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
+  return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. If dispatch is broken, use ${DIAGNOSTIC_PROBE_NAME} only: read-only, three turns, foreground, no refs or isolation. WebSearch is executor-only: file and dispatch a research ticket once dispatch works. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
 }
 var REF_RE = /\bSQ-\d+\b/gi;
 function extractRefs(prompt) {
@@ -724,6 +733,14 @@ function main() {
     return;
   }
   if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
+  if (classification.kind === "diagnostic") {
+    if (!isDiagnosticProbe(type, toolInput)) {
+      writeDeny("PreToolUse", diagnosticProbeDenyReason());
+      return;
+    }
+    writeToolUpdate({ ...toolInput, mode: "bypassPermissions", run_in_background: false });
+    return;
+  }
   const dispatchValidation = preparedDispatchValidation(input);
   if (dispatchValidation.status === "stale") {
     writeDeny("PreToolUse", "sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.");
@@ -748,7 +765,7 @@ function main() {
       return;
     }
   }
-  if (!isCurrentExecutor(classification)) {
+  if (!isCurrentExecutor(classification) && classification.kind !== "diagnostic") {
     writeDeny("PreToolUse", agentDenyReason(type, classification));
     return;
   }

@@ -105,6 +105,10 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
+// src/lib/exec-names.ts
+var EFFORTS = Object.freeze(["low", "medium", "high", "xhigh", "max"]);
+var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
+
 // src/hooks/diagnostic-worktree-warning.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
@@ -160,6 +164,7 @@ function fallbackClassify(type) {
   if (dispatch) return { kind: "codex_dispatch", effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
   if (builtin) return { kind: "claude_builtin", effort: builtin[1] || null };
+  if (type === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
   if (/^sidequest-ticket-/.test(type)) return { kind: "legacy_ticket", effort: null };
   if (/^sidequest-(?:sq-|exec-)/.test(type)) return { kind: "ticket", effort: null };
   return { kind: "unknown", effort: null };
@@ -178,7 +183,9 @@ function main() {
   const executor = stringField(data, "agent_type", "agentType", "subagent_type");
   const agentId = stringField(data, "agent_id", "agentId");
   const agentName = stringField(data, "agent_name", "agentName", "name");
-  if (!sessionId || !executor || !agentId && !agentName || classifyExecutor(executor).kind === "unknown") return;
+  if (!sessionId || !executor || !agentId && !agentName) return;
+  const classification = classifyExecutor(executor);
+  if (classification.kind === "unknown") return;
   try {
     const store = require(runtimeModule("store"));
     store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);

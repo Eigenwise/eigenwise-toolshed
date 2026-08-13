@@ -7,7 +7,7 @@ import { writeDeny, writeToolUpdate } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 // Dependency-free, so bundling it keeps launch naming identical in the hook and
 // in the store even when the installed lib is mid-upgrade.
-import { dispatchLaunchName } from '../lib/exec-names.js';
+import { dispatchLaunchName, DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
 
 const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.js')) as { canonicalPath: (value: unknown) => string };
 
@@ -15,7 +15,7 @@ const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statu
 const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']);
 const HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
 
-type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'legacy_ticket' | 'ticket' | 'unknown';
+type ExecutorKind = 'codex_dispatch' | 'claude_builtin' | 'read_only_codex_dispatch' | 'read_only_claude_builtin' | 'diagnostic' | 'legacy_ticket' | 'ticket' | 'unknown';
 interface ExecutorClassification {
   kind: ExecutorKind;
   effort: string | null;
@@ -99,12 +99,14 @@ function fallbackClassify(type: string): ExecutorClassification {
   if (dispatch) return { kind: 'codex_dispatch', effort: dispatch[1] || null };
   const builtin = /^sidequest-exec-(low|medium|high|xhigh|max)$/.exec(type);
   if (builtin) return { kind: 'claude_builtin', effort: builtin[1] || null };
+  if (type === DIAGNOSTIC_PROBE_NAME) return { kind: 'diagnostic', effort: null };
   if (/^sidequest-ticket-/.test(type)) return { kind: 'legacy_ticket', effort: null };
   if (/^sidequest-(?:sq-|exec-)/.test(type)) return { kind: 'ticket', effort: null };
   return { kind: 'unknown', effort: null };
 }
 
 function classifyExecutor(type: string): ExecutorClassification {
+  if (type === DIAGNOSTIC_PROBE_NAME) return { kind: 'diagnostic', effort: null };
   try {
     return require(runtimeModule('exec-names')).classify(type) as ExecutorClassification;
   } catch (_) {
@@ -172,6 +174,18 @@ function rewriteExecutorHelper(input: HookInput, toolInput: Record<string, unkno
   writeToolUpdate(updatedInput, 'sidequest: executor helpers run in the background from the parent working tree. If the target is unavailable there, report the visibility block instead of returning clean findings.');
 }
 
+function isDiagnosticProbe(type: string, toolInput: Record<string, unknown>): boolean {
+  return type === DIAGNOSTIC_PROBE_NAME
+    && toolInput.description === 'Sidequest dispatch self-test.'
+    && toolInput.prompt === 'Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool.'
+    && !Object.hasOwn(toolInput, 'model')
+    && !Object.hasOwn(toolInput, 'isolation');
+}
+
+function diagnosticProbeDenyReason(): string {
+  return `sidequest: ${DIAGNOSTIC_PROBE_NAME} is reserved for a foreground dispatch self-test. Use description "Sidequest dispatch self-test." and prompt "Diagnose Sidequest dispatch machinery. Read package.json, then report whether the Agent spawn can use a read-only tool." Omit model, ticket refs, isolation, and background mode. Ordinary work needs a ticket.`;
+}
+
 function agentDenyReason(type: string, classification: ExecutorClassification): string {
   if (type.startsWith('sidequest-')) {
     if (classification.kind === 'ticket' || classification.kind === 'legacy_ticket') {
@@ -180,7 +194,7 @@ function agentDenyReason(type: string, classification: ExecutorClassification): 
     return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
   return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
-    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. WebSearch is executor-only: file and dispatch a research ticket. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.';
+    `For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. If dispatch is broken, use ${DIAGNOSTIC_PROBE_NAME} only: read-only, three turns, foreground, no refs or isolation. WebSearch is executor-only: file and dispatch a research ticket once dispatch works. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
@@ -699,6 +713,14 @@ function main(): void {
     return;
   }
   if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
+  if (classification.kind === 'diagnostic') {
+    if (!isDiagnosticProbe(type, toolInput)) {
+      writeDeny('PreToolUse', diagnosticProbeDenyReason());
+      return;
+    }
+    writeToolUpdate({ ...toolInput, mode: 'bypassPermissions', run_in_background: false });
+    return;
+  }
   const dispatchValidation = preparedDispatchValidation(input);
   if (dispatchValidation.status === 'stale') {
     writeDeny('PreToolUse', 'sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.');
@@ -723,7 +745,7 @@ function main(): void {
       return;
     }
   }
-  if (!isCurrentExecutor(classification)) {
+  if (!isCurrentExecutor(classification) && classification.kind !== 'diagnostic') {
     writeDeny('PreToolUse', agentDenyReason(type, classification));
     return;
   }

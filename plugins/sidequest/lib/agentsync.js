@@ -2,7 +2,7 @@
 const fs = require("fs");
 const os = require("os");
 const path = require("path");
-const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require("./exec-names.js");
+const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME } = require("./exec-names.js");
 const crypto = require("crypto");
 const store = require("./store.js");
 const { worktreeRoot } = require("./worktrees.js");
@@ -91,6 +91,21 @@ function resolveReadOnlyTools(readOnlyDeniedTools) {
 }
 function readOnlyNote() {
   return "\n\n**Read-only role:** Do not modify the repository working tree. Bash is for inspection, tests, and verification, not edits. Keep temporary files outside the repository working tree, and do not install packages into the project's package.json or node_modules. If this ticket requires an edit, write a board blocker comment naming the needed change and why, then release the ticket.";
+}
+function renderDiagnosticProbe() {
+  return [
+    "---",
+    `name: ${DIAGNOSTIC_PROBE_NAME}`,
+    "description: Sidequest dispatch self-test.",
+    "model: haiku",
+    "maxTurns: 3",
+    "tools: Read, Glob, Grep",
+    "permissionMode: bypassPermissions",
+    "---",
+    MARKER,
+    "Diagnose only the Agent spawn path. Read repository files and report concise evidence. Do not edit, run commands, use network tools, delegate, mention tickets, or investigate ordinary work.",
+    ""
+  ].join("\n");
 }
 function renderExecAgent({ name, effort, modelId, marker, extraNote, ticketBrief: ticketBrief2, tools, disallowedTools, skills = EXECUTOR_SKILLS }) {
   const template = fs.readFileSync(TEMPLATE_PATH, "utf8");
@@ -1112,6 +1127,7 @@ function syncExecAgents(_prefs, opts) {
   const dir = opts.dir || defaultAgentsDir();
   const readOnlyDeniedTools = opts.readOnlyDeniedTools;
   const wanted = /* @__PURE__ */ new Map();
+  wanted.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
   wanted.set(`${stableDispatchName()}.md`, renderDispatchAgent());
   wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
@@ -1190,6 +1206,7 @@ module.exports = {
   renderDispatchAgent,
   renderReadOnlyDispatchAgent,
   renderReadOnlyClaudeAgent,
+  renderDiagnosticProbe,
   renderExecAgent,
   renderTicketBriefing,
   rejectedSubmissionRows,

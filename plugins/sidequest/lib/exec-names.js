@@ -20,6 +20,7 @@ var exec_names_exports = {};
 __export(exec_names_exports, {
   AGENT_NAME_MAX_LENGTH: () => AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX: () => CLAUDE_PREFIX,
+  DIAGNOSTIC_PROBE_NAME: () => DIAGNOSTIC_PROBE_NAME,
   DISPATCH_NAME: () => DISPATCH_NAME,
   DISPATCH_PREFIX: () => DISPATCH_PREFIX,
   EFFORTS: () => EFFORTS,
@@ -46,6 +47,7 @@ const READ_ONLY_CLAUDE_PREFIX = "sidequest-exec-readonly-";
 const READ_ONLY_DISPATCH_PREFIX = "sidequest-exec-dispatch-readonly-";
 const TICKET_PREFIX = "sidequest-sq-";
 const LEGACY_TICKET_PREFIX = "sidequest-ticket-";
+const DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 function isEffort(value) {
   return typeof value === "string" && EFFORTS.includes(value);
 }
@@ -134,6 +136,7 @@ function classify(name) {
   if (typeof name !== "string" || !name) return { kind: "unknown", effort: null };
   if (name === READ_ONLY_DISPATCH_NAME) return { kind: "read_only_codex_dispatch", effort: null };
   if (name === DISPATCH_NAME) return { kind: "codex_dispatch", effort: null };
+  if (name === DIAGNOSTIC_PROBE_NAME) return { kind: "unknown", effort: null };
   if (name.startsWith(READ_ONLY_DISPATCH_PREFIX)) {
     const effort = name.slice(READ_ONLY_DISPATCH_PREFIX.length);
     if (isEffort(effort)) return { kind: "read_only_codex_dispatch", effort };
@@ -162,6 +165,7 @@ function classify(name) {
 0 && (module.exports = {
   AGENT_NAME_MAX_LENGTH,
   CLAUDE_PREFIX,
+  DIAGNOSTIC_PROBE_NAME,
   DISPATCH_NAME,
   DISPATCH_PREFIX,
   EFFORTS,
