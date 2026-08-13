@@ -1120,8 +1120,25 @@ test('pre-tool repeated-command hook warns for PowerShell commands', () => {
   assert.match(runHook(REPEATED_COMMAND_WARN, payload), /polling burns ~14s and ~60k tokens per call/);
 });
 
-test('pre-tool inline-work hook records activity without injecting repeat reminders', () => {
+test('pre-tool inline-work hook tells solo work to surface the board choice once', () => {
+  const session_id = `inline-solo-${Date.now()}`;
+  const output = runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
+  });
+  assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.match(output.systemMessage, /substantive solo work/i);
+  assert.match(output.systemMessage, /board dispatch is available/i);
+  assert.match(output.systemMessage, /next user-visible reply/i);
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
+  }), null);
+});
+
+test('pre-tool inline-work hook records activity without injecting repeat reminders after board interaction', () => {
   const session_id = `inline-advisory-${Date.now()}`;
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
+  }), null);
   for (let i = 0; i < 20; i += 1) {
     assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
       session_id, cwd: BOARD_PATH, tool_name: i % 2 ? 'Read' : 'Write', tool_input: {},
@@ -2291,6 +2308,18 @@ test('session-start: tells orchestrators to arm the board watch when Monitor exi
     const context = runHookForBudget(SESSION, { session_id: `watch-${source || 'startup'}`, source });
     assert.match(context, /Arm a persistent Monitor running node "?.+[/\\]bin[/\\]sidequest\.js"? watch --project <path>/);
     assert.match(context, /Skip it if Monitor is unavailable/);
+  }
+});
+
+test('session-start: states board authorization while preserving the specific-edit boundary', () => {
+  for (const source of ['', 'compact', 'resume']) {
+    const context = runHookForBudget(SESSION, { session_id: `authorization-${source || 'startup'}`, source });
+    assert.match(context, /board authorizes ticket and executor dispatch without a further user request/i);
+    assert.match(context, /overriding conservative default agent-spawning guidance/i);
+    assert.match(context, /substantive solo work beyond that inline boundary/i);
+    assert.match(context, /next reply that board dispatch is available and they can ask to use it/i);
+    assert.match(context, /one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch/i);
+    assert.match(context, /ask before work beyond the approved scope unless explicit standing permission covers it/i);
   }
 });
 

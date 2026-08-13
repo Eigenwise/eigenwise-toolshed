@@ -122,7 +122,7 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
 
   const context = hookOutput("output.writeContext('SessionStart', 'Recover with the typed board call. ' + '🙂'.repeat(4000))");
   const contextText = context.hookSpecificOutput.additionalContext;
-  assert.ok(Buffer.byteLength(contextText, 'utf8') <= 2048);
+  assert.ok(Buffer.byteLength(contextText, 'utf8') <= 4096);
   const denial = hookOutput("output.writeDeny('PreToolUse', 'Recover with the typed board call. ' + '界'.repeat(4000))");
   assert.ok(Buffer.byteLength(denial.hookSpecificOutput.permissionDecisionReason, 'utf8') <= 768);
 

@@ -1,4 +1,5 @@
 import { isRecord, isSubagent, readStdin, stringField, type HookInput } from './shared/input.js';
+import { writeSystemMessage } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
 import { readSessionState, sessionStateFile, writeSessionState } from './shared/session-state.js';
 
@@ -61,6 +62,12 @@ function main(): void {
     state.boardInteraction = true;
   } else if (isSubstantive(toolName, command)) {
     state.substantiveActions = (Number(state.substantiveActions) || 0) + 1;
+    if (!state.boardInteraction && !state.soloChoiceSurfaced) {
+      state.soloChoiceSurfaced = true;
+      writeSessionState(file, state);
+      writeSystemMessage('PreToolUse', 'sidequest: You are choosing substantive solo work while board dispatch is available. In your next user-visible reply, say so and say that they can ask to use Sidequest board dispatch.');
+      return;
+    }
   } else if (isReadClass(toolName, command)) {
     state.readActions = (Number(state.readActions) || 0) + 1;
   }

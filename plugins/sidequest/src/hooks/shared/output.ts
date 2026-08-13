@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 
 const CONTEXT_BUDGETS: Record<string, number> = Object.freeze({
-  SessionStart: 2 * 1024,
+  SessionStart: 4 * 1024,
   UserPromptSubmit: 1024,
   PreToolUse: 768,
   PreCompact: 1500,

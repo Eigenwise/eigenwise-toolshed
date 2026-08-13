@@ -51,6 +51,56 @@ function isSubagent(input) {
   });
 }
 
+// src/hooks/shared/output.ts
+var import_node_crypto = __toESM(require("node:crypto"));
+var CONTEXT_BUDGETS = Object.freeze({
+  SessionStart: 4 * 1024,
+  UserPromptSubmit: 1024,
+  PreToolUse: 768,
+  PreCompact: 1500,
+  PostCompact: 1500,
+  SubagentStart: 512,
+  SubagentStop: 512,
+  Stop: 512,
+  PostToolUseFailure: 512,
+  TeammateIdle: 512
+});
+function byteLength(value) {
+  return Buffer.byteLength(value, "utf8");
+}
+function contextBudget(hookEventName) {
+  return CONTEXT_BUDGETS[hookEventName] || 512;
+}
+function stableWatermark(value) {
+  return import_node_crypto.default.createHash("sha256").update(value, "utf8").digest("hex").slice(0, 16);
+}
+function truncateUtf8(value, maxBytes) {
+  if (byteLength(value) <= maxBytes) return value;
+  let truncated = "";
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    truncated += character;
+    bytes += characterBytes;
+  }
+  return truncated;
+}
+function projectedText(hookEventName, value) {
+  const budget = contextBudget(hookEventName);
+  if (byteLength(value) <= budget) return value;
+  const watermark = stableWatermark(value);
+  const omission = `
+[sidequest context v1 id=${hookEventName} revision=${watermark} watermark=${watermark}; content omitted for ${budget}B budget. Retrieve current board state with mcp__plugin_sidequest_board__comments({ref:"<ticket-ref>"}).]`;
+  return `${truncateUtf8(value, Math.max(0, budget - byteLength(omission)))}${omission}`;
+}
+function writeJson(value) {
+  process.stdout.write(JSON.stringify(value));
+}
+function writeSystemMessage(hookEventName, systemMessage) {
+  writeJson({ systemMessage: projectedText(hookEventName, systemMessage), hookSpecificOutput: { hookEventName } });
+}
+
 // src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
@@ -125,6 +175,12 @@ function main() {
     state.boardInteraction = true;
   } else if (isSubstantive(toolName, command)) {
     state.substantiveActions = (Number(state.substantiveActions) || 0) + 1;
+    if (!state.boardInteraction && !state.soloChoiceSurfaced) {
+      state.soloChoiceSurfaced = true;
+      writeSessionState(file, state);
+      writeSystemMessage("PreToolUse", "sidequest: You are choosing substantive solo work while board dispatch is available. In your next user-visible reply, say so and say that they can ask to use Sidequest board dispatch.");
+      return;
+    }
   } else if (isReadClass(toolName, command)) {
     state.readActions = (Number(state.readActions) || 0) + 1;
   }

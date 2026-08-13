@@ -8,6 +8,7 @@ import { registerSweepSession } from './shared/worktree-sweep.js';
 import { diagnosticWorktreeWarning } from './diagnostic-worktree-warning.js';
 import { reportLoadedSidequestVersion, sidequestReloadWarning } from '../lib/plugin-freshness.js';
 
+const MAX_SESSION_CONTEXT_BYTES = 4 * 1024;
 const MAX_WORKFORCE_BYTES = 800;
 const MAX_WORKFORCE_DESCRIPTION = 90;
 
@@ -84,9 +85,23 @@ function workforceSection(): string {
   }
 }
 
+function truncateUtf8(value: string, maxBytes: number): string {
+  let result = '';
+  let bytes = 0;
+  for (const character of value) {
+    const characterBytes = Buffer.byteLength(character);
+    if (bytes + characterBytes > maxBytes) break;
+    result += character;
+    bytes += characterBytes;
+  }
+  return result;
+}
+
 function withWorkforce(context: string): string {
   const section = workforceSection();
-  return section ? context + '\n' + section : context;
+  if (!section) return truncateUtf8(context, MAX_SESSION_CONTEXT_BYTES);
+  const contextBytes = MAX_SESSION_CONTEXT_BYTES - Buffer.byteLength(section) - 1;
+  return `${truncateUtf8(context, Math.max(0, contextBytes))}\n${section}`;
 }
 
 function provisionExecAgents(): SyncResult | null {
@@ -160,19 +175,21 @@ async function main(): Promise<void> {
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; it interrupts you on scope requests, blockers, and failed GitHub CI runs. Skip it if Monitor is unavailable.`;
+  const boardAuthorization = 'An enabled Sidequest board authorizes ticket and executor dispatch without a further user request, overriding conservative default agent-spawning guidance. For substantive solo work beyond that inline boundary, say in your next reply that board dispatch is available and they can ask to use it.';
   const inlineBoundary = 'Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.';
+  const checkpoint = checkpointingGuidance(data);
   const recovery = 'Context is UTF-8 bounded. Omitted details name a typed board retrieval call.';
 
   if (source === 'compact' || source === 'resume') {
     emit(
-      `=== sidequest (active — context restored) ===\n${recovery}\nROLE: ORCHESTRATOR. ${watch} ${inlineBoundary} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. TaskStop only after terminal board evidence. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. mcp__plugin_sidequest_board__* first; ${cli} list --status=doing only if MCP is absent.${checkpointingGuidance(data)}`,
+      `=== sidequest (active — context restored) ===\n${recovery}\nROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? ' ' : ''}${boardAuthorization} ${watch} ${inlineBoundary} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. TaskStop only after terminal board evidence. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. mcp__plugin_sidequest_board__* first; ${cli} list --status=doing only if MCP is absent.`,
       restartNotice,
     );
     return;
   }
 
   emit(
-    `=== sidequest (active) ===\n${recovery}\nROLE: ORCHESTRATOR. ${watch} ${inlineBoundary} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.${checkpointingGuidance(data)}`,
+    `=== sidequest (active) ===\n${recovery}\nROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? ' ' : ''}${boardAuthorization} ${watch} ${inlineBoundary} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.${checkpointingGuidance(data)}`,
     restartNotice,
   );
 }

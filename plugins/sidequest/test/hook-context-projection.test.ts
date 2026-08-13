@@ -17,7 +17,7 @@ function outputContext(output: Record<string, unknown>): string {
 
 test('hook context projections stay UTF-8 safe at every model-facing budget', () => {
   const cases = [
-    ['SessionStart', 2 * 1024],
+    ['SessionStart', 4 * 1024],
     ['UserPromptSubmit', 1024],
     ['PreToolUse', 768],
     ['Stop', 512],

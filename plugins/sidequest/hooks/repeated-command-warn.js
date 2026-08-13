@@ -54,7 +54,7 @@ function stringField(input, ...names) {
 // src/hooks/shared/output.ts
 var import_node_crypto = __toESM(require("node:crypto"));
 var CONTEXT_BUDGETS = Object.freeze({
-  SessionStart: 2 * 1024,
+  SessionStart: 4 * 1024,
   UserPromptSubmit: 1024,
   PreToolUse: 768,
   PreCompact: 1500,
