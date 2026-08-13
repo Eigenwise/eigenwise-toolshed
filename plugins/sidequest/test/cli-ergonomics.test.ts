@@ -44,6 +44,7 @@ test('CLI command help stays focused on the requested command', () => {
     ['projects', '--archived'],
     ['board-config', '--always-in-scope'],
     ['groom-close', '--delivery-commit'],
+    ['watch', '--interval'],
   ] as const;
   const env = isolatedEnv();
   for (const [command, flag] of cases) {

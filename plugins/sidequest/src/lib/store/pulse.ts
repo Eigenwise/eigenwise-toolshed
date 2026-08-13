@@ -69,6 +69,7 @@ function createPulse(dependencies: any) {
     if (!comment) return null;
     const body = boundedExcerpt(comment.body, 200);
     return {
+      id: comment.id,
       by: comment.by,
       kind: comment.kind,
       body: body.text,
@@ -284,4 +285,65 @@ function createPulse(dependencies: any) {
   };
 }
 
-module.exports = { createPulse };
+function createBoardWatch(dependencies: any) {
+  const {
+    changesPayload,
+    setTimer = setTimeout,
+    writeError = (line: string) => process.stderr.write(`${line}\n`),
+    writeLine = (line: string) => process.stdout.write(`${line}\n`),
+    watchingAuthor = '',
+  } = dependencies;
+  const seen = new Set<string>();
+  let cursor = new Date().toISOString();
+  const commentPattern = /\b(?:out[- ]of[- ]scope|widen scope|scope request|technical_blocker|blocked|handback)\b/i;
+  const markerPattern = /^\[sidequest:/i;
+
+  function excerpt(value: unknown): string {
+    return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 160);
+  }
+
+  function actionableEvent(ticket: any): { type: string; author: string; excerpt: string } | null {
+    if (ticket.status === 'awaiting-oracle') return { type: 'awaiting-oracle', author: '', excerpt: '' };
+    if (ticket.lastEventType === 'release' || ticket.lastEventType === 'scope-request') {
+      return { type: ticket.lastEventType, author: '', excerpt: '' };
+    }
+    if (ticket.liveness === 'dead') return { type: 'dead', author: '', excerpt: String(ticket.livenessEvidence || '') };
+    if (Array.isArray(ticket.warnings) && ticket.warnings.length) return { type: 'warning', author: '', excerpt: excerpt(ticket.warnings[0]) };
+    const comment = ticket.lastComment;
+    const body = String(comment?.body || '');
+    if (!comment || markerPattern.test(body) || comment.by === watchingAuthor || !commentPattern.test(body)) return null;
+    return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
+  }
+
+  function poll(): void {
+    try {
+      const changes = changesPayload(cursor);
+      if (changes?.serverTime) cursor = changes.serverTime;
+      for (const ticket of Array.isArray(changes?.tickets) ? changes.tickets : []) {
+        const event = actionableEvent(ticket);
+        if (!event) continue;
+        const commentId = ticket.lastComment?.id || '';
+        const key = [ticket.ref, commentId, ticket.status].join('|');
+        if (seen.has(key)) continue;
+        seen.add(key);
+        writeLine(`${ticket.ref} ${ticket.status} ${event.type} ${event.author || '-'} ${event.excerpt || '-'}`);
+      }
+      return;
+    } catch (error: unknown) {
+      writeError(`sidequest watch: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
+
+  function start(intervalSeconds = 30): void {
+    const intervalMs = Math.max(1, Number(intervalSeconds) || 30) * 1000;
+    const next = () => {
+      poll();
+      setTimer(next, intervalMs);
+    };
+    next();
+  }
+
+  return { poll, start };
+}
+
+module.exports = { createPulse, createBoardWatch };

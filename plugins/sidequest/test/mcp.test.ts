@@ -1707,6 +1707,7 @@ test('MCP comment reads do not track per-session polling state and changes inclu
   const changes = await callTool('changes', { project, since });
   const changed = changes.tickets.find((entry: any) => entry.ref === ticket.ref);
   assert.deepEqual(changed.lastComment, {
+    id: changed.lastComment.id,
     by: 'polling-worker',
     kind: 'comment',
     body: changed.lastComment.body,

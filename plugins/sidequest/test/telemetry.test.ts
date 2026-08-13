@@ -46,6 +46,7 @@ interface Changes {
     updatedAt: string;
     lastEventType: string;
     lastEventSource: string;
+    lastComment: { id: string; by: string; kind: string; body: string; bodyLength: number; bodyTruncated: boolean };
     [key: string]: unknown;
   }>;
 }
@@ -101,7 +102,9 @@ test('changes returns an ordered compact delta and reusable serverTime', async (
   const changed = changes.tickets.find((ticket) => ticket.ref === ref);
   assert.ok(changed);
   assert.deepStrictEqual(Object.keys(changed).sort(), ['checkpoint', 'claim', 'lastComment', 'lastEventSource', 'lastEventType', 'liveness', 'livenessEvidence', 'ref', 'status', 'title', 'updatedAt']);
-  assert.deepStrictEqual(changed.lastComment, {
+  assert.match(changed.lastComment.id, /^c_/);
+  assert.deepStrictEqual({ ...changed.lastComment, id: undefined }, {
+    id: undefined,
     by: 'telemetry-worker',
     kind: 'comment',
     body: 'a second telemetry note',
