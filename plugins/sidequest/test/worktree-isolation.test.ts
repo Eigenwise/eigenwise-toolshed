@@ -166,6 +166,42 @@ test('the harness-provisioned agent worktree is allowed even though sidequest wo
   }
 });
 
+test('a harness worktree beneath the invoking linked worktree is allowed', () => {
+  const agentId = 'a2nestedharnessroot';
+  const sessionId = `session-${agentId}`;
+  const ticket = store.createTicket(slug, {
+    title: `isolation fixture ${agentId}`,
+    category: 'codebase-exploration',
+    description: 'A fixture dispatch that records whether isolation was promised.',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  const invokingWorktree = path.join(os.tmpdir(), `sq-isolation-invoking-${process.pid}-${Date.now()}`);
+  const harnessWorktree = path.join(invokingWorktree, '.claude', 'worktrees', `agent-${agentId}`);
+  execFileSync('git', ['worktree', 'add', '--detach', invokingWorktree], { cwd: PROJECT, windowsHide: true });
+  try {
+    fs.mkdirSync(path.dirname(harnessWorktree), { recursive: true });
+    execFileSync('git', ['worktree', 'add', '--detach', harnessWorktree], { cwd: PROJECT, windowsHide: true });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      sessionId,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(
+      store.getTicket(slug, ticket.ref).dispatch.worktree,
+      process.platform === 'win32' ? fs.realpathSync(harnessWorktree).toLowerCase() : fs.realpathSync(harnessWorktree),
+    );
+    const target = path.join(harnessWorktree, 'README.md');
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, harnessWorktree)), null);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', harnessWorktree], { cwd: PROJECT, windowsHide: true });
+    execFileSync('git', ['worktree', 'remove', '--force', invokingWorktree], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
 test('a different linked worktree is refused', () => {
   const agentId = 'a2foreign';
   const { sessionId, executor } = dispatched(agentId);

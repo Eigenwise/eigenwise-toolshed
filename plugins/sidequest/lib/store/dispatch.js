@@ -1142,7 +1142,8 @@ function createDispatch(dependencies) {
           projectPath: readMeta(project.slug)?.path || null,
           sharedTree: state.sharedTree !== false,
           terminal: terminalWithoutClaim,
-          agentId: state.agentId ? String(state.agentId) : null
+          agentId: state.agentId ? String(state.agentId) : null,
+          worktree: state.worktree ? String(state.worktree) : null
         };
         if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
         else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor) {
@@ -1160,8 +1161,11 @@ function createDispatch(dependencies) {
       sharedTree: matched.some((candidate) => candidate.sharedTree),
       terminal: matched.some((candidate) => candidate.terminal),
       matchedBy: byAgent.length ? "agent" : "session",
-      expectedWorktree: agentId && expectation.projectPath ? resolvedAgentWorktree(expectation.projectPath, agentId) : null,
-      expectedWorktrees: agentId && expectation.projectPath ? agentWorktreeCandidates(expectation.projectPath, agentId) : []
+      expectedWorktree: agentId && expectation.projectPath ? expectation.worktree || resolvedAgentWorktree(expectation.projectPath, agentId) : null,
+      expectedWorktrees: agentId && expectation.projectPath ? Array.from(/* @__PURE__ */ new Set([
+        ...expectation.worktree ? [expectation.worktree] : [],
+        ...agentWorktreeCandidates(expectation.projectPath, agentId)
+      ])) : []
     };
   }
   function dispatchWorkspace(slug, ticket) {
