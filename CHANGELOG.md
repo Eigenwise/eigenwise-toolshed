@@ -8,6 +8,51 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.461.0 (2026-08-13)
+
+### sidequest 4.48.0 → 4.48.1
+
+#### Fixes
+
+- Keep executor release fragment scope in sync (SQ-1845)
+  Let dispatched executors create the release fragment their submission needs.
+- Configure Python UTF-8 during dispatch (SQ-1862)
+  Sidequest dispatch now configures UTF-8 Python output for Windows projects that contain Python sources.
+- Ignore heredoc prose in Git safety guard (SQ-1869)
+  Git safety checks now ignore commit-message heredoc bodies while continuing to block executable release commands.
+- Explain shared-tree fallback for refused isolation spawns (SQ-1871)
+  Dispatch guidance now names the deliberate shared-tree fallback when Claude Code refuses an isolated worktree, and reclaims untouched unclaimed worktrees before replacement dispatches.
+- Allow bounded dispatch diagnostics (SQ-1872)
+  Adds a read-only, three-turn diagnostic probe for checking the dispatch path when ticket dispatch is unavailable.
+- Keep shared dispatch scope bindings grow-only (SQ-1873)
+- Fix Sidequest submission range remedies (SQ-1875)
+- Fix Sidequest hand-delivery closure guidance (SQ-1876)
+- Restored sessions are told stale task reminders are stale (SQ-1877)
+  The context-restored orchestrator briefing now says that a restored window replays background-task reminders which can name already-finished agents, so the board is the authority and those names are not worth an investigation round.
+- Accept a body file on add and update, and refuse unsupported flags (SQ-1878)
+  `sidequest add` and `sidequest update` now read a description from `--body-file`, the same way `comment`, `done`, and `submit` already did. Every command also refuses a flag it does not support instead of discarding it silently, so a misapplied flag can no longer leave a ticket written with a missing field.
+- Preserve a SessionStart worktree from its own sweep (SQ-1879)
+  SessionStart worktree cleanup now keeps the linked worktree running that session, even when the board resolves its project to the main checkout.
+- Submit preserved work after worktree cleanup (SQ-1880)
+  Submit now validates a reachable pinned commit from the board repository when its executor worktree has been swept. Its two remaining dead-end refusals, an undeclared file scope and a commit it cannot inspect, now name the handback an executor can actually perform instead of stopping at the diagnosis.
+- Accept harness worktrees from linked sessions (SQ-1881)
+  Sidequest now accepts an executor worktree that Claude Code creates under the invoking linked worktree.
+- Keep verified work off user handoffs (SQ-1882)
+  Executors now record evidence-backed blockers instead of handing commands to an absent user, and orchestrators are told how to deliver verified work when a board path refuses it.
+- Heal version-skewed dispatch claims (SQ-1884)
+  Token-valid dispatch claims now refresh a stale executor name after a Sidequest update.
+- Watch actionable board events (SQ-1889)
+  Adds `sidequest watch` for orchestrators to receive scope requests, blockers, liveness failures, and other actionable board events through Claude Code Monitor.
+- Add executor survival guidance to briefings (SQ-1891)
+  Executor briefings now tell routed workers to verify early, submit verified partial work, and commit before their run ends.
+
+### workbench 0.88.1 → 0.88.2
+
+#### Fixes
+
+- Report stale worktree processes (SQ-1864)
+  Toolshed Doctor now reports Windows processes whose command lines still reference a swept project or Sidequest worktree.
+
 ## v3.460.0 (2026-08-13)
 
 ### codebase-mapper 2.15.1 → 2.15.2
