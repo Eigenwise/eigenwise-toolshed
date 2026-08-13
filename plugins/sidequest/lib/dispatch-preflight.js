@@ -33,12 +33,44 @@ __export(dispatch_preflight_exports, {
   checkSidequestInstall: () => checkSidequestInstall,
   ensurePythonIoEncoding: () => ensurePythonIoEncoding,
   installRefusalMessage: () => installRefusalMessage,
+  localAheadOfUpstreamWarning: () => localAheadOfUpstreamWarning,
   transportRefusalMessage: () => transportRefusalMessage
 });
 module.exports = __toCommonJS(dispatch_preflight_exports);
+var import_node_child_process = require("node:child_process");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
+function localAheadOfUpstreamWarning(projectPath, branch) {
+  try {
+    const upstream = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], {
+      cwd: projectPath,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (!upstream) return null;
+    const count = Number((0, import_node_child_process.execFileSync)("git", ["rev-list", "--count", `${upstream}..${branch}`], {
+      cwd: projectPath,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim());
+    if (!Number.isInteger(count) || count < 1) return null;
+    const remote = (0, import_node_child_process.execFileSync)("git", ["config", "--get", `branch.${branch}.remote`], {
+      cwd: projectPath,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    return remote ? {
+      count,
+      message: `Local ${branch} is ${count} commit${count === 1 ? "" : "s"} ahead of ${upstream}; isolated worktrees fork the local tracking ref. Push first: git push ${remote} ${branch}`
+    } : null;
+  } catch (_) {
+    return null;
+  }
+}
 const PLUGIN_ID = "sidequest@eigenwise-toolshed";
 const REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
 function claudeHomeDir(opts = {}) {
@@ -156,5 +188,6 @@ function assertDispatchTransport(transport, opts = {}) {
   checkSidequestInstall,
   ensurePythonIoEncoding,
   installRefusalMessage,
+  localAheadOfUpstreamWarning,
   transportRefusalMessage
 });

@@ -1780,12 +1780,28 @@ test('worktreeBase local-main records the local main commit while default dispat
     const defaultDispatch = store.prepareDispatch(baseSlug, defaultTicket.ref, { sessionId: 'default-worktree-base' });
     assert.equal(defaultDispatch.ticket.dispatch.baseCommit, originMain);
     assert.deepEqual(defaultDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
+    assert.deepEqual(defaultDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main']);
+    assert.deepEqual(defaultDispatch.ticket.dispatch.localAheadWarning, {
+      count: 1,
+      message: 'Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main',
+    });
 
     store.setBoardConfig(baseSlug, { worktreeBase: 'local-main' });
     const localTicket = store.createTicket(baseSlug, { title: 'local worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
     const localDispatch = store.prepareDispatch(baseSlug, localTicket.ref, { sessionId: 'local-worktree-base' });
     assert.equal(localDispatch.ticket.dispatch.baseCommit, localMain);
     assert.deepEqual(localDispatch.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+    assert.deepEqual(localDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main']);
+    assert.deepEqual(store.pulsePayload(baseSlug, localTicket.ref).dispatch.localAheadWarning, {
+      count: 1,
+      message: 'Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main',
+    });
+
+    execFileSync('git', ['push', '--quiet', 'origin', 'main'], { cwd: repository });
+    const syncedTicket = store.createTicket(baseSlug, { title: 'in-sync worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const syncedDispatch = store.prepareDispatch(baseSlug, syncedTicket.ref, { sessionId: 'synced-worktree-base' });
+    assert.equal(syncedDispatch.warnings, undefined);
+    assert.equal(syncedDispatch.ticket.dispatch.localAheadWarning, undefined);
   } finally {
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(remote, { recursive: true, force: true });
