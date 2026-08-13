@@ -865,7 +865,8 @@ function createDispatch(dependencies) {
       const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
       const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t.files)])) : effectiveScope(slug, t.files);
       const readonly = dispatchReadOnly(t);
-      const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
+      const reviewAuditSharedCheckout = !Object.hasOwn(opts, "sharedTree") && ticketCategory(t) === "review-audit";
+      const requestedSharedTree = opts.sharedTree === true || reviewAuditSharedCheckout || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
       const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
       const readOnlySharedCheckout = readonly && effectiveFiles.length === 0 && !sharedTreeArtifactRequested(t) && !explicitIsolation;
       const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);

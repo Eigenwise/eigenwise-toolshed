@@ -482,6 +482,17 @@ test('zero-scope read-only dispatches use the shared checkout without a worktree
   assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
+test('review-audit dispatches default to the shared checkout while explicit isolation wins', () => {
+  const ticket = createFixture('review shared checkout default', 'review-audit');
+  const prepared = store.prepareDispatch(slug, ticket.ref);
+  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'review-shared-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  const isolated = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
+  assert.equal(isolated.ticket.dispatch.sharedTree, false);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'review-isolated-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 test('read-only category classes dispatch through restricted stable executors', () => {
   for (const category of ['codebase-exploration', 'research', 'review-audit', 'spike-investigation', 'visual-review']) {
     const ticket = createFixture(`${category} fixture`, category);
