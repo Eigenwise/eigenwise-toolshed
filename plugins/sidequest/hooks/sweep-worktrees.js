@@ -24,6 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/shared/worktree-sweep.ts
+var import_node_child_process = require("node:child_process");
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
 var import_node_os = __toESM(require("node:os"));
@@ -53,6 +54,52 @@ var MAX_PROJECTS_PER_START = 3;
 var MAX_CANDIDATES_PER_PROJECT = 8;
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 var MAX_ORPHAN_SUBJECT_LENGTH = 120;
+function windowsProcesses() {
+  try {
+    const result = (0, import_node_child_process.spawnSync)("powershell.exe", [
+      "-NoProfile",
+      "-NonInteractive",
+      "-Command",
+      "Get-CimInstance Win32_Process | Select-Object ProcessId,Name,CreationDate,KernelModeTime,UserModeTime,CommandLine | ConvertTo-Json -Compress"
+    ], { encoding: "utf8", timeout: 3e3, windowsHide: true });
+    if (result.status !== 0) return [];
+    const parsed = JSON.parse(String(result.stdout || ""));
+    return (Array.isArray(parsed) ? parsed : [parsed]).flatMap((entry) => {
+      const pid = Number(entry?.ProcessId);
+      if (!Number.isInteger(pid) || pid <= 0) return [];
+      const kernelSeconds = Number(entry.KernelModeTime) / 1e7;
+      const userSeconds = Number(entry.UserModeTime) / 1e7;
+      return [{
+        pid,
+        imageName: String(entry.Name || "unknown"),
+        startTime: String(entry.CreationDate || ""),
+        cpuSeconds: Number.isFinite(kernelSeconds + userSeconds) ? Math.floor(kernelSeconds + userSeconds) : null,
+        command: String(entry.CommandLine || "")
+      }];
+    });
+  } catch (_) {
+    return [];
+  }
+}
+function normalizedWindowsPath(value) {
+  return value.replace(/\//g, "\\").replace(/\\+$/, "").toLowerCase();
+}
+function referencesWorktree(command, worktreePath) {
+  const target = normalizedWindowsPath(worktreePath).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`${target}(?=$|[\\\\/"'\\s])`, "i").test(normalizedWindowsPath(command));
+}
+function worktreeRemovalFailureNotice(failure, options = {}) {
+  const notice = `could not remove ${failure.path || "a git entry"}: ${failure.message}`;
+  if ((options.platform ?? process.platform) !== "win32" || !failure.path || !(options.existsSync || import_node_fs2.default.existsSync)(failure.path)) return notice;
+  const processes = (options.listProcesses || windowsProcesses)().filter((entry) => referencesWorktree(entry.command, failure.path));
+  if (!processes.length) return notice;
+  const details = processes.map((entry) => {
+    const started = entry.startTime ? `, started ${entry.startTime}` : "";
+    const cpu = entry.cpuSeconds === null ? "" : `, CPU ${entry.cpuSeconds}s`;
+    return `pid ${entry.pid} (${entry.imageName}${started}${cpu})`;
+  });
+  return `${notice}. Processes still using it: ${details.join("; ")}. End those PIDs and re-run the sweep.`;
+}
 function stateFile() {
   const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
   return import_node_path2.default.join(home, "worktree-sweep-sessions.json");
@@ -170,7 +217,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
       }
       for (const failure of result.failures || []) {
         if (!failure.suppressed) {
-          notices.push(`sidequest: worktree sweep for ${project.name || project.slug} could not remove ${failure.path || "a git entry"}: ${failure.message}`);
+          notices.push(`sidequest: worktree sweep for ${project.name || project.slug} ${worktreeRemovalFailureNotice(failure)}`);
         }
       }
       notices.push(...salvageNotices(result.salvaged || []));
@@ -185,7 +232,7 @@ async function sweepWorktrees(data, includeKnownProjects) {
 }
 
 // src/hooks/shared/sweep-handoff.ts
-var import_node_child_process = require("node:child_process");
+var import_node_child_process2 = require("node:child_process");
 var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));

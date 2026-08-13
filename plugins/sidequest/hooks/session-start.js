@@ -235,6 +235,7 @@ async function runSweep(data) {
 }
 
 // src/hooks/shared/worktree-sweep.ts
+var import_node_child_process2 = require("node:child_process");
 var import_node_fs4 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
 var import_node_os3 = __toESM(require("node:os"));
