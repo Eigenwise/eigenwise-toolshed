@@ -144,6 +144,26 @@ function submissionRangeFailureMessage(ticket, range, gitRef) {
 function uncommittedScopeFailureMessage(ticket, paths) {
   return `submit: refused ${ticket.ref}; uncommitted changes fall inside this ticket's declared scope: ${paths.join(", ")}. Commit these paths, or explain why they are deliberately excluded before resubmitting.`;
 }
+function submissionRoot(meta, worktree, commit, gitRef) {
+  if (worktree == null) return process.cwd();
+  try {
+    return worktreeRoot(worktree, "submit");
+  } catch (worktreeError) {
+    const supplied = String(worktree || "").trim();
+    if (supplied && fs.existsSync(supplied)) throw worktreeError;
+    let repository;
+    try {
+      repository = commitScope.repoRoot(meta.path);
+    } catch (repositoryError) {
+      throw new Error(`submit: worktree is gone and the board repository is unavailable: ${repositoryError?.message || repositoryError}`);
+    }
+    const preserved = commitScope.preserveCommitRef(repository, commit, gitRef);
+    if (!preserved.ok) {
+      throw new Error(`submit: worktree is gone and ${commit} is unavailable from the board repository: ${preserved.message || preserved.reason}. Release this ticket to todo for a fresh board dispatch; the board cannot submit a candidate it cannot inspect.`);
+    }
+    return repository;
+  }
+}
 function validateSubmissionCandidate(options) {
   const { slug, ticket, by, root, commit, gitRef, verify, base, force = false, source = "mcp" } = options;
   const ownershipFailure = store.submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: force === true });
@@ -673,11 +693,11 @@ const tools = [
       }
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`submit: no ticket "${args.ref}" in ${meta.name}.`);
-      const root = args.worktree == null ? process.cwd() : worktreeRoot(args.worktree, "submit");
+      const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
+      const root = submissionRoot(meta, args.worktree, commit, gitRef);
       if (verifyEmbedsWorktreeRoot(args.verify, root)) {
         throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
       }
-      const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
       const verify = String(args.verify || "").trim();
       const validation = validateSubmissionCandidate({
         slug,

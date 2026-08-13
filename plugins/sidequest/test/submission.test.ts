@@ -425,6 +425,37 @@ test('SQ-822: MCP submit refuses uncommitted declared work, then accepts it once
   assert.equal(outsideSubmitted.ok, true, outsideSubmitted.message);
 });
 
+test('SQ-1880: MCP submit inspects a pinned candidate from the repository after its worktree is gone', async () => {
+  cleanBranch();
+  const ticket = addTicket('worktree swept after verified commit', { files: ['lib/swept-worktree.js'] });
+  const by = 'swept-worktree-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'swept-worktree.js'), 'verified before sweep\n');
+  git(['add', 'lib/swept-worktree.js']);
+  git(['commit', '-m', 'verified swept worktree candidate']);
+  const commit = git(['rev-parse', 'HEAD']);
+  pin(ticket, commit);
+  git(['reset', '--hard', 'origin/main']);
+  const missingWorktree = path.join(PROJECT_DIR, 'missing-agent-worktree');
+
+  const submitted = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: ticket.ref,
+    by,
+    commit,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: missingWorktree,
+    body: 'Changed lib/swept-worktree.js. Scoped submission test passed. Nothing skipped.',
+  });
+
+  assert.equal(submitted.ok, true, submitted.message);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.equal(stored.submission.commit, commit);
+  assert.equal(stored.submission.worktree, missingWorktree);
+  assert.equal(stored.claim, null);
+});
+
 test('SQ-971: an unavailable recorded integration target still quarantines verified work', async () => {
   cleanBranch();
   const t = addTicket('missing integration target preservation', { files: ['lib/missing-target.js'] });
