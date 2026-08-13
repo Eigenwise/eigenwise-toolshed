@@ -1461,7 +1461,14 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (opts.direct && t.dispatchNonce && !terminalDispatch) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (opts.direct && t.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: 'terminal_claim_takeover_required', ticket: t };
     if (!opts.direct && t.dispatchNonce && !dispatchTokenMatches(t.dispatchNonce, providedToken)) return { ok: false, reason: 'token', ticket: t };
-    if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
+    if (!opts.direct && t.dispatchNonce && opts.executor !== t.dispatchExecutor) {
+      const currentExecutor = stableExecutorName(t);
+      if (opts.executor !== currentExecutor) return { ok: false, reason: 'executor_mismatch', ticket: t, expectedExecutor: t.dispatchExecutor };
+      const at = new Date().toISOString();
+      currentDispatch.healedExecutorName = { oldName: t.dispatchExecutor, newName: currentExecutor, at };
+      currentDispatch.executor = currentExecutor;
+      t.dispatchExecutor = currentExecutor;
+    }
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const now = new Date().toISOString();

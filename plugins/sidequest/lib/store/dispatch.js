@@ -789,7 +789,14 @@ function createDispatch(dependencies) {
       if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
       const currentRoute = activeDispatchRoute(t);
       const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
-      if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor && currentExec && stableExecutorName(t) === t.dispatchExecutor) {
+      if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor && currentExec) {
+        const currentExecutor = stableExecutorName(t);
+        if (t.dispatchExecutor !== currentExecutor) {
+          const at = (/* @__PURE__ */ new Date()).toISOString();
+          current.healedExecutorName = { oldName: t.dispatchExecutor, newName: currentExecutor, at };
+          current.executor = currentExecutor;
+          t.dispatchExecutor = currentExecutor;
+        }
         if (opts.sessionId) current.sessionId = String(opts.sessionId);
         if (!current.launchSeq) current.launchSeq = 1;
         if (!current.launchName) current.launchName = dispatchLaunchName(t.ref, t.title, current.launchSeq);

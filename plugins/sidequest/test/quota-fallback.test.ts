@@ -149,9 +149,17 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(pulse.dispatch.attempts[0].outcome, 'quota_exhausted');
   assert.equal(pulse.dispatch.attempts[0].failure.signature, "You've reached your Fable 5 limit");
 
+  store.updateTicket(slug, ticket.ref, { readonly: true });
+  const currentExecutor = store.stableExecutorName(store.getTicket(slug, ticket.ref));
   const adopted = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: 'quota-store-adopted' });
   assert.equal(adopted.reused, true);
   assert.equal(adopted.token, recovered.token);
+  assert.equal(adopted.ticket.dispatchExecutor, currentExecutor);
+  assert.deepEqual(adopted.ticket.dispatch.healedExecutorName, {
+    oldName: 'sidequest-exec-dispatch',
+    newName: currentExecutor,
+    at: adopted.ticket.dispatch.healedExecutorName.at,
+  });
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.sessionId, 'quota-store-adopted');
   assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.preparedBy, { sessionId: 'quota-store-primary', surface: 'store' });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
