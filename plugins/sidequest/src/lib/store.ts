@@ -41,7 +41,7 @@ const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
-const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight.js');
+const { assertSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding } = require('./dispatch-preflight.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
@@ -395,6 +395,7 @@ const {
   SHARED_TREE_ARTIFACT_MARKER,
   assertDispatchTransport,
   assertSidequestInstall,
+  ensurePythonIoEncoding,
   availableRoute: (...args: any[]) => availableRoute(...args),
   boardConfig,
   claimReclaimable: (...args: any[]) => claimReclaimable(...args),

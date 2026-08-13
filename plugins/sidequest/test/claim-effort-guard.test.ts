@@ -558,6 +558,53 @@ test('SQ-1017: dispatch succeeds once an exact-project install advertising the b
   }
 });
 
+test('SQ-1862: win32 Python projects receive project-local UTF-8 output settings for the next session', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1862-python-project-'));
+  fs.writeFileSync(path.join(project, 'main.py'), 'print("hello")\n');
+  const result = dispatchPreflight.ensurePythonIoEncoding(project, { platform: 'win32' });
+  const settingsPath = path.join(project, '.claude', 'settings.local.json');
+  assert.equal(result.written, true);
+  assert.equal(result.settingsPath, settingsPath);
+  assert.deepEqual(JSON.parse(fs.readFileSync(settingsPath, 'utf8')), { env: { PYTHONIOENCODING: 'utf-8' } });
+});
+
+test('SQ-1862: dispatch reports the next-session Python encoding write', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1862-dispatch-python-project-'));
+  fs.writeFileSync(path.join(project, 'main.py'), 'print("hello")\n');
+  const claudeHome = goodTransportRegistry(project);
+  process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+  try {
+    const slug = store.ensureProject(project).slug;
+    const ref = cliJson(['add', '-t', 'Python dispatch fixture', '-d', 'Where: SQ-1862 fixture. Contract: write a project-local encoding setting. Verify: inspect dispatch warnings.', '--category', 'guard.claude', '--project', project]).ticket.ref;
+    const prepared = store.prepareDispatch(slug, ref, { allowUnscoped: true, transport: 'mcp' });
+    assert.match(store.dispatchWarnings(prepared.ticket, slug).join('\n'), /wrote PYTHONIOENCODING=utf-8.*next session/);
+  } finally {
+    process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;
+  }
+});
+
+test('SQ-1862: existing Python encoding settings survive unchanged', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1862-existing-python-project-'));
+  fs.writeFileSync(path.join(project, 'main.py'), 'print("hello")\n');
+  const settingsPath = path.join(project, '.claude', 'settings.local.json');
+  fs.mkdirSync(path.dirname(settingsPath), { recursive: true });
+  const original = '{\n  "env": {\n    "PYTHONIOENCODING": "utf-16"\n  }\n}\n';
+  fs.writeFileSync(settingsPath, original);
+  const result = dispatchPreflight.ensurePythonIoEncoding(project, { platform: 'win32' });
+  assert.equal(result.written, false);
+  assert.equal(fs.readFileSync(settingsPath, 'utf8'), original);
+});
+
+test('SQ-1862: non-Python projects and non-win32 platforms remain untouched', () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1862-plain-project-'));
+  fs.writeFileSync(path.join(project, 'main.ts'), 'export {};\n');
+  assert.equal(dispatchPreflight.ensurePythonIoEncoding(project, { platform: 'win32' }).written, false);
+  assert.equal(fs.existsSync(path.join(project, '.claude', 'settings.local.json')), false);
+  fs.writeFileSync(path.join(project, 'main.py'), 'print("hello")\n');
+  assert.equal(dispatchPreflight.ensurePythonIoEncoding(project, { platform: 'linux' }).written, false);
+  assert.equal(fs.existsSync(path.join(project, '.claude', 'settings.local.json')), false);
+});
+
 test('SQ-1017: dispatch refuses a stale registry entry whose install path no longer exists', () => {
   const claudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-stale-claude-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-1017-stale-project-'));
