@@ -19,8 +19,6 @@ const {
   requireDispatchSession,
   workflowRecipe,
   requireBy,
-  effortDrift,
-  executorDrift,
   requireKnownModelFilter,
   requireKnownModel,
   pathList,
@@ -274,16 +272,10 @@ const tools: ToolDefinition[] = [
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'claim');
-      const drift = executorDrift(slug, args.ref, args.effort, args.executor, args.token, !!args.direct);
-      if (drift) {
-        const ticket = store.getTicket(slug, args.ref);
-        const guidance = drift.reason === 'executor_mismatch'
-          ? { message: claimRefusalMessage(drift.reason, args.ref, ticket || {}, meta.path) }
-          : {};
-        return Object.assign({ ok: false }, drift, guidance);
-      }
-      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, tokenFile: args.tokenFile, executor: args.executor, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
-      if (!res.ok) res.message = claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
+      const res = store.claimTicket(slug, args.ref, by, { force: !!args.force, direct: !!args.direct, reason: args.reason, token: args.token, tokenFile: args.tokenFile, executor: args.executor, effort: args.effort, source: 'mcp', sessionId: sessionOf(args), requireBoundAgent: true });
+      if (!res.ok) res.message = res.reason === 'executor_mismatch'
+        ? claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path)
+        : res.message || claimRefusalMessage(res.reason, args.ref, res.ticket || res.claim, meta.path);
       return mutationAck(slug, res);
     },
   },

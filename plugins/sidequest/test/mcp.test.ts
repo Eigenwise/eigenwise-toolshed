@@ -3904,6 +3904,47 @@ test('MCP claim rejects a generic executor for a Codex route', async () => {
   }
 });
 
+test('MCP token-file claims use the prepared readonly executor and resolve once', async () => {
+  seedCatalog([{ id: 'claude-gpt-5.6-terra[1m]', slug: 'codex-gpt-5-6-terra', label: 'GPT-5.6 Terra' }]);
+  try {
+    const slug = store.ensureProject(PROJ).slug;
+    store.setCategory({ id: 'mcp-readonly-token-file', name: 'MCP readonly token file', readonly: true, route: { model: 'codex-gpt-5-6-terra', effort: 'high' } });
+    const accepted = await callTool('add', { title: 'MCP readonly token-file success', category: 'mcp-readonly-token-file' });
+    const prepared = store.prepareDispatch(slug, accepted.ref, { allowUnscoped: true, sessionId: 'mcp-readonly-token-file' });
+    assert.notEqual(store.getTicket(slug, accepted.ref).exec.agent, prepared.ticket.dispatchExecutor);
+    const tokenFile = prepared.ticket.dispatch.tokenFile;
+    const originalReadFileSync = fs.readFileSync;
+    let tokenFileReads = 0;
+    fs.readFileSync = function (filename: any, ...args: any[]) {
+      if (path.resolve(String(filename)) === path.resolve(tokenFile)) tokenFileReads += 1;
+      return originalReadFileSync.call(fs, filename, ...args);
+    };
+    try {
+      const claimed = await callTool('claim', { ref: accepted.ref, by: 'mcp-readonly-token-file', executor: prepared.ticket.dispatchExecutor, tokenFile });
+      assert.equal(claimed.ok, true);
+    } finally {
+      fs.readFileSync = originalReadFileSync;
+    }
+    assert.equal(tokenFileReads, 1);
+    assert.equal(store.releaseTicket(slug, accepted.ref, 'mcp-readonly-token-file', { status: 'todo', source: 'test' }).ok, true);
+
+    const wrong = await callTool('add', { title: 'MCP readonly token-file mismatch', category: 'mcp-readonly-token-file' });
+    const wrongPrepared = store.prepareDispatch(slug, wrong.ref, { allowUnscoped: true, sessionId: 'mcp-readonly-token-file-wrong' });
+    const mismatch = await callTool('claim', { ref: wrong.ref, by: 'mcp-wrong-readonly-token-file', executor: 'sidequest-exec-dispatch', tokenFile: wrongPrepared.ticket.dispatch.tokenFile });
+    assert.equal(mismatch.ok, false);
+    assert.equal(mismatch.reason, 'executor_mismatch');
+    assert.equal(mismatch.expectedExecutor, wrongPrepared.ticket.dispatchExecutor);
+
+    const invalidTokenFile = path.join(FIXTURE_ROOT, 'invalid-dispatch.token');
+    fs.writeFileSync(invalidTokenFile, 'invalid-dispatch-token\n');
+    const invalid = await callTool('claim', { ref: wrong.ref, by: 'mcp-invalid-token-file', executor: wrongPrepared.ticket.dispatchExecutor, tokenFile: invalidTokenFile });
+    assert.equal(invalid.ok, false);
+    assert.equal(invalid.reason, 'token');
+  } finally {
+    clearCatalog();
+  }
+});
+
 test('claim with a mismatched effort is refused (drift guard mirrors the CLI)', async () => {
   const added = await callTool('add', { title: 'effort guard', category: 'coding.easy' });
   const ref = added.ref;

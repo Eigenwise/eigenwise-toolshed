@@ -134,59 +134,6 @@ function requireBy(args?: any, action?: any) {
 }
 
 /* ------------------------------------------------------------------ *
- *  Effort-drift guard (mirrors bin/sidequest.js effortDriftReason)
- *
- *  Kept in lockstep with the CLI's copy: an executor claiming with a baked
- *  --effort that doesn't match the ticket's derived effort means the wrong-tier
- *  agent was spawned, so the claim is refused before it mutates anything.
- * ------------------------------------------------------------------ */
-
-function effortDrift(slug?: any, idOrRef?: any, claimedEffort?: any) {
-  if (claimedEffort == null) return null;
-  const t = store.getTicket(slug, idOrRef);
-  if (!t) return null;
-  const derivedEffort = t.effort || (store.CLAUDE_RUNTIMES.includes(t.model) ? 'low' : null);
-  if (!derivedEffort) return null;
-  const claimed = String(claimedEffort).toLowerCase();
-  if (claimed === derivedEffort) return null;
-  const resolved = store.resolveExec(t.model, derivedEffort);
-  const execName = (t.exec && t.exec.agent) || (resolved && resolved.agent) || `sidequest-exec-${derivedEffort}`;
-  return {
-    reason: 'effort_mismatch',
-    ref: t.ref,
-    derivedModel: t.model,
-    derivedEffort,
-    claimedEffort: claimed,
-    message: `${t.ref} resolves to ${t.model}·${derivedEffort}, but ${claimed} was requested. Run sidequest dispatch ${t.ref}, then spawn ${execName}.`,
-  };
-}
-
-function executorDrift(slug?: any, idOrRef?: any, claimedEffort?: any, executorName?: any, token?: any, direct?: any) {
-  if (direct) return null;
-  const effort = effortDrift(slug, idOrRef, claimedEffort);
-  if (effort) return effort;
-  const t = store.getTicket(slug, idOrRef);
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
-    return {
-      reason: 'executor_mismatch', ref: t.ref,
-      derivedModel: t.model, derivedEffort: t.effort,
-      executor: executorName || null, expectedExecutor: t.dispatchExecutor,
-      message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || 'this executor'}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`,
-    };
-  }
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
-  if (!executorName) return null;
-  if (!t || !t.exec || t.exec.backend !== 'codex') return null;
-  if (executorName === t.exec.agent) return null;
-  return {
-    reason: 'executor_mismatch', ref: t.ref,
-    derivedModel: t.model, derivedEffort: t.effort, backend: t.exec.backend,
-    runsLabel: t.exec.runsLabel, executor: executorName, expectedExecutor: t.exec.agent,
-    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Run sidequest dispatch ${t.ref}, then spawn ${t.exec.agent}.`,
-  };
-}
-
-/* ------------------------------------------------------------------ *
  *  Model-argument validation
  *
  *  ready.model/next.model FILTER on the derived TIER (the four built-ins). A
@@ -1175,8 +1122,6 @@ module.exports = {
   requireDispatchSession,
   workflowRecipe,
   requireBy,
-  effortDrift,
-  executorDrift,
   requireKnownModelFilter,
   requireKnownModel,
   pathList,

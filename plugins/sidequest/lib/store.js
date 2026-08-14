@@ -1513,6 +1513,60 @@ function liveRuntimeClaim(slug, ticket, by) {
   }
   return null;
 }
+function claimAdmission(slug, idOrRef, opts) {
+  opts = opts || {};
+  const ticket = getTicket(slug, idOrRef);
+  if (!ticket) return { ok: false, reason: "not_found" };
+  if (opts.direct) return { ok: true, ticket, token: null };
+  if (opts.effort != null) {
+    const derivedEffort = ticket.effort || (CLAUDE_RUNTIMES.includes(ticket.model) ? "low" : null);
+    const claimedEffort = String(opts.effort).toLowerCase();
+    if (derivedEffort && claimedEffort !== derivedEffort) {
+      const resolved = resolveExec(ticket.model, derivedEffort);
+      const expectedExecutor = ticket.exec && ticket.exec.agent || resolved && resolved.agent || `sidequest-exec-${derivedEffort}`;
+      return {
+        ok: false,
+        reason: "effort_mismatch",
+        ticket,
+        derivedModel: ticket.model,
+        derivedEffort,
+        claimedEffort,
+        expectedExecutor,
+        message: `${ticket.ref} resolves to ${ticket.model}·${derivedEffort}, but ${claimedEffort} was requested. Run sidequest dispatch ${ticket.ref}, then spawn ${expectedExecutor}.`
+      };
+    }
+  }
+  const token = dispatchTokenForRequest(opts.token, opts.tokenFile);
+  if (!ticket.dispatchNonce) {
+    if (!opts.executor || !ticket.exec || ticket.exec.backend !== "codex" || opts.executor === ticket.exec.agent) {
+      return { ok: true, ticket, token };
+    }
+    return {
+      ok: false,
+      reason: "executor_mismatch",
+      ticket,
+      derivedModel: ticket.model,
+      derivedEffort: ticket.effort,
+      executor: opts.executor,
+      expectedExecutor: ticket.exec.agent,
+      message: `${ticket.ref} resolves to ${ticket.exec.runsLabel} · ${ticket.effort} (${ticket.exec.backend}), but ${opts.executor} is not its generated executor. Run sidequest dispatch ${ticket.ref}, then spawn ${ticket.exec.agent}.`
+    };
+  }
+  if (!dispatchTokenMatches(ticket.dispatchNonce, token)) return { ok: false, reason: "token", ticket };
+  if (opts.executor !== ticket.dispatchExecutor) {
+    return {
+      ok: false,
+      reason: "executor_mismatch",
+      ticket,
+      derivedModel: ticket.model,
+      derivedEffort: ticket.effort,
+      executor: opts.executor || null,
+      expectedExecutor: ticket.dispatchExecutor,
+      message: `${ticket.ref} has a prepared dispatch for ${ticket.dispatchExecutor}, not ${opts.executor || "this executor"}. Re-run sidequest dispatch ${ticket.ref} and claim with its returned executor and token.`
+    };
+  }
+  return { ok: true, ticket, token };
+}
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -1526,13 +1580,12 @@ function claimTicket(slug, idOrRef, by, opts) {
     const directClaimReason = directReason(opts.reason);
     if (opts.direct && isRoutedTicket(t2) && !directClaimReason) return { ok: false, reason: "direct_reason_required", ticket: t2 };
     if (opts.direct && isRoutedTicket(t2) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: "direct_not_allowed", ticket: t2, expectedExecutor: t2.dispatchExecutor || t2.exec?.agent || null };
+    const admission = claimAdmission(slug, found.id, opts);
+    if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t2);
-    const providedToken = dispatchTokenForRequest(opts.token, opts.tokenFile);
     const terminalDispatch = Boolean(currentDispatch?.terminalAt && currentDispatch?.outcome);
     if (opts.direct && t2.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t2 };
     if (opts.direct && t2.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t2 };
-    if (!opts.direct && t2.dispatchNonce && !dispatchTokenMatches(t2.dispatchNonce, providedToken)) return { ok: false, reason: "token", ticket: t2 };
-    if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
     if (currentDispatch?.preparedCompatibility?.pluginInstall) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || "");
@@ -2588,6 +2641,7 @@ module.exports = {
   terminalDispatchForIdle,
   markDispatchStopped,
   reconcileLaunchedDispatches,
+  claimAdmission,
   claimTicket,
   releaseTicket,
   completeTicket,

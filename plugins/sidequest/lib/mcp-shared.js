@@ -105,57 +105,6 @@ function requireBy(args, action) {
   if (!by) throw new Error(`${action}: "by" is required — a unique per-worker id (e.g. claude-<8 hex>). A shared value breaks the atomic-claim guarantee.`);
   return by;
 }
-function effortDrift(slug, idOrRef, claimedEffort) {
-  if (claimedEffort == null) return null;
-  const t = store.getTicket(slug, idOrRef);
-  if (!t) return null;
-  const derivedEffort = t.effort || (store.CLAUDE_RUNTIMES.includes(t.model) ? "low" : null);
-  if (!derivedEffort) return null;
-  const claimed = String(claimedEffort).toLowerCase();
-  if (claimed === derivedEffort) return null;
-  const resolved = store.resolveExec(t.model, derivedEffort);
-  const execName = t.exec && t.exec.agent || resolved && resolved.agent || `sidequest-exec-${derivedEffort}`;
-  return {
-    reason: "effort_mismatch",
-    ref: t.ref,
-    derivedModel: t.model,
-    derivedEffort,
-    claimedEffort: claimed,
-    message: `${t.ref} resolves to ${t.model}·${derivedEffort}, but ${claimed} was requested. Run sidequest dispatch ${t.ref}, then spawn ${execName}.`
-  };
-}
-function executorDrift(slug, idOrRef, claimedEffort, executorName, token, direct) {
-  if (direct) return null;
-  const effort = effortDrift(slug, idOrRef, claimedEffort);
-  if (effort) return effort;
-  const t = store.getTicket(slug, idOrRef);
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName !== t.dispatchExecutor) {
-    return {
-      reason: "executor_mismatch",
-      ref: t.ref,
-      derivedModel: t.model,
-      derivedEffort: t.effort,
-      executor: executorName || null,
-      expectedExecutor: t.dispatchExecutor,
-      message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || "this executor"}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`
-    };
-  }
-  if (t && t.dispatchNonce && token === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
-  if (!executorName) return null;
-  if (!t || !t.exec || t.exec.backend !== "codex") return null;
-  if (executorName === t.exec.agent) return null;
-  return {
-    reason: "executor_mismatch",
-    ref: t.ref,
-    derivedModel: t.model,
-    derivedEffort: t.effort,
-    backend: t.exec.backend,
-    runsLabel: t.exec.runsLabel,
-    executor: executorName,
-    expectedExecutor: t.exec.agent,
-    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Run sidequest dispatch ${t.ref}, then spawn ${t.exec.agent}.`
-  };
-}
 function requireKnownModelFilter(action, value) {
   if (value == null) return;
   const cls = store.classifyModelFilter(value);
@@ -1052,8 +1001,6 @@ module.exports = {
   requireDispatchSession,
   workflowRecipe,
   requireBy,
-  effortDrift,
-  executorDrift,
   requireKnownModelFilter,
   requireKnownModel,
   pathList,

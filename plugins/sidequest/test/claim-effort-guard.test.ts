@@ -73,6 +73,11 @@ store.setCategory({
   route: { model: 'haiku', effort: 'medium' }, enabled: true,
 });
 
+store.setCategory({
+  id: 'guard.readonly', name: 'Readonly Codex guard',
+  route: { model: 'codex-gpt-test', effort: 'high' }, readonly: true, enabled: true,
+});
+
 function runCli(args?: any) {
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_DISCOVERY_DIRS: process.env.SIDEQUEST_DISCOVERY_DIRS, CLAUDE_PROJECT_DIR: PROJ });
   const result = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env });
@@ -236,6 +241,24 @@ test('the store requires a dispatch nonce, rejects a wrong one, and accepts its 
   assert.equal(wrong.reason, 'token');
   const accepted = store.claimTicket(slug, ref, 'store-prepared', { token: prepared.token, executor: prepared.ticket.dispatchExecutor });
   assert.equal(accepted.ok, true);
+});
+
+test('CLI token-file claims keep the prepared readonly executor authoritative', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const acceptedRef = seed('guard.readonly');
+  const accepted = prepareBoundDispatch(slug, acceptedRef);
+  assert.notEqual(ticket(acceptedRef).exec.agent, accepted.ticket.dispatchExecutor);
+  const claimed = cliJson(['claim', acceptedRef, '--by', 'readonly-token-file', '--executor', accepted.ticket.dispatchExecutor, '--token-file', accepted.ticket.dispatch.tokenFile]);
+  assert.equal(claimed.ok, true);
+  assert.equal(store.releaseTicket(slug, acceptedRef, 'readonly-token-file', { status: 'todo', source: 'test' }).ok, true);
+
+  const rejectedRef = seed('guard.readonly');
+  const rejected = prepareBoundDispatch(slug, rejectedRef);
+  const result = runCli(['claim', rejectedRef, '--by', 'wrong-readonly-token-file', '--executor', 'sidequest-exec-dispatch', '--token-file', rejected.ticket.dispatch.tokenFile, '--json']);
+  assert.notEqual(result.status, 0);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.reason, 'executor_mismatch');
+  assert.equal(payload.expectedExecutor, rejected.ticket.dispatchExecutor);
 });
 
 test('CLI refuses invalid direct rationales and records inline-safe direct claims', () => {

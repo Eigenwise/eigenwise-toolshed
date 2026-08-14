@@ -21,25 +21,6 @@ function reportClaimFailure(action, idOrRef, res, meta) {
   process.exitCode = 1;
   console.log(`✗ ${res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path)}`);
 }
-function effortDriftReason(slug, idOrRef, claimedEffort) {
-  if (claimedEffort == null) return null;
-  const t = store.getTicket(slug, idOrRef);
-  if (!t) return null;
-  const derivedEffort = t.effort || (store.CLAUDE_RUNTIMES.includes(t.model) ? "low" : null);
-  if (!derivedEffort) return null;
-  const claimed = String(claimedEffort).toLowerCase();
-  if (claimed === derivedEffort) return null;
-  const resolved = store.resolveExec(t.model, derivedEffort);
-  const execName = t.exec && t.exec.agent || resolved && resolved.agent || `sidequest-exec-${derivedEffort}`;
-  const modelHint = t.exec && t.exec.model ? ` (model ${t.exec.model})` : "";
-  return {
-    ref: t.ref,
-    derivedModel: t.model,
-    derivedEffort,
-    claimedEffort: claimed,
-    message: `${t.ref} resolves to ${t.model}·${derivedEffort}, but you claimed as ${claimed} effort. Run sidequest dispatch ${t.ref}, then spawn ${execName}${modelHint}. The ticket remains free for that executor.`
-  };
-}
 function validateModelFilter(action, opts) {
   if (opts.model == null) return true;
   const cls = store.classifyModelFilter(opts.model);
@@ -53,46 +34,6 @@ function validateModelFilter(action, opts) {
   }
   return false;
 }
-function executorDriftReason(slug, idOrRef, claimedEffort, executorName, token, direct, tokenFile) {
-  const resolvedToken = store.dispatchTokenForRequest(token, tokenFile) || token;
-  if (direct) return null;
-  const effortDrift = effortDriftReason(slug, idOrRef, claimedEffort);
-  if (effortDrift) return effortDrift;
-  const t = store.getTicket(slug, idOrRef);
-  if (t && store.isSupersededDispatchToken(t, resolvedToken)) {
-    return {
-      reason: "token",
-      ref: t.ref,
-      message: `${t.ref}'s dispatch was superseded by a newer preparation. Re-run sidequest dispatch ${t.ref} and use its returned token.`
-    };
-  }
-  if (t && t.dispatchNonce && resolvedToken === t.dispatchNonce && executorName !== t.dispatchExecutor) {
-    return {
-      reason: "executor_mismatch",
-      ref: t.ref,
-      derivedModel: t.model,
-      derivedEffort: t.effort,
-      executor: executorName || null,
-      expectedExecutor: t.dispatchExecutor,
-      message: `${t.ref} has a prepared dispatch for ${t.dispatchExecutor}, not ${executorName || "this executor"}. Re-run sidequest dispatch ${t.ref} and claim with its returned executor and token.`
-    };
-  }
-  if (t && t.dispatchNonce && resolvedToken === t.dispatchNonce && executorName === t.dispatchExecutor) return null;
-  if (!executorName) return null;
-  if (!t || !t.exec || t.exec.backend !== "codex") return null;
-  const expected = t.exec.agent;
-  if (executorName === expected) return null;
-  return {
-    ref: t.ref,
-    derivedModel: t.model,
-    derivedEffort: t.effort,
-    backend: t.exec.backend,
-    runsLabel: t.exec.runsLabel,
-    executor: executorName,
-    expectedExecutor: expected,
-    message: `${t.ref} resolves to ${t.exec.runsLabel} · ${t.effort} (${t.exec.backend}), but ${executorName} is not its generated executor. Run sidequest dispatch ${t.ref}, then spawn ${expected}. The ticket remains free for the authoritative runtime.`
-  };
-}
 function claimPlanningWarnings(ticket, projectPath) {
   const warnings = store.ticketPlanningWarnings(ticket, projectPath);
   if (!warnings.length) return [];
@@ -103,24 +44,11 @@ async function cmdClaim(opts, positional) {
   if (!idOrRef) fail("claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me");
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
-  const drift = executorDriftReason(slug, idOrRef, opts.effort, opts.executor, opts.token, !!opts.direct, opts["token-file"]);
-  if (drift) {
-    if (drift.reason === "executor_mismatch") {
-      drift.message = claimRefusalMessage("executor_mismatch", idOrRef, store.getTicket(slug, idOrRef) || {}, meta.path);
-    }
-    process.exitCode = 1;
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ ok: false, reason: drift.reason || "effort_mismatch", project: slug }, drift), null, 2) + "\n");
-    } else {
-      console.log(`✗ ${drift.message}`);
-    }
-    return;
-  }
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, tokenFile: opts["token-file"], executor: opts.executor, source: opts.source || "cli", sessionId: sessionId(opts), requireBoundAgent: true });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, tokenFile: opts["token-file"], executor: opts.executor, effort: opts.effort, source: opts.source || "cli", sessionId: sessionId(opts), requireBoundAgent: true });
   const warnings = res.ok ? store.presentWarnings(res.ticket, claimPlanningWarnings(res.ticket, meta.path), sessionId(opts)) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
-    if (!res.ok) payload.message = claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path);
+    if (!res.ok) payload.message = res.reason === "executor_mismatch" ? claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path) : res.message || claimRefusalMessage(res.reason, idOrRef, res.ticket || res.claim, meta.path);
     process.stdout.write(JSON.stringify(payload, null, 2) + "\n");
     if (!res.ok) process.exitCode = 1;
     return;
