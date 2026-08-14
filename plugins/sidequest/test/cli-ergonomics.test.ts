@@ -29,6 +29,16 @@ function isolatedEnv(): Record<string, string> {
   };
 }
 
+function runGit(project: string, arguments_: string[]): string {
+  const result = spawnSync('git', arguments_, {
+    cwd: project,
+    encoding: 'utf8',
+    windowsHide: true,
+  });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim();
+}
+
 test('CLI prints the installed plugin version', () => {
   const manifest = JSON.parse(fs.readFileSync(path.join(ROOT, '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
   const result = run(['--version'], isolatedEnv());
@@ -54,6 +64,31 @@ test('CLI command help stays focused on the requested command', () => {
     assert.match(result.stdout, new RegExp(flag.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
     assert.doesNotMatch(result.stdout, /sidequest merge/);
   }
+});
+
+test('groom-close records a delivered commit through the shared store transition', () => {
+  const env = isolatedEnv();
+  const project = String(env.CLAUDE_PROJECT_DIR);
+  runGit(project, ['init', '-b', 'main']);
+  runGit(project, ['config', 'user.name', 'Sidequest Test']);
+  runGit(project, ['config', 'user.email', 'sidequest@example.invalid']);
+  fs.writeFileSync(path.join(project, 'README.md'), 'delivered\n');
+  runGit(project, ['add', 'README.md']);
+  runGit(project, ['commit', '-m', 'delivered fixture']);
+  const deliveredCommit = runGit(project, ['rev-parse', 'HEAD']);
+
+  const added = run(['add', '--title', 'delivered ticket', '--unclassified', '--json'], env);
+  assert.equal(added.status, 0, added.stderr);
+
+  const closed = run([
+    'groom-close', 'SQ-1', '--delivery-commit', deliveredCommit,
+    '--reason', 'Delivered fixture commit reached main and passed its check.',
+    '--by', 'cli-delivery-test', '--json',
+  ], env);
+  assert.equal(closed.status, 0, closed.stderr);
+  const ticket = JSON.parse(closed.stdout).ticket;
+  assert.equal(ticket.status, 'done');
+  assert.equal(ticket.completion.delivery.commit, deliveredCommit);
 });
 
 test('CLI records readonly false on add and update', () => {

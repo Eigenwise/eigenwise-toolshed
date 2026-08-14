@@ -237,24 +237,6 @@ async function cmdGroomClose(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const ticket = store.getTicket(slug, idOrRef);
-  const delivery = opts['delivery-commit']
-    ? (() => {
-      const delivered = store.recordedDelivery(slug, opts['delivery-commit'], reason);
-      if (!delivered.ok) return delivered;
-      const missingFragment = store.missingReleaseFragment(meta.path, idOrRef, commitScope.commitPaths(meta.path, delivered.commit));
-      return missingFragment
-        ? { ok: false, reason: 'missing_release_fragment', message: store.missingReleaseFragmentMessage(idOrRef, missingFragment.fragmentPath, missingFragment.plugins) }
-        : { ok: true };
-    })()
-    : { ok: true };
-  if (!delivery.ok) {
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, delivery), null, 2) + '\n');
-      process.exitCode = 1;
-      return;
-    }
-    fail(`groom-close: ${delivery.message}`);
-  }
   const purpose = opts.integration ? 'integration' : opts['delivery-commit'] ? 'delivery' : 'grooming';
   const res = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,
