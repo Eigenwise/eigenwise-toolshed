@@ -45,6 +45,7 @@ const mcp = require('../lib/mcp.js');
 const contextPacket = require('../lib/context-packet.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
+const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
 
@@ -4335,6 +4336,9 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
   const worktree = `${repo}-agent-${agentId}`;
   assert.equal(store.bindDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
   gitAt(repo, ['worktree', 'add', '-q', '-b', `agent-${agentId}`, worktree, 'HEAD']);
+  createCheckoutInstanceMarker(gitAt(worktree, ['rev-parse', '--git-dir']));
+  const worktreeCompletion = store.completeDispatchWorktreeCreation(project, sessionId, worktree);
+  assert.equal(worktreeCompletion.ok, true, JSON.stringify(worktreeCompletion));
   assert.equal(
     store.bindDispatchAgent(
       sessionId,

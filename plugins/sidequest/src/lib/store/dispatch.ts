@@ -1,5 +1,7 @@
 'use strict';
 
+const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
+
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket)
@@ -586,7 +588,7 @@ function refreshPreparedDispatches(handle?: any, projects?: any, categoryIds?: a
       const attempts = Array.isArray(state.attempts) ? state.attempts.slice() : [];
       attempts.push({
         route: normalizeRoute(state.route),
-        executor: state.executor || ticket.dispatchExecutor,
+        executor: state.executor || canonicalPreparedDispatchExecutor(ticket),
         tokenPrefix: state.tokenPrefix || dispatchTokenPrefix(ticket.dispatchNonce),
         preparedAt: state.preparedAt || null,
         launchedAt: null,
@@ -933,7 +935,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
     const currentRoute = activeDispatchRoute(t);
-    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor) {
+    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && canonicalPreparedDispatchExecutor(t)) {
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       // A record prepared before launch naming existed still has to hand back a
       // usable name, and reusing it must not renumber the sequence.
@@ -1173,7 +1175,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== canonicalPreparedDispatchExecutor(t)) {
       return { ok: false, reason: 'not_prepared' };
     }
     const state = dispatchState(t);
@@ -1232,7 +1234,7 @@ function recordDispatchAgentFailure(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   const recorded = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== canonicalPreparedDispatchExecutor(t)) {
       return { ok: false, reason: 'not_prepared' };
     }
     const state = dispatchState(t);
@@ -1268,7 +1270,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
-    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== t.dispatchExecutor) {
+    if (!t || !t.dispatchNonce || !dispatchTokenMatches(t.dispatchNonce, dispatchTokenForRequest(opts.token, opts.tokenFile)) || opts.executor !== canonicalPreparedDispatchExecutor(t)) {
       return { ok: false, reason: 'not_prepared' };
     }
     if (t.claim && t.claim.by) return { ok: false, reason: 'claimed' };
@@ -1285,7 +1287,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
     const now = new Date().toISOString();
     const failedAttempt = {
       route: { model: failedExec.runsModel, effort: failedRoute.effort },
-      executor: state.executor || t.dispatchExecutor,
+      executor: state.executor || canonicalPreparedDispatchExecutor(t),
       tokenPrefix: state.tokenPrefix || dispatchTokenPrefix(t.dispatchNonce),
       preparedAt: state.preparedAt || null,
       launchedAt: state.launchedAt || null,

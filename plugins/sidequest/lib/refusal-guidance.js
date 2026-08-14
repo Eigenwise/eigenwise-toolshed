@@ -24,15 +24,16 @@ __export(refusal_guidance_exports, {
   routingDisabledMessage: () => routingDisabledMessage
 });
 module.exports = __toCommonJS(refusal_guidance_exports);
+var import_prepared_dispatch = require("./prepared-dispatch.js");
 function correctedMcpClaim(ref, ticket = {}, projectPath) {
-  const executor = ticket.dispatchExecutor || ticket.exec?.agent || "<prepared executor>";
+  const executor = (0, import_prepared_dispatch.canonicalPreparedDispatchExecutor)(ticket) || "<prepared executor>";
   const effort = ticket.effort || "<prepared effort>";
   const token = ticket.dispatchNonce || "<dispatch token>";
   const project = projectPath || "<current board project>";
   return `Corrected MCP claim, without \`direct\`: \`mcp__plugin_sidequest_board__claim({ ref: ${JSON.stringify(ref)}, by: "<choose a unique id>", executor: ${JSON.stringify(executor)}, effort: ${JSON.stringify(effort)}, project: ${JSON.stringify(project)}, token: ${JSON.stringify(token)} })\`.`;
 }
 function dispatchedClaimGuidance(ref, ticket, projectPath) {
-  const expected = ticket.dispatchExecutor || ticket.exec?.agent || "<prepared executor>";
+  const expected = (0, import_prepared_dispatch.canonicalPreparedDispatchExecutor)(ticket) || "<prepared executor>";
   if (!ticket.dispatchNonce) {
     return `Expected executor: \`${expected}\`. Run \`sidequest dispatch ${ref}\` first to get the current token.`;
   }

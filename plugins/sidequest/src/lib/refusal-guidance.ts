@@ -1,3 +1,5 @@
+import { canonicalPreparedDispatchExecutor } from './prepared-dispatch.js';
+
 export interface ClaimIdentity {
   by?: string;
   at?: string;
@@ -7,6 +9,7 @@ export interface ClaimContext extends ClaimIdentity {
   claim?: ClaimIdentity;
   submission?: ClaimIdentity;
   dispatchExecutor?: string;
+  dispatch?: { executor?: string };
   dispatchNonce?: string;
   model?: string;
   effort?: string;
@@ -16,7 +19,7 @@ export interface ClaimContext extends ClaimIdentity {
 type RefusalMessage = (ref: string, claim: ClaimContext, projectPath?: string) => string;
 
 function correctedMcpClaim(ref: string, ticket: ClaimContext = {}, projectPath?: string): string {
-  const executor = ticket.dispatchExecutor || ticket.exec?.agent || '<prepared executor>';
+  const executor = canonicalPreparedDispatchExecutor(ticket) || '<prepared executor>';
   const effort = ticket.effort || '<prepared effort>';
   const token = ticket.dispatchNonce || '<dispatch token>';
   const project = projectPath || '<current board project>';
@@ -24,7 +27,7 @@ function correctedMcpClaim(ref: string, ticket: ClaimContext = {}, projectPath?:
 }
 
 function dispatchedClaimGuidance(ref: string, ticket: ClaimContext, projectPath?: string): string {
-  const expected = ticket.dispatchExecutor || ticket.exec?.agent || '<prepared executor>';
+  const expected = canonicalPreparedDispatchExecutor(ticket) || '<prepared executor>';
   if (!ticket.dispatchNonce) {
     return `Expected executor: \`${expected}\`. Run \`sidequest dispatch ${ref}\` first to get the current token.`;
   }

@@ -334,7 +334,8 @@ function compactSchema(schema?: any, propertyMap = false): any {
 const LIST_CHAR_BUDGET = 55000;
 
 function closeDispatchExecutor(ticket?: any) {
-  if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
+  const executor = store.canonicalPreparedDispatchExecutor(ticket);
+  if (executor) agentsync.cleanupNativeAgents({ name: executor });
 }
 
 function mutationAck(project?: any, result?: any, changed?: any) {

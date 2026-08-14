@@ -305,7 +305,7 @@ const tools: ToolDefinition[] = [
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
       const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
-      const agent = prepared.ticket.dispatchExecutor;
+      const agent = store.canonicalPreparedDispatchExecutor(prepared.ticket);
       const dispatchState = prepared.ticket.dispatch || {};
       const description = dispatchState.description || agentsync.spawnDescription(prepared.ticket, resolved);
       // Old prepared records lack the stored task label. Regenerate it instead of

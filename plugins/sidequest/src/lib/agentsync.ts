@@ -45,6 +45,7 @@ const store = require('./store.js');
 const { worktreeRoot } = require('./worktrees.js');
 const { spawnDescription } = store;
 const { compileContextProjection, contextRetrieval, contextRevision } = require('./context-packet.js');
+const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
@@ -1032,7 +1033,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   }
   const category = ticket.category || {};
   const project = String(projectPath || (slug && store.readMeta(slug)?.path) || '').trim();
-  const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || '').trim();
+  const executor = canonicalPreparedDispatchExecutor(ticket) || '';
   const declared = Array.isArray(ticket.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file: any) => `- ${file}`).join('\n') : '(No files were declared.)';
   const effectiveFiles = store.effectiveScope(slug, declared);

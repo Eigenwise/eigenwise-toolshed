@@ -10,6 +10,7 @@ const store = require("./store.js");
 const { worktreeRoot } = require("./worktrees.js");
 const { spawnDescription } = store;
 const { compileContextProjection, contextRetrieval, contextRevision } = require("./context-packet.js");
+const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
 const MARKER = "<!-- generated-by: sidequest-agentsync gen2 -->";
@@ -816,7 +817,7 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
   }
   const category = ticket.category || {};
   const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
-  const executor = String(ticket.dispatchExecutor || ticket.exec?.agent || "").trim();
+  const executor = canonicalPreparedDispatchExecutor(ticket) || "";
   const declared = Array.isArray(ticket.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
   const effectiveFiles = store.effectiveScope(slug, declared);

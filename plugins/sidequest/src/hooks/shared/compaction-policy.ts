@@ -3,6 +3,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { runtimeModule } from './paths.js';
 
+const { canonicalPreparedDispatchExecutor } = require(runtimeModule('prepared-dispatch')) as { canonicalPreparedDispatchExecutor: (ticket: unknown) => string | null };
+
 const MAX_INSTRUCTION_BYTES = 1500;
 
 interface Story {
@@ -78,9 +80,10 @@ function compactText(value: unknown, limit: number): string {
 function ticketLine(ticket: any): string {
   const claim = ticket?.claim || {};
   const dispatch = ticket?.dispatch || {};
+  const executor = canonicalPreparedDispatchExecutor(ticket);
   const details = claim.by ? [
     `claim ${compactText(claim.by, 100)}`,
-    dispatch.executor || ticket?.dispatchExecutor ? `executor ${compactText(dispatch.executor || ticket.dispatchExecutor, 100)}` : '',
+    executor ? `executor ${compactText(executor, 100)}` : '',
     dispatch.token || ticket?.dispatchToken ? `dispatch token ${compactText(dispatch.token || ticket.dispatchToken, 160)}` : '',
   ].filter(Boolean).join('; ') : '';
   return `- ${compactText(ticket?.ref, 40)} — ${compactText(ticket?.title, 220)}${details ? ` (${details})` : ''}`;

@@ -43,6 +43,7 @@ const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
+const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
 const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic } = require('./kernel/index.js');
 const { sourceRevision } = require('./source-revision-capability.js');
@@ -1291,7 +1292,7 @@ configLayer = createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MOD
 function parseTicketData(slug: string, data: unknown): any | null {
   try {
     const ticket = typeof data === 'string' ? JSON.parse(data) : data;
-    return ticket && ticket.id ? applyDerivedRouting(ticket, { project: slug }) : null;
+    return ticket && ticket.id ? applyDerivedRouting(normalizePreparedDispatch(ticket), { project: slug }) : null;
   } catch (_: any) {
     return null;
   }
@@ -1591,7 +1592,8 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
     }
     return { ok: false, reason: 'token', ticket };
   }
-  if (opts.executor !== ticket.dispatchExecutor) {
+  const preparedExecutor = canonicalPreparedDispatchExecutor(ticket);
+  if (opts.executor !== preparedExecutor) {
     return {
       ok: false,
       reason: 'executor_mismatch',
@@ -1599,8 +1601,8 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
       derivedModel: ticket.model,
       derivedEffort: ticket.effort,
       executor: opts.executor || null,
-      expectedExecutor: ticket.dispatchExecutor,
-      message: `${ticket.ref} has a prepared dispatch for ${ticket.dispatchExecutor}, not ${opts.executor || 'this executor'}. Re-run sidequest dispatch ${ticket.ref} and claim with its returned executor and token.`,
+      expectedExecutor: preparedExecutor,
+      message: `${ticket.ref} has a prepared dispatch for ${preparedExecutor}, not ${opts.executor || 'this executor'}. Re-run sidequest dispatch ${ticket.ref} and claim with its returned executor and token.`,
     };
   }
   return { ok: true, ticket, token };
@@ -1618,7 +1620,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (delay) busyWait(delay);
     const directClaimReason = directReason(opts.reason);
     if (opts.direct && isRoutedTicket(t) && !directClaimReason) return { ok: false, reason: 'direct_reason_required', ticket: t };
-    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: t.dispatchExecutor || t.exec?.agent || null };
+    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: canonicalPreparedDispatchExecutor(t) };
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t);
@@ -2807,6 +2809,7 @@ module.exports = {
   deleteTicket,
   dispatchReadOnly,
   stableExecutorName,
+  canonicalPreparedDispatchExecutor,
   executorClaimDispatchRefusal,
   sharedTreeRuntimeRefusal,
   prepareDispatch,

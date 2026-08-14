@@ -36,6 +36,7 @@ module.exports = __toCommonJS(telemetry_exports);
 var import_node_crypto = __toESM(require("node:crypto"));
 var import_node_http = __toESM(require("node:http"));
 const { canonicalPath } = require("./worktrees.js");
+const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const OBSERVER_URL = "http://127.0.0.1:14319/v1/observations";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = /* @__PURE__ */ new Set(["low", "medium", "high", "xhigh", "max"]);
@@ -107,7 +108,7 @@ function ticketObservation(project, ticketValue) {
   assign(attributes, "resolved_model", identifier(ticket.model || exec.runsModel));
   assign(attributes, "resolved_effort", effort(ticket.effort));
   assign(attributes, "resolved_backend", identifier(exec.backend));
-  assign(attributes, "executor", identifier(dispatch.executor || ticket.dispatchExecutor || exec.agent));
+  assign(attributes, "executor", identifier(canonicalPreparedDispatchExecutor(ticket) || exec.agent));
   assign(attributes, "dispatch_id", identifier(dispatch.id || ticket.dispatchId));
   assign(attributes, "claim_worker_id", identifier(claim.by));
   assign(attributes, "claim_session_id", identifier(dispatch.sessionId || claim.sessionId));

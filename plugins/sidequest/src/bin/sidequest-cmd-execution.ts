@@ -104,7 +104,8 @@ async function cmdCheckpoint(opts: any, positional: any) {
 }
 
 function closeDispatchExecutor(ticket: any) {
-  if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
+  const executor = store.canonicalPreparedDispatchExecutor(ticket);
+  if (executor) agentsync.cleanupNativeAgents({ name: executor });
 }
 
 async function cmdVerdict(opts: any, positional: any) {

@@ -1,6 +1,7 @@
 'use strict';
 
 const { execFileSync } = require('node:child_process');
+const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
 
 function createGitHubCiRunsProvider(projectPath: string) {
   const command = (program: string, arguments_: string[]) => execFileSync(program, arguments_, {
@@ -259,7 +260,7 @@ function createPulse(dependencies: any) {
       claimHeld: Boolean(ticket.claim?.by),
       comments: Array.isArray(ticket.comments) ? ticket.comments.length : 0,
       lastComment: lastCommentPulse(ticket),
-      dispatchExecutor: ticket.dispatchExecutor || null,
+      dispatchExecutor: canonicalPreparedDispatchExecutor(ticket),
       dispatch: dispatch ? {
         state: pulseDispatchState(dispatch),
         sessionId: dispatch.sessionId || null,

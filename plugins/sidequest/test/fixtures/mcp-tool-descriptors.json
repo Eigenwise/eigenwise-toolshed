@@ -1368,7 +1368,7 @@
         },
         "sharedTree": {
           "type": "boolean",
-          "description": "Omit to share zero-scope read-only work."
+          "description": "Use only from the declared shared checkout. Omit to share zero-scope read-only work. Executors with live claims cannot dispatch child work."
         },
         "allowRepeatFailure": {
           "type": "boolean"

@@ -15,6 +15,7 @@ const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-binding-catalo
 fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'ready' },
   models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }],
@@ -36,6 +37,8 @@ git(PROJECT, ['commit', '--quiet', '-m', 'seed']);
 
 const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
+const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
+const db = require('../lib/db.js');
 const worktrees = require('../lib/worktrees.js');
 const worktreeKernel = require('../lib/kernel/worktree.js');
 const slug = store.ensureProject(PROJECT).slug;
@@ -44,6 +47,19 @@ store.setCategory({ id: 'binding.readonly', name: 'Binding readonly', route: { m
 
 function createFixture(title: string, category = 'binding.write') {
   return store.createTicket(slug, { title, category, files: ['tracked.txt'], source: 'test' });
+}
+
+function persist(ticket: any) {
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id,
+    project: slug,
+    ref: ticket.ref,
+    status: ticket.status,
+    archived: ticket.archived ? 1 : 0,
+    ord: ticket.order,
+    claim_by: ticket.claim?.by || null,
+    data: ticket,
+  });
 }
 
 function recoveryFixture(kind: string) {
@@ -110,6 +126,52 @@ test('prepared executor identity is projected unchanged for writing and readonly
     token: preparedReadonly.token,
     executor: preparedReadonly.ticket.dispatchExecutor,
   }).ok, true);
+});
+
+test('legacy scalar-only prepared executor identity hydrates into current dispatch state', () => {
+  const ticket = createFixture('legacy prepared executor');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'legacy-prepared' });
+  const legacy = store.getTicket(slug, ticket.ref);
+  legacy.dispatch = null;
+  persist(legacy);
+
+  const hydrated = store.getTicket(slug, ticket.ref);
+  assert.equal(hydrated.dispatch.executor, prepared.ticket.dispatchExecutor);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'legacy-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+});
+
+test('live prepared dispatch executor wins over divergent legacy scalar identity', () => {
+  const attempts = [
+    { category: 'binding.readonly', current: 'sidequest-exec-dispatch-readonly', stale: 'sidequest-exec-dispatch' },
+    { category: 'binding.write', current: 'sidequest-exec-dispatch', stale: 'sidequest-exec-dispatch-readonly' },
+  ];
+  for (const attempt of attempts) {
+    const ticket = createFixture(`divergent ${attempt.category}`, attempt.category);
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `divergent-${attempt.category}` });
+    const divergent = store.getTicket(slug, ticket.ref);
+    divergent.dispatchExecutor = attempt.stale;
+    divergent.dispatch.executor = attempt.current;
+    persist(divergent);
+
+    const current = store.getTicket(slug, ticket.ref);
+    const briefing = agentsync.renderTicketBriefing(current, prepared.token, slug, PROJECT);
+    assert.match(briefing, new RegExp(`executor: "${attempt.current}"`), attempt.category);
+    const mismatch = store.claimTicket(slug, ticket.ref, `wrong-${attempt.category}`, {
+      token: prepared.token,
+      executor: attempt.stale,
+    });
+    assert.equal(mismatch.reason, 'executor_mismatch', attempt.category);
+    assert.equal(mismatch.expectedExecutor, attempt.current, attempt.category);
+    const guidance = claimRefusalMessage('executor_mismatch', ticket.ref, mismatch.ticket, PROJECT);
+    assert.match(guidance, new RegExp(`executor: ${JSON.stringify(attempt.current)}`), attempt.category);
+    assert.equal(store.claimTicket(slug, ticket.ref, `right-${attempt.category}`, {
+      token: prepared.token,
+      executor: attempt.current,
+    }).ok, true, attempt.category);
+  }
 });
 
 test('SubagentStop before claim clears admission and allows a fresh retry', () => {

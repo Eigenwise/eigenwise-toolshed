@@ -14,6 +14,7 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
+const { canonicalPreparedDispatchExecutor } = require("../lib/prepared-dispatch");
 const { fail, resolveProject, workerId, sessionId } = require("./sidequest-cmd-shared");
 async function cmdDispatch(opts, positional) {
   const idOrRef = positional[0];
@@ -43,7 +44,7 @@ async function cmdDispatch(opts, positional) {
   const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
   const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
-  const agent = prepared.ticket.dispatchExecutor;
+  const agent = canonicalPreparedDispatchExecutor(prepared.ticket);
   const dispatchState = prepared.ticket.dispatch || {};
   const spawn2 = agentsync.agentSpawn(dispatchState.launchName, isolation, resolved && resolved.model, agent, prompt, dispatchState.description);
   const warnings = store.dispatchWarnings(prepared.ticket);

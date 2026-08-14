@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import http from 'node:http';
 
 const { canonicalPath } = require('./worktrees.js') as { canonicalPath: (value: unknown) => string };
+const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js') as { canonicalPreparedDispatchExecutor: (ticket: unknown) => string | null };
 
 const OBSERVER_URL = 'http://127.0.0.1:14319/v1/observations';
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
@@ -115,7 +116,7 @@ export function ticketObservation(project: unknown, ticketValue: unknown): Ticke
   assign(attributes, 'resolved_model', identifier(ticket.model || exec.runsModel));
   assign(attributes, 'resolved_effort', effort(ticket.effort));
   assign(attributes, 'resolved_backend', identifier(exec.backend));
-  assign(attributes, 'executor', identifier(dispatch.executor || ticket.dispatchExecutor || exec.agent));
+  assign(attributes, 'executor', identifier(canonicalPreparedDispatchExecutor(ticket) || exec.agent));
   assign(attributes, 'dispatch_id', identifier(dispatch.id || ticket.dispatchId));
   assign(attributes, 'claim_worker_id', identifier(claim.by));
   assign(attributes, 'claim_session_id', identifier(dispatch.sessionId || claim.sessionId));

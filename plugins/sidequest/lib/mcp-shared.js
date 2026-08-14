@@ -243,7 +243,8 @@ function compactSchema(schema, propertyMap = false) {
 }
 const LIST_CHAR_BUDGET = 55e3;
 function closeDispatchExecutor(ticket) {
-  if (ticket && ticket.dispatchExecutor) agentsync.cleanupNativeAgents({ name: ticket.dispatchExecutor });
+  const executor = store.canonicalPreparedDispatchExecutor(ticket);
+  if (executor) agentsync.cleanupNativeAgents({ name: executor });
 }
 function mutationAck(project, result, changed) {
   const ticket = result.ticket;
