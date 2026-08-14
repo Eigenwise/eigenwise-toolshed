@@ -125,6 +125,22 @@ function validateEntry(raw: unknown, source: string, schema: number): ExternalMo
   return { slug, id, label, provider, source };
 }
 
+export function configuredExternalModelProvider(slug: string): string | null {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!SLUG_RE.test(normalizedSlug)) return null;
+  for (const root of discoveryRoots()) {
+    for (const { source, relPath, schemas } of CATALOG_SOURCES) {
+      const catalog = usableCatalog(readJsonSafe(path.join(root, relPath)), schemas);
+      if (!catalog) continue;
+      for (const raw of catalog.models as unknown[]) {
+        const entry = validateEntry(raw, source, catalogSchema(catalog));
+        if (entry?.slug === normalizedSlug) return entry.provider;
+      }
+    }
+  }
+  return null;
+}
+
 export function discoverExternalModels(): ExternalModel[] {
   const out: ExternalModel[] = [];
   const seen = new Set<string>();

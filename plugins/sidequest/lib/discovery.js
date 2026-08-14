@@ -30,6 +30,7 @@ var discovery_exports = {};
 __export(discovery_exports, {
   CATALOG_SOURCES: () => CATALOG_SOURCES,
   CATALOG_STALE_MS: () => CATALOG_STALE_MS,
+  configuredExternalModelProvider: () => configuredExternalModelProvider,
   discoverExternalModels: () => discoverExternalModels,
   providerReadiness: () => providerReadiness
 });
@@ -104,6 +105,21 @@ function validateEntry(raw, source, schema) {
   const label = typeof model.label === "string" && model.label.trim() ? model.label.trim() : slug;
   return { slug, id, label, provider, source };
 }
+function configuredExternalModelProvider(slug) {
+  const normalizedSlug = slug.trim().toLowerCase();
+  if (!SLUG_RE.test(normalizedSlug)) return null;
+  for (const root of discoveryRoots()) {
+    for (const { source, relPath, schemas } of CATALOG_SOURCES) {
+      const catalog = usableCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
+      if (!catalog) continue;
+      for (const raw of catalog.models) {
+        const entry = validateEntry(raw, source, catalogSchema(catalog));
+        if (entry?.slug === normalizedSlug) return entry.provider;
+      }
+    }
+  }
+  return null;
+}
 function discoverExternalModels() {
   const out = [];
   const seen = /* @__PURE__ */ new Set();
@@ -127,6 +143,7 @@ function discoverExternalModels() {
 0 && (module.exports = {
   CATALOG_SOURCES,
   CATALOG_STALE_MS,
+  configuredExternalModelProvider,
   discoverExternalModels,
   providerReadiness
 });

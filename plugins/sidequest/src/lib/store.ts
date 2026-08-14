@@ -40,7 +40,7 @@ const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require('./worktrees.js');
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { discoverExternalModels, providerReadiness } = require('./discovery.js');
+const { configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
@@ -305,6 +305,7 @@ const {
 } = createRouting({
   activeDispatchRoute,
   commitScope,
+  configuredExternalModelProvider,
   crypto,
   database,
   db,

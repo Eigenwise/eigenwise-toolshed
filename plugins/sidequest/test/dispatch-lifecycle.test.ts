@@ -1633,7 +1633,7 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
     env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
   });
   assert.equal(staleClaim.status, 1);
-  assert.match(staleClaim.stdout, /prepared dispatch whose token was missing or invalid/);
+  assert.match(staleClaim.stdout, /dispatch was superseded by a newer preparation/);
   assert.equal(store.claimTicket(slug, ticket.ref, 'current-worker', {
     token: second.token,
     executor: second.ticket.dispatchExecutor,

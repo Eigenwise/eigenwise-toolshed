@@ -3,6 +3,7 @@ function createRouting(dependencies) {
   const {
     activeDispatchRoute,
     commitScope,
+    configuredExternalModelProvider,
     crypto,
     database,
     db,
@@ -971,6 +972,8 @@ function createRouting(dependencies) {
     if (!normalized) return null;
     const backend = availableRoute(normalized.model);
     if (backend) return backend.provider || backend.backend;
+    const configuredProvider = configuredExternalModelProvider(normalized.model);
+    if (configuredProvider) return configuredProvider;
     return normalized.model.startsWith("codex-") || normalized.model.startsWith("model-gateway:") ? "codex" : null;
   }
   function routeReadyForAutomaticFallback(route) {

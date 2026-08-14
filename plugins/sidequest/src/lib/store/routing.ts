@@ -4,6 +4,7 @@ function createRouting(dependencies: any) {
   const {
     activeDispatchRoute,
     commitScope,
+    configuredExternalModelProvider,
     crypto,
     database,
     db,
@@ -1094,6 +1095,8 @@ function routeProvider(route?: any) {
   if (!normalized) return null;
   const backend = availableRoute(normalized.model);
   if (backend) return (backend as any).provider || backend.backend;
+  const configuredProvider = configuredExternalModelProvider(normalized.model);
+  if (configuredProvider) return configuredProvider;
   return normalized.model.startsWith('codex-') || normalized.model.startsWith('model-gateway:') ? 'codex' : null;
 }
 
