@@ -6,6 +6,7 @@ const { dispatchLaunchName, stableClaudeName, stableDispatchName, stableReadOnly
 const crypto = require("crypto");
 const { execFileSync, spawnSync } = require("child_process");
 const db = require("./db.js");
+const { registerSourceRevisionCapability } = require("./source-revision-capability.js");
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require("./category-defaults.js");
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
@@ -2471,6 +2472,7 @@ module.exports = {
   mainWorktreeRoot,
   projectDir,
   ensureProject,
+  registerSourceRevisionCapability,
   readMeta,
   boardConfig,
   setBoardConfig,

@@ -107,7 +107,47 @@ function noGitCliTicket(title: string, files: string[]) {
     labels: ['direct-ok'],
   });
   const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: projectPath }, { cwd: projectPath });
-  return { project, ticket, runCli: runner.runCli };
+  return { project, projectPath, ticket, runCli: runner.runCli };
+}
+
+function registeredNoGitCliRunner(project: string, projectPath: string, resolution: { candidateExists: boolean; containsCandidate: boolean }) {
+  const bootstrapDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-source-revision-capability-'));
+  const bootstrapPath = path.join(bootstrapDirectory, 'register.cjs');
+  const invocationLog = path.join(bootstrapDirectory, 'invocations.jsonl');
+  const storeModule = path.join(__dirname, '..', 'lib', 'store.js');
+  fs.writeFileSync(bootstrapPath, [
+    `const fs = require('node:fs');`,
+    `const store = require(${JSON.stringify(storeModule)});`,
+    `store.registerSourceRevisionCapability(${JSON.stringify(project)}, (candidate, baseline) => {`,
+    `  fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ candidate, baseline, frozen: Object.isFrozen(baseline) && Object.isFrozen(baseline.revision) }) + '\\n');`,
+    `  return ${JSON.stringify(resolution)};`,
+    `});`,
+  ].join('\n'));
+  const existingNodeOptions = String(process.env.NODE_OPTIONS || '').trim();
+  const nodeOptions = [existingNodeOptions, `--require=${bootstrapPath}`].filter(Boolean).join(' ');
+  const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: projectPath, NODE_OPTIONS: nodeOptions }, { cwd: projectPath });
+  return { runCli: runner.runCli, invocationLog };
+}
+
+function registeredNoGitCliRunnerWithCapability(project: string, projectPath: string, capabilityStatements: string[]) {
+  const bootstrapDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-source-revision-capability-'));
+  const bootstrapPath = path.join(bootstrapDirectory, 'register.cjs');
+  const invocationLog = path.join(bootstrapDirectory, 'invocations.jsonl');
+  const storeModule = path.join(__dirname, '..', 'lib', 'store.js');
+  fs.writeFileSync(bootstrapPath, [
+    `const fs = require('node:fs');`,
+    `const store = require(${JSON.stringify(storeModule)});`,
+    `let invocationCount = 0;`,
+    `store.registerSourceRevisionCapability(${JSON.stringify(project)}, (candidate, baseline) => {`,
+    `  invocationCount += 1;`,
+    `  fs.appendFileSync(${JSON.stringify(invocationLog)}, JSON.stringify({ candidate, baseline, invocationCount }) + '\\n');`,
+    ...capabilityStatements.map((statement) => `  ${statement}`),
+    `});`,
+  ].join('\n'));
+  const existingNodeOptions = String(process.env.NODE_OPTIONS || '').trim();
+  const nodeOptions = [existingNodeOptions, `--require=${bootstrapPath}`].filter(Boolean).join(' ');
+  const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: projectPath, NODE_OPTIONS: nodeOptions }, { cwd: projectPath });
+  return { runCli: runner.runCli, invocationLog };
 }
 
 function addClaimedTicket(title: string, owner: string, extra?: any) {
@@ -312,7 +352,7 @@ test('SQ-1875: every submission range reason gives a pinned-base remedy', () => 
   assert.match(mergeMessage, /Do not use `git pull`/);
 });
 
-test('SQ-971: rejected range submission is quarantined and clean rebase resubmits', async () => {
+test('SQ-971: rejected range submission keeps the candidate and claim for repair', async () => {
   cleanBranch();
   const t = addTicket('rejected range preservation', { files: ['lib/rebased.js'] });
   const by = 'rebase-worker';
@@ -340,22 +380,27 @@ test('SQ-971: rejected range submission is quarantined and clean rebase resubmit
   });
   assert.equal(rejected.ok, false);
   assert.equal(rejected.reason, 'unrecognized_base');
-  assert.match(rejected.message, /Preserved .*refs\/sidequest\/SQ-\d+-rejected/);
   assert.match(rejected.message, /recorded .*base|approved submitted-ticket boundary/);
   assert.doesNotMatch(rejected.message, /Rebase onto the current|current origin\/main target/);
-  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), rejectedCommit);
   const preserved = store.getTicket(slug, t.ref);
   assert.equal(preserved.claim.by, by);
-  assert.equal(preserved.checkpoint.kind, 'submission_rejected');
-  assert.equal(preserved.checkpoint.commit, rejectedCommit);
-  assert.equal(preserved.checkpoint.gitRef, `refs/sidequest/${t.ref}-rejected`);
-  assert.equal(preserved.checkpoint.failure.reason, 'unrecognized_base');
-  assert.match(preserved.comments.at(-1).body, /Claim retained with a recovery checkpoint/);
+  assert.equal(preserved.submission, undefined);
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}`]), rejectedCommit);
 
   git(['rebase', '--onto', 'origin/main', parent, rejectedCommit]);
   const rebasedCommit = git(['rev-parse', 'HEAD']);
   assert.notEqual(rebasedCommit, rejectedCommit);
   pin(t, rebasedCommit);
+  const reworked = await callMcp('rework', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    review: 'The immutable rejected range needs a different candidate identity.',
+    reason: 'Replace the rejected range through the explicit rework transition.',
+  });
+  assert.equal(reworked.ok, true, reworked.message);
+  assert.equal(store.getTicket(slug, t.ref).submissionRetry, undefined);
+  assert.equal(store.getTicket(slug, t.ref).rejectedSubmissions[0].commit, rejectedCommit);
   const resubmitted = await callMcp('submit', {
     project: PROJECT_DIR,
     ref: t.ref,
@@ -471,7 +516,7 @@ test('SQ-1880: MCP submit inspects a pinned candidate from the repository after 
   assert.equal(stored.claim, null);
 });
 
-test('SQ-971: an unavailable recorded integration target still quarantines verified work', async () => {
+test('SQ-971: an unavailable recorded integration target preserves the claim', async () => {
   cleanBranch();
   const t = addTicket('missing integration target preservation', { files: ['lib/missing-target.js'] });
   const by = 'missing-target-worker';
@@ -505,17 +550,13 @@ test('SQ-971: an unavailable recorded integration target still quarantines verif
   assert.equal(rejected.ok, false);
   assert.equal(rejected.reason, 'integration_target_unavailable');
   assert.match(rejected.message, /Fetch or recreate missing-feature-target/);
-  assert.match(rejected.message, /rebase refs\/sidequest\/SQ-\d+ onto that target, and resubmit/);
-  assert.match(rejected.message, /orchestrator can cherry-pick/);
-  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), commit);
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}`]), commit);
   const preserved = store.getTicket(slug, t.ref);
   assert.equal(preserved.claim.by, by);
-  assert.equal(preserved.checkpoint.kind, 'submission_rejected');
-  assert.equal(preserved.checkpoint.failure.reason, 'integration_target_unavailable');
-  assert.match(preserved.checkpoint.failure.message, /refs\/heads\/missing-feature-target/);
+  assert.equal(preserved.submission, undefined);
 });
 
-test('SQ-971: checkpoint failure reports the already-written quarantine ref', async () => {
+test('SQ-971: a retryable range refusal leaves the existing pinned ref untouched', async () => {
   cleanBranch();
   const t = addTicket('checkpoint failure after quarantine', { files: ['lib/checkpoint-failure.js'] });
   const by = 'checkpoint-failure-worker';
@@ -531,32 +572,20 @@ test('SQ-971: checkpoint failure reports the already-written quarantine ref', as
   const commit = git(['rev-parse', 'HEAD']);
   pin(t, commit);
 
-  const originalCheckpointTicket = store.checkpointTicket;
-  store.checkpointTicket = () => {
-    throw new Error(`forced checkpoint write failure ${'x'.repeat(5000)}`);
-  };
-  let rejected: any;
-  try {
-    rejected = await callMcp('submit', {
-      project: PROJECT_DIR,
-      ref: t.ref,
-      by,
-      commit,
-      base: parent,
-      verify: 'npm run test:files -- test/submission.test.ts',
-      worktree: PROJECT_DIR,
-      body: 'Changed lib/checkpoint-failure.js. Scoped submission test passed. Nothing skipped.',
-    });
-  } finally {
-    store.checkpointTicket = originalCheckpointTicket;
-  }
+  const rejected = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
+    commit,
+    base: parent,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    worktree: PROJECT_DIR,
+    body: 'Changed lib/checkpoint-failure.js. Scoped submission test passed. Nothing skipped.',
+  });
 
   assert.equal(rejected.ok, false);
   assert.equal(rejected.reason, 'unrecognized_base');
-  assert.match(rejected.message, new RegExp(`Preserved ${commit} at refs/sidequest/${t.ref}-rejected`));
-  assert.match(rejected.message, /recovery checkpoint failed: checkpoint_error: forced checkpoint write failure/);
-  assert.ok(rejected.message.length < 2000, 'checkpoint failure text is bounded');
-  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}-rejected`]), commit);
+  assert.equal(git(['rev-parse', `refs/sidequest/${t.ref}`]), commit);
   const preserved = store.getTicket(slug, t.ref);
   assert.equal(preserved.claim.by, by);
   assert.equal(preserved.checkpoint, null);
@@ -1031,7 +1060,7 @@ test('CLI and MCP reject unauthorized or independently invalid ranges without po
     body: 'No paths admitted. Independent verify validation must prevent rejection history.',
   });
   assert.strictEqual(invalidMcp.reason, 'missing_git_ref');
-  assert.ok(invalidMcp.failures.some((failure: any) => failure.reason === 'invalid_verify'));
+  assert.ok(invalidMcp.failures.some((failure: any) => failure.code === 'invalid_verify'));
   assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions, undefined);
 });
 
@@ -1343,7 +1372,7 @@ test('integration closure consumes an in-scope submission with control-plane pro
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });
 
-test('legacy submission scope overrides require an explicit flag and retain its reason', () => {
+test('legacy submission scope bypass is removed and the handoff stays parked', () => {
   cleanBranch();
   const t = addTicket('legacy scope snapshot', { files: ['lib/legacy.js'] });
   assert.strictEqual(runCli(['claim', t.ref, '--by', 'legacy-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
@@ -1364,11 +1393,12 @@ test('legacy submission scope overrides require an explicit flag and retain its 
   assert.strictEqual(refused.status, 1);
   assert.match(refused.stderr + refused.stdout, /no admitted scope snapshot/);
 
-  const overridden = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Legacy handoff was integrated before scope snapshots shipped.']);
-  assert.strictEqual(overridden.status, 0, overridden.stderr + overridden.stdout);
+  const bypass = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Legacy handoff was integrated before scope snapshots shipped.']);
+  assert.strictEqual(bypass.status, 1);
+  assert.match(bypass.stderr + bypass.stdout, /unknown or unsupported flag --override-legacy-scope/);
   const after = store.getTicket(slug, t.ref);
-  assert.strictEqual(after.completion.legacyScopeOverride.reason, 'Legacy handoff was integrated before scope snapshots shipped.');
-  assert.match(after.comments.at(-1).body, /Legacy handoff was integrated before scope snapshots shipped/);
+  assert.strictEqual(after.status, 'doing');
+  assert.ok(after.submission);
 });
 
 test('scope snapshots refuse changed paths at queue and integration after ticket scope changes', () => {
@@ -1532,12 +1562,17 @@ test('publish queue adds release-window context only when release fragments exis
   }
 });
 
-test('CLI: submit parks an immutable source revision without Git range discovery', () => {
-  const { project, ticket, runCli: runNoGitCli } = noGitCliTicket('CLI source revision', ['wiki/page.md']);
-  assert.strictEqual(runNoGitCli([
-    'claim', ticket.ref, '--by', 'cli-source-worker', '--direct',
-    '--reason', 'This fixture publishes one exact immutable source revision.',
-  ]).status, 0);
+test('CLI: registered capability admits an immutable source revision against the dispatch baseline', () => {
+  const { project, projectPath, ticket } = noGitCliTicket('CLI source revision', ['wiki/page.md']);
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, 'cli-source-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const { runCli: runNoGitCli, invocationLog } = registeredNoGitCliRunner(project, projectPath, {
+    candidateExists: true,
+    containsCandidate: true,
+  });
 
   const submitted = runNoGitCli([
     'submit', ticket.ref, '--by', 'cli-source-worker',
@@ -1565,6 +1600,11 @@ test('CLI: submit parks an immutable source revision without Git range discovery
     review: true,
     git: false,
   });
+  const invocations = fs.readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).map((line: string) => JSON.parse(line));
+  assert.strictEqual(invocations.length, 1);
+  assert.deepStrictEqual(invocations[0].candidate, stored.submission.sourceRevision);
+  assert.deepStrictEqual(invocations[0].baseline, prepared.ticket.dispatch.lifecycleAttempt.baseline);
+  assert.strictEqual(invocations[0].frozen, true);
   assert.ok(stored.comments.some((comment?: any) => /Reviewed immutable wiki revision/.test(comment.body)));
 
   const queueJson = runNoGitCli(['publish', 'queue', '--json']);
@@ -1601,12 +1641,17 @@ test('CLI: source revision submission cannot bypass Git delivery', () => {
   assert.strictEqual(stored.claim.by, 'cli-false-capability-worker');
 });
 
-test('CLI: submit reports source revision scope refusals without crashing', () => {
-  const { project, ticket, runCli: runNoGitCli } = noGitCliTicket('CLI source scope refusal', ['wiki/allowed.md']);
-  assert.strictEqual(runNoGitCli([
-    'claim', ticket.ref, '--by', 'cli-source-refusal-worker', '--direct',
-    '--reason', 'This fixture checks one exact public submission refusal.',
-  ]).status, 0);
+test('CLI: registered source revision capability preserves scope refusals', () => {
+  const { project, projectPath, ticket } = noGitCliTicket('CLI source scope refusal', ['wiki/allowed.md']);
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, 'cli-source-refusal-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const { runCli: runNoGitCli } = registeredNoGitCliRunner(project, projectPath, {
+    candidateExists: true,
+    containsCandidate: true,
+  });
 
   const refused = runNoGitCli([
     'submit', ticket.ref, '--by', 'cli-source-refusal-worker',
@@ -2171,6 +2216,8 @@ test('SQ-1328: concurrent shared-tree submissions attribute foreign working path
   });
   assert.strictEqual(mcpEscapedSubmission.ok, false);
   assert.strictEqual(mcpEscapedSubmission.reason, 'outside_scope');
+  assert.deepStrictEqual(mcpEscapedSubmission.foreignWorkingPaths, ['foreign/escaped.js']);
+  assert.deepStrictEqual(store.getTicket(slug, escapedTicket.ref).submissionRetry.foreignWorkingPaths, ['foreign/escaped.js']);
   assert.match(mcpEscapedSubmission.message, /never stash, revert, or include foreign paths/);
 
   const cliEscapedSubmission = runCli([
@@ -2192,6 +2239,7 @@ test('SQ-1328: concurrent shared-tree submissions attribute foreign working path
   assert.strictEqual(escapedSubmission.ok, false);
   assert.strictEqual(escapedSubmission.reason, 'outside_scope');
   assert.deepStrictEqual(escapedSubmission.outside, ['foreign/escaped.js']);
+  assert.deepStrictEqual(escapedSubmission.foreignWorkingPaths, ['foreign/escaped.js']);
   assert.match(escapedSubmission.message, /never stash, revert, or include foreign paths/);
 });
 
@@ -2234,6 +2282,309 @@ test('a submit after a terminal dispatch is gated on current ticket scope, not t
   });
   assert.strictEqual(submission.ok, true, submission.message);
   assert.ok(submission.ticket.submission.admittedScope.includes('lib/granted-late.js'));
+});
+
+test('SQ-1947: MCP retry binds one capability result to the checkpointed candidate', async (context: any) => {
+  const { project, projectPath, ticket } = noGitCliTicket('retry checkpoint', ['wiki/page.md']);
+  const by = 'checkpoint-worker';
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const sourceRevision = { source: 'wiki', value: 'wiki-revision-44', observedAt: '2026-08-14T00:00:00.000Z' };
+  const verify = 'attestation: wiki-revision-44 | editor-approved | immutable revision was reviewed';
+  const refused = await callMcp('submit', {
+    project: projectPath,
+    ref: ticket.ref,
+    by,
+    sourceRevision,
+    changedSurfaces: ['wiki/page.md'],
+    projectCapabilities: { process: false, worktree: false, review: true },
+    verify,
+    body: 'Checkpoint the immutable wiki candidate.',
+  });
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'baseline_membership_unavailable');
+  assert.deepStrictEqual(refused.retry.candidate, sourceRevision);
+  assert.strictEqual(refused.retry.verify, verify);
+  assert.deepStrictEqual(refused.retry.baseline, prepared.ticket.dispatch.lifecycleAttempt.baseline);
+
+  const capabilityInvocations: any[] = [];
+  let capabilityAvailable = false;
+  const unregister = store.registerSourceRevisionCapability(project, (candidate: any, baseline: any) => {
+    capabilityInvocations.push({ candidate, baseline, frozen: Object.isFrozen(baseline) && Object.isFrozen(baseline.revision) });
+    return capabilityAvailable ? { candidateExists: true, containsCandidate: true } : null;
+  });
+  context.after(unregister);
+
+  const checkpoint = store.getTicket(project, ticket.ref).submissionRetry;
+  const replacementRefusal = await callMcp('submit', {
+    project: projectPath,
+    ref: ticket.ref,
+    by,
+    sourceRevision: { source: 'wiki', value: 'caller-replacement', observedAt: '2026-08-14T01:00:00.000Z' },
+    changedSurfaces: ['wiki/replacement.md'],
+    projectCapabilities: { process: true, worktree: true, review: false },
+    body: 'Retry with a caller replacement that cannot change checkpoint identity.',
+  });
+  assert.strictEqual(replacementRefusal.ok, false);
+  assert.strictEqual(replacementRefusal.reason, 'baseline_membership_unavailable');
+  assert.deepStrictEqual(store.getTicket(project, ticket.ref).submissionRetry, checkpoint);
+  assert.strictEqual(capabilityInvocations.length, 1);
+  assert.deepStrictEqual(capabilityInvocations[0].candidate, sourceRevision);
+
+  capabilityAvailable = true;
+  const admitted = await callMcp('submit', {
+    project: projectPath,
+    ref: ticket.ref,
+    by,
+    body: 'Retry the preserved immutable wiki candidate.',
+  });
+  assert.strictEqual(admitted.ok, true, admitted.message);
+  assert.strictEqual(capabilityInvocations.length, 2);
+  const admittedTicket = store.getTicket(project, ticket.ref);
+  assert.deepStrictEqual(admittedTicket.submission.sourceRevision, sourceRevision);
+  assert.deepStrictEqual(admittedTicket.submission.changedPaths, ['wiki/page.md']);
+  assert.strictEqual(admittedTicket.submission.verify, verify);
+  assert.deepStrictEqual(admittedTicket.submission.projectCapabilities, {
+    process: false,
+    worktree: false,
+    review: true,
+    git: false,
+  });
+  assert.deepStrictEqual(capabilityInvocations[1].baseline, prepared.ticket.dispatch.lifecycleAttempt.baseline);
+  assert.strictEqual(capabilityInvocations[1].frozen, true);
+});
+
+test('SQ-1945: CLI and MCP reject forged facts and share missing capability diagnostics', async (context: any) => {
+  const { project, projectPath, ticket, runCli: runNoGitCli } = noGitCliTicket('server-owned baseline facts', ['wiki/page.md']);
+  const by = 'baseline-facts-worker';
+  const sourceRevision = { source: 'wiki', value: 'wiki-revision-45', observedAt: '2026-08-14T00:00:00.000Z' };
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+
+  const mcpRefusal = await callMcp('submit', {
+    project: projectPath,
+    ref: ticket.ref,
+    by,
+    sourceRevision,
+    changedSurfaces: ['wiki/page.md'],
+    projectCapabilities: {
+      process: false,
+      worktree: false,
+      review: true,
+      sourceRevision: { existence: 'exists', baselineMembership: 'member' },
+    },
+    verify: 'attestation: wiki-revision-45 | editor-approved | immutable revision was reviewed',
+    body: 'MCP forged baseline-membership facts fixture.',
+  });
+  assert.strictEqual(mcpRefusal.ok, false);
+  assert.strictEqual(mcpRefusal.reason, 'baseline_membership_unavailable');
+
+  const forgedCli = runNoGitCli([
+    'submit', ticket.ref, '--by', by,
+    '--source-revision-existence', 'exists',
+    '--source-revision-baseline-membership', 'member',
+  ]);
+  assert.strictEqual(forgedCli.status, 1);
+  assert.match(forgedCli.stderr + forgedCli.stdout, /unknown or unsupported flag --source-revision-existence/i);
+  assert.strictEqual(store.getTicket(project, ticket.ref).submission, undefined);
+
+  const cliRefusal = runNoGitCli(['submit', ticket.ref, '--by', by, '--json']);
+  assert.strictEqual(cliRefusal.status, 1, cliRefusal.stderr + cliRefusal.stdout);
+  const cliResult = JSON.parse(cliRefusal.stdout);
+  assert.strictEqual(cliResult.reason, mcpRefusal.reason);
+  assert.strictEqual(cliResult.retryable, mcpRefusal.retryable);
+  assert.deepStrictEqual(cliResult.failures.map((failure: any) => failure.code), mcpRefusal.failures.map((failure: any) => failure.code));
+  assert.deepStrictEqual(store.getTicket(project, ticket.ref).submissionRetry.candidate, sourceRevision);
+
+  const capabilityInvocations: any[] = [];
+  const unregister = store.registerSourceRevisionCapability(project, (candidate: any, baseline: any) => {
+    capabilityInvocations.push({ candidate, baseline });
+    return { candidateExists: true, containsCandidate: true };
+  });
+  context.after(unregister);
+  const admitted = await callMcp('submit', {
+    project: projectPath,
+    ref: ticket.ref,
+    by,
+    body: 'MCP registered capability retry fixture.',
+  });
+  assert.strictEqual(admitted.ok, true, admitted.message);
+  assert.strictEqual(capabilityInvocations.length, 1);
+  assert.deepStrictEqual(capabilityInvocations[0].candidate, sourceRevision);
+  assert.deepStrictEqual(capabilityInvocations[0].baseline, prepared.ticket.dispatch.lifecycleAttempt.baseline);
+  const admittedTicket = store.getTicket(project, ticket.ref);
+  assert.deepStrictEqual(admittedTicket.submission.sourceRevision, sourceRevision);
+  assert.deepStrictEqual(admittedTicket.submission.changedPaths, ['wiki/page.md']);
+  assert.strictEqual(Object.hasOwn(admittedTicket.submission.projectCapabilities, 'sourceRevision'), false);
+});
+
+test('SQ-1947: CLI retry resolves facts for checkpoint A instead of caller candidate B', () => {
+  const { project, projectPath, ticket, runCli: runNoGitCli } = noGitCliTicket('CLI checkpoint identity', ['wiki/page.md']);
+  const by = 'cli-checkpoint-worker';
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const checkpointCandidate = { source: 'wiki', value: 'checkpoint-A', observedAt: '2026-08-14T00:00:00.000Z' };
+  const first = runNoGitCli([
+    'submit', ticket.ref, '--by', by,
+    '--source-revision-source', checkpointCandidate.source,
+    '--source-revision-value', checkpointCandidate.value,
+    '--source-revision-observed-at', checkpointCandidate.observedAt,
+    '--changed-surface', 'wiki/page.md', '--no-process', '--no-worktree', '--review',
+    '--verify', 'attestation: checkpoint-A | editor-approved | immutable revision was reviewed',
+    '--body', 'Checkpoint candidate A.', '--json',
+  ]);
+  assert.strictEqual(first.status, 1, first.stderr + first.stdout);
+  assert.strictEqual(JSON.parse(first.stdout).reason, 'baseline_membership_unavailable');
+
+  const { runCli: runCandidateOnlyCli, invocationLog } = registeredNoGitCliRunnerWithCapability(project, projectPath, [
+    `const admitted = candidate.value === 'caller-B';`,
+    `return { candidateExists: admitted, containsCandidate: admitted };`,
+  ]);
+  const retry = runCandidateOnlyCli([
+    'submit', ticket.ref, '--by', by,
+    '--source-revision-source', 'wiki',
+    '--source-revision-value', 'caller-B',
+    '--source-revision-observed-at', '2026-08-14T01:00:00.000Z',
+    '--changed-surface', 'wiki/replacement.md',
+    '--body', 'Caller candidate B cannot replace checkpoint A.', '--json',
+  ]);
+  assert.strictEqual(retry.status, 1, retry.stderr + retry.stdout);
+  assert.strictEqual(JSON.parse(retry.stdout).reason, 'source_revision_missing');
+  const invocations = fs.readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).map((line: string) => JSON.parse(line));
+  assert.strictEqual(invocations.length, 1);
+  assert.deepStrictEqual(invocations[0].candidate, checkpointCandidate);
+  assert.deepStrictEqual(store.getTicket(project, ticket.ref).submissionRetry.candidate, checkpointCandidate);
+  assert.strictEqual(store.getTicket(project, ticket.ref).submission, undefined);
+});
+
+test('SQ-1947: a throwing CLI resolver is called once and cannot admit on a second probe', () => {
+  const { project, projectPath, ticket } = noGitCliTicket('CLI one-call resolver', ['wiki/page.md']);
+  const by = 'cli-one-call-worker';
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const { runCli: runThrowingCli, invocationLog } = registeredNoGitCliRunnerWithCapability(project, projectPath, [
+    `if (invocationCount === 1) throw new Error('temporary adapter failure');`,
+    `return { candidateExists: true, containsCandidate: true };`,
+  ]);
+  const refused = runThrowingCli([
+    'submit', ticket.ref, '--by', by,
+    '--source-revision-source', 'wiki',
+    '--source-revision-value', 'one-call-revision',
+    '--source-revision-observed-at', '2026-08-14T00:00:00.000Z',
+    '--changed-surface', 'wiki/page.md', '--no-process', '--no-worktree', '--review',
+    '--verify', 'attestation: one-call-revision | editor-approved | immutable revision was reviewed',
+    '--body', 'A throwing adapter stays unavailable for this admission.', '--json',
+  ]);
+  assert.strictEqual(refused.status, 1, refused.stderr + refused.stdout);
+  assert.strictEqual(JSON.parse(refused.stdout).reason, 'baseline_membership_unavailable');
+  const invocations = fs.readFileSync(invocationLog, 'utf8').trim().split(/\r?\n/).map((line: string) => JSON.parse(line));
+  assert.strictEqual(invocations.length, 1);
+  assert.strictEqual(store.getTicket(project, ticket.ref).submission, undefined);
+});
+
+test('SQ-1947: resolver replacement teardown is generation-owned and project-isolated', () => {
+  const sourceRevisionCapability = require('../lib/source-revision-capability.js');
+  const firstProject = noGitCliTicket('first capability project', ['wiki/first.md']);
+  const secondProject = noGitCliTicket('second capability project', ['wiki/second.md']);
+  const firstPrepared = store.prepareDispatch(firstProject.project, firstProject.ticket.ref, { sharedTree: true });
+  const secondPrepared = store.prepareDispatch(secondProject.project, secondProject.ticket.ref, { sharedTree: true });
+  const candidate = { source: 'wiki', value: 'resolver-generation', observedAt: '2026-08-14T00:00:00.000Z' };
+  let staleCalls = 0;
+  let replacementCalls = 0;
+  let secondProjectCalls = 0;
+  const unregisterStale = store.registerSourceRevisionCapability(firstProject.project, () => {
+    staleCalls += 1;
+    return { candidateExists: false, containsCandidate: false };
+  });
+  const unregisterReplacement = store.registerSourceRevisionCapability(firstProject.project, () => {
+    replacementCalls += 1;
+    return { candidateExists: true, containsCandidate: true };
+  });
+  unregisterStale();
+  unregisterReplacement();
+  const removedFacts = sourceRevisionCapability.sourceRevisionAdapterFacts(
+    firstProject.project,
+    candidate,
+    firstPrepared.ticket.dispatch.lifecycleAttempt.baseline,
+  );
+  assert.strictEqual(removedFacts.baseline, null);
+  assert.strictEqual(staleCalls, 0);
+  assert.strictEqual(replacementCalls, 0);
+
+  const unregisterFirst = store.registerSourceRevisionCapability(firstProject.project, () => {
+    replacementCalls += 1;
+    return { candidateExists: false, containsCandidate: false };
+  });
+  const unregisterSecond = store.registerSourceRevisionCapability(secondProject.project, () => {
+    secondProjectCalls += 1;
+    return { candidateExists: true, containsCandidate: true };
+  });
+  try {
+    const firstFacts = sourceRevisionCapability.sourceRevisionAdapterFacts(
+      firstProject.project,
+      candidate,
+      firstPrepared.ticket.dispatch.lifecycleAttempt.baseline,
+    );
+    const secondFacts = sourceRevisionCapability.sourceRevisionAdapterFacts(
+      secondProject.project,
+      candidate,
+      secondPrepared.ticket.dispatch.lifecycleAttempt.baseline,
+    );
+    assert.deepStrictEqual(firstFacts.baseline, { candidateExists: false, containsCandidate: false });
+    assert.deepStrictEqual(secondFacts.baseline, { candidateExists: true, containsCandidate: true });
+    assert.strictEqual(replacementCalls, 1);
+    assert.strictEqual(secondProjectCalls, 1);
+  } finally {
+    unregisterFirst();
+    unregisterSecond();
+  }
+});
+
+test('SQ-1947: kernel refuses authentic facts bound to a different retry candidate', (context: any) => {
+  const sourceRevisionCapability = require('../lib/source-revision-capability.js');
+  const { project, ticket } = noGitCliTicket('bound capability facts', ['wiki/page.md']);
+  const by = 'bound-facts-worker';
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.strictEqual(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const checkpointCandidate = { source: 'wiki', value: 'checkpoint-A', observedAt: '2026-08-14T00:00:00.000Z' };
+  const dispatchBaseline = prepared.ticket.dispatch.lifecycleAttempt.baseline;
+  const unavailableFacts = sourceRevisionCapability.sourceRevisionAdapterFacts(project, checkpointCandidate, dispatchBaseline);
+  const refused = store.submitTicket(project, ticket.ref, by, {
+    sourceRevision: checkpointCandidate,
+    changedSurfaces: ['wiki/page.md'],
+    projectCapabilities: { process: false, worktree: false, review: true },
+    verify: 'attestation: checkpoint-A | editor-approved | immutable revision was reviewed',
+    admissionFacts: unavailableFacts,
+  });
+  assert.strictEqual(refused.reason, 'baseline_membership_unavailable');
+
+  const callerCandidate = { source: 'wiki', value: 'caller-B', observedAt: '2026-08-14T01:00:00.000Z' };
+  const unregister = store.registerSourceRevisionCapability(project, () => ({ candidateExists: true, containsCandidate: true }));
+  context.after(unregister);
+  const callerFacts = sourceRevisionCapability.sourceRevisionAdapterFacts(project, callerCandidate, dispatchBaseline);
+  const mismatched = store.submitTicket(project, ticket.ref, by, {
+    sourceRevision: callerCandidate,
+    admissionFacts: callerFacts,
+  });
+  assert.strictEqual(mismatched.ok, false);
+  assert.strictEqual(mismatched.reason, 'baseline_membership_unavailable');
+  assert.deepStrictEqual(store.getTicket(project, ticket.ref).submissionRetry.candidate, checkpointCandidate);
+  assert.strictEqual(store.getTicket(project, ticket.ref).submission, undefined);
 });
 
 export {};

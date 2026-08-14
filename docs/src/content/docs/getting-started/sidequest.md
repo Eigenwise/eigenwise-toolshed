@@ -26,7 +26,7 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results.
 5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
-The board keeps the work visible while Claude and its executors handle the ticket lifecycle. Codebase work submits a verified Git range. Projects without Git submit their native immutable revision, changed surfaces, and review or attestation evidence. Sidequest records unavailable Git, process, and worktree capabilities instead of probing those adapters.
+The board keeps the work visible while Claude and its executors handle the ticket lifecycle. Codebase work submits a verified Git range. Projects without Git submit their native immutable revision, changed surfaces, and review or attestation evidence. Their server integration registers a source-revision resolver. On a retry, Sidequest restores the checkpointed candidate before calling that project's current resolver once with the candidate and dispatch-pinned baseline; the result, including an unavailable result, stays bound to both. Replacing a resolver registration invalidates the earlier resolver. CLI and MCP callers cannot provide existence or membership facts. Sidequest records unavailable Git, process, and worktree capabilities instead of probing those adapters.
 
 ## Use the dashboard
 

@@ -808,9 +808,6 @@
         },
         "recoveryEvidence": {
           "type": "string"
-        },
-        "overrideLegacyScope": {
-          "type": "boolean"
         }
       },
       "required": [
@@ -1134,9 +1131,6 @@
           ]
         },
         "skipVerify": {
-          "type": "boolean"
-        },
-        "overrideLegacyScope": {
           "type": "boolean"
         },
         "session": {

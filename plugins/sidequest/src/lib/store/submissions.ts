@@ -1,6 +1,8 @@
 'use strict';
 
 const { resolveSuite } = require('../suite-resolver.js');
+const { decideSubmissionAdmission } = require('../kernel/submission');
+const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
 
 function createSubmissions(dependencies: any) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
@@ -32,6 +34,15 @@ function changedSurfacesMetadata(surfaces?: any) {
   return Array.from(new Set(surfaces.map((surface?: any) => String(surface).trim().replace(/\\/g, '/')).filter(Boolean)));
 }
 
+function projectCapabilityMetadata(capabilities?: any) {
+  if (!capabilities || typeof capabilities !== 'object') return {};
+  const metadata: Record<string, boolean> = {};
+  for (const name of ['process', 'worktree', 'review']) {
+    if (typeof capabilities[name] === 'boolean') metadata[name] = capabilities[name];
+  }
+  return metadata;
+}
+
 function projectUsesGit(slug: any) {
   const projectPath = String(readMeta(slug)?.path || '').trim();
   if (!projectPath) return true;
@@ -61,6 +72,33 @@ function sameSourceRevision(left?: any, right?: any) {
     && left.source === right.source
     && left.value === right.value
   );
+}
+
+function submissionRetryCheckpoint(ticket: any, checkpoint: any) {
+  if (ticket.submissionRetry) return ticket.submissionRetry;
+  ticket.submissionRetry = checkpoint;
+  return ticket.submissionRetry;
+}
+
+function hydratedSubmissionOptions(opts: any, retryCheckpoint: any) {
+  if (!retryCheckpoint) return opts;
+  const candidate = retryCheckpoint.candidate;
+  const sourceRevision = candidate?.source === 'git' ? null : candidate;
+  return {
+    ...opts,
+    sourceRevision,
+    commit: sourceRevision ? null : candidate?.value,
+    gitRef: retryCheckpoint.gitRef,
+    worktree: retryCheckpoint.worktree,
+    changedSurfaces: retryCheckpoint.changedSurfaces,
+    range: retryCheckpoint.range,
+    unscopedPaths: retryCheckpoint.unscopedPaths,
+    projectCapabilities: retryCheckpoint.projectCapabilities,
+    verify: opts.verify != null ? opts.verify : retryCheckpoint.verify,
+    admissionFacts: sourceRevision
+      ? opts.admissionFacts
+      : opts.admissionFacts || retryCheckpoint.admissionFacts,
+  };
 }
 
 function rejectedSubmissionMatches(submission?: any, rejected?: any) {
@@ -589,8 +627,7 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const scopeValidation = isArtifactSubmission(ticket.submission)
     ? { ok: true, changedPaths: ticket.submission.changedPaths || [] }
     : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref);
-  const legacyScopeOverride = opts?.overrideLegacyScope === true && scopeValidation.reason === 'missing_scope_snapshot';
-  if (!scopeValidation.ok && !legacyScopeOverride) {
+  if (!scopeValidation.ok) {
     const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
     return {
       ok: false,
@@ -599,11 +636,11 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
       ticket,
       scopeValidation,
       message: scopeValidation.message || (scopeValidation.reason === 'missing_scope_snapshot'
-        ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it, or pass the explicit legacy scope override with a recorded reason.`
+        ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it before integration.`
         : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(', ')}.`),
     };
   }
-  return { ok: true, ticket, scopeValidation, legacyScopeOverride };
+  return { ok: true, ticket, scopeValidation };
 }
 
 function updateSubmissionIntegration(slug: any, id: any, patch: any) {
@@ -871,6 +908,62 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
   }
 }
 
+function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: any, sourceRevision: any, pinnedBaseline: any, range: any, verify: any, changedSurfaces: string[]) {
+  const adapterFacts = opts.admissionFacts || {};
+  const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts)
+    ? opts.admissionFacts
+    : null;
+  const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
+  const attestation = ticket.executorVerifyKind === 'attestation' || sourceRevision != null;
+  const verificationError = attestation ? attestationErrors(verify, sourceRevision ? sourceRevision.value : ticket.executorAttestationArtifact)[0] : verifyCommandError(verify);
+  const completion = sourceRevision
+    ? { ok: true }
+    : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
+  const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
+  const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
+  const submittedSurfaces = sourceRevision ? changedSurfaces : range?.changedPaths || [];
+  const inherited = inheritedDirtyPaths(slug, ticket);
+  const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
+  const inheritedPaths = reportedPaths.filter((file: string) => inherited.has(dirtyPathKey(file)));
+  const unsubmittedWorkingPaths = sharedTreeUnsubmittedWorkingPaths(ticket, range, reportedPaths, inherited);
+  const excludedWorkingPaths = new Set([...inheritedPaths, ...unsubmittedWorkingPaths].map(dirtyPathKey));
+  const gatedPaths = reportedPaths.filter((file: string) => !excludedWorkingPaths.has(dirtyPathKey(file)));
+  const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
+  const rejected = rejectionHistory(ticket);
+  const rejectedSource = sourceRevision && rejected.find((entry: any) => sameSourceRevision(entry.sourceRevision, sourceRevision));
+  const submittedCommits = range?.commits?.length ? range.commits : [String(opts.commit || '').trim().toLowerCase()];
+  const rejectedCommit = !sourceRevision && rejected
+    .map((entry: any) => String(entry?.commit || '').trim().toLowerCase())
+    .find((candidate: string) => candidate && submittedCommits.some((submittedCommit: string) => candidate === submittedCommit || candidate.startsWith(submittedCommit) || submittedCommit.startsWith(candidate)));
+  const duplicate = adapterFacts.duplicate || (rejectedSource
+    ? { identity: `${sourceRevision.source}:${sourceRevision.value}`, diagnostic: { code: 'rejected_submission_reused', message: `submit: refused ${ticket.ref}; source revision ${sourceRevision.source}:${sourceRevision.value} was previously rejected. Submit a different immutable revision.`, retryable: false } }
+    : rejectedCommit
+      ? { identity: rejectedCommit, diagnostic: { code: 'rejected_submission_reused', message: `submit: refused ${ticket.ref}; admitted range contains previously rejected commit ${rejectedCommit}. Create and verify a range without any rejected commit before submitting.`, retryable: false } }
+      : { identity: null });
+  const decision = decideSubmissionAdmission({
+    ticket,
+    authority: { authority: { actor: by, operation: 'submit' }, claimOwner: String(ticket.claim?.by || '').trim() || null, submittedOwner: String(ticket.submission?.by || '').trim() || null, terminal: ticket.status === 'done', allowSubmittedOwner: opts.force === true },
+    completion: { complete: completion.ok, ...(completion.ok ? {} : { diagnostic: { code: completion.reason, message: completion.message, retryable: true } }) },
+    verification: { result: { kind: attestation ? 'attestation' : 'suite', status: verificationError ? 'unavailable' : 'passed', evidence: String(verify || '') }, expectedEvidence: attestation ? null : String(ticket.executorVerify || '').trim() || null, ...(verificationError ? { diagnostic: { code: 'invalid_verify', message: verificationError, retryable: true } } : {}) },
+    candidate: sourceRevision || { source: 'git', value: String(opts.commit || '').trim().toLowerCase(), observedAt: new Date().toISOString() },
+    baseline: sourceRevision
+      ? {
+        candidateExists: sourceRevisionResolution?.candidateExists ?? null,
+        containsCandidate: sourceRevisionResolution?.containsCandidate ?? null,
+        ...(sourceRevisionFacts ? {
+          candidate: sourceRevisionFacts.candidate,
+          dispatchBaseline: sourceRevisionFacts.dispatchBaseline,
+        } : {}),
+      }
+      : adapterFacts.baseline || { candidateExists: true, containsCandidate: true },
+    sourceBaseline: sourceRevision ? pinnedBaseline : null,
+    surfaces: { declared: scope, admitted: scope, changed: submittedSurfaces, pending: adapterFacts.surfaces?.pending || [], ...(adapterFacts.surfaces || {}) },
+    duplicate,
+    requirements: [...(adapterFacts.requirements || []), ...(readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }])],
+  });
+  return { decision, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+}
+
 // Record verified, committed work as ready for integration and release the
 // claim in the same locked step. A held claim establishes ownership. force can
 // only let the same submitted candidate owner replace their pending candidate.
@@ -879,44 +972,86 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   by = String(by || 'agent');
   const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
   if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
-  const commit = String(opts.commit || '').trim().toLowerCase();
-  const sourceRevision = sourceRevisionMetadata(opts.sourceRevision);
-  if (sourceRevision && commit) {
-    throw new Error('submit exactly one of commit or source revision');
-  }
-  const changedSurfaces = changedSurfacesMetadata(opts.changedSurfaces);
-  const reportedProjectCapabilities = opts.projectCapabilities && typeof opts.projectCapabilities === 'object'
-    ? opts.projectCapabilities
-    : {};
-  const projectCapabilities = sourceRevision
-    ? Object.freeze({ ...reportedProjectCapabilities, git: projectUsesGit(slug) })
-    : Object.freeze({ ...reportedProjectCapabilities });
-  if (!sourceRevision && !SUBMISSION_COMMIT_RE.test(commit)) {
-    throw new Error(`invalid commit "${opts.commit}" — pass the verified commit's hex hash (7-64 chars) or a source revision`);
-  }
-  if (sourceRevision && !changedSurfaces.length) {
-    throw new Error('source revision submissions require changed surfaces');
-  }
-  if (sourceRevision && projectCapabilities.git) {
-    throw new Error('source revision submissions require a project outside Git');
-  }
-  const gitRef = opts.gitRef != null && String(opts.gitRef).trim()
-    ? String(opts.gitRef).trim().slice(0, SUBMISSION_GITREF_MAX)
-    : null;
-  const verify = opts.verify != null && String(opts.verify).trim()
-    ? String(opts.verify).trim().slice(0, EXECUTOR_VERIFY_MAX)
-    : null;
-  const worktree = opts.worktree != null && String(opts.worktree).trim()
-    ? String(opts.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX)
-    : null;
-  const range = sourceRevision ? null : submissionRangeMetadata(opts.range, commit);
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
-    const ownershipFailure = submissionOwnershipFailure(t, by, { allowSubmittedOwner: opts.force === true });
-    if (ownershipFailure) return ownershipFailure;
+    const retryCheckpoint = t.submissionRetry || null;
+    const submissionOptions = hydratedSubmissionOptions(opts, retryCheckpoint);
+    const commit = String(submissionOptions.commit || '').trim().toLowerCase();
+    const sourceRevision = sourceRevisionMetadata(submissionOptions.sourceRevision);
+    if (sourceRevision && commit) {
+      throw new Error('submit exactly one of commit or source revision');
+    }
+    const changedSurfaces = changedSurfacesMetadata(submissionOptions.changedSurfaces);
+    const reportedProjectCapabilities = projectCapabilityMetadata(submissionOptions.projectCapabilities);
+    const projectCapabilities = sourceRevision
+      ? Object.freeze({ ...reportedProjectCapabilities, git: projectUsesGit(slug) })
+      : Object.freeze({ ...reportedProjectCapabilities });
+    if (!sourceRevision && !SUBMISSION_COMMIT_RE.test(commit)) {
+      throw new Error(`invalid commit "${submissionOptions.commit}" — pass the verified commit's hex hash (7-64 chars) or a source revision`);
+    }
+    if (sourceRevision && !changedSurfaces.length) {
+      throw new Error('source revision submissions require changed surfaces');
+    }
+    if (sourceRevision && projectCapabilities.git) {
+      throw new Error('source revision submissions require a project outside Git');
+    }
+    const gitRef = submissionOptions.gitRef != null && String(submissionOptions.gitRef).trim()
+      ? String(submissionOptions.gitRef).trim().slice(0, SUBMISSION_GITREF_MAX)
+      : null;
+    const verify = submissionOptions.verify != null && String(submissionOptions.verify).trim()
+      ? String(submissionOptions.verify).trim().slice(0, EXECUTOR_VERIFY_MAX)
+      : null;
+    const worktree = submissionOptions.worktree != null && String(submissionOptions.worktree).trim()
+      ? String(submissionOptions.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX)
+      : null;
+    const range = sourceRevision ? null : submissionRangeMetadata(submissionOptions.range, commit);
+    const pinnedBaseline = sourceRevision ? sourceRevisionBaseline(t) : null;
+    const resolvedSourceRevisionFacts = sourceRevision
+      ? (isSourceRevisionAdapterFacts(submissionOptions.admissionFacts)
+        ? submissionOptions.admissionFacts
+        : null)
+      : submissionOptions.admissionFacts;
+    const admissionOptions = sourceRevision
+      ? { ...submissionOptions, admissionFacts: resolvedSourceRevisionFacts }
+      : submissionOptions;
+    const admission = submissionAdmissionDecision(slug, t, by, admissionOptions, sourceRevision, pinnedBaseline, range, verify, changedSurfaces);
+    if (!admission.decision.ok) {
+      const [primary] = admission.decision.diagnostics;
+      const decisionForeignWorkingPaths = admission.decision.outsideAdmittedSurfaces;
+      const retry = admission.decision.retryable
+        ? submissionRetryCheckpoint(t, {
+          at: new Date().toISOString(),
+          by,
+          candidate: sourceRevision || { source: 'git', value: commit, observedAt: new Date().toISOString() },
+          gitRef,
+          worktree,
+          verify,
+          changedSurfaces: sourceRevision ? changedSurfaces : range?.changedPaths || [],
+          range,
+          unscopedPaths: submissionOptions.unscopedPaths || [],
+          projectCapabilities,
+          ...(sourceRevision && pinnedBaseline ? { baseline: pinnedBaseline } : {}),
+          admissionFacts: sourceRevision ? null : admissionOptions.admissionFacts || null,
+          diagnostics: admission.decision.diagnostics,
+          foreignWorkingPaths: decisionForeignWorkingPaths,
+        })
+        : null;
+      if (retry) putTicket(slug, t);
+      const foreignWorkingPaths = retry?.foreignWorkingPaths || decisionForeignWorkingPaths;
+      return {
+        ok: false,
+        reason: primary.code,
+        ticket: t,
+        message: primary.message,
+        failures: admission.decision.diagnostics,
+        retryable: admission.decision.retryable,
+        ...(retry ? { retry } : {}),
+        ...(foreignWorkingPaths.length ? { outside: foreignWorkingPaths, foreignWorkingPaths } : {}),
+      };
+    }
     const pendingRejections = rejectionHistory(t).filter((entry: any) => entry.preservationState === 'pending');
     if (pendingRejections.length) {
       const rejectionRoot = String(readMeta(slug)?.path || '').trim();
@@ -925,82 +1060,12 @@ function submitTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         if (!recovered.ok) return recovered;
       }
     }
-    const rejectedSubmissions = rejectionHistory(t);
-    const rejectedSubmission = rejectedSubmissions.find((entry: any) => entry && !entry.supersededAt) || null;
-    const rejectedSourceRevision = sourceRevision
-      ? rejectedSubmissions.find((entry: any) => sameSourceRevision(entry.sourceRevision, sourceRevision))
-      : null;
-    if (sourceRevision && rejectedSourceRevision) {
-      return {
-        ok: false,
-        reason: 'rejected_submission_reused',
-        ticket: t,
-        message: `submit: refused ${t.ref}; source revision ${sourceRevision.source}:${sourceRevision.value} was previously rejected. Submit a different immutable revision.`,
-      };
-    }
-    const submittedCommits = range?.commits?.length ? range.commits : [commit];
-    const rejectedCommit = rejectedSubmissions
-      .map((entry: any) => String(entry?.commit || '').trim().toLowerCase())
-      .find((candidate: string) => candidate && submittedCommits.some((submittedCommit: string) => candidate === submittedCommit || candidate.startsWith(submittedCommit) || submittedCommit.startsWith(candidate)));
-    if (rejectedCommit) {
-      return {
-        ok: false,
-        reason: 'rejected_submission_reused',
-        ticket: t,
-        message: `submit: refused ${t.ref}; admitted range contains previously rejected commit ${rejectedCommit}. Create and verify a range without any rejected commit before submitting.`,
-      };
-    }
-    const completion = sourceRevision
-      ? { ok: true, applicable: false, changedPaths: changedSurfaces }
-      : completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
-    if (!completion.ok) return Object.assign({ ticket: t }, completion);
-    const attestation = t.executorVerifyKind === 'attestation' || sourceRevision != null;
-    const attestationArtifact = sourceRevision ? sourceRevision.value : t.executorAttestationArtifact;
-    const validationError = attestation ? attestationErrors(verify, attestationArtifact)[0] : verifyCommandError(verify);
-    if (validationError) {
-      return { ok: false, reason: 'invalid_verify', ticket: t, message: validationError };
-    }
-    const declaredExecutorVerify = String(t.executorVerify || '').trim();
-    if (!attestation && declaredExecutorVerify && verify !== declaredExecutorVerify) {
-      return {
-        ok: false,
-        reason: 'executor_verify_mismatch',
-        ticket: t,
-        message: `submit: refused ${t.ref}; verification must match the declared executor verify command.`,
-      };
-    }
-    const admittedScope = executionScope(slug, t);
-    const submissionScope = commitScope.ticketCommitScope(admittedScope, t.files, t.ref);
-    const submittedSurfaces = sourceRevision ? changedSurfaces : range?.changedPaths || [];
-    const outsideSubmittedRange = submittedSurfaces.filter((file: string) => !commitScope.isInScope(file, submissionScope));
-    if (outsideSubmittedRange.length) {
-      return {
-        ok: false,
-        reason: 'outside_scope',
-        outside: outsideSubmittedRange,
-        ticket: t,
-        message: `submit: refused ${t.ref}; submitted range changes paths outside its declared scope: ${outsideSubmittedRange.join(', ')}. Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`,
-      };
-    }
-    const inherited = inheritedDirtyPaths(slug, t);
-    const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
-    const inheritedPaths = reportedPaths.filter((file: string) => inherited.has(dirtyPathKey(file)));
-    const unsubmittedWorkingPaths = sharedTreeUnsubmittedWorkingPaths(t, range, reportedPaths, inherited);
-    const excludedWorkingPaths = new Set([...inheritedPaths, ...unsubmittedWorkingPaths].map(dirtyPathKey));
-    const gatedPaths = reportedPaths.filter((file: string) => !excludedWorkingPaths.has(dirtyPathKey(file)));
-    const readiness = submissionReadiness({ unscopedPaths: gatedPaths });
-    if (!readiness.ok) {
-      return {
-        ok: false,
-        reason: readiness.reason,
-        ticket: t,
-        submissionReadiness: readiness,
-        message: `submit: refused ${t.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`,
-      };
-    }
+    const rejectedSubmission = rejectionHistory(t).find((entry: any) => entry && !entry.supersededAt) || null;
+    const { admittedScope, inheritedPaths, unsubmittedWorkingPaths, gatedPaths } = admission;
     const workingPathAdvisory = sharedTreeWorkingPathAdvisory(inheritedPaths, unsubmittedWorkingPaths);
     const submittedAt = new Date().toISOString();
     let comment = null;
+    delete t.submissionRetry;
     if (submissionComment) {
       if (!Array.isArray(t.comments)) t.comments = [];
       comment = createComment(submissionComment, submittedAt);
@@ -1334,17 +1399,59 @@ function reworkSubmission(slug?: any, idOrRef?: any, opts?: any) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
-    if (!pendingSubmission(ticket)) {
-      return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no pending submission to reject for rework.` };
+    const retryCheckpoint = ticket.submissionRetry || null;
+    if (!pendingSubmission(ticket) && !retryCheckpoint) {
+      return { ok: false, reason: 'submission_required', ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
     }
     const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
     if (ownershipFailure) return ownershipFailure;
     const history = rejectionHistory(ticket);
+    const source = opts.source || 'cli';
+    const root = String(readMeta(slug)?.path || '').trim();
+    if (retryCheckpoint && !pendingSubmission(ticket)) {
+      const candidate = retryCheckpoint.candidate;
+      const rejectedCandidate = candidate.source === 'git'
+        ? {
+          commit: candidate.value,
+          gitRef: retryCheckpoint.gitRef,
+          worktree: retryCheckpoint.worktree,
+          verify: retryCheckpoint.verify,
+          changedPaths: retryCheckpoint.changedSurfaces,
+          ...(retryCheckpoint.range || {}),
+        }
+        : {
+          sourceRevision: candidate,
+          changedPaths: retryCheckpoint.changedSurfaces,
+          projectCapabilities: retryCheckpoint.projectCapabilities,
+          verify: retryCheckpoint.verify,
+        };
+      const rejected = Object.assign({}, rejectedCandidate, {
+        rejectedAt: new Date().toISOString(),
+        rejectedBy: by,
+        review,
+        reason,
+        ...(candidate.source === 'git'
+          ? { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) }
+          : {}),
+        rejectionKind: 'rework',
+        preservationState: 'pending',
+        previousStatus: ticket.status,
+        source,
+      });
+      if (!Array.isArray(ticket.rejectedSubmissions)) ticket.rejectedSubmissions = [];
+      ticket.rejectedSubmissions.push(rejected);
+      ticket.updatedAt = rejected.rejectedAt;
+      putTicketTransaction(slug, ticket);
+      const preserved = preserveRejectedSubmission(slug, ticket, rejected, root);
+      if (!preserved.ok) return preserved;
+      delete ticket.submissionRetry;
+      putTicketTransaction(slug, ticket);
+      queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
+      return { ok: true, ticket, rejected };
+    }
     const pendingRejection = history.find((entry: any) => entry.rejectionKind === 'rework'
       && entry.preservationState === 'pending'
       && rejectedSubmissionMatches(ticket.submission, entry));
-    const source = opts.source || 'cli';
-    const root = String(readMeta(slug)?.path || '').trim();
     if (pendingRejection) {
       const recovered = preserveRejectedSubmission(slug, ticket, pendingRejection, root);
       if (recovered.ok) queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);

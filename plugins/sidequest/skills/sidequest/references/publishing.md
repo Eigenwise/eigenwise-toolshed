@@ -16,10 +16,7 @@ executor based on a feature branch, pass that branch as MCP dispatch `integratio
 records that target and its starting commit. Merge commits before the starting commit stay in parent history; the submitted range itself
 remains linear.
 
-A range refusal with verification evidence pins the commit at
-`refs/sidequest/<SQ-n>-rejected`, records the exact failure in a recovery checkpoint, and keeps the claim.
-Rebase onto the dispatch's current integration target, update `refs/sidequest/<SQ-n>`, and resubmit. The
-orchestrator can instead cherry-pick the quarantine ref when it records the range override on the ticket.
+A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
 ## When to run it (event-driven, never polled)
 
@@ -77,7 +74,7 @@ board (submissions stay parked — fail closed).
    wakeup. `--steal` only when `publish status` shows the holder stale (TTL expired or dead pid).
    Re-acquiring from the same session refreshes the lock — that is the crash-recovery path for your
    own interrupted transaction.
-2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it. Use `groom-close --integration --override-legacy-scope --reason "..."` only when the legacy handoff is already integrated and the reason belongs in the ticket record.
+2. **Read the queue**: `sidequest publish queue --json`. Queue admission mechanically revalidates each durable range and its submit-time admitted scope snapshot. Rejected entries name their offending paths and stay parked. A legacy entry without a scope snapshot stays parked until its executor resubmits it.
 3. **Read each submitted handoff**: before integrating or closing a ticket, run
    `sidequest comments <ref> --json` for it. The queue is intentionally compact and does not replace the
    full thread. Act on unresolved risks or questions: resolve them, skip and file a scoped integration

@@ -2045,15 +2045,16 @@ test('MCP submit reports every independently fixable completion refusal together
   });
 
   assert.equal(refused.ok, false);
-  assert.equal(refused.reason, 'missing_release_fragment');
-  assert.deepEqual(refused.failures.map((failure: any) => failure.reason), [
-    'missing_release_fragment',
+  assert.equal(refused.reason, 'negative_control_required');
+  assert.deepEqual(refused.failures.map((failure: any) => failure.code), [
     'negative_control_required',
     'executor_verify_mismatch',
+    'missing_release_fragment',
   ]);
-  assert.match(refused.message, /Create it with:/);
-  assert.match(refused.message, /has not recorded a negative control/);
-  assert.match(refused.message, /must match the declared executor verify command/);
+  const refusalMessages = refused.failures.map((failure: any) => failure.message).join('\n');
+  assert.match(refusalMessages, /Create it with:/);
+  assert.match(refusalMessages, /has not recorded a negative control/);
+  assert.match(refusalMessages, /must match the declared executor verify command/);
 });
 
 test('MCP add reports every verify-command defect together', async () => {
@@ -2140,8 +2141,8 @@ test('CLI submit requires release fragments for marketplace plugin changes', asy
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
   assert.notEqual(refused.status, 0);
-  assert.match(refused.stderr, new RegExp(`Create it with:\\n---\\nref: ${missing.ref}`));
-  assert.doesNotMatch(refused.stderr, /Request scope/);
+  assert.match(refused.stdout, new RegExp(`Create it with:\\n---\\nref: ${missing.ref}`));
+  assert.doesNotMatch(refused.stdout, /Request scope/);
   assert.ok(store.getTicket(missingProject, missing.ref).claim, 'CLI fragment refusal keeps the claim');
 
   const docsWorktree = createGitWorktree();
@@ -2256,9 +2257,15 @@ test('MCP commit refuses an isolated dispatch in the primary worktree but permit
   assert.ok(sharedCommit.commit, 'shared-tree dispatch can commit from the primary worktree');
 });
 
-test('MCP submits and integrates project-neutral source revisions without Git adapters', async () => {
+test('MCP submits and integrates project-neutral source revisions through one registered capability', async (context: any) => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-revisions-'));
   const project = store.ensureProject(projectPath).slug;
+  const capabilityInvocations: any[] = [];
+  const unregister = store.registerSourceRevisionCapability(project, (candidate: any, baseline: any) => {
+    capabilityInvocations.push({ candidate, baseline });
+    return { candidateExists: true, containsCandidate: true };
+  });
+  context.after(unregister);
   const revisions = [
     { source: 'wiki', value: 'wiki-42', surface: 'wiki/page.md' },
     { source: 'document-set', value: 'documents-17', surface: 'documents/index.md' },
@@ -2275,14 +2282,7 @@ test('MCP submits and integrates project-neutral source revisions without Git ad
       labels: ['direct-ok'],
     });
     const by = `mcp-${revision.source}-worker`;
-    const claimed = await callTool('claim', {
-      project,
-      ref: ticket.ref,
-      by,
-      direct: true,
-      reason: 'This fixture publishes one exact immutable source revision.',
-    });
-    assert.equal(claimed.ok, true);
+    claimDispatchedTicket(project, ticket, by, true);
 
     const submitted = await callTool('submit', {
       project,
@@ -2294,7 +2294,11 @@ test('MCP submits and integrates project-neutral source revisions without Git ad
         observedAt: '2026-08-14T00:00:00.000Z',
       },
       changedSurfaces: [revision.surface],
-      projectCapabilities: { process: false, worktree: false, review: true },
+      projectCapabilities: {
+        process: false,
+        worktree: false,
+        review: true,
+      },
       verify: `attestation: ${revision.value} | review-accepted | reviewer approved the immutable revision`,
       body: `Reviewed ${revision.source} revision ${revision.value}.`,
     });
@@ -2307,6 +2311,9 @@ test('MCP submits and integrates project-neutral source revisions without Git ad
     assert.deepEqual(integrated.delivery.changedPaths, [revision.surface]);
     assert.equal(store.getTicket(project, ticket.ref).lifecycleAttempt.state, 'closed');
   }
+  assert.equal(capabilityInvocations.length, revisions.length);
+  assert.deepEqual(capabilityInvocations.map((invocation) => invocation.candidate.source), revisions.map((revision) => revision.source));
+  assert.ok(capabilityInvocations.every((invocation) => invocation.baseline.purpose === 'dispatch'));
 });
 
 test('MCP submit requires exactly one revision identity', async () => {
