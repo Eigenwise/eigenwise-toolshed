@@ -1,15 +1,20 @@
 # Patterns
 
-Last Updated: 2026-08-10
+Last Updated: 2026-08-14
 
 - Build from source, run committed output: Sidequest TypeScript under `src/` compiles to `lib/`, `bin/`, and bundled hook files. Runtime manifests point at generated files; release suite discovery is shared through `plugins/sidequest/lib/suite-resolver.js` and re-exported by `scripts/release/lib/suites.mjs`.
 - Bounded context projections: Sidequest freezes dispatch contracts and pages large MCP reads with opaque revision-bound handles; callers continue through `context_page` and rerun mutable reads when a revision is stale.
-- One store, multiple transports: Sidequest CLI and MCP handlers call the same store functions. Keep lifecycle behavior in the store rather than duplicating it in transports.
+- One store, multiple transports: Sidequest CLI and MCP handlers call the same store functions. Keep lifecycle behavior in typed kernel reducers and store transitions rather than duplicating it in transports.
+- Immutable candidate lifecycle: preparation pins baseline and executor identity; submit atomically records the candidate, terminates the executor, and releases its claim. A confirmed review defect preserves and permanently rejects that candidate. A repair has a fresh identity and supersedes the rejection only after integration.
+- Adapter-owned facts: Git repositories and non-Git projects resolve immutable candidate existence and baseline membership through registered capabilities. Callers cannot assert those facts, and an unavailable adapter fails closed while preserving the retry candidate.
+- Lease every checkout: worktree operations require repository, dispatch baseline, bound path, checkout-instance digest, phase, and liveness facts. Paths, branches, sessions, and process presence are hints rather than cleanup authority.
+- Provider routes come from one capability decision: Sidequest accepts only fresh, valid, ready schema-4 Model Gateway catalogs for routing and model advertisement. Provider metadata may survive for precise refusal messages; stale or unready entries never materialize GPT defaults.
+- Verify produced behavior: ticket oracles observe the required property on output. Implementation-name greps are diagnostics, and overlapping terminal waves rerun the property oracle after assembly.
 - Serialize board mutations: MCP mutation handlers enqueue per-board work before touching state.
 - Pull results from the owning root: Workbench's TypeScript tools require a canonical project root, keep one language server per root, and discard TS7 push diagnostics so parent and worktree results cannot bleed into one another.
 - Preserve exact ownership: Sidequest reclaims claims and pre-claim dispatch bindings only after confirmed terminal process evidence, keeps unknown owners protected, and checks ownership before forced submission, release, or rejection-history mutation.
 - Batch-local Stop responsibility: each plugin deduplicates only its own Stop work using stable inputs; mutable transcript metadata and prompt identifiers do not define responsibility, and stale lock cleanup is generation-bound.
-- Atomic gateway updates: Model Gateway stages proxy replacements, renames atomically with rollback, compares serving versions, and defers restart when the listener cannot exit immediately; ephemeral shim ports are reported explicitly.
+- Atomic gateway updates and request recovery: Model Gateway stages proxy replacements, renames atomically with rollback, compares serving versions, and defers restart when the listener cannot exit immediately. An active request can start or recover the shared proxy without waiting for another Claude SessionStart.
 - Shared-tree artifacts are marker-gated and confined to an approved artifact root; dirty baselines and closeout deltas are checked.
 - Hook registration is declarative: events and matchers live in `hooks/hooks.json`; source or generated hook code implements behavior. Codebase-mapper blocks an announced map update until the matching Skill invocation is recorded.
 - Generated docs are disposable: `docs/scripts/generate-reference.mjs` owns `docs/src/content/docs/reference/`; edit manifests or the generator instead.
