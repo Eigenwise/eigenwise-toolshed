@@ -152,24 +152,33 @@ function samePath(a, b) {
   };
   return normalize(a) === normalize(b);
 }
-function assignedWorktree(found, actualRoot) {
-  const candidates = found.expectedWorktrees?.length ? found.expectedWorktrees : found.expectedWorktree ? [found.expectedWorktree] : [];
-  return candidates.some((candidate) => samePath(actualRoot, candidate));
+function toolContextBoundWorktree(found, worktree, agentId) {
+  return found && import_node_path2.default.basename(worktree) === `agent-${agentId}` && import_node_path2.default.basename(import_node_path2.default.dirname(worktree)) === "worktrees" && import_node_path2.default.basename(import_node_path2.default.dirname(import_node_path2.default.dirname(worktree))) === ".claude" ? worktree : found?.expectedWorktree || null;
 }
-function boundHarnessWorktree(found, actualRoot, agentId) {
-  if (!found.projectPath || import_node_path2.default.basename(actualRoot) !== `agent-${agentId}` || import_node_path2.default.basename(import_node_path2.default.dirname(actualRoot)) !== "worktrees" || import_node_path2.default.basename(import_node_path2.default.dirname(import_node_path2.default.dirname(actualRoot))) !== ".claude") return false;
-  try {
-    const common = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--git-common-dir"], {
-      cwd: actualRoot,
-      encoding: "utf8",
-      windowsHide: true,
-      stdio: ["ignore", "pipe", "ignore"]
-    }).trim();
-    const resolvedCommon = import_node_path2.default.isAbsolute(common) ? common : import_node_path2.default.resolve(actualRoot, common);
-    return samePath(resolvedCommon, import_node_path2.default.join(found.projectPath, ".git"));
-  } catch (_) {
-    return false;
-  }
+function observedWorktreeLease(found, worktree, agentId) {
+  const git = (args) => (0, import_node_child_process.execFileSync)("git", args, {
+    cwd: worktree,
+    encoding: "utf8",
+    windowsHide: true,
+    stdio: ["ignore", "pipe", "ignore"]
+  }).trim();
+  const gitPath = (value) => import_node_path2.default.isAbsolute(value) ? value : import_node_path2.default.resolve(worktree, value);
+  const repository = found?.projectPath || worktree;
+  return leaseKernel.createWorktreeLease({
+    repository,
+    gitDirectory: gitPath(git(["rev-parse", "--git-dir"])),
+    commonGitDirectory: gitPath(git(["rev-parse", "--git-common-dir"])),
+    dispatchRef: found?.ref || null,
+    dispatchBaseline: found?.dispatchBaseline || null,
+    observedRevision: git(["rev-parse", "--verify", "HEAD^{commit}"]),
+    observedWorktree: worktree,
+    boundWorktree: toolContextBoundWorktree(found, worktree, agentId),
+    identity: found?.identityBound ? { status: "bound", agentId } : { status: "unknown" },
+    phase: found?.terminal ? "terminal" : found?.phase || "created",
+    locked: false,
+    liveness: found?.terminal ? { status: "terminal", evidence: "the dispatch is terminal" } : found ? { status: "live", evidence: `dispatch ${found.ref} is active` } : { status: "unknown", evidence: "no dispatch matched this agent" },
+    provisioning: "host"
+  });
 }
 function executorAgent(type) {
   if (!type) return false;
@@ -245,17 +254,17 @@ function unknownRefusal(target) {
     "Do not work around this. Stop any owned background tasks and end the executor. Redispatch before making more changes."
   );
 }
-function projectRefusal(found, target) {
+function leaseRefusal(found, target, reason) {
   return boundedRefusal(
-    `${found.ref} belongs to a different project than this target.`,
-    [["writing to", target]],
-    "Do not work around this. End the executor and redispatch the ticket for the correct project."
+    `${found?.ref || "This executor"} has no write lease for the observed worktree.`,
+    [["writing to", target], ["lease decision", reason]],
+    "Do not work around this. Stop writing and ask the orchestrator to redispatch the ticket."
   );
 }
-function linkedWorktreeRefusal(found, target, actualRoot) {
+function linkedWorktreeLeaseRefusal(found, target, actualRoot, reason) {
   return boundedRefusal(
-    `${found.ref} is writing through a different linked worktree.`,
-    [["expected worktree", found.expectedWorktree || "(unavailable)"], ["actual worktree", actualRoot], ["writing to", target]],
+    `${found.ref} has no write lease for this linked worktree.`,
+    [["expected worktree", found.expectedWorktree || "(unavailable)"], ["actual worktree", actualRoot], ["writing to", target], ["lease decision", reason]],
     "Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket."
   );
 }
@@ -275,20 +284,23 @@ function main() {
   const repo = repoRootFor(target);
   if (!repo) return;
   if (!found) {
-    writeDeny("PreToolUse", unknownRefusal(target));
+    try {
+      const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);
+      if (!decision.allowed) writeDeny("PreToolUse", unknownRefusal(target));
+    } catch (_) {
+      writeDeny("PreToolUse", unknownRefusal(target));
+    }
     return;
   }
-  if (found.sharedTree) return;
-  if (repo.linked) {
-    if (assignedWorktree(found, repo.root) || boundHarnessWorktree(found, repo.root, agentId)) return;
-    writeDeny("PreToolUse", linkedWorktreeRefusal(found, target, repo.root));
-    return;
+  try {
+    const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(found, repo.root, agentId), target);
+    if (!decision.allowed) {
+      const message = !found.sharedTree && repo.linked ? linkedWorktreeLeaseRefusal(found, target, repo.root, decision.reason) : !found.sharedTree ? refusal(found, target, repo.root, agentId, stringField(input, "cwd")) : leaseRefusal(found, target, decision.reason);
+      writeDeny("PreToolUse", message);
+    }
+  } catch (_) {
+    writeDeny("PreToolUse", leaseRefusal(found, target, "the observed Git facts could not hydrate a lease."));
   }
-  if (found.projectPath && !samePath(found.projectPath, repo.root)) {
-    writeDeny("PreToolUse", projectRefusal(found, target));
-    return;
-  }
-  writeDeny("PreToolUse", refusal(found, target, repo.root, agentId, stringField(input, "cwd")));
 }
 try {
   main();

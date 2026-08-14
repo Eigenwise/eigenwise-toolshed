@@ -152,6 +152,23 @@ test('the assigned linked worktree remains allowed', () => {
 // <project>/.claude/worktrees/agent-<id>, not under sidequest's worktree root,
 // so the guard used to compare the executor's real tree against a path that
 // never existed and deny every write it made once its agent id was bound.
+test('an assigned worktree at a changed dispatch revision is refused', () => {
+  const agentId = 'a2baseline';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = ticket.dispatch.worktree;
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  try {
+    fs.appendFileSync(path.join(linked, 'README.md'), 'changed revision\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: linked, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', 'changed dispatch revision'], { cwd: linked, windowsHide: true });
+    const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
+    assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /dispatch baseline/);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
 test('the harness-provisioned agent worktree is allowed even though sidequest would have placed it elsewhere', () => {
   const agentId = 'a2harnessroot';
   const { ticket, sessionId, executor } = dispatched(agentId);

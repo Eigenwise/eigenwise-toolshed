@@ -1,6 +1,8 @@
 'use strict';
 
-export { canonicalPath, createWorktreeLease, isCanonicalRegisteredWorktree, sameCanonicalPath, worktreeCleanupDecision, worktreeResumeDecision, worktreeWriteDecision } from './worktree.js';
+import type { WorktreeLease } from './worktree.js';
+
+export { canonicalPath, createWorktreeLease, isCanonicalRegisteredWorktree, sameCanonicalPath, worktreeCleanupDecision, worktreeCreateDecision, worktreeResumeDecision, worktreeWriteDecision } from './worktree.js';
 export type { LeaseDecision, LeaseIdentity, LeaseLiveness, LeasePhase, WorktreeLease, WorktreeLeaseFacts, WorktreeProvisioning } from './worktree.js';
 
 export type SourceRevision = Readonly<{ source: string; value: string; observedAt: string }>;

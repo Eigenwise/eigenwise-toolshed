@@ -5,7 +5,11 @@ import { execFileSync } from 'node:child_process';
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
 
-const leaseKernel = require(runtimeModule('kernel/worktree')) as { canonicalPath: (value: string) => string };
+const leaseKernel = require(runtimeModule('kernel/worktree')) as {
+  canonicalPath: (value: string) => string;
+  createWorktreeLease: (facts: unknown) => unknown;
+  worktreeCreateDecision: (lease: unknown) => { allowed: boolean; reason: string };
+};
 
 function git(repository: string, args: string[]): string {
   return execFileSync('git', args, {
@@ -69,6 +73,25 @@ function createWorktree(repository: string, name: string, target: string): boole
   return true;
 }
 
+function observedWorktreeLease(repository: string, worktree: string) {
+  const gitDirectory = git(worktree, ['rev-parse', '--git-dir']);
+  const commonGitDirectory = git(worktree, ['rev-parse', '--git-common-dir']);
+  return leaseKernel.createWorktreeLease({
+    repository,
+    gitDirectory: path.isAbsolute(gitDirectory) ? gitDirectory : path.resolve(worktree, gitDirectory),
+    commonGitDirectory: path.isAbsolute(commonGitDirectory) ? commonGitDirectory : path.resolve(worktree, commonGitDirectory),
+    dispatchRef: null,
+    dispatchBaseline: null,
+    observedRevision: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
+    observedWorktree: worktree,
+    identity: { status: 'unknown' },
+    phase: 'created',
+    locked: false,
+    liveness: { status: 'unknown', evidence: 'WorktreeCreate has no agent identity.' },
+    provisioning: 'host',
+  });
+}
+
 function provisioningConfig(repository: string): { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null } {
   const store = require(runtimeModule('store')) as {
     findProject: (project: string) => { ok: boolean; slug?: string };
@@ -92,11 +115,9 @@ function main(): void {
   const target = worktrees.namedWorktreePath(repository, name);
   const created = createWorktree(repository, name, target);
   if (created) {
-    try {
-      worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
-    } catch (error) {
-      throw error;
-    }
+    const decision = leaseKernel.worktreeCreateDecision(observedWorktreeLease(repository, target));
+    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+    worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
   }
   process.stdout.write(`${target}\n`);
 }

@@ -1145,7 +1145,8 @@ test('released handbacks carry registered native worktrees into continuation dis
 
     const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
     continued.ticket.dispatch.integrationTarget = { mode: 'local', branch: 'main' };
-    assert.deepEqual(continued.ticket.dispatch.continuation, {
+    const { lease, ...continuation } = continued.ticket.dispatch.continuation;
+    assert.deepEqual(continuation, {
       mode: 'retained_worktree_resume',
       ticketRef: ticket.ref,
       sourceWorktree: worktree,
@@ -1157,6 +1158,8 @@ test('released handbacks carry registered native worktrees into continuation dis
       releasedAt,
       releaseKind: 'handback',
     }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
+    assert.equal(lease.dispatchBaseline, checkpoint);
+    assert.equal(lease.observedRevision, checkpoint);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     const spawn = agentsync.agentSpawn(
       continued.ticket.dispatch.launchName,

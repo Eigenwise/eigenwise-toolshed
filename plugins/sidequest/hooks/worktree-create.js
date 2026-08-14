@@ -117,6 +117,24 @@ function createWorktree(repository, name, target) {
   git(repository, ["worktree", "add", "-b", branch, target, baseRef(repository)]);
   return true;
 }
+function observedWorktreeLease(repository, worktree) {
+  const gitDirectory = git(worktree, ["rev-parse", "--git-dir"]);
+  const commonGitDirectory = git(worktree, ["rev-parse", "--git-common-dir"]);
+  return leaseKernel.createWorktreeLease({
+    repository,
+    gitDirectory: import_node_path2.default.isAbsolute(gitDirectory) ? gitDirectory : import_node_path2.default.resolve(worktree, gitDirectory),
+    commonGitDirectory: import_node_path2.default.isAbsolute(commonGitDirectory) ? commonGitDirectory : import_node_path2.default.resolve(worktree, commonGitDirectory),
+    dispatchRef: null,
+    dispatchBaseline: null,
+    observedRevision: git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]),
+    observedWorktree: worktree,
+    identity: { status: "unknown" },
+    phase: "created",
+    locked: false,
+    liveness: { status: "unknown", evidence: "WorktreeCreate has no agent identity." },
+    provisioning: "host"
+  });
+}
 function provisioningConfig(repository) {
   const store = require(runtimeModule("store"));
   const project = store.findProject(repository);
@@ -133,11 +151,9 @@ function main() {
   const target = worktrees.namedWorktreePath(repository, name);
   const created = createWorktree(repository, name, target);
   if (created) {
-    try {
-      worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
-    } catch (error) {
-      throw error;
-    }
+    const decision = leaseKernel.worktreeCreateDecision(observedWorktreeLease(repository, target));
+    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+    worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
   }
   process.stdout.write(`${target}
 `);

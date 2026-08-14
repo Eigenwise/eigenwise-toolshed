@@ -33,6 +33,7 @@ __export(worktree_exports, {
   isCanonicalRegisteredWorktree: () => isCanonicalRegisteredWorktree,
   sameCanonicalPath: () => sameCanonicalPath,
   worktreeCleanupDecision: () => worktreeCleanupDecision,
+  worktreeCreateDecision: () => worktreeCreateDecision,
   worktreeResumeDecision: () => worktreeResumeDecision,
   worktreeWriteDecision: () => worktreeWriteDecision
 });
@@ -70,7 +71,8 @@ function createWorktreeLease(facts) {
     canonicalRepository: canonicalPath(facts.repository),
     canonicalGitDirectory: canonicalPath(facts.gitDirectory),
     canonicalCommonGitDirectory: canonicalPath(facts.commonGitDirectory),
-    canonicalWorktree: facts.observedWorktree ? canonicalPath(facts.observedWorktree) : null
+    canonicalWorktree: facts.observedWorktree ? canonicalPath(facts.observedWorktree) : null,
+    canonicalBoundWorktree: facts.boundWorktree ? canonicalPath(facts.boundWorktree) : null
   });
 }
 function denied(reason) {
@@ -86,9 +88,24 @@ function incorrectBaselineDecision(lease) {
   if (!lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision) return null;
   return denied(`dispatch baseline ${lease.dispatchBaseline} differs from observed worktree revision ${lease.observedRevision}.`);
 }
+function repositoryDecision(lease) {
+  if (lease.canonicalCommonGitDirectory !== canonicalPath(import_node_path.default.join(lease.canonicalRepository, ".git"))) {
+    return denied("The observed worktree does not share the dispatch repository Git directory.");
+  }
+  if (lease.canonicalBoundWorktree && lease.canonicalBoundWorktree !== lease.canonicalWorktree) {
+    return denied("The observed worktree differs from the dispatch-bound worktree.");
+  }
+  return null;
+}
+function worktreeCreateDecision(lease) {
+  if (!lease.canonicalWorktree) return denied("Creation requires an observed worktree.");
+  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed("the observed worktree belongs to the dispatch repository.");
+}
 function worktreeWriteDecision(lease, target) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("A write");
   if (!lease.canonicalWorktree) return denied("A write requires an observed worktree.");
+  const repository = repositoryDecision(lease);
+  if (repository) return repository;
   const baseline = incorrectBaselineDecision(lease);
   if (baseline) return baseline;
   const relative = import_node_path.default.relative(lease.canonicalWorktree, canonicalPath(target));
@@ -97,7 +114,7 @@ function worktreeWriteDecision(lease, target) {
 function worktreeResumeDecision(lease) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("Resume");
   if (!lease.canonicalWorktree) return denied("Resume requires an observed worktree.");
-  return incorrectBaselineDecision(lease) || allowed("the bound worktree matches the dispatch baseline.");
+  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed("the bound worktree matches the dispatch baseline.");
 }
 function worktreeCleanupDecision(lease, registeredWorktrees) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("Cleanup");
@@ -119,6 +136,7 @@ function isCanonicalRegisteredWorktree(lease, registeredWorktrees) {
   isCanonicalRegisteredWorktree,
   sameCanonicalPath,
   worktreeCleanupDecision,
+  worktreeCreateDecision,
   worktreeResumeDecision,
   worktreeWriteDecision
 });

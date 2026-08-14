@@ -63,3 +63,10 @@ test('a changed worktree revision cannot write or resume against its dispatch ba
   assert.match(worktree.worktreeWriteDecision(lease, path.join(lease.observedWorktree, 'file.ts')).reason, /dispatch baseline/);
   assert.match(worktree.worktreeResumeDecision(lease).reason, /observed worktree revision/);
 });
+
+test('creation accepts an unbound host worktree but still rejects a baseline mismatch', () => {
+  const lease = terminalLease({ identity: { status: 'unknown' }, phase: 'created' });
+  assert.equal(worktree.worktreeCreateDecision(lease).allowed, true);
+  const changed = terminalLease({ identity: { status: 'unknown' }, phase: 'created', observedRevision: 'b'.repeat(40) });
+  assert.match(worktree.worktreeCreateDecision(changed).reason, /dispatch baseline/);
+});

@@ -30,6 +30,7 @@ __export(kernel_exports, {
   sameCanonicalPath: () => import_worktree.sameCanonicalPath,
   transitionAttempt: () => transitionAttempt,
   worktreeCleanupDecision: () => import_worktree.worktreeCleanupDecision,
+  worktreeCreateDecision: () => import_worktree.worktreeCreateDecision,
   worktreeResumeDecision: () => import_worktree.worktreeResumeDecision,
   worktreeWriteDecision: () => import_worktree.worktreeWriteDecision
 });
@@ -104,6 +105,7 @@ function inlineEligibility(input) {
   sameCanonicalPath,
   transitionAttempt,
   worktreeCleanupDecision,
+  worktreeCreateDecision,
   worktreeResumeDecision,
   worktreeWriteDecision
 });
