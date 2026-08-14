@@ -31,6 +31,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
+const worktreeLease = require('../lib/kernel/worktree.js');
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
@@ -263,6 +264,13 @@ function assertNoRetiredDoctrine(ctx?: any, where?: any) {
 
 function gitFixture(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function completeCheckoutCreation(project: string, sessionId: string, worktree: string): void {
+  const gitDirectoryValue = gitFixture(['rev-parse', '--git-dir'], worktree);
+  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+  worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
 }
 
 test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypass', () => {
@@ -878,10 +886,26 @@ test('pre-tool hook: external linked worktrees preserve helper scope enforcement
   const projectSlug = store.ensureProject(projectPath).slug;
   const ticket = addStopTicket('external helper scope', { files: ['lib/allowed.js'] }, projectSlug);
   const sessionId = `helper-external-${++sqSeq}`;
-  const parent = claimStopTicket(ticket, sessionId, 'helper-external-parent', projectSlug);
-  const assignedWorktree = store.getTicket(projectSlug, ticket.ref).dispatch.worktree;
-  fs.rmSync(assignedWorktree, { recursive: true, force: true });
+  const prepared = store.prepareDispatch(projectSlug, ticket.ref, { allowUnscoped: true, sessionId, sharedTree: false });
+  const agentId = `helper-external-agent-${sqSeq}`;
+  const agentName = `helper-external-parent-${sqSeq}`;
+  assert.equal(store.recordDispatchLaunch(projectSlug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  const assignedWorktree = worktrees.namedWorktreePath(projectPath, agentId);
+  assert.equal(store.bindDispatchWorktreeCreation(projectSlug, sessionId, assignedWorktree).ok, true);
   gitFixture(['worktree', 'add', '--detach', assignedWorktree], projectPath);
+  completeCheckoutCreation(projectSlug, sessionId, assignedWorktree);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName, assignedWorktree).ok, true);
+  assert.equal(store.claimTicket(projectSlug, ticket.ref, 'helper-external-parent', {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  const parent = { session_id: sessionId, agent_type: prepared.ticket.dispatchExecutor, agent_id: agentId, agent_name: agentName };
 
   try {
     const helper = { ...parent, agent_type: 'general-purpose', cwd: assignedWorktree };
@@ -1518,8 +1542,10 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
     agentName: isolatedName,
   }).ok, true);
   const worktree = worktrees.agentWorktreePath(isolatedRoot, agentId);
-  fs.mkdirSync(worktree, { recursive: true });
-  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, isolatedName).ok, true);
+  assert.equal(store.bindDispatchWorktreeCreation(isolatedSlug, sessionId, worktree).ok, true);
+  gitFixture(['worktree', 'add', '--detach', worktree], isolatedRoot);
+  completeCheckoutCreation(isolatedSlug, sessionId, worktree);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, isolatedName, worktree).ok, true);
   assert.strictEqual(runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }), null);
   fs.rmSync(worktree, { recursive: true, force: true });
 
@@ -1876,7 +1902,7 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
 });
 
-test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', () => {
+test('session-end leaves an unbound old patch-equivalent worktree untouched and stays fail-soft', () => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-project-'));
   const worktrees = path.join(project, '.claude', 'worktrees');
   const projectGit = (args: string[], cwd?: string) => execFileSync('git', args, { cwd: cwd || project, encoding: 'utf8', windowsHide: true }).trim();
@@ -1901,9 +1927,12 @@ test('session-end sweeps old patch-equivalent worktrees and stays fail-soft', ()
   store.ensureProject(project);
 
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
-  assert.ok(!fs.existsSync(worktree));
-  assert.equal(projectGit(['branch', '--list', branch]), '');
+  assert.ok(fs.existsSync(worktree));
+  assert.equal(projectGit(['branch', '--list', branch]), `+ ${branch}`);
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
+  projectGit(['worktree', 'remove', '--force', worktree]);
+  projectGit(['branch', '-D', branch]);
+  fs.rmSync(project, { recursive: true, force: true });
 });
 
 
@@ -2506,7 +2535,7 @@ test('session-start preserves the live linked worktree that started the sweep', 
   }
 });
 
-test('session-start sweeps an old removable worktree to completion', () => {
+test('session-start leaves an old unbound worktree untouched', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-'));
   const worktrees = path.join(repo, '.claude', 'worktrees');
   const old = path.join(worktrees, 'agent-session-sweep');
@@ -2529,7 +2558,9 @@ test('session-start sweeps an old removable worktree to completion', () => {
   store.ensureProject(repo);
 
   runHook(SESSION, { session_id: 'session-sweep', source: 'startup', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.ok(!fs.existsSync(old), 'SessionStart awaits the sweep until the worktree is gone');
+  assert.ok(fs.existsSync(old), 'SessionStart must leave an unbound worktree untouched');
+  gitFixture(['worktree', 'remove', '--force', old], repo);
+  fs.rmSync(repo, { recursive: true, force: true });
 });
 
 // The sweep's cost is bimodal, so the hook hands it to a detached worker and waits
@@ -2641,6 +2672,81 @@ test('session-start: SIDEQUEST_NUDGE=off silences it', () => {
   assert.strictEqual(out.trim(), '', 'should emit nothing when nudge is off');
 });
 
+test('worktree-create refuses an unbound request before Git or target mutation', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-unbound-worktree-repo-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Hook Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  store.ensureProject(repo, 'unbound worktree hook');
+  const name = `unknown-${++sqSeq}`;
+  const target = worktrees.namedWorktreePath(repo, name);
+  let stderr = '';
+  assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: `unknown-session-${sqSeq}`, cwd: repo, name }),
+    encoding: 'utf8',
+    env: { ...process.env, GIT_TRACE: '1' },
+  }), (error: any) => {
+    stderr = String(error.stderr || '');
+    return stderr.includes('worktree lease refused creation');
+  });
+  assert.doesNotMatch(stderr, /worktree add/, 'unknown identity must never invoke git worktree add');
+  assert.equal(fs.existsSync(target), false, 'unknown identity must not create the target directory');
+  assert.throws(() => gitFixture(['show-ref', '--verify', `refs/heads/worktree-${name}`], repo));
+});
+
+test('worktree-create refuses a pre-existing same-repository checkout without creation proof', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-existing-worktree-repo-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Hook Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  const project = store.ensureProject(repo, 'existing worktree hook').slug;
+  const category = `existing-worktree-hook-${++sqSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [],
+    worktreeSetup: 'node -e "require(\'node:fs\').writeFileSync(\'provisioned.txt\', \'wrong\')"',
+  });
+  const ticket = store.createTicket(project, { title: 'existing target refusal', category, files: ['tracked.txt'] });
+  const sessionId = `existing-target-${sqSeq}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  const name = `agent-existing-${sqSeq}`;
+  const target = worktrees.namedWorktreePath(repo, name);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  gitFixture(['worktree', 'add', '--detach', target], repo);
+  const originalRevision = gitFixture(['rev-parse', 'HEAD'], target);
+  try {
+    assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: repo, name }),
+      encoding: 'utf8',
+      env: process.env,
+    }), (error: any) => String(error.stderr || '').includes('existed before this dispatch completed its creation'));
+    assert.equal(gitFixture(['rev-parse', 'HEAD'], target), originalRevision);
+    assert.equal(fs.existsSync(path.join(target, 'provisioned.txt')), false);
+    const refusedDispatch = store.getTicket(project, ticket.ref).dispatch;
+    assert.equal(refusedDispatch.worktreeCreationCompletedAt, undefined);
+    assert.equal(refusedDispatch.agentId, undefined);
+  } finally {
+    gitFixture(['worktree', 'remove', '--force', target], repo);
+  }
+});
+
 test('worktree-create provisions configured dependencies before dispatch and removes failed worktrees', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-external-worktree-repo-'));
   gitFixture(['init', '--quiet', '-b', 'main'], repo);
@@ -2656,6 +2762,25 @@ test('worktree-create provisions configured dependencies before dispatch and rem
     worktreeDependencyPaths: [{ path: 'cached-dependency', mode: 'copy' }],
     worktreeSetup: 'node -e "require(\'node:fs\').writeFileSync(\'setup-ready.txt\', \'ready\')"',
   });
+  const category = `worktree-hook-${++sqSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  const launch = (sessionId: string, title: string) => {
+    const ticket = store.createTicket(project, { title, category, files: ['tracked.txt'] });
+    const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+    }).ok, true);
+    return ticket;
+  };
+  const createdTicket = launch('hook-test', 'bound worktree creation');
   const name = 'agent-hook-test';
   const payload = { hook_event_name: 'WorktreeCreate', session_id: 'hook-test', cwd: repo, name };
   const expected = worktrees.namedWorktreePath(repo, name);
@@ -2670,6 +2795,25 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.equal(fs.readFileSync(path.join(first, 'cached-dependency', 'cache.txt'), 'utf8'), 'warm\n');
   assert.equal(fs.readFileSync(path.join(first, 'setup-ready.txt'), 'utf8'), 'ready');
 
+  const createdDispatch = store.getTicket(project, createdTicket.ref).dispatch;
+  runHook(SUBAGENT_START, {
+    hook_event_name: 'SubagentStart',
+    session_id: 'hook-test',
+    agent_type: createdDispatch.executor,
+    agent_id: 'hook-runtime-agent',
+    agent_name: createdDispatch.agentName,
+    cwd: first,
+  });
+  const boundDispatch = store.getTicket(project, createdTicket.ref).dispatch;
+  const gitDirectory = path.resolve(first, gitFixture(['rev-parse', '--git-dir'], first));
+  const commonGitDirectory = path.resolve(first, gitFixture(['rev-parse', '--git-common-dir'], first));
+  assert.equal(boundDispatch.agentId, 'hook-runtime-agent');
+  assert.equal(worktrees.canonicalPath(boundDispatch.worktree), worktrees.canonicalPath(first));
+  assert.equal(worktrees.canonicalPath(boundDispatch.worktreeGitDirectory), worktrees.canonicalPath(gitDirectory));
+  assert.equal(worktrees.canonicalPath(boundDispatch.worktreeCommonGitDirectory), worktrees.canonicalPath(commonGitDirectory));
+  assert.equal(boundDispatch.worktreeCheckoutInstance, worktreeLease.checkoutInstanceIdentity(gitDirectory));
+  assert.equal(boundDispatch.worktreeBindingSource, 'worktree-create');
+
   const second = execFileSync(process.execPath, [WORKTREE_CREATE], {
     input: JSON.stringify(payload), encoding: 'utf8', env: process.env,
   }).trim();
@@ -2678,6 +2822,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   gitFixture(['branch', '-D', `worktree-${name}`], repo);
 
   store.setBoardConfig(project, { worktreeDependencyPaths: [], worktreeSetup: 'exit 1' });
+  launch('hook-failure', 'bound worktree setup failure');
   const failingName = 'agent-hook-failure';
   const failingTarget = worktrees.namedWorktreePath(repo, failingName);
   assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {

@@ -11,6 +11,7 @@ const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFI
 const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require("./worktrees.js");
+const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
@@ -497,6 +498,8 @@ const {
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
+  bindDispatchWorktreeCreation,
+  completeDispatchWorktreeCreation,
   dispatchIsolationExpectation,
   dispatchWorkspace,
   dispatchDelta,
@@ -520,6 +523,11 @@ const {
   integrationTargetCommit,
   spawnDescription,
   claudeQuotaFailure: (...args) => claudeQuotaFailure(...args),
+  canonicalPath,
+  checkoutInstanceIdentity,
+  createWorktreeLease,
+  worktreeResumeDecision,
+  isCanonicalRegisteredWorktree,
   classifyDispatchFailure: (...args) => classifyDispatchFailure(...args),
   terminalAgentFailure: (...args) => terminalAgentFailure(...args),
   SHARED_TREE_ARTIFACT_MARKER,
@@ -1880,6 +1888,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
     if (release) t.release = release;
     if (!dispatch2?.terminalAt || dispatch2.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || "cli", {
+        slug,
         failureShape: opts.failureShape || release?.kind || "unknown",
         releaseKind: release?.kind,
         releaseReason: release?.reason,
@@ -2569,6 +2578,8 @@ module.exports = {
   recordDispatchLaunch,
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
+  bindDispatchWorktreeCreation,
+  completeDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIsolationExpectation,
   activeSharedTreeClaim,

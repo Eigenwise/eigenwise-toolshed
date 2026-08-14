@@ -37,7 +37,9 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const { execFileSync } = require('node:child_process');
 const { stableClaudeName, stableDispatchName, stableReadOnlyClaudeName, stableReadOnlyDispatchName, DIAGNOSTIC_PROBE_NAME } = require('./exec-names.js');
+const { createWorktreeLease, worktreeResumeDecision } = require('./kernel/worktree.js');
 const crypto = require('crypto');
 const store = require('./store.js');
 const { worktreeRoot } = require('./worktrees.js');
@@ -531,9 +533,25 @@ function ticketCloseout(ticket?: any) {
   return `Closeout: this prepared dispatch is write-capable. Commit scoped repo changes, then put the full final report in submit.body with the commit hash and verification execution evidence: changed behavior, named assertion, and empty-state proof for acquisition, install, download, or cache work. Do not post a separate pre-submit final-report comment. Submit writes the short terminal submission marker; do not repeat the report in another comment. For non-repo output, close with done --model ${resolved.runsModel} --effort ${effort}; its completion comment still carries the full report. Then stop without a routine SendMessage.`;
 }
 
+function continuationResumeDecision(continuation?: any) {
+  if (!continuation?.lease) return { allowed: false, reason: 'the continuation has no immutable worktree lease.' };
+  try {
+    const observedRevision = execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd: continuation.lease.observedWorktree,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    return worktreeResumeDecision(createWorktreeLease({ ...continuation.lease, observedRevision }));
+  } catch (_) {
+    return { allowed: false, reason: 'the retained worktree revision could not be observed.' };
+  }
+}
+
 function ticketContinuationPacket(ticket?: any) {
   const continuation = ticket?.dispatch?.continuation;
-  if (continuation?.mode === 'retained_worktree_resume' && continuation.sourceWorktree && continuation.commit) {
+  const resume = continuationResumeDecision(continuation);
+  if (continuation?.mode === 'retained_worktree_resume' && continuation.sourceWorktree && continuation.commit && resume.allowed) {
     const branch = continuation.sourceBranch || '(detached HEAD)';
     return [
       'Continuation handoff:',
@@ -546,7 +564,7 @@ function ticketContinuationPacket(ticket?: any) {
       'Do not cherry-pick the checkpoint or rediscover the checkpointed work.',
     ].join('\n');
   }
-  if (continuation?.mode === 'dirty_worktree_resume' && continuation.sourceWorktree && continuation.commit) {
+  if (continuation?.mode === 'dirty_worktree_resume' && continuation.sourceWorktree && continuation.commit && resume.allowed) {
     return [
       'Continuation handoff:',
       `The previous executor released this same ticket with uncommitted work in retained worktree ${continuation.sourceWorktree}.`,
@@ -556,6 +574,7 @@ function ticketContinuationPacket(ticket?: any) {
       'The board binds this ticket to the retained worktree at claim time. This continuation spawn starts without native worktree isolation so EnterWorktree can enter that retained worktree before any work.',
     ].join('\n');
   }
+  if (continuation && !resume.allowed) return `Continuation fallback: the retained worktree lease refused resume (${resume.reason}). This dispatch uses a fresh worktree.`;
   const fallback = ticket?.dispatch?.continuationFallback;
   if (!fallback?.reason) return null;
   const replay = Array.isArray(fallback.commits) && fallback.commits.length
@@ -649,7 +668,7 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
   if (!worktree) return null;
   const gitDir = sharedTree
     ? path.join(root, '.git')
-    : path.join(root, '.git', 'worktrees', path.basename(worktree));
+    : String(dispatch.worktreeGitDirectory || '').trim() || '(recorded Git directory unavailable)';
   const identity = `Worktree identity: ${sharedTree ? 'shared tree' : 'linked worktree'}\nPath: ${worktree}\nGit dir: ${gitDir}`;
   if (!sharedTree) return identity;
   return [
@@ -672,7 +691,7 @@ function ticketIsolationContract(ticket?: any, projectPath?: any) {
   const root = String(projectPath || '').trim() || '<board project path>';
   const dispatch = ticket.dispatch;
   const continuationWorktree = String(dispatch.continuation?.sourceWorktree || '').trim();
-  const expected = continuationWorktree || String(dispatch.worktree || '').trim() || path.join(worktreeRoot(root), 'agent-<your agent id>');
+  const expected = continuationWorktree || String(dispatch.worktree || '').trim() || '(immutable worktree binding unavailable; writes will be refused)';
   return [[
     'Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.',
     'The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.',

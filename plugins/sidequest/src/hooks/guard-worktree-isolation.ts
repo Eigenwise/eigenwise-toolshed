@@ -1,9 +1,16 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
+
+const leaseKernel = require(runtimeModule('kernel/worktree')) as {
+  canonicalPath: (value: string) => string;
+  createWorktreeLease: (facts: unknown) => unknown;
+  worktreeWriteDecision: (lease: unknown, target: string) => { allowed: boolean; reason: string };
+};
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -11,8 +18,14 @@ interface IsolationExpectation {
   ref: string;
   projectPath: string | null;
   expectedWorktree: string | null;
-  expectedWorktrees?: string[];
+  expectedGitDirectory: string | null;
+  expectedCommonGitDirectory: string | null;
+  expectedCheckoutInstance: string | null;
+  expectedRevision: string | null;
   matchedBy: string;
+  identityBound: boolean;
+  dispatchBaseline: string | null;
+  phase: 'prepared' | 'created' | 'bound' | 'claimed' | 'working' | 'submitted' | 'integrated' | 'terminal';
   sharedTree: boolean;
   terminal: boolean;
 }
@@ -26,19 +39,7 @@ function targetPath(input: Record<string, unknown>): string {
 }
 
 function canonicalPath(value: string): string {
-  let candidate = path.resolve(value);
-  const missing: string[] = [];
-  for (;;) {
-    try {
-      const real = fs.realpathSync.native(candidate);
-      return path.join(real, ...missing.reverse());
-    } catch (_) {
-      const parent = path.dirname(candidate);
-      if (parent === candidate) return path.resolve(value);
-      missing.push(path.basename(candidate));
-      candidate = parent;
-    }
-  }
+  return leaseKernel.canonicalPath(value);
 }
 
 function repoRootFor(target: string): { root: string; linked: boolean } | null {
@@ -66,15 +67,36 @@ function samePath(a: string, b: string): boolean {
   return normalize(a) === normalize(b);
 }
 
-// Sidequest and the harness each provision isolated worktrees under a different
-// root, and an executor may legitimately be in either, so one expected path is
-// not enough to judge by. Falling back to the single path keeps an older store
-// build working (SQ-1546).
-function assignedWorktree(found: IsolationExpectation, actualRoot: string): boolean {
-  const candidates = found.expectedWorktrees?.length
-    ? found.expectedWorktrees
-    : (found.expectedWorktree ? [found.expectedWorktree] : []);
-  return candidates.some((candidate) => samePath(actualRoot, candidate));
+function observedWorktreeLease(found: IsolationExpectation | null, worktree: string, agentId: string) {
+  const git = (args: string[]) => execFileSync('git', args, {
+    cwd: worktree,
+    encoding: 'utf8',
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'ignore'],
+  }).trim();
+  const gitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(worktree, value);
+  const repository = found?.projectPath || worktree;
+  return leaseKernel.createWorktreeLease({
+    repository,
+    gitDirectory: gitPath(git(['rev-parse', '--git-dir'])),
+    commonGitDirectory: gitPath(git(['rev-parse', '--git-common-dir'])),
+    dispatchRef: found?.ref || null,
+    dispatchBaseline: found?.dispatchBaseline || null,
+    observedRevision: git(['rev-parse', '--verify', 'HEAD^{commit}']),
+    observedWorktree: worktree,
+    boundRevision: found?.expectedRevision || null,
+    boundWorktree: found?.sharedTree ? found.projectPath : found?.expectedWorktree || null,
+    boundGitDirectory: found?.sharedTree ? null : found?.expectedGitDirectory || null,
+    boundCommonGitDirectory: found?.sharedTree ? null : found?.expectedCommonGitDirectory || null,
+    boundCheckoutInstance: found?.sharedTree ? null : found?.expectedCheckoutInstance || null,
+    identity: found?.identityBound ? { status: 'bound', agentId } : { status: 'unknown' },
+    phase: found?.terminal ? 'terminal' : found?.phase || 'created',
+    locked: false,
+    liveness: found?.terminal
+      ? { status: 'terminal', evidence: 'the dispatch is terminal' }
+      : found ? { status: 'live', evidence: `dispatch ${found.ref} is active` } : { status: 'unknown', evidence: 'no dispatch matched this agent' },
+    provisioning: 'host',
+  });
 }
 
 function executorAgent(type: string): boolean {
@@ -105,14 +127,9 @@ function expectation(input: Record<string, unknown>, agentId: string, executor: 
 // the ticket, the tree it was promised, the tree it is actually writing to, and
 // the one move that saves the work. Losing the worktree is a platform failure,
 // not executor misbehaviour, so the message must not read like an accusation.
-function expectedWorktree(found: IsolationExpectation, repository: string, agentId: string): string {
-  if (found.expectedWorktree) return found.expectedWorktree;
-  try {
-    const worktrees = require(runtimeModule('worktrees')) as { resolvedAgentWorktree: (repo: string, id: string) => string };
-    return worktrees.resolvedAgentWorktree(repository, agentId || '<agent id>');
-  } catch (_) {
-    return `agent-${agentId || '<agent id>'}`;
-  }
+function expectedWorktree(found: IsolationExpectation): string {
+  if (found.sharedTree && found.projectPath) return found.projectPath;
+  return found.expectedWorktree || '(immutable worktree binding unavailable)';
 }
 
 function boundedText(value: string, limit: number): string {
@@ -139,8 +156,8 @@ function boundedRefusal(summary: string, facts: Array<[string, string]>, recover
   ].join('\n');
 }
 
-function refusal(found: IsolationExpectation, target: string, repoRoot: string, agentId: string, cwd: string): string {
-  const expected = expectedWorktree(found, repoRoot, agentId);
+function refusal(found: IsolationExpectation, target: string, repoRoot: string, cwd: string): string {
+  const expected = expectedWorktree(found);
   const sharedCheckout = `${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ''}`;
   return boundedRefusal(
     `${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
@@ -173,10 +190,18 @@ function projectRefusal(found: IsolationExpectation, target: string): string {
   );
 }
 
-function linkedWorktreeRefusal(found: IsolationExpectation, target: string, actualRoot: string): string {
+function leaseRefusal(found: IsolationExpectation | null, target: string, reason: string): string {
   return boundedRefusal(
-    `${found.ref} is writing through a different linked worktree.`,
-    [['expected worktree', found.expectedWorktree || '(unavailable)'], ['actual worktree', actualRoot], ['writing to', target]],
+    `${found?.ref || 'This executor'} has no write lease for the observed worktree.`,
+    [['writing to', target], ['lease decision', reason]],
+    'Do not work around this. Stop writing and ask the orchestrator to redispatch the ticket.',
+  );
+}
+
+function linkedWorktreeLeaseRefusal(found: IsolationExpectation, target: string, actualRoot: string, reason: string): string {
+  return boundedRefusal(
+    `${found.ref} has no write lease for this linked worktree.`,
+    [['expected worktree', found.expectedWorktree || '(unavailable)'], ['actual worktree', actualRoot], ['writing to', target], ['lease decision', reason]],
     'Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket.',
   );
 }
@@ -198,20 +223,27 @@ function main(): void {
   const repo = repoRootFor(target);
   if (!repo) return;
   if (!found) {
-    if (!repo.linked) writeDeny('PreToolUse', unknownRefusal(target));
+    try {
+      const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);
+      if (!decision.allowed) writeDeny('PreToolUse', unknownRefusal(target));
+    } catch (_) {
+      writeDeny('PreToolUse', unknownRefusal(target));
+    }
     return;
   }
-  if (found.sharedTree) return;
-  if (repo.linked) {
-    if (assignedWorktree(found, repo.root)) return;
-    writeDeny('PreToolUse', linkedWorktreeRefusal(found, target, repo.root));
-    return;
+  try {
+    const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(found, repo.root, agentId), target);
+    if (!decision.allowed) {
+      const message = !found.sharedTree && repo.linked
+        ? linkedWorktreeLeaseRefusal(found, target, repo.root, decision.reason)
+        : !found.sharedTree
+          ? refusal(found, target, repo.root, stringField(input, 'cwd'))
+          : leaseRefusal(found, target, decision.reason);
+      writeDeny('PreToolUse', message);
+    }
+  } catch (_) {
+    writeDeny('PreToolUse', leaseRefusal(found, target, 'the observed Git facts could not hydrate a lease.'));
   }
-  if (found.projectPath && !samePath(found.projectPath, repo.root)) {
-    writeDeny('PreToolUse', projectRefusal(found, target));
-    return;
-  }
-  writeDeny('PreToolUse', refusal(found, target, repo.root, agentId, stringField(input, 'cwd')));
 }
 
 try {

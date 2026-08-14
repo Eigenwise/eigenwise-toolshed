@@ -4,7 +4,7 @@ function unscopedWriteCannotAutoApprove(ticket, options) {
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   const DISPATCH_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
   const DISPATCH_TOKEN_CHARS = 32;
   const DISPATCH_TOKEN_GROUP_SIZE = 4;
@@ -399,10 +399,18 @@ function createDispatch(dependencies) {
   function attemptCommit(ticket, opts) {
     return opts?.commit || ticket?.checkpoint?.commit || ticket?.submission?.commit || null;
   }
+  function captureTerminalWorktreeRevision(slug, state, at) {
+    if (!slug || state?.sharedTree !== false || !state.worktree || !state.worktreeGitDirectory || !state.worktreeCommonGitDirectory) return;
+    const facts = immutableWorktreeFacts(slug, state.worktree);
+    if (!facts || facts.worktree !== canonicalPath(state.worktree) || facts.gitDirectory !== canonicalPath(state.worktreeGitDirectory) || facts.commonGitDirectory !== canonicalPath(state.worktreeCommonGitDirectory) || facts.checkoutInstance !== String(state.worktreeCheckoutInstance || "")) return;
+    state.terminalWorktreeRevision = facts.revision;
+    state.terminalWorktreeObservedAt = at;
+  }
   function setDispatchTerminal(ticket, outcome, source, opts) {
     const state = dispatchState(ticket);
     if (!state) return;
     const at = (/* @__PURE__ */ new Date()).toISOString();
+    captureTerminalWorktreeRevision(opts?.slug, state, at);
     const release = opts?.releaseKind ? {
       kind: opts.releaseKind,
       reason: opts.releaseReason || null,
@@ -608,13 +616,6 @@ function createDispatch(dependencies) {
     const gitBashPath = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(input) : null;
     return gitBashPath ? `${gitBashPath[1]}:${input.slice(2)}` : input;
   }
-  function canonicalFilesystemPath(value) {
-    const resolved = fs.realpathSync.native(path.resolve(nativeGitPath(value)));
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  }
-  function canonicalGitDirectory(repository, directory) {
-    return canonicalFilesystemPath(path.resolve(String(repository || ""), nativeGitPath(directory)));
-  }
   function gitOutput(root, args) {
     return execFileSync("git", args || [], {
       cwd: root,
@@ -624,16 +625,7 @@ function createDispatch(dependencies) {
     }).trim();
   }
   function registeredWorktrees(repository) {
-    return gitOutput(repository, ["worktree", "list", "--porcelain"]).split(/\r?\n\r?\n/).map((entry) => /^worktree\s+(.+)$/m.exec(entry)?.[1]).filter((worktree) => Boolean(worktree)).map((worktree) => canonicalFilesystemPath(worktree));
-  }
-  function registeredAgentWorktree(repository, agentId) {
-    const expectedName = `agent-${String(agentId || "").trim()}`;
-    if (expectedName === "agent-") return null;
-    try {
-      return registeredWorktrees(repository).find((worktree) => path.basename(worktree).toLowerCase() === expectedName.toLowerCase()) || null;
-    } catch (_) {
-      return null;
-    }
+    return gitOutput(repository, ["worktree", "list", "--porcelain"]).split(/\r?\n\r?\n/).map((entry) => /^worktree\s+(.+)$/m.exec(entry)?.[1]).filter((worktree) => Boolean(worktree)).map((worktree) => canonicalPath(worktree));
   }
   function gitFailureEvidence(error) {
     return String(error?.stderr || error?.message || error || "unknown Git error").replace(/\s+/g, " ").trim().slice(0, 1e3);
@@ -644,6 +636,28 @@ function createDispatch(dependencies) {
       ...worktree ? { sourceWorktree: String(worktree) } : {},
       ...details && typeof details === "object" ? details : {}
     };
+  }
+  function gitDirectory(repository, directory) {
+    const value = nativeGitPath(directory);
+    return canonicalPath(path.isAbsolute(value) ? value : path.resolve(String(repository || ""), value));
+  }
+  function immutableWorktreeFacts(slug, candidate) {
+    const projectPath = String(readMeta(slug)?.path || "").trim();
+    const supplied = String(candidate || "").trim();
+    if (!projectPath || !supplied) return null;
+    try {
+      const repository = canonicalPath(gitOutput(projectPath, ["rev-parse", "--show-toplevel"]));
+      const worktree = canonicalPath(gitOutput(supplied, ["rev-parse", "--show-toplevel"]));
+      const gitDirectoryPath = gitDirectory(worktree, gitOutput(worktree, ["rev-parse", "--git-dir"]));
+      const commonGitDirectory = gitDirectory(worktree, gitOutput(worktree, ["rev-parse", "--git-common-dir"]));
+      const repositoryGitDirectory = gitDirectory(repository, gitOutput(repository, ["rev-parse", "--git-common-dir"]));
+      const checkoutInstance = checkoutInstanceIdentity(gitDirectoryPath);
+      if (commonGitDirectory !== repositoryGitDirectory || gitDirectoryPath === commonGitDirectory || !checkoutInstance) return null;
+      const revision = gitOutput(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      return { repository, worktree, gitDirectory: gitDirectoryPath, commonGitDirectory, checkoutInstance, revision };
+    } catch (_) {
+      return null;
+    }
   }
   function releasedContinuationState(slug, ticket, state) {
     if (!state || state.outcome !== "released" || !state.terminalAt || state.sharedTree !== false) return null;
@@ -656,21 +670,45 @@ function createDispatch(dependencies) {
     const checkpointCommit = String(attempt?.commit || "").trim();
     let worktree = recordedWorktree;
     try {
-      const projectPath = String(readMeta(slug)?.path || "").trim();
-      const projectRoot = canonicalFilesystemPath(gitOutput(projectPath, ["rev-parse", "--show-toplevel"]));
-      worktree = canonicalFilesystemPath(gitOutput(recordedWorktree, ["rev-parse", "--show-toplevel"]));
-      const projectGitDirectory = canonicalGitDirectory(projectRoot, gitOutput(projectRoot, ["rev-parse", "--git-common-dir"]));
-      const worktreeGitDirectory = canonicalGitDirectory(worktree, gitOutput(worktree, ["rev-parse", "--git-common-dir"]));
-      if (projectGitDirectory !== worktreeGitDirectory) {
-        return { fallback: continuationFallback("released_worktree_belongs_to_another_repository", worktree) };
+      const recordedGitDirectory = String(state.worktreeGitDirectory || "").trim();
+      const recordedCommonGitDirectory = String(state.worktreeCommonGitDirectory || "").trim();
+      const recordedCheckoutInstance = String(state.worktreeCheckoutInstance || "").trim();
+      const recordedRevision = String(state.terminalWorktreeRevision || "").trim();
+      const worktreeFacts = immutableWorktreeFacts(slug, recordedWorktree);
+      if (!worktreeFacts || !recordedGitDirectory || !recordedCommonGitDirectory || !recordedCheckoutInstance || !recordedRevision) {
+        return { fallback: continuationFallback("released_worktree_identity_unavailable", recordedWorktree) };
       }
-      if (!registeredWorktrees(projectRoot).includes(worktree)) {
+      worktree = worktreeFacts.worktree;
+      const observedRevision = worktreeFacts.revision;
+      const leaseFacts = {
+        repository: worktreeFacts.repository,
+        gitDirectory: worktreeFacts.gitDirectory,
+        commonGitDirectory: worktreeFacts.commonGitDirectory,
+        dispatchRef: String(ticket?.ref || "") || null,
+        dispatchBaseline: String(state.baseCommit || "").trim() || null,
+        observedRevision,
+        observedWorktree: worktree,
+        boundRevision: recordedRevision,
+        boundWorktree: recordedWorktree,
+        boundGitDirectory: recordedGitDirectory,
+        boundCommonGitDirectory: recordedCommonGitDirectory,
+        boundCheckoutInstance: recordedCheckoutInstance,
+        identity: state.agentId ? { status: "bound", agentId: String(state.agentId) } : { status: "unknown" },
+        phase: "terminal",
+        locked: false,
+        liveness: { status: "terminal", evidence: "released at " + state.terminalAt },
+        provisioning: "host"
+      };
+      const lease = createWorktreeLease(leaseFacts);
+      if (!isCanonicalRegisteredWorktree(lease, registeredWorktrees(worktreeFacts.repository))) {
         return { fallback: continuationFallback("released_worktree_is_not_registered", worktree) };
       }
-      const baseCommit = gitOutput(worktree, ["rev-parse", "--verify", `${state.baseCommit}^{commit}`]);
-      const commit = gitOutput(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]);
-      gitOutput(worktree, ["merge-base", "--is-ancestor", baseCommit, commit]);
-      const commits = gitOutput(worktree, ["rev-list", "--reverse", `${baseCommit}..${commit}`, "--"]).split(/\r?\n/).filter(Boolean);
+      const resume = worktreeResumeDecision(lease);
+      if (!resume.allowed) {
+        return { fallback: continuationFallback("released_worktree_lease_refused", worktree, { cause: resume.reason }) };
+      }
+      const baseCommit = gitOutput(worktree, ["rev-parse", "--verify", String(state.baseCommit) + "^{commit}"]);
+      const commits = gitOutput(worktree, ["rev-list", "--reverse", baseCommit + ".." + observedRevision, "--"]).split(/\r?\n/).filter(Boolean);
       let sourceBranch = null;
       try {
         sourceBranch = gitOutput(worktree, ["symbolic-ref", "--quiet", "--short", "HEAD"]) || null;
@@ -685,25 +723,20 @@ function createDispatch(dependencies) {
               sourceWorktree: worktree,
               sourceBranch,
               baseCommit,
-              commit,
+              commit: observedRevision,
               clean: false,
               releasedAt: state.terminalAt,
-              releaseKind: attempt?.release?.kind || "release"
+              releaseKind: attempt?.release?.kind || "release",
+              lease: leaseFacts
             }
           };
         }
-        return {
-          fallback: continuationFallback("released_worktree_is_dirty", worktree, {
-            sourceBranch,
-            commit,
-            commits
-          })
-        };
+        return { fallback: continuationFallback("released_worktree_is_dirty", worktree, { sourceBranch, commit: observedRevision, commits }) };
       }
       if (!checkpointCommit && !["handback", "oracle"].includes(attempt?.release?.kind)) {
         return { fallback: continuationFallback("release_has_no_checkpoint_or_handback", worktree) };
       }
-      if (checkpointCommit && gitOutput(worktree, ["rev-parse", "--verify", `${checkpointCommit}^{commit}`]) !== commit) {
+      if (checkpointCommit && checkpointCommit !== observedRevision) {
         return { fallback: continuationFallback("checkpoint_is_not_worktree_head", worktree) };
       }
       if (!commits.length) return { fallback: continuationFallback("released_worktree_has_no_committed_progress", worktree) };
@@ -715,19 +748,16 @@ function createDispatch(dependencies) {
           sourceWorktree: worktree,
           sourceBranch,
           baseCommit,
-          commit,
+          commit: observedRevision,
           commits,
           clean: true,
           releasedAt: state.terminalAt,
-          releaseKind: attempt?.release?.kind || (checkpointCommit ? "checkpoint" : "handback")
+          releaseKind: attempt?.release?.kind || (checkpointCommit ? "checkpoint" : "handback"),
+          lease: leaseFacts
         }
       };
     } catch (error) {
-      return {
-        fallback: continuationFallback("released_worktree_git_state_is_unreadable", worktree, {
-          cause: gitFailureEvidence(error)
-        })
-      };
+      return { fallback: continuationFallback("released_worktree_git_state_is_unreadable", worktree, { cause: gitFailureEvidence(error) }) };
     }
   }
   function worktreeBaseIntegrationTarget(slug, worktreeBase, repository, branch) {
@@ -923,7 +953,12 @@ function createDispatch(dependencies) {
         declaredFiles,
         ...!sharedTree && releasedContinuation?.continuation ? {
           continuation: releasedContinuation.continuation,
-          worktree: releasedContinuation.continuation.sourceWorktree
+          worktree: releasedContinuation.continuation.sourceWorktree,
+          worktreeGitDirectory: releasedContinuation.continuation.lease.boundGitDirectory,
+          worktreeCommonGitDirectory: releasedContinuation.continuation.lease.boundCommonGitDirectory,
+          worktreeCheckoutInstance: releasedContinuation.continuation.lease.boundCheckoutInstance,
+          worktreeObservedRevision: releasedContinuation.continuation.lease.boundRevision,
+          worktreeBindingSource: "continuation"
         } : {},
         ...releasedContinuation?.fallback ? { continuationFallback: releasedContinuation.fallback } : {},
         ...sharedTree && releasedContinuation?.continuation ? { continuationFallback: continuationFallback("continuation_checkpoint_requires_isolated_worktree", releasedContinuation.continuation.sourceWorktree) } : {},
@@ -1167,6 +1202,86 @@ function createDispatch(dependencies) {
       return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
     });
   }
+  function dispatchCreationCandidate(state, sessionId) {
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt && !state.worktree && !state.continuation?.sourceWorktree);
+  }
+  function bindDispatchWorktreeCreation(slug, sessionId, worktree) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const target = String(worktree || "").trim();
+    const meta = readMeta(slug);
+    if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: "missing_binding_facts" };
+    const repository = canonicalPath(meta.path);
+    const boundWorktree = canonicalPath(target);
+    for (const candidate of listTickets(slug)) {
+      const state = dispatchState(candidate);
+      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+      const baseline = String(state.baseCommit || "").trim();
+      if (baseline) return {
+        ok: true,
+        ref: candidate.ref,
+        baseline,
+        repository,
+        worktree: boundWorktree,
+        creationCompleted: Boolean(state.worktreeCreationCompletedAt),
+        expectedGitDirectory: state.worktreeGitDirectory || null,
+        expectedCommonGitDirectory: state.worktreeCommonGitDirectory || null,
+        expectedCheckoutInstance: state.worktreeCheckoutInstance || null,
+        expectedRevision: state.worktreeObservedRevision || null
+      };
+    }
+    for (const candidate of listTickets(slug)) {
+      if (!dispatchCreationCandidate(dispatchState(candidate), normalizedSessionId)) continue;
+      const result = withTicketLock(slug, candidate.id, () => {
+        const ticket = getTicket(slug, candidate.id);
+        const state = dispatchState(ticket);
+        if (!dispatchCreationCandidate(state, normalizedSessionId)) return { ok: false, reason: "already_bound" };
+        const baseline = String(state.baseCommit || "").trim();
+        if (!baseline) return { ok: false, reason: "baseline_unavailable" };
+        state.worktree = boundWorktree;
+        state.worktreeBindingSource = "worktree-create";
+        state.worktreeBoundAt = (/* @__PURE__ */ new Date()).toISOString();
+        stampDispatchEvent(ticket, "worktree-create-binding", state.worktreeBoundAt);
+        putTicket(slug, ticket);
+        return { ok: true, ref: ticket.ref, baseline, repository, worktree: boundWorktree };
+      });
+      if (result?.ok) return result;
+    }
+    return { ok: false, reason: "dispatch_binding_unavailable" };
+  }
+  function completeDispatchWorktreeCreation(slug, sessionId, worktree) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const target = String(worktree || "").trim();
+    if (!normalizedSessionId || !target) return { ok: false, reason: "missing_binding_facts" };
+    const boundWorktree = canonicalPath(target);
+    for (const candidate of listTickets(slug)) {
+      const state = dispatchState(candidate);
+      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+      return withTicketLock(slug, candidate.id, () => {
+        const ticket = getTicket(slug, candidate.id);
+        const current = dispatchState(ticket);
+        if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false || current.outcome !== "launched" || current.terminalAt || current.worktreeBindingSource !== "worktree-create" || !current.worktree || canonicalPath(current.worktree) !== boundWorktree) {
+          return { ok: false, reason: "dispatch_binding_unavailable" };
+        }
+        const facts = immutableWorktreeFacts(slug, boundWorktree);
+        if (!facts) return { ok: false, reason: "invalid_worktree_binding" };
+        const baseline = String(current.baseCommit || "").trim();
+        if (!baseline || facts.revision !== baseline) return { ok: false, reason: "worktree_revision_mismatch" };
+        if (current.worktreeCreationCompletedAt) {
+          const unchanged = canonicalPath(String(current.worktreeGitDirectory || "")) === facts.gitDirectory && canonicalPath(String(current.worktreeCommonGitDirectory || "")) === facts.commonGitDirectory && String(current.worktreeCheckoutInstance || "") === facts.checkoutInstance && String(current.worktreeObservedRevision || "") === facts.revision;
+          return unchanged ? { ok: true, alreadyCompleted: true } : { ok: false, reason: "worktree_identity_mismatch" };
+        }
+        current.worktreeGitDirectory = facts.gitDirectory;
+        current.worktreeCommonGitDirectory = facts.commonGitDirectory;
+        current.worktreeCheckoutInstance = facts.checkoutInstance;
+        current.worktreeObservedRevision = facts.revision;
+        current.worktreeCreationCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
+        stampDispatchEvent(ticket, "worktree-create-complete", current.worktreeCreationCompletedAt);
+        putTicket(slug, ticket);
+        return { ok: true, alreadyCompleted: false };
+      });
+    }
+    return { ok: false, reason: "dispatch_binding_unavailable" };
+  }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();
     const executor = String(identity?.executor || "").trim();
@@ -1186,7 +1301,14 @@ function createDispatch(dependencies) {
           sharedTree: state.sharedTree !== false,
           terminal: terminalWithoutClaim,
           agentId: state.agentId ? String(state.agentId) : null,
-          worktree: state.worktree ? String(state.worktree) : null
+          worktree: state.worktree ? String(state.worktree) : null,
+          worktreeGitDirectory: state.worktreeGitDirectory ? String(state.worktreeGitDirectory) : null,
+          worktreeCommonGitDirectory: state.worktreeCommonGitDirectory ? String(state.worktreeCommonGitDirectory) : null,
+          worktreeCheckoutInstance: state.worktreeCheckoutInstance ? String(state.worktreeCheckoutInstance) : null,
+          worktreeObservedRevision: state.worktreeObservedRevision ? String(state.worktreeObservedRevision) : null,
+          worktreeBindingSource: state.worktreeBindingSource ? String(state.worktreeBindingSource) : null,
+          baseCommit: state.baseCommit ? String(state.baseCommit) : null,
+          phase: state.terminalAt ? "terminal" : state.outcome === "claimed" ? "claimed" : "bound"
         };
         if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
         else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor) {
@@ -1204,11 +1326,15 @@ function createDispatch(dependencies) {
       sharedTree: matched.some((candidate) => candidate.sharedTree),
       terminal: matched.some((candidate) => candidate.terminal),
       matchedBy: byAgent.length ? "agent" : "session",
-      expectedWorktree: agentId && expectation.projectPath ? expectation.worktree || resolvedAgentWorktree(expectation.projectPath, agentId) : null,
-      expectedWorktrees: agentId && expectation.projectPath ? Array.from(/* @__PURE__ */ new Set([
-        ...expectation.worktree ? [expectation.worktree] : [],
-        ...agentWorktreeCandidates(expectation.projectPath, agentId)
-      ])) : []
+      identityBound: Boolean(agentId && expectation.agentId === agentId),
+      dispatchBaseline: expectation.baseCommit,
+      phase: expectation.phase,
+      expectedWorktree: expectation.worktree,
+      expectedGitDirectory: expectation.worktreeGitDirectory,
+      expectedCommonGitDirectory: expectation.worktreeCommonGitDirectory,
+      expectedCheckoutInstance: expectation.worktreeCheckoutInstance,
+      expectedRevision: expectation.worktreeObservedRevision,
+      worktreeBindingSource: expectation.worktreeBindingSource
     };
   }
   function dispatchWorkspace(slug, ticket) {
@@ -1219,8 +1345,8 @@ function createDispatch(dependencies) {
     if (state.sharedTree !== false) return baseCommit ? { root: projectPath, base: baseCommit } : null;
     const agentId = String(state.agentId || "").trim();
     if (!agentId) return null;
-    const root = String(state.worktree || "").trim() || agentWorktreePath(projectPath, agentId);
-    if (!fs.existsSync(root)) return null;
+    const root = String(state.worktree || "").trim();
+    if (!root || !fs.existsSync(root)) return null;
     let base = baseCommit;
     if (!base) {
       try {
@@ -1292,14 +1418,21 @@ function createDispatch(dependencies) {
       agentName: state.agentName || null
     };
   }
-  function recordDispatchRuntimeIdentity(slug, state, agentId, agentName, now) {
+  function recordDispatchRuntimeIdentity(slug, state, agentId, agentName, now, worktreeFacts) {
+    if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts && (state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== worktreeFacts.worktree)) return false;
+    if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts && state.worktreeCreationCompletedAt && (canonicalPath(String(state.worktreeGitDirectory || "")) !== worktreeFacts.gitDirectory || canonicalPath(String(state.worktreeCommonGitDirectory || "")) !== worktreeFacts.commonGitDirectory || String(state.worktreeCheckoutInstance || "") !== worktreeFacts.checkoutInstance || String(state.worktreeObservedRevision || "") !== worktreeFacts.revision)) return false;
     if (agentId) state.agentId = agentId;
     if (agentName) state.agentName = agentName;
-    if (state.sharedTree === false && agentId && !state.continuation?.sourceWorktree) {
-      const projectPath = readMeta(slug)?.path;
-      if (projectPath) state.worktree = registeredAgentWorktree(projectPath, agentId) || agentWorktreePath(projectPath, agentId);
+    if (state.sharedTree === false && !state.continuation?.sourceWorktree && worktreeFacts) {
+      state.worktree = worktreeFacts.worktree;
+      state.worktreeGitDirectory = worktreeFacts.gitDirectory;
+      state.worktreeCommonGitDirectory = worktreeFacts.commonGitDirectory;
+      state.worktreeCheckoutInstance = worktreeFacts.checkoutInstance;
+      state.worktreeObservedRevision = worktreeFacts.revision;
+      state.worktreeBoundAt = state.worktreeBoundAt || now || (/* @__PURE__ */ new Date()).toISOString();
     }
     state.boundAt = state.boundAt || now || (/* @__PURE__ */ new Date()).toISOString();
+    return true;
   }
   function bindDispatchClaimToken(state, attempt, sessionId, executor, now) {
     const normalizedSessionId = String(sessionId || "").trim();
@@ -1313,11 +1446,12 @@ function createDispatch(dependencies) {
     state.bindSource = "claim_token";
     return boundAttempt;
   }
-  function bindDispatchAgent(sessionId, executor, agentId, agentName) {
+  function bindDispatchAgent(sessionId, executor, agentId, agentName, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const normalizedExecutor = String(executor || "").trim();
     const normalizedAgentId = String(agentId || "").trim();
     const normalizedAgentName = String(agentName || "").trim();
+    const normalizedWorktree = String(worktree || "").trim();
     if (!normalizedSessionId || !normalizedExecutor || !normalizedAgentId && !normalizedAgentName) {
       return { ok: false, reason: "missing_identity" };
     }
@@ -1334,14 +1468,23 @@ function createDispatch(dependencies) {
     }
     const tickets = [];
     for (const match of matches) {
+      const worktreeFacts = match.sharedTree === false && normalizedWorktree ? immutableWorktreeFacts(match.slug, normalizedWorktree) : null;
       const result = withTicketLock(match.slug, match.id, () => {
         const t = getTicket(match.slug, match.id);
         const state = dispatchState(t);
         if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) {
           return { ok: false };
         }
+        if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && (state.worktreeBindingSource !== "worktree-create" || !state.worktree)) {
+          return { ok: false, reason: "worktree_binding_unavailable" };
+        }
+        if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && !worktreeFacts) {
+          return { ok: false, reason: "invalid_worktree_binding" };
+        }
         const now = (/* @__PURE__ */ new Date()).toISOString();
-        recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
+        if (!recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now, worktreeFacts)) {
+          return { ok: false, reason: "worktree_binding_mismatch" };
+        }
         const lifecycle = t.lifecycleAttempt || state.lifecycleAttempt;
         const launchedAttempt = lifecycle?.state === "prepared" ? transitionAttempt(lifecycle, "launch") : lifecycle;
         const boundAttempt = launchedAttempt?.state === "launched" ? transitionAttempt(launchedAttempt, "bind") : launchedAttempt;
@@ -1355,7 +1498,7 @@ function createDispatch(dependencies) {
         putTicket(match.slug, t);
         return { ok: true, ticket: t };
       });
-      if (!result || !result.ok) return { ok: false, reason: "not_found" };
+      if (!result || !result.ok) return { ok: false, reason: result?.reason || "not_found" };
       tickets.push(result.ticket);
     }
     return { ok: true, ticket: tickets[0], tickets };
@@ -1499,6 +1642,8 @@ function createDispatch(dependencies) {
     recordDispatchLaunch,
     recordDispatchAgentFailure,
     recoverDispatchQuotaFailure,
+    bindDispatchWorktreeCreation,
+    completeDispatchWorktreeCreation,
     dispatchIsolationExpectation,
     dispatchWorkspace,
     dispatchDelta,

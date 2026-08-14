@@ -420,6 +420,8 @@ test('a released no-op dispatch closes after its isolated worktree disappears', 
   const claimed = store.getTicket(slug, ticket.ref);
   claimed.dispatch.sharedTree = false;
   claimed.dispatch.agentId = agentId;
+  claimed.dispatch.worktree = worktrees.canonicalPath(worktree);
+  claimed.dispatch.worktreeBindingSource = 'worktree-create';
   persist(claimed);
   assert.equal(store.addComment(slug, ticket.ref, {
     by: 'no-op-release-executor',
@@ -862,6 +864,8 @@ test('a missing isolated worktree is death evidence without a terminal dispatch 
   assert.equal(store.recordDispatchLaunch(slug, missing.ref, {
     token: missingPrepared.token, executor: missingPrepared.ticket.dispatchExecutor, sessionId: missingSession, agentName: missingAgent,
   }).ok, true);
+  const missingWorktree = worktrees.agentWorktreePath(PROJECT_DIR, missingAgent);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, missingSession, missingWorktree).ok, true);
   assert.equal(store.bindDispatchAgent(missingSession, missingPrepared.ticket.dispatchExecutor, missingAgent, missingAgent).ok, true);
   assert.equal(store.claimTicket(slug, missing.ref, 'missing-isolated-executor', {
     token: missingPrepared.token, executor: missingPrepared.ticket.dispatchExecutor, sessionId: missingSession,
@@ -879,6 +883,8 @@ test('a missing isolated worktree is death evidence without a terminal dispatch 
   assert.equal(store.recordDispatchLaunch(slug, live.ref, {
     token: livePrepared.token, executor: livePrepared.ticket.dispatchExecutor, sessionId: liveSession, agentName: liveAgent,
   }).ok, true);
+  const liveWorktree = worktrees.agentWorktreePath(PROJECT_DIR, liveAgent);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, liveSession, liveWorktree).ok, true);
   assert.equal(store.bindDispatchAgent(liveSession, livePrepared.ticket.dispatchExecutor, liveAgent, liveAgent).ok, true);
   assert.equal(store.claimTicket(slug, live.ref, 'quiet-isolated-executor', {
     token: livePrepared.token, executor: livePrepared.ticket.dispatchExecutor, sessionId: liveSession,

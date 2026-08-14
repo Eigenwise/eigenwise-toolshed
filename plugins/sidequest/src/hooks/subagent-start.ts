@@ -46,9 +46,10 @@ function main(): void {
   if (classification.kind === 'unknown') return;
   try {
     const store = require(runtimeModule('store')) as {
-      bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null) => unknown;
+      bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null, worktree: string | null) => unknown;
     };
-    store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
+    const worktree = stringField(data, 'cwd', 'project_dir', 'projectDir');
+    store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null, worktree || null);
   } catch (_) {
   }
   const warning = diagnosticWorktreeWarning(data);

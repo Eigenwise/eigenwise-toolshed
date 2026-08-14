@@ -35,12 +35,19 @@ execFileSync('git', ['commit', '--quiet', '-m', 'seed fixture'], { cwd: PROJECT 
 
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
+const worktreeLease = require('../lib/kernel/worktree.js');
 const agentsync = require('../lib/agentsync.js');
 const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
 const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
 const slug = store.ensureProject(PROJECT).slug;
+
+function markCheckoutInstance(worktree: string): void {
+  const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+  worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+}
 
 store.setCategory({
   id: 'dispatch.lifecycle',
@@ -513,7 +520,7 @@ test('shared-tree agents bind by name before SubagentStop supplies their id', ()
   assert.equal(dispatch.terminalSource, terminalSource);
 });
 
-test('SubagentStop backfills identity and worktree for an isolated dispatch missed at start', () => {
+test('SubagentStop backfills identity but never invents a worktree binding', () => {
   const ticket = createFixture('isolated stop fallback fixture');
   const sessionId = `isolated-stop-${Date.now()}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
@@ -547,7 +554,7 @@ test('SubagentStop backfills identity and worktree for an isolated dispatch miss
   assert.deepEqual(dispatchBindingCounts([ticket.ref]), { launched: 1, unbound: 0, noAgentId: 0 });
   assert.equal(dispatch.agentId, agentId);
   assert.ok(dispatch.boundAt);
-  assert.equal(dispatch.worktree, worktrees.agentWorktreePath(PROJECT, agentId));
+  assert.equal(dispatch.worktree, undefined);
   assert.equal(dispatch.outcome, 'claimed');
   assert.ok(dispatch.turnEndedAt);
 });
@@ -724,8 +731,10 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
     executor,
     agentName: 'complete-lifecycle-worker',
   }).ok, true);
+  const worktree = worktrees.agentWorktreePath(PROJECT, 'native-complete-agent');
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
   assert.equal(store.bindDispatchAgent(sessionId, executor, 'native-complete-agent', 'complete-lifecycle-worker').ok, true);
-  const worktree = store.getTicket(slug, ticket.ref).dispatch.worktree;
+  assert.equal(worktrees.canonicalPath(store.getTicket(slug, ticket.ref).dispatch.worktree), worktrees.canonicalPath(worktree));
   fs.mkdirSync(worktree, { recursive: true });
   let pulse = store.pulsePayload(slug, ticket.ref);
   assert.equal(pulse.dispatch.state, 'bound');
@@ -1125,6 +1134,29 @@ test('release and submission clear retain structured rework attempts', () => {
   assert.equal(Object.hasOwn(after.reworkEvents[1], 'submission'), false);
 });
 
+test('creation bindings reserve one launched dispatch each within a shared session', () => {
+  const sessionId = `creation-allocation-${Date.now()}`;
+  const tickets = [createFixture('first creation allocation'), createFixture('second creation allocation')];
+  for (const [index, ticket] of tickets.entries()) {
+    const dispatch = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: dispatch.token,
+      executor: dispatch.ticket.dispatchExecutor,
+      agentName: `creation-allocation-${index}`,
+    }).ok, true);
+  }
+  const targets = tickets.map((_, index) => path.join(SIDEQUEST_HOME, 'worktrees', `creation-allocation-${Date.now()}-${index}`));
+  const bindings = targets.map((target) => store.bindDispatchWorktreeCreation(slug, sessionId, target));
+  assert.equal(bindings.every((binding: any) => binding.ok), true);
+  assert.deepEqual(new Set(bindings.map((binding: any) => binding.ref)), new Set(tickets.map((ticket) => ticket.ref)));
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, targets[0]).ref, bindings[0].ref);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, path.join(SIDEQUEST_HOME, 'worktrees', 'creation-allocation-extra')).reason, 'dispatch_binding_unavailable');
+  for (let index = 0; index < tickets.length; index += 1) {
+    assert.equal(store.releaseTicket(slug, tickets[index].ref, `creation-allocation-${index}`, { status: 'todo', source: 'test', force: true }).ok, true);
+  }
+});
+
 test('ordinary isolated dispatches preserve native worktree isolation', () => {
   const ticket = createFixture('ordinary isolation fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `ordinary-isolation-${Date.now()}` });
@@ -1153,7 +1185,6 @@ test('released handbacks carry registered native worktrees into continuation dis
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
-  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
   try {
     assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
       sessionId,
@@ -1161,7 +1192,10 @@ test('released handbacks carry registered native worktrees into continuation dis
       executor,
       agentName: agentId,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
     assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-worker', {
       sessionId,
@@ -1178,11 +1212,13 @@ test('released handbacks carry registered native worktrees into continuation dis
       releaseKind: 'handback',
       releaseReason: 'Continue verification in another executor.',
     }).ok, true);
-    const releasedAt = store.getTicket(slug, ticket.ref).dispatch.terminalAt;
+    const releasedDispatch = store.getTicket(slug, ticket.ref).dispatch;
+    const releasedAt = releasedDispatch.terminalAt;
 
     const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
     continued.ticket.dispatch.integrationTarget = { mode: 'local', branch: 'main' };
-    assert.deepEqual(continued.ticket.dispatch.continuation, {
+    const { lease, ...continuation } = continued.ticket.dispatch.continuation;
+    assert.deepEqual(continuation, {
       mode: 'retained_worktree_resume',
       ticketRef: ticket.ref,
       sourceWorktree: worktree,
@@ -1194,6 +1230,11 @@ test('released handbacks carry registered native worktrees into continuation dis
       releasedAt,
       releaseKind: 'handback',
     }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
+    assert.equal(lease.dispatchBaseline, prepared.ticket.dispatch.baseCommit);
+    assert.equal(lease.observedRevision, checkpoint);
+    assert.equal(lease.boundRevision, checkpoint);
+    assert.equal(lease.boundGitDirectory, releasedDispatch.worktreeGitDirectory);
+    assert.equal(lease.boundCommonGitDirectory, releasedDispatch.worktreeCommonGitDirectory);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     const spawn = agentsync.agentSpawn(
       continued.ticket.dispatch.launchName,
@@ -1240,6 +1281,63 @@ test('released handbacks carry registered native worktrees into continuation dis
   }
 });
 
+test('continuation refuses a same-path replacement linked checkout', () => {
+  const ticket = createFixture('continuation replacement fixture');
+  const sessionId = `continuation-replacement-${Date.now()}`;
+  const agentId = `continuation-replacement-${Date.now()}`;
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-replacement-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 8;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
+    execFileSync('git', ['commit', '--quiet', '-m', 'replacement checkpoint'], { cwd: worktree });
+    const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-replacement-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+    }).ok, true);
+    const releasedDispatch = store.getTicket(slug, ticket.ref).dispatch;
+    assert.equal(releasedDispatch.terminalWorktreeRevision, checkpoint);
+    const boundGitDirectory = worktrees.canonicalPath(releasedDispatch.worktreeGitDirectory);
+
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['worktree', 'add', '--detach', worktree, checkpoint], { cwd: PROJECT });
+    const replacementGitDirectory = worktrees.canonicalPath(path.resolve(worktree, execFileSync('git', ['rev-parse', '--git-dir'], {
+      cwd: worktree,
+      encoding: 'utf8',
+    }).trim()));
+    assert.equal(replacementGitDirectory, boundGitDirectory);
+
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    assert.equal(continued.ticket.dispatch.continuation, undefined);
+    assert.equal(continued.ticket.dispatch.continuationFallback.reason, 'released_worktree_identity_unavailable');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'continuation-replacement-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    try { execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT }); } catch (_) {}
+  }
+});
+
 test('dirty released worktrees without commits resume in place for a continuation', () => {
   const ticket = createFixture('dirty continuation fixture');
   const sessionId = `dirty-continuation-${Date.now()}`;
@@ -1249,7 +1347,6 @@ test('dirty released worktrees without commits resume in place for a continuatio
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
-  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
   try {
     assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
       sessionId,
@@ -1257,7 +1354,10 @@ test('dirty released worktrees without commits resume in place for a continuatio
       executor,
       agentName: agentId,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-continuation-worker', {
       sessionId,
       token: prepared.token,
@@ -1317,7 +1417,6 @@ test('dirty released worktrees with checkpoints fall back to cherry-picking the 
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
-  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
   try {
     assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
       sessionId,
@@ -1325,7 +1424,10 @@ test('dirty released worktrees with checkpoints fall back to cherry-picking the 
       executor,
       agentName: agentId,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-checkpoint-worker', {
       sessionId,
       token: prepared.token,
@@ -1375,7 +1477,6 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   const prepared = store.prepareDispatch(aliasSlug, ticket.ref, { sessionId });
   const executor = prepared.ticket.dispatchExecutor;
-  execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
   try {
     assert.equal(store.recordDispatchLaunch(aliasSlug, ticket.ref, {
       sessionId,
@@ -1383,7 +1484,10 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
       executor,
       agentName: agentId,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(aliasSlug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    markCheckoutInstance(worktree);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(aliasSlug, ticket.ref, 'continuation-short-path-worker', {
       sessionId,
       token: prepared.token,
@@ -1420,7 +1524,7 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
   }
 });
 
-test('reclaiming an unclaimed isolated dispatch removes its untouched worktree and branch', () => {
+test('reclaiming an unclaimed isolated dispatch preserves its unknown lease', () => {
   const ticket = createFixture('reclaim unclaimed isolated worktree');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `reclaim-unclaimed-${Date.now()}` });
   const agentId = `reclaim-unclaimed-agent-${ticket.id}`;
@@ -1428,17 +1532,21 @@ test('reclaiming an unclaimed isolated dispatch removes its untouched worktree a
   const branch = `worktree-agent-${agentId}`;
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
   execFileSync('git', ['worktree', 'add', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit], { cwd: PROJECT });
+  markCheckoutInstance(worktree);
   try {
     const reclaimed = worktrees.reclaimUnclaimedDispatchWorktree(PROJECT, {
       sharedTree: false,
       worktree,
       baseCommit: prepared.ticket.dispatch.baseCommit,
     });
-    assert.equal(reclaimed.reclaimed, true);
-    assert.equal(fs.existsSync(worktree), false);
-    assert.throws(() => execFileSync('git', ['rev-parse', '--verify', branch], { cwd: PROJECT }), /fatal/);
+    assert.equal(reclaimed.reclaimed, false);
+    assert.equal(reclaimed.reason, 'lease_refused');
+    assert.equal(fs.existsSync(worktree), true);
+    assert.equal(execFileSync('git', ['rev-parse', '--verify', branch], { cwd: PROJECT, encoding: 'utf8' }).trim().length > 0, true);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'reclaim-unclaimed-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    try { execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT }); } catch (_) {}
   }
 });
 
@@ -1813,17 +1921,19 @@ test('a prepared dispatch records the commit its run starts from, and where its 
   assert.equal(prepared.ticket.dispatch.baseCommit, head);
 
   assert.equal(store.dispatchWorkspace(slug, prepared.ticket), null, 'an unbound isolated dispatch has no locatable worktree');
+  const worktree = worktrees.agentWorktreePath(PROJECT, 'a923baseline');
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
     sessionId: 'baseline-session',
     agentName: 'baseline-agent',
   }).ok, true);
-  assert.equal(store.bindDispatchAgent('baseline-session', prepared.ticket.dispatchExecutor, 'a923baseline', 'baseline-agent').ok, true);
-  const worktree = worktrees.agentWorktreePath(PROJECT, 'a923baseline');
-  assert.equal(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), null, 'a worktree that is not there is not a workspace');
+  assert.equal(store.bindDispatchWorktreeCreation(slug, 'baseline-session', worktree).ok, true);
+  assert.equal(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), null, 'a bound worktree that is not there is not a workspace');
   execFileSync('git', ['worktree', 'add', '--quiet', '-b', 'agent-a923baseline', worktree, 'HEAD'], { cwd: PROJECT });
-  assert.deepEqual(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), { root: worktree, base: head });
+  markCheckoutInstance(worktree);
+  assert.equal(store.bindDispatchAgent('baseline-session', prepared.ticket.dispatchExecutor, 'a923baseline', 'baseline-agent', worktree).ok, true);
+  assert.deepEqual(store.dispatchWorkspace(slug, store.getTicket(slug, ticket.ref)), { root: worktrees.canonicalPath(worktree), base: head });
 
   const shared = createFixture('shared-tree dispatch baseline');
   const preparedShared = store.prepareDispatch(slug, shared.ref, { sharedTree: true });

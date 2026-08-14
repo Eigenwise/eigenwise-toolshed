@@ -20,13 +20,22 @@ var kernel_exports = {};
 __export(kernel_exports, {
   ATTEMPT_TRANSITIONS: () => ATTEMPT_TRANSITIONS,
   attemptDiagnostic: () => attemptDiagnostic,
+  canonicalPath: () => import_worktree.canonicalPath,
+  createWorktreeLease: () => import_worktree.createWorktreeLease,
   inlineEligibility: () => inlineEligibility,
+  isCanonicalRegisteredWorktree: () => import_worktree.isCanonicalRegisteredWorktree,
   prepareAttempt: () => prepareAttempt,
   prepareDirectAttempt: () => prepareDirectAttempt,
   reduceAttempt: () => reduceAttempt,
-  transitionAttempt: () => transitionAttempt
+  sameCanonicalPath: () => import_worktree.sameCanonicalPath,
+  transitionAttempt: () => transitionAttempt,
+  worktreeCleanupDecision: () => import_worktree.worktreeCleanupDecision,
+  worktreeCreateDecision: () => import_worktree.worktreeCreateDecision,
+  worktreeResumeDecision: () => import_worktree.worktreeResumeDecision,
+  worktreeWriteDecision: () => import_worktree.worktreeWriteDecision
 });
 module.exports = __toCommonJS(kernel_exports);
+var import_worktree = require("./worktree.js");
 const ATTEMPT_TRANSITIONS = {
   prepared: { launch: "launched", bind_claim_token: "bound", claim_direct: "claimed", release: "released" },
   launched: { bind: "bound", bind_claim_token: "bound", release: "released" },
@@ -86,9 +95,17 @@ function inlineEligibility(input) {
 0 && (module.exports = {
   ATTEMPT_TRANSITIONS,
   attemptDiagnostic,
+  canonicalPath,
+  createWorktreeLease,
   inlineEligibility,
+  isCanonicalRegisteredWorktree,
   prepareAttempt,
   prepareDirectAttempt,
   reduceAttempt,
-  transitionAttempt
+  sameCanonicalPath,
+  transitionAttempt,
+  worktreeCleanupDecision,
+  worktreeCreateDecision,
+  worktreeResumeDecision,
+  worktreeWriteDecision
 });
