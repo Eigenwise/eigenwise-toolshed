@@ -4,7 +4,7 @@ function unscopedWriteCannotAutoApprove(ticket, options) {
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
   const DISPATCH_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
   const DISPATCH_TOKEN_CHARS = 32;
   const DISPATCH_TOKEN_GROUP_SIZE = 4;
@@ -77,9 +77,13 @@ function createDispatch(dependencies) {
       const state = dispatchState(ticket);
       const dispatchingSessionId = String(state?.preparedBy?.sessionId || "").trim();
       if (!ticket?.claim?.by || !state || state.terminalAt || state.sessionId !== callerSessionId || dispatchingSessionId === callerSessionId || claimReclaimable(ticket)) continue;
-      return `dispatch: dispatch is orchestrator-owned while you hold ${ticket.ref}. File the follow-up with \`add\`, link it to ${ticket.ref}, report the new ref in your submission comment, and the orchestrator will dispatch it.`;
+      return `dispatch: refused while you hold ${ticket.ref}. Executors cannot dispatch child tickets. Record the follow-up on ${ticket.ref}; the orchestration session must dispatch it.`;
     }
     return null;
+  }
+  function sharedTreeRuntimeRefusal(ticket, projectPath, runtimeCwd) {
+    if (!runtimeCwd || !staleWorktreeCwdWarning(runtimeCwd, projectPath, true)) return null;
+    return `prepare dispatch: refused ${ticket.ref}; sharedTree:true requires the spawning runtime to be rooted in the declared project checkout. This runtime is an isolated linked worktree. Record the follow-up on the owning ticket; the orchestration session must dispatch it.`;
   }
   function dispatchPreparationAttribution(opts) {
     return {
@@ -859,6 +863,19 @@ function createDispatch(dependencies) {
         });
       }
       const priorTokenFile = dispatchTokenFile(t);
+      const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
+      const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t.files)])) : effectiveScope(slug, t.files);
+      const readonly = dispatchReadOnly(t);
+      const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
+      const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
+      const readOnlySharedCheckout = readonly && effectiveFiles.length === 0 && !sharedTreeArtifactRequested(t) && !explicitIsolation;
+      const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
+      let sharedTree = worktreeIsolation ? requestedSharedTree || readOnlySharedCheckout : true;
+      const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
+      const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null;
+      if (worktreeWarning) sharedTree = true;
+      const runtimeRefusal = sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
+      if (runtimeRefusal) throw new Error(runtimeRefusal);
       t.dispatchNonce = mintDispatchToken();
       if (priorTokenFile) {
         try {
@@ -867,18 +884,6 @@ function createDispatch(dependencies) {
           if (error?.code !== "ENOENT") throw error;
         }
       }
-      const releasedBinding = current?.outcome === "released" && Array.isArray(current.declaredFiles) && current.declaredFiles.length ? current.declaredFiles.slice() : null;
-      const effectiveFiles = releasedBinding ? Array.from(/* @__PURE__ */ new Set([...releasedBinding, ...effectiveScope(slug, t.files)])) : effectiveScope(slug, t.files);
-      const readonly = dispatchReadOnly(t);
-      const reviewAuditSharedCheckout = !Object.hasOwn(opts, "sharedTree") && ticketCategory(t) === "review-audit";
-      const requestedSharedTree = opts.sharedTree === true || reviewAuditSharedCheckout || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
-      const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
-      const readOnlySharedCheckout = readonly && effectiveFiles.length === 0 && !sharedTreeArtifactRequested(t) && !explicitIsolation;
-      const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
-      let sharedTree = worktreeIsolation ? requestedSharedTree || readOnlySharedCheckout : true;
-      const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
-      const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null;
-      if (worktreeWarning) sharedTree = true;
       const category = getCategory(ticketCategory(t), { project: slug });
       const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
       const artifactMode = Boolean(artifactRoot);
@@ -1462,6 +1467,7 @@ function createDispatch(dependencies) {
     dispatchTokenPrefix,
     dispatchState,
     executorClaimDispatchRefusal,
+    sharedTreeRuntimeRefusal,
     sharedTreeArtifactRequested,
     categoryArtifactRoot,
     sharedTreeArtifactMode,

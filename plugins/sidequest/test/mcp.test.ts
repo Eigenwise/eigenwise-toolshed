@@ -3095,7 +3095,7 @@ test('native_agent refuses an executor-held claim instead of opening a second sp
   try {
     await assert.rejects(
       () => callHandler('native_agent', { ref: subordinate.ref, prompt: 'Implement the ticket.' }),
-      /dispatch is orchestrator-owned while you hold SQ-\d+\. File the follow-up with `add`, link it to SQ-\d+, report the new ref in your submission comment, and the orchestrator will dispatch it/,
+      /dispatch: refused while you hold SQ-\d+\. Executors cannot dispatch child tickets\. Record the follow-up on SQ-\d+; the orchestration session must dispatch it/,
     );
   } finally {
     process.env.CLAUDE_CODE_SESSION_ID = originalSessionId;

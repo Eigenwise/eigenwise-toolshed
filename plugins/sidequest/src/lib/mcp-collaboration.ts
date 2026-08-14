@@ -266,13 +266,13 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'dispatch',
-    description: 'Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. A new adopting-session dispatch rotates the token and returns a current spawn. Claims require the returned token and executor. If Claude Code refuses an isolated worktree spawn, re-dispatch with sharedTree:true: its spawn omits isolation, avoiding the harness validator. Choose it deliberately, and run only one shared-tree executor at a time.',
+    description: 'Prepare a token-gated dispatch. It returns a stable executor spawn spec and token. Shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout. Executors with a live claim cannot dispatch child tickets; record the follow-up and let the orchestration session dispatch it.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
         project: PROJECT_PROP,
-        sharedTree: { type: 'boolean', description: 'Use shared checkout. Omit for zero-scope read-only; false isolates. If Claude Code refuses an isolated spawn, set true deliberately: the spawn omits isolation. Run one shared-tree executor at a time.' },
+        sharedTree: { type: 'boolean', description: 'Use the declared shared checkout only when the spawning runtime is already rooted there. Executors with a live claim cannot use this to dispatch child work.' },
         allowRepeatFailure: { type: 'boolean' },
         allowUnscoped: { type: 'boolean', description: 'Explicitly allow a write ticket with no declared file scope.' },
         integrationBranch: { type: 'string' },
@@ -290,6 +290,7 @@ const tools: ToolDefinition[] = [
       const sessionId = requireDispatchSession();
       const prepared = store.prepareDispatch(slug, args.ref, {
         sessionId,
+        runtimeCwd: process.cwd(),
         ...(Object.hasOwn(args, 'sharedTree') ? { sharedTree: args.sharedTree === true } : {}),
         allowRepeatFailure: args.allowRepeatFailure === true,
         allowUnscoped: args.allowUnscoped === true,
@@ -357,7 +358,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         prompt: { type: 'string', description: 'The bounded ticket-execution prompt augmented with stored anchors and verify command.' },
         session: { type: 'string' },
-        sharedTree: { type: 'boolean', description: 'Use shared checkout. Omit for zero-scope read-only; false isolates. If Claude Code refuses an isolated spawn, set true deliberately: the spawn omits isolation. Run one shared-tree executor at a time.' },
+        sharedTree: { type: 'boolean', description: 'Use the declared shared checkout only when the spawning runtime is already rooted there. Executors with a live claim cannot use this to dispatch child work.' },
       },
       required: ['ref', 'prompt'],
     },
@@ -384,6 +385,8 @@ const tools: ToolDefinition[] = [
       const explicitIsolation = Object.hasOwn(args, 'sharedTree') && args.sharedTree === false;
       const zeroScopeReadOnly = store.dispatchReadOnly(ticket) && store.effectiveScope(slug, ticket.files).length === 0;
       const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || args.sharedTree === true || (zeroScopeReadOnly && !explicitIsolation);
+      const runtimeRefusal = sharedTree ? store.sharedTreeRuntimeRefusal(ticket, meta.path, process.cwd()) : null;
+      if (runtimeRefusal) throw new Error(runtimeRefusal);
       const created = agentsync.createNativeAgent({
         ref: ticket.ref,
         agentType: resolved.agent || `sidequest-exec-${route.effort || 'low'}`,

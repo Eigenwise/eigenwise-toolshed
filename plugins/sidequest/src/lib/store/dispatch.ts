@@ -8,7 +8,7 @@ function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -89,9 +89,14 @@ function executorClaimDispatchRefusal(slug?: any, sessionId?: any) {
     const state = dispatchState(ticket);
     const dispatchingSessionId = String(state?.preparedBy?.sessionId || '').trim();
     if (!ticket?.claim?.by || !state || state.terminalAt || state.sessionId !== callerSessionId || dispatchingSessionId === callerSessionId || claimReclaimable(ticket)) continue;
-    return `dispatch: dispatch is orchestrator-owned while you hold ${ticket.ref}. File the follow-up with \`add\`, link it to ${ticket.ref}, report the new ref in your submission comment, and the orchestrator will dispatch it.`;
+    return `dispatch: refused while you hold ${ticket.ref}. Executors cannot dispatch child tickets. Record the follow-up on ${ticket.ref}; the orchestration session must dispatch it.`;
   }
   return null;
+}
+
+function sharedTreeRuntimeRefusal(ticket?: any, projectPath?: any, runtimeCwd?: any) {
+  if (!runtimeCwd || !staleWorktreeCwdWarning(runtimeCwd, projectPath, true)) return null;
+  return `prepare dispatch: refused ${ticket.ref}; sharedTree:true requires the spawning runtime to be rooted in the declared project checkout. This runtime is an isolated linked worktree. Record the follow-up on the owning ticket; the orchestration session must dispatch it.`;
 }
 
 function dispatchPreparationAttribution(opts?: any) {
@@ -975,10 +980,6 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       });
     }
     const priorTokenFile = dispatchTokenFile(t);
-    t.dispatchNonce = mintDispatchToken();
-    if (priorTokenFile) {
-      try { fs.unlinkSync(priorTokenFile); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
-    }
     // A released dispatch hands its binding to the next attempt so a
     // continuation keeps the same worktree scope. An EMPTY released binding
     // must not be inherited: it pinned the first attempt's missing scope onto
@@ -995,9 +996,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t.files)]))
       : effectiveScope(slug, t.files);
     const readonly = dispatchReadOnly(t);
-    const reviewAuditSharedCheckout = !Object.hasOwn(opts, 'sharedTree') && ticketCategory(t) === 'review-audit';
     const requestedSharedTree = opts.sharedTree === true
-      || reviewAuditSharedCheckout
       || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
     const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;
     const readOnlySharedCheckout = readonly
@@ -1011,6 +1010,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ? 'Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately.'
       : (!sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null);
     if (worktreeWarning) sharedTree = true;
+    const runtimeRefusal = sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
+    if (runtimeRefusal) throw new Error(runtimeRefusal);
+    t.dispatchNonce = mintDispatchToken();
+    if (priorTokenFile) {
+      try { fs.unlinkSync(priorTokenFile); } catch (error: any) { if (error?.code !== 'ENOENT') throw error; }
+    }
     const category = getCategory(ticketCategory(t), { project: slug });
     const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t)
       ? categoryArtifactRoot(category, effectiveFiles[0])
@@ -1656,6 +1661,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     dispatchTokenPrefix,
     dispatchState,
     executorClaimDispatchRefusal,
+    sharedTreeRuntimeRefusal,
     sharedTreeArtifactRequested,
     categoryArtifactRoot,
     sharedTreeArtifactMode,

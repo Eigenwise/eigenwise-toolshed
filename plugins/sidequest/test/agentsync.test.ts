@@ -934,9 +934,9 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(shared.includes('Worktree identity: shared tree'));
   assert.ok(shared.includes(`Path: ${root}`));
   assert.ok(shared.includes(`Git dir: ${path.join(root, '.git')}`));
-  assert.ok(shared.includes(`Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale linked worktree outside ${root}.`));
-  assert.ok(shared.includes('Before any git or file operation, `cd "' + root + '"` and confirm `git rev-parse --show-toplevel` prints `' + root + '`.'));
-  assert.match(shared, /If it still differs after cd, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
+  assert.ok(shared.includes(`Dispatch admission verified the spawning runtime was rooted in ${root}.`));
+  assert.ok(shared.includes('Before any git or file operation, confirm `git rev-parse --show-toplevel` prints `' + root + '`.'));
+  assert.match(shared, /If it differs, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
 });
 
 test('stale worktree cwd warnings identify dispatch-specific consequences', () => {

@@ -465,6 +465,7 @@ const MANUAL_VERIFY_PREFIX = "manual:";
 const {
   dispatchTokenPrefix,
   executorClaimDispatchRefusal,
+  sharedTreeRuntimeRefusal,
   sharedTreeArtifactRequested,
   categoryArtifactRoot,
   sharedTreeArtifactMode,
@@ -573,6 +574,7 @@ const {
   resolveCategoryRoute: (...args) => resolveCategoryRoute(...args),
   resolveExec: (...args) => resolveExec(...args),
   stableExecutorName,
+  staleWorktreeCwdWarning: (...args) => staleWorktreeCwdWarning(...args),
   storyExecutionContract: (...args) => storyExecutionContract(...args),
   ticketCategory: (...args) => ticketCategory(...args),
   ticketStorageRow,
@@ -1490,6 +1492,19 @@ function lifecycleAttemptFromFacts(ticket, authority, purpose, direct) {
   if (diagnostic) throw new Error(`lifecycle refused ${ticket.ref}: ${diagnostic.message}`);
   return current;
 }
+function liveRuntimeClaim(slug, ticket, by) {
+  const claimant = String(by || "").trim();
+  if (!claimant) return null;
+  for (const project of listProjects({ all: true })) {
+    for (const candidate of listTickets(project.slug)) {
+      const dispatch2 = dispatchState(candidate);
+      if (project.slug === slug && candidate.id === ticket?.id) continue;
+      if (!candidate.claim?.by || candidate.claim.by !== claimant || candidate.status === "done" || !dispatch2 || dispatch2.terminalAt || claimReclaimable(candidate)) continue;
+      return candidate;
+    }
+  }
+  return null;
+}
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
   by = String(by || "agent");
@@ -1553,6 +1568,16 @@ function claimTicket(slug, idOrRef, by, opts) {
     const held2 = t2.claim;
     if (held2 && held2.by && held2.by !== by && !claimReclaimable(t2) && !opts.force) {
       return { ok: false, reason: "claimed", ticket: t2, claim: held2 };
+    }
+    const runtimeClaim = !opts.direct && !opts.force ? liveRuntimeClaim(slug, t2, by) : null;
+    if (runtimeClaim) {
+      return {
+        ok: false,
+        reason: "runtime_claimed",
+        ticket: t2,
+        claim: runtimeClaim.claim,
+        message: `claim: refused ${t2.ref}; this runtime already holds ${runtimeClaim.ref}. One runtime may hold one live ticket claim. The orchestration session must dispatch any review or follow-up.`
+      };
     }
     const claimRuntime = currentDispatch ? {
       sessionId: currentDispatch.sessionId || opts.sessionId || null,
@@ -2543,6 +2568,7 @@ module.exports = {
   dispatchReadOnly,
   stableExecutorName,
   executorClaimDispatchRefusal,
+  sharedTreeRuntimeRefusal,
   prepareDispatch,
   readDispatchBriefing,
   dispatchTokenForRequest,

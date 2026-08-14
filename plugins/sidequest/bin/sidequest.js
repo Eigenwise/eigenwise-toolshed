@@ -403,7 +403,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport]  prepare a token-gated dispatch: declared-file tickets use worktrees unless shared state or bounded artifact output is explicit; --allow-unscoped explicitly accepts a write ticket can block before submission; CLI transport refuses unless --unverified-transport (does not prove any session gets the board MCP); use the board MCP dispatch tool instead
+  sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport]  prepare a token-gated dispatch: declared-file tickets use worktrees by default; shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout; executors with a live claim cannot dispatch child work
   sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]  print the current token-gated executor briefing
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]  return an already-registered native Agent spawn spec + bounded prompt; CLI transport refuses unless --unverified-transport
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition

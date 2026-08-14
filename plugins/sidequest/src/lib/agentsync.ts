@@ -654,9 +654,9 @@ function ticketWorktreeIdentity(ticket?: any, projectPath?: any) {
   if (!sharedTree) return identity;
   return [
     identity,
-    `Working directory binding: your inherited shell cwd is wherever the spawning session ran and may be a stale linked worktree outside ${root}.`,
-    `Before any git or file operation, \`cd "${root}"\` and confirm \`git rev-parse --show-toplevel\` prints \`${root}\`.`,
-    'If it still differs after cd, stop and report to the orchestrator. Do not release or write anything in the wrong tree.',
+    `Dispatch admission verified the spawning runtime was rooted in ${root}.`,
+    `Before any git or file operation, confirm \`git rev-parse --show-toplevel\` prints \`${root}\`.`,
+    'If it differs, stop and report to the orchestrator. Do not release or write anything in the wrong tree.',
   ].join('\n');
 }
 

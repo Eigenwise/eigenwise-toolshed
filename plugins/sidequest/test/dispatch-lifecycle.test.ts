@@ -63,7 +63,7 @@ function createFixture(title?: any, category = 'dispatch.lifecycle') {
   });
 }
 
-test('executors cannot prepare a subordinate dispatch while the orchestrator can', () => {
+test('executors cannot prepare a shared-tree child dispatch while the orchestrator can', () => {
   const executorSessionId = `executor-dispatch-guard-${Date.now()}`;
   const orchestratorSessionId = `orchestrator-dispatch-guard-${Date.now()}`;
   const held = createFixture('executor-held dispatch guard');
@@ -76,14 +76,44 @@ test('executors cannot prepare a subordinate dispatch while the orchestrator can
 
   const subordinate = createFixture('subordinate dispatch guard');
   assert.throws(
-    () => store.prepareDispatch(slug, subordinate.ref, { sessionId: executorSessionId }),
-    /dispatch is orchestrator-owned while you hold SQ-\d+\. File the follow-up with `add`, link it to SQ-\d+, report the new ref in your submission comment, and the orchestrator will dispatch it/,
+    () => store.prepareDispatch(slug, subordinate.ref, { sessionId: executorSessionId, sharedTree: true }),
+    new RegExp(`dispatch: refused while you hold ${held.ref}\\. Executors cannot dispatch child tickets`),
   );
+  assert.equal(store.getTicket(slug, subordinate.ref).dispatchNonce, null);
 
-  const orchestrated = store.prepareDispatch(slug, subordinate.ref, { sessionId: orchestratorSessionId });
+  const orchestrated = store.prepareDispatch(slug, subordinate.ref, { sessionId: orchestratorSessionId, sharedTree: true, runtimeCwd: PROJECT });
   assert.equal(orchestrated.ok, true);
+  assert.equal(orchestrated.ticket.dispatch.sharedTree, true);
   assert.equal(store.releaseTicket(slug, held.ref, 'executor-dispatch-guard', { status: 'todo', source: 'test' }).ok, true);
   assert.equal(store.releaseTicket(slug, subordinate.ref, 'orchestrator-dispatch-guard', { force: true, status: 'todo', source: 'test' }).ok, true);
+});
+
+test('shared-tree admission requires the project checkout while artifacts remain orchestrator-dispatchable', () => {
+  const linkedWorktree = path.join(os.tmpdir(), `sq-shared-tree-runtime-${Date.now()}`);
+  execFileSync('git', ['worktree', 'add', '--detach', linkedWorktree, 'HEAD'], { cwd: PROJECT });
+  try {
+    const rejected = createFixture('shared-tree linked runtime rejection');
+    assert.throws(
+      () => store.prepareDispatch(slug, rejected.ref, { sharedTree: true, runtimeCwd: linkedWorktree }),
+      /sharedTree:true requires the spawning runtime to be rooted in the declared project checkout/,
+    );
+    assert.equal(store.getTicket(slug, rejected.ref).dispatchNonce, null);
+
+    store.setCategory({ id: 'shared-tree-artifact', name: 'Shared tree artifact', route: { model: 'sonnet', effort: 'high' }, artifactRoots: ['tracked.js'] });
+    const artifact = store.createTicket(slug, {
+      title: 'orchestrator shared-tree artifact',
+      category: 'shared-tree-artifact',
+      description: store.SHARED_TREE_ARTIFACT_MARKER,
+      files: ['tracked.js'],
+      source: 'test',
+    });
+    const prepared = store.prepareDispatch(slug, artifact.ref, { sharedTree: true, runtimeCwd: PROJECT });
+    assert.equal(prepared.ticket.dispatch.sharedTree, true);
+    assert.equal(prepared.ticket.dispatch.artifactMode, true);
+    assert.equal(store.releaseTicket(slug, artifact.ref, 'shared-tree-artifact-cleanup', { force: true, status: 'todo', source: 'test' }).ok, true);
+  } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linkedWorktree], { cwd: PROJECT });
+  }
 });
 
 function windowsShortPathAlias(directory = '') {
@@ -315,10 +345,10 @@ test('dispatched claim release records one terminal lifecycle state', () => {
   assert.equal(released.dispatch.lifecycleAttempt.state, 'released');
 });
 
-test('token claims independently bind every concurrently launched isolated dispatch', () => {
-  const first = createFixture('first token binding fixture');
-  const second = createFixture('second token binding fixture');
-  const sessionId = `token-binding-${Date.now()}`;
+test('one runtime cannot claim two isolated dispatches at once', () => {
+  const first = createFixture('first runtime claim fixture');
+  const second = createFixture('second runtime claim fixture');
+  const sessionId = `runtime-claim-${Date.now()}`;
   const prepared = [
     store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: false }),
     store.prepareDispatch(slug, second.ref, { sessionId, sharedTree: false }),
@@ -329,26 +359,32 @@ test('token claims independently bind every concurrently launched isolated dispa
       sessionId,
       token: launch.token,
       executor: launch.ticket.dispatchExecutor,
-      agentName: `token-binding-worker-${launch.ticket.id}`,
+      agentName: `runtime-claim-worker-${launch.ticket.id}`,
     }).ok, true);
   }
 
-  for (const [index, launch] of prepared.entries()) {
-    assert.equal(store.claimTicket(slug, launch.ticket.ref, `token-binding-worker-${index}`, {
-      sessionId,
-      token: launch.token,
-      executor: launch.ticket.dispatchExecutor,
-      requireBoundAgent: true,
-    }).ok, true);
-  }
-
-  for (const launch of prepared) {
-    const dispatch = store.getTicket(slug, launch.ticket.ref).dispatch;
-    assert.equal(dispatch.bindSource, 'claim_token');
-    assert.equal(dispatch.sessionId, sessionId);
-    assert.ok(dispatch.boundAt);
-    assert.equal(dispatch.outcome, 'claimed');
-  }
+  assert.equal(store.claimTicket(slug, first.ref, 'runtime-claim-worker', {
+    sessionId,
+    token: prepared[0].token,
+    executor: prepared[0].ticket.dispatchExecutor,
+    requireBoundAgent: true,
+  }).ok, true);
+  const refused = store.claimTicket(slug, second.ref, 'runtime-claim-worker', {
+    sessionId,
+    token: prepared[1].token,
+    executor: prepared[1].ticket.dispatchExecutor,
+    requireBoundAgent: true,
+  });
+  assert.equal(refused.reason, 'runtime_claimed');
+  assert.match(refused.message, new RegExp(`already holds ${first.ref}`));
+  assert.equal(store.releaseTicket(slug, first.ref, 'runtime-claim-worker', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.claimTicket(slug, second.ref, 'runtime-claim-worker', {
+    sessionId,
+    token: prepared[1].token,
+    executor: prepared[1].ticket.dispatchExecutor,
+    requireBoundAgent: true,
+  }).ok, true);
+  assert.equal(store.releaseTicket(slug, second.ref, 'runtime-claim-worker', { status: 'todo', source: 'test' }).ok, true);
 });
 
 test('launched dispatches without an executor identity, claim, or checkpoint are stalled', () => {
@@ -551,15 +587,16 @@ test('zero-scope read-only dispatches use the shared checkout without a worktree
   assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
-test('review-audit dispatches default to the shared checkout while explicit isolation wins', () => {
-  const ticket = createFixture('review shared checkout default', 'review-audit');
+test('review-audit dispatches inspect immutable commits from isolated worktrees by default', () => {
+  const ticket = createFixture('review isolated checkout default', 'review-audit');
   const prepared = store.prepareDispatch(slug, ticket.ref);
-  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+  assert.equal(prepared.ticket.dispatch.sharedTree, false);
+  assert.equal(agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree), 'worktree');
 
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'review-shared-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
-  const isolated = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
-  assert.equal(isolated.ticket.dispatch.sharedTree, false);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'review-isolated-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  const explicitlyShared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, runtimeCwd: PROJECT });
+  assert.equal(explicitlyShared.ticket.dispatch.sharedTree, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'review-shared-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('read-only category classes dispatch through restricted stable executors', () => {
