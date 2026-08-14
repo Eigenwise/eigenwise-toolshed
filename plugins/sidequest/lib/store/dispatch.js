@@ -886,6 +886,8 @@ function createDispatch(dependencies) {
       const launchSeq = nextDispatchLaunchSeq(current);
       const story = t.storyId ? getStory(slug, t.storyId) : null;
       const contract = storyExecutionContract(story);
+      const storyLogRevision = Number(story?.logRevision) || 0;
+      t.storyLogSeenSeq = storyLogRevision;
       const contractDrift = t.storyContractDrift || null;
       const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
       const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "origin-main";
@@ -955,6 +957,7 @@ function createDispatch(dependencies) {
         ...unboundAttemptsSkipped ? { unboundAttemptsSkipped: true } : {},
         ...fallbackReason ? { fallbackReason } : {},
         storyContract: contract,
+        storyLogRevision,
         ...contractDrift ? { storyContractDrift: Object.assign({}, contractDrift, { rebasedAt: now }) } : {},
         preparedAt: now,
         launchedAt: null,

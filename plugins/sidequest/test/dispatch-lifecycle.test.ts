@@ -1967,4 +1967,50 @@ test('dispatch tokens accept case and separator normalization but reject transpo
   assert.match(claimRefusalMessage('token', ticket.ref), /Re-read the grouped lowercase token/);
 });
 
+test('story membership records the current decision-log revision', () => {
+  const story = store.createStory(slug, { title: 'Story membership revision' });
+  store.appendStoryLogEntry(slug, story.ref, { by: 'orchestrator', entry: 'DECISION: creation baseline' });
+  const ticket = store.createTicket(slug, {
+    title: 'story membership revision', category: 'dispatch.lifecycle', files: ['tracked.js'], storyId: story.ref, source: 'test',
+  });
+
+  assert.equal(ticket.storyLogSeenSeq, 1);
+  assert.equal(store.pulsePayload(slug, ticket.ref).warnings, undefined);
+});
+
+test('prepared dispatch pins decisions added after story membership', () => {
+  const story = store.createStory(slug, { title: 'Prepared story revision' });
+  store.appendStoryLogEntry(slug, story.ref, { by: 'orchestrator', entry: 'DECISION: creation baseline' });
+  const ticket = store.createTicket(slug, {
+    title: 'prepared story revision', category: 'dispatch.lifecycle', files: ['tracked.js'], storyId: story.ref, source: 'test',
+  });
+  store.appendStoryLogEntry(slug, story.ref, { by: 'orchestrator', entry: 'CONSTRAINT: prepare boundary includes this' });
+
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `story-log-boundary-${Date.now()}` });
+
+  assert.equal(prepared.ticket.dispatch.storyLogRevision, 2);
+  assert.equal(prepared.ticket.storyLogSeenSeq, 2);
+  assert.equal(store.pulsePayload(slug, ticket.ref).warnings, undefined);
+});
+
+test('dispatch briefing includes each pinned decision once and reports later deltas', () => {
+  const story = store.createStory(slug, { title: 'Briefed story revision' });
+  store.appendStoryLogEntry(slug, story.ref, { by: 'orchestrator', entry: 'DECISION: creation baseline' });
+  const ticket = store.createTicket(slug, {
+    title: 'briefed story revision', category: 'dispatch.lifecycle', files: ['tracked.js'], storyId: story.ref, source: 'test',
+  });
+  store.appendStoryLogEntry(slug, story.ref, { by: 'orchestrator', entry: 'CONSTRAINT: prepare boundary includes this' });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `story-log-brief-${Date.now()}` });
+  store.appendStoryLogEntry(slug, story.ref, { by: 'orchestrator', entry: 'DISCOVERY: post-prepare delta' });
+
+  const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, ticket.ref), prepared.token, slug, PROJECT);
+  const warnings = store.pulsePayload(slug, ticket.ref).warnings.join('\n');
+
+  assert.equal((briefing.match(/#1 DECISION \(orchestrator, orchestrator\): creation baseline/g) || []).length, 1);
+  assert.equal((briefing.match(/#2 CONSTRAINT \(orchestrator, orchestrator\): prepare boundary includes this/g) || []).length, 1);
+  assert.doesNotMatch(briefing, /#3 DISCOVERY \(orchestrator, orchestrator\): post-prepare delta/);
+  assert.match(warnings, /decision log gained 1 entry \(#3\) since .* was prepared/);
+  assert.doesNotMatch(warnings, /was claimed/);
+});
+
 export {};

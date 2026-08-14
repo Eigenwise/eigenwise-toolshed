@@ -892,6 +892,7 @@ const {
   executorText,
   fs,
   getCategory,
+  getStory: (...args: any[]) => getStory(...args),
   getTicket,
   listTickets,
   makeWorkedBy,
@@ -1590,7 +1591,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
         },
       };
     }
-    if (t.storyId) {
+    if (t.storyId && !Number.isInteger(t.dispatch?.storyLogRevision)) {
       const story = getStory(slug, t.storyId);
       if (story) t.storyLogSeenSeq = Number(story.logRevision) || 0;
     }

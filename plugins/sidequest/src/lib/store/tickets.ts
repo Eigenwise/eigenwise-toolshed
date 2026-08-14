@@ -5,7 +5,7 @@ function createTickets(dependencies: any) {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
     database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, effectiveScope, execFileSync, executorText, fs,
-    getCategory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
+    getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
     ticketLockPath, ticketStoryId, touchClaimActivity, upperRef, withTicketLock,
@@ -36,6 +36,11 @@ function authoringVerifyError(ticket?: any, projectPath?: any) {
   return error && /(?:requires .*package\.json|requires a `[^`]+` script)/.test(error) ? error : null;
 }
 
+function storyLogRevision(slug?: any, storyId?: any) {
+  const story = storyId ? getStory(slug, storyId) : null;
+  return Number(story?.logRevision) || 0;
+}
+
 function createTicket(slug?: any, fields?: any) {
   fields = fields || {};
   const status = fields.status === undefined ? 'todo' : requireStatus(fields.status);
@@ -62,6 +67,7 @@ function createTicket(slug?: any, fields?: any) {
   }
 
   requireVerifyOracle(fields.executorVerifyKind, fields.executorVerify, fields.executorAttestationArtifact);
+  const storyId = coerceStoryId(slug, fields.storyId);
   const ticket = {
     id,
     ref: `SQ-${seq}`,
@@ -71,7 +77,8 @@ function createTicket(slug?: any, fields?: any) {
     priority: coercePriority(fields.priority, 'normal'),
     labels: boundedLabels(fields.labels),
     highStakes: !!fields.highStakes,
-    storyId: coerceStoryId(slug, fields.storyId), // the user story this ticket belongs to (null = none)
+    storyId, // the user story this ticket belongs to (null = none)
+    storyLogSeenSeq: storyLogRevision(slug, storyId),
     category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
     route: normalizedTicketRoute(fields.route),
     complexity: coerceComplexity(fields.complexity), // 1..10 score the routing is derived from (entry points require it)
@@ -823,7 +830,13 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
     if (patch.labels != null) t.labels = boundedLabels(patch.labels);
     if (patch.highStakes !== undefined) t.highStakes = !!patch.highStakes;
-    if (patch.storyId !== undefined) t.storyId = coerceStoryId(slug, patch.storyId);
+    if (patch.storyId !== undefined) {
+      const storyId = coerceStoryId(slug, patch.storyId);
+      if (storyId !== t.storyId) {
+        t.storyId = storyId;
+        t.storyLogSeenSeq = storyLogRevision(slug, storyId);
+      }
+    }
     if (patch.category !== undefined) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
     if (patch.route !== undefined) t.route = normalizedTicketRoute(patch.route);
     // Complexity can move to another valid score, never clear; a fresh motivation

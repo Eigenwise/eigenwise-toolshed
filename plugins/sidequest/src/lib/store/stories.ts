@@ -289,9 +289,15 @@ function rotateStoryLog(slug?: any, storyRef?: any) {
 
 function storyDecisionLogWarnings(ticket?: any, slug?: any) {
   if (!ticket || !ticket.storyId || !slug) return [];
+  const dispatchBoundary = Number(ticket.dispatch?.storyLogRevision);
+  const claimBoundary = ticket.claim ? Number(ticket.storyLogSeenSeq) : null;
+  const seenSeq = Number.isInteger(dispatchBoundary) && dispatchBoundary >= 0
+    ? dispatchBoundary
+    : claimBoundary;
+  if (!Number.isInteger(seenSeq) || seenSeq < 0) return [];
+  const boundary = Number.isInteger(dispatchBoundary) && dispatchBoundary >= 0 ? 'prepared' : 'claimed';
   const story = getStory(slug, ticket.storyId);
   if (!story) return [];
-  const seenSeq = Number(ticket.storyLogSeenSeq) || 0;
   const lastSeq = Number(story.logRevision) || 0;
   if (lastSeq <= seenSeq) return [];
   const gained = lastSeq - seenSeq;
@@ -299,7 +305,7 @@ function storyDecisionLogWarnings(ticket?: any, slug?: any) {
   const range = firstSeq === lastSeq ? `#${firstSeq}` : `#${firstSeq}-#${lastSeq}`;
   const noun = gained === 1 ? 'entry' : 'entries';
   const pronoun = gained === 1 ? 'it is' : 'they are';
-  return [`Dispatch warning: ${story.ref} decision log gained ${gained} ${noun} (${range}) since ${ticket.ref} was claimed; ${pronoun} not in its briefing.`];
+  return [`Dispatch warning: ${story.ref} decision log gained ${gained} ${noun} (${range}) since ${ticket.ref} was ${boundary}; ${pronoun} not in its briefing.`];
 }
 
 function markStoryContractDrift(slug?: any, story?: any, fromRevision?: any, changedAt?: any) {

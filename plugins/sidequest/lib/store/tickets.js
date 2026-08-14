@@ -22,6 +22,7 @@ function createTickets(dependencies) {
     executorText,
     fs,
     getCategory,
+    getStory,
     getTicket,
     listTickets,
     makeWorkedBy,
@@ -68,6 +69,10 @@ function createTickets(dependencies) {
     const error = dispatchVerifyCommandError(ticket, projectPath);
     return error && /(?:requires .*package\.json|requires a `[^`]+` script)/.test(error) ? error : null;
   }
+  function storyLogRevision(slug, storyId) {
+    const story = storyId ? getStory(slug, storyId) : null;
+    return Number(story?.logRevision) || 0;
+  }
   function createTicket(slug, fields) {
     fields = fields || {};
     const status = fields.status === void 0 ? "todo" : requireStatus(fields.status);
@@ -90,6 +95,7 @@ function createTickets(dependencies) {
       }
     }
     requireVerifyOracle(fields.executorVerifyKind, fields.executorVerify, fields.executorAttestationArtifact);
+    const storyId = coerceStoryId(slug, fields.storyId);
     const ticket = {
       id,
       ref: `SQ-${seq}`,
@@ -99,8 +105,9 @@ function createTickets(dependencies) {
       priority: coercePriority(fields.priority, "normal"),
       labels: boundedLabels(fields.labels),
       highStakes: !!fields.highStakes,
-      storyId: coerceStoryId(slug, fields.storyId),
+      storyId,
       // the user story this ticket belongs to (null = none)
+      storyLogSeenSeq: storyLogRevision(slug, storyId),
       category: fields.category == null ? null : String(fields.category).trim().toLowerCase() || null,
       route: normalizedTicketRoute(fields.route),
       complexity: coerceComplexity(fields.complexity),
@@ -737,7 +744,13 @@ function createTickets(dependencies) {
       if (patch.priority != null) t.priority = coercePriority(patch.priority, t.priority);
       if (patch.labels != null) t.labels = boundedLabels(patch.labels);
       if (patch.highStakes !== void 0) t.highStakes = !!patch.highStakes;
-      if (patch.storyId !== void 0) t.storyId = coerceStoryId(slug, patch.storyId);
+      if (patch.storyId !== void 0) {
+        const storyId = coerceStoryId(slug, patch.storyId);
+        if (storyId !== t.storyId) {
+          t.storyId = storyId;
+          t.storyLogSeenSeq = storyLogRevision(slug, storyId);
+        }
+      }
       if (patch.category !== void 0) t.category = patch.category == null ? null : String(patch.category).trim().toLowerCase() || null;
       if (patch.route !== void 0) t.route = normalizedTicketRoute(patch.route);
       if (patch.complexity !== void 0) {

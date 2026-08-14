@@ -746,6 +746,27 @@ function storySnapshot(ticket?: any, slug?: any) {
   };
 }
 
+function storyDecisionLogSnapshot(ticket?: any, slug?: any) {
+  const revision = Number(ticket?.dispatch?.storyLogRevision);
+  if (!Number.isInteger(revision) || revision < 0 || !ticket?.storyId || !slug) return null;
+  const story = store.getStory(slug, ticket.storyId);
+  const entries = story
+    ? store.storyDecisionLog(story, { full: true }).entries.filter((entry: any) => Number(entry.seq) <= revision)
+    : [];
+  return { revision, story: String(story?.ref || ticket.storyId), entries };
+}
+
+function storyDecisionLogProjectionBody(snapshot?: any) {
+  if (!snapshot) return '';
+  const entries = snapshot.entries || [];
+  const countLabel = `${entries.length} ${entries.length === 1 ? 'entry' : 'entries'}`;
+  return [
+    `## Story decision log (${snapshot.story}, ${countLabel} through #${snapshot.revision})`,
+    'Pinned at dispatch preparation. The contract above outranks these.',
+    ...entries.map((entry: any) => `- #${entry.seq} ${entry.kind} (${entry.ref || 'orchestrator'}, ${entry.by}): ${entry.text}`),
+  ].join('\n');
+}
+
 function storyContractRetrieval(ticket?: any, snapshot?: any, project?: any, forceHandle = false) {
   const body = String(snapshot?.body || '');
   if (!forceHandle && !snapshot?.frozenAbsent && byteLength(body) <= EXECUTOR_CONTRACT_MAX_BYTES) {
@@ -1019,6 +1040,7 @@ function ticketBrief(ticket?: any, nonce?: any, marker?: any, slug?: any, projec
   const rejectionRetrieval = rejectedSubmissionHistoryRetrieval(ticket, slug || project);
   const rejectionHistory = rejectedSubmissionHistoryBody(ticket, rejectionRetrieval);
   const snapshot = storySnapshot(ticket, slug);
+  const storyLog = storyDecisionLogSnapshot(ticket, slug);
   const commentsRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const ticketRetrieval = projectionRetrieval('mcp__plugin_sidequest_board__comments', Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const suffix = marker ? `
@@ -1033,14 +1055,16 @@ ${marker}` : '';
     return [
     { id: 'safety', kind: 'safety', priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, ticket?.dispatch?.tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
     { id: 'execution-contract', kind: 'contract', priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
-    ...(rejectionHistory ? [{ id: 'rejection-history', kind: 'evidence', priority: 450, order: 3, body: rejectionHistory, retrieval: rejectionRetrieval }] : []),
-    { id: 'task-and-scope', kind: 'task', priority: 300, order: 4, body: taskAndScope, retrieval: taskRetrieval },
-    { id: 'newest-comments', kind: 'evidence', priority: 200, order: 5, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
-    { id: 'handles', kind: 'handle', priority: 100, order: 6, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
+    ...(storyLog ? [{ id: 'story-decision-log', kind: 'evidence', priority: 475, order: 3, watermark: `${storyLog.revision}:${sha256Text(JSON.stringify(storyLog.entries))}`, body: storyDecisionLogProjectionBody(storyLog), retrieval: ticketRetrieval }] : []),
+    ...(rejectionHistory ? [{ id: 'rejection-history', kind: 'evidence', priority: 450, order: 4, body: rejectionHistory, retrieval: rejectionRetrieval }] : []),
+    { id: 'task-and-scope', kind: 'task', priority: 300, order: 5, body: taskAndScope, retrieval: taskRetrieval },
+    { id: 'newest-comments', kind: 'evidence', priority: 200, order: 6, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
+    { id: 'handles', kind: 'handle', priority: 100, order: 7, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval },
     ];
   };
   const watermarks = {
     storyContractSnapshot: `${snapshot.revision}:${sha256Text(snapshot.body)}`,
+    ...(storyLog ? { storyDecisionLogSnapshot: `${storyLog.revision}:${sha256Text(JSON.stringify(storyLog.entries))}` } : {}),
   };
   const compile = (forceContractHandle = false) => compileContextProjection({
     profile: { id: 'executor-briefing', budgetBytes: profileBudget },
