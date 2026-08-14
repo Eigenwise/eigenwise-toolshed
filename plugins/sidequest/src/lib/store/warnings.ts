@@ -536,13 +536,44 @@ function packageConsumerHops(packageSources: string[], sourceFiles: string[]) {
   return hops;
 }
 
+function generatedOutputPath(packageRoot?: any, file?: any) {
+  return packageBuildOutputs(packageRoot).some((output?: any) => relativePathWithin(path.resolve(packageRoot, output.directory), file) !== null);
+}
+
+function sameBasenameSiblingGroups(ticket?: any, projectPath?: any) {
+  if (dispatchReadOnly(ticket) || !projectPath || !Array.isArray(ticket?.files)) return [];
+  const sourceFiles = normalizeFiles(ticket.files)
+    .map((scope?: any) => path.resolve(projectPath, scope))
+    .filter((file?: any) => fs.existsSync(file) && sourceModulePath(file));
+  return sourceFiles.flatMap((sourceFile?: any) => {
+    const basename = path.parse(sourceFile).name;
+    if (COMMON_MODULE_BASENAMES.has(basename.toLowerCase())) return [];
+    const packageRoot = packageRootForScope(projectPath, relativePathWithin(projectPath, sourceFile));
+    if (!packageRoot || generatedOutputPath(packageRoot, sourceFile)) return [];
+    const siblingPaths = repositoryFiles(projectPath)
+      .filter((candidate?: any) => candidate !== sourceFile && relativePathWithin(packageRoot, candidate) !== null && !generatedOutputPath(packageRoot, candidate) && path.parse(candidate).name === basename && !scopeIncludesPath(ticket.files, projectPath, candidate))
+      .map((candidate?: any) => relativePathWithin(projectPath, candidate)?.replace(/\\/g, '/'))
+      .filter(Boolean)
+      .sort();
+    const sourceRelative = relativePathWithin(projectPath, sourceFile)?.replace(/\\/g, '/');
+    return sourceRelative && siblingPaths.length ? [{ sourceRelative, siblingPaths }] : [];
+  });
+}
+
+function scopeConsumerWarningDetails(ticket?: any, projectPath?: any) {
+  return sameBasenameSiblingGroups(ticket, projectPath)
+    .filter(({ sourceRelative, siblingPaths }: any) => {
+      const sourceDirectory = path.posix.dirname(sourceRelative);
+      return siblingPaths.filter((siblingPath: string) => path.posix.dirname(siblingPath) !== sourceDirectory).length > 1;
+    });
+}
+
 function scopeConsumerWarnings(ticket?: any, projectPath?: any) {
   if (dispatchReadOnly(ticket) || !projectPath || !Array.isArray(ticket?.files)) return [];
   const sourceFiles = normalizeFiles(ticket.files)
     .map((scope?: any) => path.resolve(projectPath, scope))
     .filter((file?: any) => fs.existsSync(file) && sourceModulePath(file));
   const warnings = new Set<string>();
-  const declaredPaths = new Set(sourceFiles);
   const packageSources = new Map<string, string[]>();
   const sourceFilesByPackage = new Map<string, string[]>();
   for (const sourceFile of sourceFiles) {
@@ -569,20 +600,16 @@ function scopeConsumerWarnings(ticket?: any, projectPath?: any) {
       warnings.add(`Planning-depth warning: declared scope may omit in-package ${relationship}: ${relative}. Include the path if this change reaches it.`);
     }
   }
-  for (const sourceFile of declaredPaths) {
-    const basename = path.basename(sourceFile);
-    if (COMMON_MODULE_BASENAMES.has(path.parse(basename).name.toLowerCase())) continue;
-    const packageRoot = packageRootForScope(projectPath, relativePathWithin(projectPath, sourceFile));
-    if (!packageRoot) continue;
-    const siblingPaths = repositoryFiles(projectPath)
-      .filter((candidate?: any) => candidate !== sourceFile && relativePathWithin(packageRoot, candidate) !== null && path.basename(candidate) === basename && !scopeIncludesPath(ticket.files, projectPath, candidate))
-      .map((candidate?: any) => relativePathWithin(projectPath, candidate)?.replace(/\\/g, '/'))
-      .filter(Boolean)
-      .sort();
-    if (siblingPaths.length) {
-      const sourceRelative = relativePathWithin(projectPath, sourceFile)?.replace(/\\/g, '/');
-      warnings.add(`Planning-depth warning: declared path ${sourceRelative} has undeclared same-basename sibling paths: ${siblingPaths.join(', ')}. Check whether they consume this change before dispatch.`);
+  for (const { sourceRelative, siblingPaths } of sameBasenameSiblingGroups(ticket, projectPath)) {
+    const sourceDirectory = path.posix.dirname(sourceRelative);
+    const sameDirectoryPaths = siblingPaths.filter((siblingPath: string) => path.posix.dirname(siblingPath) === sourceDirectory);
+    const siblingDirectoryPaths = siblingPaths.filter((siblingPath: string) => path.posix.dirname(siblingPath) !== sourceDirectory);
+    if (siblingDirectoryPaths.length > 1) {
+      warnings.add(`Planning-depth warning: declared path ${sourceRelative} has ${siblingDirectoryPaths.length} undeclared same-basename sibling paths in separate directories. Retrieve sameBasenameSiblingDetails from the full board response before dispatch.`);
+      if (sameDirectoryPaths.length) warnings.add(`Planning-depth warning: declared path ${sourceRelative} has undeclared same-basename sibling paths: ${sameDirectoryPaths.join(', ')}. Check whether they consume this change before dispatch.`);
+      continue;
     }
+    warnings.add(`Planning-depth warning: declared path ${sourceRelative} has undeclared same-basename sibling paths: ${siblingPaths.join(', ')}. Check whether they consume this change before dispatch.`);
   }
   return [...warnings].sort();
 }
@@ -1102,7 +1129,7 @@ function presentWarnings(ticket?: any, warnings?: any, sessionId?: any) {
   return [...visible, `Warning summary: ${ranked.length - WARNING_RETURN_LIMIT + 1} lower-priority warnings suppressed for this call.`];
 }
 
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, scopeConsumerWarningDetails, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
 }
 
 module.exports = { createWarnings };

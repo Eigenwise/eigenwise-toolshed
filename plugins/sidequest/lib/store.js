@@ -307,6 +307,9 @@ function embedsCompleteEdit(...args) {
 function presolvedRoutingWarnings(...args) {
   return warningsLayer.presolvedRoutingWarnings(...args);
 }
+function scopeConsumerWarningDetails(...args) {
+  return warningsLayer.scopeConsumerWarningDetails(...args);
+}
 function ticketPlanningWarnings(ticket, projectPath) {
   const project = projectPath ? findProject(projectPath) : null;
   return warningsLayer.ticketPlanningWarnings(ticket, projectPath, project?.ok ? project.slug : null);
@@ -2410,6 +2413,7 @@ module.exports = {
   dispatchUncertaintyWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,
+  scopeConsumerWarningDetails,
   ticketPlanningWarnings,
   presentWarnings,
   coerceComplexity,

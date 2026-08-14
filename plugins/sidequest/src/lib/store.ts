@@ -189,6 +189,7 @@ function diffShapedBlock(...args: any[]) { return warningsLayer.diffShapedBlock(
 function evidenceShapedBlock(...args: any[]) { return warningsLayer.evidenceShapedBlock(...args); }
 function embedsCompleteEdit(...args: any[]) { return warningsLayer.embedsCompleteEdit(...args); }
 function presolvedRoutingWarnings(...args: any[]) { return warningsLayer.presolvedRoutingWarnings(...args); }
+function scopeConsumerWarningDetails(...args: any[]) { return warningsLayer.scopeConsumerWarningDetails(...args); }
 function ticketPlanningWarnings(ticket?: any, projectPath?: any) {
   const project = projectPath ? findProject(projectPath) : null;
   return warningsLayer.ticketPlanningWarnings(ticket, projectPath, project?.ok ? project.slug : null);
@@ -2558,6 +2559,7 @@ module.exports = {
   dispatchUncertaintyWarnings,
   ticketReferenceWarnings,
   ticketCategoryWarnings,
+  scopeConsumerWarningDetails,
   ticketPlanningWarnings,
   presentWarnings,
   coerceComplexity,

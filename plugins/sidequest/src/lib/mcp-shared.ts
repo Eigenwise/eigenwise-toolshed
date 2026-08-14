@@ -1207,6 +1207,7 @@ module.exports = {
   ticketWithContextHandles,
   listRowsContextRetrieval,
   snapshotRowsContextRetrieval,
+  snapshotContextRetrieval,
   resolveContextPage,
   boundedReadPayload,
   MAX_CONTEXT_PAGE_BYTES,

@@ -9,6 +9,7 @@ const { spawnSync } = require('child_process');
 const store = require('../lib/store');
 const { resolveSuite } = require('../lib/suite-resolver');
 const { tools: mcpTicketTools } = require('../lib/mcp-tickets');
+const { tools: mcpReadTools } = require('../lib/mcp-read');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
 const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
@@ -588,6 +589,44 @@ test('warns about undeclared same-basename sibling paths', () => {
   assert.deepStrictEqual(added.warnings, [
     'Planning-depth warning: declared path lib/plan.mjs has undeclared same-basename sibling paths: cli/plan.mjs. Check whether they consume this change before dispatch.',
   ]);
+});
+
+test('folds sibling-directory warnings while retaining direct importers and full paths', () => {
+  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'many-basename-siblings');
+  fs.rmSync(project, { recursive: true, force: true });
+  fs.mkdirSync(path.join(project, 'src', 'dojo', '00'), { recursive: true });
+  fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
+  fs.writeFileSync(path.join(project, 'src', 'dojo', '00', 'drill.ts'), 'export const drill = true;\n');
+  fs.writeFileSync(path.join(project, 'src', 'dojo', '00', 'drill.js'), 'export const drill = true;\n');
+  fs.writeFileSync(path.join(project, 'src', 'direct.ts'), "import { drill } from './dojo/00/drill.ts';\nvoid drill;\n");
+  for (let index = 1; index <= 13; index += 1) {
+    const directory = path.join(project, 'src', 'dojo', String(index).padStart(2, '0'));
+    fs.mkdirSync(directory, { recursive: true });
+    fs.writeFileSync(path.join(directory, 'drill.ts'), 'export const drill = true;\n');
+  }
+
+  const add = mcpTicketTools.find((tool: any) => tool.name === 'add');
+  const contextPage = mcpReadTools.find((tool: any) => tool.name === 'context_page');
+  assert.ok(add);
+  assert.ok(contextPage);
+  const added = add.handler({
+    project,
+    title: 'fold sibling paths',
+    category: 'coding.normal',
+    files: ['src/dojo/00/drill.ts'],
+  });
+
+  assert.ok(added.warnings.some((warning: string) => warning.includes('direct importer: src/direct.ts')));
+  assert.ok(added.warnings.some((warning: string) => warning.includes('13 undeclared same-basename sibling paths in separate directories')));
+  assert.ok(added.warnings.some((warning: string) => warning.includes('src/dojo/00/drill.js')));
+  assert.ok(!added.warnings.some((warning: string) => warning.includes('src/dojo/01/drill.ts')));
+  assert.deepStrictEqual({ groups: added.sameBasenameSiblingDetails.groups, paths: added.sameBasenameSiblingDetails.paths }, { groups: 1, paths: 14 });
+
+  const details = contextPage.handler(added.sameBasenameSiblingDetails.retrieval.arguments);
+  assert.deepStrictEqual(details.rows, [{
+    sourceRelative: 'src/dojo/00/drill.ts',
+    siblingPaths: ['src/dojo/00/drill.js', ...Array.from({ length: 13 }, (_, index) => `src/dojo/${String(index + 1).padStart(2, '0')}/drill.ts`)],
+  }]);
 });
 
 test('does not warn about same-basename siblings outside the package', () => {

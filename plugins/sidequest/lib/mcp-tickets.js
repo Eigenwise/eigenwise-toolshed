@@ -56,8 +56,28 @@ const {
   requiredReleaseReason,
   worktreeRoot,
   verifyEmbedsWorktreeRoot,
-  withoutCategories
+  withoutCategories,
+  snapshotContextRetrieval
 } = require("./mcp-shared");
+function sameBasenameSiblingDetails(project, ticket, projectPath, tool) {
+  const details = store.scopeConsumerWarningDetails(ticket, projectPath);
+  if (!details.length) return {};
+  return {
+    sameBasenameSiblingDetails: {
+      groups: details.length,
+      paths: details.reduce((total, detail) => total + detail.siblingPaths.length, 0),
+      retrieval: snapshotContextRetrieval({
+        tool,
+        project,
+        kind: "rows",
+        field: "sameBasenameSiblingDetails",
+        position: 0,
+        value: details,
+        reason: "collapsed"
+      })
+    }
+  };
+}
 const tools = [
   {
     name: "add",
@@ -146,7 +166,10 @@ const tools = [
       warnings.push(...store.ticketCategoryWarnings(ticket));
       warnings.push(...store.ticketPlanningWarnings(ticket, meta.path));
       const presentedWarnings = store.presentWarnings(ticket, warnings, sessionOf(args));
-      return mutationAck(slug, { ok: true, ticket }, presentedWarnings.length ? { warnings: presentedWarnings } : null);
+      return mutationAck(slug, { ok: true, ticket }, Object.assign(
+        presentedWarnings.length ? { warnings: presentedWarnings } : {},
+        sameBasenameSiblingDetails(slug, ticket, meta.path, "add")
+      ));
     }
   },
   {
@@ -256,7 +279,10 @@ const tools = [
       const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
       const presentedWarnings = store.presentWarnings(t, warnings, sessionOf(args));
-      return mutationAck(slug, { ok: true, ticket: t }, presentedWarnings.length ? { warnings: presentedWarnings } : null);
+      return mutationAck(slug, { ok: true, ticket: t }, Object.assign(
+        presentedWarnings.length ? { warnings: presentedWarnings } : {},
+        sameBasenameSiblingDetails(slug, t, meta.path, "update")
+      ));
     }
   },
   {
