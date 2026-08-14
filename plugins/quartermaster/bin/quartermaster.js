@@ -157,9 +157,6 @@ async function main(argv = process.argv.slice(2)) {
     case 'enable-auto-allowlist':
       printJson({ ok: true, enabled: enablePermissionAutomation(options.projectPath) });
       return;
-    // mark-retro is the pre-rename spelling, still accepted so a skill file or note that predates
-    // the rename keeps working instead of failing at the last step of a completed pass.
-    case 'mark-retro':
     case 'mark-resupply':
       markResupply(options.projectPath);
       printJson({ ok: true, lastResupplyAt: new Date().toISOString() });
