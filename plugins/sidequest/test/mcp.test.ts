@@ -1925,6 +1925,32 @@ test('MCP delivery closure points live claims at the owning release command', as
   assert.doesNotMatch(refused.message, /recoverDispatch/);
 });
 
+test('MCP delivery closure binds the integration revision resolved after board initialization', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main' });
+  const ticket = store.createTicket(project, {
+    title: 'current integration delivery', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm a later local integration commit is evaluated at closure time',
+  });
+  fs.writeFileSync(path.join(worktree, 'feature.js'), 'delivered after board initialization\n');
+  gitAt(worktree, ['add', 'feature.js']);
+  gitAt(worktree, ['commit', '-m', 'advance main after board initialization']);
+  const deliveryCommit = gitAt(worktree, ['rev-parse', 'HEAD']);
+
+  const closed = await callTool('groomClose', {
+    project, ref: ticket.ref, by: 'integrator', reason: 'The candidate reached the integration branch after board initialization.', deliveryCommit,
+  });
+  assert.equal(closed.ok, true, `delivery closure was refused: ${closed.message}`);
+  const completed = store.getTicket(project, ticket.ref);
+  assert.equal(completed.completion.delivery.commit, deliveryCommit);
+  assert.deepEqual(completed.completion.delivery.integrationRevision, {
+    source: 'git:main',
+    value: deliveryCommit,
+    observedAt: completed.completion.delivery.integrationRevision.observedAt,
+  }, 'the closure records the exact integration revision used for reachability');
+});
+
 test('MCP submit requires release fragments for marketplace plugin changes', async () => {
   const missingWorktree = createGitWorktree();
   addMarketplaceFixture(missingWorktree);

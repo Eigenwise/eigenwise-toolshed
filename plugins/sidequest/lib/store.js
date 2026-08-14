@@ -17,6 +17,7 @@ const telemetry = require("./telemetry.js");
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require("./refusal-guidance.js");
 const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic } = require("./kernel/index.js");
+const { sourceRevision } = require("./source-revision-capability.js");
 const { createAssets } = require("./store/assets.js");
 const { createNotifications } = require("./store/notifications.js");
 const { createWorkers } = require("./store/workers.js");
@@ -2081,12 +2082,18 @@ function recordedDelivery(slug, commit, evidence) {
       stdio: "pipe"
     }).trim();
     const targetCommit = integrationTargetCommit(repo, target);
-    execFileSync("git", ["merge-base", "--is-ancestor", deliveredCommit, targetCommit], {
+    const integrationRevision = sourceRevision({
+      source: `git:${target.upstream}`,
+      value: targetCommit,
+      observedAt: (/* @__PURE__ */ new Date()).toISOString()
+    });
+    if (!integrationRevision) throw new Error("could not record the current integration revision");
+    execFileSync("git", ["merge-base", "--is-ancestor", deliveredCommit, integrationRevision.value], {
       cwd: repo,
       windowsHide: true,
       stdio: "pipe"
     });
-    return { ok: true, commit: deliveredCommit, target, evidence: recordedEvidence };
+    return { ok: true, commit: deliveredCommit, target, integrationRevision, evidence: recordedEvidence };
   } catch (error) {
     return {
       ok: false,
@@ -2192,7 +2199,15 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     completionAuthority: CONTROL_PLANE_COMPLETION,
     completionProvenance: Object.assign(
       { authority: "control-plane", purpose, reason },
-      delivery?.ok ? { delivery: { commit: delivery.commit, targetBranch: delivery.target.branch, targetRef: delivery.target.upstream, evidence: delivery.evidence } } : {},
+      delivery?.ok ? {
+        delivery: {
+          commit: delivery.commit,
+          targetBranch: delivery.target.branch,
+          targetRef: delivery.target.upstream,
+          integrationRevision: delivery.integrationRevision,
+          evidence: delivery.evidence
+        }
+      } : {},
       legacyScopeOverride ? { legacyScopeOverride: { reason } } : {}
     ),
     ...delivery?.ok ? { recordedDelivery: delivery } : {}

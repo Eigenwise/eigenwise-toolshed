@@ -41,7 +41,7 @@ function baselinePurpose(value: unknown): Baseline['purpose'] | null {
   return null;
 }
 
-function immutableSourceRevision(value: SourceRevision | undefined): SourceRevision | null {
+export function sourceRevision(value: SourceRevision | undefined): SourceRevision | null {
   const source = String(value?.source || '').trim();
   const revisionValue = String(value?.value || '').trim();
   const observedAt = String(value?.observedAt || '').trim();
@@ -50,7 +50,7 @@ function immutableSourceRevision(value: SourceRevision | undefined): SourceRevis
 }
 
 function immutableBaseline(value: Baseline | undefined): Baseline | null {
-  const revision = immutableSourceRevision(value?.revision);
+  const revision = sourceRevision(value?.revision);
   const purpose = baselinePurpose(value?.purpose);
   if (!revision || !purpose) return null;
   return Object.freeze({ revision, purpose });
@@ -83,7 +83,7 @@ export function sourceRevisionAdapterFacts(
   candidate: SourceRevision | null | undefined,
   baseline: Baseline | null | undefined,
 ): SourceRevisionAdapterFacts | null {
-  const pinnedCandidate = immutableSourceRevision(candidate || undefined);
+  const pinnedCandidate = sourceRevision(candidate || undefined);
   const pinnedBaseline = immutableBaseline(baseline || undefined);
   if (!pinnedCandidate || !pinnedBaseline) return null;
   const capability = registrationsByProject.get(projectKey(project))?.capability;

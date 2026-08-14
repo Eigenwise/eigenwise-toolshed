@@ -20,6 +20,7 @@ var source_revision_capability_exports = {};
 __export(source_revision_capability_exports, {
   isSourceRevisionAdapterFacts: () => isSourceRevisionAdapterFacts,
   registerSourceRevisionCapability: () => registerSourceRevisionCapability,
+  sourceRevision: () => sourceRevision,
   sourceRevisionAdapterFacts: () => sourceRevisionAdapterFacts,
   sourceRevisionBaseline: () => sourceRevisionBaseline
 });
@@ -33,7 +34,7 @@ function baselinePurpose(value) {
   if (value === "dispatch" || value === "wave" || value === "submission") return value;
   return null;
 }
-function immutableSourceRevision(value) {
+function sourceRevision(value) {
   const source = String(value?.source || "").trim();
   const revisionValue = String(value?.value || "").trim();
   const observedAt = String(value?.observedAt || "").trim();
@@ -41,7 +42,7 @@ function immutableSourceRevision(value) {
   return Object.freeze({ source, value: revisionValue, observedAt: new Date(observedAt).toISOString() });
 }
 function immutableBaseline(value) {
-  const revision = immutableSourceRevision(value?.revision);
+  const revision = sourceRevision(value?.revision);
   const purpose = baselinePurpose(value?.purpose);
   if (!revision || !purpose) return null;
   return Object.freeze({ revision, purpose });
@@ -62,7 +63,7 @@ function registerSourceRevisionCapability(project, capability) {
   };
 }
 function sourceRevisionAdapterFacts(project, candidate, baseline) {
-  const pinnedCandidate = immutableSourceRevision(candidate || void 0);
+  const pinnedCandidate = sourceRevision(candidate || void 0);
   const pinnedBaseline = immutableBaseline(baseline || void 0);
   if (!pinnedCandidate || !pinnedBaseline) return null;
   const capability = registrationsByProject.get(projectKey(project))?.capability;
@@ -95,6 +96,7 @@ function isSourceRevisionAdapterFacts(value) {
 0 && (module.exports = {
   isSourceRevisionAdapterFacts,
   registerSourceRevisionCapability,
+  sourceRevision,
   sourceRevisionAdapterFacts,
   sourceRevisionBaseline
 });
