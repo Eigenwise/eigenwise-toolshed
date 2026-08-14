@@ -59,10 +59,13 @@ test('cleanup requires the terminal bound registered worktree', () => {
   assert.equal(worktree.worktreeCleanupDecision(lease, [lease.observedWorktree]).allowed, true);
 });
 
-test('a changed worktree revision cannot write or resume against its dispatch baseline', () => {
-  const lease = terminalLease({ observedRevision: 'b'.repeat(40) });
+test('write and resume compare their distinct baseline and release-time revisions', () => {
+  const lease = terminalLease({
+    boundRevision: 'a'.repeat(40),
+    observedRevision: 'b'.repeat(40),
+  });
   assert.match(worktree.worktreeWriteDecision(lease, path.join(lease.observedWorktree, 'file.ts')).reason, /dispatch baseline/);
-  assert.match(worktree.worktreeResumeDecision(lease).reason, /observed worktree revision/);
+  assert.match(worktree.worktreeResumeDecision(lease).reason, /bound worktree revision/);
 });
 
 test('creation requires a prepared dispatch-bound lease before mutation', () => {

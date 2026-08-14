@@ -1167,7 +1167,8 @@ test('released handbacks carry registered native worktrees into continuation dis
       releaseKind: 'handback',
       releaseReason: 'Continue verification in another executor.',
     }).ok, true);
-    const releasedAt = store.getTicket(slug, ticket.ref).dispatch.terminalAt;
+    const releasedDispatch = store.getTicket(slug, ticket.ref).dispatch;
+    const releasedAt = releasedDispatch.terminalAt;
 
     const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
     continued.ticket.dispatch.integrationTarget = { mode: 'local', branch: 'main' };
@@ -1184,8 +1185,11 @@ test('released handbacks carry registered native worktrees into continuation dis
       releasedAt,
       releaseKind: 'handback',
     }, JSON.stringify(continued.ticket.dispatch.continuationFallback));
-    assert.equal(lease.dispatchBaseline, checkpoint);
+    assert.equal(lease.dispatchBaseline, prepared.ticket.dispatch.baseCommit);
     assert.equal(lease.observedRevision, checkpoint);
+    assert.equal(lease.boundRevision, checkpoint);
+    assert.equal(lease.boundGitDirectory, releasedDispatch.worktreeGitDirectory);
+    assert.equal(lease.boundCommonGitDirectory, releasedDispatch.worktreeCommonGitDirectory);
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     const spawn = agentsync.agentSpawn(
       continued.ticket.dispatch.launchName,
@@ -1229,6 +1233,66 @@ test('released handbacks carry registered native worktrees into continuation dis
     store.releaseTicket(slug, ticket.ref, 'continuation-cleanup', { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
     execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT });
+  }
+});
+
+test('continuation refuses a same-path replacement linked checkout', () => {
+  const ticket = createFixture('continuation replacement fixture');
+  const sessionId = `continuation-replacement-${Date.now()}`;
+  const agentId = `continuation-replacement-${Date.now()}`;
+  const branch = `worktree-agent-${agentId}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentId);
+  const replacementSource = `${worktree}-source`;
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-replacement-worker', {
+      sessionId,
+      token: prepared.token,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(worktree, 'tracked.js'), 'module.exports = 8;\n');
+    execFileSync('git', ['add', 'tracked.js'], { cwd: worktree });
+    execFileSync('git', ['commit', '--quiet', '-m', 'replacement checkpoint'], { cwd: worktree });
+    const checkpoint = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: worktree, encoding: 'utf8' }).trim();
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'continuation-replacement-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+    }).ok, true);
+    const releasedDispatch = store.getTicket(slug, ticket.ref).dispatch;
+    assert.equal(releasedDispatch.terminalWorktreeRevision, checkpoint);
+    const boundGitDirectory = worktrees.canonicalPath(releasedDispatch.worktreeGitDirectory);
+
+    execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    execFileSync('git', ['worktree', 'add', '--detach', replacementSource, checkpoint], { cwd: PROJECT });
+    fs.renameSync(replacementSource, worktree);
+    execFileSync('git', ['worktree', 'repair', worktree], { cwd: PROJECT });
+    const replacementGitDirectory = worktrees.canonicalPath(path.resolve(worktree, execFileSync('git', ['rev-parse', '--git-dir'], {
+      cwd: worktree,
+      encoding: 'utf8',
+    }).trim()));
+    assert.notEqual(replacementGitDirectory, boundGitDirectory);
+
+    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    assert.equal(continued.ticket.dispatch.continuation, undefined);
+    assert.equal(continued.ticket.dispatch.continuationFallback.reason, 'released_worktree_lease_refused');
+    assert.match(continued.ticket.dispatch.continuationFallback.cause, /Git directory differs from the dispatch-bound Git directory/);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'continuation-replacement-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    try { execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT }); } catch (_) {}
   }
 });
 

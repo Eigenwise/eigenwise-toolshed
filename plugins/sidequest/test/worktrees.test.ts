@@ -30,12 +30,18 @@ function createAgentWorktree(repository: string, root: string, name: string): st
   return worktree;
 }
 
-function integratedTicket(ref: string, agentId: string, worktree: string, baseCommit: string) {
+function integratedTicket(ref: string, agentId: string, worktree: string, baseCommit: string, identity: { gitDirectory?: string; commonGitDirectory?: string } = {}) {
   return {
     ref,
     status: 'done',
     claimLive: false,
-    dispatch: { agentId, worktree, baseCommit },
+    dispatch: {
+      agentId,
+      worktree,
+      baseCommit,
+      ...(identity.gitDirectory ? { worktreeGitDirectory: identity.gitDirectory } : {}),
+      ...(identity.commonGitDirectory ? { worktreeCommonGitDirectory: identity.commonGitDirectory } : {}),
+    },
   };
 }
 
@@ -64,6 +70,34 @@ test('sweep removes only the terminal bound registered worktree', async () => {
     const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
     assert.deepEqual(result.removed.map((candidate: string) => worktrees.canonicalPath(candidate)), [worktrees.canonicalPath(worktree)]);
     assert.equal(fs.existsSync(worktree), false);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep refuses cleanup after a bound checkout is replaced at the same path', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'replaced');
+  const replacementSource = `${worktree}-source`;
+  const resolveGitPath = (checkout: string, value: string) => path.isAbsolute(value) ? value : path.resolve(checkout, value);
+  const gitDirectory = resolveGitPath(worktree, git(worktree, ['rev-parse', '--git-dir']));
+  const commonGitDirectory = resolveGitPath(worktree, git(worktree, ['rev-parse', '--git-common-dir']));
+  const ticket = integratedTicket('SQ-REPLACED', 'replaced', worktree, baseCommit, { gitDirectory, commonGitDirectory });
+  try {
+    git(repository, ['worktree', 'remove', '--force', worktree]);
+    git(repository, ['worktree', 'add', '--detach', replacementSource, baseCommit]);
+    fs.renameSync(replacementSource, worktree);
+    git(repository, ['worktree', 'repair', worktree]);
+    const replacementGitDirectory = resolveGitPath(worktree, git(worktree, ['rev-parse', '--git-dir']));
+    assert.notEqual(worktrees.canonicalPath(replacementGitDirectory), worktrees.canonicalPath(gitDirectory));
+
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'lease_refused');
+    assert.match(entry.leaseDecision, /Git directory differs from the dispatch-bound Git directory/);
+    assert.equal(fs.existsSync(worktree), true);
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });

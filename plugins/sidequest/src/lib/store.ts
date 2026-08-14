@@ -370,6 +370,7 @@ const {
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
+  completeDispatchWorktreeCreation,
   dispatchIsolationExpectation,
   dispatchWorkspace,
   dispatchDelta,
@@ -1922,6 +1923,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (release) t.release = release;
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
+        slug,
         failureShape: opts.failureShape || release?.kind || 'unknown',
         releaseKind: release?.kind,
         releaseReason: release?.reason,
@@ -2683,6 +2685,7 @@ module.exports = {
   recordDispatchAgentFailure,
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
+  completeDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIsolationExpectation,
   activeSharedTreeClaim,

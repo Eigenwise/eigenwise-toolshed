@@ -2678,6 +2678,56 @@ test('worktree-create refuses an unbound request before Git or target mutation',
   assert.throws(() => gitFixture(['show-ref', '--verify', `refs/heads/worktree-${name}`], repo));
 });
 
+test('worktree-create refuses a pre-existing same-repository checkout without creation proof', () => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-existing-worktree-repo-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repo);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repo);
+  gitFixture(['config', 'user.name', 'Worktree Hook Test'], repo);
+  fs.writeFileSync(path.join(repo, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repo);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repo);
+  const project = store.ensureProject(repo, 'existing worktree hook').slug;
+  const category = `existing-worktree-hook-${++sqSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  store.setBoardConfig(project, {
+    worktreeDependencyPaths: [],
+    worktreeSetup: 'node -e "require(\'node:fs\').writeFileSync(\'provisioned.txt\', \'wrong\')"',
+  });
+  const ticket = store.createTicket(project, { title: 'existing target refusal', category, files: ['tracked.txt'] });
+  const sessionId = `existing-target-${sqSeq}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  const name = `agent-existing-${sqSeq}`;
+  const target = worktrees.namedWorktreePath(repo, name);
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  gitFixture(['worktree', 'add', '--detach', target], repo);
+  const originalRevision = gitFixture(['rev-parse', 'HEAD'], target);
+  try {
+    assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: repo, name }),
+      encoding: 'utf8',
+      env: process.env,
+    }), (error: any) => String(error.stderr || '').includes('existed before this dispatch completed its creation'));
+    assert.equal(gitFixture(['rev-parse', 'HEAD'], target), originalRevision);
+    assert.equal(fs.existsSync(path.join(target, 'provisioned.txt')), false);
+    const refusedDispatch = store.getTicket(project, ticket.ref).dispatch;
+    assert.equal(refusedDispatch.worktreeCreationCompletedAt, undefined);
+    assert.equal(refusedDispatch.agentId, undefined);
+  } finally {
+    gitFixture(['worktree', 'remove', '--force', target], repo);
+  }
+});
+
 test('worktree-create provisions configured dependencies before dispatch and removes failed worktrees', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-external-worktree-repo-'));
   gitFixture(['init', '--quiet', '-b', 'main'], repo);

@@ -84,23 +84,34 @@ function repositoryFor(cwd) {
 function samePath(left, right) {
   return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
 }
-function existingWorktreeMatches(repository, target) {
+function linkedCheckoutIdentity(target) {
   try {
-    const checkout = import_node_path2.default.resolve(git(target, ["rev-parse", "--show-toplevel"]));
-    const commonOutput = git(target, ["rev-parse", "--git-common-dir"]);
-    const common = import_node_path2.default.resolve(target, commonOutput);
-    return samePath(checkout, target) && samePath(common, import_node_path2.default.join(repository, ".git"));
+    const worktree = import_node_path2.default.resolve(git(target, ["rev-parse", "--show-toplevel"]));
+    const gitPath = (value) => import_node_path2.default.isAbsolute(value) ? value : import_node_path2.default.resolve(worktree, value);
+    return {
+      worktree,
+      gitDirectory: gitPath(git(worktree, ["rev-parse", "--git-dir"])),
+      commonGitDirectory: gitPath(git(worktree, ["rev-parse", "--git-common-dir"])),
+      revision: git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"])
+    };
   } catch (_) {
-    return false;
+    return null;
   }
 }
-function createWorktree(repository, name, target, baseline) {
+function completedTargetMatches(binding) {
+  const identity = linkedCheckoutIdentity(String(binding.worktree));
+  return Boolean(identity && binding.expectedGitDirectory && binding.expectedCommonGitDirectory && binding.expectedRevision && samePath(identity.worktree, String(binding.worktree)) && samePath(identity.gitDirectory, binding.expectedGitDirectory) && samePath(identity.commonGitDirectory, binding.expectedCommonGitDirectory) && identity.revision === binding.expectedRevision);
+}
+function createWorktree(binding, name) {
+  const repository = String(binding.repository);
+  const target = String(binding.worktree);
+  const baseline = String(binding.baseline);
   import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(target), { recursive: true });
   if (import_node_fs2.default.existsSync(target)) {
-    if (existingWorktreeMatches(repository, target)) return false;
-    if (import_node_fs2.default.statSync(target).isDirectory() && import_node_fs2.default.readdirSync(target).length === 0) import_node_fs2.default.rmdirSync(target);
-    else throw new Error(`worktree destination already exists and is not registered to this repository: ${target}`);
+    if (binding.creationCompleted && completedTargetMatches(binding)) return false;
+    throw new Error(`worktree destination existed before this dispatch completed its creation: ${target}`);
   }
+  if (binding.creationCompleted) throw new Error(`completed worktree creation is missing its bound checkout: ${target}`);
   const branch = `worktree-${name}`;
   git(repository, ["check-ref-format", "--branch", branch]);
   if (gitSucceeds(repository, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`])) {
@@ -115,6 +126,12 @@ function bindCreation(repository, sessionId, worktree) {
   const project = store.findProject(repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
+}
+function completeCreation(repository, sessionId, worktree) {
+  const store = require(runtimeModule("store"));
+  const project = store.findProject(repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
+  return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
 function plannedRevision(repository, name, baseline) {
   const branch = `worktree-${name}`;
@@ -170,6 +187,7 @@ function main() {
     throw new Error(`worktree lease refused creation: ${binding.reason || "dispatch binding is incomplete"}`);
   }
   const boundCreation = {
+    ...binding,
     ref: binding.ref,
     baseline: binding.baseline,
     repository: binding.repository,
@@ -177,10 +195,12 @@ function main() {
   };
   const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(boundCreation, name));
   if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
-  const created = createWorktree(boundCreation.repository, name, boundCreation.worktree, boundCreation.baseline);
+  const created = createWorktree(boundCreation, name);
   if (created) {
     try {
       worktrees.provisionWorktree(boundCreation.repository, boundCreation.worktree, provisioningConfig(boundCreation.repository));
+      const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
+      if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || "completion binding is incomplete"}`);
     } catch (error) {
       removeCreatedWorktree(boundCreation.repository, boundCreation.worktree);
       throw error;

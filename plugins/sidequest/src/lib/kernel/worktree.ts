@@ -15,7 +15,10 @@ export type WorktreeLeaseFacts = Readonly<{
   dispatchBaseline: string | null;
   observedRevision: string | null;
   observedWorktree: string | null;
+  boundRevision?: string | null;
   boundWorktree?: string | null;
+  boundGitDirectory?: string | null;
+  boundCommonGitDirectory?: string | null;
   identity: LeaseIdentity;
   phase: LeasePhase;
   locked: boolean;
@@ -28,6 +31,8 @@ export type WorktreeLease = Readonly<WorktreeLeaseFacts & {
   canonicalCommonGitDirectory: string;
   canonicalWorktree: string | null;
   canonicalBoundWorktree: string | null;
+  canonicalBoundGitDirectory: string | null;
+  canonicalBoundCommonGitDirectory: string | null;
 }>;
 export type LeaseDecision = Readonly<{ allowed: boolean; reason: string }>;
 
@@ -67,6 +72,8 @@ export function createWorktreeLease(facts: WorktreeLeaseFacts): WorktreeLease {
     canonicalCommonGitDirectory: canonicalPath(facts.commonGitDirectory),
     canonicalWorktree: facts.observedWorktree ? canonicalPath(facts.observedWorktree) : null,
     canonicalBoundWorktree: facts.boundWorktree ? canonicalPath(facts.boundWorktree) : null,
+    canonicalBoundGitDirectory: facts.boundGitDirectory ? canonicalPath(facts.boundGitDirectory) : null,
+    canonicalBoundCommonGitDirectory: facts.boundCommonGitDirectory ? canonicalPath(facts.boundCommonGitDirectory) : null,
   });
 }
 
@@ -87,12 +94,23 @@ function incorrectBaselineDecision(lease: WorktreeLease): LeaseDecision | null {
   return denied(`dispatch baseline ${lease.dispatchBaseline} differs from observed worktree revision ${lease.observedRevision}.`);
 }
 
+function boundRevisionDecision(lease: WorktreeLease): LeaseDecision | null {
+  if (!lease.boundRevision || !lease.observedRevision || lease.boundRevision === lease.observedRevision) return null;
+  return denied(`bound worktree revision ${lease.boundRevision} differs from observed worktree revision ${lease.observedRevision}.`);
+}
+
 function repositoryDecision(lease: WorktreeLease): LeaseDecision | null {
   if (lease.canonicalCommonGitDirectory !== canonicalPath(path.join(lease.canonicalRepository, '.git'))) {
     return denied('The observed worktree does not share the dispatch repository Git directory.');
   }
   if (lease.canonicalBoundWorktree && lease.canonicalBoundWorktree !== lease.canonicalWorktree) {
     return denied('The observed worktree differs from the dispatch-bound worktree.');
+  }
+  if (lease.canonicalBoundGitDirectory && lease.canonicalBoundGitDirectory !== lease.canonicalGitDirectory) {
+    return denied('The observed worktree Git directory differs from the dispatch-bound Git directory.');
+  }
+  if (lease.canonicalBoundCommonGitDirectory && lease.canonicalBoundCommonGitDirectory !== lease.canonicalCommonGitDirectory) {
+    return denied('The observed common Git directory differs from the dispatch-bound common Git directory.');
   }
   return null;
 }
@@ -122,12 +140,14 @@ export function worktreeWriteDecision(lease: WorktreeLease, target: string): Lea
 export function worktreeResumeDecision(lease: WorktreeLease): LeaseDecision {
   if (lease.identity.status === 'unknown') return unknownIdentityDecision('Resume');
   if (!lease.canonicalWorktree) return denied('Resume requires an observed worktree.');
-  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed('the bound worktree matches the dispatch baseline.');
+  return repositoryDecision(lease) || boundRevisionDecision(lease) || allowed('the bound worktree matches its release-time identity.');
 }
 
 export function worktreeCleanupDecision(lease: WorktreeLease, registeredWorktrees: readonly string[]): LeaseDecision {
   if (lease.identity.status === 'unknown') return unknownIdentityDecision('Cleanup');
   if (!lease.canonicalWorktree) return denied('Cleanup requires an observed worktree.');
+  const repository = repositoryDecision(lease);
+  if (repository) return repository;
   if (!registeredWorktrees.some((registered) => sameCanonicalPath(registered, lease.canonicalWorktree!))) return denied('Cleanup requires a canonical registered worktree.');
   if (lease.phase !== 'terminal' && lease.phase !== 'integrated') return denied('Cleanup requires a terminal lease phase.');
   if (lease.locked) return denied('Cleanup refuses a locked worktree.');

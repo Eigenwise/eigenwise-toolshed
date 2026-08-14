@@ -18,6 +18,9 @@ interface IsolationExpectation {
   ref: string;
   projectPath: string | null;
   expectedWorktree: string | null;
+  expectedGitDirectory: string | null;
+  expectedCommonGitDirectory: string | null;
+  expectedRevision: string | null;
   matchedBy: string;
   identityBound: boolean;
   dispatchBaseline: string | null;
@@ -80,7 +83,10 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
     dispatchBaseline: found?.dispatchBaseline || null,
     observedRevision: git(['rev-parse', '--verify', 'HEAD^{commit}']),
     observedWorktree: worktree,
+    boundRevision: found?.expectedRevision || null,
     boundWorktree: found?.sharedTree ? found.projectPath : found?.expectedWorktree || null,
+    boundGitDirectory: found?.sharedTree ? null : found?.expectedGitDirectory || null,
+    boundCommonGitDirectory: found?.sharedTree ? null : found?.expectedCommonGitDirectory || null,
     identity: found?.identityBound ? { status: 'bound', agentId } : { status: 'unknown' },
     phase: found?.terminal ? 'terminal' : found?.phase || 'created',
     locked: false,
