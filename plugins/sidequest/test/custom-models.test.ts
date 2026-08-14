@@ -16,7 +16,12 @@ function seedCatalog(models?: any, catalog: any = { schemaVersion: 3, source: 'm
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-routing-catalog-'));
   const dir = path.join(root, 'model-gateway');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ ...catalog, models }));
+  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({
+    updatedAt: new Date().toISOString(),
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
+    ...catalog,
+    models,
+  }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
 }
 

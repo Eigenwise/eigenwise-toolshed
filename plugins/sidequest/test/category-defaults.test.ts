@@ -4,19 +4,33 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('../lib/category-defaults.js') as {
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES, starterRoutingProfilesFor } = require('../lib/category-defaults.js') as {
   DEFAULT_CATEGORIES: unknown;
   ROUTING_PROFILE_SEED_REVISION: number;
   STARTER_ROUTING_PROFILES: Array<{ id: string; categories: any[] }>;
+  starterRoutingProfilesFor(models: Array<{ slug: string; provider: string }>): Array<{ id: string; categories: any[] }>;
 };
 const snapshotPath = path.join(__dirname, 'fixtures', 'category-defaults.json');
 
 test('seeded categories match the checked-in global category snapshot', () => {
   const snapshot: unknown = JSON.parse(fs.readFileSync(snapshotPath, 'utf8'));
   assert.deepEqual(DEFAULT_CATEGORIES, snapshot);
-  assert.equal(ROUTING_PROFILE_SEED_REVISION, 6);
+  assert.equal(ROUTING_PROFILE_SEED_REVISION, 7);
 });
 
+test('starter profile routes use only exact ready gateway capabilities', () => {
+  const codingWithoutGateway = starterRoutingProfilesFor([]).find((profile) => profile.id === 'coding')!;
+  assert.ok(codingWithoutGateway.categories.every((category) => !category.route.model.startsWith('codex-')));
+
+  const codingWithTerra = starterRoutingProfilesFor([{ slug: 'codex-gpt-5-6-terra', provider: 'codex' }])
+    .find((profile) => profile.id === 'coding')!;
+  assert.deepEqual(codingWithTerra.categories.find((category) => category.id === 'coding.normal')!.route, {
+    model: 'codex-gpt-5-6-terra', effort: 'high',
+  });
+  assert.deepEqual(codingWithTerra.categories.find((category) => category.id === 'codebase-exploration')!.route, {
+    model: 'sonnet', effort: 'high',
+  });
+});
 test('hard coding excludes stakes alone from classification', () => {
   const hard = (DEFAULT_CATEGORIES as any[]).find((category) => category.id === 'coding.hard');
   assert.match(hard.description, /do not make a ticket hard/);
@@ -25,7 +39,7 @@ test('hard coding excludes stakes alone from classification', () => {
 test('experiment category preserves its human-verdict and round protocol gate', () => {
   const experiment = (DEFAULT_CATEGORIES as any[]).find((category) => category.id === 'experiment');
   assert.deepEqual(experiment.route, { model: 'opus', effort: 'high' });
-  assert.deepEqual(experiment.fallback, { model: 'codex-gpt-5-6-sol', effort: 'high' });
+  assert.equal(experiment.fallback, null);
   assert.equal(experiment.readonly, false);
   assert.match(experiment.description, /ONLY when the verdict is a human's judgement/);
   assert.match(experiment.description, /If a test can decide, it is coding or debugging/);

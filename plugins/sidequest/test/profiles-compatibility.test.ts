@@ -17,6 +17,7 @@ const PROJECT_PATH = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-profiles-compat-p
 fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
@@ -242,6 +243,46 @@ test('DETACH provenance remains visible and CLI, MCP, and REST agree on effectiv
   const config = store.boardConfig(pinned);
   assert.equal(config.overrides.items.find((entry: any) => entry.id === 'coding.easy').kind, 'DETACH');
   assert.equal(config.overrides.items.find((entry: any) => entry.id === 'coding.easy').baseProfileId, 'coding');
+});
+
+test('provider capability changes migrate only untouched seeds and preserve prepared Gateway dispatches', () => {
+  const seededBoard = store.ensureProject(path.join(HOME, 'capability-seed-board'), 'Capability seed board').slug;
+  const overrideBoard = store.ensureProject(path.join(HOME, 'capability-override-board'), 'Capability override board').slug;
+  assert.deepEqual(store.getCategory('coding.normal', { project: seededBoard }).route, {
+    model: 'codex-gpt-5-6-terra', effort: 'high',
+  });
+  store.setProjectCategory(overrideBoard, 'coding.normal', 'OVERRIDE', {
+    route: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+  });
+  const ticket = store.createTicket(seededBoard, {
+    title: 'Pinned Gateway dispatch',
+    category: 'coding.normal',
+    description: 'Provider capability migration must retain this prepared executor identity.',
+  });
+  const prepared = store.prepareDispatch(seededBoard, ticket.ref, { allowUnscoped: true, sessionId: 'provider-capability' });
+  assert.equal(prepared.ticket.dispatch.route.model, 'codex-gpt-5-6-terra');
+  assert.equal(prepared.ticket.dispatch.route.effort, 'high');
+
+  fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
+    source: 'model-gateway',
+    codexReadiness: { ready: false, state: 'proxy-down', message: 'Codex is unavailable.' },
+    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]', label: 'GPT-5.6 Terra' }],
+  }));
+
+  assert.deepEqual(store.getCategory('coding.normal', { project: seededBoard }).route, {
+    model: 'sonnet', effort: 'high',
+  });
+  assert.deepEqual(store.getCategory('coding.normal', { project: overrideBoard }).route, {
+    model: 'codex-gpt-5-6-terra', effort: 'high',
+  });
+  assert.ok(!store.modelsPayload({ project: seededBoard }).models.includes('codex-gpt-5-6-terra'));
+  const pinned = store.getTicket(seededBoard, ticket.ref);
+  assert.equal(pinned.dispatch.route.model, 'codex-gpt-5-6-terra');
+  assert.equal(pinned.dispatch.route.effort, 'high');
+  assert.equal(pinned.dispatch.outcome, 'prepared');
+  assert.ok(pinned.dispatch.policyChangedAt);
 });
 
 export {};

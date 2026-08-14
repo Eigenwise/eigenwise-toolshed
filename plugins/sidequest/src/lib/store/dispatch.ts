@@ -555,7 +555,7 @@ function routingPolicyAffectsTicket(ticket?: any, categoryIds?: any) {
   return category != null && affected.has(normalizeCategoryId(category));
 }
 
-function refreshPreparedDispatches(handle?: any, projects?: any, categoryIds?: any) {
+function refreshPreparedDispatches(handle?: any, projects?: any, categoryIds?: any, options?: any) {
   const projectList = Array.from(new Set((projects || []).filter(Boolean)));
   const refreshed = { superseded: 0, stamped: 0 };
   if (!projectList.length) return refreshed;
@@ -567,7 +567,7 @@ function refreshPreparedDispatches(handle?: any, projects?: any, categoryIds?: a
       if (!routingPolicyAffectsTicket(ticket, categoryIds)) continue;
       const state = dispatchState(ticket);
       if (!state || state.terminalAt || !ticket.dispatchNonce) continue;
-      const active = Boolean(state.launchedAt || state.boundAt || state.claimedAt || (ticket.claim && ticket.claim.by));
+      const active = Boolean(state.launchedAt || state.boundAt || state.claimedAt || (ticket.claim && ticket.claim.by) || options?.preservePrepared);
       if (active) {
         state.policyChangedAt = now;
         stampDispatchEvent(ticket, 'routing-policy', now);

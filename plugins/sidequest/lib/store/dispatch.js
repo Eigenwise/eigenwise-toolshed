@@ -466,7 +466,7 @@ function createDispatch(dependencies) {
     if (category == null && ticket && ticket.complexity != null) category = legacyCategoryForComplexity(ticket.complexity);
     return category != null && affected.has(normalizeCategoryId(category));
   }
-  function refreshPreparedDispatches(handle, projects, categoryIds) {
+  function refreshPreparedDispatches(handle, projects, categoryIds, options) {
     const projectList = Array.from(new Set((projects || []).filter(Boolean)));
     const refreshed = { superseded: 0, stamped: 0 };
     if (!projectList.length) return refreshed;
@@ -482,7 +482,7 @@ function createDispatch(dependencies) {
         if (!routingPolicyAffectsTicket(ticket, categoryIds)) continue;
         const state = dispatchState(ticket);
         if (!state || state.terminalAt || !ticket.dispatchNonce) continue;
-        const active = Boolean(state.launchedAt || state.boundAt || state.claimedAt || ticket.claim && ticket.claim.by);
+        const active = Boolean(state.launchedAt || state.boundAt || state.claimedAt || ticket.claim && ticket.claim.by || options?.preservePrepared);
         if (active) {
           state.policyChangedAt = now;
           stampDispatchEvent(ticket, "routing-policy", now);

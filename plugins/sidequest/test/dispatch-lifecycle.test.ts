@@ -16,6 +16,7 @@ const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-lifecycle-c
 fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
@@ -1632,7 +1633,7 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
     env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
   });
   assert.equal(staleClaim.status, 1);
-  assert.match(staleClaim.stdout, /dispatch was superseded by a newer preparation/);
+  assert.match(staleClaim.stdout, /prepared dispatch whose token was missing or invalid/);
   assert.equal(store.claimTicket(slug, ticket.ref, 'current-worker', {
     token: second.token,
     executor: second.ticket.dispatchExecutor,

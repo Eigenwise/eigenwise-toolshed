@@ -84,6 +84,9 @@ const LEGACY_RUNTIME = {
   fable: "fable"
 };
 const ROUTING_FALLBACK_DEFAULT = { model: "sonnet", effort: "high" };
+function capabilityModels() {
+  return (0, import_discovery.discoverExternalModels)().filter((model) => (0, import_discovery.providerReadiness)(model.provider)?.ready === true);
+}
 const TABLES = {
   projects: { key: "slug", columns: ["slug", "data"], jsonColumns: ["data"], payload: "data" },
   tickets: { key: "id", columns: ["id", "project", "ref", "status", "archived", "ord", "claim_by", "data"], jsonColumns: ["data"], payload: "data", orderBy: "ord" },
@@ -519,7 +522,8 @@ function openDb(homeRoot) {
         );
         CREATE INDEX project_categories_v7_project_idx ON project_categories_v7(project);
       `);
-      const codingSeed = import_category_defaults.STARTER_ROUTING_PROFILES.find((profile) => profile.id === "coding");
+      const starterProfiles = (0, import_category_defaults.starterRoutingProfilesFor)(capabilityModels());
+      const codingSeed = starterProfiles.find((profile) => profile.id === "coding");
       if (!codingSeed) throw new Error("The coding routing profile seed is missing.");
       const codingMatchesSeed = categoryDigest(legacyCategories) === categoryDigest(import_category_defaults.DEFAULT_CATEGORIES);
       const codingCategories = codingMatchesSeed ? import_category_defaults.DEFAULT_CATEGORIES : legacyCategories;
@@ -544,7 +548,7 @@ function openDb(homeRoot) {
           VALUES ('coding', ?, ?, ?, ?)
         `).run(id, JSON.stringify(category), position, migratedAt);
       });
-      for (const profile of import_category_defaults.STARTER_ROUTING_PROFILES) {
+      for (const profile of starterProfiles) {
         if (profile.id === "coding") continue;
         validateGeneral(profile.id, profile.categories);
         prepareCached(database, `

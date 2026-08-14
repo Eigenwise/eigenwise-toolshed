@@ -3,8 +3,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import type { DatabaseSync, SQLInputValue, SQLOutputValue, StatementSync } from 'node:sqlite';
 
-import { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } from './category-defaults.js';
-import { discoverExternalModels } from './discovery.js';
+import { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } from './category-defaults.js';
+import { discoverExternalModels, providerReadiness } from './discovery.js';
 
 const originalEmitWarning = process.emitWarning;
 process.emitWarning = ((warning: string | Error, ...args: unknown[]) => {
@@ -46,6 +46,10 @@ const LEGACY_RUNTIME: Readonly<Record<string, string>> = {
   fable: 'fable',
 };
 const ROUTING_FALLBACK_DEFAULT = { model: 'sonnet', effort: 'high' } as const;
+
+function capabilityModels() {
+  return discoverExternalModels().filter((model) => providerReadiness(model.provider)?.ready === true);
+}
 
 interface TableSpec {
   key: string | readonly string[];
@@ -665,7 +669,8 @@ export function openDb(homeRoot: string): SidequestDatabase {
         CREATE INDEX project_categories_v7_project_idx ON project_categories_v7(project);
       `);
 
-      const codingSeed = STARTER_ROUTING_PROFILES.find((profile) => profile.id === 'coding');
+      const starterProfiles = starterRoutingProfilesFor(capabilityModels());
+      const codingSeed = starterProfiles.find((profile) => profile.id === 'coding');
       if (!codingSeed) throw new Error('The coding routing profile seed is missing.');
       const codingMatchesSeed = categoryDigest(legacyCategories) === categoryDigest(DEFAULT_CATEGORIES as unknown as Record<string, unknown>[]);
       const codingCategories = codingMatchesSeed
@@ -693,7 +698,7 @@ export function openDb(homeRoot: string): SidequestDatabase {
         `).run(id, JSON.stringify(category), position, migratedAt);
       });
 
-      for (const profile of STARTER_ROUTING_PROFILES) {
+      for (const profile of starterProfiles) {
         if (profile.id === 'coding') continue;
         validateGeneral(profile.id, profile.categories as unknown as Record<string, unknown>[]);
         prepareCached(database, `

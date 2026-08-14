@@ -34,7 +34,7 @@ const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
 const { registerSourceRevisionCapability } = require('./source-revision-capability.js');
-const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, STARTER_ROUTING_PROFILES } = require('./category-defaults.js');
+const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require('./worktrees.js');
@@ -1072,13 +1072,29 @@ const {
   withTicketLock,
 });
 
+let refreshingRoutingProfileSeeds = false;
+
+function installedProviderSeedProfiles() {
+  return starterRoutingProfilesFor(discoverExternalModels()
+    .filter((model: any) => providerReadiness(model.provider)?.ready === true));
+}
+
 function refreshRoutingProfileSeeds(handle?: any) {
   const pending: any[] = [];
-  for (const seed of STARTER_ROUTING_PROFILES) {
+  for (const seed of installedProviderSeedProfiles()) {
     const profile = handle.prepare(`
       SELECT id, seed_revision FROM routing_profiles WHERE source = 'seed' AND seed_key = ?
     `).get(seed.id);
-    if (!profile || profile.seed_revision == null || Number(profile.seed_revision) >= ROUTING_PROFILE_SEED_REVISION) continue;
+    if (!profile || profile.seed_revision == null) continue;
+    const existing = handle.prepare(`
+      SELECT category_id, data, position FROM routing_profile_entries
+      WHERE profile_id = ? ORDER BY position, category_id
+    `).all(profile.id);
+    const matchesSeed = existing.length === seed.categories.length
+      && existing.every((entry: any, position: number) => entry.category_id === seed.categories[position].id
+        && entry.data === JSON.stringify(seed.categories[position])
+        && Number(entry.position) === position);
+    if (Number(profile.seed_revision) >= ROUTING_PROFILE_SEED_REVISION && matchesSeed) continue;
     pending.push({ seed, profileId: profile.id });
   }
   if (!pending.length) return;
@@ -1087,7 +1103,7 @@ function refreshRoutingProfileSeeds(handle?: any) {
     const affected = new Set<string>();
     for (const { seed, profileId } of pending) {
       handle.prepare('DELETE FROM routing_profile_entries WHERE profile_id = ?').run(profileId);
-      seed.categories.forEach((category?: any, position?: any) => {
+      seed.categories.forEach((category: any, position: number) => {
         handle.prepare(`
           INSERT INTO routing_profile_entries (profile_id, category_id, data, position, updated_at)
           VALUES (?, ?, ?, ?, ?)
@@ -1101,8 +1117,9 @@ function refreshRoutingProfileSeeds(handle?: any) {
         affected.add(String(row.project));
       }
     }
-    refreshPreparedDispatches(handle, [...affected], null);
+    refreshPreparedDispatches(handle, [...affected], null, { preservePrepared: true });
   });
+  invalidateStoreCaches();
 }
 
 function refreshReadonlyCategorySeeds(handle?: any) {
@@ -1144,9 +1161,16 @@ function database() {
   if (!handle) {
     handle = db.openDb(root);
     migrateIfNeeded(handle, root);
-    refreshRoutingProfileSeeds(handle);
-    refreshReadonlyCategorySeeds(handle);
     dbByHome.set(root, handle);
+    refreshReadonlyCategorySeeds(handle);
+  }
+  if (!refreshingRoutingProfileSeeds) {
+    refreshingRoutingProfileSeeds = true;
+    try {
+      refreshRoutingProfileSeeds(handle);
+    } finally {
+      refreshingRoutingProfileSeeds = false;
+    }
   }
   return handle;
 }

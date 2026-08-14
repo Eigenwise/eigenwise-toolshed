@@ -20,16 +20,17 @@ var category_defaults_exports = {};
 __export(category_defaults_exports, {
   DEFAULT_CATEGORIES: () => DEFAULT_CATEGORIES,
   ROUTING_PROFILE_SEED_REVISION: () => ROUTING_PROFILE_SEED_REVISION,
-  STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES
+  STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES,
+  starterRoutingProfilesFor: () => starterRoutingProfilesFor
 });
 module.exports = __toCommonJS(category_defaults_exports);
-const ROUTING_PROFILE_SEED_REVISION = 6;
+const ROUTING_PROFILE_SEED_REVISION = 7;
 const DEFAULT_CATEGORIES = [
   {
     id: "codebase-exploration",
     name: "Codebase exploration",
     description: "Trace and explain how an unfamiliar code path, feature, or convention works. Existing code bounds the answer and no design choice is required, so high code reasoning is appropriate. The deliverable is a grounded map of existing code, not an implementation or design recommendation.",
-    route: { model: "codex-gpt-5-6-luna", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: null,
     contract: "Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact path under .claude/.codebase-info as its only write scope.",
     artifactRoots: [".claude/.codebase-info"],
@@ -41,7 +42,7 @@ const DEFAULT_CATEGORIES = [
     name: "Debugging",
     description: 'Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. Selecting and eliminating competing hypotheses requires high-capability reasoning. Use behavior-verification when the intended behavior is already known and only verification is needed. "Why is this slow" belongs here; "does approach X make it faster" is spike-investigation.',
     route: { model: "opus", effort: "high" },
-    fallback: { model: "codex-gpt-5-6-terra", effort: "high" },
+    fallback: null,
     contract: "Reproduce first; use a hypothesis loop and prove the fix.",
     artifactRoots: [],
     enabled: true
@@ -51,7 +52,7 @@ const DEFAULT_CATEGORIES = [
     name: "Experiment",
     description: "Use ONLY when the verdict is a human's judgement and no offline metric has been shown to reproduce it. Comparing candidates against an irreducibly subjective oracle requires high-capability judgement. If a test can decide, it is coding or debugging.",
     route: { model: "opus", effort: "high" },
-    fallback: { model: "codex-gpt-5-6-sol", effort: "high" },
+    fallback: null,
     contract: "Read the experiment log fully before the first edit. Run one hypothesis per round. Always commit the candidate to sidequest/experiment/<ref> and pin refs/sidequest/<ref>/r<N>, even when it loses. Write the oracle ask as a blind ranked comparison. Never paraphrase the user's verdict. Hand off with release and the oracle ask.",
     artifactRoots: [],
     readonly: false,
@@ -61,7 +62,7 @@ const DEFAULT_CATEGORIES = [
     id: "implementation-explanation",
     name: "Implementation-grounded explanation",
     description: "Explain established technical behavior for a named audience when the implementation already supplies the factual boundary. Known code bounds both facts and structure, so high code-and-language capability is appropriate.",
-    route: { model: "codex-gpt-5-6-luna", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: { model: "sonnet", effort: "medium" },
     contract: "Verify every behavioral claim against the supplied implementation, preserve the requested voice and scope, and do not invent APIs or guarantees.",
     artifactRoots: [],
@@ -71,7 +72,7 @@ const DEFAULT_CATEGORIES = [
     id: "general",
     name: "General fallback",
     description: "Required and undeletable fallback. Use only when no more specific capability fits or the request is too underspecified to classify safely. This route performs bounded triage, so high reasoning is appropriate. Reclassify after the first concrete evidence appears.",
-    route: { model: "codex-gpt-5-6-luna", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: null,
     contract: "Clarify or inspect just enough to select a specific category; avoid broad work by default.",
     artifactRoots: [],
@@ -82,7 +83,7 @@ const DEFAULT_CATEGORIES = [
     name: "Hard coding",
     description: "A code change whose approach itself is genuinely unknown or contested and has hard-to-reverse consequences: competing designs, unclear root cause, or no obvious correct path. Blast radius, cross-consumer or cross-surface risk, and work that feels scary to get wrong do not make a ticket hard. If you can already state the fix approach, it is coding.normal no matter the stakes. Does not belong here: a high-risk migration with an established rollout is coding.normal. This tier is deliberately RARE and expensive; choose it only when the approach is unclear or contested and consequences are high. On the fence between coding.normal and coding.hard? It's coding.normal.",
     route: { model: "opus", effort: "xhigh" },
-    fallback: { model: "codex-gpt-5-6-sol", effort: "xhigh" },
+    fallback: null,
     contract: "Plan against the existing system, keep scope explicit, and verify end to end.",
     artifactRoots: [],
     enabled: true
@@ -113,7 +114,7 @@ const DEFAULT_CATEGORIES = [
     id: "review-audit",
     name: "Review or audit",
     description: "Inspect an existing change, system, or artifact for correctness, regressions, or spec gaps. Adversarially checking interactions and tracing concrete impact requires high code-review capability. The deliverable is evidence-backed findings, not an unsolicited rewrite. Includes vulnerability-focused review when the ticket calls for it.",
-    route: { model: "codex-gpt-5-6-terra", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: { model: "sonnet", effort: "high" },
     contract: "Report concrete findings with evidence, confidence, and impact; do not edit unless asked. For security-focused review, severity-rank findings and give each a concrete exploit scenario.",
     artifactRoots: [],
@@ -125,7 +126,7 @@ const DEFAULT_CATEGORIES = [
     name: "Spike or investigation",
     description: "Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. Comparing viable approaches under material uncertainty requires high technical reasoning. The deliverable is a recommendation with evidence and explicit remaining uncertainty. The unknown must be answerable by building or running something in this repo or system; use source-lookup or evidence-research for external-source questions.",
     route: { model: "opus", effort: "high" },
-    fallback: { model: "codex-gpt-5-6-sol", effort: "high" },
+    fallback: null,
     contract: "Timebox exploration; record what was tested, ruled out, and recommended. For design-direction work: state constraints, compare viable options, recommend one, and name tradeoffs.",
     artifactRoots: [],
     readonly: true,
@@ -135,7 +136,7 @@ const DEFAULT_CATEGORIES = [
     id: "coding.normal",
     name: "Standard coding",
     description: "A code change with a clear destination but real engineering judgment in getting there: choosing among a few conventional, already-used-in-this-repo patterns, coordinating edits across files that reference each other, or filling in reasonable defaults the request left unspecified. A clear approach still belongs here even when the change is high-stakes or touches many consumers; raise the verification bar, not the model tier. Belongs here: a new endpoint or component following the shape of existing ones; a fix requiring understanding how two or three parts interact; a refactor following an established pattern already used elsewhere in this codebase. Does not belong here: work where the repo doesn't show the right pattern and you'd have to invent one (coding.hard), or work with no real decision points (coding.easy). This is the DEFAULT tier for real coding work: when you're unsure whether a change is normal or hard, choose coding.normal.",
-    route: { model: "codex-gpt-5-6-terra", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: { model: "sonnet", effort: "high" },
     contract: "Establish the local pattern, implement to it, then run relevant checks.",
     artifactRoots: [],
@@ -145,7 +146,7 @@ const DEFAULT_CATEGORIES = [
     id: "coding.easy",
     name: "Straightforward change",
     description: "A change where the correct edit is mechanically obvious once you've found the right spot: the pattern to follow already exists verbatim elsewhere in the repo, and there's no point where a reasonable engineer could pick two different valid approaches. Belongs here: adding a field that mirrors existing fields; fixing a value that's clearly wrong against a known-correct reference; wiring a new call to a utility the way it's already called elsewhere; a tightly bounded, reversible non-code change (config value, doc move, rename) with an explicit target and expected result. Does not belong here: anything where you must decide HOW to do it, even in one file (coding.normal or coding.hard), or an edit that first requires reading large files or broad repo context before a small change — route that coding.normal. File count alone never decides this tier.",
-    route: { model: "codex-gpt-5-6-terra", effort: "medium" },
+    route: { model: "sonnet", effort: "medium" },
     fallback: { model: "sonnet", effort: "medium" },
     contract: "Make the smallest working change and verify the stated contract.",
     artifactRoots: [],
@@ -155,7 +156,7 @@ const DEFAULT_CATEGORIES = [
     id: "behavior-verification",
     name: "Behavior verification",
     description: "Add, run, repair, or interpret a focused verification flow where the intended behavior and deciding signal are already known. Those fixed constraints still benefit from high execution-and-test reasoning. Use debugging when the cause of a failing result is unknown.",
-    route: { model: "codex-gpt-5-6-luna", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: null,
     contract: "Exercise the named behavior with the narrowest reliable check and report the observed result faithfully.",
     artifactRoots: [],
@@ -165,7 +166,7 @@ const DEFAULT_CATEGORIES = [
     id: "interaction-design-implementation",
     name: "Interaction design and implementation",
     description: "Build or substantially reshape a user-facing interface where visual hierarchy, interaction design, and implementation must work together. Coordinating those concerns and judging rendered results requires high frontend capability. Includes charts, dashboards, and other data visualization. Use coding.easy for a purely mechanical UI tweak.",
-    route: { model: "codex-gpt-5-6-terra", effort: "high" },
+    route: { model: "sonnet", effort: "high" },
     fallback: { model: "sonnet", effort: "high" },
     contract: "Match the product's visual language and validate the rendered flow, not only source code. For charts and data visualizations, read the dataviz skill's references before writing chart code, follow its palette, form, and accessibility rules, and verify the rendered output.",
     artifactRoots: [],
@@ -176,7 +177,7 @@ const DEFAULT_CATEGORIES = [
     name: "Visual evaluation",
     description: "Judge a rendered interface through browser screenshots as a first-time user would see it, finding confusing representations, misleading labels, dead panels, and layout or flow problems. Visual judgement needs a multimodal model, while the bounded review-only deliverable keeps effort at medium. Source-code evidence belongs in review-audit.",
     route: { model: "opus", effort: "medium" },
-    fallback: { model: "codex-gpt-5-6-terra", effort: "medium" },
+    fallback: null,
     contract: "Strictly read-only and review-only: browse and screenshot the rendered surface, never edit files, never fix, never restart or write to live services. Deliver a prioritized findings comment on the ticket, worst problems first, with each finding naming the exact element and what a user would misunderstand.",
     artifactRoots: [],
     readonly: true,
@@ -351,9 +352,32 @@ const STARTER_ROUTING_PROFILES = [
     categories: WRITING_CATEGORIES
   }
 ];
+const GATEWAY_ROUTE_BY_PROFILE_CATEGORY = {
+  coding: {
+    "codebase-exploration": { model: "codex-gpt-5-6-luna", effort: "high" },
+    "implementation-explanation": { model: "codex-gpt-5-6-luna", effort: "high" },
+    general: { model: "codex-gpt-5-6-luna", effort: "high" },
+    "review-audit": { model: "codex-gpt-5-6-terra", effort: "high" },
+    "coding.normal": { model: "codex-gpt-5-6-terra", effort: "high" },
+    "coding.easy": { model: "codex-gpt-5-6-terra", effort: "medium" },
+    "behavior-verification": { model: "codex-gpt-5-6-luna", effort: "high" },
+    "interaction-design-implementation": { model: "codex-gpt-5-6-terra", effort: "high" }
+  }
+};
+function starterRoutingProfilesFor(models) {
+  const availableGatewayModels = new Set(models.filter((model) => model.provider === "codex").map((model) => model.slug));
+  return STARTER_ROUTING_PROFILES.map((profile) => ({
+    ...profile,
+    categories: profile.categories.map((category) => {
+      const gatewayRoute = GATEWAY_ROUTE_BY_PROFILE_CATEGORY[profile.id]?.[category.id];
+      return gatewayRoute && availableGatewayModels.has(gatewayRoute.model) ? { ...category, route: gatewayRoute } : { ...category };
+    })
+  }));
+}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   DEFAULT_CATEGORIES,
   ROUTING_PROFILE_SEED_REVISION,
-  STARTER_ROUTING_PROFILES
+  STARTER_ROUTING_PROFILES,
+  starterRoutingProfilesFor
 });

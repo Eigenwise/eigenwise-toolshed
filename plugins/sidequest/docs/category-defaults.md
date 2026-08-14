@@ -1,36 +1,26 @@
 # Default category taxonomy
 
-These are the shipped defaults for category routing. The dispatcher receives each **Classifier description** verbatim, so classify the requested work rather than its title, urgency, or a requested model. Pick the narrowest matching row. A plausibly matching project-scoped category wins over any global row, and classification follows the deliverable rather than whether the process involves code or tooling.
+Sidequest ships four routing profiles: Coding, Creative music, Research, and Writing. Their defaults always work in a Sidequest-only install. Every seed route begins as a native Claude route.
 
-Each primary route is a concrete backend pin. Fallbacks default to none. The global fallback handles degradation when a concrete backend is unavailable, and a per-category fallback remains an explicit user option.
+## Optional Model Gateway routes
 
-| ID | Name | Classifier description | Primary route | Executor contract | Sources |
-| --- | --- | --- | --- | --- | --- |
-| `mechanical` | Mechanical change | A tightly bounded, reversible change with an explicit target and expected result. No design choice, diagnosis, or repository-wide inference is needed. | `codex-gpt-5-6-luna` / `high` | Change only the named surface; run the named check. | [A1], [A2], [O1], [O2] |
-| `docs-writing` | Documentation writing | Write or edit prose from supplied facts and a clear audience, without needing to investigate technical truth beyond the provided context. Use `web-research` when sources must be found or checked. | `codex-gpt-5-6-luna` / `high` | Preserve the requested voice and scope; do not invent facts. | [A1], [O1], [O2] |
-| `codebase-exploration` | Codebase exploration | Locate and explain how an unfamiliar code path, feature, or convention works. The deliverable is a grounded map of existing code, not an implementation or a design recommendation. | `codex-gpt-5-6-luna` / `high` | Read before concluding; cite files and symbols. Do not edit project source. A ticket may explicitly name one bounded documentation artifact path under `.claude/.codebase-info` as its only write scope. The structured `artifactRoots` capability is `['.claude/.codebase-info']`; contract text or ticket markers cannot grant it. | [A1], [O1], [O2] |
-| `web-research` | Web research | Answer a question whose result depends on current, external, or source-backed information. Gather primary sources where possible and distinguish evidence from inference. | `codex-gpt-5-6-luna` / `high` | Return a sourced synthesis; do not edit repository files. | [A1], [A2], [O1], [O2] |
-| `testing` | Testing and verification | Add, run, repair, or interpret a focused test or verification flow where the intended behavior is already known. Use `debugging` when the cause of a failing result is unknown. | `codex-gpt-5-6-luna` / `high` | Exercise the named behavior and report the observed result faithfully. | [A1], [A2], [O1], [O2] |
-| `coding.easy` | Straightforward coding | Implement a small, localized code change with a known approach and low interaction risk. The task does not require architectural decisions or multi-system reasoning. | `codex-gpt-5-6-luna` / `high` | Make the smallest working change and verify the stated contract. | [A1], [A2], [O1], [O2] |
-| `coding.normal` | Standard coding | Implement a bounded feature or fix that needs repository context, several coordinated edits, or normal engineering judgment, but has a conventional solution. | `codex-gpt-5-6-terra` / `high` | Establish the local pattern, implement to it, then run relevant checks. | [A1], [A2], [O1], [O2] |
-| `coding.hard` | Hard coding | Implement a complex, ambiguous, or cross-cutting change requiring substantial design judgment, deep reasoning, or autonomous multi-step execution. | `codex-gpt-5-6-sol` / `xhigh` | Plan against the existing system, keep scope explicit, and verify end to end. | [A1], [A2], [O1], [O2] |
-| `debugging` | Debugging | Explain and fix an observed defect with an unknown cause, including intermittent failures and unexpected runtime behavior. The first job is to reproduce and narrow the hypothesis space. | `codex-gpt-5-6-terra` / `high` | Reproduce first; use a hypothesis loop and prove the fix. | [A1], [A2], [O1], [O2] |
-| `review-audit` | Review or audit | Inspect an existing change, system, or artifact for correctness, regressions, security, or spec gaps. The deliverable is evidence-backed findings, not an unsolicited rewrite. | `codex-gpt-5-6-terra` / `high` | Report concrete findings with evidence, confidence, and impact; do not edit unless asked. | [A1], [A2], [O1], [O2] |
-| `ui-frontend` | UI and frontend work | Build or substantially reshape a user-facing interface where visual hierarchy, interaction design, and implementation must work together. Use `coding.easy` for a purely mechanical UI tweak. | `codex-gpt-5-6-terra` / `high` | Match the product’s visual language and validate the rendered flow, not only source code. | [A1], [A2], [O1], [O2] |
-| `spike-investigation` | Spike or investigation | Reduce an important unknown by testing alternatives, feasibility, behavior, or constraints. The deliverable is a recommendation with evidence and explicit remaining uncertainty. | `codex-gpt-5-6-terra` / `high` | Timebox exploration; record what was tested, ruled out, and recommended. | [A1], [A2], [O1], [O2] |
-| `architecture-design` | Architecture design | Design a system boundary, migration, or cross-cutting technical direction where several valid approaches have material tradeoffs. The request needs a decision framework, not implementation alone. | `codex-gpt-5-6-sol` / `xhigh` | State constraints, compare viable options, recommend one, and name tradeoffs. | [A1], [A2], [O1], [O2] |
-| `general` | General fallback | **Required and undeletable fallback.** Use only when no more specific category fits or the request is too underspecified to classify safely. Reclassify after the first concrete evidence appears. | `codex-gpt-5-6-luna` / `high` | Clarify or inspect just enough to select a specific category; avoid broad work by default. | [A1], [A2], [O1], [O2] |
+A ready Model Gateway catalog can replace a Coding seed route only when it advertises the exact GPT slug below. Missing, empty, unreadable, stale, or unready catalogs leave the native route in place.
 
-## Why these defaults
+| Coding category | Native route | Exact optional Gateway route |
+| --- | --- | --- |
+| Codebase exploration | `sonnet` / `high` | `codex-gpt-5-6-luna` / `high` |
+| Implementation-grounded explanation | `sonnet` / `high` | `codex-gpt-5-6-luna` / `high` |
+| General fallback | `sonnet` / `high` | `codex-gpt-5-6-luna` / `high` |
+| Review or audit | `sonnet` / `high` | `codex-gpt-5-6-terra` / `high` |
+| Standard coding | `sonnet` / `high` | `codex-gpt-5-6-terra` / `high` |
+| Straightforward change | `sonnet` / `medium` | `codex-gpt-5-6-terra` / `medium` |
+| Behavior verification | `sonnet` / `high` | `codex-gpt-5-6-luna` / `high` |
+| Interaction design and implementation | `sonnet` / `high` | `codex-gpt-5-6-terra` / `high` |
 
-- Anthropic positions Haiku 4.5 for fast, economical, high-volume straightforward work and sub-agent tasks; Sonnet 5 for coding, agents, analysis, and enterprise processes; Opus 4.8 for complex autonomous coding, research, and systems work; and Fable 5 for the most demanding long-running agents. [A1], [A3]
-- Anthropic recommends `high` as the normal intelligence-sensitive baseline, `xhigh` for hard coding and agentic work, and lower effort for routine or cost-sensitive work. `max` is deliberately absent because it is for exceptional, measured cases. [A2]
-- OpenAI describes Luna as the clear, repeatable, high-volume model; Terra as the everyday tool-using workhorse; and Sol for complex, open-ended work that needs extra analysis, judgment, or polish. [O1], [O2]
+The mapping is explicit. Sidequest never substitutes a different GPT model when the advertised one is absent.
 
-## Sources
+## Seed migration and dispatches
 
-- **[A1] Anthropic, [Choosing the right model](https://platform.claude.com/docs/en/about-claude/models/choosing-a-model)**: published model-selection matrix for Haiku 4.5, Sonnet 5, and Opus 4.8.
-- **[A2] Anthropic, [Effort](https://platform.claude.com/docs/en/build-with-claude/effort)**: supported effort levels and recommendations by model tier.
-- **[A3] Anthropic, [Introducing Claude Fable 5 and Claude Mythos 5](https://platform.claude.com/docs/en/about-claude/models/introducing-claude-fable-5-and-claude-mythos-5)**: Fable 5 positioning for long-running, high-capability agents.
-- **[O1] OpenAI, [GPT-5.6](https://openai.com/index/gpt-5-6/)**: Luna, Terra, and Sol positioning and effort guidance.
-- **[O2] OpenAI, [GPT-5.6 Sol preview](https://openai.com/index/previewing-gpt-5-6-sol/)**: complex, open-ended work positioning for Sol and the GPT-5.6 family.
+An untouched shipped profile updates when the available provider capability changes, so its displayed and dispatched category route stays valid. User-created or edited profiles, plus project category overrides and detaches, keep their configured routes.
+
+A prepared, launched, or claimed dispatch keeps its pinned executor route. If its Gateway provider disappears, the dispatch fails closed rather than switching to Claude or another GPT model.

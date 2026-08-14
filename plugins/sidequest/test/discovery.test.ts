@@ -34,11 +34,15 @@ const store = require('../lib/store.js') as {
   classifyModelFilter(model: string): string;
 };
 
-function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = { schemaVersion: 3, source: 'model-gateway' }) {
+function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = {
+  schemaVersion: 3,
+  source: 'model-gateway',
+  codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
+}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-'));
   const dir = path.join(root, 'model-gateway');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ ...catalog, models }));
+  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ updatedAt: new Date().toISOString(), ...catalog, models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
 }
 
@@ -49,6 +53,18 @@ test('missing and malformed catalogs fail soft', () => {
   fs.writeFileSync(path.join(root, 'model-gateway', 'catalog.json'), '{bad');
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
   assert.deepEqual(discovery.discoverExternalModels(), []);
+});
+
+test('stale, invalid, and future catalog timestamps suppress both models and readiness', () => {
+  for (const updatedAt of [undefined, 'not-a-date', new Date(Date.now() - 5 * 60 * 1000 - 1).toISOString(), new Date(Date.now() + 60 * 1000).toISOString()]) {
+    writeCatalog([{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test' }], {
+      schemaVersion: 3,
+      updatedAt,
+      codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
+    });
+    assert.deepEqual(discovery.discoverExternalModels(), []);
+    assert.equal(discovery.providerReadiness('codex'), null);
+  }
 });
 
 test('discovery reads the gateway readiness contract independently of catalog models', () => {
@@ -84,6 +100,7 @@ test('discovery accepts catalog v2 migration input', () => {
     schema: 2,
     source: 'model-gateway',
     updatedAt: new Date().toISOString(),
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
   });
   assert.deepEqual(discovery.discoverExternalModels(), [{
     slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
@@ -98,9 +115,7 @@ test('discovery reads schema-4 providers and model providers', () => {
       codex: { ready: true, state: 'ready', message: 'Codex is ready.' },
     },
   });
-  assert.deepEqual(discovery.discoverExternalModels(), [{
-    slug: 'grok-test', id: 'claude-grok-test', label: 'Grok Test', provider: 'grok', source: 'model-gateway',
-  }]);
+  assert.deepEqual(discovery.discoverExternalModels(), []);
   assert.deepEqual(discovery.providerReadiness('grok'), {
     provider: 'grok', ready: false, state: 'credentials-missing', message: 'Sign in to Grok CLI, then retry.',
   });

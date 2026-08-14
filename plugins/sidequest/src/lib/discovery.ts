@@ -13,6 +13,7 @@ interface CatalogSource {
 interface CatalogData {
   schemaVersion?: unknown;
   schema?: unknown;
+  updatedAt?: unknown;
   models?: unknown;
   providers?: unknown;
   codexReadiness?: unknown;
@@ -64,11 +65,18 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
 
-function validCatalog(data: unknown, schemas: ReadonlySet<number>): CatalogData | null {
+export const CATALOG_STALE_MS = 5 * 60 * 1000;
+
+function usableCatalog(data: unknown, schemas: ReadonlySet<number>): CatalogData | null {
   if (!isRecord(data)) return null;
   const catalog = data as CatalogData;
   const schema = catalog.schemaVersion ?? catalog.schema;
-  return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
+  const updatedAt = typeof catalog.updatedAt === 'string' ? Date.parse(catalog.updatedAt) : Number.NaN;
+  const age = Date.now() - updatedAt;
+  return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models)
+    && Number.isFinite(updatedAt) && age >= 0 && age <= CATALOG_STALE_MS
+    ? catalog
+    : null;
 }
 
 function catalogSchema(catalog: CatalogData): number {
@@ -82,16 +90,21 @@ function validateReadiness(raw: unknown): Omit<ProviderReadiness, 'provider'> | 
   return state && message ? { ready: raw.ready, state, message } : null;
 }
 
+function catalogProviderReadiness(catalog: CatalogData, provider: string): ProviderReadiness | null {
+  const schema = catalogSchema(catalog);
+  const readiness = schema >= 4
+    ? isRecord(catalog.providers) && validateReadiness(catalog.providers[provider])
+    : provider === 'codex' && validateReadiness(catalog.codexReadiness);
+  return readiness ? { provider, ...readiness } : null;
+}
+
 export function providerReadiness(provider: string): ProviderReadiness | null {
   for (const root of discoveryRoots()) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = validCatalog(readJsonSafe(path.join(root, relPath)), schemas);
+      const catalog = usableCatalog(readJsonSafe(path.join(root, relPath)), schemas);
       if (!catalog) continue;
-      const schema = catalogSchema(catalog);
-      const readiness = schema >= 4
-        ? isRecord(catalog.providers) && validateReadiness(catalog.providers[provider])
-        : provider === 'codex' && validateReadiness(catalog.codexReadiness);
-      if (readiness) return { provider, ...readiness };
+      const readiness = catalogProviderReadiness(catalog, provider);
+      if (readiness) return readiness;
     }
   }
   return null;
@@ -117,11 +130,12 @@ export function discoverExternalModels(): ExternalModel[] {
   const seen = new Set<string>();
   for (const root of discoveryRoots()) {
     for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = validCatalog(readJsonSafe(path.join(root, relPath)), schemas);
+      const catalog = usableCatalog(readJsonSafe(path.join(root, relPath)), schemas);
       if (!catalog) continue;
       for (const raw of catalog.models as unknown[]) {
         const entry = validateEntry(raw, source, catalogSchema(catalog));
-        const key = entry && `${entry.source}:${entry.slug}`;
+        const readiness = entry && catalogProviderReadiness(catalog, entry.provider);
+        const key = entry && readiness?.ready && `${entry.source}:${entry.slug}`;
         if (!entry || !key || seen.has(key)) continue;
         seen.add(key);
         out.push(entry);
