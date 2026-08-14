@@ -18,6 +18,7 @@ function terminalLease(overrides: Record<string, unknown> = {}) {
     dispatchBaseline: 'a'.repeat(40),
     observedRevision: 'a'.repeat(40),
     observedWorktree,
+    boundWorktree: observedWorktree,
     identity: { status: 'bound', agentId: 'agent-1' },
     phase: 'terminal',
     locked: false,
@@ -64,9 +65,24 @@ test('a changed worktree revision cannot write or resume against its dispatch ba
   assert.match(worktree.worktreeResumeDecision(lease).reason, /observed worktree revision/);
 });
 
-test('creation accepts an unbound host worktree but still rejects a baseline mismatch', () => {
-  const lease = terminalLease({ identity: { status: 'unknown' }, phase: 'created' });
-  assert.equal(worktree.worktreeCreateDecision(lease).allowed, true);
-  const changed = terminalLease({ identity: { status: 'unknown' }, phase: 'created', observedRevision: 'b'.repeat(40) });
-  assert.match(worktree.worktreeCreateDecision(changed).reason, /dispatch baseline/);
+test('creation requires a prepared dispatch-bound lease before mutation', () => {
+  const bound = terminalLease({
+    phase: 'prepared',
+    liveness: { status: 'live', evidence: 'dispatch reserved creation' },
+  });
+  const unbound = terminalLease({
+    boundWorktree: undefined,
+    phase: 'prepared',
+    liveness: { status: 'live', evidence: 'dispatch reserved creation' },
+  });
+  assert.equal(worktree.worktreeCreateDecision(bound).allowed, true);
+  assert.match(worktree.worktreeCreateDecision(unbound).reason, /bound worktree target/);
+  assert.match(worktree.worktreeCreateDecision(terminalLease({
+    identity: { status: 'unknown' },
+    phase: 'prepared',
+  })).reason, /bound worktree identity/);
+  assert.match(worktree.worktreeCreateDecision(terminalLease({
+    phase: 'prepared',
+    observedRevision: 'b'.repeat(40),
+  })).reason, /dispatch baseline/);
 });

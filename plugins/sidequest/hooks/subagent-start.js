@@ -188,7 +188,8 @@ function main() {
   if (classification.kind === "unknown") return;
   try {
     const store = require(runtimeModule("store"));
-    store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null);
+    const worktree = stringField(data, "cwd", "project_dir", "projectDir");
+    store.bindDispatchAgent(sessionId, executor, agentId || null, agentName || null, worktree || null);
   } catch (_) {
   }
   const warning = diagnosticWorktreeWarning(data);

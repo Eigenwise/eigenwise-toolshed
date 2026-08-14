@@ -482,7 +482,7 @@ function ticketWorktreeIdentity(ticket, projectPath) {
   const continuationWorktree = dispatch.continuation?.sourceWorktree;
   const worktree = sharedTree ? root : String(continuationWorktree || dispatch.worktree || "").trim();
   if (!worktree) return null;
-  const gitDir = sharedTree ? path.join(root, ".git") : path.join(root, ".git", "worktrees", path.basename(worktree));
+  const gitDir = sharedTree ? path.join(root, ".git") : String(dispatch.worktreeGitDirectory || "").trim() || "(recorded Git directory unavailable)";
   const identity = `Worktree identity: ${sharedTree ? "shared tree" : "linked worktree"}
 Path: ${worktree}
 Git dir: ${gitDir}`;
@@ -503,7 +503,7 @@ function ticketIsolationContract(ticket, projectPath) {
   const root = String(projectPath || "").trim() || "<board project path>";
   const dispatch = ticket.dispatch;
   const continuationWorktree = String(dispatch.continuation?.sourceWorktree || "").trim();
-  const expected = continuationWorktree || String(dispatch.worktree || "").trim() || path.join(worktreeRoot(root), "agent-<your agent id>");
+  const expected = continuationWorktree || String(dispatch.worktree || "").trim() || "(immutable worktree binding unavailable; writes will be refused)";
   return [[
     "Worktree isolation contract: this dispatch runs in its own linked worktree, never in the shared checkout.",
     "The harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path.",

@@ -98,12 +98,16 @@ function repositoryDecision(lease) {
   return null;
 }
 function worktreeCreateDecision(lease) {
-  if (!lease.canonicalWorktree) return denied("Creation requires an observed worktree.");
-  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed("the observed worktree belongs to the dispatch repository.");
+  if (lease.identity.status === "unknown") return unknownIdentityDecision("Creation");
+  if (lease.phase !== "prepared") return denied("Creation requires a prepared worktree lease.");
+  if (!lease.dispatchRef) return denied("Creation requires a dispatch binding.");
+  if (!lease.canonicalWorktree || !lease.canonicalBoundWorktree) return denied("Creation requires a bound worktree target.");
+  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed("the prepared dispatch owns the bound worktree target.");
 }
 function worktreeWriteDecision(lease, target) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("A write");
   if (!lease.canonicalWorktree) return denied("A write requires an observed worktree.");
+  if (!lease.canonicalBoundWorktree) return denied("A write requires an immutable worktree binding.");
   const repository = repositoryDecision(lease);
   if (repository) return repository;
   const baseline = incorrectBaselineDecision(lease);

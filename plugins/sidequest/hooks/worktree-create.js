@@ -94,14 +94,7 @@ function existingWorktreeMatches(repository, target) {
     return false;
   }
 }
-function baseRef(repository) {
-  try {
-    return git(repository, ["symbolic-ref", "--quiet", "refs/remotes/origin/HEAD"]);
-  } catch (_) {
-    return "HEAD";
-  }
-}
-function createWorktree(repository, name, target) {
+function createWorktree(repository, name, target, baseline) {
   import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(target), { recursive: true });
   if (import_node_fs2.default.existsSync(target)) {
     if (existingWorktreeMatches(repository, target)) return false;
@@ -114,24 +107,37 @@ function createWorktree(repository, name, target) {
     git(repository, ["worktree", "add", target, branch]);
     return true;
   }
-  git(repository, ["worktree", "add", "-b", branch, target, baseRef(repository)]);
+  git(repository, ["worktree", "add", "-b", branch, target, baseline]);
   return true;
 }
-function observedWorktreeLease(repository, worktree) {
-  const gitDirectory = git(worktree, ["rev-parse", "--git-dir"]);
-  const commonGitDirectory = git(worktree, ["rev-parse", "--git-common-dir"]);
+function bindCreation(repository, sessionId, worktree) {
+  const store = require(runtimeModule("store"));
+  const project = store.findProject(repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
+  return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
+}
+function plannedRevision(repository, name, baseline) {
+  const branch = `worktree-${name}`;
+  git(repository, ["check-ref-format", "--branch", branch]);
+  return gitSucceeds(repository, ["show-ref", "--verify", "--quiet", `refs/heads/${branch}`]) ? git(repository, ["rev-parse", "--verify", `refs/heads/${branch}^{commit}`]) : git(repository, ["rev-parse", "--verify", `${baseline}^{commit}`]);
+}
+function preparedWorktreeLease(binding, name) {
+  const gitDirectory = git(binding.repository, ["rev-parse", "--git-dir"]);
+  const commonGitDirectory = git(binding.repository, ["rev-parse", "--git-common-dir"]);
+  const gitPath = (value) => import_node_path2.default.isAbsolute(value) ? value : import_node_path2.default.resolve(binding.repository, value);
   return leaseKernel.createWorktreeLease({
-    repository,
-    gitDirectory: import_node_path2.default.isAbsolute(gitDirectory) ? gitDirectory : import_node_path2.default.resolve(worktree, gitDirectory),
-    commonGitDirectory: import_node_path2.default.isAbsolute(commonGitDirectory) ? commonGitDirectory : import_node_path2.default.resolve(worktree, commonGitDirectory),
-    dispatchRef: null,
-    dispatchBaseline: null,
-    observedRevision: git(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]),
-    observedWorktree: worktree,
-    identity: { status: "unknown" },
-    phase: "created",
+    repository: binding.repository,
+    gitDirectory: gitPath(gitDirectory),
+    commonGitDirectory: gitPath(commonGitDirectory),
+    dispatchRef: binding.ref,
+    dispatchBaseline: binding.baseline,
+    observedRevision: plannedRevision(binding.repository, name, binding.baseline),
+    observedWorktree: binding.worktree,
+    boundWorktree: binding.worktree,
+    identity: { status: "bound", dispatchRef: binding.ref },
+    phase: "prepared",
     locked: false,
-    liveness: { status: "unknown", evidence: "WorktreeCreate has no agent identity." },
+    liveness: { status: "live", evidence: `dispatch ${binding.ref} reserved this creation` },
     provisioning: "host"
   });
 }
@@ -140,22 +146,47 @@ function provisioningConfig(repository) {
   const project = store.findProject(repository);
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
+function removeCreatedWorktree(repository, target) {
+  try {
+    git(repository, ["worktree", "remove", "--force", target]);
+  } catch (_) {
+    import_node_fs2.default.rmSync(target, { recursive: true, force: true });
+    git(repository, ["worktree", "prune"]);
+  }
+}
 function main() {
   const input = readStdin();
   if (!input || stringField(input, "hook_event_name") !== "WorktreeCreate") return;
   const name = stringField(input, "name");
+  const sessionId = stringField(input, "session_id", "sessionId");
   const cwd = stringField(input, "cwd") || process.cwd();
   if (!name) throw new Error("WorktreeCreate requires a worktree name.");
+  if (!sessionId) throw new Error("WorktreeCreate requires a dispatch session binding.");
   const repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule("worktrees"));
   const target = worktrees.namedWorktreePath(repository, name);
-  const created = createWorktree(repository, name, target);
-  if (created) {
-    const decision = leaseKernel.worktreeCreateDecision(observedWorktreeLease(repository, target));
-    if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
-    worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
+  const binding = bindCreation(repository, sessionId, target);
+  if (!binding.ok || !binding.ref || !binding.baseline || !binding.repository || !binding.worktree) {
+    throw new Error(`worktree lease refused creation: ${binding.reason || "dispatch binding is incomplete"}`);
   }
-  process.stdout.write(`${target}
+  const boundCreation = {
+    ref: binding.ref,
+    baseline: binding.baseline,
+    repository: binding.repository,
+    worktree: binding.worktree
+  };
+  const decision = leaseKernel.worktreeCreateDecision(preparedWorktreeLease(boundCreation, name));
+  if (!decision.allowed) throw new Error(`worktree lease refused creation: ${decision.reason}`);
+  const created = createWorktree(boundCreation.repository, name, boundCreation.worktree, boundCreation.baseline);
+  if (created) {
+    try {
+      worktrees.provisionWorktree(boundCreation.repository, boundCreation.worktree, provisioningConfig(boundCreation.repository));
+    } catch (error) {
+      removeCreatedWorktree(boundCreation.repository, boundCreation.worktree);
+      throw error;
+    }
+  }
+  process.stdout.write(`${boundCreation.worktree}
 `);
 }
 try {

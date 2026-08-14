@@ -3,7 +3,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-export type LeaseIdentity = Readonly<{ status: 'bound'; agentId: string } | { status: 'unknown' }>;
+export type LeaseIdentity = Readonly<{ status: 'bound'; agentId?: string; dispatchRef?: string } | { status: 'unknown' }>;
 export type LeaseLiveness = Readonly<{ status: 'live'; evidence: string } | { status: 'terminal'; evidence: string } | { status: 'unknown' }>;
 export type LeasePhase = 'prepared' | 'created' | 'bound' | 'claimed' | 'working' | 'submitted' | 'integrated' | 'terminal';
 export type WorktreeProvisioning = 'host' | 'sidequest-copy' | 'sidequest-link' | 'unknown';
@@ -98,13 +98,17 @@ function repositoryDecision(lease: WorktreeLease): LeaseDecision | null {
 }
 
 export function worktreeCreateDecision(lease: WorktreeLease): LeaseDecision {
-  if (!lease.canonicalWorktree) return denied('Creation requires an observed worktree.');
-  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed('the observed worktree belongs to the dispatch repository.');
+  if (lease.identity.status === 'unknown') return unknownIdentityDecision('Creation');
+  if (lease.phase !== 'prepared') return denied('Creation requires a prepared worktree lease.');
+  if (!lease.dispatchRef) return denied('Creation requires a dispatch binding.');
+  if (!lease.canonicalWorktree || !lease.canonicalBoundWorktree) return denied('Creation requires a bound worktree target.');
+  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed('the prepared dispatch owns the bound worktree target.');
 }
 
 export function worktreeWriteDecision(lease: WorktreeLease, target: string): LeaseDecision {
   if (lease.identity.status === 'unknown') return unknownIdentityDecision('A write');
   if (!lease.canonicalWorktree) return denied('A write requires an observed worktree.');
+  if (!lease.canonicalBoundWorktree) return denied('A write requires an immutable worktree binding.');
   const repository = repositoryDecision(lease);
   if (repository) return repository;
   const baseline = incorrectBaselineDecision(lease);

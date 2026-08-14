@@ -63,12 +63,6 @@ function samePath(a: string, b: string): boolean {
   return normalize(a) === normalize(b);
 }
 
-function toolContextBoundWorktree(found: IsolationExpectation | null, worktree: string, agentId: string): string | null {
-  return found && path.basename(worktree) === `agent-${agentId}` && path.basename(path.dirname(worktree)) === 'worktrees' && path.basename(path.dirname(path.dirname(worktree))) === '.claude'
-    ? worktree
-    : found?.expectedWorktree || null;
-}
-
 function observedWorktreeLease(found: IsolationExpectation | null, worktree: string, agentId: string) {
   const git = (args: string[]) => execFileSync('git', args, {
     cwd: worktree,
@@ -86,7 +80,7 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
     dispatchBaseline: found?.dispatchBaseline || null,
     observedRevision: git(['rev-parse', '--verify', 'HEAD^{commit}']),
     observedWorktree: worktree,
-    boundWorktree: toolContextBoundWorktree(found, worktree, agentId),
+    boundWorktree: found?.sharedTree ? found.projectPath : found?.expectedWorktree || null,
     identity: found?.identityBound ? { status: 'bound', agentId } : { status: 'unknown' },
     phase: found?.terminal ? 'terminal' : found?.phase || 'created',
     locked: false,
@@ -125,14 +119,9 @@ function expectation(input: Record<string, unknown>, agentId: string, executor: 
 // the ticket, the tree it was promised, the tree it is actually writing to, and
 // the one move that saves the work. Losing the worktree is a platform failure,
 // not executor misbehaviour, so the message must not read like an accusation.
-function expectedWorktree(found: IsolationExpectation, repository: string, agentId: string): string {
-  if (found.expectedWorktree) return found.expectedWorktree;
-  try {
-    const worktrees = require(runtimeModule('worktrees')) as { resolvedAgentWorktree: (repo: string, id: string) => string };
-    return worktrees.resolvedAgentWorktree(repository, agentId || '<agent id>');
-  } catch (_) {
-    return `agent-${agentId || '<agent id>'}`;
-  }
+function expectedWorktree(found: IsolationExpectation): string {
+  if (found.sharedTree && found.projectPath) return found.projectPath;
+  return found.expectedWorktree || '(immutable worktree binding unavailable)';
 }
 
 function boundedText(value: string, limit: number): string {
@@ -159,8 +148,8 @@ function boundedRefusal(summary: string, facts: Array<[string, string]>, recover
   ].join('\n');
 }
 
-function refusal(found: IsolationExpectation, target: string, repoRoot: string, agentId: string, cwd: string): string {
-  const expected = expectedWorktree(found, repoRoot, agentId);
+function refusal(found: IsolationExpectation, target: string, repoRoot: string, cwd: string): string {
+  const expected = expectedWorktree(found);
   const sharedCheckout = `${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ''}`;
   return boundedRefusal(
     `${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
@@ -240,7 +229,7 @@ function main(): void {
       const message = !found.sharedTree && repo.linked
         ? linkedWorktreeLeaseRefusal(found, target, repo.root, decision.reason)
         : !found.sharedTree
-          ? refusal(found, target, repo.root, agentId, stringField(input, 'cwd'))
+          ? refusal(found, target, repo.root, stringField(input, 'cwd'))
           : leaseRefusal(found, target, decision.reason);
       writeDeny('PreToolUse', message);
     }

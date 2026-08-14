@@ -152,9 +152,6 @@ function samePath(a, b) {
   };
   return normalize(a) === normalize(b);
 }
-function toolContextBoundWorktree(found, worktree, agentId) {
-  return found && import_node_path2.default.basename(worktree) === `agent-${agentId}` && import_node_path2.default.basename(import_node_path2.default.dirname(worktree)) === "worktrees" && import_node_path2.default.basename(import_node_path2.default.dirname(import_node_path2.default.dirname(worktree))) === ".claude" ? worktree : found?.expectedWorktree || null;
-}
 function observedWorktreeLease(found, worktree, agentId) {
   const git = (args) => (0, import_node_child_process.execFileSync)("git", args, {
     cwd: worktree,
@@ -172,7 +169,7 @@ function observedWorktreeLease(found, worktree, agentId) {
     dispatchBaseline: found?.dispatchBaseline || null,
     observedRevision: git(["rev-parse", "--verify", "HEAD^{commit}"]),
     observedWorktree: worktree,
-    boundWorktree: toolContextBoundWorktree(found, worktree, agentId),
+    boundWorktree: found?.sharedTree ? found.projectPath : found?.expectedWorktree || null,
     identity: found?.identityBound ? { status: "bound", agentId } : { status: "unknown" },
     phase: found?.terminal ? "terminal" : found?.phase || "created",
     locked: false,
@@ -200,14 +197,9 @@ function expectation(input, agentId, executor) {
     return null;
   }
 }
-function expectedWorktree(found, repository, agentId) {
-  if (found.expectedWorktree) return found.expectedWorktree;
-  try {
-    const worktrees = require(runtimeModule("worktrees"));
-    return worktrees.resolvedAgentWorktree(repository, agentId || "<agent id>");
-  } catch (_) {
-    return `agent-${agentId || "<agent id>"}`;
-  }
+function expectedWorktree(found) {
+  if (found.sharedTree && found.projectPath) return found.projectPath;
+  return found.expectedWorktree || "(immutable worktree binding unavailable)";
 }
 function boundedText(value, limit) {
   if (Buffer.byteLength(value, "utf8") <= limit) return value;
@@ -231,8 +223,8 @@ function boundedRefusal(summary, facts, recovery) {
     `Recovery: ${recovery}`
   ].join("\n");
 }
-function refusal(found, target, repoRoot, agentId, cwd) {
-  const expected = expectedWorktree(found, repoRoot, agentId);
+function refusal(found, target, repoRoot, cwd) {
+  const expected = expectedWorktree(found);
   const sharedCheckout = `${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ""}`;
   return boundedRefusal(
     `${found.ref} was dispatched with worktree isolation, but this write lands in the SHARED checkout.`,
@@ -295,7 +287,7 @@ function main() {
   try {
     const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(found, repo.root, agentId), target);
     if (!decision.allowed) {
-      const message = !found.sharedTree && repo.linked ? linkedWorktreeLeaseRefusal(found, target, repo.root, decision.reason) : !found.sharedTree ? refusal(found, target, repo.root, agentId, stringField(input, "cwd")) : leaseRefusal(found, target, decision.reason);
+      const message = !found.sharedTree && repo.linked ? linkedWorktreeLeaseRefusal(found, target, repo.root, decision.reason) : !found.sharedTree ? refusal(found, target, repo.root, stringField(input, "cwd")) : leaseRefusal(found, target, decision.reason);
       writeDeny("PreToolUse", message);
     }
   } catch (_) {

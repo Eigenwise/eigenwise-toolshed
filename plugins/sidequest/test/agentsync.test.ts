@@ -919,12 +919,14 @@ test('briefings surface resolved worktree identities for linked and shared dispa
     ref: 'SQ-1091', title: 'Surface worktree identity', model: 'opus', effort: 'high', category: {},
   };
 
+  const linkedGitDirectory = path.join(root, '.git', 'worktrees', 'recorded-lease');
   const linked = agentsync.renderTicketBriefing(Object.assign({}, base, {
-    dispatch: { sharedTree: false, worktree: linkedWorktree },
+    dispatch: { sharedTree: false, worktree: linkedWorktree, worktreeGitDirectory: linkedGitDirectory },
   }), 'linked-token', undefined, root);
   assert.ok(linked.includes('Worktree identity: linked worktree'));
   assert.ok(linked.includes(`Path: ${linkedWorktree}`));
-  assert.ok(linked.includes(`Git dir: ${path.join(root, '.git', 'worktrees', 'agent-briefing-worker')}`));
+  assert.ok(linked.includes(`Git dir: ${linkedGitDirectory}`));
+  assert.ok(!linked.includes(path.join(root, '.git', 'worktrees', 'agent-briefing-worker')));
   assert.match(linked, /harness refuses heredocs in isolated worktrees; Write scripts to your scratchpad and run them by path/);
   assert.doesNotMatch(linked, /Working directory binding:/);
 

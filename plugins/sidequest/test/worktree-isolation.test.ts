@@ -21,6 +21,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
+const worktrees = require('../lib/worktrees.js');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const GUARD_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
@@ -81,6 +82,10 @@ function dispatched(agentId: string, options: { sharedTree?: boolean } = {}) {
     sessionId,
     agentName: agentId,
   }).ok, true);
+  if (options.sharedTree !== true) {
+    const expectedWorktree = worktrees.resolvedAgentWorktree(PROJECT, agentId);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, expectedWorktree).ok, true);
+  }
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
   const bound = store.getTicket(slug, ticket.ref);
   return { ticket: bound, sessionId, executor: bound.dispatchExecutor };
@@ -169,18 +174,21 @@ test('an assigned worktree at a changed dispatch revision is refused', () => {
   }
 });
 
-test('the harness-provisioned agent worktree is allowed even though sidequest would have placed it elsewhere', () => {
+test('a same-repository agent-name lookalike without the server binding is refused', () => {
   const agentId = 'a2harnessroot';
   const { ticket, sessionId, executor } = dispatched(agentId);
-  const harnessWorktree = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
-  assert.notEqual(harnessWorktree, ticket.dispatch.worktree, 'fixture must exercise the OTHER root');
-  fs.mkdirSync(path.dirname(harnessWorktree), { recursive: true });
-  execFileSync('git', ['worktree', 'add', '--detach', harnessWorktree], { cwd: PROJECT, windowsHide: true });
+  const lookalikeWorktree = path.join(PROJECT, '.claude', 'worktrees', `agent-${agentId}`);
+  assert.notEqual(lookalikeWorktree, ticket.dispatch.worktree, 'fixture must exercise an unbound lookalike');
+  fs.mkdirSync(path.dirname(lookalikeWorktree), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', lookalikeWorktree], { cwd: PROJECT, windowsHide: true });
   try {
-    const target = path.join(harnessWorktree, 'README.md');
-    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, harnessWorktree)), null);
+    const target = path.join(lookalikeWorktree, 'README.md');
+    const refusal = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, lookalikeWorktree));
+    assert.equal(refusal.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(refusal.hookSpecificOutput.permissionDecisionReason, /no write lease for this linked worktree/);
+    assert.match(refusal.hookSpecificOutput.permissionDecisionReason, /observed worktree differs from the dispatch-bound worktree/);
   } finally {
-    execFileSync('git', ['worktree', 'remove', '--force', harnessWorktree], { cwd: PROJECT, windowsHide: true });
+    execFileSync('git', ['worktree', 'remove', '--force', lookalikeWorktree], { cwd: PROJECT, windowsHide: true });
   }
 });
 
@@ -207,7 +215,7 @@ test('a harness worktree beneath the invoking linked worktree is allowed', () =>
       sessionId,
       agentName: agentId,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, harnessWorktree).ok, true);
     assert.equal(
       store.getTicket(slug, ticket.ref).dispatch.worktree,
       // realpathSync.native expands 8.3 short names (runner~1) the way the store's
