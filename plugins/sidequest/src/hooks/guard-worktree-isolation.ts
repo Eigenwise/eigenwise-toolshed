@@ -20,6 +20,7 @@ interface IsolationExpectation {
   expectedWorktree: string | null;
   expectedGitDirectory: string | null;
   expectedCommonGitDirectory: string | null;
+  expectedCheckoutInstance: string | null;
   expectedRevision: string | null;
   matchedBy: string;
   identityBound: boolean;
@@ -87,6 +88,7 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
     boundWorktree: found?.sharedTree ? found.projectPath : found?.expectedWorktree || null,
     boundGitDirectory: found?.sharedTree ? null : found?.expectedGitDirectory || null,
     boundCommonGitDirectory: found?.sharedTree ? null : found?.expectedCommonGitDirectory || null,
+    boundCheckoutInstance: found?.sharedTree ? null : found?.expectedCheckoutInstance || null,
     identity: found?.identityBound ? { status: 'bound', agentId } : { status: 'unknown' },
     phase: found?.terminal ? 'terminal' : found?.phase || 'created',
     locked: false,

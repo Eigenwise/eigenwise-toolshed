@@ -29,6 +29,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var worktree_exports = {};
 __export(worktree_exports, {
   canonicalPath: () => canonicalPath,
+  checkoutInstanceIdentity: () => checkoutInstanceIdentity,
+  createCheckoutInstanceMarker: () => createCheckoutInstanceMarker,
   createWorktreeLease: () => createWorktreeLease,
   isCanonicalRegisteredWorktree: () => isCanonicalRegisteredWorktree,
   sameCanonicalPath: () => sameCanonicalPath,
@@ -40,6 +42,29 @@ __export(worktree_exports, {
 module.exports = __toCommonJS(worktree_exports);
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
+var import_node_crypto = __toESM(require("node:crypto"));
+const CHECKOUT_INSTANCE_MARKER = "sidequest-checkout-instance";
+function checkoutInstanceDigest(token) {
+  return import_node_crypto.default.createHash("sha256").update(token, "utf8").digest("hex");
+}
+function checkoutInstanceIdentity(gitDirectory) {
+  try {
+    const token = import_node_fs.default.readFileSync(import_node_path.default.join(gitDirectory, CHECKOUT_INSTANCE_MARKER), "utf8").trim();
+    return /^[a-f0-9]{64}$/.test(token) ? checkoutInstanceDigest(token) : null;
+  } catch {
+    return null;
+  }
+}
+function createCheckoutInstanceMarker(gitDirectory) {
+  const token = import_node_crypto.default.randomBytes(32).toString("hex");
+  import_node_fs.default.writeFileSync(import_node_path.default.join(gitDirectory, CHECKOUT_INSTANCE_MARKER), `${token}
+`, {
+    encoding: "utf8",
+    flag: "wx",
+    mode: 384
+  });
+  return checkoutInstanceDigest(token);
+}
 function platformPath(value) {
   return process.platform === "win32" ? value.toLowerCase() : value;
 }
@@ -74,7 +99,8 @@ function createWorktreeLease(facts) {
     canonicalWorktree: facts.observedWorktree ? canonicalPath(facts.observedWorktree) : null,
     canonicalBoundWorktree: facts.boundWorktree ? canonicalPath(facts.boundWorktree) : null,
     canonicalBoundGitDirectory: facts.boundGitDirectory ? canonicalPath(facts.boundGitDirectory) : null,
-    canonicalBoundCommonGitDirectory: facts.boundCommonGitDirectory ? canonicalPath(facts.boundCommonGitDirectory) : null
+    canonicalBoundCommonGitDirectory: facts.boundCommonGitDirectory ? canonicalPath(facts.boundCommonGitDirectory) : null,
+    observedCheckoutInstance: checkoutInstanceIdentity(facts.gitDirectory)
   });
 }
 function denied(reason) {
@@ -109,6 +135,12 @@ function repositoryDecision(lease) {
   }
   return null;
 }
+function checkoutInstanceDecision(lease) {
+  if (lease.canonicalGitDirectory === lease.canonicalCommonGitDirectory) return null;
+  if (!lease.boundCheckoutInstance) return denied("The dispatch-bound checkout instance is unavailable.");
+  if (!lease.observedCheckoutInstance) return denied("The observed checkout instance is unavailable.");
+  return lease.boundCheckoutInstance === lease.observedCheckoutInstance ? null : denied("The observed checkout instance differs from the dispatch-bound checkout instance.");
+}
 function worktreeCreateDecision(lease) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("Creation");
   if (lease.phase !== "prepared") return denied("Creation requires a prepared worktree lease.");
@@ -122,6 +154,8 @@ function worktreeWriteDecision(lease, target) {
   if (!lease.canonicalBoundWorktree) return denied("A write requires an immutable worktree binding.");
   const repository = repositoryDecision(lease);
   if (repository) return repository;
+  const checkoutInstance = checkoutInstanceDecision(lease);
+  if (checkoutInstance) return checkoutInstance;
   const baseline = incorrectBaselineDecision(lease);
   if (baseline) return baseline;
   const relative = import_node_path.default.relative(lease.canonicalWorktree, canonicalPath(target));
@@ -130,13 +164,15 @@ function worktreeWriteDecision(lease, target) {
 function worktreeResumeDecision(lease) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("Resume");
   if (!lease.canonicalWorktree) return denied("Resume requires an observed worktree.");
-  return repositoryDecision(lease) || boundRevisionDecision(lease) || allowed("the bound worktree matches its release-time identity.");
+  return repositoryDecision(lease) || checkoutInstanceDecision(lease) || boundRevisionDecision(lease) || allowed("the bound worktree matches its release-time identity.");
 }
 function worktreeCleanupDecision(lease, registeredWorktrees) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("Cleanup");
   if (!lease.canonicalWorktree) return denied("Cleanup requires an observed worktree.");
   const repository = repositoryDecision(lease);
   if (repository) return repository;
+  const checkoutInstance = checkoutInstanceDecision(lease);
+  if (checkoutInstance) return checkoutInstance;
   if (!registeredWorktrees.some((registered) => sameCanonicalPath(registered, lease.canonicalWorktree))) return denied("Cleanup requires a canonical registered worktree.");
   if (lease.phase !== "terminal" && lease.phase !== "integrated") return denied("Cleanup requires a terminal lease phase.");
   if (lease.locked) return denied("Cleanup refuses a locked worktree.");
@@ -150,6 +186,8 @@ function isCanonicalRegisteredWorktree(lease, registeredWorktrees) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   canonicalPath,
+  checkoutInstanceIdentity,
+  createCheckoutInstanceMarker,
   createWorktreeLease,
   isCanonicalRegisteredWorktree,
   sameCanonicalPath,

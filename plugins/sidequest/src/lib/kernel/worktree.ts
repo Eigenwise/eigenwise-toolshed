@@ -2,6 +2,7 @@
 
 import fs from 'node:fs';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export type LeaseIdentity = Readonly<{ status: 'bound'; agentId?: string; dispatchRef?: string } | { status: 'unknown' }>;
 export type LeaseLiveness = Readonly<{ status: 'live'; evidence: string } | { status: 'terminal'; evidence: string } | { status: 'unknown' }>;
@@ -19,6 +20,7 @@ export type WorktreeLeaseFacts = Readonly<{
   boundWorktree?: string | null;
   boundGitDirectory?: string | null;
   boundCommonGitDirectory?: string | null;
+  boundCheckoutInstance?: string | null;
   identity: LeaseIdentity;
   phase: LeasePhase;
   locked: boolean;
@@ -33,8 +35,34 @@ export type WorktreeLease = Readonly<WorktreeLeaseFacts & {
   canonicalBoundWorktree: string | null;
   canonicalBoundGitDirectory: string | null;
   canonicalBoundCommonGitDirectory: string | null;
+  observedCheckoutInstance: string | null;
 }>;
 export type LeaseDecision = Readonly<{ allowed: boolean; reason: string }>;
+
+const CHECKOUT_INSTANCE_MARKER = 'sidequest-checkout-instance';
+
+function checkoutInstanceDigest(token: string): string {
+  return crypto.createHash('sha256').update(token, 'utf8').digest('hex');
+}
+
+export function checkoutInstanceIdentity(gitDirectory: string): string | null {
+  try {
+    const token = fs.readFileSync(path.join(gitDirectory, CHECKOUT_INSTANCE_MARKER), 'utf8').trim();
+    return /^[a-f0-9]{64}$/.test(token) ? checkoutInstanceDigest(token) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function createCheckoutInstanceMarker(gitDirectory: string): string {
+  const token = crypto.randomBytes(32).toString('hex');
+  fs.writeFileSync(path.join(gitDirectory, CHECKOUT_INSTANCE_MARKER), `${token}\n`, {
+    encoding: 'utf8',
+    flag: 'wx',
+    mode: 0o600,
+  });
+  return checkoutInstanceDigest(token);
+}
 
 function platformPath(value: string): string {
   return process.platform === 'win32' ? value.toLowerCase() : value;
@@ -74,6 +102,7 @@ export function createWorktreeLease(facts: WorktreeLeaseFacts): WorktreeLease {
     canonicalBoundWorktree: facts.boundWorktree ? canonicalPath(facts.boundWorktree) : null,
     canonicalBoundGitDirectory: facts.boundGitDirectory ? canonicalPath(facts.boundGitDirectory) : null,
     canonicalBoundCommonGitDirectory: facts.boundCommonGitDirectory ? canonicalPath(facts.boundCommonGitDirectory) : null,
+    observedCheckoutInstance: checkoutInstanceIdentity(facts.gitDirectory),
   });
 }
 
@@ -115,6 +144,15 @@ function repositoryDecision(lease: WorktreeLease): LeaseDecision | null {
   return null;
 }
 
+function checkoutInstanceDecision(lease: WorktreeLease): LeaseDecision | null {
+  if (lease.canonicalGitDirectory === lease.canonicalCommonGitDirectory) return null;
+  if (!lease.boundCheckoutInstance) return denied('The dispatch-bound checkout instance is unavailable.');
+  if (!lease.observedCheckoutInstance) return denied('The observed checkout instance is unavailable.');
+  return lease.boundCheckoutInstance === lease.observedCheckoutInstance
+    ? null
+    : denied('The observed checkout instance differs from the dispatch-bound checkout instance.');
+}
+
 export function worktreeCreateDecision(lease: WorktreeLease): LeaseDecision {
   if (lease.identity.status === 'unknown') return unknownIdentityDecision('Creation');
   if (lease.phase !== 'prepared') return denied('Creation requires a prepared worktree lease.');
@@ -129,6 +167,8 @@ export function worktreeWriteDecision(lease: WorktreeLease, target: string): Lea
   if (!lease.canonicalBoundWorktree) return denied('A write requires an immutable worktree binding.');
   const repository = repositoryDecision(lease);
   if (repository) return repository;
+  const checkoutInstance = checkoutInstanceDecision(lease);
+  if (checkoutInstance) return checkoutInstance;
   const baseline = incorrectBaselineDecision(lease);
   if (baseline) return baseline;
   const relative = path.relative(lease.canonicalWorktree, canonicalPath(target));
@@ -140,7 +180,7 @@ export function worktreeWriteDecision(lease: WorktreeLease, target: string): Lea
 export function worktreeResumeDecision(lease: WorktreeLease): LeaseDecision {
   if (lease.identity.status === 'unknown') return unknownIdentityDecision('Resume');
   if (!lease.canonicalWorktree) return denied('Resume requires an observed worktree.');
-  return repositoryDecision(lease) || boundRevisionDecision(lease) || allowed('the bound worktree matches its release-time identity.');
+  return repositoryDecision(lease) || checkoutInstanceDecision(lease) || boundRevisionDecision(lease) || allowed('the bound worktree matches its release-time identity.');
 }
 
 export function worktreeCleanupDecision(lease: WorktreeLease, registeredWorktrees: readonly string[]): LeaseDecision {
@@ -148,6 +188,8 @@ export function worktreeCleanupDecision(lease: WorktreeLease, registeredWorktree
   if (!lease.canonicalWorktree) return denied('Cleanup requires an observed worktree.');
   const repository = repositoryDecision(lease);
   if (repository) return repository;
+  const checkoutInstance = checkoutInstanceDecision(lease);
+  if (checkoutInstance) return checkoutInstance;
   if (!registeredWorktrees.some((registered) => sameCanonicalPath(registered, lease.canonicalWorktree!))) return denied('Cleanup requires a canonical registered worktree.');
   if (lease.phase !== 'terminal' && lease.phase !== 'integrated') return denied('Cleanup requires a terminal lease phase.');
   if (lease.locked) return denied('Cleanup refuses a locked worktree.');

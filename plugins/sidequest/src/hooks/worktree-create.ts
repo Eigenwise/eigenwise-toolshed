@@ -7,6 +7,8 @@ import { runtimeModule } from './shared/paths.js';
 
 const leaseKernel = require(runtimeModule('kernel/worktree')) as {
   canonicalPath: (value: string) => string;
+  checkoutInstanceIdentity: (gitDirectory: string) => string | null;
+  createCheckoutInstanceMarker: (gitDirectory: string) => string;
   createWorktreeLease: (facts: unknown) => unknown;
   worktreeCreateDecision: (lease: unknown) => { allowed: boolean; reason: string };
 };
@@ -41,6 +43,7 @@ interface LinkedCheckoutIdentity {
   worktree: string;
   gitDirectory: string;
   commonGitDirectory: string;
+  checkoutInstance: string | null;
   revision: string;
 }
 
@@ -48,10 +51,12 @@ function linkedCheckoutIdentity(target: string): LinkedCheckoutIdentity | null {
   try {
     const worktree = path.resolve(git(target, ['rev-parse', '--show-toplevel']));
     const gitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(worktree, value);
+    const gitDirectory = gitPath(git(worktree, ['rev-parse', '--git-dir']));
     return {
       worktree,
-      gitDirectory: gitPath(git(worktree, ['rev-parse', '--git-dir'])),
+      gitDirectory,
       commonGitDirectory: gitPath(git(worktree, ['rev-parse', '--git-common-dir'])),
+      checkoutInstance: leaseKernel.checkoutInstanceIdentity(gitDirectory),
       revision: git(worktree, ['rev-parse', '--verify', 'HEAD^{commit}']),
     };
   } catch (_) {
@@ -61,10 +66,11 @@ function linkedCheckoutIdentity(target: string): LinkedCheckoutIdentity | null {
 
 function completedTargetMatches(binding: CreationBinding): boolean {
   const identity = linkedCheckoutIdentity(String(binding.worktree));
-  return Boolean(identity && binding.expectedGitDirectory && binding.expectedCommonGitDirectory && binding.expectedRevision
+  return Boolean(identity && binding.expectedGitDirectory && binding.expectedCommonGitDirectory && binding.expectedCheckoutInstance && binding.expectedRevision
     && samePath(identity.worktree, String(binding.worktree))
     && samePath(identity.gitDirectory, binding.expectedGitDirectory)
     && samePath(identity.commonGitDirectory, binding.expectedCommonGitDirectory)
+    && identity.checkoutInstance === binding.expectedCheckoutInstance
     && identity.revision === binding.expectedRevision);
 }
 
@@ -98,6 +104,7 @@ interface CreationBinding {
   creationCompleted?: boolean;
   expectedGitDirectory?: string | null;
   expectedCommonGitDirectory?: string | null;
+  expectedCheckoutInstance?: string | null;
   expectedRevision?: string | null;
 }
 
@@ -198,6 +205,9 @@ function main(): void {
   const created = createWorktree(boundCreation, name);
   if (created) {
     try {
+      const identity = linkedCheckoutIdentity(boundCreation.worktree);
+      if (!identity) throw new Error('new worktree identity is unavailable');
+      leaseKernel.createCheckoutInstanceMarker(identity.gitDirectory);
       worktrees.provisionWorktree(boundCreation.repository, boundCreation.worktree, provisioningConfig(boundCreation.repository));
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
       if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || 'completion binding is incomplete'}`);

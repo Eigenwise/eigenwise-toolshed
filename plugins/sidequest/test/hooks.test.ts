@@ -31,6 +31,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
 const worktrees = require('../lib/worktrees.js');
+const worktreeLease = require('../lib/kernel/worktree.js');
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
@@ -264,6 +265,13 @@ function assertNoRetiredDoctrine(ctx?: any, where?: any) {
 
 function gitFixture(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function completeCheckoutCreation(project: string, sessionId: string, worktree: string): void {
+  const gitDirectoryValue = gitFixture(['rev-parse', '--git-dir'], worktree);
+  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+  worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
 }
 
 test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypass', () => {
@@ -891,6 +899,7 @@ test('pre-tool hook: external linked worktrees preserve helper scope enforcement
   const assignedWorktree = worktrees.namedWorktreePath(projectPath, agentId);
   assert.equal(store.bindDispatchWorktreeCreation(projectSlug, sessionId, assignedWorktree).ok, true);
   gitFixture(['worktree', 'add', '--detach', assignedWorktree], projectPath);
+  completeCheckoutCreation(projectSlug, sessionId, assignedWorktree);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentName, assignedWorktree).ok, true);
   assert.equal(store.claimTicket(projectSlug, ticket.ref, 'helper-external-parent', {
     sessionId,
@@ -1536,6 +1545,7 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
   const worktree = worktrees.agentWorktreePath(isolatedRoot, agentId);
   assert.equal(store.bindDispatchWorktreeCreation(isolatedSlug, sessionId, worktree).ok, true);
   gitFixture(['worktree', 'add', '--detach', worktree], isolatedRoot);
+  completeCheckoutCreation(isolatedSlug, sessionId, worktree);
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, isolatedName, worktree).ok, true);
   assert.strictEqual(runGuardPeer({ tool_input: { to: isolatedName, message: 'continue' } }), null);
   fs.rmSync(worktree, { recursive: true, force: true });
@@ -2792,6 +2802,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   assert.equal(worktrees.canonicalPath(boundDispatch.worktree), worktrees.canonicalPath(first));
   assert.equal(worktrees.canonicalPath(boundDispatch.worktreeGitDirectory), worktrees.canonicalPath(gitDirectory));
   assert.equal(worktrees.canonicalPath(boundDispatch.worktreeCommonGitDirectory), worktrees.canonicalPath(commonGitDirectory));
+  assert.equal(boundDispatch.worktreeCheckoutInstance, worktreeLease.checkoutInstanceIdentity(gitDirectory));
   assert.equal(boundDispatch.worktreeBindingSource, 'worktree-create');
 
   const second = execFileSync(process.execPath, [WORKTREE_CREATE], {

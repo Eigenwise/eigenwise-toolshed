@@ -371,6 +371,7 @@ async function worktreeCleanupLease(repo, ticket, entry, livePaths) {
     boundWorktree: ticket?.dispatch?.worktree || null,
     boundGitDirectory: ticket?.dispatch?.worktreeGitDirectory || null,
     boundCommonGitDirectory: ticket?.dispatch?.worktreeCommonGitDirectory || null,
+    boundCheckoutInstance: ticket?.dispatch?.worktreeCheckoutInstance || null,
     identity: worktreeLeaseIdentity(ticket, entry),
     phase: worktreeLeasePhase(ticket),
     locked: Boolean(entry.locked),
@@ -380,6 +381,7 @@ async function worktreeCleanupLease(repo, ticket, entry, livePaths) {
 }
 function leaseCleanupSkipReason(decision) {
   if (/bound worktree identity/.test(decision.reason)) return "unknown_identity";
+  if (/checkout instance/.test(decision.reason)) return "checkout_instance_mismatch";
   if (/canonical registered/.test(decision.reason)) return "not_registered";
   if (/terminal lease phase/.test(decision.reason)) return "active_ticket";
   if (/locked worktree/.test(decision.reason)) return "locked";

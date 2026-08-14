@@ -6,6 +6,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const worktrees = require('../src/lib/worktrees.ts');
+const worktreeLease = require('../src/lib/kernel/worktree.ts');
 
 function git(repository: string, arguments_: string[]): string {
   return execFileSync('git', arguments_, { cwd: repository, encoding: 'utf8', windowsHide: true }).trim();
@@ -23,14 +24,30 @@ function repositoryFixture() {
   return { repository, baseCommit, worktreeRoot: path.join(repository, '.claude', 'worktrees') };
 }
 
+function checkoutIdentity(worktree: string) {
+  const resolveGitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(worktree, value);
+  const gitDirectory = resolveGitPath(git(worktree, ['rev-parse', '--git-dir']));
+  const checkoutInstance = worktreeLease.checkoutInstanceIdentity(gitDirectory);
+  if (!checkoutInstance) throw new Error(`checkout instance is unavailable for ${worktree}`);
+  return {
+    gitDirectory,
+    commonGitDirectory: resolveGitPath(git(worktree, ['rev-parse', '--git-common-dir'])),
+    checkoutInstance,
+  };
+}
+
 function createAgentWorktree(repository: string, root: string, name: string): string {
   const worktree = path.join(root, `agent-${name}`);
   fs.mkdirSync(root, { recursive: true });
   git(repository, ['worktree', 'add', '-b', `worktree-agent-${name}`, worktree, 'HEAD']);
+  const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
+  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+  worktreeLease.createCheckoutInstanceMarker(gitDirectory);
   return worktree;
 }
 
-function integratedTicket(ref: string, agentId: string, worktree: string, baseCommit: string, identity: { gitDirectory?: string; commonGitDirectory?: string } = {}) {
+function integratedTicket(ref: string, agentId: string, worktree: string, baseCommit: string, suppliedIdentity?: { gitDirectory: string; commonGitDirectory: string; checkoutInstance: string }) {
+  const identity = suppliedIdentity || checkoutIdentity(worktree);
   return {
     ref,
     status: 'done',
@@ -39,8 +56,9 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
       agentId,
       worktree,
       baseCommit,
-      ...(identity.gitDirectory ? { worktreeGitDirectory: identity.gitDirectory } : {}),
-      ...(identity.commonGitDirectory ? { worktreeCommonGitDirectory: identity.commonGitDirectory } : {}),
+      worktreeGitDirectory: identity.gitDirectory,
+      worktreeCommonGitDirectory: identity.commonGitDirectory,
+      worktreeCheckoutInstance: identity.checkoutInstance,
     },
   };
 }
@@ -76,27 +94,26 @@ test('sweep removes only the terminal bound registered worktree', async () => {
   }
 });
 
-test('sweep refuses cleanup after a bound checkout is replaced at the same path', async () => {
+test('sweep refuses cleanup after a bound checkout is recreated at the exact path', async () => {
   const { repository, baseCommit, worktreeRoot } = repositoryFixture();
   const worktree = createAgentWorktree(repository, worktreeRoot, 'replaced');
-  const replacementSource = `${worktree}-source`;
-  const resolveGitPath = (checkout: string, value: string) => path.isAbsolute(value) ? value : path.resolve(checkout, value);
-  const gitDirectory = resolveGitPath(worktree, git(worktree, ['rev-parse', '--git-dir']));
-  const commonGitDirectory = resolveGitPath(worktree, git(worktree, ['rev-parse', '--git-common-dir']));
-  const ticket = integratedTicket('SQ-REPLACED', 'replaced', worktree, baseCommit, { gitDirectory, commonGitDirectory });
+  const identity = checkoutIdentity(worktree);
+  const ticket = integratedTicket('SQ-REPLACED', 'replaced', worktree, baseCommit, identity);
   try {
     git(repository, ['worktree', 'remove', '--force', worktree]);
-    git(repository, ['worktree', 'add', '--detach', replacementSource, baseCommit]);
-    fs.renameSync(replacementSource, worktree);
-    git(repository, ['worktree', 'repair', worktree]);
-    const replacementGitDirectory = resolveGitPath(worktree, git(worktree, ['rev-parse', '--git-dir']));
-    assert.notEqual(worktrees.canonicalPath(replacementGitDirectory), worktrees.canonicalPath(gitDirectory));
+    git(repository, ['worktree', 'add', '--detach', worktree, baseCommit]);
+    const replacementGitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
+    const replacementGitDirectory = path.isAbsolute(replacementGitDirectoryValue)
+      ? replacementGitDirectoryValue
+      : path.resolve(worktree, replacementGitDirectoryValue);
+    assert.equal(worktrees.canonicalPath(replacementGitDirectory), worktrees.canonicalPath(identity.gitDirectory));
+    assert.equal(worktreeLease.checkoutInstanceIdentity(replacementGitDirectory), null);
 
     const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
     const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
     assert.equal(entry.action, 'keep');
-    assert.equal(entry.reason, 'lease_refused');
-    assert.match(entry.leaseDecision, /Git directory differs from the dispatch-bound Git directory/);
+    assert.equal(entry.reason, 'checkout_instance_mismatch');
+    assert.match(entry.leaseDecision, /checkout instance/);
     assert.equal(fs.existsSync(worktree), true);
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
