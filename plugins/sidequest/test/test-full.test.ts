@@ -30,6 +30,7 @@ function loadBudgetHelpers() {
     warning: string;
     gatewayCatalog: {
       schemaVersion: number;
+      updatedAt: string;
       providers: { codex: { ready: boolean; state: string; message: string } };
       models: Array<{ slug: string; id: string; provider: string }>;
     };
@@ -46,6 +47,7 @@ test('full-suite budget scales down-core runners and stays bounded', () => {
 test('full-suite catalog supplies the ready Codex capability and every default Codex route', () => {
   const { gatewayCatalog } = loadBudgetHelpers();
 
+  assert.equal(Number.isFinite(Date.parse(gatewayCatalog.updatedAt)), true);
   assert.deepEqual(gatewayCatalog.providers.codex, {
     ready: true,
     state: 'ready',

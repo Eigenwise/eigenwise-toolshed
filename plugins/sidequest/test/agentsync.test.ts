@@ -60,6 +60,7 @@ function seedCatalog(models?: any) {
   fs.mkdirSync(path.join(dir, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(dir, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models,
@@ -485,9 +486,12 @@ test('diagnostic probe definition has only read-only tools and a bounded lifetim
 test('sync writes the complete stable executor ladder with the smallest valid taxonomy', () => {
   clearCatalog();
   const store = require('../lib/store.js');
-  const db = require('../lib/db.js').openDb(process.env.SIDEQUEST_HOME);
-  const categories = store.getCategories({ includeDisabled: true });
-  db.prepare("DELETE FROM routing_profile_entries WHERE profile_id = 'coding' AND category_id <> 'general'").run();
+  const profileId = 'minimal-taxonomy';
+  store.createRoutingProfile(profileId, { from: 'coding', name: 'Minimal taxonomy' });
+  for (const category of store.routingProfileDetails(profileId).categories) {
+    if (category.id !== 'general') store.removeRoutingProfileCategory(profileId, category.id);
+  }
+  store.setNewProjectRoutingProfile(profileId);
   const dir = tmpDir();
   try {
     assert.deepStrictEqual(store.getCategories({ includeDisabled: true }).map((category?: any) => category.id), ['general']);
@@ -510,8 +514,7 @@ test('sync writes the complete stable executor ladder with the smallest valid ta
       assert.match(builtin, new RegExp(`^effort: ${effort}$`, 'm'));
     }
   } finally {
-    for (const category of categories) store.setCategory(category);
-    db.close();
+    store.setNewProjectRoutingProfile('coding');
   }
 });
 

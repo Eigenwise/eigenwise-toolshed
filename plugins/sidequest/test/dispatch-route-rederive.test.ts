@@ -16,7 +16,7 @@ const catalogPath = path.join(catalogDir, 'catalog.json');
 fs.mkdirSync(catalogDir, { recursive: true });
 
 function writeCatalog(models?: any, codexReadiness: any = null) {
-  fs.writeFileSync(catalogPath, JSON.stringify({ schemaVersion: 3, source: 'model-gateway', codexReadiness, models }));
+  fs.writeFileSync(catalogPath, JSON.stringify({ schemaVersion: 3, updatedAt: new Date().toISOString(), source: 'model-gateway', codexReadiness, models }));
 }
 
 const READY = {

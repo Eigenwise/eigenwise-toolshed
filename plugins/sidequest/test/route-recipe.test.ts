@@ -16,6 +16,7 @@ const discovery = path.join(home, 'discovery');
 fs.mkdirSync(path.join(discovery, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [

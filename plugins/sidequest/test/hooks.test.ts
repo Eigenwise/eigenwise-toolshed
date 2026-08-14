@@ -19,6 +19,7 @@ const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
 fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [
@@ -251,6 +252,27 @@ function writeCategory(home?: any, category?: any) {
 function writeModelPrefs(home?: any, prefs?: any) {
   const database = db.openDb(home);
   db.putRow(database, 'globals', { key: 'model-prefs', data: prefs });
+}
+
+function writeOversizedRoutingProfile(home: string): void {
+  const previousHome = process.env.SIDEQUEST_HOME;
+  process.env.SIDEQUEST_HOME = home;
+  try {
+    const profileId = 'oversized-workforce';
+    store.createRoutingProfile(profileId, { from: 'coding', name: 'Oversized workforce' });
+    for (let index = 0; index < 80; index += 1) {
+      store.setRoutingProfileCategory(profileId, {
+        id: `oversized-category-${String(index).padStart(2, '0')}`,
+        name: `Oversized category ${index}`,
+        route: { model: 'sonnet', effort: 'medium' },
+        enabled: true,
+      });
+    }
+    store.setNewProjectRoutingProfile(profileId);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
+    else process.env.SIDEQUEST_HOME = previousHome;
+  }
 }
 
 // Phrases from the retired heavy doctrine that must NOT come back to any block.
@@ -2420,14 +2442,7 @@ test('session-start: shows the live investigation workforce within its cap', () 
 
 test('session-start: bounds oversized workforces and reports omitted categories', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-workforce-cap-'));
-  for (let index = 0; index < 80; index += 1) {
-    writeCategory(home, {
-      id: `oversized-category-${String(index).padStart(2, '0')}`,
-      name: `Oversized category ${index}`,
-      route: { model: 'sonnet', effort: 'medium' },
-      enabled: true,
-    });
-  }
+  writeOversizedRoutingProfile(home);
   const output = JSON.parse(runSessionWithHomeForBudget(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project') }));
   const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
   assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
@@ -2476,7 +2491,7 @@ test('session-start: provisions the shared dispatch executor and prunes legacy p
   fs.writeFileSync(legacyFile, '<!-- generated-by: sidequest-agentsync -->\nold');
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, updatedAt: new Date().toISOString(), source: 'model-gateway', codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' }, models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(!fs.existsSync(legacyFile), 'legacy per-combo Codex executor must be pruned by session sync');
   assert.ok(fs.existsSync(path.join(agents, 'sidequest-exec-dispatch.md')), 'reachable Codex route must provision the shared dispatch executor');
@@ -2497,7 +2512,7 @@ test('session-start: category-route sync ignores retired prefs data', () => {
   db.openDb(home).prepare("INSERT INTO globals (key, data) VALUES ('model-prefs', '{')").run();
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-catalog-'));
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
+  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, updatedAt: new Date().toISOString(), source: 'model-gateway', codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' }, models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }] }));
   runSessionWithHome(home, { SIDEQUEST_AGENTS_DIR: agents, SIDEQUEST_DISCOVERY_DIRS: catalog });
   assert.ok(fs.existsSync(codexFile), 'a category route must provision despite unreadable retired prefs data');
 });
@@ -2744,6 +2759,56 @@ test('worktree-create refuses a pre-existing same-repository checkout without cr
     assert.equal(refusedDispatch.agentId, undefined);
   } finally {
     gitFixture(['worktree', 'remove', '--force', target], repo);
+  }
+});
+
+test('worktree-create forks local-main directly when origin main is stale', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-local-main-worktree-repo-'));
+  gitFixture(['init', '--quiet', '-b', 'main'], repository);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+  gitFixture(['config', 'user.name', 'Worktree Hook Test'], repository);
+  fs.writeFileSync(path.join(repository, 'tracked.txt'), 'origin\n');
+  gitFixture(['add', 'tracked.txt'], repository);
+  gitFixture(['commit', '--quiet', '-m', 'origin main'], repository);
+  const originMain = gitFixture(['rev-parse', 'HEAD'], repository);
+  gitFixture(['update-ref', 'refs/remotes/origin/main', originMain], repository);
+  fs.writeFileSync(path.join(repository, 'tracked.txt'), 'local\n');
+  gitFixture(['commit', '--quiet', '-am', 'local main'], repository);
+  const localMain = gitFixture(['rev-parse', 'HEAD'], repository);
+
+  const project = store.ensureProject(repository, 'local main worktree hook').slug;
+  store.setBoardConfig(project, { worktreeBase: 'local-main' });
+  const category = `local-main-worktree-hook-${++sqSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  const ticket = store.createTicket(project, { title: 'local main worktree creation', category, files: ['tracked.txt'] });
+  const sessionId = `local-main-worktree-${sqSeq}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(prepared.ticket.dispatch.baseCommit, localMain);
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+
+  const name = `agent-local-main-${sqSeq}`;
+  const target = worktrees.namedWorktreePath(repository, name);
+  try {
+    execFileSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: repository, name }),
+      encoding: 'utf8',
+      env: process.env,
+    });
+    assert.equal(gitFixture(['rev-parse', 'HEAD'], target), localMain);
+    assert.notEqual(gitFixture(['rev-parse', 'HEAD'], target), originMain);
+  } finally {
+    if (fs.existsSync(target)) gitFixture(['worktree', 'remove', '--force', target], repository);
+    try { gitFixture(['branch', '-D', `worktree-${name}`], repository); } catch (_) {}
   }
 });
 
@@ -3355,6 +3420,7 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [
@@ -3418,6 +3484,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }],
@@ -3467,6 +3534,7 @@ test('pre-tool hook: a prepared Codex route requires its marker and executor cla
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }],
@@ -3634,6 +3702,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
     schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
     source: 'model-gateway',
     codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
     models: [{ slug: 'codex-gpt-5-6-sol', id: 'claude-gpt-5.6-sol[1m]' }],

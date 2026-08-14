@@ -7,7 +7,7 @@ import { fileURLToPath } from 'node:url';
 import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
 
 const require = createRequire(import.meta.url);
-const { DEFAULT_CATEGORIES } = require('../lib/category-defaults.js');
+const { STARTER_GATEWAY_MODEL_SLUGS } = require('../lib/category-defaults.js');
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
@@ -17,14 +17,9 @@ const baselineTestPhaseTimeoutMilliseconds = 480_000;
 const maximumTestPhaseTimeoutMilliseconds = 1_200_000;
 
 export function fullSuiteGatewayCatalog() {
-  const codexModels = new Set(
-    DEFAULT_CATEGORIES
-      .flatMap((category) => [category.route, category.fallback])
-      .map((route) => route?.model)
-      .filter((model) => typeof model === 'string' && model.startsWith('codex-')),
-  );
   return {
     schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
     source: 'sidequest-full-suite',
     providers: {
       codex: {
@@ -33,7 +28,7 @@ export function fullSuiteGatewayCatalog() {
         message: 'The full-suite fixture provides the Codex dispatch capability.',
       },
     },
-    models: Array.from(codexModels).sort().map((slug) => ({
+    models: STARTER_GATEWAY_MODEL_SLUGS.map((slug) => ({
       slug,
       id: `claude-${slug}`,
       label: slug,

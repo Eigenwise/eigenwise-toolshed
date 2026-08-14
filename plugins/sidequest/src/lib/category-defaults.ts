@@ -350,6 +350,23 @@ const GATEWAY_ROUTE_BY_PROFILE_CATEGORY: Readonly<Record<string, Readonly<Record
   },
 };
 
+const GATEWAY_FALLBACK_BY_PROFILE_CATEGORY: Readonly<Record<string, Readonly<Record<string, { model: string; effort: string }>>>> = {
+  coding: {
+    debugging: { model: 'codex-gpt-5-6-terra', effort: 'high' },
+    experiment: { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    'coding.hard': { model: 'codex-gpt-5-6-sol', effort: 'xhigh' },
+    'spike-investigation': { model: 'codex-gpt-5-6-sol', effort: 'high' },
+    'visual-evaluation': { model: 'codex-gpt-5-6-terra', effort: 'medium' },
+  },
+};
+
+export const STARTER_GATEWAY_MODEL_SLUGS = Array.from(new Set(
+  [GATEWAY_ROUTE_BY_PROFILE_CATEGORY, GATEWAY_FALLBACK_BY_PROFILE_CATEGORY]
+    .flatMap((profiles) => Object.values(profiles))
+    .flatMap((categories) => Object.values(categories))
+    .map((route) => route.model),
+)).sort();
+
 export function starterRoutingProfilesFor(models: readonly GatewayModelCapability[]) {
   const availableGatewayModels = new Set(models
     .filter((model) => model.provider === 'codex')
@@ -358,9 +375,12 @@ export function starterRoutingProfilesFor(models: readonly GatewayModelCapabilit
     ...profile,
     categories: profile.categories.map((category) => {
       const gatewayRoute = GATEWAY_ROUTE_BY_PROFILE_CATEGORY[profile.id]?.[category.id];
-      return gatewayRoute && availableGatewayModels.has(gatewayRoute.model)
-        ? { ...category, route: gatewayRoute }
-        : { ...category };
+      const gatewayFallback = GATEWAY_FALLBACK_BY_PROFILE_CATEGORY[profile.id]?.[category.id];
+      return {
+        ...category,
+        ...(gatewayRoute && availableGatewayModels.has(gatewayRoute.model) ? { route: gatewayRoute } : {}),
+        ...(gatewayFallback && availableGatewayModels.has(gatewayFallback.model) ? { fallback: gatewayFallback } : {}),
+      };
     }),
   }));
 }

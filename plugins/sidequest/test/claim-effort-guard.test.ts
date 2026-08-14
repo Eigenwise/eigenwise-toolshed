@@ -14,6 +14,7 @@ const catalogDir = path.join(DISCOVERY_ROOT, 'model-gateway');
 fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
   schemaVersion: 3, source: 'model-gateway',
+  updatedAt: new Date().toISOString(),
   codexReadiness: {
     ready: true,
     state: 'ready',
@@ -80,6 +81,9 @@ store.setCategory({
 
 function runCli(args?: any) {
   const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_DISCOVERY_DIRS: process.env.SIDEQUEST_DISCOVERY_DIRS, CLAUDE_PROJECT_DIR: PROJ });
+  delete env.CLAUDE_CODE_SESSION_ID;
+  delete env.CLAUDE_SESSION_ID;
+  delete env.SIDEQUEST_SESSION;
   const result = spawnSync(process.execPath, [BIN, ...args], { encoding: 'utf8', env });
   return { status: result.status, stdout: result.stdout || '', stderr: result.stderr || '' };
 }
@@ -405,6 +409,7 @@ test('a re-dispatch rotates the token against a constant stable executor and rej
   assert.notEqual(stale.status, 0);
   assert.equal(JSON.parse(stale.stdout).reason, 'token');
   assert.equal(cliJson(['claim', ref, '--by', 'latest', '--token', second.token, '--executor', second.ticket.dispatchExecutor]).ok, true);
+  assert.equal(store.releaseTicket(slug, ref, 'latest', { status: 'todo' }).ok, true);
 });
 
 test('fresh redispatch briefing includes every comment added after preparation and refuses a foreign project', () => {

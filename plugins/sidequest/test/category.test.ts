@@ -17,7 +17,13 @@ function freshStore(options?: any) {
   if (options && options.catalog) {
     const dir = path.join(discovery, 'model-gateway');
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: options.catalog }));
+    fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({
+      schemaVersion: 3,
+      updatedAt: new Date().toISOString(),
+      source: 'model-gateway',
+      codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+      models: options.catalog,
+    }));
   }
   process.env.SIDEQUEST_HOME = home;
   process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
@@ -136,7 +142,13 @@ test('schema v2 migration materializes configured backends, fallbacks, and globa
   assert.equal(spawnSync(process.execPath, ['-e', seed], { encoding: 'utf8' }).status, 0);
   const discovery = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-category-discovery-'));
   fs.mkdirSync(path.join(discovery, 'model-gateway'));
-  fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({ schemaVersion: 3, source: 'model-gateway', models: [{ slug:'codex-gpt-test', id:'gpt-test' }] }));
+  fs.writeFileSync(path.join(discovery, 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 3,
+    updatedAt: new Date().toISOString(),
+    source: 'model-gateway',
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
+    models: [{ slug:'codex-gpt-test', id:'gpt-test' }],
+  }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = discovery;
   const db = require('../lib/db.js');
   const handle = db.openDb(home);

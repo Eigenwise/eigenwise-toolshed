@@ -20,6 +20,7 @@ var category_defaults_exports = {};
 __export(category_defaults_exports, {
   DEFAULT_CATEGORIES: () => DEFAULT_CATEGORIES,
   ROUTING_PROFILE_SEED_REVISION: () => ROUTING_PROFILE_SEED_REVISION,
+  STARTER_GATEWAY_MODEL_SLUGS: () => STARTER_GATEWAY_MODEL_SLUGS,
   STARTER_ROUTING_PROFILES: () => STARTER_ROUTING_PROFILES,
   starterRoutingProfilesFor: () => starterRoutingProfilesFor
 });
@@ -364,13 +365,30 @@ const GATEWAY_ROUTE_BY_PROFILE_CATEGORY = {
     "interaction-design-implementation": { model: "codex-gpt-5-6-terra", effort: "high" }
   }
 };
+const GATEWAY_FALLBACK_BY_PROFILE_CATEGORY = {
+  coding: {
+    debugging: { model: "codex-gpt-5-6-terra", effort: "high" },
+    experiment: { model: "codex-gpt-5-6-sol", effort: "high" },
+    "coding.hard": { model: "codex-gpt-5-6-sol", effort: "xhigh" },
+    "spike-investigation": { model: "codex-gpt-5-6-sol", effort: "high" },
+    "visual-evaluation": { model: "codex-gpt-5-6-terra", effort: "medium" }
+  }
+};
+const STARTER_GATEWAY_MODEL_SLUGS = Array.from(new Set(
+  [GATEWAY_ROUTE_BY_PROFILE_CATEGORY, GATEWAY_FALLBACK_BY_PROFILE_CATEGORY].flatMap((profiles) => Object.values(profiles)).flatMap((categories) => Object.values(categories)).map((route) => route.model)
+)).sort();
 function starterRoutingProfilesFor(models) {
   const availableGatewayModels = new Set(models.filter((model) => model.provider === "codex").map((model) => model.slug));
   return STARTER_ROUTING_PROFILES.map((profile) => ({
     ...profile,
     categories: profile.categories.map((category) => {
       const gatewayRoute = GATEWAY_ROUTE_BY_PROFILE_CATEGORY[profile.id]?.[category.id];
-      return gatewayRoute && availableGatewayModels.has(gatewayRoute.model) ? { ...category, route: gatewayRoute } : { ...category };
+      const gatewayFallback = GATEWAY_FALLBACK_BY_PROFILE_CATEGORY[profile.id]?.[category.id];
+      return {
+        ...category,
+        ...gatewayRoute && availableGatewayModels.has(gatewayRoute.model) ? { route: gatewayRoute } : {},
+        ...gatewayFallback && availableGatewayModels.has(gatewayFallback.model) ? { fallback: gatewayFallback } : {}
+      };
     })
   }));
 }
@@ -378,6 +396,7 @@ function starterRoutingProfilesFor(models) {
 0 && (module.exports = {
   DEFAULT_CATEGORIES,
   ROUTING_PROFILE_SEED_REVISION,
+  STARTER_GATEWAY_MODEL_SLUGS,
   STARTER_ROUTING_PROFILES,
   starterRoutingProfilesFor
 });

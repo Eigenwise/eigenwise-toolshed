@@ -27,6 +27,7 @@ const DISCOVERY = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-ca
 fs.mkdirSync(path.join(DISCOVERY, 'model-gateway'), { recursive: true });
 fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
   models: [

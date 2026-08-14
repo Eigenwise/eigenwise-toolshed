@@ -17,6 +17,7 @@ const catalogDir = path.join(DISCOVERY, 'model-gateway');
 fs.mkdirSync(catalogDir, { recursive: true });
 fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
   schemaVersion: 3,
+  updatedAt: new Date().toISOString(),
   source: 'model-gateway',
   codexReadiness: {
     ready: true,
