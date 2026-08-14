@@ -153,7 +153,7 @@ function readPluginVersion() {
 function mkdirs() { for (const d of [STATE, LOGS, BIN_DIR]) fs.mkdirSync(d, { recursive: true }); }
 
 const {
-  fetchUrl, killPid, pidFile, portListening, postJson, processOwningPort, readPid, reapGatewayOrphans,
+  createProxyRecovery, fetchUrl, killPid, pidFile, portListening, postJson, processOwningPort, readPid, reapGatewayOrphans,
   removePid, restartWorkerWithDrain, shimHealthy, spawnDetached, stopAll, stopProcess, stopRunningSupervisor,
   stopShimWithDrain, waitForShimExit,
 } = require('./process-supervision.js');
@@ -199,7 +199,7 @@ function isAuthed() {
 const CODEX_READINESS_MESSAGES = {
   'binary-missing': () => `Codex dispatch refused: claude-code-proxy is missing. Run \`node "${CLI_PATH}" setup\`, then retry. No Anthropic fallback was used.`,
   'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${CLI_PATH}" login\`, finish browser OAuth, then run \`node "${CLI_PATH}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
-  'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
   'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
   'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
   'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${CLI_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
@@ -521,12 +521,7 @@ function warnIfProxyOutdated() {
 async function startAll({ quiet = false } = {}) {
   if (!fs.existsSync(PROXY_BIN)) return { ok: false, reason: 'proxy binary missing (run setup)' };
   mkdirs();
-  let started = [];
-  if (!(await portListening(PROXY_PORT))) {
-    spawnDetached('proxy', PROXY_BIN, ['serve', '--no-monitor'], { PORT: String(PROXY_PORT) });
-    writeProxyServingVersion(currentProxyVersion());
-    started.push('proxy');
-  }
+  const started = [];
   const health = await fetchShimHealth();
   if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
     const stopped = await stopRunningSupervisor({ quiet });
@@ -546,7 +541,7 @@ async function startAll({ quiet = false } = {}) {
   }
   const deadline = Date.now() + Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
   while (Date.now() < deadline) {
-    if ((await portListening(PROXY_PORT)) && (await shimHealthy())) {
+    if ((await proxyModelsAnswering()) && (await shimHealthy())) {
       if (!quiet && started.length) log(`started: ${started.join(', ')}`);
       await writeCatalog().catch(() => { /* advisory only; sidequest just won't see fresh models */ });
       return { ok: true, started };
@@ -573,7 +568,7 @@ function servingShimVersion(health) {
 
 function shimNeedsRestart(installedVersion, health) {
   const running = servingShimVersion(health);
-  return Boolean(installedVersion && running && installedVersion !== running);
+  return Boolean((installedVersion && running && installedVersion !== running) || health?.proxyRecovery !== true);
 }
 
 async function restartSupervisorForVersionMismatch({ quiet = false, start = startAll } = {}) {
@@ -611,6 +606,9 @@ async function statusReport({ readiness = null } = {}) {
   log(`proxy (claude-code-proxy) on :${PROXY_PORT}: ${checks.proxyModels ? 'answering /v1/models' : 'DOWN'}`);
   if (checks.shimRunning) {
     log(`models advertised to Claude Code: ${health?.models ?? 'unavailable'}`);
+    log(health?.proxyRecovery
+      ? 'proxy recovery: shim supervisor probes /v1/models and restarts an unavailable proxy with bounded backoff'
+      : 'proxy recovery: unavailable until the shim supervisor is refreshed');
   }
   log(`shim (model router) on :${SHIM_PORT}: ${checks.shimRunning ? `running${checks.servingVersion ? ` (serving ${checks.servingVersion})` : ' (serving version unavailable)'}` : 'DOWN'}`);
   const compat = health?.compat;
@@ -1574,6 +1572,9 @@ function runShim() {
   let workerPortReportTimeout = null;
   let restarting = false;
   let stopped = false;
+  const recoveryIntervalMs = Math.max(1000, Number(process.env.CODEX_GATEWAY_PROXY_RECOVERY_INTERVAL_MS) || 5000);
+  const proxyRecovery = createProxyRecovery({ onStarted: () => writeProxyServingVersion(currentProxyVersion()) });
+  let proxyRecoveryTimer = null;
 
   function clearWorkerPortReportTimeout() {
     if (!workerPortReportTimeout) return;
@@ -1653,6 +1654,7 @@ function runShim() {
         upstream.once('end', () => {
           const health = JSON.parse(Buffer.concat(response).toString());
           health.supervisorVersion = PLUGIN_VERSION;
+          health.proxyRecovery = true;
           health.compat = { ...compatState };
           res.writeHead(upstream.statusCode || 502, upstream.headers);
           res.end(JSON.stringify(health));
@@ -1706,6 +1708,12 @@ function runShim() {
     return relay(req, res);
   }
 
+  function monitorProxy() {
+    void proxyRecovery.recover().catch((error) => {
+      console.error(`${new Date().toISOString()} model-gateway: proxy recovery failed: ${error.message}`);
+    });
+  }
+
   function listen(port, host, callback) {
     const server = http.createServer(handle);
     server.requestTimeout = 0;
@@ -1720,6 +1728,9 @@ function runShim() {
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
     console.log(`model-gateway shim supervisor listening on 127.0.0.1:${publicShimPort}`);
     startWorker();
+    monitorProxy();
+    proxyRecoveryTimer = setInterval(monitorProxy, recoveryIntervalMs);
+    proxyRecoveryTimer.unref();
   });
   main.once('error', (error) => {
     stopped = true;
@@ -1745,6 +1756,7 @@ function runShim() {
   }
   process.once('SIGTERM', () => {
     stopped = true;
+    clearInterval(proxyRecoveryTimer);
     killPid(worker?.pid);
     compatServer?.close();
     main.close(() => process.exit(0));

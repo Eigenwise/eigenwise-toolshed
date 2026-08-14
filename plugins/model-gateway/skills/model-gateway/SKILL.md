@@ -60,7 +60,10 @@ exactly what's advertised.
 That restart is ONLY to surface new model rows in `/model` — model discovery happens once at
 session start. Restoring or refreshing auth on an already-wired install needs no restart: the
 proxy is a separate process, so once `login` + `setup` re-authenticate it, the next request
-routes through cleanly. This matters when an agent is mid-orchestration (e.g. dispatching Codex
+routes through cleanly. The shim supervisor also probes the proxy's `/v1/models` endpoint while
+it runs, restarting an unavailable proxy with single-flight bounded backoff. It leaves a healthy
+proxy alone and writes timestamped recovery evidence to `~/.claude/model-gateway/logs/guardian.log`.
+This matters when an agent is mid-orchestration (e.g. dispatching Codex
 subagents through the gateway) — do not tell the user to restart Claude Code just to bring auth
 back, or you kill the session that was about to use it.
 

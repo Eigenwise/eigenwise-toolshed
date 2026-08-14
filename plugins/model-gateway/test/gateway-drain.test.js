@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const { startGateway } = require('./support.js');
+const { createProxyRecovery } = require('../lib/process-supervision.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const gateway = require(CLI);
@@ -231,7 +232,7 @@ test('version mismatch replaces the supervisor instead of draining its worker', 
 test('same-version health keeps the supervisor and worker running', async () => {
   const calls = [];
   const result = await gateway.restartShimIfOutdated({
-    fetchHealth: async () => ({ version: gateway.PLUGIN_VERSION, supervisorVersion: gateway.PLUGIN_VERSION }),
+    fetchHealth: async () => ({ version: gateway.PLUGIN_VERSION, supervisorVersion: gateway.PLUGIN_VERSION, proxyRecovery: true }),
     restartWorker: async () => { calls.push('worker'); return { ok: true }; },
     restartSupervisor: async () => { calls.push('supervisor'); return { ok: true }; },
   });
@@ -268,4 +269,71 @@ test('doctor reports a serving version mismatch and the ensure remedy', async (t
   assert.match(output.text, /serving shim version: 0\.0\.0/);
   assert.match(output.text, new RegExp(`VERSION MISMATCH: CLI ${gateway.PLUGIN_VERSION.replaceAll('.', '\\.')}, serving shim 0\\.0\\.0`));
   assert.match(output.text, new RegExp(`Run node "${CLI.replace(/[\\/]/g, '[\\\\/]')}" ensure`));
+});
+
+test('supervisor restores a proxy that dies after startup without another session', async () => {
+  let modelsAvailable = true;
+  let starts = 0;
+  const logs = [];
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => modelsAvailable,
+    listening: async () => false,
+    binaryExists: () => true,
+    start: () => { starts += 1; modelsAvailable = true; },
+    now: () => 0,
+    report: (message) => logs.push(message),
+  });
+
+  assert.equal((await recovery.recover()).state, 'healthy');
+  modelsAvailable = false;
+  assert.equal((await recovery.recover()).state, 'recovered');
+  assert.equal(starts, 1);
+  assert.match(logs.join('\n'), /^1970-01-01T00:00:00\.000Z model-gateway: proxy \/v1\/models unavailable; restart attempt 1/m);
+  assert.match(logs.join('\n'), /proxy recovered and \/v1\/models is ready/);
+});
+
+test('supervisor replaces an unresponsive bound proxy only after its owner releases the port', async () => {
+  let modelsAvailable = false;
+  const stopped = [];
+  let releaseChecks = 0;
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => modelsAvailable,
+    listening: async () => true,
+    owner: () => 4242,
+    stop: (pid) => stopped.push(pid),
+    waitForRelease: async () => { releaseChecks += 1; return true; },
+    binaryExists: () => true,
+    start: () => { modelsAvailable = true; },
+    now: () => 0,
+    report: () => {},
+  });
+
+  assert.equal((await recovery.recover()).state, 'recovered');
+  assert.deepEqual(stopped, [4242]);
+  assert.equal(releaseChecks, 1);
+});
+
+test('concurrent supervisor checks share one proxy recovery attempt', async () => {
+  let releaseProbe;
+  const probeStarted = new Promise((resolve) => { releaseProbe = resolve; });
+  let starts = 0;
+  const recovery = createProxyRecovery({
+    proxyBinary: 'fake-proxy',
+    probe: async () => { await probeStarted; return starts > 0; },
+    listening: async () => false,
+    binaryExists: () => true,
+    start: () => { starts += 1; releaseProbe(); },
+    now: () => 0,
+    report: () => {},
+  });
+
+  const first = recovery.recover();
+  const second = recovery.recover();
+  releaseProbe();
+  const [firstResult, secondResult] = await Promise.all([first, second]);
+  assert.equal(starts, 1);
+  assert.equal(firstResult.state, 'recovered');
+  assert.equal(secondResult.state, 'recovered');
 });

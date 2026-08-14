@@ -27,7 +27,7 @@ Open `/model` and choose a row labeled `From gateway`.
 - `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in.
 - Claude models keep using Anthropic normally.
 
-That’s it for daily use. The plugin keeps the gateway running, and Sidequest can select gateway models automatically when both plugins are installed.
+That’s it for daily use. The plugin keeps the gateway running: its shim supervisor checks the proxy's `/v1/models` endpoint, recovers an unavailable proxy with bounded backoff, and leaves a healthy proxy alone. Sidequest can select gateway models automatically when both plugins are installed.
 
 ## If something stops working
 

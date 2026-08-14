@@ -6,7 +6,7 @@ const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
-const { CLI_PATH, LOGS, PROXY_PORT, PUBLIC_SHIM_PORT, SHIM_PORT, STATE, WIN } = require('./runtime.js');
+const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, SHIM_PORT, STATE, WIN } = require('./runtime.js');
 
 function fetchUrl(url, { timeout = 15000, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -185,8 +185,106 @@ function spawnDetached(name, command, cmdArgs, env) {
   return child.pid;
 }
 
+async function proxyModelsAnswering(port = PROXY_PORT, fetch = fetchUrl) {
+  try {
+    return (await fetch(`http://127.0.0.1:${port}/v1/models`, { timeout: 2000 })).status === 200;
+  } catch { return false; }
+}
+
+function waitForPortRelease(port, { listening = portListening, attempts = 20, delay = 100 } = {}) {
+  return (async () => {
+    for (let attempt = 0; attempt < attempts; attempt += 1) {
+      if (!(await listening(port))) return true;
+      await new Promise((resolve) => setTimeout(resolve, delay));
+    }
+    return !(await listening(port));
+  })();
+}
+
+function spawnSupervisedProxy({ command = PROXY_BIN, port = PROXY_PORT, logs = LOGS, spawnProcess = spawn } = {}) {
+  const output = fs.openSync(path.join(logs, 'proxy.log'), 'a');
+  const child = spawnProcess(command, ['serve', '--no-monitor'], {
+    stdio: ['ignore', output, output], env: { ...process.env, PORT: String(port) }, windowsHide: true,
+  });
+  child.once('error', () => {});
+  fs.writeFileSync(pidFile('proxy'), String(child.pid));
+  fs.closeSync(output);
+  return child;
+}
+
+function createProxyRecovery({
+  proxyBinary = PROXY_BIN,
+  proxyPort = PROXY_PORT,
+  probe = () => proxyModelsAnswering(proxyPort),
+  listening = portListening,
+  owner = processOwningPort,
+  stop = killPid,
+  waitForRelease = waitForPortRelease,
+  start = spawnSupervisedProxy,
+  onStarted = () => {},
+  binaryExists = fs.existsSync,
+  now = Date.now,
+  report = console.error,
+  initialBackoffMs = 1000,
+  maximumBackoffMs = 30000,
+} = {}) {
+  let recovery = null;
+  let restartAttempt = 0;
+  let nextRestartAt = 0;
+
+  function log(message) {
+    report(`${new Date(now()).toISOString()} model-gateway: ${message}`);
+  }
+
+  async function recover() {
+    if (recovery) return recovery;
+    recovery = (async () => {
+      if (await probe()) {
+        restartAttempt = 0;
+        nextRestartAt = 0;
+        return { ok: true, state: 'healthy' };
+      }
+      if (now() < nextRestartAt) return { ok: false, state: 'backing-off', nextRestartAt };
+
+      restartAttempt += 1;
+      const backoffMs = Math.min(maximumBackoffMs, initialBackoffMs * (2 ** (restartAttempt - 1)));
+      nextRestartAt = now() + backoffMs;
+      log(`proxy /v1/models unavailable; restart attempt ${restartAttempt}`);
+      if (!binaryExists(proxyBinary)) {
+        log(`proxy restart skipped because ${proxyBinary} is missing`);
+        return { ok: false, state: 'binary-missing', retryAt: nextRestartAt };
+      }
+      if (await listening(proxyPort)) {
+        const pid = owner(proxyPort);
+        if (!pid) {
+          log(`proxy restart deferred because an unresponsive listener still owns :${proxyPort}`);
+          return { ok: false, state: 'port-owned', retryAt: nextRestartAt };
+        }
+        stop(pid);
+        if (!(await waitForRelease(proxyPort, { listening }))) {
+          log(`proxy restart deferred because PID ${pid} did not release :${proxyPort}`);
+          return { ok: false, state: 'port-stuck', retryAt: nextRestartAt };
+        }
+      }
+      start({ command: proxyBinary, port: proxyPort });
+      onStarted();
+      if (await probe()) {
+        restartAttempt = 0;
+        nextRestartAt = 0;
+        log('proxy recovered and /v1/models is ready');
+        return { ok: true, state: 'recovered' };
+      }
+      log('proxy restart started; /v1/models is not ready yet');
+      return { ok: false, state: 'starting', retryAt: nextRestartAt };
+    })();
+    try { return await recovery; } finally { recovery = null; }
+  }
+
+  return { recover };
+}
+
 module.exports = {
-  fetchUrl, gatewayShimProcesses, killPid, pidFile, portListening, postJson, processOwningPort,
-  readPid, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
-  stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForShimExit,
+  createProxyRecovery, fetchUrl, gatewayShimProcesses, killPid, pidFile, portListening, postJson, processOwningPort,
+  proxyModelsAnswering, readPid, reapGatewayOrphans, removePid, restartWorkerWithDrain, shimHealthy, spawnDetached,
+  spawnSupervisedProxy, stopAll, stopProcess, stopRunningSupervisor, stopShimWithDrain, waitForPortRelease, waitForShimExit,
 };
