@@ -555,6 +555,49 @@ async function cmdSubmit(opts: any, positional: any) {
   const body = await bodyFromOpts(opts, 'submit');
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`submit: no ticket "${idOrRef}" in ${meta.name}.`);
+  const sourceRevisionValue = String(opts['source-revision-value'] || '').trim();
+  if (sourceRevisionValue && opts.commit) {
+    fail('submit: pass exactly one of --commit or --source-revision-value.');
+  }
+  if (sourceRevisionValue) {
+    let res;
+    try {
+      res = store.submitTicket(slug, idOrRef, by, {
+        sourceRevision: {
+          source: String(opts['source-revision-source'] || '').trim(),
+          value: sourceRevisionValue,
+          observedAt: String(opts['source-revision-observed-at'] || '').trim(),
+        },
+        changedSurfaces: opts['changed-surface'],
+        projectCapabilities: {
+          process: !opts['no-process'],
+          worktree: !opts['no-worktree'],
+          review: !!opts.review,
+        },
+        verify: opts.verify,
+        force: !!opts.force,
+        source: opts.source || 'cli',
+        sessionId: sessionId(opts),
+      });
+    } catch (error: any) {
+      fail(`submit: ${(error && error.message) || error}`);
+    }
+    if (res.ok) {
+      const comment = addBodyComment(slug, idOrRef, by, body, opts.source || 'cli');
+      if (comment && !comment.ok) fail(`submit: recorded ${idOrRef}, but couldn't add evidence comment: ${comment.reason}`);
+    }
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, res), null, 2) + '\n');
+      if (!res.ok) process.exitCode = 1;
+      return;
+    }
+    if (!res.ok) {
+      reportClaimFailure('submit', idOrRef, res, meta);
+      return;
+    }
+    console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${res.ticket.submission.sourceRevision.source}:${res.ticket.submission.sourceRevision.value})  — ${meta.name}`);
+    return;
+  }
   if (verifyEmbedsWorktreeRoot(opts.verify, store.nearestRepoRoot(process.cwd()))) {
     fail(`submit: refused ${ticket.ref}; --verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
   }
@@ -638,18 +681,24 @@ async function cmdIntegrate(opts: any, positional: any) {
   if (!idOrRef) fail('integrate: pass a ticket id or ref, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
+  const ticket = store.getTicket(slug, idOrRef);
+  const usesGit = store.submissionUsesGit(ticket);
   const publish = require('../lib/publish');
   const runtimeSessionId = sessionId(opts);
-  const lock = await publish.publishLockStatus(meta.path);
-  if (lock.locked && !publish.publishLockOwnedBySession(meta.path, runtimeSessionId)) {
-    fail(publishLockRefusal(lock.holder, by, runtimeSessionId));
+  if (usesGit) {
+    const lock = await publish.publishLockStatus(meta.path);
+    if (lock.locked && !publish.publishLockOwnedBySession(meta.path, runtimeSessionId)) {
+      fail(publishLockRefusal(lock.holder, by, runtimeSessionId));
+    }
   }
-  let target: any;
-  try {
-    target = store.integrationTarget(slug);
-  } catch (error: any) {
-    fail(`integrate: ${(error && error.message) || error}`);
-    return;
+  let target: any = null;
+  if (usesGit) {
+    try {
+      target = store.integrationTarget(slug);
+    } catch (error: any) {
+      fail(`integrate: ${(error && error.message) || error}`);
+      return;
+    }
   }
   const mode = opts.mode == null ? store.boardConfig(slug).delivery : opts.mode;
   const delivery = store.integrateSubmission(slug, idOrRef, {
@@ -682,14 +731,18 @@ async function cmdIntegrate(opts: any, positional: any) {
     }
     fail(`integrate: delivered ${idOrRef}, but verification ${verification.verify.status === 'timeout' ? `timed out after ${verification.verify.timeoutMs}ms` : `failed with exit code ${verification.verify.exitCode}`}. Log: ${verification.verify.logPath}`);
   }
-  const verifyReason = verification.verify.status === 'skipped'
-    ? 'Verify skipped by choice.'
-    : verification.verify.status === 'manual'
-      ? `Manual verification recorded: ${verification.verify.manual}.`
-      : verification.verify.status === 'none'
-        ? 'Verify: none.'
-        : `Verify passed: ${verification.verify.command}.`;
-  const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;
+  const verifyReason = verification.verify.status === 'attestation'
+    ? `Attestation accepted for ${verification.verify.artifact || 'the source revision'}.`
+    : verification.verify.status === 'skipped'
+      ? 'Verify skipped by choice.'
+      : verification.verify.status === 'manual'
+        ? `Manual verification recorded: ${verification.verify.manual}.`
+        : verification.verify.status === 'none'
+          ? 'Verify: none.'
+          : `Verify passed: ${verification.verify.command}.`;
+  const reason = usesGit
+    ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`
+    : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
   const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
     by,
     reason,
@@ -705,10 +758,13 @@ async function cmdIntegrate(opts: any, positional: any) {
   if (!opts.json && integration.ignoredDirtyPaths?.length) {
     console.log(`info: left unrelated dirty paths untouched: ${integration.ignoredDirtyPaths.join(', ')}`);
   }
-  const result = integration.mode === 'apply'
-    ? `working tree changed: ${(integration.dirtyFiles || []).join(', ') || '(no files)'}`
-    : `HEAD ${String(integration.resultingHead).slice(0, 12)}`;
-  console.log(`✓ ${closed.ticket.ref} delivered by ${integration.mode} onto ${integration.targetBranch} (${result}) — ${meta.name}`);
+  const result = integration.mode === 'source-revision'
+    ? `${integration.sourceRevision.source}:${integration.sourceRevision.value}`
+    : integration.mode === 'apply'
+      ? `working tree changed: ${(integration.dirtyFiles || []).join(', ') || '(no files)'}`
+      : `HEAD ${String(integration.resultingHead).slice(0, 12)}`;
+  const destination = integration.mode === 'source-revision' ? 'the project source' : integration.targetBranch;
+  console.log(`✓ ${closed.ticket.ref} delivered by ${integration.mode} onto ${destination} (${result}) — ${meta.name}`);
 }
 
 // Orchestrator control-plane surface: the cross-process publish lock plus the
@@ -740,9 +796,11 @@ async function cmdPublish(opts: any, positional: any) {
             reason: 'missing_scope_snapshot',
             message: 'submission has no admitted scope snapshot; re-submit it, or close with the explicit legacy-scope override and a recorded reason.',
           }
-          : ticket.submission.base
-            ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission, ticket.ref)
-            : { ok: false, reason: 'legacy_submission' };
+          : ticket.submission.sourceRevision
+            ? readiness
+            : ticket.submission.base
+              ? commitScope.validateStoredSubmissionRange(meta.path, ticket.submission, ticket.ref)
+              : { ok: false, reason: 'legacy_submission' };
     }
     const queuePayload = releaseWindow
       ? Object.assign({ project: slug, releaseWindow }, payload)
@@ -760,20 +818,28 @@ async function cmdPublish(opts: any, positional: any) {
     }
     console.log(`${payload.count} submission(s) awaiting integration — ${meta.name}:`);
     console.log(`  default delivery: ${payload.delivery || 'merge'}`);
-    for (const t of payload.tickets) {
-      const commits = Array.isArray(t.submission.commits) && t.submission.commits.length ? t.submission.commits : [t.submission.commit];
-      const paths = Array.isArray(t.submission.changedPaths) ? t.submission.changedPaths : [];
-      console.log(`  ${t.ref}  ${commits.length} commit(s), tip ${t.submission.commit.slice(0, 12)} @ ${t.submission.gitRef}  (by ${t.submission.by}, ${t.submission.at})`);
-      console.log(`      commits: ${commits.map((commit: any) => commit.slice(0, 12)).join(', ')}`);
-      console.log(`      paths: ${paths.join(', ') || '(legacy submission: unavailable)'}`);
-      if (!t.rangeValidation.ok) {
-        const rejectedPaths = Array.isArray(t.rangeValidation.unscopedPaths) && t.rangeValidation.unscopedPaths.length
-          ? t.rangeValidation.unscopedPaths
-          : Array.isArray(t.rangeValidation.outside) ? t.rangeValidation.outside : [];
-        const pathSuffix = rejectedPaths.length ? `: ${rejectedPaths.join(', ')}` : '';
-        console.log(`      REJECTED: ${t.rangeValidation.reason}${pathSuffix}`);
+    for (const ticket of payload.tickets) {
+      const submission = ticket.submission;
+      const paths = Array.isArray(submission.changedPaths) ? submission.changedPaths : [];
+      if (submission.sourceRevision) {
+        const revision = `${submission.sourceRevision.source}:${submission.sourceRevision.value}`;
+        console.log(`  ${ticket.ref}  source revision ${revision}  (by ${submission.by}, ${submission.at})`);
+      } else {
+        const commits = Array.isArray(submission.commits) && submission.commits.length
+          ? submission.commits
+          : [submission.commit];
+        console.log(`  ${ticket.ref}  ${commits.length} commit(s), tip ${submission.commit.slice(0, 12)} @ ${submission.gitRef}  (by ${submission.by}, ${submission.at})`);
+        console.log(`      commits: ${commits.map((commit: any) => commit.slice(0, 12)).join(', ')}`);
       }
-      if (t.submission.verify) console.log(`      verify: ${t.submission.verify}`);
+      console.log(`      paths: ${paths.join(', ') || '(legacy submission: unavailable)'}`);
+      if (!ticket.rangeValidation.ok) {
+        const rejectedPaths = Array.isArray(ticket.rangeValidation.unscopedPaths) && ticket.rangeValidation.unscopedPaths.length
+          ? ticket.rangeValidation.unscopedPaths
+          : Array.isArray(ticket.rangeValidation.outside) ? ticket.rangeValidation.outside : [];
+        const pathSuffix = rejectedPaths.length ? `: ${rejectedPaths.join(', ')}` : '';
+        console.log(`      REJECTED: ${ticket.rangeValidation.reason}${pathSuffix}`);
+      }
+      if (submission.verify) console.log(`      verify: ${submission.verify}`);
     }
     return;
   }

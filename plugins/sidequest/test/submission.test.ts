@@ -95,6 +95,21 @@ function addTicket(title?: any, extra?: any) {
   }, extra || {}));
 }
 
+function noGitCliTicket(title: string, files: string[]) {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-no-git-project-'));
+  const project = store.ensureProject(projectPath).slug;
+  const ticket = store.createTicket(project, {
+    title,
+    complexity: 3,
+    complexityWhy: 'fixture for one immutable non-Git project revision',
+    files,
+    source: 'cli',
+    labels: ['direct-ok'],
+  });
+  const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: projectPath }, { cwd: projectPath });
+  return { project, ticket, runCli: runner.runCli };
+}
+
 function addClaimedTicket(title: string, owner: string, extra?: any) {
   const ticket = addTicket(title, extra);
   const claim = store.claimTicket(slug, ticket.ref, owner, { direct: true, reason: 'The submission fixture requires a local direct claim.' });
@@ -1291,8 +1306,19 @@ test('integration reports and records replay conflict paths before aborting', ()
 
 test('integration closure consumes an in-scope submission with control-plane provenance', () => {
   cleanBranch();
-  const t = addTicket('integration consumes submission', { files: ['lib/integrates.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'worker-a', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+  const t = addTicket('integration consumes submission', {
+    files: ['lib/integrates.js'],
+    category: 'submission.fixture',
+  });
+  const prepared = store.prepareDispatch(slug, t.ref, {
+    sessionId: 'integration-consumes-submission',
+    sharedTree: true,
+  });
+  assert.strictEqual(store.claimTicket(slug, t.ref, 'worker-a', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: 'integration-consumes-submission',
+  }).ok, true);
   fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'integrates.js'), 'integrated\n');
   git(['add', 'lib/integrates.js']);
@@ -1300,6 +1326,9 @@ test('integration closure consumes an in-scope submission with control-plane pro
   const commit = git(['rev-parse', 'HEAD']);
   pin(t, commit);
   assert.strictEqual(runCli(['submit', t.ref, '--by', 'worker-a', '--commit', commit]).status, 0);
+  const submitted = store.getTicket(slug, t.ref);
+  assert.strictEqual(submitted.lifecycleAttempt.state, 'submitted');
+  assert.strictEqual(submitted.dispatch.lifecycleAttempt.state, 'submitted');
 
   const completed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into main.`]);
   assert.strictEqual(completed.status, 0, completed.stderr + completed.stdout);
@@ -1308,6 +1337,8 @@ test('integration closure consumes an in-scope submission with control-plane pro
   assert.strictEqual(after.completion.authority, 'control-plane');
   assert.strictEqual(after.completion.purpose, 'integration');
   assert.ok(after.submission.integratedAt, 'integration closure stamps the submission integrated');
+  assert.strictEqual(after.lifecycleAttempt.state, 'closed');
+  assert.strictEqual(after.dispatch.lifecycleAttempt.state, 'closed');
   assert.strictEqual(store.pendingSubmission(after), false);
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });
@@ -1499,6 +1530,114 @@ test('publish queue adds release-window context only when release fragments exis
     store.setBoardConfig(slug, { integrationBranch: 'main' });
     fs.rmSync(path.join(PROJECT_DIR, '.release'), { recursive: true, force: true });
   }
+});
+
+test('CLI: submit parks an immutable source revision without Git range discovery', () => {
+  const { project, ticket, runCli: runNoGitCli } = noGitCliTicket('CLI source revision', ['wiki/page.md']);
+  assert.strictEqual(runNoGitCli([
+    'claim', ticket.ref, '--by', 'cli-source-worker', '--direct',
+    '--reason', 'This fixture publishes one exact immutable source revision.',
+  ]).status, 0);
+
+  const submitted = runNoGitCli([
+    'submit', ticket.ref, '--by', 'cli-source-worker',
+    '--source-revision-source', 'wiki',
+    '--source-revision-value', 'wiki-revision-42',
+    '--source-revision-observed-at', '2026-08-14T00:00:00.000Z',
+    '--changed-surface', 'wiki/page.md',
+    '--no-process', '--no-worktree', '--review',
+    '--verify', 'attestation: wiki-revision-42 | editor-approved | editor approved the immutable revision',
+    '--body', 'Reviewed immutable wiki revision.',
+  ]);
+  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
+  assert.match(submitted.stdout, /wiki:wiki-revision-42/);
+
+  const stored = store.getTicket(project, ticket.ref);
+  assert.deepStrictEqual(stored.submission.sourceRevision, {
+    source: 'wiki',
+    value: 'wiki-revision-42',
+    observedAt: '2026-08-14T00:00:00.000Z',
+  });
+  assert.deepStrictEqual(stored.submission.changedPaths, ['wiki/page.md']);
+  assert.deepStrictEqual(stored.submission.projectCapabilities, {
+    process: false,
+    worktree: false,
+    review: true,
+    git: false,
+  });
+  assert.ok(stored.comments.some((comment?: any) => /Reviewed immutable wiki revision/.test(comment.body)));
+
+  const queueJson = runNoGitCli(['publish', 'queue', '--json']);
+  assert.strictEqual(queueJson.status, 0, queueJson.stderr + queueJson.stdout);
+  const queuedTicket = JSON.parse(queueJson.stdout).tickets.find((entry?: any) => entry.ref === ticket.ref);
+  assert.strictEqual(queuedTicket.rangeValidation.ok, true);
+  assert.strictEqual(queuedTicket.rangeValidation.reason, null);
+
+  const queueText = runNoGitCli(['publish', 'queue']);
+  assert.strictEqual(queueText.status, 0, queueText.stderr + queueText.stdout);
+  assert.match(queueText.stdout, /source revision wiki:wiki-revision-42/);
+  assert.doesNotMatch(queueText.stdout, /legacy_submission/);
+});
+
+test('CLI: source revision submission cannot bypass Git delivery', () => {
+  const ticket = addTicket('CLI false non-Git submission', { files: ['wiki/page.md'] });
+  assert.strictEqual(runCli([
+    'claim', ticket.ref, '--by', 'cli-false-capability-worker', '--direct',
+    '--reason', 'This fixture checks one exact public submission refusal.',
+  ]).status, 0);
+
+  const refused = runCli([
+    'submit', ticket.ref, '--by', 'cli-false-capability-worker',
+    '--source-revision-source', 'wiki',
+    '--source-revision-value', 'invented-revision',
+    '--source-revision-observed-at', '2026-08-14T00:00:00.000Z',
+    '--changed-surface', 'wiki/page.md',
+    '--verify', 'attestation: invented-revision | self-approved | caller asserted delivery',
+  ]);
+  assert.strictEqual(refused.status, 1);
+  assert.match(refused.stderr + refused.stdout, /require a project outside Git/);
+  const stored = store.getTicket(slug, ticket.ref);
+  assert.strictEqual(stored.submission, undefined);
+  assert.strictEqual(stored.claim.by, 'cli-false-capability-worker');
+});
+
+test('CLI: submit reports source revision scope refusals without crashing', () => {
+  const { project, ticket, runCli: runNoGitCli } = noGitCliTicket('CLI source scope refusal', ['wiki/allowed.md']);
+  assert.strictEqual(runNoGitCli([
+    'claim', ticket.ref, '--by', 'cli-source-refusal-worker', '--direct',
+    '--reason', 'This fixture checks one exact public submission refusal.',
+  ]).status, 0);
+
+  const refused = runNoGitCli([
+    'submit', ticket.ref, '--by', 'cli-source-refusal-worker',
+    '--source-revision-source', 'wiki',
+    '--source-revision-value', 'wiki-revision-43',
+    '--source-revision-observed-at', '2026-08-14T00:00:00.000Z',
+    '--changed-surface', 'wiki/outside.md',
+    '--verify', 'attestation: wiki-revision-43 | editor-reviewed | editor found the revision complete',
+  ]);
+  assert.strictEqual(refused.status, 1);
+  assert.match(refused.stderr + refused.stdout, /outside its declared scope/);
+  assert.doesNotMatch(refused.stderr + refused.stdout, /TypeError/);
+  assert.strictEqual(store.getTicket(project, ticket.ref).submission, undefined);
+});
+
+test('CLI: submit rejects mixed Git and source revision identities', () => {
+  const ticket = addTicket('CLI mixed revision identity', { files: ['wiki/page.md'] });
+  assert.strictEqual(runCli([
+    'claim', ticket.ref, '--by', 'cli-mixed-worker', '--direct',
+    '--reason', 'This fixture checks one exact public submission validation.',
+  ]).status, 0);
+
+  const refused = runCli([
+    'submit', ticket.ref, '--by', 'cli-mixed-worker', '--commit', COMMIT,
+    '--source-revision-source', 'wiki', '--source-revision-value', 'wiki-revision-42',
+    '--source-revision-observed-at', '2026-08-14T00:00:00.000Z',
+    '--changed-surface', 'wiki/page.md',
+    '--verify', 'attestation: wiki-revision-42',
+  ]);
+  assert.strictEqual(refused.status, 1);
+  assert.match(refused.stderr + refused.stdout, /exactly one of --commit or --source-revision-value/);
 });
 
 test('CLI: submit parks the ticket READY_FOR_INTEGRATION with an evidence comment, publish queue lists it', () => {

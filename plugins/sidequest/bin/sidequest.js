@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 "use strict";
 const store = require("../lib/store");
-const { createBoardWatch, createGitHubCiRunsProvider } = require("../lib/store/pulse");
+const { createProjectBoardWatch } = require("../lib/store/project-watch");
 const { fail, resolveProject, resolveWatchProject } = require("./sidequest-cmd-shared");
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require("./sidequest-cmd-server");
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./sidequest-cmd-tickets");
@@ -10,9 +10,9 @@ const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose,
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
 const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
-const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes"]);
+const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label" };
-const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "unverified-transport", "allow-repeat-failure", "allow-unscoped"]);
+const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "override-legacy-scope", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "unverified-transport", "allow-repeat-failure", "allow-unscoped", "no-process", "no-worktree", "review"]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
 const COMMAND_FLAGS = {
   add: ["title", "desc", "description", "body", "body-file", "priority", "status", "category", "unclassified", "complexity", "why", "high-stakes", "label", "image", "file", "produces", "changes", "consumes", "contract-waiver", "readonly", "anchors", "verify-kind", "attestation-artifact", "verify", "story", "route-model", "route-effort", "route", "model", "effort", "dry-run", "name"],
@@ -47,7 +47,7 @@ const COMMAND_FLAGS = {
   remind: ["in", "at"],
   unremind: [],
   done: ["by", "model", "effort", "body", "body-file", "force"],
-  submit: ["by", "commit", "base", "gitref", "git-ref", "verify", "worktree", "body", "body-file", "force", "clear", "status"],
+  submit: ["by", "commit", "source-revision-source", "source-revision-value", "source-revision-observed-at", "changed-surface", "no-process", "no-worktree", "review", "base", "gitref", "git-ref", "verify", "worktree", "body", "body-file", "force", "clear", "status"],
   comment: ["by", "body", "body-file", "message"],
   comments: ["full"],
   link: ["ref", "type", "target"],
@@ -156,7 +156,7 @@ const HELP_COMMANDS = {
   list: "sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)",
   pulse: "sidequest pulse <SQ-n> [--project <path-or-slug>]",
   changes: "sidequest changes [--since <iso>] [--project <path-or-slug>]",
-  watch: "sidequest watch --project <board-root-or-slug> [--interval <seconds>]  print this board’s actionable and GitHub CI alerts",
+  watch: "sidequest watch [--project <path-or-slug>] [--interval <seconds>]  print board and GitHub CI alerts as they arrive",
   update: 'sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: "sidequest rm <id|SQ-n> [--force]",
   profile: "sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]",
@@ -173,7 +173,7 @@ const HELP_COMMANDS = {
   done: "sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]",
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair"',
-  submit: 'sidequest submit <id|SQ-n> --by who (--commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] [--body-file path] [--force] | --clear [-s todo])',
+  submit: 'sidequest submit <id|SQ-n> --by who (--commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] | --source-revision-source <kind> --source-revision-value <revision> --source-revision-observed-at <ISO-time> --changed-surface <path> [--no-process] [--no-worktree] [--review] --verify "attestation: ..." | --clear [-s todo]) [--body-file path] [--force]',
   integrate: "sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--skip-verify] [--override-legacy-scope] [--json]",
   publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
@@ -257,7 +257,7 @@ Usage:
   sidequest list [--status todo|doing|awaiting-oracle|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest watch --project <board-root-or-slug> [--interval <seconds>]   stream this board’s actionable and GitHub CI events (30s default)
+  sidequest watch [--project <path-or-slug>] [--interval <seconds>]   stream actionable board and GitHub CI events (30s default)
   sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
@@ -292,7 +292,7 @@ Working the board safely (multi-agent):
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
     --force only lets the existing submitted candidate owner replace their own pending candidate; it never authorizes a foreign submit or rejection.
   sidequest submit <id|SQ-n> --clear [-s todo]     orchestrator reset: drop a submission after a bounced integration
-  sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply]   deliver a ready submission and close it with the durable ref recorded
+  sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply]   deliver a ready Git range or immutable source revision, verify it, and close it
   sidequest publish lock|unlock|status [--repo path] [--steal] [--force]   cross-process publish lock (owner pid +
     session metadata in the repo's common git dir; stale/dead holders reclaimable, --steal takes over explicitly)
   sidequest publish queue [--json]                 tickets awaiting the publish transaction, oldest first
@@ -427,16 +427,8 @@ async function main() {
       await cmdChanges(opts);
       break;
     case "watch": {
-      const { slug, meta } = await resolveWatchProject(opts);
-      createBoardWatch({
-        board: slug,
-        changesPayload: (board, since) => {
-          if (board !== slug) throw new Error("watch attempted to read a board other than its registered identity.");
-          return { project: slug, ...store.changesPayload(slug, since) };
-        },
-        ciRunsProvider: createGitHubCiRunsProvider(meta?.path),
-        watchingAuthor: process.env.SIDEQUEST_AGENT || process.env.CLAUDE_SESSION_ID || process.env.CLAUDE_CODE_SESSION_ID || ""
-      }).start(opts.interval);
+      const project = await resolveWatchProject(opts);
+      createProjectBoardWatch(project).start(opts.interval);
       break;
     }
     case "update":

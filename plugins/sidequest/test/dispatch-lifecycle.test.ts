@@ -257,7 +257,65 @@ test('one runtime agent cannot bind concurrently launched isolated dispatches', 
   }
 });
 
-test('token claims independently bind every concurrently prepared isolated dispatch', () => {
+test('claim-token binding accepts prepared and launched attempts', () => {
+  const fixture = createFixture('claim token compatibility fixture');
+  const sessionId = `claim-token-compatibility-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, fixture.ref, { sessionId, sharedTree: false });
+  const claimOptions = {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    requireBoundAgent: true,
+  };
+
+  assert.equal(store.claimTicket(slug, fixture.ref, 'claim-token-compatibility-worker', claimOptions).ok, true);
+  const dispatch = store.getTicket(slug, fixture.ref).dispatch;
+  assert.equal(dispatch.bindSource, 'claim_token');
+  assert.ok(dispatch.boundAt);
+  assert.equal(store.getTicket(slug, fixture.ref).lifecycleAttempt.state, 'claimed');
+});
+
+test('direct claim release records the terminal lifecycle state', () => {
+  const ticket = createFixture('direct release lifecycle fixture');
+  const owner = 'direct-release-lifecycle-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    direct: true,
+    reason: 'The lifecycle fixture requires an exact local direct claim.',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).lifecycleAttempt.state, 'claimed');
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, owner, {
+    status: 'todo',
+    source: 'test',
+  }).ok, true);
+  const released = store.getTicket(slug, ticket.ref);
+  assert.equal(released.claim, null);
+  assert.equal(released.lifecycleAttempt.state, 'released');
+});
+
+test('dispatched claim release records one terminal lifecycle state', () => {
+  const ticket = createFixture('dispatched release lifecycle fixture');
+  const owner = 'dispatched-release-lifecycle-worker';
+  const prepared = store.prepareDispatch(slug, ticket.ref, {
+    sessionId: 'dispatched-release-lifecycle',
+    sharedTree: true,
+  });
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId: 'dispatched-release-lifecycle',
+  }).ok, true);
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, owner, {
+    status: 'todo',
+    source: 'test',
+  }).ok, true);
+  const released = store.getTicket(slug, ticket.ref);
+  assert.equal(released.lifecycleAttempt.state, 'released');
+  assert.equal(released.dispatch.lifecycleAttempt.state, 'released');
+});
+
+test('token claims independently bind every concurrently launched isolated dispatch', () => {
   const first = createFixture('first token binding fixture');
   const second = createFixture('second token binding fixture');
   const sessionId = `token-binding-${Date.now()}`;
@@ -265,6 +323,15 @@ test('token claims independently bind every concurrently prepared isolated dispa
     store.prepareDispatch(slug, first.ref, { sessionId, sharedTree: false }),
     store.prepareDispatch(slug, second.ref, { sessionId, sharedTree: false }),
   ];
+
+  for (const launch of prepared) {
+    assert.equal(store.recordDispatchLaunch(slug, launch.ticket.ref, {
+      sessionId,
+      token: launch.token,
+      executor: launch.ticket.dispatchExecutor,
+      agentName: `token-binding-worker-${launch.ticket.id}`,
+    }).ok, true);
+  }
 
   for (const [index, launch] of prepared.entries()) {
     assert.equal(store.claimTicket(slug, launch.ticket.ref, `token-binding-worker-${index}`, {
@@ -479,6 +546,8 @@ test('zero-scope read-only dispatches use the shared checkout without a worktree
 
   const explicitlyIsolated = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
   assert.equal(explicitlyIsolated.ticket.dispatch.sharedTree, false);
+  assert.equal(store.getTicket(slug, ticket.ref).lifecycleAttempt.state, 'prepared');
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.lifecycleAttempt.state, 'prepared');
   assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
@@ -655,6 +724,7 @@ test('pulse reports derived activity and dispatch changes without leaking a nonc
     source: 'test',
   }).ok, false);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'lifecycle-worker', { status: 'todo', source: 'test' }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).lifecycleAttempt.state, 'released');
   assert.equal(store.completeTicketAsControlPlane(slug, ticket.ref, {
     purpose: 'grooming',
     by: 'board-groomer',

@@ -1031,6 +1031,45 @@
         "commit": {
           "type": "string"
         },
+        "sourceRevision": {
+          "type": "object",
+          "properties": {
+            "source": {
+              "type": "string"
+            },
+            "value": {
+              "type": "string"
+            },
+            "observedAt": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "source",
+            "value",
+            "observedAt"
+          ]
+        },
+        "changedSurfaces": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "projectCapabilities": {
+          "type": "object",
+          "properties": {
+            "process": {
+              "type": "boolean"
+            },
+            "worktree": {
+              "type": "boolean"
+            },
+            "review": {
+              "type": "boolean"
+            }
+          }
+        },
         "base": {
           "type": "string"
         },

@@ -1,7 +1,7 @@
 "use strict";
 const { resolveSuite } = require("../suite-resolver.js");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -12,8 +12,49 @@ function createSubmissions(dependencies) {
   const CHECKPOINT_VERIFY_EXCERPT_MAX = 500;
   const REJECTION_REVIEW_MAX = 1e3;
   const REJECTION_REASON_MAX = 4e3;
+  function sourceRevisionMetadata(revision) {
+    if (!revision || typeof revision !== "object") return null;
+    const source = String(revision.source || "").trim();
+    const value = String(revision.value || "").trim();
+    const observedAt = String(revision.observedAt || "").trim();
+    if (!source || !value || !Number.isFinite(Date.parse(observedAt))) {
+      throw new Error("invalid source revision metadata");
+    }
+    return Object.freeze({ source, value, observedAt: new Date(observedAt).toISOString() });
+  }
+  function changedSurfacesMetadata(surfaces) {
+    if (!Array.isArray(surfaces)) return [];
+    return Array.from(new Set(surfaces.map((surface) => String(surface).trim().replace(/\\/g, "/")).filter(Boolean)));
+  }
+  function projectUsesGit(slug) {
+    const projectPath = String(readMeta(slug)?.path || "").trim();
+    if (!projectPath) return true;
+    let directory = path.resolve(projectPath);
+    for (; ; ) {
+      if (fs.existsSync(path.join(directory, ".git"))) return true;
+      const parent = path.dirname(directory);
+      if (parent === directory) return false;
+      directory = parent;
+    }
+  }
+  function isArtifactSubmission(submission) {
+    return Boolean(submission?.sourceRevision && !submission?.commit);
+  }
   function rejectionHistory(ticket) {
     return Array.isArray(ticket?.rejectedSubmissions) ? ticket.rejectedSubmissions.filter((entry) => entry) : [];
+  }
+  function sameSourceRevision(left, right) {
+    return Boolean(
+      left?.source && right?.source && left.source === right.source && left.value === right.value
+    );
+  }
+  function rejectedSubmissionMatches(submission, rejected) {
+    if (submission?.sourceRevision || rejected?.sourceRevision) {
+      return sameSourceRevision(submission?.sourceRevision, rejected?.sourceRevision);
+    }
+    return Boolean(
+      submission?.commit && rejected?.commit && String(submission.commit).toLowerCase() === String(rejected.commit).toLowerCase()
+    );
   }
   function putTicketTransaction(slug, ticket) {
     return transaction(() => putTicket(slug, ticket));
@@ -27,7 +68,7 @@ function createSubmissions(dependencies) {
     delete rejected.preservationError;
     if (rejected.rejectionKind === "rework") {
       const previousStatus = rejected.previousStatus || ticket.status;
-      if (ticket.submission && String(ticket.submission.commit || "").toLowerCase() === rejected.commit) {
+      if (ticket.submission && rejectedSubmissionMatches(ticket.submission, rejected)) {
         ticket.submission = null;
         ticket.status = "todo";
         ticket.statusTransition = { from: previousStatus, to: ticket.status, at: rejected.rejectedAt };
@@ -78,6 +119,25 @@ function createSubmissions(dependencies) {
     putTicketTransaction(slug, ticket);
     return { ok: true, ticket, rejected };
   }
+  function preserveRejectedSubmission(slug, ticket, rejected, root) {
+    if (!rejected.sourceRevision) {
+      if (!root) {
+        return {
+          ok: false,
+          reason: "rejected_submission_preservation_failed",
+          ticket,
+          message: `rework: refused ${ticket.ref}; missing project path`
+        };
+      }
+      return preservePendingRejection(slug, ticket, rejected, root);
+    }
+    rejected.preservationState = "preserved";
+    delete rejected.preservationError;
+    delete rejected.quarantineRef;
+    finalizePendingRejection(ticket, rejected);
+    putTicketTransaction(slug, ticket);
+    return { ok: true, ticket, rejected };
+  }
   function reconcileSubmissionRejections(slug, idOrRef) {
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
@@ -87,10 +147,9 @@ function createSubmissions(dependencies) {
       const pending = rejectionHistory(ticket).filter((entry) => entry.preservationState === "pending");
       if (!pending.length) return { ok: true, ticket, recovered: [] };
       const root = String(readMeta(slug)?.path || "").trim();
-      if (!root) return { ok: false, reason: "missing_project_path", ticket };
       const recovered = [];
       for (const rejected of pending) {
-        const result = preservePendingRejection(slug, ticket, rejected, root);
+        const result = preserveRejectedSubmission(slug, ticket, rejected, root);
         if (!result.ok) return Object.assign(result, { recovered });
         recovered.push(result.rejected);
       }
@@ -294,7 +353,7 @@ Expires: ${checkpoint.expiresAt}`;
     );
   }
   function pendingSubmission(t) {
-    return !!(t && t.submission && t.submission.commit && !t.submission.integratedAt);
+    return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt);
   }
   function submissionGitRef(ticket) {
     return `refs/sidequest/${ticket.ref}`;
@@ -370,7 +429,13 @@ Expires: ${checkpoint.expiresAt}`;
   }
   function verifyDeliveredSubmission(slug, ticket, opts) {
     const command = integrationVerifyCommand(slug, ticket);
-    if (ticket.executorVerifyKind === "attestation") return { status: "attestation", artifact: ticket.executorAttestationArtifact || null, evidence: String(ticket.submission?.verify || "").trim() };
+    if (ticket.executorVerifyKind === "attestation" || isArtifactSubmission(ticket.submission)) {
+      return {
+        status: "attestation",
+        artifact: ticket.submission?.sourceRevision?.value || ticket.executorAttestationArtifact || null,
+        evidence: String(ticket.submission?.verify || "").trim()
+      };
+    }
     if (opts?.skipVerify === true) return { status: "skipped", skippedByChoice: true, command: command || null };
     if (!command) return { status: "none", command: null };
     const validationError = verifyCommandError(command);
@@ -437,7 +502,7 @@ ${verify.outputTail}` : null
     if (!pendingSubmission(ticket)) {
       return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no submission to integrate.` };
     }
-    if (ticket.executorVerifyKind !== "attestation") {
+    if (ticket.executorVerifyKind !== "attestation" && !isArtifactSubmission(ticket.submission)) {
       const recordedVerify = String(ticket.submission?.verify || "").trim();
       const verifyError = verifyCommandErrors(recordedVerify)[0];
       if (verifyError) {
@@ -460,7 +525,7 @@ ${verify.outputTail}` : null
       };
     }
     const project = readMeta(slug);
-    const scopeValidation = commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref);
+    const scopeValidation = isArtifactSubmission(ticket.submission) ? { ok: true, changedPaths: ticket.submission.changedPaths || [] } : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref);
     const legacyScopeOverride = opts?.overrideLegacyScope === true && scopeValidation.reason === "missing_scope_snapshot";
     if (!scopeValidation.ok && !legacyScopeOverride) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
@@ -533,11 +598,42 @@ ${verify.outputTail}` : null
       message: verificationMessage
     });
   }
+  function submissionUsesGit(ticket) {
+    return !isArtifactSubmission(ticket?.submission) || ticket.submission.projectCapabilities?.git !== false;
+  }
+  function integrateArtifactSubmission(slug, ticket, opts) {
+    const submission = ticket.submission;
+    const capabilities = submission.projectCapabilities || {};
+    const changedPaths = changedIntegrationPaths("", submission);
+    const verify = verifyDeliveredSubmission(slug, ticket, opts);
+    if (capabilities.process === false && verify.status !== "attestation") {
+      return integrationFailure(slug, ticket, {
+        reason: "artifact_attestation_required",
+        verify,
+        message: `${ticket.ref} requires attestation or review evidence for integration without process capability.`
+      });
+    }
+    const integratedAt = (/* @__PURE__ */ new Date()).toISOString();
+    const integration = {
+      mode: "source-revision",
+      sourceRevision: submission.sourceRevision,
+      changedPaths,
+      deliveredFiles: changedPaths,
+      verify,
+      outcome: "delivered",
+      recordedAt: integratedAt,
+      deliveredAt: integratedAt,
+      verifiedAt: integratedAt
+    };
+    const recorded = updateSubmissionIntegration(slug, ticket.id, integration);
+    return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
+  }
   function integrateSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
     if (!admitted.ok) return admitted;
     const ticket = admitted.ticket;
+    if (!submissionUsesGit(ticket)) return integrateArtifactSubmission(slug, ticket, opts);
     const project = readMeta(slug);
     const repo = project?.path;
     const target = opts.target;
@@ -708,13 +804,26 @@ ${verify.outputTail}` : null
     const submissionComment = opts.submissionComment ? prepareComment(opts.submissionComment) : null;
     if (submissionComment && !submissionComment.ok) throw new Error(`submission comment ${submissionComment.reason}`);
     const commit = String(opts.commit || "").trim().toLowerCase();
-    if (!SUBMISSION_COMMIT_RE.test(commit)) {
-      throw new Error(`invalid commit "${opts.commit}" — pass the verified commit's hex hash (7-64 chars)`);
+    const sourceRevision = sourceRevisionMetadata(opts.sourceRevision);
+    if (sourceRevision && commit) {
+      throw new Error("submit exactly one of commit or source revision");
+    }
+    const changedSurfaces = changedSurfacesMetadata(opts.changedSurfaces);
+    const reportedProjectCapabilities = opts.projectCapabilities && typeof opts.projectCapabilities === "object" ? opts.projectCapabilities : {};
+    const projectCapabilities = sourceRevision ? Object.freeze({ ...reportedProjectCapabilities, git: projectUsesGit(slug) }) : Object.freeze({ ...reportedProjectCapabilities });
+    if (!sourceRevision && !SUBMISSION_COMMIT_RE.test(commit)) {
+      throw new Error(`invalid commit "${opts.commit}" — pass the verified commit's hex hash (7-64 chars) or a source revision`);
+    }
+    if (sourceRevision && !changedSurfaces.length) {
+      throw new Error("source revision submissions require changed surfaces");
+    }
+    if (sourceRevision && projectCapabilities.git) {
+      throw new Error("source revision submissions require a project outside Git");
     }
     const gitRef = opts.gitRef != null && String(opts.gitRef).trim() ? String(opts.gitRef).trim().slice(0, SUBMISSION_GITREF_MAX) : null;
     const verify = opts.verify != null && String(opts.verify).trim() ? String(opts.verify).trim().slice(0, EXECUTOR_VERIFY_MAX) : null;
     const worktree = opts.worktree != null && String(opts.worktree).trim() ? String(opts.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX) : null;
-    const range = submissionRangeMetadata(opts.range, commit);
+    const range = sourceRevision ? null : submissionRangeMetadata(opts.range, commit);
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
     return withTicketLock(slug, found.id, () => {
@@ -725,14 +834,22 @@ ${verify.outputTail}` : null
       const pendingRejections = rejectionHistory(t).filter((entry) => entry.preservationState === "pending");
       if (pendingRejections.length) {
         const rejectionRoot = String(readMeta(slug)?.path || "").trim();
-        if (!rejectionRoot) return { ok: false, reason: "missing_project_path", ticket: t };
         for (const pendingRejection of pendingRejections) {
-          const recovered = preservePendingRejection(slug, t, pendingRejection, rejectionRoot);
+          const recovered = preserveRejectedSubmission(slug, t, pendingRejection, rejectionRoot);
           if (!recovered.ok) return recovered;
         }
       }
       const rejectedSubmissions = rejectionHistory(t);
       const rejectedSubmission = rejectedSubmissions.find((entry) => entry && !entry.supersededAt) || null;
+      const rejectedSourceRevision = sourceRevision ? rejectedSubmissions.find((entry) => sameSourceRevision(entry.sourceRevision, sourceRevision)) : null;
+      if (sourceRevision && rejectedSourceRevision) {
+        return {
+          ok: false,
+          reason: "rejected_submission_reused",
+          ticket: t,
+          message: `submit: refused ${t.ref}; source revision ${sourceRevision.source}:${sourceRevision.value} was previously rejected. Submit a different immutable revision.`
+        };
+      }
       const submittedCommits = range?.commits?.length ? range.commits : [commit];
       const rejectedCommit = rejectedSubmissions.map((entry) => String(entry?.commit || "").trim().toLowerCase()).find((candidate) => candidate && submittedCommits.some((submittedCommit) => candidate === submittedCommit || candidate.startsWith(submittedCommit) || submittedCommit.startsWith(candidate)));
       if (rejectedCommit) {
@@ -743,10 +860,11 @@ ${verify.outputTail}` : null
           message: `submit: refused ${t.ref}; admitted range contains previously rejected commit ${rejectedCommit}. Create and verify a range without any rejected commit before submitting.`
         };
       }
-      const completion = completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
+      const completion = sourceRevision ? { ok: true, applicable: false, changedPaths: changedSurfaces } : completionTreeCheck(slug, t, { explicitNoOp: range?.noOp === true });
       if (!completion.ok) return Object.assign({ ticket: t }, completion);
-      const attestation = t.executorVerifyKind === "attestation";
-      const validationError = attestation ? attestationErrors(verify, t.executorAttestationArtifact)[0] : verifyCommandError(verify);
+      const attestation = t.executorVerifyKind === "attestation" || sourceRevision != null;
+      const attestationArtifact = sourceRevision ? sourceRevision.value : t.executorAttestationArtifact;
+      const validationError = attestation ? attestationErrors(verify, attestationArtifact)[0] : verifyCommandError(verify);
       if (validationError) {
         return { ok: false, reason: "invalid_verify", ticket: t, message: validationError };
       }
@@ -761,7 +879,8 @@ ${verify.outputTail}` : null
       }
       const admittedScope = executionScope(slug, t);
       const submissionScope = commitScope.ticketCommitScope(admittedScope, t.files, t.ref);
-      const outsideSubmittedRange = range ? range.changedPaths.filter((file) => !commitScope.isInScope(file, submissionScope)) : [];
+      const submittedSurfaces = sourceRevision ? changedSurfaces : range?.changedPaths || [];
+      const outsideSubmittedRange = submittedSurfaces.filter((file) => !commitScope.isInScope(file, submissionScope));
       if (outsideSubmittedRange.length) {
         return {
           ok: false,
@@ -798,9 +917,8 @@ ${verify.outputTail}` : null
       t.submission = Object.assign({
         by,
         at: submittedAt,
-        commit,
+        ...sourceRevision ? { sourceRevision, changedPaths: changedSurfaces, projectCapabilities } : { commit, gitRef: gitRef || submissionGitRef(t) },
         commentId: comment ? comment.id : null,
-        gitRef: gitRef || submissionGitRef(t),
         verify,
         worktree,
         admittedScope,
@@ -812,9 +930,16 @@ ${verify.outputTail}` : null
       }, range || {});
       if (rejectedSubmission) {
         rejectedSubmission.supersededAt = submittedAt;
-        rejectedSubmission.supersededBy = { commit, gitRef: t.submission.gitRef };
+        rejectedSubmission.supersededBy = sourceRevision ? { sourceRevision } : { commit, gitRef: t.submission.gitRef };
       }
       const dispatch = dispatchState(t);
+      const lifecycle = t.lifecycleAttempt;
+      const workingAttempt = lifecycle?.state === "claimed" ? transitionAttempt(lifecycle, "start_work") : lifecycle;
+      const verifiedAttempt = workingAttempt?.state === "working" ? transitionAttempt(workingAttempt, "verify") : workingAttempt;
+      const submittedAttempt = verifiedAttempt?.state === "verified" ? transitionAttempt(verifiedAttempt, "submit") : verifiedAttempt;
+      const lifecycleDiagnostic = submittedAttempt ? attemptDiagnostic(submittedAttempt) : null;
+      if (lifecycleDiagnostic) return { ok: false, reason: lifecycleDiagnostic.code, ticket: t, message: lifecycleDiagnostic.message };
+      if (submittedAttempt) recordLifecycleAttempt(t, submittedAttempt);
       const previousStatus = t.status;
       t.claim = null;
       setDispatchTerminal(t, "submitted", opts.source || "cli", { failureShape: "unknown" });
@@ -1113,12 +1238,11 @@ ${verify.outputTail}` : null
       const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
-      const pendingRejection = history.find((entry) => entry.rejectionKind === "rework" && entry.preservationState === "pending" && entry.commit === String(ticket.submission.commit || "").toLowerCase());
+      const pendingRejection = history.find((entry) => entry.rejectionKind === "rework" && entry.preservationState === "pending" && rejectedSubmissionMatches(ticket.submission, entry));
       const source = opts.source || "cli";
       const root = String(readMeta(slug)?.path || "").trim();
       if (pendingRejection) {
-        if (!root) return { ok: false, reason: "rejected_submission_preservation_failed", ticket, message: `rework: refused ${ticket.ref}; missing project path` };
-        const recovered = preservePendingRejection(slug, ticket, pendingRejection, root);
+        const recovered = preserveRejectedSubmission(slug, ticket, pendingRejection, root);
         if (recovered.ok) queueEventNotification(slug, ticket, ticket.lastEventType, ticket.lastEventSource);
         return recovered;
       }
@@ -1127,7 +1251,7 @@ ${verify.outputTail}` : null
         rejectedBy: by,
         review,
         reason,
-        quarantineRef: rejectionQuarantineRef(ticket, history.length + 1),
+        ...ticket.submission.sourceRevision ? {} : { quarantineRef: rejectionQuarantineRef(ticket, history.length + 1) },
         rejectionKind: "rework",
         preservationState: "pending",
         previousStatus: ticket.status,
@@ -1137,7 +1261,7 @@ ${verify.outputTail}` : null
       ticket.rejectedSubmissions.push(rejected);
       ticket.updatedAt = rejected.rejectedAt;
       putTicketTransaction(slug, ticket);
-      const preserved = root ? preservePendingRejection(slug, ticket, rejected, root) : { ok: false, reason: "rejected_submission_preservation_failed", ticket, message: `rework: refused ${ticket.ref}; missing project path` };
+      const preserved = preserveRejectedSubmission(slug, ticket, rejected, root);
       if (!preserved.ok) {
         ticket.rejectedSubmissions = ticket.rejectedSubmissions.filter((entry) => entry !== rejected);
         if (!ticket.rejectedSubmissions.length) delete ticket.rejectedSubmissions;
@@ -1212,6 +1336,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, verifyIntegration, validateIntegrationSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
 }
 module.exports = { createSubmissions };

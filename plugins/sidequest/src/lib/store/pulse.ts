@@ -120,6 +120,9 @@ function createPulse(dependencies: any) {
       id: comment.id,
       by: comment.by,
       kind: comment.kind,
+      ...(comment.sourceSession ? { sourceSession: comment.sourceSession } : {}),
+      ...(comment.actor ? { actor: comment.actor } : {}),
+      ...(comment.operation ? { operation: comment.operation } : {}),
       body: body.text,
       bodyLength: body.length,
       bodyTruncated: body.truncated,
@@ -343,6 +346,8 @@ function createBoardWatch(dependencies: any) {
     writeError = (line: string) => process.stderr.write(`${line}\n`),
     writeLine = (line: string) => process.stdout.write(`${line}\n`),
     watchingAuthor = '',
+    watchingSession = '',
+    watchingOrigin = {},
   } = dependencies;
   const boardIdentity = String(board || '').trim();
   if (!boardIdentity) throw new Error('sidequest watch requires an explicit board identity.');
@@ -357,6 +362,16 @@ function createBoardWatch(dependencies: any) {
     return String(value || '').replace(/\s+/g, ' ').trim().slice(0, 160);
   }
 
+  function routineOwnMutation(comment: any): boolean {
+    const sessionId = String(watchingOrigin.sessionId || watchingSession || '');
+    const actor = String(watchingOrigin.actor || watchingAuthor || '');
+    const operation = String(watchingOrigin.operation || 'comment');
+    if (!comment || !sessionId || !actor) return false;
+    return String(comment.sourceSession || '') === sessionId
+      && String(comment.actor || '') === actor
+      && String(comment.operation || '') === operation;
+  }
+
   function actionableEvent(ticket: any): { type: string; author: string; excerpt: string } | null {
     if (ticket.status === 'awaiting-oracle') return { type: 'awaiting-oracle', author: '', excerpt: '' };
     if (ticket.lastEventType === 'release' || ticket.lastEventType === 'scope-request') {
@@ -366,7 +381,9 @@ function createBoardWatch(dependencies: any) {
     if (Array.isArray(ticket.warnings) && ticket.warnings.length) return { type: 'warning', author: '', excerpt: excerpt(ticket.warnings[0]) };
     const comment = ticket.lastComment;
     const body = String(comment?.body || '');
-    if (!comment || markerPattern.test(body) || comment.by === watchingAuthor || !commentPattern.test(body)) return null;
+    if (!comment || markerPattern.test(body)) return null;
+    if (commentPattern.test(body)) return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
+    if (routineOwnMutation(comment)) return null;
     return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
   }
 

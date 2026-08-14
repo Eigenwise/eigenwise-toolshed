@@ -118,7 +118,15 @@ const tools = [
       const sessionId = sessionOf(args);
       const claimSessionId = ticket?.claim?.runtime?.sessionId;
       const by = args.by || (sessionId && claimSessionId === sessionId ? ticket.claim.by : controlPlaneIdentity(null, sessionId));
-      const res = store.addComment(slug, args.ref, { body: args.body, by, kind: "comment", source: "mcp" });
+      const res = store.addComment(slug, args.ref, {
+        body: args.body,
+        by,
+        kind: "comment",
+        source: "mcp",
+        sourceSession: sessionId || null,
+        actor: by,
+        operation: "comment"
+      });
       return mutationAck(slug, res, res.ok ? { commentId: res.comment.id, at: res.comment.at } : null);
     }
   },

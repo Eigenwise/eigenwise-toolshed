@@ -1,6 +1,6 @@
 # Sidequest
 
-Sidequest is a local board for planning, tracking, and delivering Claude Code work. It keeps a visible backlog across your projects, groups related tickets into stories, and routes delegated work through a consistent review and delivery flow.
+Sidequest is a local board for planning, tracking, and delivering Claude Code work. It keeps a visible backlog across your projects, groups related tickets into stories, and routes delegated work through a consistent review and delivery flow. The same lifecycle covers Git codebases and immutable revisions from wikis, documentation vaults, document sets, and research collections.
 
 [Setup guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/sidequest/) · [Toolshed marketplace](../../README.md)
 
@@ -28,6 +28,8 @@ Claude can create the story, split it into tickets, connect dependencies, and ch
 ## Run and deliver tickets
 
 Once the backlog looks right, ask Claude to dispatch the ready work. Claude handles routing, executor startup, verification, and the ticket updates. Independent tickets can run in parallel when their dependencies allow it.
+
+A codebase submission pins a verified Git range. A project without Git pins its native immutable revision and changed surfaces, then records review or attestation evidence. Missing Git, process, and worktree capabilities are explicit, so delivery does not probe or invoke those adapters.
 
 When work is ready, ask Claude to review and integrate it:
 

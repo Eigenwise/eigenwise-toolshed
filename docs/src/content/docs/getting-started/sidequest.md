@@ -3,7 +3,7 @@ title: Sidequest
 description: Plan, track, and deliver Claude Code work from a local board.
 ---
 
-Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow.
+Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow. That flow works for Git codebases and immutable revisions from wikis, documentation vaults, document sets, and research collections.
 
 ## Install
 
@@ -26,7 +26,7 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results.
 5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
-The board keeps the work visible while Claude and its executors handle the ticket lifecycle.
+The board keeps the work visible while Claude and its executors handle the ticket lifecycle. Codebase work submits a verified Git range. Projects without Git submit their native immutable revision, changed surfaces, and review or attestation evidence. Sidequest records unavailable Git, process, and worktree capabilities instead of probing those adapters.
 
 ## Use the dashboard
 

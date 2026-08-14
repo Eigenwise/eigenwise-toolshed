@@ -743,7 +743,11 @@ test('MCP comment attribution keeps the control plane distinct from a claim hold
   const controlPlane = freshMcpServer();
   const controlPlaneComment = await callToolOn(controlPlane, 'comment', { project, ref: ticket.ref, body: 'Control-plane comment.' });
   assert.ok(controlPlaneComment.commentId, 'control-plane comment is acknowledged');
-  assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, `orchestrator-${MCP_SESSION_ID.slice(0, 12)}`);
+  const storedControlPlaneComment = store.getTicket(project, ticket.ref).comments.at(-1);
+  assert.equal(storedControlPlaneComment.by, `orchestrator-${MCP_SESSION_ID.slice(0, 12)}`);
+  assert.equal(storedControlPlaneComment.sourceSession, MCP_SESSION_ID);
+  assert.equal(storedControlPlaneComment.actor, storedControlPlaneComment.by);
+  assert.equal(storedControlPlaneComment.operation, 'comment');
 
   await callTool('comment', { project, ref: ticket.ref, body: 'Executor comment.', by: 'claim-holder' });
   assert.equal(store.getTicket(project, ticket.ref).comments.at(-1).by, 'claim-holder');
@@ -2250,6 +2254,93 @@ test('MCP commit refuses an isolated dispatch in the primary worktree but permit
     project, ref: shared.ref, by: sharedBy, message: 'shared tree commit', worktree: primary,
   });
   assert.ok(sharedCommit.commit, 'shared-tree dispatch can commit from the primary worktree');
+});
+
+test('MCP submits and integrates project-neutral source revisions without Git adapters', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-revisions-'));
+  const project = store.ensureProject(projectPath).slug;
+  const revisions = [
+    { source: 'wiki', value: 'wiki-42', surface: 'wiki/page.md' },
+    { source: 'document-set', value: 'documents-17', surface: 'documents/index.md' },
+    { source: 'docs-vault', value: 'vault-91', surface: 'vault/note.md' },
+    { source: 'research-collection', value: 'research-8', surface: 'research/result.md' },
+  ];
+
+  for (const revision of revisions) {
+    const ticket = store.createTicket(project, {
+      title: `publish ${revision.source} revision`,
+      files: [revision.surface],
+      complexity: 2,
+      complexityWhy: 'publish one pinned immutable source revision',
+      labels: ['direct-ok'],
+    });
+    const by = `mcp-${revision.source}-worker`;
+    const claimed = await callTool('claim', {
+      project,
+      ref: ticket.ref,
+      by,
+      direct: true,
+      reason: 'This fixture publishes one exact immutable source revision.',
+    });
+    assert.equal(claimed.ok, true);
+
+    const submitted = await callTool('submit', {
+      project,
+      ref: ticket.ref,
+      by,
+      sourceRevision: {
+        source: revision.source,
+        value: revision.value,
+        observedAt: '2026-08-14T00:00:00.000Z',
+      },
+      changedSurfaces: [revision.surface],
+      projectCapabilities: { process: false, worktree: false, review: true },
+      verify: `attestation: ${revision.value} | review-accepted | reviewer approved the immutable revision`,
+      body: `Reviewed ${revision.source} revision ${revision.value}.`,
+    });
+    assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+    assert.equal(store.getTicket(project, ticket.ref).submission.sourceRevision.source, revision.source);
+
+    const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'mcp-source-publisher' });
+    assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+    assert.equal(integrated.delivery.mode, 'source-revision');
+    assert.deepEqual(integrated.delivery.changedPaths, [revision.surface]);
+    assert.equal(store.getTicket(project, ticket.ref).lifecycleAttempt.state, 'closed');
+  }
+});
+
+test('MCP submit requires exactly one revision identity', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-source-exclusive-'));
+  const project = store.ensureProject(projectPath).slug;
+  const ticket = store.createTicket(project, {
+    title: 'reject mixed revision identities',
+    files: ['wiki/page.md'],
+    complexity: 2,
+    complexityWhy: 'exercise public submission validation',
+    labels: ['direct-ok'],
+  });
+  const by = 'mcp-exclusive-worker';
+  assert.equal((await callTool('claim', {
+    project,
+    ref: ticket.ref,
+    by,
+    direct: true,
+    reason: 'This fixture checks one exact public submission validation.',
+  })).ok, true);
+
+  const refused = await callToolRaw('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    commit: 'abc1234',
+    sourceRevision: { source: 'wiki', value: 'wiki-42', observedAt: '2026-08-14T00:00:00.000Z' },
+    changedSurfaces: ['wiki/page.md'],
+    projectCapabilities: {},
+    verify: 'attestation: wiki-42',
+    body: 'Mixed revision identity must fail.',
+  });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /exactly one of commit or sourceRevision/);
 });
 
 test('MCP submit accepts a known submitted commit as an explicit base', async () => {

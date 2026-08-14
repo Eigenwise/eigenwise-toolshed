@@ -1,0 +1,94 @@
+"use strict";
+var __defProp = Object.defineProperty;
+var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
+var __getOwnPropNames = Object.getOwnPropertyNames;
+var __hasOwnProp = Object.prototype.hasOwnProperty;
+var __export = (target, all) => {
+  for (var name in all)
+    __defProp(target, name, { get: all[name], enumerable: true });
+};
+var __copyProps = (to, from, except, desc) => {
+  if (from && typeof from === "object" || typeof from === "function") {
+    for (let key of __getOwnPropNames(from))
+      if (!__hasOwnProp.call(to, key) && key !== except)
+        __defProp(to, key, { get: () => from[key], enumerable: !(desc = __getOwnPropDesc(from, key)) || desc.enumerable });
+  }
+  return to;
+};
+var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
+var kernel_exports = {};
+__export(kernel_exports, {
+  ATTEMPT_TRANSITIONS: () => ATTEMPT_TRANSITIONS,
+  attemptDiagnostic: () => attemptDiagnostic,
+  inlineEligibility: () => inlineEligibility,
+  prepareAttempt: () => prepareAttempt,
+  prepareDirectAttempt: () => prepareDirectAttempt,
+  reduceAttempt: () => reduceAttempt,
+  transitionAttempt: () => transitionAttempt
+});
+module.exports = __toCommonJS(kernel_exports);
+const ATTEMPT_TRANSITIONS = {
+  prepared: { launch: "launched", bind_claim_token: "bound", claim_direct: "claimed", release: "released" },
+  launched: { bind: "bound", bind_claim_token: "bound", release: "released" },
+  bound: { claim: "claimed", release: "released" },
+  claimed: { start_work: "working", release: "released" },
+  working: { verify: "verified", release: "released" },
+  verified: { submit: "submitted", release: "released" },
+  submitted: { assemble: "assembled", release: "released" },
+  assembled: { integrate: "integrated", release: "released" },
+  integrated: { close: "closed", release: "released" },
+  closed: {},
+  released: {}
+};
+function prepareAttempt(baseline, authority, preparedCompatibility) {
+  return Object.freeze({
+    state: "prepared",
+    execution: "dispatched",
+    baseline,
+    authority,
+    ...preparedCompatibility ? { preparedCompatibility: Object.freeze({ ...preparedCompatibility }) } : {}
+  });
+}
+function prepareDirectAttempt(baseline, authority) {
+  return Object.freeze({ state: "prepared", execution: "direct", baseline, authority });
+}
+function transitionAttempt(attempt, event) {
+  const directDispatchEvent = attempt.execution === "direct" && ["launch", "bind", "bind_claim_token", "claim"].includes(event);
+  const dispatchedDirectEvent = attempt.execution === "dispatched" && event === "claim_direct";
+  if (directDispatchEvent || dispatchedDirectEvent) return Object.freeze({ code: "invalid_transition", message: `Cannot ${event} a ${attempt.execution} attempt.`, actionable: false });
+  const next = ATTEMPT_TRANSITIONS[attempt.state][event];
+  return next ? Object.freeze({ ...attempt, state: next }) : Object.freeze({ code: "invalid_transition", message: `Cannot ${event} an attempt in ${attempt.state}.`, actionable: false });
+}
+function reduceAttempt(attempt, events) {
+  let current = attempt;
+  for (const event of events) {
+    if ("code" in current) return current;
+    current = transitionAttempt(current, event);
+  }
+  return current;
+}
+function attemptDiagnostic(result) {
+  return "code" in result ? result : null;
+}
+function inlineEligibility(input) {
+  const reasons = [];
+  if (input.attempt) reasons.push("attempt_exists");
+  if ((input.namedFiles || []).length !== 1 && !String(input.prompt || "").trim()) reasons.push("single_named_target_required");
+  if (!String(input.requestedResult || "").trim()) reasons.push("explicit_result_required");
+  if (input.unresolvedDesign) reasons.push("unresolved_design");
+  if (input.dependencySequencing) reasons.push("dependency_sequence");
+  if (input.destructive) reasons.push("destructive_operation");
+  if (input.highStakes) reasons.push("high_stakes_operation");
+  if (input.scopeExpanded) reasons.push("scope_expansion");
+  return Object.freeze({ eligible: reasons.length === 0, reasons: Object.freeze(reasons) });
+}
+// Annotate the CommonJS export names for ESM import in node:
+0 && (module.exports = {
+  ATTEMPT_TRANSITIONS,
+  attemptDiagnostic,
+  inlineEligibility,
+  prepareAttempt,
+  prepareDirectAttempt,
+  reduceAttempt,
+  transitionAttempt
+});

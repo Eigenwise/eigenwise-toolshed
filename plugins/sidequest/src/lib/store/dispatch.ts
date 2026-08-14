@@ -8,7 +8,7 @@ function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -855,7 +855,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   }
   const verifyError = dispatchVerifyCommandError(found, projectPath);
   if (verifyError) throw new Error(verifyError);
-  if (projectPath) assertSidequestInstall(projectPath);
+  const installCheck = projectPath ? assertSidequestInstall(projectPath) : null;
+  const preparedPluginInstall = installCheck?.installPath || null;
+  const preparedPluginIdentity = installCheck?.identity || null;
   if (opts.recoveryEvidence) {
     const superseded = supersedeUnclaimedLaunch(slug, found.id, {
       evidence: opts.recoveryEvidence,
@@ -1041,8 +1043,16 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : null;
     delete t.storyContractDrift;
     t.dispatch = {
+      lifecycleAttempt: prepareAttempt(
+        Object.freeze({ revision: Object.freeze({ source: 'board', value: String(t.id || t.ref), observedAt: now }), purpose: 'dispatch' }),
+        Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: 'prepare', sessionId: opts.sessionId ? String(opts.sessionId) : null }),
+        preparedPluginInstall && preparedPluginIdentity
+          ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity })
+          : undefined,
+      ),
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       preparedBy: dispatchPreparationAttribution(opts),
+      ...(preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {}),
       sharedTree,
       ...(worktreeWarning ? { worktreeWarning } : {}),
       ...(pythonIoEncoding.written ? { pythonIoEncoding } : {}),
@@ -1104,6 +1114,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ...(supersededTokens.length ? { supersededTokens: supersededTokens.slice(-8) } : {}),
       ...(recovery ? { recovery } : {}),
     };
+    t.lifecycleAttempt = t.dispatch.lifecycleAttempt;
     writeDispatchTokenFile(t);
     stampDispatchEvent(t, 'dispatch', now);
     putTicket(slug, t);
@@ -1138,11 +1149,26 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
     }
     const state = dispatchState(t);
     if (!state) return { ok: false, reason: 'missing_state' };
+    if (state.preparedCompatibility?.pluginInstall) {
+      const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
+      if (!currentInstall.ok
+        || currentInstall.installPath !== state.preparedCompatibility.pluginInstall
+        || currentInstall.identity !== state.preparedCompatibility.identity) {
+        return { ok: false, reason: 'prepared_compatibility_stale' };
+      }
+    }
     const now = new Date().toISOString();
     state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
     state.agentName = opts.agentName ? String(opts.agentName) : state.agentName || null;
     state.launchedAt = state.launchedAt || now;
     state.outcome = 'launched';
+    const lifecycle = t.lifecycleAttempt || state.lifecycleAttempt;
+    const launchedAttempt = lifecycle?.state === 'prepared' ? transitionAttempt(lifecycle, 'launch') : lifecycle;
+    if (launchedAttempt) {
+      if (attemptDiagnostic(launchedAttempt)) return { ok: false, reason: 'invalid_lifecycle' };
+      t.lifecycleAttempt = launchedAttempt;
+      state.lifecycleAttempt = launchedAttempt;
+    }
     stampDispatchEvent(t, opts.source || 'dispatch', now);
     putTicket(slug, t);
     return { ok: true, ticket: t };
@@ -1452,15 +1478,17 @@ function recordDispatchRuntimeIdentity(slug?: any, state?: any, agentId?: any, a
   state.boundAt = state.boundAt || now || new Date().toISOString();
 }
 
-function bindDispatchClaimToken(state?: any, sessionId?: any, executor?: any, now?: any) {
+function bindDispatchClaimToken(state?: any, attempt?: any, sessionId?: any, executor?: any, now?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
-  if (!state || state.sharedTree !== false || state.agentId || !normalizedSessionId || !normalizedExecutor) return false;
+  if (!state || !normalizedSessionId || !normalizedExecutor || !['prepared', 'launched'].includes(attempt?.state)) return null;
+  const boundAttempt = transitionAttempt(attempt, attempt.state === 'prepared' ? 'bind_claim_token' : 'bind');
+  if (attemptDiagnostic(boundAttempt)) return null;
   state.sessionId = normalizedSessionId;
   state.executor = normalizedExecutor;
   state.boundAt = state.boundAt || now || new Date().toISOString();
   state.bindSource = 'claim_token';
-  return true;
+  return boundAttempt;
 }
 
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
@@ -1492,6 +1520,14 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
       }
       const now = new Date().toISOString();
       recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
+      const lifecycle = t.lifecycleAttempt || state.lifecycleAttempt;
+      const launchedAttempt = lifecycle?.state === 'prepared' ? transitionAttempt(lifecycle, 'launch') : lifecycle;
+      const boundAttempt = launchedAttempt?.state === 'launched' ? transitionAttempt(launchedAttempt, 'bind') : launchedAttempt;
+      if (boundAttempt) {
+        if (attemptDiagnostic(boundAttempt)) return { ok: false };
+        t.lifecycleAttempt = boundAttempt;
+        state.lifecycleAttempt = boundAttempt;
+      }
       syncClaimRuntimeIdentity(t, state);
       stampDispatchEvent(t, 'subagent-start', now);
       putTicket(match.slug, t);

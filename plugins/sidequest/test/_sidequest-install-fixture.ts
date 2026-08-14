@@ -26,7 +26,8 @@ export function stubSidequestInstall(): void {
   const claudeHome = process.env.SIDEQUEST_CLAUDE_HOME || fs.mkdtempSync(path.join(os.tmpdir(), 'sq-fake-claude-home-'));
   process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
 
-  const installPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-fake-sidequest-install-'));
+  const installPath = path.join(claudeHome, 'sidequest-test-install');
+  fs.mkdirSync(installPath, { recursive: true });
   fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({
     mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } },
   }));

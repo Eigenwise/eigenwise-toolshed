@@ -55,6 +55,9 @@ function prepareComment(fields?: any) {
     kind: 'comment',
     body,
     source: fields.source ? String(fields.source) : 'cli',
+    ...(fields.sourceSession ? { sourceSession: String(fields.sourceSession) } : {}),
+    ...(fields.actor ? { actor: String(fields.actor) } : {}),
+    ...(fields.operation ? { operation: String(fields.operation) } : {}),
     ...(advisory ? { advisory } : {}),
   };
 }
@@ -66,6 +69,9 @@ function createComment(fields?: any, at?: any) {
     kind: fields.kind,
     body: fields.body,
     source: fields.source,
+    ...(fields.sourceSession ? { sourceSession: fields.sourceSession } : {}),
+    ...(fields.actor ? { actor: fields.actor } : {}),
+    ...(fields.operation ? { operation: fields.operation } : {}),
     at: at || new Date().toISOString(),
   };
 }

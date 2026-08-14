@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -62,6 +63,7 @@ export interface InstallCheckResult {
   reason?: InstallCheckReason;
   registryPath: string;
   installPath?: string;
+  identity?: string;
   detail?: string;
 }
 
@@ -120,6 +122,15 @@ function normalizeDir(value: unknown): string | null {
 // registration) or an install whose .mcp.json no longer declares the board
 // server both count as unusable — the caller only cares whether a fresh
 // session in this project would actually get the board MCP tools.
+function installIdentity(installPath: string): string | null {
+  try {
+    const manifest = fs.readFileSync(path.join(installPath, '.mcp.json'));
+    return createHash('sha256').update(manifest).digest('hex');
+  } catch (_) {
+    return null;
+  }
+}
+
 function installAdvertisesBoardMcp(installPath: unknown): boolean {
   if (typeof installPath !== 'string' || !installPath) return false;
   let manifest: any;
@@ -161,8 +172,9 @@ export function checkSidequestInstall(projectPath: string, opts: InstallCheckOpt
   if (!matching.length) return { ok: false, reason: 'missing', registryPath };
 
   for (const install of matching) {
-    if (installAdvertisesBoardMcp(install.installPath)) {
-      return { ok: true, registryPath, installPath: install.installPath };
+    const identity = typeof install.installPath === 'string' ? installIdentity(install.installPath) : null;
+    if (identity && installAdvertisesBoardMcp(install.installPath)) {
+      return { ok: true, registryPath, installPath: install.installPath, identity };
     }
   }
   return { ok: false, reason: 'stale', registryPath };
@@ -185,9 +197,10 @@ export function installRefusalMessage(check: InstallCheckResult, projectPath: st
 // Single preflight owner for every path that hands a fresh session a claim-first
 // spawn spec: CLI/MCP dispatch (via prepareDispatch) and CLI/MCP native-agent
 // both call this before doing anything else, so neither can drift independently.
-export function assertSidequestInstall(projectPath: string, opts: InstallCheckOptions = {}): void {
+export function assertSidequestInstall(projectPath: string, opts: InstallCheckOptions = {}): InstallCheckResult {
   const check = checkSidequestInstall(projectPath, opts);
   if (!check.ok) throw new Error(installRefusalMessage(check, projectPath));
+  return check;
 }
 
 // The install check above proves a FUTURE fresh session in the target

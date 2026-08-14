@@ -38,6 +38,7 @@ __export(dispatch_preflight_exports, {
 });
 module.exports = __toCommonJS(dispatch_preflight_exports);
 var import_node_child_process = require("node:child_process");
+var import_node_crypto = require("node:crypto");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
@@ -120,6 +121,14 @@ function normalizeDir(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   return import_node_path.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
+function installIdentity(installPath) {
+  try {
+    const manifest = import_node_fs.default.readFileSync(import_node_path.default.join(installPath, ".mcp.json"));
+    return (0, import_node_crypto.createHash)("sha256").update(manifest).digest("hex");
+  } catch (_) {
+    return null;
+  }
+}
 function installAdvertisesBoardMcp(installPath) {
   if (typeof installPath !== "string" || !installPath) return false;
   let manifest;
@@ -151,8 +160,9 @@ function checkSidequestInstall(projectPath, opts = {}) {
   });
   if (!matching.length) return { ok: false, reason: "missing", registryPath };
   for (const install of matching) {
-    if (installAdvertisesBoardMcp(install.installPath)) {
-      return { ok: true, registryPath, installPath: install.installPath };
+    const identity = typeof install.installPath === "string" ? installIdentity(install.installPath) : null;
+    if (identity && installAdvertisesBoardMcp(install.installPath)) {
+      return { ok: true, registryPath, installPath: install.installPath, identity };
     }
   }
   return { ok: false, reason: "stale", registryPath };
@@ -172,6 +182,7 @@ function installRefusalMessage(check, projectPath) {
 function assertSidequestInstall(projectPath, opts = {}) {
   const check = checkSidequestInstall(projectPath, opts);
   if (!check.ok) throw new Error(installRefusalMessage(check, projectPath));
+  return check;
 }
 function transportRefusalMessage() {
   return "Dispatch refused: the CLI cannot prove this Claude Code session has the Sidequest board MCP connected — a fresh native Agent could still receive zero board tools even though the target project's install looks fine. Run `/reload-plugins` in this session, then dispatch again through the board MCP `dispatch`/`native_agent` tool (reaching that tool is itself proof the MCP is connected). If you are intentionally running the CLI outside Claude Code for diagnostics, pass --unverified-transport to proceed anyway; it does NOT prove any session will have the board MCP available.";

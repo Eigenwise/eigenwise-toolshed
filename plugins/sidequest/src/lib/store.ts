@@ -41,7 +41,8 @@ const { migrateIfNeeded } = require('./migrate.js');
 const { discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
-const { assertSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
+const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
+const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic } = require('./kernel/index.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
@@ -395,6 +396,10 @@ const {
   SHARED_TREE_ARTIFACT_MARKER,
   assertDispatchTransport,
   assertSidequestInstall,
+  checkSidequestInstall,
+  prepareAttempt,
+  transitionAttempt,
+  attemptDiagnostic,
   ensurePythonIoEncoding,
   localAheadOfUpstreamWarning,
   availableRoute: (...args: any[]) => availableRoute(...args),
@@ -983,6 +988,7 @@ const {
   submissionReadiness,
   submissionProjection,
   pendingSubmission,
+  submissionUsesGit,
   verifyIntegration,
   validateIntegrationSubmission,
   integrateSubmission,
@@ -1036,12 +1042,15 @@ const {
   putTicket,
   queueEventNotification,
   readMeta,
+  recordLifecycleAttempt,
   releaseLock,
   setDispatchTerminal,
   spawnSync,
   stampDispatchEvent,
   ticketLockPath,
   transaction,
+  transitionAttempt,
+  attemptDiagnostic,
   unregisterClaim,
   verifyCommandErrors,
   verifyCommandError,
@@ -1444,6 +1453,41 @@ function directReasonAllowed(reason?: any) {
   return !INVALID_DIRECT_REASON_PATTERNS.some((pattern) => pattern.test(String(reason || '')));
 }
 
+function lifecycleBaseline(ticket: any, purpose: 'dispatch' | 'wave' | 'submission') {
+  const preparedAt = String(ticket.dispatch?.preparedAt || ticket.updatedAt || new Date().toISOString());
+  return Object.freeze({ revision: Object.freeze({ source: 'board', value: String(ticket.id || ticket.ref), observedAt: preparedAt }), purpose });
+}
+
+function recordLifecycleAttempt(ticket: any, attempt: any) {
+  ticket.lifecycleAttempt = attempt;
+  if (ticket.dispatch) ticket.dispatch.lifecycleAttempt = attempt;
+}
+
+function lifecycleAttemptFromFacts(ticket: any, authority: any, purpose: 'dispatch' | 'wave' | 'submission', direct: boolean) {
+  const persistedAttempt = ticket.lifecycleAttempt || ticket.dispatch?.lifecycleAttempt;
+  const baseline = persistedAttempt?.baseline || lifecycleBaseline(ticket, purpose);
+  const preparedCompatibility = persistedAttempt?.preparedCompatibility || ticket.dispatch?.preparedCompatibility;
+  let current: any = direct
+    ? prepareDirectAttempt(baseline, persistedAttempt?.authority || authority)
+    : prepareAttempt(baseline, persistedAttempt?.authority || authority, preparedCompatibility);
+  const dispatch = ticket.dispatch;
+  if (direct) {
+    if (ticket.claim || ticket.submission) current = transitionAttempt(current, 'claim_direct');
+  } else if (dispatch) {
+    if (dispatch.launchedAt) current = transitionAttempt(current, 'launch');
+    if (dispatch.boundAt || ticket.claim || ticket.submission) {
+      current = transitionAttempt(current, current.state === 'launched' ? 'bind' : 'bind_claim_token');
+    }
+    if (ticket.claim || ticket.submission) current = transitionAttempt(current, 'claim');
+  }
+  if (ticket.submission) {
+    for (const event of ['start_work', 'verify', 'submit'] as const) current = transitionAttempt(current, event);
+  }
+  const diagnostic = attemptDiagnostic(current);
+  if (diagnostic) throw new Error(`lifecycle refused ${ticket.ref}: ${diagnostic.message}`);
+  return current;
+}
+
 function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   opts = opts || {};
   by = String(by || 'agent');
@@ -1472,10 +1516,38 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       t.dispatchExecutor = currentExecutor;
     }
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
+    if (currentDispatch?.preparedCompatibility?.pluginInstall) {
+      const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
+      if (!currentInstall.ok
+        || currentInstall.installPath !== currentDispatch.preparedCompatibility.pluginInstall
+        || currentInstall.identity !== currentDispatch.preparedCompatibility.identity) {
+        return {
+          ok: false,
+          reason: 'prepared_compatibility_stale',
+          ticket: t,
+          message: `claim: refused ${t.ref}; the prepared Sidequest install snapshot no longer matches the current project install. Prepare a fresh dispatch before claiming.`,
+        };
+      }
+    }
     if (t.status === 'done') return { ok: false, reason: 'done', ticket: t };
     const now = new Date().toISOString();
-    if (!opts.direct && opts.requireBoundAgent && currentDispatch?.sharedTree === false && !String(currentDispatch.agentId || '').trim() && !currentDispatch.boundAt &&
-      !bindDispatchClaimToken(currentDispatch, opts.sessionId, opts.executor, now)) {
+    const lifecycleAuthority = { actor: by, operation: 'claim', sessionId: opts.sessionId || null };
+    const directExecution = opts.direct || !currentDispatch;
+    let activeAttempt = directExecution
+      ? lifecycleAttemptFromFacts(t, lifecycleAuthority, 'dispatch', true)
+      : lifecycleAttemptFromFacts(t, lifecycleAuthority, 'dispatch', false);
+    if (!directExecution && opts.requireBoundAgent && currentDispatch && activeAttempt.state === 'prepared') {
+      const boundAttempt = bindDispatchClaimToken(currentDispatch, activeAttempt, opts.sessionId, opts.executor, now);
+      if (boundAttempt) activeAttempt = boundAttempt;
+    }
+    if (!directExecution && opts.requireBoundAgent && currentDispatch && activeAttempt.state === 'launched' && !currentDispatch.boundAt) {
+      const boundAttempt = bindDispatchClaimToken(currentDispatch, activeAttempt, opts.sessionId, opts.executor, now);
+      if (boundAttempt) activeAttempt = boundAttempt;
+    }
+    if (!directExecution && !opts.requireBoundAgent && ['prepared', 'launched'].includes(activeAttempt.state)) {
+      activeAttempt = transitionAttempt(activeAttempt, 'bind_claim_token');
+    }
+    if (!directExecution && opts.requireBoundAgent && activeAttempt.state !== 'bound' && activeAttempt.state !== 'claimed') {
       return { ok: false, reason: 'unbound_dispatch', ticket: t };
     }
     if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: 'worktree_missing', ticket: t };
@@ -1539,6 +1611,19 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       state.outcome = 'claimed';
     }
     const previousStatus = t.status;
+    const preClaimAttempt = activeAttempt;
+    if (directExecution && preClaimAttempt.state !== 'prepared' && preClaimAttempt.state !== 'claimed') {
+      return { ok: false, reason: 'invalid_transition', ticket: t, message: 'Cannot directly claim an attempt after execution started.' };
+    }
+    if (!directExecution && preClaimAttempt.state !== 'bound' && preClaimAttempt.state !== 'claimed') {
+      return { ok: false, reason: 'invalid_transition', ticket: t, message: 'Cannot claim a dispatched attempt before it is bound.' };
+    }
+    const claimedAttempt = preClaimAttempt.state === 'claimed'
+      ? preClaimAttempt
+      : transitionAttempt(preClaimAttempt, directExecution ? 'claim_direct' : 'claim');
+    const claimDiagnostic = attemptDiagnostic(claimedAttempt);
+    if (claimDiagnostic) return { ok: false, reason: claimDiagnostic.code, ticket: t, message: claimDiagnostic.message };
+    recordLifecycleAttempt(t, claimedAttempt);
     if (opts.status !== false) t.status = coerceStatus(opts.status || 'doing', t.status);
     if (t.status !== previousStatus) t.statusTransition = { from: previousStatus, to: t.status, at: now };
     if (state) stampDispatchEvent(t, opts.source || 'cli', now);
@@ -1794,6 +1879,21 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       t.oracle = oracleMarker(dispatch, opts, now);
       writeOracleExperimentRound(slug, t);
     }
+    const closesPendingSubmission = opts.status === 'done' && pendingSubmission(t);
+    const lifecycleAlreadyTerminal = ['closed', 'released'].includes(t.lifecycleAttempt?.state);
+    const releasedAttempt = !closesPendingSubmission && t.lifecycleAttempt && !lifecycleAlreadyTerminal
+      ? transitionAttempt(t.lifecycleAttempt, 'release')
+      : t.lifecycleAttempt;
+    const releaseDiagnostic = releasedAttempt ? attemptDiagnostic(releasedAttempt) : null;
+    if (releaseDiagnostic) {
+      return {
+        ok: false,
+        reason: releaseDiagnostic.code,
+        ticket: t,
+        message: releaseDiagnostic.message,
+      };
+    }
+    if (releasedAttempt) recordLifecycleAttempt(t, releasedAttempt);
     t.claim = null;
     if (noOpRelease && dispatch) dispatch.noOpRelease = { by, at: now, claimAt: held?.at || null };
     // Provenance for a claim taken away from its holder rather than handed back,
@@ -1868,7 +1968,13 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // Completing a submitted ticket is the publish transaction consuming the
     // submission — stamp it integrated (kept as provenance) so the ticket
     // leaves the ready-for-integration queue the moment it goes done.
-    if (t.status === 'done' && pendingSubmission(t)) {
+    if (closesPendingSubmission) {
+      const assembledAttempt = t.lifecycleAttempt?.state === 'submitted' ? transitionAttempt(t.lifecycleAttempt, 'assemble') : t.lifecycleAttempt;
+      const integratedAttempt = assembledAttempt?.state === 'assembled' ? transitionAttempt(assembledAttempt, 'integrate') : assembledAttempt;
+      const closedAttempt = integratedAttempt?.state === 'integrated' ? transitionAttempt(integratedAttempt, 'close') : integratedAttempt;
+      const lifecycleDiagnostic = closedAttempt ? attemptDiagnostic(closedAttempt) : null;
+      if (lifecycleDiagnostic) return { ok: false, reason: lifecycleDiagnostic.code, ticket: t, message: lifecycleDiagnostic.message };
+      if (closedAttempt) recordLifecycleAttempt(t, closedAttempt);
       const integratedAt = new Date().toISOString();
       const recordedDelivery = opts.recordedDelivery;
       t.submission = Object.assign({}, t.submission, {
@@ -2520,6 +2626,7 @@ module.exports = {
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   integrateSubmission,
+  submissionUsesGit,
   closeSubmissionAsSuperseded,
   verifyIntegration,
   effectiveScope,

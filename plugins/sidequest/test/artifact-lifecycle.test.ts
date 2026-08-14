@@ -607,3 +607,153 @@ test('artifact completion refuses a newly dirty path outside the dispatch scope'
   assert.match(done.message, /Revert those changes or release the ticket/);
   assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'out-of-scope-worker');
 });
+
+
+test('a Git project cannot self-declare no-Git source revision delivery', () => {
+  const created = store.createTicket(slug, {
+    title: 'reject false no-Git capability',
+    category: 'repository-write',
+    files: ['docs/wiki.md'],
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(claim(prepared, 'false-capability-worker').ok, true);
+
+  assert.throws(() => store.submitTicket(slug, created.ref, 'false-capability-worker', {
+    sourceRevision: { source: 'wiki', value: 'invented-revision', observedAt: '2026-08-14T00:00:00.000Z' },
+    changedSurfaces: ['docs/wiki.md'],
+    projectCapabilities: { git: false, process: false, worktree: false, review: true },
+    verify: 'attestation: invented-revision | self-approved | caller asserted delivery',
+    source: 'mcp',
+  }), /require a project outside Git/);
+  const refused = store.getTicket(slug, created.ref);
+  assert.strictEqual(refused.submission, undefined);
+  assert.strictEqual(refused.claim.by, 'false-capability-worker');
+});
+
+test('a rejected no-Git source revision reopens without Git quarantine', () => {
+  const noGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-document-rework-project-'));
+  const noGitBoard = store.ensureProject(noGitProject).slug;
+  const created = store.createTicket(noGitBoard, {
+    title: 'revise rejected wiki revision',
+    category: 'repository-write',
+    files: ['docs/wiki.md'],
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'wiki-revision-42',
+    source: 'mcp',
+  });
+  assert.strictEqual(store.claimTicket(noGitBoard, created.ref, 'wiki-worker', {
+    direct: true,
+    reason: 'The immutable wiki revision fixture requires an exact local claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+    sourceRevision: { source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z' },
+    changedSurfaces: ['docs/wiki.md'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: wiki-revision-42 | review-884 | editor reviewed the immutable revision',
+    source: 'mcp',
+  }).ok, true);
+
+  const reworked = store.reworkSubmission(noGitBoard, created.ref, {
+    by: 'wiki-worker',
+    review: 'review-885 found a broken reference',
+    reason: 'Replace the broken reference in a new immutable wiki revision.',
+    source: 'mcp',
+  });
+  assert.strictEqual(reworked.ok, true, reworked.message);
+  const reopened = store.getTicket(noGitBoard, created.ref);
+  assert.strictEqual(reopened.status, 'todo');
+  assert.strictEqual(reopened.submission, null);
+  assert.strictEqual(reopened.rejectedSubmissions[0].preservationState, 'preserved');
+  assert.deepStrictEqual(reopened.rejectedSubmissions[0].sourceRevision, {
+    source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z',
+  });
+  assert.strictEqual(Object.hasOwn(reopened.rejectedSubmissions[0], 'quarantineRef'), false);
+  assert.strictEqual(store.pendingSubmission(reopened), false);
+
+  assert.strictEqual(store.claimTicket(noGitBoard, created.ref, 'wiki-worker', {
+    direct: true,
+    reason: 'The immutable wiki revision fixture requires an exact local reclaim.',
+  }).ok, true);
+  const reused = store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+    sourceRevision: { source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z' },
+    changedSurfaces: ['docs/wiki.md'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: wiki-revision-42 | review-886 | editor reviewed the unchanged revision',
+    source: 'mcp',
+  });
+  assert.strictEqual(reused.ok, false);
+  assert.strictEqual(reused.reason, 'rejected_submission_reused');
+  assert.strictEqual(store.getTicket(noGitBoard, created.ref).claim.by, 'wiki-worker');
+
+  const replacement = store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+    sourceRevision: { source: 'wiki', value: 'wiki-revision-43', observedAt: '2026-08-13T21:00:00.000Z' },
+    changedSurfaces: ['docs/wiki.md'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: wiki-revision-43 | review-887 | editor approved the corrected immutable revision',
+    source: 'mcp',
+  });
+  assert.strictEqual(replacement.ok, true, replacement.message);
+  assert.deepStrictEqual(
+    replacement.ticket.rejectedSubmissions[0].supersededBy.sourceRevision,
+    { source: 'wiki', value: 'wiki-revision-43', observedAt: '2026-08-13T21:00:00.000Z' },
+  );
+});
+
+test('a no-Git document submission uses source revision through submit and integration closure', () => {
+  const noGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-document-lifecycle-project-'));
+  const noGitBoard = store.ensureProject(noGitProject).slug;
+  const created = store.createTicket(noGitBoard, {
+    title: 'publish reviewed wiki revision',
+    description: 'Publish the reviewed documentation revision.',
+    category: 'repository-write',
+    files: ['docs/wiki.md'],
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'wiki-revision-42',
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(noGitBoard, created.ref, { sharedTree: false });
+  const claimed = store.claimTicket(noGitBoard, created.ref, 'wiki-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'mcp',
+  });
+  assert.strictEqual(claimed.ok, true);
+
+  const submitted = store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+    sourceRevision: { source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z' },
+    changedSurfaces: ['docs/wiki.md'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: wiki-revision-42 | review-884 | editor approved the immutable revision',
+    source: 'mcp',
+  });
+  assert.strictEqual(submitted.ok, true);
+  assert.deepStrictEqual(submitted.ticket.submission.sourceRevision, {
+    source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z',
+  });
+  assert.deepStrictEqual(submitted.ticket.submission.changedPaths, ['docs/wiki.md']);
+  assert.strictEqual(submitted.ticket.lifecycleAttempt.state, 'submitted');
+
+  const delivered = store.integrateSubmission(noGitBoard, created.ref, { mode: 'apply' });
+  assert.strictEqual(delivered.ok, true);
+  assert.strictEqual(delivered.integration.mode, 'source-revision');
+  assert.strictEqual(delivered.integration.outcome, 'delivered');
+  assert.deepStrictEqual(delivered.integration.deliveredFiles, ['docs/wiki.md']);
+  assert.deepStrictEqual(delivered.integration.sourceRevision, {
+    source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z',
+  });
+
+  const verified = store.verifyIntegration(noGitBoard, created.ref, { by: 'wiki-publisher' });
+  assert.strictEqual(verified.ok, true);
+  assert.strictEqual(verified.verify.status, 'attestation');
+
+  const closed = store.completeTicketAsControlPlane(noGitBoard, created.ref, {
+    by: 'wiki-publisher',
+    purpose: 'integration',
+    reason: 'Reviewed wiki revision published without Git, process, or worktree capabilities.',
+  });
+  assert.strictEqual(closed.ok, true);
+  assert.strictEqual(closed.ticket.lifecycleAttempt.state, 'closed');
+  assert.strictEqual(closed.ticket.submission.integration.outcome, 'verified');
+  assert.ok(closed.ticket.submission.integratedAt);
+});

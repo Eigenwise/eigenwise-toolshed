@@ -60,6 +60,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
+const { validateSubmissionAdmission } = require("./kernel/submission");
 function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -154,21 +155,15 @@ function submissionRoot(meta, worktree, commit, gitRef) {
 }
 function validateSubmissionCandidate(options) {
   const { slug, ticket, by, root, commit, gitRef, verify, base, force = false, source = "mcp" } = options;
-  const ownershipFailure = store.submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: force === true });
-  if (ownershipFailure) return ownershipFailure;
-  const completion = store.completionTreeCheck(slug, ticket, { explicitNoOp: String(base || "").trim() === commit });
-  const independentFailures = [];
-  if (!completion.ok) independentFailures.push({ reason: completion.reason, message: completion.message });
   const attestation = ticket.executorVerifyKind === "attestation";
-  const verifyErrors = attestation ? store.attestationErrors(verify, ticket.executorAttestationArtifact) : store.verifyCommandErrors(verify);
-  for (const validationMessage of verifyErrors) independentFailures.push({ reason: "invalid_verify", message: validationMessage });
-  const declaredExecutorVerify = String(ticket.executorVerify || "").trim();
-  if (!attestation && declaredExecutorVerify && verify !== declaredExecutorVerify) {
-    independentFailures.push({
-      reason: "executor_verify_mismatch",
-      message: `submit: refused ${ticket.ref}; verification must match the declared executor verify command.`
-    });
-  }
+  const admission = validateSubmissionAdmission({
+    ownershipFailure: (candidate, owner, allowSubmittedOwner) => store.submissionOwnershipFailure(candidate, owner, { allowSubmittedOwner }),
+    completionCheck: (project, candidate, explicitNoOp) => store.completionTreeCheck(project, candidate, { explicitNoOp }),
+    verifyErrors: (candidate, submittedVerify) => attestation ? store.attestationErrors(submittedVerify, candidate.executorAttestationArtifact) : store.verifyCommandErrors(submittedVerify),
+    declaredVerify: (candidate) => attestation ? "" : String(candidate.executorVerify || "").trim()
+  }, { slug, ticket, by, verify, base, commit, force });
+  if (!Array.isArray(admission)) return admission;
+  const independentFailures = [...admission];
   const dispatchTarget = ticket.dispatch && ticket.dispatch.integrationTarget;
   let target;
   try {
@@ -643,7 +638,7 @@ const tools = [
   },
   {
     name: "submit",
-    description: "Submit a verified scoped commit range for integration and release the claim. Refuses declared-scope paths still uncommitted in the verified worktree. body carries the final report. For a review rejection, use rework to retain the candidate and review evidence. clear:true is only for an integration bounce that intentionally drops the candidate, and only the submitted candidate owner can clear it.",
+    description: "Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and non-Git adapter capabilities instead of commit, base, gitRef, or worktree. body carries the final report. For a review rejection, use rework to retain the candidate and review evidence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -651,6 +646,26 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         commit: { type: "string" },
+        sourceRevision: {
+          type: "object",
+          description: "Immutable non-Git project revision.",
+          properties: {
+            source: { type: "string" },
+            value: { type: "string" },
+            observedAt: { type: "string" }
+          },
+          required: ["source", "value", "observedAt"]
+        },
+        changedSurfaces: { type: "array", items: { type: "string" }, description: "Declared project surfaces changed by a source revision." },
+        projectCapabilities: {
+          type: "object",
+          description: "Available non-Git project adapters. Git capability is observed from the registered project path and cannot be disabled by the caller.",
+          properties: {
+            process: { type: "boolean" },
+            worktree: { type: "boolean" },
+            review: { type: "boolean" }
+          }
+        },
         base: { type: "string", description: "Optional prior submitted or integrated commit to exclude from this submission range. Set it equal to commit for a verified no-op submission." },
         verify: { type: "string" },
         gitRef: { type: "string" },
@@ -675,12 +690,29 @@ const tools = [
         return mutationAck(slug, res2);
       }
       const body = requiredFinalReport(args, "submit");
+      const ticket = store.getTicket(slug, args.ref);
+      if (!ticket) throw new Error(`submit: no ticket "${args.ref}" in ${meta.name}.`);
+      if (args.sourceRevision && args.commit) {
+        throw new Error("submit: pass exactly one of commit or sourceRevision.");
+      }
+      if (args.sourceRevision) {
+        const res2 = store.submitTicket(slug, args.ref, by, {
+          sourceRevision: args.sourceRevision,
+          changedSurfaces: args.changedSurfaces,
+          projectCapabilities: args.projectCapabilities,
+          verify: args.verify,
+          force: args.force === true,
+          submissionComment: { body, by, kind: "comment", source: "mcp" },
+          source: "mcp",
+          sessionId: sessionOf(args)
+        });
+        if (res2.ok) closeDispatchExecutor(ticket);
+        return mutationAck(slug, res2);
+      }
       const commit = requiredText(args, "commit", "submit");
       if (!/^[0-9a-f]{7,64}$/i.test(commit)) {
         throw new Error(`invalid commit "${commit}" — pass the verified commit's hex hash (7-64 chars)`);
       }
-      const ticket = store.getTicket(slug, args.ref);
-      if (!ticket) throw new Error(`submit: no ticket "${args.ref}" in ${meta.name}.`);
       const gitRef = args.gitRef || `refs/sidequest/${ticket.ref}`;
       const root = submissionRoot(meta, args.worktree, commit, gitRef);
       if (verifyEmbedsWorktreeRoot(args.verify, root)) {
@@ -720,7 +752,7 @@ const tools = [
   },
   {
     name: "integrate",
-    description: "Deliver and verify a submitted range. Successful responses list changedPaths for the submitted range and deliveredFiles for actual delivery; they can differ for apply mode.",
+    description: "Deliver and verify a submitted Git range or immutable source revision. Successful responses list changedPaths and deliveredFiles; they can differ for apply mode.",
     inputSchema: {
       type: "object",
       properties: {
@@ -749,21 +781,26 @@ const tools = [
         if (delivery2.reason === "verify_failed_post_merge" || delivery2.reason === "verify_failed_post_merge_rollback_failed") failure.verifyFailed = delivery2.verify;
         return Object.assign(mutationAck(slug, delivery2), failure);
       }
-      const lock = await publish.publishLockStatus(meta.path);
-      if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
-        failures.push({
-          reason: "publish_lock_required",
-          message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"}; acquire or re-acquire it before delivery.`
-        });
+      const usesGit = store.submissionUsesGit(ticket);
+      if (usesGit) {
+        const lock = await publish.publishLockStatus(meta.path);
+        if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
+          failures.push({
+            reason: "publish_lock_required",
+            message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || "another session"}; acquire or re-acquire it before delivery.`
+          });
+        }
       }
-      let target;
-      try {
-        target = store.integrationTarget(slug);
-      } catch (error) {
-        failures.push({
-          reason: "integration_target_unavailable",
-          message: error && error.message || String(error)
-        });
+      let target = null;
+      if (usesGit) {
+        try {
+          target = store.integrationTarget(slug);
+        } catch (error) {
+          failures.push({
+            reason: "integration_target_unavailable",
+            message: error && error.message || String(error)
+          });
+        }
       }
       const admitted = store.validateIntegrationSubmission(slug, args.ref, { overrideLegacyScope: args.overrideLegacyScope === true });
       if (!admitted.ok) failures.push({
@@ -788,8 +825,8 @@ const tools = [
       if (!verification.ok) {
         return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });
       }
-      const verifyReason = verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
-      const reason = `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`;
+      const verifyReason = verification.verify.status === "attestation" ? `Attestation accepted for ${verification.verify.artifact || "the source revision"}.` : verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
+      const reason = usesGit ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}` : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
