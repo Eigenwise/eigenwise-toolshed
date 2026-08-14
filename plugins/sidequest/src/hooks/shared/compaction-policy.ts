@@ -3,7 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { runtimeModule } from './paths.js';
 
-const { canonicalPreparedDispatchExecutor } = require(runtimeModule('prepared-dispatch')) as { canonicalPreparedDispatchExecutor: (ticket: unknown) => string | null };
+type CanonicalPreparedDispatchExecutor = (ticket: unknown) => string | null;
 
 const MAX_INSTRUCTION_BYTES = 1500;
 
@@ -77,7 +77,7 @@ function compactText(value: unknown, limit: number): string {
   return `${result}${marker}`;
 }
 
-function ticketLine(ticket: any): string {
+function ticketLine(ticket: any, canonicalPreparedDispatchExecutor: CanonicalPreparedDispatchExecutor): string {
   const claim = ticket?.claim || {};
   const dispatch = ticket?.dispatch || {};
   const executor = canonicalPreparedDispatchExecutor(ticket);
@@ -139,6 +139,7 @@ async function boardState(cwd: string, store: Store): Promise<{ instruction: str
   const doing = tickets.filter((ticket) => ticket?.status === 'doing');
   const fresh = doing.filter((ticket) => liveRefs.has(String(ticket.ref)));
   const stale = doing.filter((ticket) => !liveRefs.has(String(ticket.ref)));
+  const preparedDispatch = require(runtimeModule('prepared-dispatch')) as { canonicalPreparedDispatchExecutor: CanonicalPreparedDispatchExecutor };
   const publish = require(runtimeModule('publish')) as { publishLockStatus: (repoPath: string) => Promise<{ locked?: boolean; holder?: any }> };
   const lock = await publish.publishLockStatus(found.meta.path);
   const storyIds = [...new Set(doing.map((ticket) => String(ticket?.storyId || '')).filter(Boolean))];
@@ -147,7 +148,7 @@ async function boardState(cwd: string, store: Store): Promise<{ instruction: str
   const lines = [
     'sidequest compaction recovery v1: board history omitted under the 1500B recovery budget.',
     ...fresh.map((ticket) => liveTicketLine(ticket, storiesByRef.get(String(ticket?.storyId || '')))),
-    ...stale.map(ticketLine),
+    ...stale.map((ticket) => ticketLine(ticket, preparedDispatch.canonicalPreparedDispatchExecutor)),
     ...stories.filter((story) => !fresh.some((ticket) => String(ticket?.storyId || '') === story.ref)).map((story) => `Compaction policy story ${compactText(story.title, 80)}: id=${compactText(story.ref, 40)} contractRevision=${Number(story.contractRevision) || 0} logRevision=${Number(story.logRevision) || 0}. Retrieve: mcp__plugin_sidequest_board__story_contract({story:"${compactText(story.ref, 40)}"}) and mcp__plugin_sidequest_board__story_log({story:"${compactText(story.ref, 40)}"}).`),
     ...(lock.locked ? [`Publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || JSON.stringify(lock.holder || 'held'), 260)}`] : []),
   ];

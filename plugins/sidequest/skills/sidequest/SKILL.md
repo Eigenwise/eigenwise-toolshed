@@ -49,8 +49,11 @@ For substantial work:
 4. **Execute proportionally** — "Route execution down" below.
 
 Complexity 4+ needs planning: scope, anchors, a scoped verify. Executors test the changed
-surface; the full suite runs once on the merged tree at integration. A passing executable
-done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
+surface; the full suite runs once on the merged tree at integration. Every done-oracle observes the
+required property on produced output. Greps for implementation identifiers are diagnostics only,
+because another name or path can reproduce the broken behavior. For overlapping wave changes,
+treat source anchors as baseline hints and rerun the property oracle on the assembled wave before
+publish. A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
 The board keeps plans. Before solo-fit or filing, do a stated one-line `.gitignore` entry or other mechanical edit to 1–2 named files inline; don't ticket or spawn it. Investigation or other-file reading needs a ticket.

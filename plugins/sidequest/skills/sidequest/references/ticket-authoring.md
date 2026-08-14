@@ -16,7 +16,9 @@ Descriptions are developer-to-developer specs, never PM summaries. Include ancho
 
 A quantitative or behavioral claim that a fix depends on needs evidence before it becomes a ticket premise. Include the measurement command, its output, and where it ran, or link the read-only measurement ticket that established the numbers. When the claim has not been measured, file measurement work first and create the fix ticket from that result.
 
-State the behavior that must keep working, the regression input or consumer that would expose a break, and what a useful failure should identify. Add or update only the coverage needed to prove that behavior; use as many assertions as the contract requires.
+State the behavior that must keep working, the regression input or consumer that would expose a break, and what a useful failure should identify. The verification oracle must observe that property on produced output. Greps for class names, function names, route names, or other implementation identifiers are diagnostics only because another implementation can reproduce the same broken behavior. Add or update only the coverage needed to prove that behavior; use as many assertions as the contract requires.
+
+For overlapping wave changes, treat source anchors as baseline hints. Write acceptance against the assembled behavior and rerun that property oracle after the terminal wave is assembled, before publish.
 
 ## Carry paid recon into the ticket
 

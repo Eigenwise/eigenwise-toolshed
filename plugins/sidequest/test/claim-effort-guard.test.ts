@@ -11,8 +11,9 @@ const { spawnSync } = require('node:child_process');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-test-'));
 const DISCOVERY_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-catalog-'));
 const catalogDir = path.join(DISCOVERY_ROOT, 'model-gateway');
+const catalogPath = path.join(catalogDir, 'catalog.json');
 fs.mkdirSync(catalogDir, { recursive: true });
-fs.writeFileSync(path.join(catalogDir, 'catalog.json'), JSON.stringify({
+fs.writeFileSync(catalogPath, JSON.stringify({
   schemaVersion: 3, source: 'model-gateway',
   updatedAt: new Date().toISOString(),
   codexReadiness: {
@@ -80,7 +81,13 @@ store.setCategory({
 });
 
 function runCli(args?: any) {
-  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_DISCOVERY_DIRS: process.env.SIDEQUEST_DISCOVERY_DIRS, CLAUDE_PROJECT_DIR: PROJ });
+  const activeDiscoveryRoot = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  if (activeDiscoveryRoot === DISCOVERY_ROOT) {
+    const catalog = JSON.parse(fs.readFileSync(catalogPath, 'utf8'));
+    catalog.updatedAt = new Date().toISOString();
+    fs.writeFileSync(catalogPath, JSON.stringify(catalog));
+  }
+  const env = Object.assign({}, process.env, { SIDEQUEST_HOME, SIDEQUEST_DISCOVERY_DIRS: activeDiscoveryRoot, CLAUDE_PROJECT_DIR: PROJ });
   delete env.CLAUDE_CODE_SESSION_ID;
   delete env.CLAUDE_SESSION_ID;
   delete env.SIDEQUEST_SESSION;

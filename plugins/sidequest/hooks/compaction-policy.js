@@ -54,7 +54,6 @@ function runtimeModule(name) {
 }
 
 // src/hooks/shared/compaction-policy.ts
-var { canonicalPreparedDispatchExecutor } = require(runtimeModule("prepared-dispatch"));
 var MAX_INSTRUCTION_BYTES = 1500;
 function policy() {
   const value = String(process.env.SIDEQUEST_COMPACTION_POLICY || "").trim().toLowerCase();
@@ -100,7 +99,7 @@ function compactText(value, limit) {
   }
   return `${result}${marker}`;
 }
-function ticketLine(ticket) {
+function ticketLine(ticket, canonicalPreparedDispatchExecutor) {
   const claim = ticket?.claim || {};
   const dispatch = ticket?.dispatch || {};
   const executor = canonicalPreparedDispatchExecutor(ticket);
@@ -153,6 +152,7 @@ async function boardState(cwd, store) {
   const doing = tickets.filter((ticket) => ticket?.status === "doing");
   const fresh = doing.filter((ticket) => liveRefs.has(String(ticket.ref)));
   const stale = doing.filter((ticket) => !liveRefs.has(String(ticket.ref)));
+  const preparedDispatch = require(runtimeModule("prepared-dispatch"));
   const publish = require(runtimeModule("publish"));
   const lock = await publish.publishLockStatus(found.meta.path);
   const storyIds = [...new Set(doing.map((ticket) => String(ticket?.storyId || "")).filter(Boolean))];
@@ -161,7 +161,7 @@ async function boardState(cwd, store) {
   const lines = [
     "sidequest compaction recovery v1: board history omitted under the 1500B recovery budget.",
     ...fresh.map((ticket) => liveTicketLine(ticket, storiesByRef.get(String(ticket?.storyId || "")))),
-    ...stale.map(ticketLine),
+    ...stale.map((ticket) => ticketLine(ticket, preparedDispatch.canonicalPreparedDispatchExecutor)),
     ...stories.filter((story) => !fresh.some((ticket) => String(ticket?.storyId || "") === story.ref)).map((story) => `Compaction policy story ${compactText(story.title, 80)}: id=${compactText(story.ref, 40)} contractRevision=${Number(story.contractRevision) || 0} logRevision=${Number(story.logRevision) || 0}. Retrieve: mcp__plugin_sidequest_board__story_contract({story:"${compactText(story.ref, 40)}"}) and mcp__plugin_sidequest_board__story_log({story:"${compactText(story.ref, 40)}"}).`),
     ...lock.locked ? [`Publish lock: ${compactText(lock.holder?.by || lock.holder?.sessionId || JSON.stringify(lock.holder || "held"), 260)}`] : []
   ];
