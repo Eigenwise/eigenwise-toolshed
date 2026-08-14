@@ -51,6 +51,9 @@ function createPaths({ fs, os, path, crypto }) {
   }
   function nearestRepoRoot(startDir) {
     const start = path.resolve(startDir);
+    const enterWorktreeMarker = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+    const enterWorktreeIndex = start.indexOf(enterWorktreeMarker);
+    if (enterWorktreeIndex >= 0) return start.slice(0, enterWorktreeIndex);
     let dir = start;
     for (; ; ) {
       try {

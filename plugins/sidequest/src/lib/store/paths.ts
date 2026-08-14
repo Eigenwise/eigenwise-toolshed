@@ -100,6 +100,9 @@ function mainWorktreeRoot(gitEntry?: any) {
 // Fail-soft: any fs error stops the walk and falls back to the resolved startDir.
 function nearestRepoRoot(startDir?: any) {
   const start = path.resolve(startDir);
+  const enterWorktreeMarker = `${path.sep}.claude${path.sep}worktrees${path.sep}`;
+  const enterWorktreeIndex = start.indexOf(enterWorktreeMarker);
+  if (enterWorktreeIndex >= 0) return start.slice(0, enterWorktreeIndex);
   let dir = start;
   for (;;) {
     try {
