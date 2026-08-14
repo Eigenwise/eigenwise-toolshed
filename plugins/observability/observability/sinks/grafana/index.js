@@ -17,6 +17,22 @@ const CONFIG_VERSION_LABEL = 'dev.eigenwise.workbench.lgtm-config-version';
 const MANAGED_CONFIG_VERSION = '1';
 const PROJECT_ACTIVITY_METRIC = 'claude_code_token_usage_tokens_total';
 const DEFAULT_ACTIVITY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
+const DOCKER_TIMEOUT_MS = 1_500;
+
+function runDocker(context, args) {
+  const docker = context.docker || 'docker';
+  const spawn = context.spawnSync || spawnSync;
+  try {
+    return spawn(docker, args, {
+      encoding: 'utf8',
+      timeout: DOCKER_TIMEOUT_MS,
+      killSignal: 'SIGKILL',
+      windowsHide: true,
+    });
+  } catch (error) {
+    return { error };
+  }
+}
 
 function projectActivityStart(context = {}) {
   const now = typeof context.now === 'function' ? context.now() : (context.now ?? Date.now());
@@ -32,15 +48,13 @@ function activeProjectNames(config = {}, context = {}) {
   const activityStart = projectActivityStart(context);
   const state = inspect(config, context);
   if (!state?.running) return new Set();
-  const docker = context.docker || 'docker';
-  const spawn = context.spawnSync || spawnSync;
   const runtime = runtimeConfig(config);
-  const result = spawn(docker, [
+  const result = runDocker(context, [
     'exec', runtime.container, 'curl', '--silent', '--show-error', '--fail', '--get',
     '--data-urlencode', `match[]=${PROJECT_ACTIVITY_METRIC}`,
     '--data-urlencode', `start=${activityStart}`,
     'http://127.0.0.1:9090/api/v1/series',
-  ], { encoding: 'utf8', windowsHide: true });
+  ]);
   if (result.error || result.status !== 0) {
     throw new Error('Prometheus could not report recently active dashboard projects.');
   }
@@ -115,13 +129,23 @@ function managedConfigVersion(context = {}) {
 }
 
 function inspect(config = {}, context = {}) {
-  const docker = context.docker || 'docker';
-  const spawn = context.spawnSync || spawnSync;
   const runtime = runtimeConfig(config);
   const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{index .Config.Labels "${CONFIG_VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}|{{json .Mounts}}`;
-  const result = spawn(docker, ['inspect', '--format', format, runtime.container], { encoding: 'utf8', windowsHide: true });
+  const result = runDocker(context, ['inspect', '--format', format, runtime.container]);
   if (result.error || result.status !== 0) return null;
   return parseInspection(result.stdout);
+}
+
+function status(config = {}, context = {}) {
+  const runtime = runtimeConfig(config);
+  const state = inspect(config, context);
+  return {
+    ...runtime,
+    running: Boolean(state?.running),
+    portBindingsCurrent: Boolean(state
+      && bindingMatches(state.bindings, 3000, runtime.grafanaPort)
+      && bindingMatches(state.bindings, 4318, runtime.otlpPort)),
+  };
 }
 
 function deleteStatus(config = {}, context = {}) {
@@ -146,8 +170,6 @@ function dashboardMountMatches(mounts, dashboardDir) {
 }
 
 function setup(config = {}, context = {}) {
-  const docker = context.docker || 'docker';
-  const spawn = context.spawnSync || spawnSync;
   const dataDir = context.dataDir;
   const dashboardDir = context.dashboardDir || path.join(__dirname, 'dashboards');
   const runtime = runtimeConfig(config);
@@ -164,13 +186,13 @@ function setup(config = {}, context = {}) {
       return { image: IMAGE, dataDir, container: runtime.container, resumed: false };
     }
     if (current) {
-      const restarted = spawn(docker, ['start', runtime.container], { encoding: 'utf8', windowsHide: true });
+      const restarted = runDocker(context, ['start', runtime.container]);
       if (restarted.error || restarted.status !== 0) {
         throw new Error('Docker could not resume the pinned loopback-only dashboard container.');
       }
       return { image: IMAGE, dataDir, container: runtime.container, resumed: true };
     }
-    const removed = spawn(docker, ['rm', '--force', runtime.container], { encoding: 'utf8', windowsHide: true });
+    const removed = runDocker(context, ['rm', '--force', runtime.container]);
     if (removed.error || removed.status !== 0) {
       throw new Error('Docker could not replace the stale dashboard container.');
     }
@@ -198,7 +220,7 @@ function setup(config = {}, context = {}) {
     '-c',
     'cp /workbench-managed/run-prometheus.sh /otel-lgtm/run-prometheus.sh && chmod +x /otel-lgtm/run-prometheus.sh && exec /otel-lgtm/run-all.sh',
   );
-  const result = spawn(docker, args, { encoding: 'utf8', windowsHide: true });
+  const result = runDocker(context, args);
   if (result.error || result.status !== 0) {
     throw new Error('Docker could not start the pinned loopback-only dashboard container.');
   }
@@ -206,26 +228,24 @@ function setup(config = {}, context = {}) {
 }
 
 function teardown(config = {}, context = {}) {
-  const docker = context.docker || 'docker';
-  const spawn = context.spawnSync || spawnSync;
   const { container } = runtimeConfig(config);
-  const inspected = spawn(docker, ['inspect', '--format', '{{.State.Running}}', container], { encoding: 'utf8', windowsHide: true });
+  const inspected = runDocker(context, ['inspect', '--format', '{{.State.Running}}', container]);
   if (inspected.error) return { container, stopped: false, removed: false, dataDeleted: false, unavailable: true };
   if (inspected.status !== 0) {
     if (!context.deleteData) return { container, stopped: false, removed: false, dataDeleted: false };
-    const deleted = spawn(docker, ['volume', 'rm', DATA_VOLUME], { encoding: 'utf8', windowsHide: true });
+    const deleted = runDocker(context, ['volume', 'rm', DATA_VOLUME]);
     if (deleted.error) return { container, stopped: false, removed: false, dataDeleted: false, unavailable: true };
     return { container, stopped: false, removed: false, dataDeleted: deleted.status === 0 };
   }
   const running = String(inspected.stdout).trim() === 'true';
   if (running) {
-    const stopped = spawn(docker, ['stop', container], { encoding: 'utf8', windowsHide: true });
+    const stopped = runDocker(context, ['stop', container]);
     if (stopped.error || stopped.status !== 0) throw new Error('Docker could not stop the dashboard container.');
   }
   if (!context.deleteData) return { container, stopped: running, removed: false, dataDeleted: false };
-  const removed = spawn(docker, ['rm', '--force', container], { encoding: 'utf8', windowsHide: true });
+  const removed = runDocker(context, ['rm', '--force', container]);
   if (removed.error || removed.status !== 0) throw new Error('Docker could not remove the dashboard container.');
-  const deleted = spawn(docker, ['volume', 'rm', DATA_VOLUME], { encoding: 'utf8', windowsHide: true });
+  const deleted = runDocker(context, ['volume', 'rm', DATA_VOLUME]);
   if (deleted.error || deleted.status !== 0) throw new Error('Docker could not delete the dashboard data volume.');
   return { container, stopped: running, removed: true, dataDeleted: true };
 }
@@ -244,5 +264,6 @@ module.exports = {
   resolve,
   runtimeConfig,
   setup,
+  status,
   teardown,
 };

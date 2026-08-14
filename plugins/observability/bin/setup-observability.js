@@ -375,11 +375,16 @@ function pluginVersion(root = path.resolve(__dirname, '..')) {
 }
 
 function dockerAvailable(options = {}) {
+  if (typeof options.dockerAvailable === 'function') return Boolean(options.dockerAvailable());
   if (typeof options.dockerAvailable === 'boolean') return options.dockerAvailable;
-  const result = (options.spawnSync || spawnSync)(options.docker || 'docker', ['info', '--format', '{{.ServerVersion}}'], {
-    encoding: 'utf8', timeout: 1500, windowsHide: true,
-  });
-  return !result.error && result.status === 0;
+  try {
+    const result = (options.spawnSync || spawnSync)(options.docker || 'docker', ['info', '--format', '{{.ServerVersion}}'], {
+      encoding: 'utf8', timeout: 1500, killSignal: 'SIGKILL', windowsHide: true,
+    });
+    return !result.error && result.status === 0;
+  } catch {
+    return false;
+  }
 }
 
 function configuredOptedInProjects(config) {
@@ -534,12 +539,14 @@ async function setupObservability(options = {}) {
     return { ...plan, resetDashboards: resetDashboards(plan.dataDir, now) };
   }
   const before = readManagedConfig(plan.observabilityConfig);
-  const dashboardRelevant = !options.disable && options.dashboard !== false
-    && (!options.sink || options.sink === DEFAULT_SINK);
-  const available = dashboardRelevant ? dockerAvailable(options) : false;
-  const config = configuredSink(plan, { ...options, defaultDashboard: available });
+  const config = configuredSink(plan, { ...options, defaultDashboard: options.defaultDashboard ?? false });
   const changes = configurationChanges(before, config);
-  if (options.check) return { ...plan, check: true, before, config, changes, dockerAvailable: available };
+  if (options.check) {
+    const dashboardStatus = config.observability.dashboard && dockerAvailable(options)
+      ? grafanaLgtm.status(config.observability.sinks[DEFAULT_SINK] || {}, options)
+      : null;
+    return { ...plan, check: true, before, config, changes, dashboardStatus };
+  }
 
   fs.mkdirSync(plan.dataDir, { recursive: true, mode: 0o700 });
   try { fs.chmodSync(plan.dataDir, 0o700); } catch {}
@@ -574,28 +581,11 @@ async function setupObservability(options = {}) {
   verifyCommand(collectorBinary, ['--version'], options.spawnSync);
 
   const version = pluginVersion(options.pluginRoot);
-  let dashboard = null;
-  let dashboardSkipped = false;
   let sinkSetup = null;
-  if (config.observability.dashboard) {
-    if (available) {
-      const dashboardDir = provisionDashboards(plan.dataDir, activeDashboardProjects(config, plan.dataDir, options));
-      dashboard = grafanaLgtm.setup(config.observability.sinks[DEFAULT_SINK], {
-        ...options,
-        dataDir: plan.dataDir,
-        dashboardDir,
-        pluginVersion: version,
-        forceRecreate: Boolean(config.observability.dashboardVersion
-          && config.observability.dashboardVersion !== version),
-      });
-      sinkSetup = dashboard;
-    } else {
-      dashboardSkipped = true;
-    }
-  } else {
+  if (!config.observability.dashboard) {
     sinkSetup = setupSink(config, { ...options, dataDir: plan.dataDir, pluginVersion: version }).setup;
     if (before.observability.dashboard) {
-      dashboard = grafanaLgtm.teardown(before.observability.sinks[DEFAULT_SINK] || {}, { ...options, dataDir: plan.dataDir });
+      grafanaLgtm.teardown(before.observability.sinks[DEFAULT_SINK] || {}, { ...options, dataDir: plan.dataDir });
     }
   }
 
@@ -608,7 +598,7 @@ async function setupObservability(options = {}) {
       ...config.observability,
       managedVersion: version,
       collectorVersion: COLLECTOR_VERSION,
-      dashboardVersion: dashboard && config.observability.dashboard ? version : config.observability.dashboardVersion,
+      dashboardVersion: config.observability.dashboardVersion,
     },
   });
   writeObservabilityConfig(plan.observabilityConfig, managedConfig);
@@ -621,6 +611,24 @@ async function setupObservability(options = {}) {
     configFile: plan.observabilityConfig,
     pluginRoot: options.pluginRoot || path.resolve(__dirname, '..'),
   });
+  let dashboard = runtime.dashboard || null;
+  let dashboardSkipped = Boolean(runtime.dashboardSkipped);
+  if (config.observability.dashboard && !dashboard) {
+    if (dockerAvailable(options)) {
+      const dashboardDir = provisionDashboards(plan.dataDir, activeDashboardProjects(config, plan.dataDir, options));
+      dashboard = grafanaLgtm.setup(config.observability.sinks[DEFAULT_SINK], {
+        ...options,
+        dataDir: plan.dataDir,
+        dashboardDir,
+        pluginVersion: version,
+        forceRecreate: Boolean(config.observability.dashboardVersion
+          && config.observability.dashboardVersion !== version),
+      });
+    } else {
+      dashboardSkipped = true;
+    }
+  }
+  if (dashboard) sinkSetup = dashboard;
   const sink = resolveSink(managedConfig);
   return {
     ...plan,
@@ -634,7 +642,7 @@ async function setupObservability(options = {}) {
     lgtm: dashboard,
     dashboard,
     dashboardSkipped,
-    dockerAvailable: available,
+    dockerAvailable: config.observability.dashboard ? !dashboardSkipped : false,
     runtime,
   };
 }
@@ -685,7 +693,7 @@ function parseArgs(argv) {
 
 function verificationGuidance(ports = DEFAULT_PORTS) {
   const tokenUsageReport = path.join(__dirname, 'token-usage-report.js');
-  return `Reload plugins once now, then verify: claude --version; curl http://${LOOPBACK}:${ports.observer}/health; node "${tokenUsageReport}".\n`;
+  return `Reload plugins once now, then verify: claude --version; curl http://${LOOPBACK}:${ports.observer}/health; node "${path.join(__dirname, '..', 'lib', 'observability', 'ensure.js')}" --health; node "${tokenUsageReport}".\n`;
 }
 
 function describeChange(change) {
@@ -704,6 +712,11 @@ async function main() {
     process.stdout.write(result.changes.length > 0
       ? `Changes: ${result.changes.map(describeChange).join('; ')}.\n`
       : 'Changes: none.\n');
+    if (result.config.observability.dashboard && !result.dashboardStatus) {
+      process.stdout.write('Dashboard unhealthy: Docker is unavailable. Observer, collector, and SQLite ingestion are independent.\n');
+    } else if (result.dashboardStatus && (!result.dashboardStatus.running || !result.dashboardStatus.portBindingsCurrent)) {
+      process.stdout.write(`Dashboard unhealthy: ${result.dashboardStatus.container} does not match configured loopback ports ${result.dashboardStatus.grafanaPort}->3000 and ${result.dashboardStatus.otlpPort}->4318.\n`);
+    }
     if (result.config.observability.dashboard && !result.dockerAvailable) {
       process.stdout.write('Dashboard skipped: Docker is unavailable; SQLite observability will keep running.\n');
     }

@@ -55,7 +55,7 @@ Gateway wiring is global and has no mode to choose, so do not ask about it. If t
    `found` means the local observer is healthy and the local Grafana/Loki stack has a
    `claude_code_token_usage_tokens_total` metric tagged with this project. `not-found` means the command did
    not see it yet, or no dashboard is configured. Report that result as-is, never claim telemetry is flowing
-   before the command says `found`.
+   before the command says `found`. If the dashboard is unavailable, keep the observer and SQLite ingestion running; diagnose and report the observer, collector, downstream sink, and dashboard as separate planes.
 5. When `not-found` persists after a restart and real activity, add `--audit` to the same command. It lists the
    repository's session directories with their wiring state, names any opted-in project sending observer events
    with no `claude_code_*` samples, and prints the command that fixes it.

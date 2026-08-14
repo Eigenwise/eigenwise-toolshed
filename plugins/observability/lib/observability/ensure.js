@@ -22,7 +22,6 @@ const {
   writeObservabilityConfig,
 } = require('../../observability/sinks/index.js');
 
-const LOCK_MAX_AGE_MS = 30_000;
 const LOOPBACK = '127.0.0.1';
 const MAX_MANAGED_LOG_BYTES = 16 * 1024 * 1024;
 const MANAGED_LOG_ARCHIVES = 3;
@@ -227,12 +226,25 @@ function lockDirectory(dataDir) {
   return path.join(dataDir, 'ensure-observability.lock');
 }
 
-function acquireLock(dataDir, now = Date.now()) {
+function readLockOwner(filePath) {
+  try {
+    const owner = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+    return owner && typeof owner === 'object' ? owner : null;
+  } catch {
+    return null;
+  }
+}
+
+function acquireLock(dataDir, options = {}) {
   const directory = lockDirectory(dataDir);
-  const ownerFile = path.join(directory, 'pid');
+  const ownerFile = path.join(directory, 'owner.json');
   const create = () => {
     fs.mkdirSync(directory);
-    fs.writeFileSync(ownerFile, `${process.pid}\n`, { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(ownerFile, `${JSON.stringify({
+      pid: process.pid,
+      pluginVersion: options.pluginVersion,
+      scriptPath: __filename,
+    })}\n`, { encoding: 'utf8', mode: 0o600 });
     return directory;
   };
   fs.mkdirSync(dataDir, { recursive: true, mode: 0o700 });
@@ -242,9 +254,14 @@ function acquireLock(dataDir, now = Date.now()) {
     if (!error || error.code !== 'EEXIST') throw error;
   }
   try {
-    const owner = readPid(ownerFile);
-    if (owner && processAlive(owner)) return null;
-    if (!owner && now - fs.statSync(directory).mtimeMs <= LOCK_MAX_AGE_MS) return null;
+    const owner = readLockOwner(ownerFile);
+    const ownerIsCurrent = owner
+      && Number.isInteger(owner.pid)
+      && owner.pid > 0
+      && owner.pluginVersion === options.pluginVersion
+      && owner.scriptPath === __filename;
+    if (ownerIsCurrent && (options.processAlive || processAlive)(owner.pid)) return null;
+    if (owner?.pid && owner.scriptPath === __filename) stopProcess(owner.pid, 'ensure', options);
     fs.rmSync(directory, { recursive: true, force: true });
     return create();
   } catch {
@@ -272,13 +289,15 @@ async function ensureObservability(options = {}) {
   const configFile = options.configFile || defaultConfigPath(dataDir);
   let config = consentedConfig(configFile);
   if (!config) return { enabled: false, started: [] };
-  const lock = acquireLock(dataDir, options.now);
+  const setup = options.setupModule || require('../../bin/setup-observability.js');
+  const pluginRoot = options.pluginRoot || path.resolve(__dirname, '..', '..');
+  const currentPluginVersion = setup.pluginVersion(pluginRoot);
+  const lock = acquireLock(dataDir, { ...options, pluginVersion: currentPluginVersion });
   if (!lock) return { enabled: true, started: [], skipped: 'locked' };
 
   try {
     config = consentedConfig(configFile);
     if (!config) return { enabled: false, started: [] };
-    const setup = options.setupModule || require('../../bin/setup-observability.js');
     let state = config.observability;
     const ports = state.ports;
     if (state.dashboard) {
@@ -300,8 +319,6 @@ async function ensureObservability(options = {}) {
         state = config.observability;
       }
     }
-    const pluginRoot = options.pluginRoot || path.resolve(__dirname, '..', '..');
-    const currentPluginVersion = setup.pluginVersion(pluginRoot);
     const pluginDrift = Boolean(state.managedVersion && state.managedVersion !== currentPluginVersion);
     const collectorDrift = Boolean(state.collectorVersion && state.collectorVersion !== setup.COLLECTOR_VERSION);
     const dashboardDrift = Boolean(state.dashboardVersion && state.dashboardVersion !== currentPluginVersion);
@@ -319,26 +336,6 @@ async function ensureObservability(options = {}) {
 
     let dashboard = null;
     let dashboardSkipped = false;
-    if (state.dashboard) {
-      const activityStart = dashboardActivityStart(dataDir, options.now ?? Date.now());
-      const activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
-        ...options,
-        activityStart,
-      });
-      const activeProjects = projectsWithActivity(state.optedInProjects, activeProjectNames);
-      const dashboardDir = provisionDashboards(dataDir, activeProjects);
-      if (setup.dockerAvailable(options)) {
-        dashboard = grafanaLgtm.setup(state.sinks[DEFAULT_SINK] || {}, {
-          ...options,
-          dataDir,
-          dashboardDir,
-          pluginVersion: currentPluginVersion,
-          forceRecreate: pluginDrift || dashboardDrift || dashboardConfigDrift,
-        });
-      } else {
-        dashboardSkipped = true;
-      }
-    }
 
     const started = [];
     const rotatedLogs = [];
@@ -407,6 +404,27 @@ async function ensureObservability(options = {}) {
       });
       started.push('collector');
       await wait(ports.collector, true, options);
+    }
+
+    if (state.dashboard) {
+      const activityStart = dashboardActivityStart(dataDir, options.now ?? Date.now());
+      const activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
+        ...options,
+        activityStart,
+      });
+      const activeProjects = projectsWithActivity(state.optedInProjects, activeProjectNames);
+      const dashboardDir = provisionDashboards(dataDir, activeProjects);
+      if (setup.dockerAvailable(options)) {
+        dashboard = grafanaLgtm.setup(state.sinks[DEFAULT_SINK] || {}, {
+          ...options,
+          dataDir,
+          dashboardDir,
+          pluginVersion: currentPluginVersion,
+          forceRecreate: pluginDrift || dashboardDrift || dashboardConfigDrift,
+        });
+      } else {
+        dashboardSkipped = true;
+      }
     }
 
     const dashboardVersion = state.dashboard && dashboard ? currentPluginVersion : state.dashboardVersion;
@@ -479,6 +497,32 @@ function observerIdentity(port, options = {}) {
   });
 }
 
+function endpointHealthy(port, pathname, options = {}) {
+  const timeoutMs = Math.max(25, Number(options.healthTimeoutMs) || 300);
+  return new Promise((resolve) => {
+    let settled = false;
+    const finish = (healthy = false) => {
+      if (settled) return;
+      settled = true;
+      resolve(healthy);
+    };
+    const request = (options.httpGet || http.get)(`http://${LOOPBACK}:${port}${pathname}`, { timeout: timeoutMs }, (response) => {
+      response.resume();
+      finish(response.statusCode < 500);
+    });
+    request.once('timeout', () => { request.destroy(); finish(); });
+    request.once('error', () => finish());
+  });
+}
+
+function collectorHealth(port, options = {}) {
+  return endpointHealthy(port, '/v1/logs', options);
+}
+
+function dashboardHealth(port, options = {}) {
+  return endpointHealthy(port, '/api/health', options);
+}
+
 function observerHealth(port, options = {}) {
   return observerIdentity(port, options).then(Boolean);
 }
@@ -546,10 +590,9 @@ async function healthSnapshot(options = {}) {
     ports: state.ports,
     storage,
   };
-  const [observerPort, collectorPort, observer] = await Promise.all([
-    portListening(state.ports.observer, options),
-    portListening(state.ports.collector, options),
+  const [observer, collector] = await Promise.all([
     observerHealth(state.ports.observer, options),
+    collectorHealth(state.ports.collector, options),
   ]);
   let dashboard = { configured: state.dashboard, docker: false, running: false };
   if (state.dashboard) {
@@ -558,10 +601,12 @@ async function healthSnapshot(options = {}) {
     const runtime = grafanaLgtm.runtimeConfig(state.sinks[DEFAULT_SINK] || {});
     if (docker) {
       const deleteStatus = grafanaLgtm.deleteStatus(state.sinks[DEFAULT_SINK] || {}, options);
+      const healthy = await dashboardHealth(runtime.grafanaPort, options);
       dashboard = {
         configured: true,
         docker: true,
         running: deleteStatus.running,
+        healthy,
         container: runtime.container,
         deletes: deleteStatus.deletes,
       };
@@ -570,6 +615,7 @@ async function healthSnapshot(options = {}) {
         configured: true,
         docker: false,
         running: false,
+        healthy: false,
         container: runtime.container,
         deletes: { prometheus: false, loki: false },
       };
@@ -580,8 +626,8 @@ async function healthSnapshot(options = {}) {
     enabled: true,
     sink: state.sink,
     ports: state.ports,
-    observer: { listening: observerPort, healthy: observer },
-    collector: { listening: collectorPort },
+    observer: { healthy: observer },
+    collector: { healthy: collector },
     storage,
     dashboard,
   };
@@ -640,7 +686,6 @@ async function main() {
 if (require.main === module) main().catch(() => { process.exitCode = 0; });
 
 module.exports = {
-  LOCK_MAX_AGE_MS,
   MANAGED_LOG_ARCHIVES,
   MAX_MANAGED_LOG_BYTES,
   acquireLock,

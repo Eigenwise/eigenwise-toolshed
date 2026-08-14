@@ -54,9 +54,10 @@ test('requires Claude Code v2.1.212 or newer', () => {
 
 test('prints copy-pasteable observer verification guidance', () => {
   const reportPath = path.join(path.resolve(__dirname, '..'), 'bin', 'token-usage-report.js');
+  const healthPath = path.join(path.resolve(__dirname, '..'), 'lib', 'observability', 'ensure.js');
   assert.equal(
     verificationGuidance(),
-    `Reload plugins once now, then verify: claude --version; curl http://127.0.0.1:14319/health; node "${reportPath}".\n`,
+    `Reload plugins once now, then verify: claude --version; curl http://127.0.0.1:14319/health; node "${healthPath}" --health; node "${reportPath}".\n`,
   );
 });
 

@@ -279,6 +279,66 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   );
 });
 
+test('ensure reclaims a stale versioned ensure owner and restores the observer', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  writeObservabilityConfig(configFile, enabledConfig());
+  const lockDir = path.join(dataDir, 'ensure-observability.lock');
+  fs.mkdirSync(lockDir);
+  fs.writeFileSync(path.join(lockDir, 'owner.json'), `${JSON.stringify({
+    pid: 202,
+    pluginVersion: '0.7.8',
+    scriptPath: path.join(path.resolve(__dirname, '..'), 'lib', 'observability', 'ensure.js'),
+  })}\n`);
+  const killed = [];
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    processAlive: () => true,
+    killProcess(pid, name) { killed.push({ pid, name }); },
+    checkPort: async () => false,
+    waitForPort: async () => true,
+    startProcess() { return 1000; },
+  });
+
+  assert.deepEqual(killed, [{ pid: 202, name: 'ensure' }]);
+  assert.deepEqual(result.started, ['observer', 'collector']);
+});
+
+test('ensure starts the observer before probing an optional dashboard', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  const config = enabledConfig();
+  config.observability.dashboard = true;
+  config.observability.sink = 'grafana-lgtm';
+  config.observability.sinks = { 'grafana-lgtm': {} };
+  writeObservabilityConfig(configFile, config);
+  const started = [];
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async () => false,
+    waitForPort: async () => true,
+    startProcess(name) { started.push(name); return 1000; },
+    dockerAvailable: () => {
+      assert.ok(started.includes('observer'));
+      return false;
+    },
+  });
+
+  assert.equal(result.dashboardSkipped, true);
+  assert.deepEqual(started, ['observer', 'collector']);
+});
+
 test('start records the managed process provenance next to its PID', (t) => {
   const dataDir = temporaryDirectory(t);
   startManagedProcess('observer', process.execPath, ['--version'], dataDir, {

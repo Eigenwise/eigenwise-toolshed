@@ -29,6 +29,6 @@ Tell Claude:
 
 > My Observability dashboard is empty. Check the project setup and tell me what to fix.
 
-Existing sessions need a restart after opt-in. A project also needs fresh Claude Code activity before its panels appear. If the local service is unavailable, ask Claude to diagnose Observability; it can check the managed local processes and configuration without making you run their internal commands. The observer health response includes hook-spool failures, the last error, and any quarantined poison file so diagnosis can distinguish a live service from a stalled drain.
+Existing sessions need a restart after opt-in. A project also needs fresh Claude Code activity before its panels appear. A dashboard outage does not stop local observer ingestion, and queued delivery resumes after the configured sink returns. If the local service is unavailable, ask Claude to diagnose Observability; it can check the managed local processes and configuration without making you run their internal commands. The observer health response includes hook-spool failures, the last error, and any quarantined poison file so diagnosis can distinguish a live service from a stalled drain.
 
 See the generated [Observability reference](/reference/observability/) for the agent-facing setup and command contract.
