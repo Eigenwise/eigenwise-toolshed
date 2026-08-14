@@ -233,7 +233,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> =
   },
   story_log: { entry: 'Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes.' },
   category_edit: { fallbackModel: 'null clears fallback.' },
-  dispatch: { sharedTree: 'Use only from the declared shared checkout. Omit to share zero-scope read-only work. Executors with live claims cannot dispatch child work.', recoveryEvidence: 'Recovery evidence for a failed dispatch.' },
+  dispatch: { sharedTree: 'Use only from the declared shared checkout. Omit for an isolated checkout. Executors with live claims cannot dispatch child work.', recoveryEvidence: 'Recovery evidence for a failed dispatch.' },
 };
 
 function toolDescriptor(tool: ToolDefinition) {

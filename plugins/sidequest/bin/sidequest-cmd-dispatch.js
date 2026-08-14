@@ -119,9 +119,7 @@ async function cmdNativeAgent(opts, positional) {
   const executorClaimRefusal = store.executorClaimDispatchRefusal(slug, sessionId2);
   if (executorClaimRefusal) fail(executorClaimRefusal);
   const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, opts.prompt || `Work ${ticket.ref}: ${ticket.title}`), meta.path);
-  const explicitIsolation = Object.hasOwn(opts, "shared-tree") && opts["shared-tree"] === false;
-  const zeroScopeReadOnly = store.dispatchReadOnly(ticket) && store.effectiveScope(slug, ticket.files).length === 0;
-  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || opts["shared-tree"] === true || zeroScopeReadOnly && !explicitIsolation;
+  const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || opts["shared-tree"] === true;
   const runtimeRefusal = sharedTree ? store.sharedTreeRuntimeRefusal(ticket, meta.path, process.cwd()) : null;
   if (runtimeRefusal) fail(runtimeRefusal);
   const created = agentsync.createNativeAgent({

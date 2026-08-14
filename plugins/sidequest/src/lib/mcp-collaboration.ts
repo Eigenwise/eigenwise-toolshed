@@ -382,9 +382,7 @@ const tools: ToolDefinition[] = [
       if (!route || !route.exec) throw new Error(`native_agent: ${route?.refusal || `${ticket.ref} has no routable model and effort.`}`);
       const resolved = route.exec;
       const prompt = agentsync.withProjectIdentity(work.executorPrompt(ticket, args.prompt), meta.path);
-      const explicitIsolation = Object.hasOwn(args, 'sharedTree') && args.sharedTree === false;
-      const zeroScopeReadOnly = store.dispatchReadOnly(ticket) && store.effectiveScope(slug, ticket.files).length === 0;
-      const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || args.sharedTree === true || (zeroScopeReadOnly && !explicitIsolation);
+      const sharedTree = store.boardConfig(slug)?.worktreeIsolation === false || args.sharedTree === true;
       const runtimeRefusal = sharedTree ? store.sharedTreeRuntimeRefusal(ticket, meta.path, process.cwd()) : null;
       if (runtimeRefusal) throw new Error(runtimeRefusal);
       const created = agentsync.createNativeAgent({

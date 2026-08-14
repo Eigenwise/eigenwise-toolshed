@@ -1138,12 +1138,25 @@ test('board worktree isolation defaults on and overrides dispatch isolation when
 
   store.setCategory({ id: 'readonly-zero-scope', name: 'Readonly zero scope', route: { model: 'sonnet', effort: 'medium' }, fallback: null, readonly: true, enabled: true });
   const readonlyTicket = store.createTicket(isolatedProject, {
-    title: 'zero-scope read-only shared checkout', description: DISPATCH_DESCRIPTION, category: 'readonly-zero-scope',
+    title: 'zero-scope read-only isolated checkout', description: DISPATCH_DESCRIPTION, category: 'readonly-zero-scope',
   });
-  const readonly = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, full: true });
-  assert.equal(readonly.spawn.isolation, undefined);
-  assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, true);
-  assert.match(readonly.spawn.prompt, /zero-scope read-only shared checkout/);
+  const isolatedOrchestrator = path.join(isolatedRoot, 'isolated-orchestrator');
+  execFileSync('git', ['worktree', 'add', '--detach', isolatedOrchestrator], { cwd: isolatedRoot, windowsHide: true });
+  const originalWorkingDirectory = process.cwd();
+  let readonly;
+  try {
+    process.chdir(isolatedOrchestrator);
+    readonly = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, full: true });
+  } finally {
+    process.chdir(originalWorkingDirectory);
+    execFileSync('git', ['worktree', 'remove', '--force', isolatedOrchestrator], { cwd: isolatedRoot, windowsHide: true });
+  }
+  assert.equal(readonly.spawn.isolation, 'worktree');
+  assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, false);
+  assert.match(readonly.spawn.prompt, /zero-scope read-only isolated checkout/);
+  assert.match(readonly.spawn.prompt, new RegExp(`--project "${isolatedRoot.replace(/\\/g, '\\\\')}"`));
+  const readonlyBriefing = agentsync.renderTicketBriefing(store.getTicket(isolatedProject, readonlyTicket.ref), readonly.token, isolatedProject, isolatedRoot);
+  assert.match(readonlyBriefing, /Worktree isolation contract: this dispatch runs in its own linked worktree/);
   const explicitlyIsolated = await callTool('dispatch', { allowUnscoped: true, project: isolatedProject, ref: readonlyTicket.ref, sharedTree: false, full: true });
   assert.equal(explicitlyIsolated.spawn.isolation, 'worktree');
   assert.equal(store.getTicket(isolatedProject, readonlyTicket.ref).dispatch.sharedTree, false);

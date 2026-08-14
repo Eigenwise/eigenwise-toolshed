@@ -560,18 +560,18 @@ test('SubagentStop backfills identity but never invents a worktree binding', () 
   assert.ok(dispatch.turnEndedAt);
 });
 
-test('zero-scope read-only dispatches use the shared checkout without a worktree', () => {
+test('zero-scope read-only dispatches isolate by default and preserve explicit checkout choice', () => {
   const ticket = store.createTicket(slug, {
-    title: 'zero-scope read-only shared checkout',
+    title: 'zero-scope read-only isolated checkout',
     category: 'research',
     source: 'test',
   });
   const sessionId = `zero-scope-readonly-${Date.now()}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
   assert.equal(prepared.ticket.dispatch.readonly, true);
-  assert.equal(prepared.ticket.dispatch.sharedTree, true);
+  assert.equal(prepared.ticket.dispatch.sharedTree, false);
   assert.equal(prepared.ticket.dispatchExecutor, 'sidequest-exec-readonly-high');
-  assert.equal(agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree), null);
+  assert.equal(agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch.sharedTree), 'worktree');
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId,
     token: prepared.token,
@@ -587,6 +587,11 @@ test('zero-scope read-only dispatches use the shared checkout without a worktree
     source: 'test',
   }).ok, true);
   assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-worker', { status: 'todo', source: 'test' }).ok, true);
+
+  const explicitlyShared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, runtimeCwd: PROJECT });
+  assert.equal(explicitlyShared.ticket.dispatch.sharedTree, true);
+  assert.equal(agentsync.ticketIsolation(explicitlyShared.ticket, explicitlyShared.ticket.dispatch.sharedTree), null);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'zero-scope-readonly-shared-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 
   const explicitlyIsolated = store.prepareDispatch(slug, ticket.ref, { sharedTree: false });
   assert.equal(explicitlyIsolated.ticket.dispatch.sharedTree, false);

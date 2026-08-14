@@ -1014,18 +1014,14 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const requestedSharedTree = opts.sharedTree === true
       || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
     const explicitIsolation = Object.hasOwn(opts, 'sharedTree') && opts.sharedTree === false;
-    const readOnlySharedCheckout = readonly
-      && effectiveFiles.length === 0
-      && !sharedTreeArtifactRequested(t)
-      && !explicitIsolation;
     const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
-    let sharedTree = worktreeIsolation ? requestedSharedTree || readOnlySharedCheckout : true;
+    let sharedTree = worktreeIsolation ? requestedSharedTree : true;
     const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
     const worktreeWarning = !worktreeIsolation && explicitIsolation
       ? 'Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately.'
       : (!sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null);
     if (worktreeWarning) sharedTree = true;
-    const runtimeRefusal = sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd);
+    const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
     if (runtimeRefusal) throw new Error(runtimeRefusal);
     t.dispatchNonce = mintDispatchToken();
     if (priorTokenFile) {
