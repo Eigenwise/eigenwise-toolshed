@@ -3,7 +3,7 @@ const { resolveSuite } = require("../suite-resolver.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
 function createSubmissions(dependencies) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
   const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
   const SUBMISSION_GITREF_MAX = 200;
@@ -1054,19 +1054,48 @@ ${verify.outputTail}` : null
     }
     return divergent;
   }
+  function deliveredCommitPaths(repo, deliveredCommit) {
+    const facts = integrationGit(repo, ["rev-list", "--parents", "-n", "1", deliveredCommit]).split(/\s+/).filter(Boolean);
+    if (!facts.length || facts[0].toLowerCase() !== deliveredCommit) throw new Error("delivery commit facts are unavailable");
+    const firstParent = facts[1];
+    const args = firstParent ? ["diff", "--name-only", firstParent, deliveredCommit] : ["diff-tree", "--root", "--no-commit-id", "--name-only", "-r", deliveredCommit];
+    return integrationGit(repo, args).split(/\r?\n/).filter(Boolean);
+  }
+  function completedRepairDelivery(repo, repair) {
+    const delivery = repair.completion?.delivery;
+    const commit = String(delivery?.commit || "").trim();
+    const resultingHead = String(delivery?.integrationRevision?.value || "").trim();
+    if (!SUBMISSION_COMMIT_RE.test(commit) || !SUBMISSION_COMMIT_RE.test(resultingHead) || !recordedReviewPass(repair)) return null;
+    try {
+      const deliveredCommit = integrationGit(repo, ["rev-parse", "--verify", `${commit}^{commit}`]).toLowerCase();
+      const deliveredHead = integrationGit(repo, ["rev-parse", "--verify", `${resultingHead}^{commit}`]).toLowerCase();
+      integrationGit(repo, ["merge-base", "--is-ancestor", deliveredCommit, deliveredHead]);
+      return {
+        commit: deliveredCommit,
+        resultingHead: deliveredHead,
+        deliveredAt: repair.completion.at || null,
+        deliveredFiles: deliveredCommitPaths(repo, deliveredCommit)
+      };
+    } catch (_) {
+      return null;
+    }
+  }
   function integratedRepairTicket(slug, source, repairRef) {
     const repair = getTicket(slug, repairRef);
     if (!repair) return { ok: false, reason: "repair_not_found", message: `No repair ticket ${repairRef}.` };
     if (repair.id === source.id) return { ok: false, reason: "repair_self_reference", message: `${source.ref} cannot supersede its own submission.` };
     const integration = repair.submission?.integration;
-    if (repair.status !== "done" || !repair.submission?.integratedAt || !integration?.resultingHead || !["delivered", "verified"].includes(integration.outcome)) {
-      return {
-        ok: false,
-        reason: "repair_not_integrated",
-        message: `${repair.ref} must be done with a recorded integrated delivery before it can supersede ${source.ref}. Integrate and close ${repair.ref} first.`
-      };
+    if (repair.status === "done" && repair.submission?.integratedAt && integration?.resultingHead && ["delivered", "verified"].includes(integration.outcome)) {
+      return { ok: true, repair, integration };
     }
-    return { ok: true, repair, integration };
+    const repo = readMeta(slug)?.path;
+    const delivery = repo && repair.status === "done" ? completedRepairDelivery(repo, repair) : null;
+    if (delivery) return { ok: true, repair, integration: Object.assign({ outcome: "delivered" }, delivery) };
+    return {
+      ok: false,
+      reason: "repair_not_integrated",
+      message: `${repair.ref} must be done with a reviewed recorded delivery before it can supersede ${source.ref}. Integrate and close ${repair.ref} first.`
+    };
   }
   function closeSubmissionAsSuperseded(slug, idOrRef, opts) {
     opts = opts || {};
@@ -1151,9 +1180,9 @@ ${verify.outputTail}` : null
       const reviewedReplacements = changedPaths.filter((file) => reviewedReplacementPaths.has(file)).map((file) => replacements.get(file));
       const supersededBy = {
         ref: repaired.repair.ref,
-        commit: repaired.repair.submission.commit,
+        commit: repaired.repair.submission?.commit || repaired.integration.commit,
         resultingHead: repaired.integration.resultingHead,
-        deliveredAt: repaired.integration.deliveredAt || repaired.repair.submission.integratedAt,
+        deliveredAt: repaired.integration.deliveredAt || repaired.repair.submission?.integratedAt,
         closedAt: now,
         changedPaths,
         reviewedReplacements,

@@ -1059,6 +1059,7 @@ const {
   putTicket,
   queueEventNotification,
   readMeta,
+  recordedReviewPass,
   recordLifecycleAttempt,
   releaseLock,
   setDispatchTerminal,

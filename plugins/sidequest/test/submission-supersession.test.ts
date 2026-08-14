@@ -92,7 +92,7 @@ function fixture(label: string, retiredPaths: string[] = []) {
     },
   };
   persist(slug, repair);
-  return { repository, slug, source, repair };
+  return { repository, slug, source, repair, base };
 }
 
 async function supersede(input: any) {
@@ -100,6 +100,99 @@ async function supersede(input: any) {
   assert.ok(tool, 'supersede_submission is exposed over MCP');
   return tool.handler(input);
 }
+
+function mergeDelivery(repository: string, base: string) {
+  git(repository, ['branch', 'delivery-topic', 'HEAD^']);
+  git(repository, ['reset', '--hard', base]);
+  git(repository, ['merge', '--no-ff', '--no-edit', 'delivery-topic']);
+  return git(repository, ['rev-parse', 'HEAD']);
+}
+
+function recoveredRepairFixture(label: string, purpose: string = 'delivery', prepareDelivery?: (repository: string, base: string) => string) {
+  const { repository, slug, source, base } = fixture(`recovered-${label}`);
+  const deliveryCommit = purpose === 'delivery'
+    ? prepareDelivery ? prepareDelivery(repository, base) : git(repository, ['rev-parse', 'HEAD'])
+    : undefined;
+  const repair = store.createTicket(slug, {
+    title: `recovered repair ${label}`,
+    description: 'A reviewed repair closed after delivery recovery.',
+    files: ['feature.txt'],
+  });
+  store.addComment(slug, repair.ref, { by: 'reviewer', source: 'test', body: 'reviewed-by: SQ-review' });
+  const completed = store.completeTicketAsControlPlane(slug, repair.ref, {
+    by: 'integrator',
+    purpose,
+    reason: 'The reviewed repair reached the integration branch.',
+    ...(deliveryCommit ? { deliveryCommit } : {}),
+  });
+  return { repository, slug, source, repair, completed, deliveryCommit };
+}
+
+test('a reviewed hand-delivered repair supersedes the earlier submission over MCP', async () => {
+  const { repository, slug, source, repair, completed } = recoveredRepairFixture('reachable');
+  assert.equal(completed.ok, true, completed.message);
+  assert.equal(completed.ticket.completion.delivery.commit, git(repository, ['rev-parse', 'HEAD']));
+
+  const result = await supersede({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: repair.ref,
+    reason: 'The reviewed recovery delivery replaces the rejected submitted range.',
+    reviewedReplacements: [{ path: 'feature.txt', reviewedBy: 'SQ-review', reason: 'The reviewed repair replaces the submitted feature.' }],
+  });
+
+  assert.equal(result.ok, true, result.message);
+  assert.equal(store.getTicket(slug, source.ref).submission.supersededBy.resultingHead, completed.ticket.completion.delivery.integrationRevision.value);
+});
+
+test('a reviewed merge delivery uses its first-parent lineage over MCP', async () => {
+  const { repository, source, repair, completed, deliveryCommit } = recoveredRepairFixture('merge', 'delivery', mergeDelivery);
+  assert.equal(completed.ok, true, completed.message);
+  assert.equal(git(repository, ['show', '-s', '--format=%P', deliveryCommit!]).split(/\s+/).length, 2, 'fixture delivery is a merge commit');
+
+  const parentlessPaths = git(repository, ['diff-tree', '--no-commit-id', '--name-only', '-r', deliveryCommit!]).split(/\r?\n/).filter(Boolean);
+  assert.deepEqual(parentlessPaths, [], 'negative control: parentless diff-tree loses a merge delivery delta');
+
+  const result = await supersede({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: repair.ref,
+    reason: 'The reviewed merge delivery replaces the rejected submitted range.',
+  });
+
+  assert.equal(result.ok, true, result.message);
+});
+
+test('missing or unreachable recovery delivery cannot supersede a submission', async () => {
+  const missing = recoveredRepairFixture('missing', 'grooming');
+  assert.equal(missing.completed.ok, true, missing.completed.message);
+  const missingResult = await supersede({
+    project: missing.repository,
+    ref: missing.source.ref,
+    by: 'orchestrator',
+    supersededBy: missing.repair.ref,
+    reason: 'A grooming closure does not establish delivery.',
+    reviewedReplacements: [{ path: 'feature.txt', reviewedBy: 'SQ-review', reason: 'The repair was reviewed.' }],
+  });
+  assert.equal(missingResult.reason, 'repair_not_integrated');
+
+  const unreachable = recoveredRepairFixture('unreachable');
+  const storedRepair = store.getTicket(unreachable.slug, unreachable.repair.ref);
+  storedRepair.completion.delivery.integrationRevision.value = git(unreachable.repository, ['rev-parse', `${storedRepair.completion.delivery.commit}^`]);
+  persist(unreachable.slug, storedRepair);
+  const unreachableResult = await supersede({
+    project: unreachable.repository,
+    ref: unreachable.source.ref,
+    by: 'orchestrator',
+    supersededBy: unreachable.repair.ref,
+    reason: 'Delivery evidence must stay reachable from its recorded integration revision.',
+    reviewedReplacements: [{ path: 'feature.txt', reviewedBy: 'SQ-review', reason: 'The repair was reviewed.' }],
+  });
+  assert.equal(unreachableResult.reason, 'repair_not_integrated');
+  assert.equal(store.getTicket(unreachable.slug, unreachable.source.ref).status, 'doing');
+});
 
 test('a reviewed integrated repair closes the earlier submission and unblocks dependents', async () => {
   const { repository, slug, source, repair } = fixture('happy');
