@@ -948,7 +948,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         recovery: current.recovery,
       };
     }
-    if (current && current.recovery && !current.terminalAt && !currentExec) {
+    if (current && current.recovery && !current.terminalAt && !currentRoute) {
       const replacement = resolveCategoryFallback(t.category, current.recovery.failedModel);
       if (!replacement) throw new Error(`prepare dispatch: no fallback remains available for ${current.recovery.failedModel}.`);
       t.model = replacement.model;

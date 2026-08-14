@@ -294,7 +294,7 @@ function storyDecisionLogWarnings(ticket?: any, slug?: any) {
   const seenSeq = Number.isInteger(dispatchBoundary) && dispatchBoundary >= 0
     ? dispatchBoundary
     : claimBoundary;
-  if (!Number.isInteger(seenSeq) || seenSeq < 0) return [];
+  if (seenSeq === null || !Number.isInteger(seenSeq) || seenSeq < 0) return [];
   const boundary = Number.isInteger(dispatchBoundary) && dispatchBoundary >= 0 ? 'prepared' : 'claimed';
   const story = getStory(slug, ticket.storyId);
   if (!story) return [];
