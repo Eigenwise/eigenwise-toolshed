@@ -165,13 +165,14 @@ function provisioningConfig(repository) {
   const project = store.findProject(repository);
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
-function removeCreatedWorktree(repository, target) {
-  try {
-    git(repository, ["worktree", "remove", "--force", target]);
-  } catch (_) {
-    import_node_fs2.default.rmSync(target, { recursive: true, force: true });
-    git(repository, ["worktree", "prune"]);
-  }
+function recoverCreatedWorktree(repository, sessionId, target, error) {
+  const store = require(runtimeModule("store"));
+  const project = store.findProject(repository);
+  if (!project.ok || !project.slug) return "worktree recovery preserved the checkout because its project binding is unavailable";
+  const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error);
+  if (!recovery.ok) return `worktree recovery preserved the checkout because ${recovery.reason || "its dispatch binding is unavailable"}`;
+  if (recovery.cleanup?.reclaimed) return null;
+  return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || "cleanup authority is incomplete"}`;
 }
 function main() {
   const input = readStdin();
@@ -207,8 +208,9 @@ function main() {
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
       if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || "completion binding is incomplete"}`);
     } catch (error) {
-      removeCreatedWorktree(boundCreation.repository, boundCreation.worktree);
-      throw error;
+      const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
   }
   process.stdout.write(`${boundCreation.worktree}

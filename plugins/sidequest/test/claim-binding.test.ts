@@ -37,6 +37,7 @@ git(PROJECT, ['commit', '--quiet', '-m', 'seed']);
 const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
 const worktrees = require('../lib/worktrees.js');
+const worktreeKernel = require('../lib/kernel/worktree.js');
 const slug = store.ensureProject(PROJECT).slug;
 store.setCategory({ id: 'binding.write', name: 'Binding write', route: { model: 'codex-gpt-test', effort: 'high' }, enabled: true });
 store.setCategory({ id: 'binding.readonly', name: 'Binding readonly', route: { model: 'codex-gpt-test', effort: 'high' }, readonly: true, enabled: true });
@@ -53,23 +54,37 @@ function recoveryFixture(kind: string) {
   fs.writeFileSync(path.join(repository, 'tracked.txt'), 'seed\n');
   git(repository, ['add', 'tracked.txt']);
   git(repository, ['commit', '--quiet', '-m', 'seed']);
-  const initial = git(repository, ['rev-parse', 'HEAD']);
-  if (kind === 'ancestor') {
-    fs.appendFileSync(path.join(repository, 'tracked.txt'), 'base\n');
-    git(repository, ['add', 'tracked.txt']);
-    git(repository, ['commit', '--quiet', '-m', 'base']);
-  }
   const baseCommit = git(repository, ['rev-parse', 'HEAD']);
   const worktree = path.join(repository, '.claude', 'worktrees', `agent-${kind}`);
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
-  git(repository, ['worktree', 'add', '--quiet', '-b', `agent-${kind}`, worktree, kind === 'ancestor' ? initial : baseCommit]);
-  if (kind === 'dirty') fs.appendFileSync(path.join(worktree, 'tracked.txt'), 'dirty\n');
-  if (kind === 'advanced') {
-    fs.appendFileSync(path.join(worktree, 'tracked.txt'), 'progress\n');
-    git(worktree, ['add', 'tracked.txt']);
-    git(worktree, ['commit', '--quiet', '-m', 'progress']);
-  }
+  git(repository, ['worktree', 'add', '--quiet', '-b', `agent-${kind}`, worktree, baseCommit]);
   return { repository, worktree, baseCommit };
+}
+
+function completedWorktreeBinding(candidate: { worktree: string }) {
+  const resolveGitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(candidate.worktree, value);
+  const gitDirectory = resolveGitPath(git(candidate.worktree, ['rev-parse', '--git-dir']));
+  return {
+    worktree: candidate.worktree,
+    worktreeBindingSource: 'worktree-create',
+    worktreeGitDirectory: gitDirectory,
+    worktreeCommonGitDirectory: resolveGitPath(git(candidate.worktree, ['rev-parse', '--git-common-dir'])),
+    worktreeCheckoutInstance: worktreeKernel.createCheckoutInstanceMarker(gitDirectory),
+    worktreeObservedRevision: git(candidate.worktree, ['rev-parse', 'HEAD']),
+    worktreeCreationCompletedAt: new Date().toISOString(),
+  };
+}
+
+function terminalLifecycleState() {
+  const terminalAt = new Date().toISOString();
+  const terminalSource = 'test-store-transition';
+  const outcome = 'failed';
+  return {
+    terminalAt,
+    terminalSource,
+    outcome,
+    attempts: [{ terminalAt, terminalSource, outcome }],
+  };
 }
 
 test('prepared executor identity is projected unchanged for writing and readonly claims', () => {
@@ -121,6 +136,70 @@ test('SubagentStop before claim clears admission and allows a fresh retry', () =
   assert.equal(retry.ticket.dispatch.attempts.at(-1).failureShape, 'stopped_before_claim');
 });
 
+test('terminal retry preserves a markerless linked checkout', () => {
+  const ticket = createFixture('markerless terminal retry');
+  const sessionId = `markerless-terminal-${Date.now()}`;
+  const agentName = `markerless-terminal-agent-${ticket.id}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentName);
+  const branch = `worktree-agent-${agentName}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
+    assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+    assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
+    assert.throws(
+      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-retry`, sharedTree: false }),
+      /cannot retry because immutable recovery fact: cleanup requires the completed WorktreeCreate checkout binding/,
+    );
+    assert.equal(fs.existsSync(worktree), true);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'markerless-terminal-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) git(PROJECT, ['worktree', 'remove', '--force', worktree]);
+    try { git(PROJECT, ['branch', '-D', branch]); } catch (_) {}
+  }
+});
+
+test('terminal retry cleans the exact completed-bound checkout', () => {
+  const ticket = createFixture('bound terminal retry');
+  const sessionId = `bound-terminal-${Date.now()}`;
+  const agentName = `bound-terminal-agent-${ticket.id}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, agentName);
+  const branch = `worktree-agent-${agentName}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
+    const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
+    const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+    worktreeKernel.createCheckoutInstanceMarker(gitDirectory);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName, worktree).ok, true);
+    assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
+    const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-retry`, sharedTree: false });
+    assert.notEqual(retry.token, prepared.token);
+    assert.equal(fs.existsSync(worktree), false);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'bound-terminal-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) git(PROJECT, ['worktree', 'remove', '--force', worktree]);
+    try { git(PROJECT, ['branch', '-D', branch]); } catch (_) {}
+  }
+});
+
 test('terminal recovery names the immutable fact that prevents a retry', () => {
   const ticket = createFixture('dirty terminal recovery');
   const sessionId = 'dirty-terminal-recovery';
@@ -129,7 +208,6 @@ test('terminal recovery names the immutable fact that prevents a retry', () => {
   const worktree = worktrees.agentWorktreePath(PROJECT, agentName);
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
   fs.mkdirSync(path.dirname(worktree), { recursive: true });
-  git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
   try {
     assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
       sessionId,
@@ -137,7 +215,13 @@ test('terminal recovery names the immutable fact that prevents a retry', () => {
       executor: prepared.ticket.dispatchExecutor,
       agentName,
     }).ok, true);
-    assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
+    const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
+    const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+    worktreeKernel.createCheckoutInstanceMarker(gitDirectory);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName, worktree).ok, true);
     fs.appendFileSync(path.join(worktree, 'tracked.txt'), 'dirty\n');
     assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
     assert.throws(
@@ -151,30 +235,94 @@ test('terminal recovery names the immutable fact that prevents a retry', () => {
   }
 });
 
-test('unclaimed recovery reclaims only exact no-progress worktrees', () => {
-  const cases: Array<[string, string, string]> = [
-    ['clean-base', 'clean-base', 'reclaimed'],
-    ['clean-ancestor', 'ancestor', 'reclaimed'],
-    ['dirty', 'dirty', 'dirty_worktree'],
-    ['advanced', 'advanced', 'candidate_commit'],
-  ];
-  for (const [name, kind, expected] of cases) {
-    const candidate = recoveryFixture(kind);
+test('exact completed binding without terminal lifecycle preserves the checkout', () => {
+  const candidate = recoveryFixture('exact-nonterminal');
+  try {
+    const binding = completedWorktreeBinding(candidate);
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
+      sharedTree: false,
+      baseCommit: candidate.baseCommit,
+      ...binding,
+    });
+    assert.equal(result.reclaimed, false, 'completed creation identity cannot manufacture terminal cleanup authority');
+    assert.match(result.message, /store-owned terminal dispatch transition/);
+    assert.equal(fs.existsSync(candidate.worktree), true);
+  } finally {
+    fs.rmSync(candidate.repository, { recursive: true, force: true });
+  }
+});
+
+test('terminal lifecycle without a completed marker binding preserves the checkout', () => {
+  const candidate = recoveryFixture('terminal-markerless');
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
+      sharedTree: false,
+      worktree: candidate.worktree,
+      baseCommit: candidate.baseCommit,
+      ...terminalLifecycleState(),
+    });
+    assert.equal(result.reclaimed, false);
+    assert.match(result.message, /completed WorktreeCreate checkout binding/);
+    assert.equal(fs.existsSync(candidate.worktree), true);
+  } finally {
+    fs.rmSync(candidate.repository, { recursive: true, force: true });
+  }
+});
+
+test('exact completed binding with terminal lifecycle cleans only that checkout instance', () => {
+  const candidate = recoveryFixture('exact-terminal');
+  try {
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
+      sharedTree: false,
+      baseCommit: candidate.baseCommit,
+      ...completedWorktreeBinding(candidate),
+      ...terminalLifecycleState(),
+    });
+    assert.equal(result.reclaimed, true);
+    assert.equal(fs.existsSync(candidate.worktree), false);
+  } finally {
+    fs.rmSync(candidate.repository, { recursive: true, force: true });
+  }
+});
+
+test('terminal cleanup preserves a recreated checkout with a mismatched marker digest', () => {
+  const candidate = recoveryFixture('recreated-terminal');
+  try {
+    const binding = completedWorktreeBinding(candidate);
+    fs.unlinkSync(path.join(binding.worktreeGitDirectory, 'sidequest-checkout-instance'));
+    worktreeKernel.createCheckoutInstanceMarker(binding.worktreeGitDirectory);
+    const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
+      sharedTree: false,
+      baseCommit: candidate.baseCommit,
+      ...binding,
+      ...terminalLifecycleState(),
+    });
+    assert.equal(result.reclaimed, false);
+    assert.match(result.message, /checkout instance differs/);
+    assert.equal(fs.existsSync(candidate.worktree), true);
+  } finally {
+    fs.rmSync(candidate.repository, { recursive: true, force: true });
+  }
+});
+
+test('exact terminal cleanup preserves changed worktree contents', () => {
+  for (const kind of ['dirty', 'advanced']) {
+    const candidate = recoveryFixture(`terminal-${kind}`);
     try {
+      const binding = completedWorktreeBinding(candidate);
+      fs.appendFileSync(path.join(candidate.worktree, 'tracked.txt'), `${kind}\n`);
+      if (kind === 'advanced') {
+        git(candidate.worktree, ['add', 'tracked.txt']);
+        git(candidate.worktree, ['commit', '--quiet', '-m', 'progress']);
+      }
       const result = worktrees.reclaimUnclaimedDispatchWorktree(candidate.repository, {
         sharedTree: false,
-        worktree: candidate.worktree,
         baseCommit: candidate.baseCommit,
+        ...binding,
+        ...terminalLifecycleState(),
       });
-      if (expected === 'reclaimed') {
-        assert.equal(result.reclaimed, true, name);
-        assert.equal(fs.existsSync(candidate.worktree), false, name);
-      } else {
-        assert.equal(result.reclaimed, false, name);
-        assert.equal(result.reason, expected, name);
-        assert.equal(fs.existsSync(candidate.worktree), true, name);
-        assert.match(result.message, /immutable recovery fact/, name);
-      }
+      assert.equal(result.reclaimed, false, kind);
+      assert.equal(fs.existsSync(candidate.worktree), true, kind);
     } finally {
       fs.rmSync(candidate.repository, { recursive: true, force: true });
     }

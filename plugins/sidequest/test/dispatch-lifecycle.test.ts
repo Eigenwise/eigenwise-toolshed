@@ -1157,6 +1157,32 @@ test('creation bindings reserve one launched dispatch each within a shared sessi
   }
 });
 
+test('a prepared sibling cannot supply authority for a launched dispatch checkout', () => {
+  const sessionId = `prepared-sibling-${Date.now()}`;
+  const preparedTicket = createFixture('prepared sibling isolation fixture');
+  const launchedTicket = createFixture('launched sibling isolation fixture');
+  store.prepareDispatch(slug, preparedTicket.ref, { sessionId });
+  const launched = store.prepareDispatch(slug, launchedTicket.ref, { sessionId });
+  const executor = launched.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, launchedTicket.ref, {
+    sessionId,
+    token: launched.token,
+    executor,
+    agentName: 'launched-sibling',
+  }).ok, true);
+  const worktree = path.join(SIDEQUEST_HOME, 'worktrees', `launched-sibling-${Date.now()}`);
+  try {
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ref, launchedTicket.ref);
+    const expectation = store.dispatchIsolationExpectation({ sessionId, executor });
+    assert.equal(expectation.ref, launchedTicket.ref);
+    assert.equal(expectation.expectedWorktree, worktrees.canonicalPath(worktree));
+    assert.equal(store.getTicket(slug, preparedTicket.ref).dispatch.outcome, 'prepared');
+  } finally {
+    assert.equal(store.releaseTicket(slug, preparedTicket.ref, 'prepared-sibling-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+    assert.equal(store.releaseTicket(slug, launchedTicket.ref, 'launched-sibling-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+  }
+});
+
 test('ordinary isolated dispatches preserve native worktree isolation', () => {
   const ticket = createFixture('ordinary isolation fixture');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `ordinary-isolation-${Date.now()}` });

@@ -500,6 +500,7 @@ const {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recoverDispatchWorktreeCreation,
   dispatchIsolationExpectation,
   dispatchWorkspace,
   dispatchDelta,
@@ -1552,7 +1553,17 @@ function claimAdmission(slug, idOrRef, opts) {
       message: `${ticket.ref} resolves to ${ticket.exec.runsLabel} · ${ticket.effort} (${ticket.exec.backend}), but ${opts.executor} is not its generated executor. Run sidequest dispatch ${ticket.ref}, then spawn ${ticket.exec.agent}.`
     };
   }
-  if (!dispatchTokenMatches(ticket.dispatchNonce, token)) return { ok: false, reason: "token", ticket };
+  if (!dispatchTokenMatches(ticket.dispatchNonce, token)) {
+    if (isSupersededDispatchToken(ticket, token)) {
+      return {
+        ok: false,
+        reason: "token",
+        ticket,
+        message: `${ticket.ref}'s dispatch was superseded by a newer preparation. Re-read this dispatch's token from its own briefing before claiming.`
+      };
+    }
+    return { ok: false, reason: "token", ticket };
+  }
   if (opts.executor !== ticket.dispatchExecutor) {
     return {
       ok: false,
@@ -2633,6 +2644,7 @@ module.exports = {
   recoverDispatchQuotaFailure,
   bindDispatchWorktreeCreation,
   completeDispatchWorktreeCreation,
+  recoverDispatchWorktreeCreation,
   bindDispatchAgent,
   dispatchIsolationExpectation,
   activeSharedTreeClaim,

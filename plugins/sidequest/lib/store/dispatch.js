@@ -293,7 +293,7 @@ function createDispatch(dependencies) {
       const ticket = getTicket(slug, found.id);
       const state = dispatchState(ticket);
       if (!supersedableUnclaimedLaunch(ticket, state)) return { ok: false, reason: "unclaimed_launch_not_supersedable", ticket };
-      setDispatchTerminal(ticket, "failed", opts?.source || "control-plane-unclaimed-launch-supersession", { failureShape: "unclaimed_launch_superseded" });
+      setDispatchTerminal(ticket, "failed", opts?.source || "control-plane-unclaimed-launch-supersession", { slug, failureShape: "unclaimed_launch_superseded" });
       const attempt = state.attempts?.at(-1);
       if (attempt) attempt.recoveryEvidence = evidence;
       ticket.dispatchNonce = null;
@@ -1099,6 +1099,7 @@ function createDispatch(dependencies) {
       const now = (/* @__PURE__ */ new Date()).toISOString();
       const claim = claimSnapshot(t.claim);
       setDispatchTerminal(t, claim ? "died" : "failed", opts.source || "agent-terminal-failure", {
+        slug,
         error: opts.error,
         failureShape
       });
@@ -1282,6 +1283,47 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
+  function recoverDispatchWorktreeCreation(slug, sessionId, worktree, error) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const target = String(worktree || "").trim();
+    const meta = readMeta(slug);
+    if (!normalizedSessionId || !target || !meta?.path) return { ok: false, reason: "missing_binding_facts" };
+    const boundWorktree = canonicalPath(target);
+    const matches = listTickets(slug).filter((candidate) => {
+      const state = dispatchState(candidate);
+      return Boolean(state && state.sessionId === normalizedSessionId && state.sharedTree === false && state.outcome === "launched" && !state.terminalAt && state.worktreeBindingSource === "worktree-create" && state.worktree && canonicalPath(state.worktree) === boundWorktree);
+    });
+    if (matches.length !== 1) return { ok: false, reason: matches.length ? "ambiguous_binding" : "dispatch_binding_unavailable" };
+    const terminal = withTicketLock(slug, matches[0].id, () => {
+      const ticket = getTicket(slug, matches[0].id);
+      const state = dispatchState(ticket);
+      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) {
+        return { ok: false, reason: "dispatch_binding_unavailable" };
+      }
+      const facts = immutableWorktreeFacts(slug, boundWorktree);
+      const baseline = String(state.baseCommit || "").trim();
+      if (!state.worktreeCreationCompletedAt && facts && baseline && facts.revision === baseline) {
+        state.worktreeGitDirectory = facts.gitDirectory;
+        state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+        state.worktreeCheckoutInstance = facts.checkoutInstance;
+        state.worktreeObservedRevision = facts.revision;
+        state.worktreeCreationCompletedAt = (/* @__PURE__ */ new Date()).toISOString();
+      }
+      setDispatchTerminal(ticket, "failed", "worktree-create-recovery", {
+        slug,
+        error,
+        failureShape: "worktree_create_failed"
+      });
+      ticket.dispatchNonce = null;
+      ticket.dispatchExecutor = null;
+      stampDispatchEvent(ticket, "worktree-create-recovery");
+      putTicket(slug, ticket);
+      return { ok: true, ticket };
+    });
+    if (!terminal?.ok) return terminal;
+    const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
+    return { ok: true, ticket: terminal.ticket, cleanup };
+  }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();
     const executor = String(identity?.executor || "").trim();
@@ -1311,12 +1353,12 @@ function createDispatch(dependencies) {
           phase: state.terminalAt ? "terminal" : state.outcome === "claimed" ? "claimed" : "bound"
         };
         if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
-        else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor) {
+        else if (!terminalWithoutClaim && sessionId && executor && state.sessionId === sessionId && state.executor === executor && ["launched", "claimed"].includes(state.outcome)) {
           bySession.push(candidate);
         }
       }
     }
-    const matched = byAgent.length ? byAgent : bySession;
+    const matched = byAgent.length === 1 ? byAgent : bySession.length === 1 ? bySession : [];
     if (!matched.length) return null;
     const expectation = matched[0];
     return {
@@ -1560,7 +1602,7 @@ function createDispatch(dependencies) {
           recordDispatchRuntimeIdentity(match.slug, state, normalizedAgentId, normalizedAgentName, now);
         }
         if (active && state.outcome === "launched" && !(t.claim && t.claim.by)) {
-          setDispatchTerminal(t, "failed", "subagent-stop", { failureShape: "stopped_before_claim" });
+          setDispatchTerminal(t, "failed", "subagent-stop", { slug: match.slug, failureShape: "stopped_before_claim" });
           t.dispatchNonce = null;
           t.dispatchExecutor = null;
           stopped = true;
@@ -1591,7 +1633,7 @@ function createDispatch(dependencies) {
           if (!current || current.sessionId !== String(sessionId) || current.outcome !== "launched" || current.boundAt || t.claim && t.claim.by) {
             return { ok: false };
           }
-          setDispatchTerminal(t, "failed", source);
+          setDispatchTerminal(t, "failed", source, { slug: project.slug });
           t.dispatchNonce = null;
           t.dispatchExecutor = null;
           stampDispatchEvent(t, source);
@@ -1644,6 +1686,7 @@ function createDispatch(dependencies) {
     recoverDispatchQuotaFailure,
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
+    recoverDispatchWorktreeCreation,
     dispatchIsolationExpectation,
     dispatchWorkspace,
     dispatchDelta,

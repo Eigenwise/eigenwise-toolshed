@@ -166,13 +166,21 @@ function provisioningConfig(repository: string): { worktreeDependencyPaths?: { p
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
 
-function removeCreatedWorktree(repository: string, target: string): void {
-  try {
-    git(repository, ['worktree', 'remove', '--force', target]);
-  } catch (_) {
-    fs.rmSync(target, { recursive: true, force: true });
-    git(repository, ['worktree', 'prune']);
-  }
+function recoverCreatedWorktree(repository: string, sessionId: string, target: string, error: unknown): string | null {
+  const store = require(runtimeModule('store')) as {
+    findProject: (project: string) => { ok: boolean; slug?: string };
+    recoverDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, error: unknown) => {
+      ok: boolean;
+      reason?: string;
+      cleanup?: { reclaimed?: boolean; reason?: string; message?: string } | null;
+    };
+  };
+  const project = store.findProject(repository);
+  if (!project.ok || !project.slug) return 'worktree recovery preserved the checkout because its project binding is unavailable';
+  const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error);
+  if (!recovery.ok) return `worktree recovery preserved the checkout because ${recovery.reason || 'its dispatch binding is unavailable'}`;
+  if (recovery.cleanup?.reclaimed) return null;
+  return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || 'cleanup authority is incomplete'}`;
 }
 
 function main(): void {
@@ -212,8 +220,9 @@ function main(): void {
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
       if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || 'completion binding is incomplete'}`);
     } catch (error) {
-      removeCreatedWorktree(boundCreation.repository, boundCreation.worktree);
-      throw error;
+      const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
   }
   process.stdout.write(`${boundCreation.worktree}\n`);

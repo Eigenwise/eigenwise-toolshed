@@ -48,6 +48,9 @@ function createAgentWorktree(repository: string, root: string, name: string): st
 
 function integratedTicket(ref: string, agentId: string, worktree: string, baseCommit: string, suppliedIdentity?: { gitDirectory: string; commonGitDirectory: string; checkoutInstance: string }) {
   const identity = suppliedIdentity || checkoutIdentity(worktree);
+  const terminalAt = new Date().toISOString();
+  const terminalSource = 'test-store-transition';
+  const outcome = 'done';
   return {
     ref,
     status: 'done',
@@ -56,9 +59,16 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
       agentId,
       worktree,
       baseCommit,
+      worktreeBindingSource: 'worktree-create',
+      worktreeCreationCompletedAt: terminalAt,
       worktreeGitDirectory: identity.gitDirectory,
       worktreeCommonGitDirectory: identity.commonGitDirectory,
       worktreeCheckoutInstance: identity.checkoutInstance,
+      worktreeObservedRevision: baseCommit,
+      terminalAt,
+      terminalSource,
+      outcome,
+      attempts: [{ terminalAt, terminalSource, outcome }],
     },
   };
 }
@@ -88,6 +98,28 @@ test('sweep removes only the terminal bound registered worktree', async () => {
     const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
     assert.deepEqual(result.removed.map((candidate: string) => worktrees.canonicalPath(candidate)), [worktrees.canonicalPath(worktree)]);
     assert.equal(fs.existsSync(worktree), false);
+  } finally {
+    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep preserves an exact completed binding without terminal lifecycle authority', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const worktree = createAgentWorktree(repository, worktreeRoot, 'bound-nonterminal');
+  const ticket = integratedTicket('SQ-BOUND-NONTERMINAL', 'bound-nonterminal', worktree, baseCommit);
+  ticket.status = 'done';
+  const nonterminalDispatch: any = ticket.dispatch;
+  nonterminalDispatch.outcome = 'launched';
+  delete nonterminalDispatch.terminalAt;
+  delete nonterminalDispatch.terminalSource;
+  delete nonterminalDispatch.attempts;
+  try {
+    const result = await worktrees.sweep(repository, [ticket], { execute: true, minAgeMs: 0, integrationTarget });
+    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+    assert.equal(entry.action, 'keep');
+    assert.equal(entry.reason, 'active_ticket');
+    assert.equal(fs.existsSync(worktree), true);
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
     fs.rmSync(repository, { recursive: true, force: true });
@@ -143,7 +175,7 @@ test('unclaimed dispatch cleanup is denied by its unknown lease identity', () =>
     const result = worktrees.reclaimUnclaimedDispatchWorktree(repository, { sharedTree: false, worktree, baseCommit, ref: 'SQ-UNCLAIMED' });
     assert.equal(result.reclaimed, false);
     assert.equal(result.reason, 'lease_refused');
-    assert.match(result.message, /bound worktree identity/);
+    assert.match(result.message, /store-owned terminal dispatch transition/);
     assert.equal(fs.existsSync(worktree), true);
   } finally {
     if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);

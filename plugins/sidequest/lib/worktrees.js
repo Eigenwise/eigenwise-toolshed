@@ -283,10 +283,11 @@ function isAgentWorktree(repo, worktree) {
 }
 function ticketForWorktree(tickets, entry) {
   const worktree = canonicalPath(entry.worktree);
-  return tickets.find((ticket) => {
+  const matches = tickets.filter((ticket) => {
     const knownWorktree = dispatchWorktreeForTicket(ticket);
     return Boolean(knownWorktree && canonicalPath(knownWorktree) === worktree);
-  }) || null;
+  });
+  return matches.length === 1 ? matches[0] : null;
 }
 function localBranchName(ref) {
   const match = /^refs\/heads\/(.+)$/.exec(String(ref || ""));
@@ -337,21 +338,35 @@ function dispatchWorktreeForTicket(ticket) {
   const worktree = String(ticket?.dispatch?.worktree || ticket?.submission?.worktree || "").trim();
   return worktree || null;
 }
+function dispatchHasTerminalLifecycleAuthority(dispatch) {
+  const terminalAt = String(dispatch?.terminalAt || "").trim();
+  const terminalSource = String(dispatch?.terminalSource || "").trim();
+  const outcome = String(dispatch?.outcome || "").trim();
+  if (!terminalAt || !terminalSource || !outcome) return false;
+  const attempts = Array.isArray(dispatch?.attempts) ? dispatch.attempts : [];
+  return attempts.some((attempt) => attempt?.terminalAt === terminalAt && attempt?.terminalSource === terminalSource && attempt?.outcome === outcome);
+}
+function dispatchHasCompletedWorktreeCreation(dispatch) {
+  return Boolean(dispatch?.worktreeBindingSource === "worktree-create" && dispatch?.worktreeCreationCompletedAt && dispatch?.worktree && dispatch?.worktreeGitDirectory && dispatch?.worktreeCommonGitDirectory && dispatch?.worktreeCheckoutInstance && dispatch?.worktreeObservedRevision);
+}
 function worktreeLeaseIdentity(ticket, entry) {
+  const dispatch = ticket?.dispatch;
   const expected = dispatchWorktreeForTicket(ticket);
-  const agentId = String(ticket?.dispatch?.agentId || "").trim();
-  if (expected && agentId && canonicalPath(expected) === canonicalPath(entry.worktree)) return { status: "bound", agentId };
-  return { status: "unknown" };
+  if (!dispatchHasCompletedWorktreeCreation(dispatch) || !expected || canonicalPath(expected) !== canonicalPath(entry.worktree)) {
+    return { status: "unknown" };
+  }
+  const agentId = String(dispatch?.agentId || "").trim();
+  const dispatchRef = String(ticket?.ref || "").trim();
+  return { status: "bound", ...agentId ? { agentId } : {}, ...dispatchRef ? { dispatchRef } : {} };
 }
 function worktreeLeasePhase(ticket) {
-  if (!finalTicket(ticket)) return "working";
-  return ticket?.archived ? "terminal" : "integrated";
+  return dispatchHasTerminalLifecycleAuthority(ticket?.dispatch) ? "terminal" : "working";
 }
 function worktreeLeaseLiveness(ticket, entry, livePaths) {
   if (livePaths.some((livePath) => canonicalPath(livePath) === canonicalPath(entry.worktree))) return { status: "live", evidence: "active session path" };
   if (liveClaimTicket(ticket)) return { status: "live", evidence: "live ticket claim" };
-  if (finalTicket(ticket)) return { status: "terminal", evidence: "terminal board ticket without a live claim" };
-  return { status: "unknown", evidence: "no terminal board evidence" };
+  if (dispatchHasTerminalLifecycleAuthority(ticket?.dispatch)) return { status: "terminal", evidence: "store-owned terminal dispatch transition" };
+  return { status: "unknown", evidence: "no store-owned terminal dispatch transition" };
 }
 async function worktreeCleanupLease(repo, ticket, entry, livePaths) {
   const [gitDirectory, commonGitDirectory, observedRevision] = await Promise.all([
@@ -368,6 +383,7 @@ async function worktreeCleanupLease(repo, ticket, entry, livePaths) {
     dispatchBaseline: String(ticket?.dispatch?.baseCommit || "").trim() || null,
     observedRevision: observedRevision.ok ? observedRevision.stdout || null : null,
     observedWorktree: entry.worktree,
+    boundRevision: ticket?.dispatch?.worktreeObservedRevision || null,
     boundWorktree: ticket?.dispatch?.worktree || null,
     boundGitDirectory: ticket?.dispatch?.worktreeGitDirectory || null,
     boundCommonGitDirectory: ticket?.dispatch?.worktreeCommonGitDirectory || null,
@@ -902,6 +918,22 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
   }));
   const entry = entries.find((candidate) => canonicalPath(candidate.worktree) === expected);
   if (!entry) return { worktree, reclaimed: false, discardable: true, reason: "not_registered" };
+  if (!dispatchHasTerminalLifecycleAuthority(dispatch)) {
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: "lease_refused",
+      message: "immutable recovery fact: cleanup requires a store-owned terminal dispatch transition."
+    };
+  }
+  if (!dispatchHasCompletedWorktreeCreation(dispatch)) {
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: "lease_refused",
+      message: "immutable recovery fact: cleanup requires the completed WorktreeCreate checkout binding."
+    };
+  }
   const resolveGitPath = (value) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);
   const lease = worktreeLease.createWorktreeLease({
     repository,
@@ -911,14 +943,19 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
     dispatchBaseline: dispatch.baseCommit || null,
     observedRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim(),
     observedWorktree: entry.worktree,
-    identity: { status: "unknown" },
+    boundRevision: dispatch.worktreeObservedRevision,
+    boundWorktree: dispatch.worktree,
+    boundGitDirectory: dispatch.worktreeGitDirectory,
+    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory,
+    boundCheckoutInstance: dispatch.worktreeCheckoutInstance,
+    identity: { status: "bound", agentId: dispatch.agentId || void 0, dispatchRef: dispatch.ref || void 0 },
     phase: "terminal",
     locked: Boolean(entry.locked),
-    liveness: { status: "terminal", evidence: "unclaimed dispatch" },
+    liveness: { status: "terminal", evidence: `store transition ${dispatch.terminalSource} at ${dispatch.terminalAt}` },
     provisioning: "host"
   });
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, [entry.worktree]);
-  if (!cleanup.allowed) return { worktree, reclaimed: false, reason: "lease_refused", message: cleanup.reason };
+  if (!cleanup.allowed) return { worktree, reclaimed: false, reason: "lease_refused", message: `immutable recovery fact: ${cleanup.reason}` };
   const dirty = execFileSync("git", ["status", "--porcelain"], {
     cwd: entry.worktree,
     encoding: "utf8",
