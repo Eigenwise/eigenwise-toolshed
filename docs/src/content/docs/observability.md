@@ -23,6 +23,12 @@ Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to comp
 
 To check setup or disable telemetry, run the same skill and describe what you want. Claude reports whether a project is sending data and tells you when a restart or more activity is needed.
 
+## Storage pressure
+
+The local observer keeps a 128 MiB writable reserve below its 4 GiB database limit. It reacts during ingestion rather than waiting for routine maintenance: it removes data past the normal 30-day window first, then removes oldest whole days from that window only when it needs more capacity. Health reports the pressure state, action, remaining headroom, and exact removed windows and row counts.
+
+Freed SQLite pages stay available to new telemetry. New databases can compact reusable tail pages without a second database-sized allocation. The manual retention command checks filesystem space before attempting a full `VACUUM`. When no removable data can restore the reserve, health reports `storage_headroom_unrecoverable`; committed ingestion still receives its normal acknowledgement.
+
 ## If the dashboard is empty
 
 Tell Claude:

@@ -72,7 +72,7 @@ function formatResult(result) {
     `outbox records: ${result.counts.outbox}`,
     `${result.dryRun ? 'estimated reusable space' : 'reusable space'}: ${formatBytes(reusableBytes)}`,
     result.dryRun
-      ? `SQLite keeps the ${formatBytes(result.databaseBytes)} database file size until VACUUM runs. Applying this runs VACUUM, which needs roughly that much free disk space and blocks for about a minute per 2 GB.`
+      ? `SQLite keeps the ${formatBytes(result.databaseBytes)} database file size until VACUUM runs. Applying checks free disk space before attempting a full VACUUM, which can need roughly that much temporary space and blocks for about a minute per 2 GB.`
       : `Database file is now ${formatBytes(result.storage.databaseBytes)}.`,
     ...(result.sizePrune
       ? [`Over the ${formatBytes(result.storage.maxDatabaseBytes)} size cap, so the oldest ${result.sizePrune.days} day(s) were dropped as well: ${result.sizePrune.counts.observations} observations.`]

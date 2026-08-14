@@ -173,6 +173,12 @@ function createObserver(options = {}) {
   });
 
   let maintenanceStatus = { failed: false, lastRunAt: null };
+  const preserveStorageHeadroom = () => typeof store.preserveStorageHeadroom === 'function'
+    ? store.preserveStorageHeadroom({ retentionDays: options.retentionDays === undefined ? DEFAULT_RETENTION_DAYS : options.retentionDays })
+    : { state: 'healthy', action: 'none', failure: null };
+  const readStoragePressure = () => typeof store.storagePressure === 'function'
+    ? store.storagePressure()
+    : { state: 'healthy', action: 'none', failure: null };
   const spoolStatus = {
     consecutive_failures: 0,
     last_error: null,
@@ -193,16 +199,19 @@ function createObserver(options = {}) {
         const spoolDrainStartedAt = Date.parse(spoolStatus.in_flight_at || '');
         const spoolStalled = Number.isFinite(spoolDrainStartedAt) && Date.now() - spoolDrainStartedAt > hookSpoolStallMs;
         const spoolFailed = spoolStatus.consecutive_failures > 0 || spoolStalled;
-        jsonResponse(response, versionError || outboxStalled || spoolFailed ? 503 : 200, {
-          ok: !versionError && !outboxStalled && !spoolFailed,
+        const storage = store.storageMetrics();
+        const storagePressure = readStoragePressure();
+        const storageFailed = storagePressure.state === 'unrecoverable';
+        jsonResponse(response, versionError || outboxStalled || spoolFailed || storageFailed ? 503 : 200, {
+          ok: !versionError && !outboxStalled && !spoolFailed && !storageFailed,
           pid: process.pid,
           pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
           outbox: outboxHealth,
           spool: spoolStatus,
-          storage: store.storageMetrics(),
+          storage: { ...storage, pressure: storagePressure },
           maintenance: maintenanceStatus,
-          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : spoolStalled ? 'hook_spool_drain_stalled' : spoolFailed ? 'hook_spool_drain_failed' : undefined,
+          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : spoolStalled ? 'hook_spool_drain_stalled' : spoolFailed ? 'hook_spool_drain_failed' : storageFailed ? 'storage_headroom_unrecoverable' : undefined,
         });
         if (versionError) setImmediate(retireOutdatedObserver);
         return;
@@ -212,10 +221,12 @@ function createObserver(options = {}) {
         const body = await readJson(request, maxBodyBytes);
         if (Array.isArray(body) && body.length === 0) throw requestError(400, 'empty_batch');
         const results = Array.isArray(body) ? store.ingestBatch(body) : [store.ingest(body)];
+        const storagePressure = preserveStorageHeadroom();
         const rejected = results.some((result) => !result.accepted);
         jsonResponse(response, rejected ? 422 : 200, {
           committed: results.every((result) => result.committed),
           results,
+          storagePressure,
         });
         return;
       }
@@ -228,6 +239,7 @@ function createObserver(options = {}) {
           return;
         }
         const results = store.ingestBatch(observations);
+        preserveStorageHeadroom();
         if (results.some((result) => !result.accepted)) {
           jsonResponse(response, 422, { error: 'observation_rejected' });
           return;
@@ -282,7 +294,7 @@ function createObserver(options = {}) {
     drainingSpool = true;
     spoolStatus.in_flight_at = new Date().toISOString();
     try {
-      return await drainHookSpool({
+      const result = await drainHookSpool({
         spoolPath,
         store,
         projectId: options.projectId,
@@ -290,6 +302,8 @@ function createObserver(options = {}) {
         failureState: spoolStatus,
         failureThreshold: options.hookSpoolFailureThreshold,
       });
+      preserveStorageHeadroom();
+      return result;
     } catch (error) {
       logger.error('Observer hook spool drain failed', {
         code: typeof error?.code === 'string' ? error.code : 'hook_spool_drain_failed',
@@ -322,9 +336,10 @@ function createObserver(options = {}) {
     if (maintaining) return null;
     maintaining = true;
     try {
-      const result = store.prune({
-        retentionDays: options.retentionDays === undefined ? DEFAULT_RETENTION_DAYS : options.retentionDays,
-      });
+      const retention = typeof store.prune === 'function'
+        ? store.prune({ retentionDays: options.retentionDays === undefined ? DEFAULT_RETENTION_DAYS : options.retentionDays })
+        : null;
+      const result = { retention, pressure: preserveStorageHeadroom() };
       maintenanceStatus = { failed: false, lastRunAt: new Date().toISOString(), result };
       return result;
     } catch {

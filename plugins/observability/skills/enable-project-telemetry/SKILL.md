@@ -60,6 +60,10 @@ Gateway wiring is global and has no mode to choose, so do not ask about it. If t
    repository's session directories with their wiring state, names any opted-in project sending observer events
    with no `claude_code_*` samples, and prints the command that fixes it.
 
+## Storage pressure
+
+The observer reserves 128 MiB below its 4 GiB database limit. It prunes expired observations first, then oldest whole days inside the 30-day window only when pressure remains, and records the exact windows and row counts in `/health`. A health failure of `storage_headroom_unrecoverable` means no removable data restored that reserve. Explain that committed ingestion still receives its normal acknowledgement, then diagnose disk and retention pressure from the health response. Do not tell the user to run `VACUUM`: the managed path compacts reusable pages when it can, and the manual prune command checks free space before a full vacuum.
+
 ## Disable
 
 Run:

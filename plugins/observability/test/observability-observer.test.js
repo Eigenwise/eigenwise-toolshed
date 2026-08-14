@@ -617,6 +617,39 @@ test('health reports a hook spool drain that remains in flight past its deadline
   assert.match(health.spool.in_flight_at, /^\d{4}-\d{2}-\d{2}T/);
 });
 
+test('observer reports unrecoverable storage pressure without dropping the triggering ingestion', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-pressure-'));
+  const store = openObservabilityStore(path.join(directory, 'ledger.db'), { maxDatabaseBytes: 1, storageReserveBytes: 0 });
+  t.after(() => {
+    store.close();
+    fs.rmSync(directory, { recursive: true, force: true });
+  });
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+    hookSpoolFile: path.join(directory, 'spool.jsonl'),
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+  const base = `http://127.0.0.1:${address.port}`;
+
+  const ingestion = await fetch(`${base}/v1/observations`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(requestObservation({ source_event_id: 'storage-pressure' })),
+  });
+  const body = await ingestion.json();
+  assert.equal(ingestion.status, 200);
+  assert.equal(body.committed, true);
+  assert.equal(body.storagePressure.failure, 'storage_headroom_unrecoverable');
+
+  const health = await fetch(`${base}/health`);
+  assert.equal(health.status, 503);
+  assert.equal((await health.json()).error, 'storage_headroom_unrecoverable');
+});
+
 test('observer binds only to loopback and acknowledges HTTP ingestion after commit', async (t) => {
   assert.throws(() => assertLoopbackHost('0.0.0.0'), /loopback/);
   const store = temporaryStore(t);

@@ -92,7 +92,7 @@ test('retention dry run reports old rows without changing the database', (t) => 
   assert.equal(result.counts.outbox, 1);
   assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 2);
   assert.match(formatResult(result), /estimated reusable space/);
-  assert.match(formatResult(result), /Applying this runs VACUUM, which needs roughly/);
+  assert.match(formatResult(result), /Applying checks free disk space before attempting a full VACUUM/);
 });
 
 test('retention removes only expired rows and preserves current report totals', (t) => {

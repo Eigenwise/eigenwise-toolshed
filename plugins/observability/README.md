@@ -29,6 +29,12 @@ Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to comp
 
 There are no routine observer commands to remember. Claude keeps the managed local services running and handles setup, verification, repair, and disable flows through the bundled skill.
 
+## Storage pressure
+
+The observer keeps a 128 MiB writable reserve below its 4 GiB database limit. When it crosses that threshold, it first removes data past the normal 30-day retention window, then drops the oldest whole days inside that window if needed. Removed windows and row counts are recorded in `/health`, alongside remaining headroom and the selected action.
+
+SQLite pages freed by that work stay reusable for ingestion. New databases use incremental compaction, and the manual prune command only attempts a full `VACUUM` after confirming enough filesystem space for its temporary copy. If no removable data can restore the reserve, `/health` returns `storage_headroom_unrecoverable` while the observer continues to acknowledge committed ingestion.
+
 ## If something stops working
 
 Tell Claude what happened:

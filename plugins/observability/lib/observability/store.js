@@ -45,6 +45,7 @@ const DEFAULT_RETENTION_DAYS = 30;
 // retention could never bring it back under. 4GB holds about a week of that, which is the
 // point where size pruning starts doing the work retention was never going to do.
 const DEFAULT_MAX_DATABASE_BYTES = 4 * 1024 * 1024 * 1024;
+const DEFAULT_STORAGE_RESERVE_BYTES = 128 * 1024 * 1024;
 const DEFAULT_MAX_SIZE_PRUNE_DAYS = 3;
 const DEFAULT_MAX_WAL_BYTES = 64 * 1024 * 1024;
 
@@ -247,10 +248,18 @@ function openObservabilityStore(databaseFile, options = {}) {
   const outboxEnabled = options.outboxEnabled !== false;
   const busyTimeoutMs = Number(options.busyTimeoutMs || 5000);
   const maxDatabaseBytes = Math.max(1, Number(options.maxDatabaseBytes) || DEFAULT_MAX_DATABASE_BYTES);
+  const requestedStorageReserveBytes = Number(options.storageReserveBytes);
+  const storageReserveBytes = Math.max(0, Math.min(
+    maxDatabaseBytes,
+    Number.isFinite(requestedStorageReserveBytes)
+      ? requestedStorageReserveBytes
+      : Math.min(DEFAULT_STORAGE_RESERVE_BYTES, Math.floor(maxDatabaseBytes / 4)),
+  ));
   const database = new DatabaseSync(databaseFile, { readOnly, timeout: busyTimeoutMs });
   if (!readOnly) {
     database.exec(`PRAGMA busy_timeout=${busyTimeoutMs}`);
     database.exec('PRAGMA journal_mode=WAL');
+    database.exec('PRAGMA auto_vacuum=INCREMENTAL');
     database.exec(`PRAGMA journal_size_limit=${DEFAULT_MAX_WAL_BYTES}`);
     database.exec('PRAGMA synchronous=FULL');
     database.exec(TABLE_SQL);
@@ -699,18 +708,103 @@ function openObservabilityStore(databaseFile, options = {}) {
     };
   }
 
+  function databasePageMetrics() {
+    const pageSize = Number(database.prepare('PRAGMA page_size').get().page_size);
+    const pageCount = Number(database.prepare('PRAGMA page_count').get().page_count);
+    const freePages = Number(database.prepare('PRAGMA freelist_count').get().freelist_count);
+    return { pageSize, pageCount, freePages };
+  }
+
   function storageMetrics() {
     assertOpen();
-    const databaseBytes = databaseFile === ':memory:' ? 0 : fileBytes(databaseFile);
-    const walBytes = databaseFile === ':memory:' ? 0 : fileBytes(`${databaseFile}-wal`);
+    const { pageSize, pageCount, freePages } = databasePageMetrics();
+    const usedDatabaseBytes = (pageCount - freePages) * pageSize;
+    const reusableDatabaseBytes = freePages * pageSize;
+    const headroomBytes = Math.max(0, maxDatabaseBytes - usedDatabaseBytes);
     return {
-      databaseBytes,
-      walBytes,
+      databaseBytes: databaseFile === ':memory:' ? 0 : fileBytes(databaseFile),
+      walBytes: databaseFile === ':memory:' ? 0 : fileBytes(`${databaseFile}-wal`),
+      usedDatabaseBytes,
+      reusableDatabaseBytes,
+      headroomBytes,
+      storageReserveBytes,
+      underStorageReserve: usedDatabaseBytes > maxDatabaseBytes || headroomBytes < storageReserveBytes,
       maxDatabaseBytes,
       maxWalBytes: DEFAULT_MAX_WAL_BYTES,
-      overDatabaseLimit: databaseBytes > maxDatabaseBytes,
-      overWalLimit: walBytes > DEFAULT_MAX_WAL_BYTES,
+      allocatedOverDatabaseLimit: databaseFile !== ':memory:' && fileBytes(databaseFile) > maxDatabaseBytes,
+      overDatabaseLimit: usedDatabaseBytes > maxDatabaseBytes,
+      overWalLimit: databaseFile !== ':memory:' && fileBytes(`${databaseFile}-wal`) > DEFAULT_MAX_WAL_BYTES,
     };
+  }
+
+  function compactReusablePages() {
+    if (databaseFile === ':memory:') return 0;
+    const autoVacuum = Number(database.prepare('PRAGMA auto_vacuum').get().auto_vacuum);
+    const { freePages } = databasePageMetrics();
+    if (autoVacuum !== 2 || freePages === 0) return 0;
+    const before = fileBytes(databaseFile);
+    database.exec(`PRAGMA incremental_vacuum(${freePages})`);
+    return Math.max(0, before - fileBytes(databaseFile));
+  }
+
+  function reclaimFileSpaceIfSafe() {
+    if (databaseFile === ':memory:' || typeof fs.statfsSync !== 'function') {
+      return { attempted: false, reason: 'filesystem_space_unknown' };
+    }
+    try {
+      const fileSystem = fs.statfsSync(path.dirname(path.resolve(databaseFile)));
+      const availableBytes = Number(fileSystem.bavail) * Number(fileSystem.bsize);
+      const requiredBytes = fileBytes(databaseFile) + storageReserveBytes;
+      if (availableBytes < requiredBytes) return { attempted: false, availableBytes, requiredBytes, reason: 'insufficient_filesystem_space' };
+      database.exec('VACUUM');
+      return { attempted: true, availableBytes, requiredBytes };
+    } catch {
+      return { attempted: false, reason: 'filesystem_space_unknown' };
+    }
+  }
+
+  function zeroCounts() {
+    return { observations: 0, measurements: 0, links: 0, dedupe: 0, outbox: 0 };
+  }
+
+  function removalBefore(cutoff) {
+    const range = database.prepare(`
+      SELECT MIN(observed_at) AS oldestObservedAt, MAX(observed_at) AS newestObservedAt
+      FROM observation WHERE observed_at < ?
+    `).get(cutoff);
+    return {
+      cutoff,
+      counts: countsBefore(cutoff),
+      oldestObservedAt: range.oldestObservedAt || null,
+      newestObservedAt: range.newestObservedAt || null,
+    };
+  }
+
+  function storedStoragePressure() {
+    const row = database.prepare("SELECT value FROM observability_meta WHERE key = 'storage_pressure_status'").get();
+    if (!row) return null;
+    try { return JSON.parse(row.value); } catch { return null; }
+  }
+
+  function storagePressure() {
+    const storage = storageMetrics();
+    const status = storedStoragePressure();
+    return {
+      state: status?.state || (storage.underStorageReserve ? 'pressure' : 'healthy'),
+      action: status?.action || 'none',
+      remainingHeadroomBytes: storage.headroomBytes,
+      storageReserveBytes,
+      removed: status?.removed || { counts: zeroCounts(), windows: [] },
+      failure: status?.failure || null,
+      lastActionAt: status?.lastActionAt || null,
+    };
+  }
+
+  function recordStoragePressure(status) {
+    database.prepare(`
+      INSERT INTO observability_meta (key, value) VALUES ('storage_pressure_status', ?)
+      ON CONFLICT(key) DO UPDATE SET value = excluded.value
+    `).run(JSON.stringify(status));
   }
 
   function countsBefore(cutoff) {
@@ -741,15 +835,13 @@ function openObservabilityStore(databaseFile, options = {}) {
   }
 
   function usedDatabaseBytes() {
-    const pageSize = Number(database.prepare('PRAGMA page_size').get().page_size);
-    const pageCount = Number(database.prepare('PRAGMA page_count').get().page_count);
-    const freePages = Number(database.prepare('PRAGMA freelist_count').get().freelist_count);
+    const { pageSize, pageCount, freePages } = databasePageMetrics();
     return (pageCount - freePages) * pageSize;
   }
 
-  function sizePrune({ reclaimFileSpace, maxDays }) {
-    const result = { counts: { observations: 0, measurements: 0, links: 0, dedupe: 0, outbox: 0 }, days: 0 };
-    while (usedDatabaseBytes() > maxDatabaseBytes) {
+  function sizePrune({ reclaimFileSpace, maxDays, targetDatabaseBytes = maxDatabaseBytes }) {
+    const result = { counts: zeroCounts(), days: 0, removals: [] };
+    while (usedDatabaseBytes() > targetDatabaseBytes) {
       if (result.days >= maxDays) {
         result.moreWorkPending = true;
         break;
@@ -759,13 +851,14 @@ function openObservabilityStore(databaseFile, options = {}) {
       const cutoffDate = new Date(oldest.observed_at);
       cutoffDate.setUTCHours(24, 0, 0, 0);
       const cutoff = cutoffDate.toISOString();
-      const counts = countsBefore(cutoff);
-      if (counts.observations === 0) break;
+      const removal = removalBefore(cutoff);
+      if (removal.counts.observations === 0) break;
       deleteBefore(cutoff);
-      for (const [name, count] of Object.entries(counts)) result.counts[name] += count;
+      for (const [name, count] of Object.entries(removal.counts)) result.counts[name] += count;
+      result.removals.push(removal);
       result.days += 1;
     }
-    if (result.counts.observations > 0 && reclaimFileSpace) database.exec('VACUUM');
+    if (result.counts.observations > 0 && reclaimFileSpace) result.vacuum = reclaimFileSpaceIfSafe();
     result.checkpoint = checkpoint();
     result.storage = storageMetrics();
     return result;
@@ -810,8 +903,8 @@ function openObservabilityStore(databaseFile, options = {}) {
     }
     result.checkpoint = checkpoint();
     result.storage = storageMetrics();
-    if (result.storage.overDatabaseLimit && counts.observations > 0 && reclaimFileSpace) {
-      database.exec('VACUUM');
+    if (result.storage.allocatedOverDatabaseLimit && counts.observations > 0 && reclaimFileSpace) {
+      result.vacuum = reclaimFileSpaceIfSafe();
       result.checkpoint = checkpoint();
       result.storage = storageMetrics();
     }
@@ -819,6 +912,61 @@ function openObservabilityStore(databaseFile, options = {}) {
       result.sizePrune = sizePrune({ reclaimFileSpace, maxDays: maxSizePruneDays });
     }
     return result;
+  }
+
+  function preserveStorageHeadroom(options = {}) {
+    assertOpen();
+    const maxSizePruneDays = Math.max(1, Number(options.maxSizePruneDays) || DEFAULT_MAX_SIZE_PRUNE_DAYS);
+    const retentionDays = options.retentionDays === undefined ? DEFAULT_RETENTION_DAYS : Number(options.retentionDays);
+    const targetDatabaseBytes = Math.max(0, maxDatabaseBytes - storageReserveBytes);
+    const removed = { counts: zeroCounts(), windows: [] };
+    let storage = storageMetrics();
+    let action = 'none';
+    let pending = false;
+
+    if (storage.underStorageReserve) {
+      const retentionRemoval = removalBefore(retentionCutoff(now, retentionDays));
+      if (retentionRemoval.counts.observations > 0) {
+        deleteBefore(retentionRemoval.cutoff);
+        for (const [name, count] of Object.entries(retentionRemoval.counts)) removed.counts[name] += count;
+        removed.windows.push(retentionRemoval);
+        action = 'retention_prune';
+      }
+      checkpoint();
+      storage = storageMetrics();
+      if (storage.underStorageReserve) {
+        const sizePruneResult = sizePrune({
+          reclaimFileSpace: false,
+          maxDays: maxSizePruneDays,
+          targetDatabaseBytes,
+        });
+        for (const [name, count] of Object.entries(sizePruneResult.counts)) removed.counts[name] += count;
+        removed.windows.push(...sizePruneResult.removals);
+        pending = sizePruneResult.moreWorkPending === true;
+        if (sizePruneResult.counts.observations > 0) action = 'size_prune';
+        storage = sizePruneResult.storage;
+      }
+      if (storage.underStorageReserve && storage.reusableDatabaseBytes > 0) {
+        const compactedBytes = compactReusablePages();
+        if (compactedBytes > 0) action = 'incremental_vacuum';
+        storage = storageMetrics();
+      }
+    }
+
+    const failure = storage.underStorageReserve && !pending
+      ? 'storage_headroom_unrecoverable'
+      : null;
+    const status = {
+      state: failure ? 'unrecoverable' : storage.underStorageReserve ? 'pressure' : 'healthy',
+      action: failure ? 'unrecoverable' : action,
+      remainingHeadroomBytes: storage.headroomBytes,
+      storageReserveBytes,
+      removed,
+      failure,
+      lastActionAt: isoNow(now),
+    };
+    recordStoragePressure(status);
+    return { ...status, storage, pending };
   }
 
   function queryView(name, options = {}) {
@@ -894,10 +1042,12 @@ function openObservabilityStore(databaseFile, options = {}) {
     ingest,
     ingestBatch,
     pendingOutbox,
+    preserveStorageHeadroom,
     prune,
     queryView,
     requeueExhaustedOutbox,
     storageMetrics,
+    storagePressure,
     transaction,
   };
 }
@@ -906,6 +1056,7 @@ module.exports = {
   DEFAULT_MAX_DATABASE_BYTES,
   DEFAULT_MAX_WAL_BYTES,
   DEFAULT_RETENTION_DAYS,
+  DEFAULT_STORAGE_RESERVE_BYTES,
   buildOtlpPayload,
   openObservabilityStore,
 };
