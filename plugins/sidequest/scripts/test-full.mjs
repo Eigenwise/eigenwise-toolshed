@@ -2,8 +2,12 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
+import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
+
+const require = createRequire(import.meta.url);
+const { DEFAULT_CATEGORIES } = require('../lib/category-defaults.js');
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
@@ -11,6 +15,32 @@ const minimumTestConcurrency = 2;
 const maximumTestConcurrency = 8;
 const baselineTestPhaseTimeoutMilliseconds = 480_000;
 const maximumTestPhaseTimeoutMilliseconds = 1_200_000;
+
+export function fullSuiteGatewayCatalog() {
+  const codexModels = new Set(
+    DEFAULT_CATEGORIES
+      .flatMap((category) => [category.route, category.fallback])
+      .map((route) => route?.model)
+      .filter((model) => typeof model === 'string' && model.startsWith('codex-')),
+  );
+  return {
+    schemaVersion: 4,
+    source: 'sidequest-full-suite',
+    providers: {
+      codex: {
+        ready: true,
+        state: 'ready',
+        message: 'The full-suite fixture provides the Codex dispatch capability.',
+      },
+    },
+    models: Array.from(codexModels).sort().map((slug) => ({
+      slug,
+      id: `claude-${slug}`,
+      label: slug,
+      provider: 'codex',
+    })),
+  };
+}
 
 export function calculateTestConcurrency(availableParallelism) {
   return Math.min(maximumTestConcurrency, Math.max(minimumTestConcurrency, availableParallelism));
@@ -88,9 +118,13 @@ async function main() {
   const suiteHomeDirectory = path.join(suiteTemporaryDirectory, 'home');
   const suiteClaudeDirectory = path.join(suiteHomeDirectory, '.claude');
   const suiteSidequestDirectory = path.join(suiteClaudeDirectory, 'sidequest');
-  const emptyDiscoveryDirectory = path.join(suiteTemporaryDirectory, 'empty-discovery');
+  const suiteGatewayCatalogDirectory = path.join(suiteTemporaryDirectory, 'gateway-catalog');
   await fs.mkdir(suiteSidequestDirectory, { recursive: true });
-  await fs.mkdir(emptyDiscoveryDirectory);
+  await fs.mkdir(path.join(suiteGatewayCatalogDirectory, 'model-gateway'), { recursive: true });
+  await fs.writeFile(
+    path.join(suiteGatewayCatalogDirectory, 'model-gateway', 'catalog.json'),
+    JSON.stringify(fullSuiteGatewayCatalog()),
+  );
   const suiteTestEnvironment = {
     ...suiteEnvironment(),
     HOME: suiteHomeDirectory,
@@ -100,7 +134,7 @@ async function main() {
     TMPDIR: suiteTemporaryDirectory,
     TMP: suiteTemporaryDirectory,
     TEMP: suiteTemporaryDirectory,
-    SIDEQUEST_DISCOVERY_DIRS: emptyDiscoveryDirectory,
+    SIDEQUEST_DISCOVERY_DIRS: suiteGatewayCatalogDirectory,
   };
 
   try {
