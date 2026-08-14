@@ -13,6 +13,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecy
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const agentsync = require('../lib/agentsync.js');
 
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
@@ -52,6 +53,16 @@ function claim(prepared: any, by: any) {
     executor: prepared.ticket.dispatchExecutor,
     source: 'mcp',
   });
+}
+
+function submitSourceRevision(project: string, ticketRef: string, by: string, options: any) {
+  const currentTicket = store.getTicket(project, ticketRef);
+  const admissionFacts = sourceRevisionCapability.sourceRevisionAdapterFacts(
+    project,
+    options.sourceRevision,
+    sourceRevisionCapability.sourceRevisionBaseline(currentTicket),
+  );
+  return store.submitTicket(project, ticketRef, by, { ...options, admissionFacts });
 }
 
 function runCli(args: any) {
@@ -619,7 +630,7 @@ test('a Git project cannot self-declare no-Git source revision delivery', () => 
   const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
   assert.strictEqual(claim(prepared, 'false-capability-worker').ok, true);
 
-  assert.throws(() => store.submitTicket(slug, created.ref, 'false-capability-worker', {
+  assert.throws(() => submitSourceRevision(slug, created.ref, 'false-capability-worker', {
     sourceRevision: { source: 'wiki', value: 'invented-revision', observedAt: '2026-08-14T00:00:00.000Z' },
     changedSurfaces: ['docs/wiki.md'],
     projectCapabilities: { git: false, process: false, worktree: false, review: true },
@@ -631,9 +642,11 @@ test('a Git project cannot self-declare no-Git source revision delivery', () => 
   assert.strictEqual(refused.claim.by, 'false-capability-worker');
 });
 
-test('a rejected no-Git source revision reopens without Git quarantine', () => {
+test('a rejected no-Git source revision reopens without Git quarantine', (context: any) => {
   const noGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-document-rework-project-'));
   const noGitBoard = store.ensureProject(noGitProject).slug;
+  const unregister = store.registerSourceRevisionCapability(noGitBoard, () => ({ candidateExists: true, containsCandidate: true }));
+  context.after(unregister);
   const created = store.createTicket(noGitBoard, {
     title: 'revise rejected wiki revision',
     category: 'repository-write',
@@ -642,11 +655,12 @@ test('a rejected no-Git source revision reopens without Git quarantine', () => {
     executorAttestationArtifact: 'wiki-revision-42',
     source: 'mcp',
   });
+  const prepared = store.prepareDispatch(noGitBoard, created.ref, { sharedTree: true });
   assert.strictEqual(store.claimTicket(noGitBoard, created.ref, 'wiki-worker', {
-    direct: true,
-    reason: 'The immutable wiki revision fixture requires an exact local claim.',
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
-  assert.strictEqual(store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+  assert.strictEqual(submitSourceRevision(noGitBoard, created.ref, 'wiki-worker', {
     sourceRevision: { source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z' },
     changedSurfaces: ['docs/wiki.md'],
     projectCapabilities: { review: true, process: false, worktree: false },
@@ -671,11 +685,12 @@ test('a rejected no-Git source revision reopens without Git quarantine', () => {
   assert.strictEqual(Object.hasOwn(reopened.rejectedSubmissions[0], 'quarantineRef'), false);
   assert.strictEqual(store.pendingSubmission(reopened), false);
 
+  const repairDispatch = store.prepareDispatch(noGitBoard, created.ref, { sharedTree: true });
   assert.strictEqual(store.claimTicket(noGitBoard, created.ref, 'wiki-worker', {
-    direct: true,
-    reason: 'The immutable wiki revision fixture requires an exact local reclaim.',
+    token: repairDispatch.token,
+    executor: repairDispatch.ticket.dispatchExecutor,
   }).ok, true);
-  const reused = store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+  const reused = submitSourceRevision(noGitBoard, created.ref, 'wiki-worker', {
     sourceRevision: { source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z' },
     changedSurfaces: ['docs/wiki.md'],
     projectCapabilities: { review: true, process: false, worktree: false },
@@ -686,7 +701,7 @@ test('a rejected no-Git source revision reopens without Git quarantine', () => {
   assert.strictEqual(reused.reason, 'rejected_submission_reused');
   assert.strictEqual(store.getTicket(noGitBoard, created.ref).claim.by, 'wiki-worker');
 
-  const replacement = store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+  const replacement = submitSourceRevision(noGitBoard, created.ref, 'wiki-worker', {
     sourceRevision: { source: 'wiki', value: 'wiki-revision-43', observedAt: '2026-08-13T21:00:00.000Z' },
     changedSurfaces: ['docs/wiki.md'],
     projectCapabilities: { review: true, process: false, worktree: false },
@@ -700,9 +715,11 @@ test('a rejected no-Git source revision reopens without Git quarantine', () => {
   );
 });
 
-test('a no-Git document submission uses source revision through submit and integration closure', () => {
+test('a no-Git document submission uses source revision through submit and integration closure', (context: any) => {
   const noGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-document-lifecycle-project-'));
   const noGitBoard = store.ensureProject(noGitProject).slug;
+  const unregister = store.registerSourceRevisionCapability(noGitBoard, () => ({ candidateExists: true, containsCandidate: true }));
+  context.after(unregister);
   const created = store.createTicket(noGitBoard, {
     title: 'publish reviewed wiki revision',
     description: 'Publish the reviewed documentation revision.',
@@ -720,7 +737,7 @@ test('a no-Git document submission uses source revision through submit and integ
   });
   assert.strictEqual(claimed.ok, true);
 
-  const submitted = store.submitTicket(noGitBoard, created.ref, 'wiki-worker', {
+  const submitted = submitSourceRevision(noGitBoard, created.ref, 'wiki-worker', {
     sourceRevision: { source: 'wiki', value: 'wiki-revision-42', observedAt: '2026-08-13T20:00:00.000Z' },
     changedSurfaces: ['docs/wiki.md'],
     projectCapabilities: { review: true, process: false, worktree: false },

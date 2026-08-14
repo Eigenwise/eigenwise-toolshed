@@ -60,7 +60,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
-const { validateSubmissionAdmission } = require("./kernel/submission");
+const { sourceRevisionAdapterFacts, sourceRevisionBaseline } = require("./source-revision-capability");
 function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -153,81 +153,58 @@ function submissionRoot(meta, worktree, commit, gitRef) {
     return repository;
   }
 }
-function validateSubmissionCandidate(options) {
-  const { slug, ticket, by, root, commit, gitRef, verify, base, force = false, source = "mcp" } = options;
-  const attestation = ticket.executorVerifyKind === "attestation";
-  const admission = validateSubmissionAdmission({
-    ownershipFailure: (candidate, owner, allowSubmittedOwner) => store.submissionOwnershipFailure(candidate, owner, { allowSubmittedOwner }),
-    completionCheck: (project, candidate, explicitNoOp) => store.completionTreeCheck(project, candidate, { explicitNoOp }),
-    verifyErrors: (candidate, submittedVerify) => attestation ? store.attestationErrors(submittedVerify, candidate.executorAttestationArtifact) : store.verifyCommandErrors(submittedVerify),
-    declaredVerify: (candidate) => attestation ? "" : String(candidate.executorVerify || "").trim()
-  }, { slug, ticket, by, verify, base, commit, force });
-  if (!Array.isArray(admission)) return admission;
-  const independentFailures = [...admission];
+function collectGitSubmissionFacts(options) {
+  const { slug, ticket, root, commit, gitRef, base } = options;
   const dispatchTarget = ticket.dispatch && ticket.dispatch.integrationTarget;
-  let target;
+  let target = null;
+  let targetFailure = null;
   try {
     target = store.integrationTarget(slug, dispatchTarget || void 0);
   } catch (error) {
-    const reason = "integration_target_unavailable";
-    const message = error && error.message || String(error);
     const targetName = dispatchTarget && typeof dispatchTarget === "object" ? String(dispatchTarget.upstream || dispatchTarget.branch || "the recorded integration target") : String(dispatchTarget || "the configured integration target");
-    const remedy = `Fetch or recreate ${targetName}, rebase ${gitRef} onto that target, and resubmit. Or the orchestrator can cherry-pick a recorded rejection quarantine ref and record the range override.`;
-    if (independentFailures.length) return combinedRefusal(ticket, [...independentFailures, { reason, message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(message)}. Remedy: ${remedy}` }]);
-    if (!verify) return { ok: false, ticket, reason, message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(message)}. Remedy: ${remedy}` };
-    return preserveRejectedSubmission({ slug, ticket, by, root, commit, gitRef, verify, reason, message, remedy, source });
+    targetFailure = { code: "integration_target_unavailable", message: `submit: refused ${ticket.ref}; ${boundedSubmissionText(error && error.message || String(error))}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true };
   }
   const dispatchBase = String(ticket.dispatch?.baseCommit || "").trim() || null;
   const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
   if (dispatchBase) allowedBases.push(dispatchBase);
-  const rangeOptions = {
-    commit,
-    gitRef,
-    upstream: target.upstream,
-    integrationBranch: target.branch,
-    base,
-    dispatchBase,
-    allowedBases,
-    baseCandidates: base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true })
-  };
-  const range = commitScope.submissionRange(root, rangeOptions);
-  const submissionFailures = [];
-  if (!range.ok) submissionFailures.push({ reason: range.reason, message: submissionRangeFailureMessage(ticket, range, gitRef) });
+  const range = target ? commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream, integrationBranch: target.branch, base, dispatchBase, allowedBases, baseCandidates: base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true }) }) : null;
   const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
-  if (range.ok) {
+  const requirements = targetFailure ? [targetFailure] : [];
+  const surfaces = { declared: scope, admitted: scope, changed: range?.ok ? range.changedPaths : [], pending: [] };
+  if (!range?.ok) {
+    surfaces.diagnostic = { code: range?.reason || "integration_target_unavailable", message: range ? submissionRangeFailureMessage(ticket, range, gitRef) : targetFailure.message, retryable: true };
+  } else {
     const pending = commitScope.scopedWorkPending(root, scope, { base: range.base });
     if (!pending.ok) {
-      submissionFailures.push({ reason: pending.reason, message: `submit: could not inspect the declared scope in ${root}: ${pending.message || pending.reason}` });
-    } else if (pending.working.length) {
-      submissionFailures.push({ reason: "dirty_scope", message: uncommittedScopeFailureMessage(ticket, pending.working) });
+      requirements.push({ code: pending.reason, message: `submit: could not inspect the declared scope in ${root}: ${pending.message || pending.reason}`, retryable: true });
+    } else {
+      surfaces.pending = pending.working;
     }
-    const duplicate = store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).find((entry) => {
-      const commits = Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit];
-      return commits.some((entryCommit) => range.commits.includes(entryCommit));
-    });
-    if (duplicate) {
-      submissionFailures.push({ reason: "duplicate_submission", message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.` });
-    }
-  }
-  const rangeForChecks = range.ok ? range : null;
-  if (rangeForChecks) {
-    const scopedRange = commitScope.validateCommitRangeScope(root, rangeForChecks.commits, scope);
+    const scopedRange = commitScope.validateCommitRangeScope(root, range.commits, scope);
     if (!scopedRange.ok) {
-      const validationMessage = scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration. An executor cannot declare its own scope: release with kind "handback", naming the paths this range changes, so the orchestrator can declare them and redispatch.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.` : `submit: could not inspect ${commit} from ${root}: ${scopedRange.message || scopedRange.reason}. If the commit is pinned on ${gitRef} it survives this tree; release with kind "handback" naming this failure so the orchestrator can deliver it from the repository.`;
-      submissionFailures.push({ reason: scopedRange.reason, message: validationMessage });
+      surfaces.diagnostic = {
+        code: scopedRange.reason,
+        message: scopedRange.reason === "missing_scope" ? `submit: ${ticket.ref} has no declared file scope, so its range cannot be admitted for integration.` : scopedRange.reason === "outside_scope" ? `submit: refused ${ticket.ref}; submitted range changes paths outside its declared scope: ${scopedRange.outside.join(", ")}. Request scope only for work this ticket owns with: ${store.scopeExpansionCommand(ticket, scopedRange.outside)}. Commit only approved scope; never stash, revert, or include foreign paths.` : `submit: could not inspect ${commit} from ${root}: ${scopedRange.message || scopedRange.reason}.`,
+        retryable: true
+      };
     }
-    const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || rangeForChecks.changedPaths);
-    if (missingFragment) {
-      submissionFailures.push({ reason: "missing_release_fragment", message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins) });
+    const missingFragment = missingReleaseFragment(root, ticket.ref, scopedRange.paths || range.changedPaths);
+    if (missingFragment) requirements.push({ code: "missing_release_fragment", message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
+  }
+  const duplicate = range?.ok ? store.submissionsPayload(slug).tickets.filter((entry) => entry.ref !== ticket.ref).find((entry) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit) => range.commits.includes(entryCommit))) : null;
+  return {
+    target,
+    range,
+    scope,
+    admissionFacts: {
+      admittedScope: store.executionScope(slug, ticket),
+      scope,
+      baseline: range?.ok ? { candidateExists: true, containsCandidate: true } : { candidateExists: false, containsCandidate: false, diagnostic: surfaces.diagnostic },
+      surfaces,
+      duplicate: duplicate ? { identity: duplicate.ref, diagnostic: { code: "duplicate_submission", message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`, retryable: false } } : { identity: null },
+      requirements
     }
-  }
-  const failures = [...submissionFailures, ...independentFailures];
-  if (!range.ok && failures.length === 1 && verify) {
-    const remedy = submissionRangeRemedy(ticket, range, gitRef);
-    return preserveRejectedSubmission({ slug, ticket, by, root, commit, gitRef, verify, reason: range.reason, message: range.message || "", remedy, source, force });
-  }
-  if (failures.length) return combinedRefusal(ticket, failures);
-  return { ok: true, ticket, target, range, scope };
+  };
 }
 const tools = [
   {
@@ -386,8 +363,7 @@ const tools = [
         reason: { type: "string" },
         integration: { type: "boolean" },
         deliveryCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "Commit already on the integration branch." },
-        recoveryEvidence: { type: "string", description: "Observed terminal-agent evidence for an unclaimed dispatch." },
-        overrideLegacyScope: { type: "boolean", description: "Permit only a legacy submission without an admitted scope snapshot; the required reason is recorded on the ticket." }
+        recoveryEvidence: { type: "string", description: "Observed terminal-agent evidence for an unclaimed dispatch." }
       },
       required: ["ref", "by", "reason"]
     },
@@ -406,8 +382,7 @@ const tools = [
         by,
         reason,
         purpose,
-        deliveryCommit: args.deliveryCommit,
-        overrideLegacyScope: args.overrideLegacyScope === true
+        deliveryCommit: args.deliveryCommit
       });
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
@@ -638,7 +613,7 @@ const tools = [
   },
   {
     name: "submit",
-    description: "Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and non-Git adapter capabilities instead of commit, base, gitRef, or worktree. body carries the final report. For a review rejection, use rework to retain the candidate and review evidence.",
+    description: "Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. The server invokes the project source-revision capability with the candidate and dispatch-pinned baseline; callers cannot supply existence or membership facts. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. For a review rejection, use rework to retain the candidate and review evidence.",
     inputSchema: {
       type: "object",
       properties: {
@@ -659,7 +634,7 @@ const tools = [
         changedSurfaces: { type: "array", items: { type: "string" }, description: "Declared project surfaces changed by a source revision." },
         projectCapabilities: {
           type: "object",
-          description: "Available non-Git project adapters. Git capability is observed from the registered project path and cannot be disabled by the caller.",
+          description: "Available non-Git execution adapters. Git capability and source-revision facts are resolved by the server and cannot be supplied by the caller.",
           properties: {
             process: { type: "boolean" },
             worktree: { type: "boolean" },
@@ -695,10 +670,26 @@ const tools = [
       if (args.sourceRevision && args.commit) {
         throw new Error("submit: pass exactly one of commit or sourceRevision.");
       }
-      if (args.sourceRevision) {
+      const retryCandidate = ticket.submissionRetry?.candidate;
+      const hydratedSourceRevision = retryCandidate ? retryCandidate.source === "git" ? null : retryCandidate : args.sourceRevision;
+      if (hydratedSourceRevision) {
+        const adapterFacts = sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket));
         const res2 = store.submitTicket(slug, args.ref, by, {
-          sourceRevision: args.sourceRevision,
-          changedSurfaces: args.changedSurfaces,
+          sourceRevision: hydratedSourceRevision,
+          changedSurfaces: retryCandidate ? ticket.submissionRetry?.changedSurfaces : args.changedSurfaces,
+          projectCapabilities: args.projectCapabilities,
+          ...adapterFacts ? { admissionFacts: adapterFacts } : {},
+          verify: args.verify,
+          force: args.force === true,
+          submissionComment: { body, by, kind: "comment", source: "mcp" },
+          source: "mcp",
+          sessionId: sessionOf(args)
+        });
+        if (res2.ok) closeDispatchExecutor(ticket);
+        return mutationAck(slug, res2);
+      }
+      if (retryCandidate && !args.sourceRevision && !args.commit) {
+        const res2 = store.submitTicket(slug, args.ref, by, {
           projectCapabilities: args.projectCapabilities,
           verify: args.verify,
           force: args.force === true,
@@ -719,28 +710,17 @@ const tools = [
         throw new Error(`submit: refused ${ticket.ref}; verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
       }
       const verify = String(args.verify || "").trim();
-      const validation = validateSubmissionCandidate({
-        slug,
-        ticket,
-        by,
-        root,
-        commit,
-        gitRef,
-        verify,
-        base: args.base,
-        force: args.force === true,
-        source: "mcp"
-      });
-      if (!validation.ok) return mutationAck(slug, validation);
-      const { target, range, scope } = validation;
+      const collected = collectGitSubmissionFacts({ slug, ticket, root, commit, gitRef, base: args.base });
+      const { target, range, scope } = collected;
       const unscopedPaths = ticket.dispatch?.sharedTree === true ? commitScope.unscopedWorkingPaths(root, scope) : [];
       const res = store.submitTicket(slug, args.ref, by, {
-        commit: range.commit,
+        commit,
         gitRef,
-        range: Object.assign({}, range, { integrationMode: target.mode, integrationBranch: target.branch }),
+        range: range?.ok ? Object.assign({}, range, { integrationMode: target?.mode, integrationBranch: target?.branch }) : void 0,
         verify: args.verify,
         worktree: args.worktree,
         unscopedPaths,
+        admissionFacts: collected.admissionFacts,
         force: args.force === true,
         submissionComment: { body, by, kind: "comment", source: "mcp" },
         source: "mcp",
@@ -761,7 +741,6 @@ const tools = [
         by: { type: "string" },
         mode: { type: "string", enum: ["merge", "replay", "apply"], description: "Defaults to the board delivery setting." },
         skipVerify: { type: "boolean" },
-        overrideLegacyScope: { type: "boolean", description: "Permit only a legacy submission without an admitted scope snapshot." },
         session: { type: "string" }
       },
       required: ["ref", "by"]
@@ -774,7 +753,6 @@ const tools = [
       if (!ticket) {
         const delivery2 = store.integrateSubmission(slug, args.ref, {
           mode: args.mode == null ? store.boardConfig(slug).delivery : args.mode,
-          overrideLegacyScope: args.overrideLegacyScope === true,
           skipVerify: args.skipVerify === true
         });
         const failure = delivery2.outside?.length ? { strayPaths: delivery2.outside } : {};
@@ -802,7 +780,7 @@ const tools = [
           });
         }
       }
-      const admitted = store.validateIntegrationSubmission(slug, args.ref, { overrideLegacyScope: args.overrideLegacyScope === true });
+      const admitted = store.validateIntegrationSubmission(slug, args.ref);
       if (!admitted.ok) failures.push({
         reason: admitted.reason,
         message: admitted.message || `integrate: refused ${args.ref}; ${admitted.reason}.`
@@ -812,7 +790,6 @@ const tools = [
       const delivery = store.integrateSubmission(slug, args.ref, {
         mode,
         target,
-        overrideLegacyScope: args.overrideLegacyScope === true,
         skipVerify: args.skipVerify === true
       });
       if (!delivery.ok) {
@@ -830,8 +807,7 @@ const tools = [
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
-        purpose: "integration",
-        overrideLegacyScope: args.overrideLegacyScope === true
+        purpose: "integration"
       });
       if (closed.ok) closeDispatchExecutor(delivery.ticket);
       return mutationAck(slug, closed, {
@@ -842,4 +818,4 @@ const tools = [
     }
   }
 ];
-module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, validateSubmissionCandidate };
+module.exports = { tools, missingReleaseFragment, missingReleaseFragmentMessage, submissionRangeFailureMessage, collectGitSubmissionFacts };

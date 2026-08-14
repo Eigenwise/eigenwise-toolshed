@@ -11,7 +11,8 @@ const worktrees = require('../lib/worktrees');
 const tempCleanup = require('../lib/temp-cleanup');
 const execNames = require('../lib/exec-names');
 const { claimRefusalMessage } = require('../lib/refusal-guidance');
-const { validateSubmissionCandidate } = require('../lib/mcp-lifecycle');
+const { collectGitSubmissionFacts } = require('../lib/mcp-lifecycle');
+const { sourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../lib/source-revision-capability');
 const { assertSidequestInstall, assertDispatchTransport } = require('../lib/dispatch-preflight');
 
 const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment } = require('./sidequest-cmd-shared');
@@ -346,7 +347,6 @@ async function cmdGroomClose(opts: any, positional: any) {
     reason,
     purpose,
     deliveryCommit: opts['delivery-commit'],
-    overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
   if (res.ok && opts.integration) {
@@ -532,6 +532,15 @@ async function cmdRework(opts: any, positional: any) {
   else reportClaimFailure('rework submission', idOrRef, res, meta);
 }
 
+function sourceRevisionProjectCapabilities(opts: any, includeExecutionCapabilities: boolean) {
+  if (!includeExecutionCapabilities) return undefined;
+  return {
+    process: !opts['no-process'],
+    worktree: !opts['no-worktree'],
+    review: !!opts.review,
+  };
+}
+
 async function cmdSubmit(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('submit: pass a ticket id or ref, e.g. sidequest submit SQ-3 --by me --commit <hash>');
@@ -559,21 +568,34 @@ async function cmdSubmit(opts: any, positional: any) {
   if (sourceRevisionValue && opts.commit) {
     fail('submit: pass exactly one of --commit or --source-revision-value.');
   }
-  if (sourceRevisionValue) {
+  const retryCandidate = ticket.submissionRetry?.candidate;
+  const retryWithoutIdentity = retryCandidate && !sourceRevisionValue && !opts.commit;
+  const requestedSourceRevision = sourceRevisionValue
+    ? {
+      source: String(opts['source-revision-source'] || '').trim(),
+      value: sourceRevisionValue,
+      observedAt: String(opts['source-revision-observed-at'] || '').trim(),
+    }
+    : null;
+  const hydratedSourceRevision = retryCandidate
+    ? (retryCandidate.source === 'git' ? null : retryCandidate)
+    : requestedSourceRevision;
+  if (hydratedSourceRevision || retryWithoutIdentity) {
+    const projectCapabilities = hydratedSourceRevision
+      ? sourceRevisionProjectCapabilities(opts, Boolean(sourceRevisionValue && !retryCandidate))
+      : undefined;
+    const adapterFacts = hydratedSourceRevision
+      ? sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket))
+      : null;
     let res;
     try {
       res = store.submitTicket(slug, idOrRef, by, {
-        sourceRevision: {
-          source: String(opts['source-revision-source'] || '').trim(),
-          value: sourceRevisionValue,
-          observedAt: String(opts['source-revision-observed-at'] || '').trim(),
-        },
-        changedSurfaces: opts['changed-surface'],
-        projectCapabilities: {
-          process: !opts['no-process'],
-          worktree: !opts['no-worktree'],
-          review: !!opts.review,
-        },
+        ...(hydratedSourceRevision ? {
+          sourceRevision: hydratedSourceRevision,
+          changedSurfaces: retryCandidate ? ticket.submissionRetry?.changedSurfaces : opts['changed-surface'],
+        } : {}),
+        ...(projectCapabilities ? { projectCapabilities } : {}),
+        ...(adapterFacts ? { admissionFacts: adapterFacts } : {}),
         verify: opts.verify,
         force: !!opts.force,
         source: opts.source || 'cli',
@@ -595,44 +617,36 @@ async function cmdSubmit(opts: any, positional: any) {
       reportClaimFailure('submit', idOrRef, res, meta);
       return;
     }
-    console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${res.ticket.submission.sourceRevision.source}:${res.ticket.submission.sourceRevision.value})  — ${meta.name}`);
+    const submissionIdentity = res.ticket.submission.sourceRevision
+      ? `${res.ticket.submission.sourceRevision.source}:${res.ticket.submission.sourceRevision.value}`
+      : res.ticket.submission.commit;
+    console.log(`✓ ${res.ticket.ref} READY_FOR_INTEGRATION (${submissionIdentity})  — ${meta.name}`);
     return;
   }
   if (verifyEmbedsWorktreeRoot(opts.verify, store.nearestRepoRoot(process.cwd()))) {
     fail(`submit: refused ${ticket.ref}; --verify embeds this worktree path. Run verification from the repo root and use repo-relative paths.`);
   }
   const gitRef = opts.gitref || opts['git-ref'] || `refs/sidequest/${ticket.ref}`;
-  const validation = validateSubmissionCandidate({
+  const collected = collectGitSubmissionFacts({
     slug,
     ticket,
-    by,
     root: process.cwd(),
     commit: opts.commit,
     gitRef,
-    verify: String(opts.verify || '').trim(),
     base: opts.base,
-    force: !!opts.force,
-    source: opts.source || 'cli',
   });
-  if (!validation.ok) {
-    if (opts.json) {
-      process.stdout.write(JSON.stringify(Object.assign({ project: slug }, validation), null, 2) + '\n');
-      process.exitCode = 1;
-      return;
-    }
-    fail(validation.message || claimRefusalMessage(validation.reason, idOrRef, validation.ticket || validation.claim, meta.path));
-  }
-  const { target, range, scope } = validation;
+  const { target, range, scope } = collected;
   const unscopedPaths = commitScope.unscopedWorkingPaths(process.cwd(), scope);
   let res;
   try {
     res = store.submitTicket(slug, idOrRef, by, {
-      commit: range.commit,
+      commit: opts.commit,
       gitRef,
-      range: Object.assign({}, range, { integrationMode: target.mode, integrationBranch: target.branch }),
+      range: range?.ok ? Object.assign({}, range, { integrationMode: target?.mode, integrationBranch: target?.branch }) : undefined,
       verify: opts.verify,
       worktree: opts.worktree,
       unscopedPaths,
+      admissionFacts: collected.admissionFacts,
       force: !!opts.force,
       source: opts.source || 'cli',
       sessionId: sessionId(opts),
@@ -704,7 +718,6 @@ async function cmdIntegrate(opts: any, positional: any) {
   const delivery = store.integrateSubmission(slug, idOrRef, {
     mode,
     target,
-    overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
     skipVerify: !!opts['skip-verify'],
   });
   if (!delivery.ok) {
@@ -747,7 +760,6 @@ async function cmdIntegrate(opts: any, positional: any) {
     by,
     reason,
     purpose: 'integration',
-    overrideLegacyScope: !!(opts['override-legacy-scope'] || opts.overrideLegacyScope),
   });
   if (opts.json) {
     process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closed), null, 2) + '\n');

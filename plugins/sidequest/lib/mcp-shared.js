@@ -301,7 +301,7 @@ function mutationAck(project, result, changed) {
   const out = { ok: !!result.ok, project };
   if (ticket) Object.assign(out, { ref: ticket.ref, status: ticket.status });
   if (!result.ok) {
-    for (const key of ["reason", "claim", "expectedExecutor", "derivedEffort", "claimedEffort", "max", "length", "message", "failures", "preserved"]) {
+    for (const key of ["reason", "claim", "expectedExecutor", "derivedEffort", "claimedEffort", "max", "length", "message", "failures", "retryable", "retry", "foreignWorkingPaths", "preserved"]) {
       if (result[key] !== void 0) out[key] = result[key];
     }
     return out;
