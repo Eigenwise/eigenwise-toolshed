@@ -52,6 +52,30 @@ test('kernel admits Git, wiki, vault, and research revisions through one decisio
   }
 });
 
+test('kernel preserves auto-release recovery without changing unclaimed guidance', () => {
+  const unclaimed = submission.decideSubmissionAdmission({
+    ...admissionFacts('git', 'a'.repeat(40)),
+    authority: { authority: { actor: 'executor', operation: 'submit' }, claimOwner: null, submittedOwner: null, terminal: false, allowSubmittedOwner: false },
+  });
+  const released = submission.decideSubmissionAdmission({
+    ...admissionFacts('git', 'a'.repeat(40)),
+    authority: {
+      authority: { actor: 'executor', operation: 'submit' },
+      claimOwner: null,
+      submittedOwner: null,
+      claimReleaseDiagnostic: { code: 'not_claimed', message: 'SQ-1916 was auto-released. Recovery: dispatch again.', retryable: true },
+      terminal: false,
+      allowSubmittedOwner: false,
+    },
+  });
+
+  assert.equal(unclaimed.ok, false);
+  assert.equal(released.ok, false);
+  assert.equal(unclaimed.diagnostics[0].message, 'submit: refused SQ-1916; a held claim is required.');
+  assert.equal(released.diagnostics[0].message, 'SQ-1916 was auto-released. Recovery: dispatch again.');
+});
+
+
 test('kernel returns every retryable submission diagnostic without mutating facts', () => {
   const originalFacts = admissionFacts('wiki', 'wiki-42');
   const facts: SubmissionAdmissionFacts = {

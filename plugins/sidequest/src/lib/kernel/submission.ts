@@ -8,6 +8,7 @@ export type SubmissionAuthority = Readonly<{
   authority: Authority;
   claimOwner: string | null;
   submittedOwner: string | null;
+  claimReleaseDiagnostic?: SubmissionFailure;
   terminal: boolean;
   allowSubmittedOwner: boolean;
 }>;
@@ -93,7 +94,7 @@ export function decideSubmissionAdmission(facts: SubmissionAdmissionFacts): Subm
   if (authority.terminal) {
     failures.push({ code: 'done', message: `submit: refused ${ticket.ref}; the ticket is already done.`, actionable: false, retryable: false });
   } else if (!owner || (!authority.claimOwner && !authority.allowSubmittedOwner)) {
-    failures.push({ code: 'not_claimed', message: `submit: refused ${ticket.ref}; a held claim is required.`, retryable: true });
+    failures.push(supplied(authority.claimReleaseDiagnostic, { code: 'not_claimed', message: `submit: refused ${ticket.ref}; a held claim is required.`, retryable: true }));
   } else if (owner !== authority.authority.actor) {
     failures.push({ code: 'not_owner', message: `submit: refused ${ticket.ref}; not_owner: ${authority.authority.actor} does not own the candidate.`, retryable: false });
   }

@@ -942,7 +942,20 @@ function submissionAdmissionDecision(slug: any, ticket: any, by: string, opts: a
       : { identity: null });
   const decision = decideSubmissionAdmission({
     ticket,
-    authority: { authority: { actor: by, operation: 'submit' }, claimOwner: String(ticket.claim?.by || '').trim() || null, submittedOwner: String(ticket.submission?.by || '').trim() || null, terminal: ticket.status === 'done', allowSubmittedOwner: opts.force === true },
+    authority: {
+      authority: { actor: by, operation: 'submit' },
+      claimOwner: String(ticket.claim?.by || '').trim() || null,
+      submittedOwner: String(ticket.submission?.by || '').trim() || null,
+      ...(ticket.claim || !ticket.claimRelease ? {} : {
+        claimReleaseDiagnostic: {
+          code: 'not_claimed',
+          message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease),
+          retryable: true,
+        },
+      }),
+      terminal: ticket.status === 'done',
+      allowSubmittedOwner: opts.force === true,
+    },
     completion: { complete: completion.ok, ...(completion.ok ? {} : { diagnostic: { code: completion.reason, message: completion.message, retryable: true } }) },
     verification: { result: { kind: attestation ? 'attestation' : 'suite', status: verificationError ? 'unavailable' : 'passed', evidence: String(verify || '') }, expectedEvidence: attestation ? null : String(ticket.executorVerify || '').trim() || null, ...(verificationError ? { diagnostic: { code: 'invalid_verify', message: verificationError, retryable: true } } : {}) },
     candidate: sourceRevision || { source: 'git', value: String(opts.commit || '').trim().toLowerCase(), observedAt: new Date().toISOString() },
