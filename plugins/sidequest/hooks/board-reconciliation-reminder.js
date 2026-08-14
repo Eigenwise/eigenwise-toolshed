@@ -133,15 +133,14 @@ function nudgeOff() {
 function pendingSubmission(ticket) {
   return Boolean(ticket.submission?.commit && !ticket.submission.integratedAt);
 }
-function liveDispatch(ticket, sessionId, store) {
-  return ticket.dispatch?.sessionId === sessionId && !ticket.dispatch.terminalAt && !store.claimPulse(ticket)?.reclaimable;
+function liveDispatch(ticket, sessionId) {
+  return ticket.dispatch?.sessionId === sessionId && !ticket.dispatch.terminalAt && (!ticket.claim?.by || Boolean(ticket.claimLive));
 }
 function dispatchedBySession(ticket, sessionId) {
   return ticket.dispatch?.sessionId === sessionId;
 }
-function heldByLiveExecutor(ticket, store) {
-  if (!ticket.claim?.by || !ticket.dispatch || ticket.dispatch.terminalAt) return false;
-  return !store.claimPulse(ticket)?.reclaimable;
+function heldByLiveExecutor(ticket) {
+  return Boolean(ticket.claimLive && ticket.dispatch && !ticket.dispatch.terminalAt);
 }
 function byteCapped(message) {
   return Buffer.byteLength(message) <= MAX_MESSAGE_BYTES ? message : message.slice(0, MAX_MESSAGE_BYTES - 1).trimEnd() + "…";
@@ -292,10 +291,13 @@ function reconciliationMessage(data) {
     if (!project.ok || !project.slug) return null;
     const claimedRefs = new Set(store.sessionClaims(sessionId).filter((claim) => claim.held).map((claim) => String(claim.ref || "")).filter(Boolean));
     const claimedByThisSession = (ticket) => claimedRefs.has(String(ticket.ref || "")) || Boolean(ticket.claim?.by && dispatchedBySession(ticket, sessionId));
-    const touched = (ticket) => claimedByThisSession(ticket) || pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId) || dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId, store);
-    const open = store.listTickets(project.slug).filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId, store) && !heldByLiveExecutor(ticket, store) || pendingSubmission(ticket)));
+    const touched = (ticket) => claimedByThisSession(ticket) || pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId) || dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId);
+    const projectTickets = store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug);
+    const open = projectTickets.filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
+    const submissionStoryIds = new Set(submissions.map((ticket) => ticket.storyId).filter(Boolean));
+    const liveClaimCount = projectTickets.filter((ticket) => ticket.claimLive && (submissionStoryIds.size ? submissionStoryIds.has(ticket.storyId) : dispatchedBySession(ticket, sessionId))).length;
     const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
     const actionable = [
@@ -303,23 +305,27 @@ function reconciliationMessage(data) {
       otherOpen ? `${countLabel(otherOpen, "ticket")} still open` : ""
     ].filter(Boolean);
     const waits = [
-      submissions.length ? `${countLabel(submissions.length, "submission")} pending integration` : ""
+      submissions.length ? `${countLabel(submissions.length, "submission")} pending integration` : "",
+      submissions.length && liveClaimCount ? `${countLabel(liveClaimCount, "live claim")} in progress` : ""
     ].filter(Boolean);
     const state = [...actionable, ...waits].join(" / ");
     const closeActionable = actionable.length ? `Update or close ${actionable.length === 1 && doing.length === 1 ? "it" : "them"} before finishing.` : "Continue working on the board.";
-    const action = submissions.length ? "Integrate pending submissions now." : closeActionable;
-    const holdWaits = waits.length ? " If integration cannot proceed, record why as a ticket comment and hold the submission; never release it as complete." : "";
-    const signature = JSON.stringify(open.map((ticket) => ({
-      ref: ticket.ref || "",
-      status: ticket.status || "",
-      claimBy: ticket.claim?.by || "",
-      claimAt: ticket.claim?.at || "",
-      claimGeneration: ticket.claim?.generation || "",
-      dispatchSessionId: ticket.dispatch?.sessionId || "",
-      dispatchClaimedAt: ticket.dispatch?.claimedAt || "",
-      submissionCommit: ticket.submission?.commit || "",
-      integratedAt: ticket.submission?.integratedAt || ""
-    })).sort((left, right) => left.ref.localeCompare(right.ref)));
+    const action = submissions.length ? liveClaimCount ? `Hold integration until ${countLabel(liveClaimCount, "live claim")} ${liveClaimCount === 1 ? "becomes" : "become"} terminal.` : "Integrate pending submissions now." : closeActionable;
+    const holdWaits = submissions.length && !liveClaimCount ? " If integration cannot proceed, record why as a ticket comment and hold the submission; never release it as complete." : "";
+    const signature = JSON.stringify({
+      liveClaimCount,
+      tickets: open.map((ticket) => ({
+        ref: ticket.ref || "",
+        status: ticket.status || "",
+        claimBy: ticket.claim?.by || "",
+        claimAt: ticket.claim?.at || "",
+        claimGeneration: ticket.claim?.generation || "",
+        dispatchSessionId: ticket.dispatch?.sessionId || "",
+        dispatchClaimedAt: ticket.dispatch?.claimedAt || "",
+        submissionCommit: ticket.submission?.commit || "",
+        integratedAt: ticket.submission?.integratedAt || ""
+      })).sort((left, right) => left.ref.localeCompare(right.ref))
+    });
     return {
       sessionId,
       message: byteCapped(`Sidequest: ${acknowledgementFreeContinuation(action)} ${state}.${holdWaits}`),
