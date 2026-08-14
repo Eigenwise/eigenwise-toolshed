@@ -4,7 +4,7 @@ const os = require("node:os");
 const crypto = require("node:crypto");
 const fs = require("node:fs/promises");
 const nativeFs = require("node:fs");
-const { execFileSync, spawn } = require("node:child_process");
+const { execFileSync, spawn, spawnSync } = require("node:child_process");
 const commitScope = require("./commit-scope.js");
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -833,7 +833,7 @@ async function removeCandidate(repo, entry) {
   const extended = await remove(extendedWindowsPath(entry.path));
   return extended.ok ? extended : { ok: false, stderr: `${first.stderr}; extended-path retry: ${extended.stderr}` };
 }
-function reclaimUnclaimedDispatchWorktree(repository, dispatch) {
+function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
   const worktree = String(dispatch?.worktree || "").trim();
   if (dispatch?.sharedTree !== false || dispatch?.claimedAt || !worktree) return null;
   const expected = canonicalPath(worktree);
@@ -843,21 +843,60 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch) {
     windowsHide: true
   }));
   const entry = entries.find((candidate) => canonicalPath(candidate.worktree) === expected);
-  if (!entry) return { worktree, reclaimed: false, reason: "not_registered" };
+  if (!entry) return { worktree, reclaimed: false, discardable: true, reason: "not_registered" };
   const dirty = execFileSync("git", ["status", "--porcelain"], {
     cwd: entry.worktree,
     encoding: "utf8",
     windowsHide: true
   }).trim();
-  if (dirty) throw new Error(`never-claimed dispatch worktree ${entry.worktree} has uncommitted changes and cannot be reclaimed.`);
+  if (dirty) {
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: "dirty_worktree",
+      message: `immutable recovery fact: ${entry.worktree} has uncommitted changes.`
+    };
+  }
+  const checkpointCommit = String(facts.checkpointCommit || "").trim();
+  if (checkpointCommit) {
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: "checkpointed_worktree",
+      message: `immutable recovery fact: ${entry.worktree} has checkpoint ${checkpointCommit}.`
+    };
+  }
   const baseCommit = String(dispatch.baseCommit || "").trim();
-  if (baseCommit) {
-    const head = execFileSync("git", ["rev-parse", "HEAD"], {
+  if (!baseCommit) {
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: "dispatch_base_missing",
+      message: `immutable recovery fact: ${entry.worktree} has no dispatch base revision.`
+    };
+  }
+  const head = execFileSync("git", ["rev-parse", "HEAD"], {
+    cwd: entry.worktree,
+    encoding: "utf8",
+    windowsHide: true
+  }).trim();
+  const headAtOrBeforeBase = spawnSync("git", ["merge-base", "--is-ancestor", head, baseCommit], {
+    cwd: entry.worktree,
+    encoding: "utf8",
+    windowsHide: true
+  }).status === 0;
+  if (!headAtOrBeforeBase) {
+    const baseAtOrBeforeHead = spawnSync("git", ["merge-base", "--is-ancestor", baseCommit, head], {
       cwd: entry.worktree,
       encoding: "utf8",
       windowsHide: true
-    }).trim();
-    if (head !== baseCommit) throw new Error(`never-claimed dispatch worktree ${entry.worktree} advanced beyond its dispatch base and cannot be reclaimed.`);
+    }).status === 0;
+    return {
+      worktree: entry.worktree,
+      reclaimed: false,
+      reason: baseAtOrBeforeHead ? "candidate_commit" : "divergent_candidate",
+      message: baseAtOrBeforeHead ? `immutable recovery fact: candidate commit ${head} descends from dispatch base ${baseCommit}.` : `immutable recovery fact: worktree head ${head} and dispatch base ${baseCommit} diverge.`
+    };
   }
   execFileSync("git", ["worktree", "remove", entry.worktree], { cwd: repository, windowsHide: true });
   execFileSync("git", ["worktree", "prune"], { cwd: repository, windowsHide: true });

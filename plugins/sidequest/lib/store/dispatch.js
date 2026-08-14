@@ -773,7 +773,12 @@ function createDispatch(dependencies) {
       if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
       const current = dispatchState(t);
       if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
-        reclaimUnclaimedDispatchWorktree(projectPath, current);
+        const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, current, {
+          checkpointCommit: t.checkpoint?.commit || t.submission?.commit || null
+        });
+        if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true) {
+          throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery2.message || `immutable recovery fact ${recovery2.reason || "is unreadable"}`}`);
+        }
       }
       const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by) && Boolean(current.launchedAt || current.boundAt);
       if (activeRuntimeAttempt) {
@@ -797,15 +802,7 @@ function createDispatch(dependencies) {
       }
       if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
       const currentRoute = activeDispatchRoute(t);
-      const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
-      if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor && currentExec) {
-        const currentExecutor = stableExecutorName(t);
-        if (t.dispatchExecutor !== currentExecutor) {
-          const at = (/* @__PURE__ */ new Date()).toISOString();
-          current.healedExecutorName = { oldName: t.dispatchExecutor, newName: currentExecutor, at };
-          current.executor = currentExecutor;
-          t.dispatchExecutor = currentExecutor;
-        }
+      if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && t.dispatchExecutor) {
         if (opts.sessionId) current.sessionId = String(opts.sessionId);
         if (!current.launchSeq) current.launchSeq = 1;
         if (!current.launchName) current.launchName = dispatchLaunchName(t.ref, t.title, current.launchSeq);

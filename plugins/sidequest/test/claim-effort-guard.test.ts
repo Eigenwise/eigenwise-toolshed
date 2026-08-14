@@ -168,24 +168,27 @@ test('a category-routed claim requires a prepared token even with its resolved e
   assert.equal(claim.ticket.status, 'doing');
 });
 
-test('a token-valid current executor heals a version-skewed dispatch executor name', () => {
+test('a prepared dispatch keeps its executor when ticket metadata changes', () => {
   const ref = seed('guard.codex');
   const slug = store.ensureProject(PROJ).slug;
   const prepared = store.prepareDispatch(slug, ref, { allowUnscoped: true });
   store.updateTicket(slug, ref, { readonly: true });
-  const currentExecutor = store.stableExecutorName(store.getTicket(slug, ref));
-  const healed = store.claimTicket(slug, ref, 'healed-executor', {
+  const changedExecutor = store.stableExecutorName(store.getTicket(slug, ref));
+  const rejected = store.claimTicket(slug, ref, 'changed-executor', {
     token: prepared.token,
-    executor: currentExecutor,
+    executor: changedExecutor,
   });
-  assert.equal(healed.ok, true);
+  assert.equal(rejected.ok, false);
+  assert.equal(rejected.reason, 'executor_mismatch');
+  const accepted = store.claimTicket(slug, ref, 'prepared-executor', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  });
+  assert.equal(accepted.ok, true);
   const current = store.getTicket(slug, ref);
-  assert.equal(current.dispatchExecutor, currentExecutor);
-  assert.deepEqual(current.dispatch.healedExecutorName, {
-    oldName: prepared.ticket.dispatchExecutor,
-    newName: currentExecutor,
-    at: current.dispatch.healedExecutorName.at,
-  });
+  assert.equal(current.dispatchExecutor, prepared.ticket.dispatchExecutor);
+  assert.equal(current.dispatch.executor, prepared.ticket.dispatchExecutor);
+  assert.equal(current.dispatch.healedExecutorName, undefined);
 });
 
 test('a token-valid unknown executor keeps the prepared dispatch name unchanged', () => {

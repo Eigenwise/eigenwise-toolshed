@@ -885,7 +885,12 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     if (!t) throw new Error(`prepare dispatch: no ticket "${idOrRef}".`);
     const current = dispatchState(t);
     if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
-      reclaimUnclaimedDispatchWorktree(projectPath, current);
+      const recovery = reclaimUnclaimedDispatchWorktree(projectPath, current, {
+        checkpointCommit: t.checkpoint?.commit || t.submission?.commit || null,
+      });
+      if (recovery && recovery.reclaimed === false && recovery.discardable !== true) {
+        throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery.message || `immutable recovery fact ${recovery.reason || 'is unreadable'}`}`);
+      }
     }
     const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by)
       && Boolean(current.launchedAt || current.boundAt);
@@ -912,15 +917,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     }
     if (resolvedPolicy?.refusal) throw new Error(resolvedPolicy.refusal);
     const currentRoute = activeDispatchRoute(t);
-    const currentExec = currentRoute && resolveExec(currentRoute.model, currentRoute.effort);
-    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor && currentExec) {
-      const currentExecutor = stableExecutorName(t);
-      if (t.dispatchExecutor !== currentExecutor) {
-        const at = new Date().toISOString();
-        current.healedExecutorName = { oldName: t.dispatchExecutor, newName: currentExecutor, at };
-        current.executor = currentExecutor;
-        t.dispatchExecutor = currentExecutor;
-      }
+    if (current && current.recovery && current.outcome === 'prepared' && t.dispatchNonce && t.dispatchExecutor) {
       if (opts.sessionId) current.sessionId = String(opts.sessionId);
       // A record prepared before launch naming existed still has to hand back a
       // usable name, and reusing it must not renumber the sequence.

@@ -1524,14 +1524,7 @@ function claimTicket(slug, idOrRef, by, opts) {
     if (opts.direct && t2.dispatchNonce && !terminalDispatch) return { ok: false, reason: "direct_conflict", ticket: t2 };
     if (opts.direct && t2.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: "terminal_claim_takeover_required", ticket: t2 };
     if (!opts.direct && t2.dispatchNonce && !dispatchTokenMatches(t2.dispatchNonce, providedToken)) return { ok: false, reason: "token", ticket: t2 };
-    if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) {
-      const currentExecutor = stableExecutorName(t2);
-      if (opts.executor !== currentExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
-      const at = (/* @__PURE__ */ new Date()).toISOString();
-      currentDispatch.healedExecutorName = { oldName: t2.dispatchExecutor, newName: currentExecutor, at };
-      currentDispatch.executor = currentExecutor;
-      t2.dispatchExecutor = currentExecutor;
-    }
+    if (!opts.direct && t2.dispatchNonce && opts.executor !== t2.dispatchExecutor) return { ok: false, reason: "executor_mismatch", ticket: t2, expectedExecutor: t2.dispatchExecutor };
     if (!opts.direct && isRoutedTicket(t2) && !t2.dispatchNonce) return { ok: false, reason: "dispatch_required", ticket: t2 };
     if (currentDispatch?.preparedCompatibility?.pluginInstall) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || "");
