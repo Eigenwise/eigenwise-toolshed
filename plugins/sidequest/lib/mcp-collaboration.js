@@ -62,7 +62,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
-const { sidequestDispatchFreshness } = require("./plugin-freshness");
+const { sidequestMutationFreshness } = require("./plugin-freshness");
 const tools = [
   {
     name: "supersede_submission",
@@ -274,7 +274,7 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
       if (freshness.refusal) throw new Error(freshness.refusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
@@ -349,7 +349,7 @@ const tools = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
+      const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, "..") });
       if (freshness.refusal) throw new Error(freshness.refusal);
       if (meta.path) {
         assertSidequestInstall(meta.path);

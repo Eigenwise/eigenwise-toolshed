@@ -36,6 +36,7 @@ __export(plugin_freshness_exports, {
   reportLoadedSidequestVersion: () => reportLoadedSidequestVersion,
   sidequestDispatchFreshness: () => sidequestDispatchFreshness,
   sidequestDispatchRefusal: () => sidequestDispatchRefusal,
+  sidequestMutationFreshness: () => sidequestMutationFreshness,
   sidequestReloadWarning: () => sidequestReloadWarning
 });
 module.exports = __toCommonJS(plugin_freshness_exports);
@@ -146,6 +147,21 @@ function sidequestDispatchFreshness(projectPath, options = {}) {
     skew: { loadedVersion, installedVersion, schemaVersion: 1 }
   };
 }
+const mutationFreshnessBySession = /* @__PURE__ */ new Map();
+function freshnessSessionId(options) {
+  return options.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || String(process.pid);
+}
+function sidequestMutationFreshness(projectPath, options = {}) {
+  const project = normalizedPath(projectPath);
+  if (!project) return sidequestDispatchFreshness(projectPath, options);
+  const pluginRoot = normalizedPath(options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT || "");
+  const cacheKey = `${freshnessSessionId(options)}\0${project}\0${pluginRoot || ""}`;
+  const cached = mutationFreshnessBySession.get(cacheKey);
+  if (cached) return cached;
+  const freshness = sidequestDispatchFreshness(projectPath, options);
+  mutationFreshnessBySession.set(cacheKey, freshness);
+  return freshness;
+}
 function sidequestDispatchRefusal(projectPath, options = {}) {
   return sidequestDispatchFreshness(projectPath, options).refusal;
 }
@@ -189,5 +205,6 @@ function reportLoadedSidequestVersion(input, options = {}) {
   reportLoadedSidequestVersion,
   sidequestDispatchFreshness,
   sidequestDispatchRefusal,
+  sidequestMutationFreshness,
   sidequestReloadWarning
 });

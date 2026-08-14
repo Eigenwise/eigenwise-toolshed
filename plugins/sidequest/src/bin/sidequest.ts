@@ -1,5 +1,7 @@
 'use strict';
+const path = require('path');
 const store = require('../lib/store');
+const { sidequestMutationFreshness } = require('../lib/plugin-freshness');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
 const { fail, resolveProject, resolveWatchProject } = require('./sidequest-cmd-shared');
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require('./sidequest-cmd-server');
@@ -76,6 +78,47 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   stop: [],
 };
 const COMMAND_ALIASES: Record<string, string> = { new: 'add', ticket: 'add', ls: 'list', edit: 'update', set: 'update', remove: 'rm', delete: 'rm', complete: 'done', finish: 'done', open: 'dashboard', board: 'dashboard' };
+const MUTATING_COMMANDS = new Set([
+  'add', 'new', 'ticket', 'update', 'edit', 'set', 'rm', 'remove', 'delete', 'claim', 'take', 'checkpoint',
+  'recover-shared', 'next', 'grab', 'reconcile', 'work', 'drain', 'groom-close', 'done', 'complete', 'finish',
+  'scope-request', 'scope_request', 'commit', 'rework', 'submit', 'integrate', 'publish', 'release', 'unclaim',
+  'assign', 'unassign', 'remind', 'unremind', 'comment', 'link', 'unlink', 'archive', 'unarchive', 'restore',
+  'dispatch', 'archive-board', 'archive_board', 'unarchive-board', 'unarchive_board', 'restore-board', 'merge',
+  'global-fallback', 'global_fallback',
+]);
+
+function commandMutates(command: string, opts: any, positional: any[]): boolean {
+  if (MUTATING_COMMANDS.has(command)) return true;
+  if (command === 'claims') return positional[0] === 'sweep';
+  if (command === 'native-agent' || command === 'native_agent') return positional[0] !== 'cleanup';
+  if (command === 'profile' || command === 'profiles' || command === 'category' || command === 'categories') {
+    return positional.length > 0 && !['list', 'ls', 'get', 'show'].includes(String(positional[0]).toLowerCase());
+  }
+  if (command === 'story') return ['add', 'update', 'edit', 'log', 'rotate'].includes(String(positional[0] || '').toLowerCase());
+  if (command === 'board-config' || command === 'board_config') {
+    return ['name', 'always-in-scope', 'read-only-denied-tool', 'generated-pairs', 'integration-mode', 'integration-branch', 'worktree-isolation', 'worktree-base', 'not-integrated-salvage-age-hours', 'auto-approve-test-scope', 'auto-approve-scope', 'worktree-setup', 'worktree-dependency-paths'].some((key) => Object.hasOwn(opts, key));
+  }
+  return false;
+}
+
+function mutationProjectPath(projectArg: unknown): string | null {
+  const project = projectArg == null ? '' : String(projectArg).trim();
+  if (project) {
+    const known = store.findProject(project);
+    if (known.ok) return known.meta.path;
+    return path.isAbsolute(project) ? store.nearestRepoRoot(path.resolve(project)) : null;
+  }
+  return store.nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+}
+
+function assertMutationFreshness(opts: any): void {
+  const projectPath = mutationProjectPath(opts.project);
+  if (!projectPath) return;
+  const freshness = sidequestMutationFreshness(projectPath, {
+    pluginRoot: process.env.CLAUDE_PLUGIN_ROOT || path.join(__dirname, '..'),
+  });
+  if (freshness.refusal) throw new Error(freshness.refusal);
+}
 
 function assertCommandFlags(command: any, opts: any) {
   const canonical = COMMAND_ALIASES[command] || command;
@@ -398,6 +441,7 @@ async function main() {
     return;
   }
   assertCommandFlags(cmd, opts);
+  if (commandMutates(cmd, opts, positional)) assertMutationFreshness(opts);
 
   switch (cmd) {
     case 'add':

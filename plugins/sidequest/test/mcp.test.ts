@@ -110,6 +110,63 @@ function freshMcpServer() {
   delete require.cache[modulePath];
   return require(modulePath);
 }
+
+test('untrusted Sidequest versions refuse MCP and CLI writes before creating a board', async () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mutation-freshness-'));
+  const project = path.join(directory, 'project');
+  const claudeHome = path.join(directory, 'claude');
+  const pluginRoot = path.join(directory, 'loaded-sidequest');
+  fs.mkdirSync(project, { recursive: true });
+  fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '4.48.0' }));
+  fs.mkdirSync(path.join(claudeHome, 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: 'not-semver' }] },
+  }));
+  const previousClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  const previousPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
+  const previousProjectDirectory = process.env.CLAUDE_PROJECT_DIR;
+  const previousSession = process.env.CLAUDE_CODE_SESSION_ID;
+  try {
+    process.env.SIDEQUEST_CLAUDE_HOME = claudeHome;
+    process.env.CLAUDE_PLUGIN_ROOT = pluginRoot;
+    process.env.CLAUDE_PROJECT_DIR = project;
+    process.env.CLAUDE_CODE_SESSION_ID = 'mcp-stale-mutation';
+    const mcpRefusal = await callToolRaw('add', {
+      project,
+      title: 'Refused stale mutation',
+      description: 'The freshness guard must run before add creates a board.',
+      unclassified: true,
+    });
+    assert.equal(mcpRefusal.isError, true);
+    assert.match(mcpRefusal.content[0].text, /missing or malformed/);
+    assert.match(mcpRefusal.content[0].text, /installed not-semver/);
+    assert.equal(store.findProject(project).ok, false);
+
+    const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+    const cliRefusal = spawnSync(process.execPath, [cli, 'add', '--project', project, '--title', 'Refused stale mutation', '--description', 'The freshness guard must run before add creates a board.', '--unclassified'], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: project, CLAUDE_CODE_SESSION_ID: 'cli-stale-mutation' },
+    });
+    assert.equal(cliRefusal.status, 1);
+    assert.match(cliRefusal.stderr, /missing or malformed/);
+    assert.match(cliRefusal.stderr, /installed not-semver/);
+    assert.equal(store.findProject(project).ok, false);
+
+    const readable = await callToolRaw('list', { project });
+    assert.notEqual(readable.isError, true);
+  } finally {
+    if (previousClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = previousClaudeHome;
+    if (previousPluginRoot === undefined) delete process.env.CLAUDE_PLUGIN_ROOT;
+    else process.env.CLAUDE_PLUGIN_ROOT = previousPluginRoot;
+    if (previousProjectDirectory === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previousProjectDirectory;
+    if (previousSession === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousSession;
+  }
+});
 // Legacy native-agent helpers remain CLI-only, but their handlers still have
 // direct coverage for the backward-compatible fallback path.
 async function callHandler(name?: any, args?: any) {

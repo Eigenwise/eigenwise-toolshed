@@ -63,7 +63,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state,
 } = require('./mcp-shared');
-const { sidequestDispatchFreshness } = require('./plugin-freshness');
+const { sidequestMutationFreshness } = require('./plugin-freshness');
 
 type ToolDefinition = {
   name: string;
@@ -283,7 +283,7 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
+      const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
       if (freshness.refusal) throw new Error(freshness.refusal);
       const descriptionError = store.dispatchDescriptionError(store.getTicket(slug, args.ref));
       if (descriptionError) throw new Error(descriptionError);
@@ -363,7 +363,7 @@ const tools: ToolDefinition[] = [
     },
     handler(args) {
       const { slug, meta } = resolveProject(args.project);
-      const freshness = sidequestDispatchFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
+      const freshness = sidequestMutationFreshness(meta.path, { pluginRoot: path.join(__dirname, '..') });
       if (freshness.refusal) throw new Error(freshness.refusal);
       // native_agent does not go through prepareDispatch, so it needs its own
       // copy of the same install preflight (SQ-1017) — see dispatch-preflight.js.

@@ -9,6 +9,7 @@ const {
   reportLoadedSidequestVersion,
   sidequestDispatchFreshness,
   sidequestDispatchRefusal,
+  sidequestMutationFreshness,
   sidequestReloadWarning,
 } = require('../lib/plugin-freshness.js');
 
@@ -65,6 +66,22 @@ test('dispatch refuses stale or malformed installed Sidequest versions', () => {
 
   writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: 'not-semver' }]);
   assert.match(sidequestDispatchRefusal(project, { claudeHome, pluginRoot }), /missing or malformed/);
+});
+
+test('mutation freshness reuses the dispatch decision once per session', () => {
+  const directory = temporaryDirectory();
+  const claudeHome = path.join(directory, 'claude');
+  const pluginRoot = path.join(directory, 'loaded-sidequest');
+  const project = path.join(directory, 'current');
+  const options = { claudeHome, pluginRoot, sessionId: 'mutation-freshness-session' };
+  writePluginVersion(pluginRoot, '4.48.0');
+  writeRegistry(claudeHome, [{ scope: 'project', projectPath: project, version: '4.48.1' }]);
+
+  const first = sidequestMutationFreshness(project, options);
+  assert.match(first.refusal, /loaded 4\.48\.0, installed 4\.48\.1/);
+  fs.rmSync(path.join(claudeHome, 'plugins', 'installed_plugins.json'));
+  assert.deepEqual(sidequestMutationFreshness(project, options), first);
+  assert.equal(sidequestMutationFreshness(project, { ...options, sessionId: 'no-installed-evidence' }).refusal, '');
 });
 
 test('dispatch permits a heal-capable version skew with a recorded warning', () => {

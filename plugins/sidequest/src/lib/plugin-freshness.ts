@@ -24,6 +24,7 @@ export interface FreshnessOptions {
   claudeHome?: string;
   pluginRoot?: string;
   stateDirectory?: string;
+  sessionId?: string;
 }
 
 export interface DispatchFreshness {
@@ -146,6 +147,24 @@ export function sidequestDispatchFreshness(projectPath: string, options: Freshne
     warning: `Sidequest dispatch skew: loaded ${loadedVersion}, installed ${installedVersion}. Claim self-heal can bridge this compatible version skew, so dispatch continues; run /reload-plugins or restart Claude Code before the next dispatch. A schema change or a loaded version before ${CLAIM_SELF_HEAL_VERSION} still refuses.`,
     skew: { loadedVersion, installedVersion, schemaVersion: 1 },
   };
+}
+
+const mutationFreshnessBySession = new Map<string, DispatchFreshness>();
+
+function freshnessSessionId(options: FreshnessOptions): string {
+  return options.sessionId || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || String(process.pid);
+}
+
+export function sidequestMutationFreshness(projectPath: string, options: FreshnessOptions = {}): DispatchFreshness {
+  const project = normalizedPath(projectPath);
+  if (!project) return sidequestDispatchFreshness(projectPath, options);
+  const pluginRoot = normalizedPath(options.pluginRoot || process.env.CLAUDE_PLUGIN_ROOT || '');
+  const cacheKey = `${freshnessSessionId(options)}\0${project}\0${pluginRoot || ''}`;
+  const cached = mutationFreshnessBySession.get(cacheKey);
+  if (cached) return cached;
+  const freshness = sidequestDispatchFreshness(projectPath, options);
+  mutationFreshnessBySession.set(cacheKey, freshness);
+  return freshness;
 }
 
 export function sidequestDispatchRefusal(projectPath: string, options: FreshnessOptions = {}): string {

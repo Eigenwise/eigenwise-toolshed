@@ -22,7 +22,10 @@
  * on the same store.
  */
 
+const path = require('path');
+const store = require('./store');
 const { compactSchema, conciseDescription, resolveProject, TOOL_DESCRIPTION_OVERRIDES, boundedReadPayload } = require('./mcp-shared');
+const { sidequestMutationFreshness } = require('./plugin-freshness');
 const { tools: readTools } = require('./mcp-read');
 const { tools: ticketTools } = require('./mcp-tickets');
 const { tools: lifecycleTools } = require('./mcp-lifecycle');
@@ -178,12 +181,32 @@ function acknowledgeAliases(output: any, aliases: string[]) {
     : output;
 }
 
+function mutationProjectPath(projectArg: unknown): string | null {
+  const project = projectArg == null ? '' : String(projectArg).trim();
+  if (project) {
+    const known = store.findProject(project);
+    if (known.ok) return known.meta.path;
+    return path.isAbsolute(project) ? store.nearestRepoRoot(path.resolve(project)) : null;
+  }
+  return store.nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+}
+
+function assertMutationFreshness(projectArg: unknown) {
+  const projectPath = mutationProjectPath(projectArg);
+  if (!projectPath) return;
+  const freshness = sidequestMutationFreshness(projectPath, {
+    pluginRoot: path.join(__dirname, '..'),
+  });
+  if (freshness.refusal) throw new Error(freshness.refusal);
+}
+
 async function runTool(tool: ToolDefinition, rawArgs: any) {
   const { args, aliases } = validateToolArguments(tool, rawArgs);
   if (!toolMutates(tool.name, args)) {
     const output = await tool.handler(args);
     return acknowledgeAliases(tool.name === 'context_page' ? output : boundedReadPayload(tool.name, output), aliases);
   }
+  assertMutationFreshness(args.project);
   const board = mutationQueueKey(tool.name, args);
   return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
