@@ -61,6 +61,7 @@ function runtimeModule(name) {
 }
 
 // src/hooks/worktree-create.ts
+var leaseKernel = require(runtimeModule("kernel/worktree"));
 function git(repository, args) {
   return (0, import_node_child_process.execFileSync)("git", args, {
     cwd: repository,
@@ -81,11 +82,7 @@ function repositoryFor(cwd) {
   return import_node_path2.default.resolve(git(cwd, ["rev-parse", "--show-toplevel"]));
 }
 function samePath(left, right) {
-  const normalize = (value) => {
-    const resolved = import_node_fs2.default.realpathSync.native(value);
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  };
-  return normalize(left) === normalize(right);
+  return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
 }
 function existingWorktreeMatches(repository, target) {
   try {
@@ -125,14 +122,6 @@ function provisioningConfig(repository) {
   const project = store.findProject(repository);
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
-function removeCreatedWorktree(repository, target) {
-  try {
-    git(repository, ["worktree", "remove", "--force", target]);
-  } catch (_) {
-    import_node_fs2.default.rmSync(target, { recursive: true, force: true });
-    git(repository, ["worktree", "prune"]);
-  }
-}
 function main() {
   const input = readStdin();
   if (!input || stringField(input, "hook_event_name") !== "WorktreeCreate") return;
@@ -147,7 +136,6 @@ function main() {
     try {
       worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
     } catch (error) {
-      removeCreatedWorktree(repository, target);
       throw error;
     }
   }

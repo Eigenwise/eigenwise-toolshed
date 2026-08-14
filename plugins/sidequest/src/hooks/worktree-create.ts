@@ -5,6 +5,8 @@ import { execFileSync } from 'node:child_process';
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
 
+const leaseKernel = require(runtimeModule('kernel/worktree')) as { canonicalPath: (value: string) => string };
+
 function git(repository: string, args: string[]): string {
   return execFileSync('git', args, {
     cwd: repository,
@@ -28,11 +30,7 @@ function repositoryFor(cwd: string): string {
 }
 
 function samePath(left: string, right: string): boolean {
-  const normalize = (value: string) => {
-    const resolved = fs.realpathSync.native(value);
-    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
-  };
-  return normalize(left) === normalize(right);
+  return leaseKernel.canonicalPath(left) === leaseKernel.canonicalPath(right);
 }
 
 function existingWorktreeMatches(repository: string, target: string): boolean {
@@ -80,15 +78,6 @@ function provisioningConfig(repository: string): { worktreeDependencyPaths?: { p
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
 
-function removeCreatedWorktree(repository: string, target: string): void {
-  try {
-    git(repository, ['worktree', 'remove', '--force', target]);
-  } catch (_) {
-    fs.rmSync(target, { recursive: true, force: true });
-    git(repository, ['worktree', 'prune']);
-  }
-}
-
 function main(): void {
   const input = readStdin();
   if (!input || stringField(input, 'hook_event_name') !== 'WorktreeCreate') return;
@@ -106,7 +95,6 @@ function main(): void {
     try {
       worktrees.provisionWorktree(repository, target, provisioningConfig(repository));
     } catch (error) {
-      removeCreatedWorktree(repository, target);
       throw error;
     }
   }

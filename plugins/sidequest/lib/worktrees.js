@@ -6,6 +6,7 @@ const fs = require("node:fs/promises");
 const nativeFs = require("node:fs");
 const { execFileSync, spawn } = require("node:child_process");
 const commitScope = require("./commit-scope.js");
+const worktreeLease = require("./kernel/worktree.js");
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1e3;
 const DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS = 7 * 24 * 60 * 60 * 1e3;
 const QUARANTINE_RETRY_INTERVAL_MS = 24 * 60 * 60 * 1e3;
@@ -131,22 +132,7 @@ function gitBashPath(value) {
   return drive ? `${drive[1]}:${value.slice(2)}` : value;
 }
 function canonicalPath(value) {
-  const resolved = path.resolve(gitBashPath(String(value)));
-  const missingSegments = [];
-  let existingAncestor = resolved;
-  while (!nativeFs.existsSync(existingAncestor)) {
-    const parent = path.dirname(existingAncestor);
-    if (parent === existingAncestor) break;
-    missingSegments.unshift(path.basename(existingAncestor));
-    existingAncestor = parent;
-  }
-  try {
-    const canonical = nativeFs.realpathSync.native(existingAncestor);
-    const completed = path.join(canonical, ...missingSegments);
-    return process.platform === "win32" ? completed.toLowerCase() : completed;
-  } catch {
-    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
-  }
+  return worktreeLease.canonicalPath(String(value));
 }
 function sidequestHome() {
   const configured = String(process.env.SIDEQUEST_HOME || "").trim();
@@ -297,15 +283,10 @@ function isAgentWorktree(repo, worktree) {
 }
 function ticketForWorktree(tickets, entry) {
   const worktree = canonicalPath(entry.worktree);
-  const submitted = tickets.find((ticket) => ticket.submission && ticket.submission.worktree && canonicalPath(ticket.submission.worktree) === worktree);
-  if (submitted) return submitted;
-  const continued = tickets.find((ticket) => ticket.dispatch?.continuation?.sourceWorktree && canonicalPath(ticket.dispatch.continuation.sourceWorktree) === worktree);
-  if (continued) return continued;
-  const agentId = String(path.basename(entry.worktree)).replace(/^agent-/, "");
-  const dispatched = tickets.find((ticket) => String(ticket.dispatch?.agentId || "") === agentId);
-  if (dispatched) return dispatched;
-  const ref = /(?:^|[^A-Z0-9])(SQ-\d+)(?:$|[^A-Z0-9])/i.exec(entry.branch || "");
-  return ref?.[1] ? tickets.find((ticket) => ticket.ref.toUpperCase() === ref[1].toUpperCase()) || null : null;
+  return tickets.find((ticket) => {
+    const knownWorktree = dispatchWorktreeForTicket(ticket);
+    return Boolean(knownWorktree && canonicalPath(knownWorktree) === worktree);
+  }) || null;
 }
 function localBranchName(ref) {
   const match = /^refs\/heads\/(.+)$/.exec(String(ref || ""));
@@ -351,6 +332,57 @@ function finalTicket(ticket) {
 }
 function liveClaimTicket(ticket) {
   return Boolean(ticket && ticket.claimLive);
+}
+function dispatchWorktreeForTicket(ticket) {
+  const worktree = String(ticket?.dispatch?.worktree || ticket?.submission?.worktree || "").trim();
+  return worktree || null;
+}
+function worktreeLeaseIdentity(ticket, entry) {
+  const expected = dispatchWorktreeForTicket(ticket);
+  const agentId = String(ticket?.dispatch?.agentId || "").trim();
+  if (expected && agentId && canonicalPath(expected) === canonicalPath(entry.worktree)) return { status: "bound", agentId };
+  return { status: "unknown" };
+}
+function worktreeLeasePhase(ticket) {
+  if (!finalTicket(ticket)) return "working";
+  return ticket?.archived ? "terminal" : "integrated";
+}
+function worktreeLeaseLiveness(ticket, entry, livePaths) {
+  if (livePaths.some((livePath) => canonicalPath(livePath) === canonicalPath(entry.worktree))) return { status: "live", evidence: "active session path" };
+  if (liveClaimTicket(ticket)) return { status: "live", evidence: "live ticket claim" };
+  if (finalTicket(ticket)) return { status: "terminal", evidence: "terminal board ticket without a live claim" };
+  return { status: "unknown", evidence: "no terminal board evidence" };
+}
+async function worktreeCleanupLease(repo, ticket, entry, livePaths) {
+  const [gitDirectory, commonGitDirectory, observedRevision] = await Promise.all([
+    git(entry.worktree, ["rev-parse", "--git-dir"]),
+    git(entry.worktree, ["rev-parse", "--git-common-dir"]),
+    git(entry.worktree, ["rev-parse", "HEAD"])
+  ]);
+  const resolveGitPath = (result) => result.ok && result.stdout ? path.isAbsolute(result.stdout) ? result.stdout : path.resolve(entry.worktree, result.stdout) : entry.worktree;
+  return worktreeLease.createWorktreeLease({
+    repository: repo,
+    gitDirectory: resolveGitPath(gitDirectory),
+    commonGitDirectory: resolveGitPath(commonGitDirectory),
+    dispatchRef: ticket?.ref || null,
+    dispatchBaseline: String(ticket?.dispatch?.baseCommit || "").trim() || null,
+    observedRevision: observedRevision.ok ? observedRevision.stdout || null : null,
+    observedWorktree: entry.worktree,
+    identity: worktreeLeaseIdentity(ticket, entry),
+    phase: worktreeLeasePhase(ticket),
+    locked: Boolean(entry.locked),
+    liveness: worktreeLeaseLiveness(ticket, entry, livePaths),
+    provisioning: entry.orphanDirectory ? "unknown" : "host"
+  });
+}
+function leaseCleanupSkipReason(decision) {
+  if (/bound worktree identity/.test(decision.reason)) return "unknown_identity";
+  if (/canonical registered/.test(decision.reason)) return "not_registered";
+  if (/terminal lease phase/.test(decision.reason)) return "active_ticket";
+  if (/locked worktree/.test(decision.reason)) return "locked";
+  if (/terminal liveness/.test(decision.reason)) return "live_session";
+  if (/unknown provisioning/.test(decision.reason)) return "unknown_provisioning";
+  return "lease_refused";
 }
 async function worktreeAge(pathname) {
   try {
@@ -404,15 +436,14 @@ function skippedEntry(entry, ticket, reason, current) {
     current
   };
 }
-async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream, livePaths = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS) {
+async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, upstream, livePaths = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, registeredWorktrees = []) {
   const ticket = ticketForWorktree(tickets, entry);
   const worktreePath2 = canonicalPath(entry.worktree);
   const current = worktreePath2 === canonicalPath(currentPath);
   if (current) return skippedEntry(entry, ticket, "current_worktree", true);
-  if (livePaths.some((livePath) => worktreePath2 === canonicalPath(livePath))) return skippedEntry(entry, ticket, "live_session", false);
-  if (entry.locked) return skippedEntry(entry, ticket, "locked", false);
-  if (ticket && !finalTicket(ticket)) return skippedEntry(entry, ticket, "active_ticket", false);
-  if (liveClaimTicket(ticket)) return skippedEntry(entry, ticket, "live_claim", false);
+  const lease = await worktreeCleanupLease(repo, ticket, entry, livePaths);
+  const cleanup = worktreeLease.worktreeCleanupDecision(lease, registeredWorktrees);
+  if (!cleanup.allowed) return { ...skippedEntry(entry, ticket, leaseCleanupSkipReason(cleanup), false), lease, leaseDecision: cleanup.reason };
   const [cleanResult, ageMs, patch, reachable] = await Promise.all([
     git(entry.worktree, ["status", "--porcelain"]),
     worktreeAge(entry.worktree),
@@ -466,7 +497,9 @@ async function classifyWorktree(repo, tickets, entry, currentPath, minAgeMs, ups
     locked: null,
     action,
     reason,
-    current: false
+    current: false,
+    lease,
+    leaseDecision: cleanup.reason
   };
 }
 async function orphanDirectories(repo, registered) {
@@ -826,8 +859,28 @@ async function quarantineCandidate(entry, message, options) {
     return { ok: false, stderr };
   }
 }
+async function hasReparsePoint(pathname) {
+  let status;
+  try {
+    status = await fs.lstat(pathname);
+  } catch (_) {
+    return true;
+  }
+  if (status.isSymbolicLink()) return true;
+  if (!status.isDirectory()) return false;
+  let entries;
+  try {
+    entries = await fs.readdir(pathname, { withFileTypes: true });
+  } catch (_) {
+    return true;
+  }
+  for (const entry of entries) {
+    if (entry.isSymbolicLink() || await hasReparsePoint(path.join(pathname, entry.name))) return true;
+  }
+  return false;
+}
 async function removeCandidate(repo, entry) {
-  const remove = async (pathname) => entry.orphanDirectory ? fs.rm(pathname, { recursive: true, force: false }).then(() => ({ ok: true, stderr: "" })).catch((error) => ({ ok: false, stderr: String(error && error.message || error) })) : git(repo, entry.clean ? ["worktree", "remove", pathname] : ["worktree", "remove", "--force", pathname]);
+  const remove = async (pathname) => git(repo, entry.clean ? ["worktree", "remove", pathname] : ["worktree", "remove", "--force", pathname]);
   const first = await remove(entry.path);
   if (first.ok || !shouldTryExtendedPath(entry.path, first.stderr)) return first;
   const extended = await remove(extendedWindowsPath(entry.path));
@@ -844,6 +897,23 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch) {
   }));
   const entry = entries.find((candidate) => canonicalPath(candidate.worktree) === expected);
   if (!entry) return { worktree, reclaimed: false, reason: "not_registered" };
+  const resolveGitPath = (value) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);
+  const lease = worktreeLease.createWorktreeLease({
+    repository,
+    gitDirectory: resolveGitPath(execFileSync("git", ["rev-parse", "--git-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim()),
+    commonGitDirectory: resolveGitPath(execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim()),
+    dispatchRef: dispatch.ref || null,
+    dispatchBaseline: dispatch.baseCommit || null,
+    observedRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim(),
+    observedWorktree: entry.worktree,
+    identity: { status: "unknown" },
+    phase: "terminal",
+    locked: Boolean(entry.locked),
+    liveness: { status: "terminal", evidence: "unclaimed dispatch" },
+    provisioning: "host"
+  });
+  const cleanup = worktreeLease.worktreeCleanupDecision(lease, [entry.worktree]);
+  if (!cleanup.allowed) return { worktree, reclaimed: false, reason: "lease_refused", message: cleanup.reason };
   const dirty = execFileSync("git", ["status", "--porcelain"], {
     cwd: entry.worktree,
     encoding: "utf8",
@@ -893,12 +963,12 @@ async function sweep(repo, tickets, options = {}) {
   const worktreeList = parseWorktreeList(listed.stdout);
   const registered = new Set(worktreeList.map((entry) => canonicalPath(entry.worktree)));
   const candidates = worktreeList.filter((entry) => isAgentWorktree(repo, entry.worktree)).filter((entry) => quarantineRetryDue(entry.worktree)).filter((entry) => !options.ticketRef || ticketForWorktree(tickets, entry)?.ref === options.ticketRef);
-  const orphanCandidates = options.ticketRef ? [] : await orphanDirectories(repo, registered);
-  const allCandidates = [...candidates, ...orphanCandidates];
+  const orphanCandidates = [];
+  const allCandidates = candidates;
   const maxCandidates = Number.isFinite(Number(options.maxCandidates)) && Number(options.maxCandidates) > 0 ? Math.floor(Number(options.maxCandidates)) : allCandidates.length;
   const boundedCandidates = allCandidates.slice(0, maxCandidates);
   const livePaths = Array.isArray(options.livePaths) ? options.livePaths.map((pathname) => String(pathname)) : [];
-  const entries = await Promise.all(boundedCandidates.map((entry) => entry.orphanDirectory ? classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs)));
+  const entries = await Promise.all(boundedCandidates.map((entry) => entry.orphanDirectory ? classifyOrphanDirectory(tickets, entry, livePaths, minAgeMs) : classifyWorktree(repo, tickets, entry, options.currentPath || process.cwd(), minAgeMs, upstream, livePaths, notIntegratedSalvageAgeMs, [...registered])));
   const execute = !!options.execute;
   const removed = [];
   const backups = [];
@@ -912,6 +982,11 @@ async function sweep(repo, tickets, options = {}) {
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = "keep";
         entry.reason = "known_permanent_failure";
+        continue;
+      }
+      if (await hasReparsePoint(entry.path)) {
+        entry.action = "keep";
+        entry.reason = "reparse_point";
         continue;
       }
       if (entry.action === "salvage") {

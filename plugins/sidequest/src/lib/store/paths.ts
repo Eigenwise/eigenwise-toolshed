@@ -100,17 +100,6 @@ function mainWorktreeRoot(gitEntry?: any) {
 // Fail-soft: any fs error stops the walk and falls back to the resolved startDir.
 function nearestRepoRoot(startDir?: any) {
   const start = path.resolve(startDir);
-
-  // (1) EnterWorktree fast path — deterministic, no filesystem trust required.
-  const wt = /^(.*?)[/\\]\.claude[/\\]worktrees[/\\]/i.exec(start + path.sep);
-  if (wt && wt[1]) {
-    const owner = path.resolve(wt[1]);
-    try {
-      if (fs.statSync(owner).isDirectory()) return owner;
-    } catch (_: any) { /* owner gone — fall through to the git walk */ }
-  }
-
-  // (2) + (3) Walk up to the enclosing `.git`.
   let dir = start;
   for (;;) {
     try {

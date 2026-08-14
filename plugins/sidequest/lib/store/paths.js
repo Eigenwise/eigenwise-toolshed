@@ -51,14 +51,6 @@ function createPaths({ fs, os, path, crypto }) {
   }
   function nearestRepoRoot(startDir) {
     const start = path.resolve(startDir);
-    const wt = /^(.*?)[/\\]\.claude[/\\]worktrees[/\\]/i.exec(start + path.sep);
-    if (wt && wt[1]) {
-      const owner = path.resolve(wt[1]);
-      try {
-        if (fs.statSync(owner).isDirectory()) return owner;
-      } catch (_) {
-      }
-    }
     let dir = start;
     for (; ; ) {
       try {

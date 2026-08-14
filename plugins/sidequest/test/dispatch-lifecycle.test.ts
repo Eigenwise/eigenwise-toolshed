@@ -1383,7 +1383,7 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
   }
 });
 
-test('reclaiming an unclaimed isolated dispatch removes its untouched worktree and branch', () => {
+test('reclaiming an unclaimed isolated dispatch preserves its unknown lease', () => {
   const ticket = createFixture('reclaim unclaimed isolated worktree');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `reclaim-unclaimed-${Date.now()}` });
   const agentId = `reclaim-unclaimed-agent-${ticket.id}`;
@@ -1397,11 +1397,14 @@ test('reclaiming an unclaimed isolated dispatch removes its untouched worktree a
       worktree,
       baseCommit: prepared.ticket.dispatch.baseCommit,
     });
-    assert.equal(reclaimed.reclaimed, true);
-    assert.equal(fs.existsSync(worktree), false);
-    assert.throws(() => execFileSync('git', ['rev-parse', '--verify', branch], { cwd: PROJECT }), /fatal/);
+    assert.equal(reclaimed.reclaimed, false);
+    assert.equal(reclaimed.reason, 'lease_refused');
+    assert.equal(fs.existsSync(worktree), true);
+    assert.equal(execFileSync('git', ['rev-parse', '--verify', branch], { cwd: PROJECT, encoding: 'utf8' }).trim().length > 0, true);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'reclaim-unclaimed-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT });
+    try { execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT }); } catch (_) {}
   }
 });
 

@@ -26,6 +26,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 // src/hooks/guard-worktree-isolation.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
+var import_node_child_process = require("node:child_process");
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -116,6 +117,7 @@ function runtimeModule(name) {
 }
 
 // src/hooks/guard-worktree-isolation.ts
+var leaseKernel = require(runtimeModule("kernel/worktree"));
 var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
 function targetPath(input) {
   const toolInput = input.tool_input;
@@ -125,19 +127,7 @@ function targetPath(input) {
   return target && import_node_path2.default.isAbsolute(target) ? import_node_path2.default.resolve(target) : "";
 }
 function canonicalPath(value) {
-  let candidate = import_node_path2.default.resolve(value);
-  const missing = [];
-  for (; ; ) {
-    try {
-      const real = import_node_fs2.default.realpathSync.native(candidate);
-      return import_node_path2.default.join(real, ...missing.reverse());
-    } catch (_) {
-      const parent = import_node_path2.default.dirname(candidate);
-      if (parent === candidate) return import_node_path2.default.resolve(value);
-      missing.push(import_node_path2.default.basename(candidate));
-      candidate = parent;
-    }
-  }
+  return leaseKernel.canonicalPath(value);
 }
 function repoRootFor(target) {
   let directory = import_node_path2.default.dirname(canonicalPath(target));
@@ -165,6 +155,21 @@ function samePath(a, b) {
 function assignedWorktree(found, actualRoot) {
   const candidates = found.expectedWorktrees?.length ? found.expectedWorktrees : found.expectedWorktree ? [found.expectedWorktree] : [];
   return candidates.some((candidate) => samePath(actualRoot, candidate));
+}
+function boundHarnessWorktree(found, actualRoot, agentId) {
+  if (!found.projectPath || import_node_path2.default.basename(actualRoot) !== `agent-${agentId}` || import_node_path2.default.basename(import_node_path2.default.dirname(actualRoot)) !== "worktrees" || import_node_path2.default.basename(import_node_path2.default.dirname(import_node_path2.default.dirname(actualRoot))) !== ".claude") return false;
+  try {
+    const common = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--git-common-dir"], {
+      cwd: actualRoot,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    const resolvedCommon = import_node_path2.default.isAbsolute(common) ? common : import_node_path2.default.resolve(actualRoot, common);
+    return samePath(resolvedCommon, import_node_path2.default.join(found.projectPath, ".git"));
+  } catch (_) {
+    return false;
+  }
 }
 function executorAgent(type) {
   if (!type) return false;
@@ -270,12 +275,12 @@ function main() {
   const repo = repoRootFor(target);
   if (!repo) return;
   if (!found) {
-    if (!repo.linked) writeDeny("PreToolUse", unknownRefusal(target));
+    writeDeny("PreToolUse", unknownRefusal(target));
     return;
   }
   if (found.sharedTree) return;
   if (repo.linked) {
-    if (assignedWorktree(found, repo.root)) return;
+    if (assignedWorktree(found, repo.root) || boundHarnessWorktree(found, repo.root, agentId)) return;
     writeDeny("PreToolUse", linkedWorktreeRefusal(found, target, repo.root));
     return;
   }

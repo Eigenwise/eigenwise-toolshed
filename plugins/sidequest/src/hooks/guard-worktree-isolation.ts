@@ -1,9 +1,12 @@
 #!/usr/bin/env node
 import fs from 'node:fs';
 import path from 'node:path';
+import { execFileSync } from 'node:child_process';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
+
+const leaseKernel = require(runtimeModule('kernel/worktree')) as { canonicalPath: (value: string) => string };
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
 
@@ -26,19 +29,7 @@ function targetPath(input: Record<string, unknown>): string {
 }
 
 function canonicalPath(value: string): string {
-  let candidate = path.resolve(value);
-  const missing: string[] = [];
-  for (;;) {
-    try {
-      const real = fs.realpathSync.native(candidate);
-      return path.join(real, ...missing.reverse());
-    } catch (_) {
-      const parent = path.dirname(candidate);
-      if (parent === candidate) return path.resolve(value);
-      missing.push(path.basename(candidate));
-      candidate = parent;
-    }
-  }
+  return leaseKernel.canonicalPath(value);
 }
 
 function repoRootFor(target: string): { root: string; linked: boolean } | null {
@@ -75,6 +66,22 @@ function assignedWorktree(found: IsolationExpectation, actualRoot: string): bool
     ? found.expectedWorktrees
     : (found.expectedWorktree ? [found.expectedWorktree] : []);
   return candidates.some((candidate) => samePath(actualRoot, candidate));
+}
+
+function boundHarnessWorktree(found: IsolationExpectation, actualRoot: string, agentId: string): boolean {
+  if (!found.projectPath || path.basename(actualRoot) !== `agent-${agentId}` || path.basename(path.dirname(actualRoot)) !== 'worktrees' || path.basename(path.dirname(path.dirname(actualRoot))) !== '.claude') return false;
+  try {
+    const common = execFileSync('git', ['rev-parse', '--git-common-dir'], {
+      cwd: actualRoot,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+    const resolvedCommon = path.isAbsolute(common) ? common : path.resolve(actualRoot, common);
+    return samePath(resolvedCommon, path.join(found.projectPath, '.git'));
+  } catch (_) {
+    return false;
+  }
 }
 
 function executorAgent(type: string): boolean {
@@ -198,12 +205,12 @@ function main(): void {
   const repo = repoRootFor(target);
   if (!repo) return;
   if (!found) {
-    if (!repo.linked) writeDeny('PreToolUse', unknownRefusal(target));
+    writeDeny('PreToolUse', unknownRefusal(target));
     return;
   }
   if (found.sharedTree) return;
   if (repo.linked) {
-    if (assignedWorktree(found, repo.root)) return;
+    if (assignedWorktree(found, repo.root) || boundHarnessWorktree(found, repo.root, agentId)) return;
     writeDeny('PreToolUse', linkedWorktreeRefusal(found, target, repo.root));
     return;
   }

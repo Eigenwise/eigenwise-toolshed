@@ -1,10 +1,12 @@
 'use strict';
 
+export { canonicalPath, createWorktreeLease, isCanonicalRegisteredWorktree, sameCanonicalPath, worktreeCleanupDecision, worktreeResumeDecision, worktreeWriteDecision } from './worktree.js';
+export type { LeaseDecision, LeaseIdentity, LeaseLiveness, LeasePhase, WorktreeLease, WorktreeLeaseFacts, WorktreeProvisioning } from './worktree.js';
+
 export type SourceRevision = Readonly<{ source: string; value: string; observedAt: string }>;
 export type Baseline = Readonly<{ revision: SourceRevision; purpose: 'dispatch' | 'wave' | 'submission' }>;
 export type Authority = Readonly<{ actor: string; operation: string; sessionId?: string | null }>;
 export type VerificationResult = Readonly<{ kind: 'suite' | 'attestation' | 'review'; status: 'passed' | 'failed' | 'unavailable'; evidence: string }>;
-export type WorktreeLease = Readonly<{ id: string; path: string; holder: string; acquiredAt: string }>;
 export type Diagnostic = Readonly<{ code: string; message: string; actionable: boolean }>;
 export type InlineEligibility = Readonly<{ eligible: boolean; reasons: readonly string[] }>;
 export type PreparedCompatibility = Readonly<{ pluginInstall: string; identity: string }>;
