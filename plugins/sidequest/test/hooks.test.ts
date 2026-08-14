@@ -35,6 +35,7 @@ const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
+const agentsync = require('../lib/agentsync.js');
 const BOARD_PATH = path.join(os.tmpdir(), 'sq-hooks-fixtures', 'board');
 const { slug } = store.ensureProject(BOARD_PATH);
 const database = db.openDb(SIDEQUEST_HOME);
@@ -295,6 +296,10 @@ function completeCheckoutCreation(project: string, sessionId: string, worktree: 
   assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
 }
 
+function preparedPrompt(prepared: any): string {
+  return agentsync.renderDispatchStub(prepared.ticket, prepared.token, BOARD_PATH);
+}
+
 test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypass', () => {
   const original = {
     subagent_type: 'sidequest-exec-high',
@@ -324,17 +329,7 @@ test('pre-tool hook: a spawn prompt naming another ticket still records its laun
   });
   const sessionId = `prompt-extra-refs-${++sqSeq}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
-  const command = `node "C:\\\\launcher\\\\sidequest-launcher.js" briefing ${ticket.ref} --token ${prepared.token} --project "${BOARD_PATH}"`;
-  const prompt = [
-    '[sidequest-route model=gpt-5.6-terra effort=high]',
-    '',
-    'Implementation context:',
-    `Title: ${ticket.title}`,
-    'Description:',
-    'Mirror what SQ-51 established, and keep SQ-52 unaffected.',
-    '',
-    `FIRST action: run \`${command}\` and execute exactly what it prints.`,
-  ].join('\n');
+  const prompt = preparedPrompt(prepared);
 
   runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -489,7 +484,7 @@ test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   }), null);
 });
 
-test('pre-tool hook: every stable readonly executor remains allowed and forced to bypass', () => {
+test('pre-tool hook: readonly Claude executors bypass while dispatch executors require preparation', () => {
   for (const effort of EFFORTS) {
     const claude = runHookOutput(FORCE_BYPASS, {
       tool_name: 'Agent',
@@ -510,9 +505,8 @@ test('pre-tool hook: every stable readonly executor remains allowed and forced t
         prompt: `Review SQ-1.\n[sidequest-route model=gpt-5.6-sol effort=${effort}]`,
       },
     });
-    assert.equal(dispatch.hookSpecificOutput.permissionDecision, undefined);
-    assert.equal(dispatch.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
-    assert.equal(dispatch.hookSpecificOutput.updatedInput.model, undefined);
+    assert.equal(dispatch.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(dispatch.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
   }
 });
 
@@ -1052,7 +1046,7 @@ test('pre-tool hook: a marked arbitrary agent is still denied', () => {
   assert.match(reason, /returned executor/);
 });
 
-test('pre-tool hook keeps builtin models and strips a stable dispatch executor model', () => {
+test('pre-tool hook keeps builtin models and rejects an unprepared dispatch executor', () => {
   const dispatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
@@ -1060,9 +1054,8 @@ test('pre-tool hook keeps builtin models and strips a stable dispatch executor m
       prompt: 'work SQ-210\n[sidequest-route model=codex-gpt-5-6-terra effort=high]',
     },
   });
-  assert.equal(dispatch.hookSpecificOutput.updatedInput.model, undefined);
-  assert.equal(dispatch.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
-  assert.match(dispatch.systemMessage, /removed the Agent model override/);
+  assert.equal(dispatch.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(dispatch.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 
   const builtIn = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -1353,7 +1346,7 @@ test('pre-tool hook: builtin exec spawned WITH a model that mismatches the resol
   assert.match(out.systemMessage, /model "opus" but .* resolves to "sonnet"/);
 });
 
-test('pre-tool hook: stable dispatch executor strips model even when a ref resolves', () => {
+test('pre-tool hook: stable dispatch executors require preparation even with a ref', () => {
   const t = fixtureTicket('SQ-232 dispatch passthrough fixture', 'codex-gpt-5-6-terra', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -1362,9 +1355,8 @@ test('pre-tool hook: stable dispatch executor strips model even when a ref resol
       prompt: `work ${t.ref} --project "${slug}"\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
     },
   });
-  assert.equal(out.hookSpecificOutput.updatedInput.model, undefined);
-  assert.equal(out.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
-  assert.match(out.systemMessage, /removed the Agent model override/);
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 });
 
 
@@ -1384,14 +1376,13 @@ function runForceBypassWithEnv(toolInput?: any, envOverrides?: any) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
-test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a dispatch executor spawn', () => {
+test('pre-tool hook: an unprepared dispatch executor denies before model override checks', () => {
   const out = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch', name: 'sq-env-codex', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: 'opus' }
   );
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /CLAUDE_CODE_SUBAGENT_MODEL/);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /defeat(s|ing) routing/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 });
 
 test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a builtin executor spawn too', () => {
@@ -1403,13 +1394,13 @@ test('pre-tool hook: CLAUDE_CODE_SUBAGENT_MODEL set denies a builtin executor sp
   assert.match(out.hookSpecificOutput.permissionDecisionReason, /Unset it/);
 });
 
-test('pre-tool hook: an unset CLAUDE_CODE_SUBAGENT_MODEL leaves the spawn alone', () => {
+test('pre-tool hook: an unprepared dispatch executor remains denied without a model override', () => {
   const out = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch', model: 'fable', name: 'sq-env-off', prompt: 'work SQ-1\n[sidequest-route model=codex-gpt-5-6-terra effort=high]' },
     { CLAUDE_CODE_SUBAGENT_MODEL: '' }
   );
-  assert.ok(!out.hookSpecificOutput.permissionDecision, 'no override -> no deny');
-  assert.equal(out.hookSpecificOutput.updatedInput.model, undefined, 'the pin still wins by stripping the Agent model');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 });
 
 /* ------------------------------------------------------------------ *
@@ -3415,7 +3406,7 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
 
 // Registered LAST: creates extra fixture categories, which would otherwise grow
 // the taxonomy line inside earlier byte-budget assertions.
-test('pre-tool hook: dispatch executor rejects conflicting route markers and ignores prose sibling refs', () => {
+test('pre-tool hook: route marker batches require an exact prepared briefing', () => {
   const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-dispatch-catalog-'));
   fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
   fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
@@ -3434,29 +3425,26 @@ test('pre-tool hook: dispatch executor rejects conflicting route markers and ign
     { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-prose', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nPrior ${b.ref} had a sol route. --project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
-  assert.ok(!proseSibling.hookSpecificOutput.permissionDecision, 'a prose sibling ref must not create a mixed batch');
-  assert.equal(proseSibling.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.equal(proseSibling.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(proseSibling.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
   const mixed = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-mixed', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: ${b.ref}\n[sidequest-route model=codex-gpt-5-6-sol effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
   assert.equal(mixed.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /route marker/);
-  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /mixes tickets stamped with different models/);
-  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /Split the batch/);
-  assert.doesNotMatch(mixed.hookSpecificOutput.permissionDecisionReason, /fresh dispatch briefing/);
+  assert.match(mixed.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
   const same = runForceBypassWithEnv(
     { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-same', prompt: `Ref: ${a.ref}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\nRef: SQ-999\n[sidequest-route model=codex-gpt-5-6-terra effort=high]\n--project "${slug}"` },
     { SIDEQUEST_DISCOVERY_DIRS: catalog }
   );
-  assert.ok(!same.hookSpecificOutput.permissionDecision, 'a same-model batch must not be denied');
-  assert.equal(same.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+  assert.equal(same.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(same.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 });
 
 // The collapsed executor name carries no effort, so name-vs-marker auditing only
 // applies to legacy per-effort executors; on the collapsed def the marker owns effort
 // and the prepared-spawn comparison audits it against the board.
-test('pre-tool hook: legacy per-effort executor still rejects a route marker with different effort', () => {
+test('pre-tool hook: a route marker cannot authorize a legacy dispatch executor', () => {
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
@@ -3465,10 +3453,10 @@ test('pre-tool hook: legacy per-effort executor still rejects a route marker wit
     },
   });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /executor effort "high" does not match route marker effort "medium"/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 });
 
-test('pre-tool hook: the collapsed dispatch executor accepts any marker effort', () => {
+test('pre-tool hook: a route marker cannot authorize the collapsed dispatch executor', () => {
   const out = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
@@ -3476,7 +3464,8 @@ test('pre-tool hook: the collapsed dispatch executor accepts any marker effort',
       prompt: 'work SQ-377\n[sidequest-route model=codex-gpt-5-6-terra effort=medium]',
     },
   });
-  assert.notEqual(out?.hookSpecificOutput?.permissionDecision, 'deny');
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 });
 
 test('pre-tool hook: prepared codex dispatch accepts the gateway-form route marker (SQ-753)', () => {
@@ -3502,7 +3491,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
       subagent_type: prepared.ticket.dispatchExecutor,
       name: prepared.ticket.dispatch.launchName,
       description: prepared.ticket.dispatch.description,
-      prompt: `Ref: ${ticket.ref}\n[sidequest-route model=gpt-5.6-terra effort=high]\n--project "${projectPath}" --token ${prepared.token}`,
+      prompt: preparedPrompt(prepared),
     };
     const exact = runForceBypassWithEnv(base, { SIDEQUEST_DISCOVERY_DIRS: catalog });
     assert.ok(!exact.hookSpecificOutput.permissionDecision, 'the production marker form must be allowed');
@@ -3514,7 +3503,7 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
       { SIDEQUEST_DISCOVERY_DIRS: catalog }
     );
     assert.equal(retired.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(retired.hookSpecificOutput.permissionDecisionReason, /missing the route marker/);
+    assert.match(retired.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is/);
 
     const drifted = runForceBypassWithEnv(
       { ...base, prompt: base.prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol') },
@@ -3522,54 +3511,94 @@ test('pre-tool hook: prepared codex dispatch accepts the gateway-form route mark
     );
     assert.equal(drifted.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is codex-gpt-5-6-terra \/ high/);
-    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /cannot be overridden at spawn time/);
+    assert.match(drifted.hookSpecificOutput.permissionDecisionReason, /pass its spawn unchanged/);
   } finally {
     if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
     else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
   }
 });
 
-test('pre-tool hook: a prepared Codex route requires its marker and executor class', () => {
-  const catalog = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-route-class-'));
-  fs.mkdirSync(path.join(catalog, 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(catalog, 'model-gateway', 'catalog.json'), JSON.stringify({
-    schemaVersion: 3,
-    updatedAt: new Date().toISOString(),
-    source: 'model-gateway',
-    codexReadiness: { ready: true, state: 'ready', message: 'Codex readiness confirms the local gateway is ready.' },
-    models: [{ slug: 'codex-gpt-5-6-terra', id: 'claude-gpt-5.6-terra[1m]' }],
-  }));
-  const previousDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
-  process.env.SIDEQUEST_DISCOVERY_DIRS = catalog;
-  try {
-    const ticket = fixtureTicket('SQ-1494 prepared Codex route', 'codex-gpt-5-6-terra', 'high');
-    const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId: `route-class-${++sqSeq}` });
-    const projectPath = store.readMeta(slug).path;
-    const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
-    const marker = '[sidequest-route model=gpt-5.6-terra effort=high]';
-    const cases = [
-      { type: 'sidequest-exec-dispatch', acceptsMarker: true },
-      { type: 'sidequest-exec-dispatch-readonly', acceptsMarker: true },
-      { type: 'sidequest-exec-high', acceptsMarker: false },
-      { type: 'sidequest-exec-readonly-high', acceptsMarker: false },
-      { type: 'unrecognised-executor', acceptsMarker: false },
-    ];
-    for (const executorCase of cases) {
-      const withoutMarker = runForceBypassWithEnv({ subagent_type: executorCase.type, prompt }, { SIDEQUEST_DISCOVERY_DIRS: catalog });
-      assert.equal(withoutMarker.hookSpecificOutput.permissionDecision, 'deny', `${executorCase.type} must not run without the route marker`);
-      assert.match(withoutMarker.hookSpecificOutput.permissionDecisionReason, /missing the route marker/);
-
-      const withMarker = runForceBypassWithEnv({ subagent_type: executorCase.type, prompt: `${prompt}\n${marker}` }, { SIDEQUEST_DISCOVERY_DIRS: catalog });
-      if (executorCase.acceptsMarker) {
-        assert.notEqual(withMarker.hookSpecificOutput.permissionDecision, 'deny', `${executorCase.type} should carry the prepared Codex route`);
-      } else {
-        assert.equal(withMarker.hookSpecificOutput.permissionDecision, 'deny', `${executorCase.type} must not replace a Codex dispatch executor`);
-        assert.match(withMarker.hookSpecificOutput.permissionDecisionReason, /not a Codex dispatch executor/);
-      }
+test('pre-tool hook: exact prepared briefing is the sole dispatch launch authority', () => {
+  const cases = [
+    {
+      name: 'exact valid briefing',
+      mutate: (prompt: string) => prompt,
+      accepted: true,
+    },
+    {
+      name: 'no prepared dispatch',
+      prepare: false,
+      mutate: (_prompt: string, ticket: any) => `FIRST action: run \`node "C:\\launcher\\sidequest-launcher.js" briefing ${ticket.ref} --token-file "C:\\missing.token" --project "${BOARD_PATH}"\` and execute exactly what it prints.\n[sidequest-route model=gpt-5.6-terra effort=high]`,
+    },
+    {
+      name: 'marker only',
+      mutate: () => '[sidequest-route model=gpt-5.6-terra effort=high]',
+    },
+    {
+      name: 'copied current token without FIRST action',
+      mutate: (_prompt: string, ticket: any) => `Ref: ${ticket.ref}\n--token-file "${ticket.dispatch.tokenFile}"\n--project "${BOARD_PATH}"\n[sidequest-route model=gpt-5.6-terra effort=high]`,
+    },
+    {
+      name: 'drifted command',
+      mutate: (prompt: string) => prompt.replace(' briefing ', ' brief '),
+    },
+    {
+      name: 'stale token',
+      rotate: true,
+      mutate: (prompt: string) => prompt,
+    },
+    {
+      name: 'executor mismatch',
+      type: 'sidequest-exec-dispatch-readonly',
+      mutate: (prompt: string) => prompt,
+    },
+    {
+      name: 'project mismatch',
+      mutate: (prompt: string) => prompt.replace(`--project "${BOARD_PATH}"`, '--project "C:\\wrong-project"'),
+    },
+    {
+      name: 'route mismatch',
+      mutate: (prompt: string) => prompt.replace('model=gpt-5.6-terra', 'model=gpt-5.6-sol'),
+    },
+  ];
+  for (const dispatchCase of cases) {
+    const ticket = fixtureTicket(`SQ-1494 ${dispatchCase.name}`, 'codex-gpt-5-6-terra', 'high');
+    const sessionId = `exact-briefing-${++sqSeq}`;
+    const prepared = dispatchCase.prepare === false ? null : store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+    const prompt = preparedPrompt(prepared || { ticket, token: null });
+    const dispatchedTicket = prepared?.ticket || ticket;
+    if (dispatchCase.rotate) {
+      const initialLaunch = runHookOutput(FORCE_BYPASS, {
+        session_id: sessionId,
+        tool_name: 'Agent',
+        tool_input: {
+          subagent_type: prepared.ticket.dispatchExecutor,
+          name: prepared.ticket.dispatch.launchName,
+          description: prepared.ticket.dispatch.description,
+          prompt,
+        },
+      });
+      assert.equal(initialLaunch.hookSpecificOutput.permissionDecision, undefined);
+      assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, null, prepared.ticket.dispatch.launchName).stopped, true);
+      store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
     }
-  } finally {
-    if (previousDirs === undefined) delete process.env.SIDEQUEST_DISCOVERY_DIRS;
-    else process.env.SIDEQUEST_DISCOVERY_DIRS = previousDirs;
+    const launch = runHookOutput(FORCE_BYPASS, {
+      session_id: sessionId,
+      tool_name: 'Agent',
+      tool_input: {
+        subagent_type: dispatchCase.type || prepared?.ticket.dispatchExecutor || 'sidequest-exec-dispatch',
+        name: prepared?.ticket.dispatch.launchName,
+        description: prepared?.ticket.dispatch.description,
+        prompt: dispatchCase.mutate(prompt, dispatchedTicket),
+      },
+    });
+    if (dispatchCase.accepted) {
+      assert.equal(launch.hookSpecificOutput.permissionDecision, undefined, dispatchCase.name);
+      assert.ok(store.getTicket(slug, ticket.ref).dispatch.launchedAt, `${dispatchCase.name} records the authoritative launch`);
+    } else {
+      assert.equal(launch.hookSpecificOutput.permissionDecision, 'deny', dispatchCase.name);
+      assert.ok(!store.getTicket(slug, ticket.ref).dispatch?.launchedAt, `${dispatchCase.name} denies before launch recording`);
+    }
   }
 });
 
@@ -3577,10 +3606,9 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   const ticket = addEffortTicket('correct prepared dispatch spawn drift', 'high');
   const sessionId = `description-${++sqSeq}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
-  const projectPath = store.readMeta(slug).path;
   const description = prepared.ticket.dispatch.description;
   assert.equal(description, `Claude Sonnet, high · ${ticket.title}`);
-  const prompt = `Ref: ${ticket.ref}\n--project "${projectPath}" --token ${prepared.token}`;
+  const prompt = preparedPrompt(prepared);
   const expectedName = `${ticket.ref.toLowerCase()}-correct-prepared`;
   assert.equal(prepared.ticket.dispatch.launchName, expectedName);
   const base = {
@@ -3613,41 +3641,6 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   assert.equal(driftedName.hookSpecificOutput.updatedInput.name, expectedName);
   assert.match(driftedName.systemMessage, /corrected prepared dispatch name/);
 
-  const driftedRoute = runHookOutput(FORCE_BYPASS, {
-    session_id: sessionId,
-    tool_name: 'Agent',
-    tool_input: {
-      ...base,
-      subagent_type: 'sidequest-exec-dispatch',
-      prompt: `${prompt}\n[sidequest-route model=codex-gpt-5-6-terra effort=high]`,
-    },
-  });
-  assert.equal(driftedRoute.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /ticket resolved route is sonnet \/ high/);
-  assert.match(driftedRoute.hookSpecificOutput.permissionDecisionReason, /Set this ticket's route override before dispatching/);
-
-  const driftedBriefing = runHookOutput(FORCE_BYPASS, {
-    session_id: sessionId,
-    tool_name: 'Agent',
-    tool_input: {
-      ...base,
-      subagent_type: 'sidequest-exec-dispatch',
-      prompt: `[sidequest-route model=sonnet effort=high]\nFIRST action: run \`node "sidequest-launcher.js" brief ${ticket.ref} --token ${prepared.token} --project "${projectPath}"\``,
-    },
-  });
-  assert.equal(driftedBriefing.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(driftedBriefing.hookSpecificOutput.permissionDecisionReason, /briefing command must match the prepared spawn/);
-
-  assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, null, expectedName).stopped, true);
-  store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
-  const staleToken = runHookOutput(FORCE_BYPASS, {
-    session_id: sessionId,
-    tool_name: 'Agent',
-    tool_input: base,
-  });
-  assert.equal(staleToken.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(staleToken.hookSpecificOutput.permissionDecisionReason, /token is stale or rotated/);
-
   const ordinary = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: {
@@ -3666,7 +3659,7 @@ test('dispatch ledger records an authoritative launch, agent bind, and claim ack
   const sessionId = `launch-${++sqSeq}`;
   const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
   const projectPath = store.readMeta(slug).path;
-  const prompt = `Work ${ticket.ref} --project "${projectPath}" --token ${prepared.token}`;
+  const prompt = preparedPrompt(prepared);
   const launch = runHookOutput(FORCE_BYPASS, {
     session_id: sessionId,
     tool_name: 'Agent',
@@ -3727,7 +3720,7 @@ test('readonly category executors pass spawn correction, start binding, and stop
       const marker = expectedExecutor.includes('dispatch')
         ? `\n[sidequest-route model=${prepared.ticket.dispatch.route.marker} effort=${effort}]`
         : '';
-      const prompt = `Ref: ${ticket.ref}${marker}\n--project "${projectPath}" --token ${prepared.token}`;
+      const prompt = preparedPrompt(prepared);
       const launch = runHookOutput(FORCE_BYPASS, {
         session_id: sessionId,
         tool_name: 'Agent',
@@ -3785,7 +3778,7 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
       subagent_type: prepared.ticket.dispatchExecutor,
       name: 'sidequest-exec-dispatch',
       description: prepared.ticket.dispatch.description,
-      prompt: `Work ${prepared.ticket.ref} --project "${projectPath}" --token ${prepared.token}`,
+      prompt: preparedPrompt(prepared),
     },
   }));
   const names = launches.map((launch) => launch.hookSpecificOutput.updatedInput.name);
@@ -3881,16 +3874,13 @@ test('subagent-stop: legacy ticket executors without identity stay silent', () =
   );
 });
 
-test('pre-tool hook: dispatch executor requires a canonical route marker and legacy executors cannot launch', () => {
+test('pre-tool hook: dispatch executor requires an exact briefing and legacy executors cannot launch', () => {
   const missingMarker = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
     tool_input: { subagent_type: 'sidequest-exec-dispatch', name: 'w-dispatch-no-marker', prompt: 'work SQ-377' },
   });
   assert.equal(missingMarker.hookSpecificOutput.permissionDecision, 'deny');
-  assert.equal(
-    missingMarker.hookSpecificOutput.permissionDecisionReason,
-    "sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged."
-  );
+  assert.match(missingMarker.hookSpecificOutput.permissionDecisionReason, /requires the exact prepared FIRST action briefing command/);
 
   const builtIn = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',

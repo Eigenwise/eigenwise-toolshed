@@ -411,36 +411,43 @@ function dispatchRouteMarkers(input) {
   if (typeof prompt !== "string" || !prompt) return [];
   return [...prompt.matchAll(ROUTE_MARKER_RE)].map((match) => ({ model: match[1] || "", effort: match[2] || "" }));
 }
-function isPreparedCodexRoute(route) {
-  return Boolean(route?.marker || route?.model.startsWith("codex-"));
+function preparedBriefingCommand(ticket, project) {
+  try {
+    const agentsync = require(runtimeModule("agentsync"));
+    const stub = agentsync.renderDispatchStub(ticket, ticket.dispatchNonce, project);
+    return /^FIRST action: run `([^`]+)` and execute exactly what it prints\.$/m.exec(stub)?.[1] || null;
+  } catch (_) {
+    return null;
+  }
 }
 function preparedDispatchValidation(input) {
-  const toolInput = toolInputOf(input);
-  if (!toolInput) return { status: "none" };
-  const launches = dispatchLaunches(toolInput.prompt);
-  if (launches.length !== 1) return { status: "none" };
-  const launch = launches[0];
-  const project = extractProjectArg(toolInput.prompt) || stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR;
-  if (!launch || !project) return { status: "none" };
+  const prompt = toolInputOf(input)?.prompt;
+  if (typeof prompt !== "string") return { status: "none" };
+  const commands = [...prompt.matchAll(/^FIRST action: run `([^`]+)` and execute exactly what it prints\.$/gm)];
+  if (commands.length !== 1) return { status: "none" };
+  const command = commands[0]?.[1];
+  const ref = /\bbriefing\s+(SQ-\d+)\b/i.exec(command || "")?.[1]?.toUpperCase();
+  const project = extractProjectArg(command);
+  if (!ref || !project) return { status: "none" };
   try {
     const store = require(runtimeModule("store"));
     const found = store.findProject(project);
     if (!found.ok || !found.slug) return { status: "none" };
-    const ticket = store.getTicket(found.slug, launch.ref);
-    if (!ticket) return { status: "none" };
-    if (ticket.dispatchNonce !== launch.token && ticket.dispatch?.tokenFile !== launch.tokenFile) return { status: "stale" };
-    const description = ticket.dispatch?.description;
-    const route = ticket.dispatch?.route;
+    const ticket = store.getTicket(found.slug, ref);
+    if (!ticket?.dispatch) return { status: "none" };
+    const briefingCommand = preparedBriefingCommand(ticket, project);
+    if (!briefingCommand) return { status: "none" };
+    if (command !== briefingCommand) return { status: "stale" };
+    const description = ticket.dispatch.description;
+    const route = ticket.dispatch.route;
     return {
       status: "valid",
       spawn: {
+        briefingCommand,
         description: typeof description === "string" && description ? description : null,
-        // Records prepared before launch naming existed still get a readable
-        // name: ref plus title is the same derivation the store now stores.
-        name: ticket.dispatch?.launchName || dispatchLaunchName(ticket.ref || launch.ref, ticket.title, ticket.dispatch?.launchSeq),
-        ref: launch.ref,
-        token: launch.token,
-        tokenFile: launch.tokenFile,
+        executor: typeof ticket.dispatchExecutor === "string" ? ticket.dispatchExecutor : "",
+        name: ticket.dispatch.launchName || dispatchLaunchName(ticket.ref || ref, ticket.title, ticket.dispatch.launchSeq),
+        ref,
         project,
         route: typeof route?.model === "string" && typeof route.effort === "string" ? { model: route.model, effort: route.effort, marker: typeof route.marker === "string" && route.marker ? route.marker : null } : null
       }
@@ -449,12 +456,8 @@ function preparedDispatchValidation(input) {
     return { status: "none" };
   }
 }
-function briefingCommandDrifted(prompt, spawn) {
-  if (typeof prompt !== "string" || !/FIRST action:\s*run/i.test(prompt)) return false;
-  const command = /FIRST action:\s*run\s+`([^`]+)`/i.exec(prompt)?.[1];
-  if (!command) return true;
-  const refs = extractRefs(command);
-  return !/sidequest-launcher\.js["']?\s+briefing\b/i.test(command) || refs.length !== 1 || refs[0] !== spawn.ref || (spawn.token ? extractDispatchToken(command) !== spawn.token : extractDispatchTokenFile(command) !== spawn.tokenFile) || extractProjectArg(command) !== spawn.project;
+function hasExactPreparedBriefing(prompt, spawn) {
+  return typeof prompt === "string" && prompt.includes(`FIRST action: run \`${spawn.briefingCommand}\` and execute exactly what it prints.`);
 }
 function correctionMessage(corrections) {
   return corrections.length ? `sidequest: corrected prepared dispatch ${corrections.join(" and ")}.` : null;
@@ -777,27 +780,24 @@ function main() {
     writeToolUpdate({ ...toolInput, mode: "bypassPermissions", run_in_background: false });
     return;
   }
+  const isDispatchExecutor = classification.kind === "codex_dispatch" || classification.kind === "read_only_codex_dispatch";
   const dispatchValidation = preparedDispatchValidation(input);
-  if (dispatchValidation.status === "stale") {
-    writeDeny("PreToolUse", "sidequest: dispatch token is stale or rotated. Re-run dispatch and pass its spawn unchanged.");
+  if (isDispatchExecutor && dispatchValidation.status !== "valid") {
+    writeDeny("PreToolUse", dispatchValidation.status === "stale" ? "sidequest: dispatch briefing command is stale or drifted. Re-run dispatch and pass its spawn unchanged." : "sidequest: dispatch executor requires the exact prepared FIRST action briefing command. Re-run dispatch and pass its spawn unchanged.");
     return;
   }
   const preparedSpawn = dispatchValidation.spawn;
   const preparedRoute = preparedSpawn?.route;
   const markers = dispatchRouteMarkers(input);
-  const routeModels = [...new Set(markers.map((marker) => marker.model))];
-  if (isPreparedCodexRoute(preparedRoute)) {
+  if (isDispatchExecutor) {
+    if (!preparedSpawn || !hasExactPreparedBriefing(toolInput.prompt, preparedSpawn) || type !== preparedSpawn.executor) {
+      writeDeny("PreToolUse", "sidequest: dispatch executor requires the exact prepared FIRST action briefing command and executor. Re-run dispatch and pass its spawn unchanged.");
+      return;
+    }
     const route = preparedRoute;
-    if (!routeModels.length) {
-      writeDeny("PreToolUse", "sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.");
-      return;
-    }
-    if (markers.some((marker) => marker.model !== (route?.marker ?? route?.model) || marker.effort !== route?.effort)) {
-      writeDeny("PreToolUse", `sidequest: ticket resolved route is ${route?.model} / ${route?.effort}. A model cannot be overridden at spawn time. Set this ticket's route override before dispatching, then re-run dispatch and pass the returned spawn unchanged.`);
-      return;
-    }
-    if (classification.kind !== "codex_dispatch" && classification.kind !== "read_only_codex_dispatch") {
-      writeDeny("PreToolUse", `sidequest: ticket resolved route is ${route?.model} / ${route?.effort}, but ${type} is not a Codex dispatch executor. Re-run dispatch and pass the returned spawn unchanged.`);
+    const expectedMarker = route?.marker ?? route?.model;
+    if (!route || markers.length !== 1 || markers[0]?.model !== expectedMarker || markers[0]?.effort !== route.effort) {
+      writeDeny("PreToolUse", `sidequest: ticket resolved route is ${route?.model || "unavailable"} / ${route?.effort || "unavailable"}. Re-run dispatch and pass its spawn unchanged.`);
       return;
     }
   }
@@ -819,10 +819,6 @@ function main() {
     ...isSubagentCaller(input) ? { run_in_background: true } : {}
   };
   if (isSubagentCaller(input)) delete updatedInput.isolation;
-  if (preparedSpawn && briefingCommandDrifted(toolInput.prompt, preparedSpawn)) {
-    writeDeny("PreToolUse", "sidequest: dispatch briefing command must match the prepared spawn. Re-run dispatch and pass its spawn unchanged.");
-    return;
-  }
   const corrections = [];
   if (preparedSpawn?.description && toolInput.description !== preparedSpawn.description) {
     updatedInput.description = preparedSpawn.description;
@@ -836,28 +832,7 @@ function main() {
   const launchAgentName = preparedSpawn?.name || requestedAgentName || dispatchAgentName(input);
   if (launchAgentName) updatedInput.name = launchAgentName;
   const preparedCorrection = correctionMessage(corrections);
-  if (classification.kind === "codex_dispatch" || classification.kind === "read_only_codex_dispatch") {
-    if (preparedRoute && markers.some((marker) => marker.model !== (preparedRoute.marker ?? preparedRoute.model) || marker.effort !== preparedRoute.effort)) {
-      const route = preparedRoute;
-      writeDeny("PreToolUse", `sidequest: ticket resolved route is ${route.model} / ${route.effort}. A model cannot be overridden at spawn time. Set this ticket's route override before dispatching, then re-run dispatch and pass the returned spawn unchanged.`);
-      return;
-    }
-    if (!routeModels.length) {
-      writeDeny("PreToolUse", "sidequest: dispatch executor is missing the route marker from spawn.prompt. Re-run dispatch and pass the returned spawn unchanged.");
-      return;
-    }
-    const mismatch = classification.effort === null ? null : markers.find((marker) => marker.effort !== classification.effort);
-    if (mismatch) {
-      writeDeny("PreToolUse", `sidequest: dispatch executor effort "${classification.effort}" does not match route marker effort "${mismatch.effort}". Re-run dispatch and pass the returned spawn unchanged.`);
-      return;
-    }
-    if (routeModels.length > 1) {
-      writeDeny(
-        "PreToolUse",
-        `sidequest: this batch mixes tickets stamped with different models (${routeModels.join(", ")}) under one dispatch executor — every ticket would silently run on the last route marker's model. Split the batch per model and re-spawn each with its own dispatch prompt.`
-      );
-      return;
-    }
+  if (isDispatchExecutor) {
     const hadModel = Object.prototype.hasOwnProperty.call(toolInput, "model");
     if (hadModel) delete updatedInput.model;
     recordAuthoritativeLaunch(input, type, launchAgentName);
