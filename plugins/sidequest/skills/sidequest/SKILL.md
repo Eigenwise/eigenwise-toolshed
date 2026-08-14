@@ -159,7 +159,10 @@ optionally `--status todo`).
   salvage its worktree, release, then replace it.
 - Agents report automatically. **Never use `TaskOutput`** for a Sidequest task ID
   or launch name. THE polling read: `changes --since`; `pulse <ref>` for liveness.
-  `TaskStop` only after terminal evidence.
+  `TaskStop` only after terminal evidence. After consuming the terminal board result and preserving its
+  report or recovery handoff, retire that exact native teammate once with `TaskStop({ task_id: "<agent name>" })`.
+  This is a Claude Code host action, not a Sidequest tool. Never stop a live claim, retained continuation, or
+  candidate awaiting integration.
   **Never proxy-wait** either: no shell/`Monitor`/cron task whose only job is waiting for an
   executor or polling for its artifact (a one-shot local readiness watch is fine).
 

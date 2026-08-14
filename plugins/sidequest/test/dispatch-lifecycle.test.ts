@@ -1729,12 +1729,9 @@ test('a working dispatch is never matched, however well its identity lines up', 
   }), null);
 });
 
-test('the harness TeammateIdle payload ends an unbound terminal executor', () => {
-  const dispatch = finishDispatch('unbound dispatch meeting the real payload');
-  assert.deepEqual(runTeammateIdle(dispatch.agentName), {
-    continue: false,
-    stopReason: `sidequest: ${dispatch.ref} is terminal (done); end this idle executor.`,
-  });
+test('the former TeammateIdle payload does not wake a terminal executor', () => {
+  const dispatch = finishDispatch('terminal dispatch meeting the former payload');
+  assert.equal(runTeammateIdle(dispatch.agentName), null);
 });
 
 test('the harness TeammateIdle payload leaves a working executor alone', () => {

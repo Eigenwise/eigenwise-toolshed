@@ -43,7 +43,6 @@ const SESSION_END = path.join(HOOKS, 'session-end.js');
 const FORCE_BYPASS = path.join(HOOKS, 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(HOOKS, 'subagent-start.js');
 const SUBAGENT_STOP = path.join(HOOKS, 'subagent-stop.js');
-const TEAMMATE_IDLE = path.join(HOOKS, 'teammate-idle.js');
 const GUARD_PEER = path.join(HOOKS, 'guard-peer-message.js');
 const GUARD_HOME_DELETE = path.join(HOOKS, 'guard-home-delete.js');
 const GUARD_WORKTREE_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
@@ -1546,47 +1545,9 @@ test('peer-guard: missing isolated worktree blocks a non-terminal resume only', 
   fs.rmSync(isolatedRoot, { recursive: true, force: true });
 });
 
-test('teammate-idle: terminal dispatch ends its own idle executor', () => {
-  const ticket = addEffortTicket('terminal teammate exits', 'high');
-  const sessionId = `terminal-idle-${++sqSeq}`;
-  const stop = claimStopTicket(ticket, sessionId, 'terminal-idle-worker');
-  assert.equal(store.completeTicket(slug, ticket.ref, 'terminal-idle-worker', { sessionId }).ok, true);
-
-  const out = runHookOutput(TEAMMATE_IDLE, {
-    hook_event_name: 'TeammateIdle',
-    session_id: 'teammate-own-session',
-    agent_id: stop.agent_id,
-    agent_type: stop.agent_type,
-    teammate_name: stop.agent_name,
-  });
-  assert.deepEqual(out, {
-    continue: false,
-    stopReason: `sidequest: ${ticket.ref} is terminal (done); end this idle executor.`,
-  });
-});
-
-test('teammate-idle: live and scope-paused claims remain alive', () => {
-  const live = addEffortTicket('live teammate remains', 'high');
-  const liveStop = claimStopTicket(live, `live-idle-${++sqSeq}`, 'live-idle-worker');
-  assert.equal(runHookOutput(TEAMMATE_IDLE, {
-    hook_event_name: 'TeammateIdle',
-    session_id: liveStop.session_id,
-    agent_id: liveStop.agent_id,
-    agent_type: liveStop.agent_type,
-    teammate_name: liveStop.agent_name,
-  }), null);
-
-  const paused = addStopTicket('scope-paused teammate remains', { files: ['lib/declared.js'] });
-  const pausedStop = claimStopTicket(paused, `paused-idle-${++sqSeq}`, 'paused-idle-worker');
-  assert.equal(store.requestScope(slug, paused.ref, 'paused-idle-worker', ['lib/resumed.js']).ok, true);
-  runHook(SUBAGENT_STOP, pausedStop);
-  assert.equal(runHookOutput(TEAMMATE_IDLE, {
-    hook_event_name: 'TeammateIdle',
-    session_id: pausedStop.session_id,
-    agent_id: pausedStop.agent_id,
-    agent_type: pausedStop.agent_type,
-    teammate_name: pausedStop.agent_name,
-  }), null);
+test('hook manifest leaves terminal teammate retirement to the orchestrator', () => {
+  const config = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8'));
+  assert.equal(config.hooks.TeammateIdle, undefined, 'a TeammateIdle hook would wake completed executors instead of using native TaskStop');
 });
 
 
@@ -2866,8 +2827,7 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('guard-task-output.js'))), 'the TaskOutput guard must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
     && entry.hooks.some((hook?: any) => hook.command.includes('repeated-command-warn.js'))), 'the repeated-command warning must run for shell commands');
-  assert.ok(config.hooks.TeammateIdle.some((entry?: any) => entry.hooks
-    .some((hook?: any) => hook.command.includes('teammate-idle.js'))), 'terminal teammates must stop when idle');
+  assert.equal(config.hooks.TeammateIdle, undefined, 'native terminal retirement must not wake completed executors');
 
   const readme = fs.readFileSync(path.join(pluginRoot, 'README.md'), 'utf8');
   assert.doesNotMatch(readme, /per-prompt "use sidequest" reminder/);
@@ -2977,14 +2937,15 @@ function backdateSessionClaims(sessionId?: any, minutesAgo?: any, effort?: any) 
   db.putRow(database, 'globals', { key: 'workers', data: w });
 }
 
-test('subagent-stop stays silent after a terminal Agent failure releases the exact claim', () => {
+test('subagent-stop: a terminal Agent failure preserves recovery evidence then names the exact teammate to retire', () => {
   const sess = `sess-long-${++sqSeq}`;
   const t = addTicket('terminal release ticket');
   const stop = claimStopTicket(t, sess, 'worker-long');
   backdateSessionClaims(sess, 28);
   assert.equal(recordTerminalAgentFailure(t, stop).ok, true);
-  const ctx = runHookForBudget(SUBAGENT_STOP, stop);
-  assert.equal(ctx, '');
+  const context = runHookForBudget(SUBAGENT_STOP, stop);
+  assert.match(context, new RegExp(`^exec FINISHED after terminal died: ${t.ref}\\. Preserve recovery evidence before a replacement\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
   assert.equal(store.getTicket(slug, t.ref).claim, null);
   assert.equal(store.getTicket(slug, t.ref).dispatch.outcome, 'died');
   assert.ok(store.getTicket(slug, t.ref).dispatch.terminalAt);
@@ -3048,15 +3009,68 @@ test('subagent-stop: a stopped executor holding a fresh claim remains resumable'
   assert.match(ctx, new RegExp(`^exec WAITING: ${t.ref} ended a turn while holding its claim; it may resume\.`));
 });
 
-test('subagent-stop: a terminal release leaves task state alone after board closeout', () => {
+test('subagent-stop: a terminal release preserves board closeout then names the native teammate to retire', () => {
   const sess = `sess-released-${++sqSeq}`;
   const t = addStopTicket('released ticket with a monitor still armed');
   const stop = claimStopTicket(t, sess, 'worker-released');
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-released', { status: 'todo' }).ok, true);
-  assert.strictEqual(
-    runHook(SUBAGENT_STOP, stop),
-    `exec FINISHED after terminal release: ${t.ref}. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`
-  );
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, new RegExp(`^exec FINISHED after terminal release: ${t.ref}\\. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
+  assert.match(context, /TaskStop is a Claude Code host action, not a Sidequest tool\./);
+  assert.equal((context.match(/TaskStop\(/g) || []).length, 1, 'a terminal teammate is named for retirement once');
+});
+
+test('subagent-stop: a failed-before-claim attempt names its exact native teammate for retirement', () => {
+  const sessionId = `failed-before-claim-${++sqSeq}`;
+  const ticket = addEffortTicket('failed before claim ticket', 'high');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+  const agentName = `failed-before-claim-agent-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+
+  const context = runHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: prepared.ticket.dispatchExecutor,
+    agent_id: `failed-before-claim-id-${ticket.id}`,
+    agent_name: agentName,
+  });
+  assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
+  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
+});
+
+test('subagent-stop: a superseded unclaimed attempt names its exact native teammate for retirement', () => {
+  const sessionId = `superseded-attempt-${++sqSeq}`;
+  const ticket = addEffortTicket('superseded unclaimed attempt', 'high');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
+  const agentName = `superseded-attempt-agent-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId,
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.doesNotThrow(() => store.prepareDispatch(slug, ticket.ref, {
+    allowUnscoped: true,
+    sessionId: `superseded-replacement-${ticket.id}`,
+    recoveryEvidence: 'Observed terminal launch failure before the claim.',
+    source: 'test',
+  }));
+
+  const context = runHook(SUBAGENT_STOP, {
+    session_id: sessionId,
+    agent_type: prepared.ticket.dispatchExecutor,
+    agent_id: `superseded-attempt-id-${ticket.id}`,
+    agent_name: agentName,
+  });
+  assert.match(context, new RegExp(`^exec FINISHED after superseded terminal failed: ${ticket.ref}\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${agentName}" \\}\\)`));
+  assert.equal((context.match(/TaskStop\(/g) || []).length, 1);
 });
 
 test('subagent-stop: completed board closeout overrides a contradictory task notification', () => {
@@ -3066,7 +3080,9 @@ test('subagent-stop: completed board closeout overrides a contradictory task not
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-completed', kind: 'comment', body: 'Shipped abc1234.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-completed', { status: 'todo' }).ok, true);
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Shipped abc1234.' }).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done (abc1234); review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`);
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done \\(abc1234\\); review the recorded board result\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
 });
 
 test('subagent-stop: completed board closeout without a hash still overrides task state', () => {
@@ -3076,7 +3092,9 @@ test('subagent-stop: completed board closeout without a hash still overrides tas
   assert.strictEqual(store.addComment(slug, t.ref, { by: 'worker-no-hash', kind: 'comment', body: 'Done and verified.', source: 'cli' }).ok, true);
   assert.strictEqual(store.releaseTicket(slug, t.ref, 'worker-no-hash', { status: 'todo' }).ok, true);
   assert.strictEqual(store.closeTicketForGrooming(slug, t.ref, { by: 'hook-test-groomer', reason: 'Done and verified.' }).ok, true);
-  assert.strictEqual(runHook(SUBAGENT_STOP, stop), `exec FINISHED: ${t.ref} done WITHOUT commit hash; review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`);
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} done WITHOUT commit hash; review the recorded board result\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
 });
 
 test('subagent-stop: a legacy partial submission is not reported ready for integration', () => {
@@ -3090,10 +3108,9 @@ test('subagent-stop: a legacy partial submission is not reported ready for integ
     id: partial.id, project: slug, ref: partial.ref, status: partial.status,
     archived: partial.archived ? 1 : 0, ord: partial.order, claim_by: null, data: partial,
   });
-  assert.strictEqual(
-    runHook(SUBAGENT_STOP, stop),
-    `exec FINISHED with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths (plugins/model-gateway/bin/model-gateway.js); do not integrate it`
-  );
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, new RegExp(`^exec FINISHED with PARTIAL_SUBMISSION: ${t.ref} has scope-gated paths \\(plugins/model-gateway/bin/model-gateway\\.js\\); do not integrate it`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
 });
 
 test('subagent-stop: submitted board state overrides a contradictory task notification', () => {
@@ -3101,10 +3118,9 @@ test('subagent-stop: submitted board state overrides a contradictory task notifi
   const t = addStopTicket('submitted ticket awaiting the publish transaction', { files: ['lib/fixture.js'] });
   const stop = claimStopTicket(t, sess, 'worker-submitted');
   assert.strictEqual(store.submitTicket(slug, t.ref, 'worker-submitted', { commit: 'abc1234def5678abc1234def5678abc1234def56' }).ok, true);
-  assert.strictEqual(
-    runHook(SUBAGENT_STOP, stop),
-    `exec FINISHED: ${t.ref} READY_FOR_INTEGRATION (abc1234def56); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`
-  );
+  const context = runHook(SUBAGENT_STOP, stop);
+  assert.match(context, new RegExp(`^exec FINISHED: ${t.ref} READY_FOR_INTEGRATION \\(abc1234def56\\); run the publish transaction \\(references/publishing\\.md\\)\\.`));
+  assert.match(context, new RegExp(`TaskStop\\(\\{ task_id: "${stop.agent_name}" \\}\\)`));
 });
 
 test('subagent-stop: a prior owner is silent after another worker reclaims the ticket', () => {
@@ -3588,7 +3604,8 @@ test('subagent stop terminalizes an unclaimed launch so the next dispatch can re
     agent_id: 'native-stop-1',
     agent_name: 'stop-before-claim',
   });
-  assert.match(context, /exec DIED before claiming/);
+  assert.match(context, new RegExp(`^exec FINISHED after terminal failed: ${ticket.ref}\\. Preserve recovery evidence before a replacement\\.`));
+  assert.match(context, /TaskStop\(\{ task_id: "stop-before-claim" \}\)/);
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.dispatch.outcome, 'failed');
   assert.ok(after.dispatch.terminalAt);

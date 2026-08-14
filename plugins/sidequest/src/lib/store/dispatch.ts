@@ -446,6 +446,9 @@ function appendDispatchAttempt(state?: any, outcome?: any, source?: any, failure
   attempts.push({
     route: normalizeRoute(route),
     executor: state.executor || null,
+    sessionId: state.sessionId || null,
+    agentId: state.agentId || null,
+    agentName: state.agentName || null,
     tokenPrefix: state.tokenPrefix || null,
     preparedAt: state.preparedAt || null,
     launchedAt: state.launchedAt || null,
@@ -1550,6 +1553,17 @@ function dispatchMatchesStopIdentity(state?: any, sessionId?: any, executor?: an
   if (state.agentId) return state.agentId === agentId;
   return Boolean(agentName && state.agentName === agentName);
 }
+function terminalAttemptMatchesStopIdentity(state?: any, sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
+  const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
+  return attempts.find((attempt?: any) => {
+    if (!attempt?.terminalAt || attempt.sessionId !== sessionId || attempt.executor !== executor) return false;
+    if (agentName && attempt.agentName !== agentName) return false;
+    if (!agentId) return Boolean(agentName && attempt.agentName === agentName);
+    if (attempt.agentId) return attempt.agentId === agentId;
+    return Boolean(agentName && attempt.agentName === agentName);
+  }) || null;
+}
+
 function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, agentName?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
@@ -1557,13 +1571,21 @@ function markDispatchStopped(sessionId?: any, executor?: any, agentId?: any, age
   const normalizedAgentName = String(agentName || '').trim();
   if (!normalizedSessionId || !normalizedExecutor) return { ok: false, reason: 'missing_identity' };
   const matches: any[] = [];
+  const terminalAttempts: any[] = [];
   for (const project of listProjects({ all: true })) {
     for (const ticket of listTickets(project.slug)) {
       const state = dispatchState(ticket);
+      const terminalAttempt = ticket.claim?.by
+        ? null
+        : terminalAttemptMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName);
+      if (terminalAttempt) terminalAttempts.push({ ref: ticket.ref, outcome: terminalAttempt.outcome, agentName: terminalAttempt.agentName });
       if (!dispatchMatchesStopIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
       const active = state.outcome === 'prepared' || state.outcome === 'launched' || state.outcome === 'claimed';
       if (active || state.terminalAt) matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree });
     }
+  }
+  if (!matches.length && terminalAttempts.length === 1) {
+    return { ok: true, stopped: false, tickets: [], terminalAttempts };
   }
   if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {
     return { ok: false, reason: matches.length ? 'ambiguous' : 'not_found' };

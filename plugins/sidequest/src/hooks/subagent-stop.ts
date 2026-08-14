@@ -34,7 +34,7 @@ interface Ticket {
   files?: string[];
   claim?: { by?: string; verification?: { startedAt?: string; command?: string } } | null;
   checkpoint?: { id?: string; commit?: string; at?: string } | null;
-  dispatch?: { outcome?: string; terminalAt?: string; terminalSource?: string; turnEndedAt?: string; worktree?: string };
+  dispatch?: { outcome?: string; terminalAt?: string; terminalSource?: string; turnEndedAt?: string; worktree?: string; agentName?: string };
   submission?: { commit?: string; integratedAt?: string; unscopedPaths?: string[] };
   effort?: string;
 }
@@ -50,6 +50,7 @@ interface Store {
     ok?: boolean;
     stopped?: boolean;
     tickets?: Ticket[];
+    terminalAttempts?: { ref: string; outcome?: string; agentName?: string }[];
   };
   sessionClaims: (sessionId: string, options: Record<string, unknown>) => Claim[];
   markLongRunFlagged: (sessionId: string, slug: string, ticketId: string, at?: string) => boolean;
@@ -120,22 +121,31 @@ function diedVerdict(store: Store, claim: Claim, ticket: Ticket | null): string 
   return `exec DIED: ${label} at ${diedAt}; board quiet since ${quietSince}; checkpoint ${checkpointLabel}; commit ${commit}; comment ${commentLabel}${worktree}. Next: recover the worktree diff, or release + fresh dispatch.`;
 }
 
-function submissionVerdict(store: Store, ticket: Ticket): string | null {
+function retirementInstruction(ticket: Ticket | null, eventAgentName: string): string {
+  const teammateName = String(ticket?.dispatch?.agentName || eventAgentName || '').trim();
+  if (!teammateName) return '';
+  return ` After preserving this terminal handoff, retire the exact native teammate once with TaskStop({ task_id: ${JSON.stringify(teammateName)} }). TaskStop is a Claude Code host action, not a Sidequest tool.`;
+}
+
+function submissionVerdict(store: Store, ticket: Ticket, eventAgentName: string): string | null {
   const submission = ticket?.submission;
   if (!submission?.commit || submission.integratedAt) return null;
   const readiness = store.submissionReadiness(submission);
   if (!readiness.ok) {
-    return `exec FINISHED with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(', ')}); do not integrate it`;
+    return `exec FINISHED with PARTIAL_SUBMISSION: ${ticket.ref} has scope-gated paths (${(readiness.unscopedPaths || []).join(', ')}); do not integrate it${retirementInstruction(ticket, eventAgentName)}`;
   }
-  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
+  return `exec FINISHED: ${ticket.ref} READY_FOR_INTEGRATION (${submission.commit.slice(0, 12)}); run the publish transaction (references/publishing.md). The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
 }
 
-function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null {
+function terminalDispatchVerdict(store: Store, tickets: Ticket[], eventAgentName: string): string | null {
   for (const ticket of tickets) {
-    const submissionVerdictText = submissionVerdict(store, ticket);
+    const submissionVerdictText = submissionVerdict(store, ticket, eventAgentName);
     if (submissionVerdictText) return submissionVerdictText;
     if (ticket?.dispatch?.terminalAt && ticket.dispatch.outcome === 'released') {
-      return `exec FINISHED after terminal release: ${ticket.ref}. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
+      return `exec FINISHED after terminal release: ${ticket.ref}. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
+    }
+    if (ticket?.dispatch?.terminalAt && !ticket?.claim?.by) {
+      return `exec FINISHED after terminal ${ticket.dispatch.outcome || 'attempt'}: ${ticket.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(ticket, eventAgentName)}`;
     }
     if (!ticket || ticket.status !== 'done') continue;
     const comment = doneComment(ticket);
@@ -144,7 +154,7 @@ function terminalDispatchVerdict(store: Store, tickets: Ticket[]): string | null
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
   }
   return null;
 }
@@ -155,6 +165,7 @@ function stopVerdict(
   classification: ExecutorClassification,
   dispatchStopped: boolean,
   terminalTickets: Ticket[],
+  eventAgentName: string,
 ): string | null {
   for (const claim of claims) {
     if (!claim || claim.status !== 'done') continue;
@@ -165,7 +176,7 @@ function stopVerdict(
     const suffix = Array.isArray(ticket.files) && ticket.files.length && !hash
       ? ' done WITHOUT commit hash'
       : ` done${hash ? ` (${hash})` : ''}`;
-    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not TaskStop, redispatch, or investigate a contradictory task notification.`;
+    return `exec FINISHED: ${ticket.ref}${suffix}; review the recorded board result. The terminal board state is authoritative; do not redispatch or investigate a contradictory task notification.${retirementInstruction(ticket, eventAgentName)}`;
   }
 
   for (const claim of claims) {
@@ -176,12 +187,12 @@ function stopVerdict(
     } catch (_) {
       continue;
     }
-    const submissionVerdictText = ticket && submissionVerdict(store, ticket);
+    const submissionVerdictText = ticket && submissionVerdict(store, ticket, eventAgentName);
     if (!submissionVerdictText) continue;
     return submissionVerdictText;
   }
 
-  const terminal = terminalDispatchVerdict(store, terminalTickets);
+  const terminal = terminalDispatchVerdict(store, terminalTickets, eventAgentName);
   if (terminal) return terminal;
 
   const held = claims.find((claim) => claim && claim.held && claim.status === 'doing');
@@ -195,7 +206,9 @@ function stopVerdict(
     return `exec WAITING: ${label} ended a turn while holding its claim; it may resume. Do not re-dispatch or release it without a recorded terminal Agent failure.`;
   }
 
-  if (dispatchStopped && classification.kind !== 'unknown') return 'exec DIED before claiming; TaskStop it first, then fresh-dispatch and spawn the returned spec';
+  if (dispatchStopped && classification.kind !== 'unknown') {
+    return `exec DIED before claiming; fresh-dispatch only after diagnosis.${retirementInstruction(terminalTickets[0] || null, eventAgentName)}`;
+  }
   return null;
 }
 
@@ -243,15 +256,20 @@ function main(): void {
 
   let dispatchStopped = false;
   let terminalTickets: Ticket[] = [];
+  let terminalAttempts: { ref: string; outcome?: string; agentName?: string }[] = [];
   try {
     const result = store.markDispatchStopped(sessionId, agentType, agentId || null, agentName || null);
     dispatchStopped = Boolean(result.ok && result.stopped !== false);
     terminalTickets = Array.isArray(result.tickets) ? result.tickets : [];
+    terminalAttempts = Array.isArray(result.terminalAttempts) ? result.terminalAttempts : [];
   } catch (_) {}
 
   let verdict: string | null;
   try {
-    verdict = stopVerdict(store, claims, classification, dispatchStopped, terminalTickets);
+    const terminalAttempt = terminalAttempts[0];
+    verdict = terminalAttempt
+      ? `exec FINISHED after superseded terminal ${terminalAttempt.outcome || 'attempt'}: ${terminalAttempt.ref}. Preserve recovery evidence before a replacement.${retirementInstruction(null, terminalAttempt.agentName || agentName)}`
+      : stopVerdict(store, claims, classification, dispatchStopped, terminalTickets, agentName);
   } catch (_) {
     return;
   }

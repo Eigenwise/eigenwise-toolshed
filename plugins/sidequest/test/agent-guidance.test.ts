@@ -31,6 +31,13 @@ test('published guidance excludes retired instructions', () => {
   assert.match(executorTemplate, /name the assertion in the test that ran and was not skipped/);
   assert.match(executorTemplate, /state that the state directory started empty/);
   assert.match(executorTemplate, /both names must cover the changed behavior, not an unrelated test/);
+  assert.match(orchestration, /Retire terminal teammates/);
+  assert.match(orchestration, /TaskStop\(\{ task_id: "<agent name>" \}\)`\s+once/);
+  assert.match(orchestration, /Claude Code host action, not a Sidequest tool/);
+  assert.match(orchestration, /Never stop a live claim, retained continuation,\s+or candidate awaiting\s+integration/);
+  assert.match(orchestration, /Do not wake a completed executor, poll FleetView, or create a cleanup loop/);
+  assert.match(skill, /TaskStop\(\{ task_id: "<agent name>" \}\)/);
+  assert.match(executorTemplate, /After terminal closeout, the board terminal state is authoritative/);
 
   for (const source of [skill, orchestration]) {
     assert.doesNotMatch(source, new RegExp('native' + '_agent', 'i'));
