@@ -223,6 +223,23 @@ test('Grafana adopts the managed live container and honors configured loopback p
   assert.throws(() => grafana.runtimeConfig({ container: '../bad' }), /Invalid dashboard container name/);
 });
 
+test('Grafana check reports mismatched loopback bindings without mutating the container', () => {
+  const calls = [];
+  const result = grafana.status({ container: 'workbench-otel-lgtm', grafanaPort: 3000, otlpPort: 14318 }, {
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      return {
+        status: 0,
+        stdout: `true|${grafana.IMAGE}|0.20.0|${grafana.MANAGED_CONFIG_VERSION}|${JSON.stringify({ '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '15433' }], '4318/tcp': [{ HostIp: '127.0.0.1', HostPort: '15434' }] })}|null`,
+      };
+    },
+  });
+
+  assert.equal(result.running, true);
+  assert.equal(result.portBindingsCurrent, false);
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect']);
+});
+
 test('Grafana recognizes a dashboard mount through a canonical path alias', (t) => {
   const root = temporaryDirectory();
   const dashboardDir = path.join(root, 'dashboards');

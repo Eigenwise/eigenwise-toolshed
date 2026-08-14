@@ -37,7 +37,7 @@ Tell Claude what happened:
 
 > Disable Observability for this repository, but keep its local history.
 
-Claude checks project wiring, recent activity, and the local services. Existing Claude Code sessions need a restart after opt-in or settings changes.
+Claude checks project wiring, recent activity, and the local services. Existing Claude Code sessions need a restart after opt-in or settings changes. A dashboard outage does not stop local observer ingestion: queued delivery resumes when the configured sink returns.
 
 ## License
 
