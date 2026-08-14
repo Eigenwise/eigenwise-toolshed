@@ -119,11 +119,8 @@ stamp `--category`; use its fallback only when no category fits. `--complexity` 
 fallback; never set `--model`/`--effort`. Use `--file`, `--story`, `--anchors`, and exact `--verify` as
 needed; scope and authoring details: `references/ticket-authoring.md`.
 
-**Descriptions are developer-to-developer specs, never PM summaries.** Include anchors, behavior and
-edge cases, bounds, dependencies/decisions, and a runnable `cd <repo-relative-dir> && ...` verify command. Bugs include
-a reproduction. Front-load evidence for cheaper executors. Route by remaining
-uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct
-only for the INLINE-SAFE allowlist below, with its recorded reason.
+Write developer-to-developer descriptions with evidence that cheaper executors can act on. For the
+required details and direct-route boundary, see `references/ticket-authoring.md`.
 
 Descriptions/comments render markdown. Use real newlines, never literal `\n`. Mid-task side issue? File
 it with `mcp__plugin_sidequest_board__add`, then keep going. Filing a ticket is not a request to work it.

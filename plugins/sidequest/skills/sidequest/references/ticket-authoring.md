@@ -8,6 +8,10 @@ A Sidequest category or config-schema change normally spans `src/lib/store.ts`, 
 
 Decide explicitly whether existing materialized profiles need a seed catch-up. Put that decision and the exact verify command in the ticket description.
 
+## Describe implementation work
+
+Descriptions are developer-to-developer specs, never PM summaries. Include anchors, behavior and edge cases, bounds, dependencies or decisions, and a runnable `cd <repo-relative-dir> && ...` verify command. Bugs include a reproduction. Front-load evidence for cheaper executors. Route by remaining uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct only for the INLINE-SAFE allowlist, with its recorded reason.
+
 ## Establish the premise and acceptance behavior
 
 A quantitative or behavioral claim that a fix depends on needs evidence before it becomes a ticket premise. Include the measurement command, its output, and where it ran, or link the read-only measurement ticket that established the numbers. When the claim has not been measured, file measurement work first and create the fix ticket from that result.
