@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import { planningDepthWarningsFixtureParent } from './_fixture-provenance.js';
 'use strict';
 const test = require('node:test');
 const assert = require('node:assert');
@@ -12,7 +13,7 @@ const { tools: mcpTicketTools } = require('../lib/mcp-tickets');
 const { tools: mcpReadTools } = require('../lib/mcp-read');
 
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-test-'));
-const PROJ = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'board');
+const PROJ = path.join(planningDepthWarningsFixtureParent, 'board');
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const CLAUDE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-claude-'));
 fs.mkdirSync(path.join(CLAUDE_HOME, 'plugins'), { recursive: true });
@@ -214,7 +215,7 @@ test('correct executor anchors stay quiet', () => {
 });
 
 test('submission-review anchors resolve against their explicit pinned ref or commit', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'pinned-anchor');
+  const project = path.join(planningDepthWarningsFixtureParent, 'pinned-anchor');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'test'), { recursive: true });
   fs.writeFileSync(path.join(project, 'README.md'), 'fixture\n');
@@ -473,7 +474,7 @@ test('add warns for a write-scope ticket with no declared files, and dispatch re
   assert.strictEqual(overridden.status, 0, overridden.stderr + overridden.stdout);
   assert.ok(JSON.parse(overridden.stdout).warnings.includes(`Dispatch warning: ${NO_SCOPE_WARNING.replace('Planning-depth warning: ', '')}`));
 
-  const policyProject = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'policy-board');
+  const policyProject = path.join(planningDepthWarningsFixtureParent, 'policy-board');
   fs.mkdirSync(policyProject, { recursive: true });
   const policyConfig = cliJsonAt(policyProject, ['board-config', '--auto-approve-scope', 'generated/**']);
   assert.deepStrictEqual(policyConfig.autoApproveScope, ['generated/**']);
@@ -501,7 +502,7 @@ test('add warns for a write-scope ticket with no declared files, and dispatch re
 });
 
 test('warns when tracked package build output is omitted from source scope', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'tracked-output');
+  const project = path.join(planningDepthWarningsFixtureParent, 'tracked-output');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'src', 'lib'), { recursive: true });
   fs.mkdirSync(path.join(project, 'lib'), { recursive: true });
@@ -526,7 +527,7 @@ test('warns when tracked package build output is omitted from source scope', () 
 });
 
 test('warns when a declared module has an undeclared in-package importer', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'scope-consumer');
+  const project = path.join(planningDepthWarningsFixtureParent, 'scope-consumer');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'src'), { recursive: true });
   fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
@@ -543,7 +544,7 @@ test('warns when a declared module has an undeclared in-package importer', () =>
 });
 
 test('warns for transitive consumers in the first scope warning', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'transitive-scope-consumer');
+  const project = path.join(planningDepthWarningsFixtureParent, 'transitive-scope-consumer');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'src'), { recursive: true });
   fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
@@ -561,7 +562,7 @@ test('warns for transitive consumers in the first scope warning', () => {
 });
 
 test('summarizes large in-package consumer closures', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'large-scope-consumer');
+  const project = path.join(planningDepthWarningsFixtureParent, 'large-scope-consumer');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'src'), { recursive: true });
   fs.writeFileSync(path.join(project, 'package.json'), '{}\n');
@@ -577,7 +578,7 @@ test('summarizes large in-package consumer closures', () => {
 });
 
 test('warns about undeclared same-basename sibling paths', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'basename-sibling');
+  const project = path.join(planningDepthWarningsFixtureParent, 'basename-sibling');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'lib'), { recursive: true });
   fs.mkdirSync(path.join(project, 'cli'), { recursive: true });
@@ -630,7 +631,7 @@ test('folds sibling-directory warnings while retaining direct importers and full
 });
 
 test('does not warn about same-basename siblings outside the package', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'package-basename-sibling');
+  const project = path.join(planningDepthWarningsFixtureParent, 'package-basename-sibling');
   fs.rmSync(project, { recursive: true, force: true });
   const sidequest = path.join(project, 'plugins', 'sidequest');
   const observability = path.join(project, 'plugins', 'observability');
@@ -646,7 +647,7 @@ test('does not warn about same-basename siblings outside the package', () => {
 });
 
 test('discovers bundled hook output from the build script export', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'bundled-hook-output');
+  const project = path.join(planningDepthWarningsFixtureParent, 'bundled-hook-output');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'src', 'hooks'), { recursive: true });
   fs.mkdirSync(path.join(project, 'hooks'), { recursive: true });
@@ -673,7 +674,7 @@ test('discovers bundled hook output from the build script export', () => {
 });
 
 test('readonly tickets skip build-output and consumer write-scope warnings on add and dispatch', () => {
-  const project = path.join(os.tmpdir(), 'sq-planning-warnings-fixtures', 'readonly-output');
+  const project = path.join(planningDepthWarningsFixtureParent, 'readonly-output');
   fs.rmSync(project, { recursive: true, force: true });
   fs.mkdirSync(path.join(project, 'src', 'lib'), { recursive: true });
   fs.mkdirSync(path.join(project, 'src', 'hooks'), { recursive: true });

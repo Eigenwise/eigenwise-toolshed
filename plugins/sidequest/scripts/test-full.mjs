@@ -83,7 +83,7 @@ const testFiles = (await fs.readdir(testDirectory))
 
 function runTests(phase, files, environment) {
   const phaseStartTime = performance.now();
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
+  const result = spawnSync(process.execPath, ['--import', 'tsx', '--import', './test/_sidequest-test-home.ts', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
     cwd: pluginRoot,
     stdio: 'inherit',
     windowsHide: true,
