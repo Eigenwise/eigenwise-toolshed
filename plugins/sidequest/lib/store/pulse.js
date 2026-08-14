@@ -347,7 +347,10 @@ function createBoardWatch(dependencies) {
       return { type: ticket.lastEventType, author: "", excerpt: "" };
     }
     if (ticket.liveness === "dead") return { type: "dead", author: "", excerpt: String(ticket.livenessEvidence || "") };
-    if (Array.isArray(ticket.warnings) && ticket.warnings.length) return { type: "warning", author: "", excerpt: excerpt(ticket.warnings[0]) };
+    if (Array.isArray(ticket.warnings) && ticket.warnings.length) {
+      const warningIdentity = String(ticket.warnings[0] || "");
+      return { type: "warning", author: "", excerpt: excerpt(warningIdentity), warningIdentity };
+    }
     const comment = ticket.lastComment;
     const body = String(comment?.body || "");
     if (!comment || markerPattern.test(body)) return null;
@@ -380,7 +383,7 @@ function createBoardWatch(dependencies) {
         const event = actionableEvent(ticket);
         if (!event) continue;
         const commentId = ticket.lastComment?.id || "";
-        const key = [ticket.ref, commentId, ticket.status].join("|");
+        const key = event.type === "warning" ? [ticket.ref, ticket.status, event.type, event.author, event.warningIdentity].join("|") : [ticket.ref, commentId, ticket.status].join("|");
         if (seen.has(key)) continue;
         seen.add(key);
         writeLine(`${ticket.ref} ${ticket.status} ${event.type} ${event.author || "-"} ${event.excerpt || "-"}`);

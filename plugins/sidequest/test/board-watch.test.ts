@@ -75,6 +75,36 @@ test('watch emits an out-of-scope comment once across repeated polls', () => {
   assert.deepEqual(lines, ['SQ-1 doing comment executor I need to widen scope for the generated pair.']);
 });
 
+test('watch emits an unchanged warning once after an unrelated ticket change', () => {
+  const warning = 'Dispatch warning: US-54 decision log gained 1 entry (#14) since SQ-1970 was claimed; it is not in its briefing.';
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ticket({ warnings: [warning] })] },
+    { serverTime: '2026-08-13T00:00:02.000Z', tickets: [ticket({ warnings: [warning], lastComment: { id: 'unrelated-comment', by: 'executor', body: 'Finished a separate task.' } })] },
+  ]);
+
+  boardWatch.poll();
+  boardWatch.poll();
+
+  assert.deepEqual(lines, [`SQ-1 doing warning - ${warning}`]);
+});
+
+test('watch re-emits a materially changed warning', () => {
+  const originalWarning = 'Dispatch warning: US-54 decision log gained 1 entry (#14) since SQ-1970 was claimed; it is not in its briefing.';
+  const changedWarning = 'Dispatch warning: US-54 decision log gained 2 entries (#14-#15) since SQ-1970 was claimed; they are not in its briefing.';
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ticket({ warnings: [originalWarning] })] },
+    { serverTime: '2026-08-13T00:00:02.000Z', tickets: [ticket({ warnings: [changedWarning] })] },
+  ]);
+
+  boardWatch.poll();
+  boardWatch.poll();
+
+  assert.deepEqual(lines, [
+    `SQ-1 doing warning - ${originalWarning}`,
+    `SQ-1 doing warning - ${changedWarning}`,
+  ]);
+});
+
 test('watch ignores marker comments', () => {
   const { boardWatch, lines } = watch([
     { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ticket({ lastComment: { id: 'marker', by: 'executor', body: '[sidequest:verify-start] scope request' } })] },

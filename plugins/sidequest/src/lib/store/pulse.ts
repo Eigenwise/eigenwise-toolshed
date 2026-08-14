@@ -372,13 +372,16 @@ function createBoardWatch(dependencies: any) {
       && String(comment.operation || '') === operation;
   }
 
-  function actionableEvent(ticket: any): { type: string; author: string; excerpt: string } | null {
+  function actionableEvent(ticket: any): { type: string; author: string; excerpt: string; warningIdentity?: string } | null {
     if (ticket.status === 'awaiting-oracle') return { type: 'awaiting-oracle', author: '', excerpt: '' };
     if (ticket.lastEventType === 'release' || ticket.lastEventType === 'scope-request') {
       return { type: ticket.lastEventType, author: '', excerpt: '' };
     }
     if (ticket.liveness === 'dead') return { type: 'dead', author: '', excerpt: String(ticket.livenessEvidence || '') };
-    if (Array.isArray(ticket.warnings) && ticket.warnings.length) return { type: 'warning', author: '', excerpt: excerpt(ticket.warnings[0]) };
+    if (Array.isArray(ticket.warnings) && ticket.warnings.length) {
+      const warningIdentity = String(ticket.warnings[0] || '');
+      return { type: 'warning', author: '', excerpt: excerpt(warningIdentity), warningIdentity };
+    }
     const comment = ticket.lastComment;
     const body = String(comment?.body || '');
     if (!comment || markerPattern.test(body)) return null;
@@ -413,7 +416,9 @@ function createBoardWatch(dependencies: any) {
         const event = actionableEvent(ticket);
         if (!event) continue;
         const commentId = ticket.lastComment?.id || '';
-        const key = [ticket.ref, commentId, ticket.status].join('|');
+        const key = event.type === 'warning'
+          ? [ticket.ref, ticket.status, event.type, event.author, event.warningIdentity].join('|')
+          : [ticket.ref, commentId, ticket.status].join('|');
         if (seen.has(key)) continue;
         seen.add(key);
         writeLine(`${ticket.ref} ${ticket.status} ${event.type} ${event.author || '-'} ${event.excerpt || '-'}`);
