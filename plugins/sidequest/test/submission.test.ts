@@ -105,6 +105,7 @@ function noGitCliTicket(title: string, files: string[]) {
     files,
     source: 'cli',
     labels: ['direct-ok'],
+    category: 'submission.fixture',
   });
   const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: projectPath }, { cwd: projectPath });
   return { project, projectPath, ticket, runCli: runner.runCli };
@@ -2340,6 +2341,15 @@ test('a submit after a terminal dispatch is gated on current ticket scope, not t
   });
   assert.strictEqual(submission.ok, true, submission.message);
   assert.ok(submission.ticket.submission.admittedScope.includes('lib/granted-late.js'));
+});
+
+test('no-Git submission fixtures pin the available fixture route', () => {
+  const { project, ticket } = noGitCliTicket('fixture routing', ['wiki/page.md']);
+  const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
+  assert.deepStrictEqual(
+    { model: prepared.ticket.model, effort: prepared.ticket.effort },
+    { model: 'sonnet', effort: 'medium' },
+  );
 });
 
 test('SQ-1947: MCP retry binds one capability result to the checkpointed candidate', async (context: any) => {
