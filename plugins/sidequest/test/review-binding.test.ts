@@ -15,6 +15,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const store = require('../lib/store.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
+const reviewBinding = require('../lib/kernel/review-binding.js');
 
 function git(repository: string, args: string[]) {
   return execFileSync('git', args, { cwd: repository, encoding: 'utf8', windowsHide: true }).trim();
@@ -49,9 +50,15 @@ function board(label: string) {
 // A claim-free terminal submission: exactly the state a candidate review binds to.
 function submittedSource(slug: string, commit: string, label: string, overrides: any = {}) {
   const source = store.createTicket(slug, { title: `source ${label}`, files: ['candidate.txt'] });
+  const terminalAt = new Date().toISOString();
   source.status = 'doing';
   source.claim = null;
-  source.dispatch = { terminalAt: new Date().toISOString(), outcome: 'submitted' };
+  source.dispatch = {
+    terminalAt,
+    outcome: 'submitted',
+    agentId: `source-agent-${label}`,
+    attempts: [{ outcome: 'submitted', commit, agentId: `source-agent-${label}`, terminalAt }],
+  };
   source.submission = Object.assign({
     by: 'implementer',
     at: new Date().toISOString(),
@@ -62,6 +69,30 @@ function submittedSource(slug: string, commit: string, label: string, overrides:
   }, overrides);
   persist(slug, source);
   return store.getTicket(slug, source.ref);
+}
+
+// The review as a terminal executor leaves it: status done plus an appended
+// terminal attempt carrying the runtime identity that actually ran it.
+function completeReview(slug: string, ref: string, agentId: string | null) {
+  const done = store.getTicket(slug, ref);
+  const terminalAt = new Date().toISOString();
+  done.status = 'done';
+  done.dispatch = {
+    terminalAt,
+    outcome: 'done',
+    agentId,
+    attempts: [{ outcome: 'done', agentId, terminalAt }],
+  };
+  persist(slug, done);
+  return store.getTicket(slug, ref);
+}
+
+// The exact bytes a refused mutation must leave behind on both halves.
+function bindingBytes(slug: string, sourceRef: string, reviewRef: string) {
+  return JSON.stringify({
+    source: store.getTicket(slug, sourceRef),
+    review: store.getTicket(slug, reviewRef),
+  });
 }
 
 function reviewTicket(slug: string, label: string) {
@@ -273,61 +304,297 @@ test('a bound candidate refuses reclaim, amendment, and clearing from either leg
   }
 });
 
-test('integration waits for the bound review and stays blocked once the candidate is rejected', () => {
-  const { slug, commit } = board('integration');
-  const source = submittedSource(slug, commit, 'integration');
-  const review = store.createTicket(slug, { title: 'gate review', category: 'review-audit' }, { ref: source.ref, commit });
+test('no direct store call can permanently reject a bound candidate under any caller label', () => {
+  const { repository, slug, commit } = board('direct-store-reject');
+  const source = submittedSource(slug, commit, 'direct-store-reject');
+  const review = store.createTicket(slug, { title: 'direct store review', category: 'review-audit' }, { ref: source.ref, commit });
+  completeReview(slug, review.ref, 'reviewer-agent');
+  const before = bindingBytes(slug, source.ref, review.ref);
+
+  for (const by of ['implementer', 'reviewer', 'fresh-repair-identity']) {
+    const direct = store.recordSubmissionRejection(slug, source.ref, {
+      by,
+      review: 'read the pinned candidate end to end',
+      reason: 'confirmed defect',
+      commit,
+      root: repository,
+    });
+    assert.equal(direct.ok, false, `${by} cannot reject directly`);
+    assert.equal(direct.reason, 'candidate_review_locked', `${by} gets the lock, not an ownership answer`);
+    assert.match(direct.message, /no route permanently rejects a bound candidate/);
+
+    const reworked = store.reworkSubmission(slug, source.ref, {
+      by,
+      review: 'read the pinned candidate end to end',
+      reviewRef: review.ref,
+      reason: 'confirmed defect',
+    });
+    assert.equal(reworked.ok, false, `${by} cannot rework the bound candidate`);
+    assert.equal(reworked.reason, 'candidate_review_locked');
+  }
+
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'every refused route left both halves byte-identical');
+  const parked = store.getTicket(slug, source.ref);
+  assert.equal(parked.rejectedSubmissions, undefined, 'no rejected history was written');
+  assert.equal(parked.submission.review.outcome, 'planned', 'no review outcome was written');
+  assert.equal(store.rejectBoundCandidate, undefined, 'no privileged rejection wrapper is exported');
+  assert.equal(store.reworkSubmissionAsReleaseAuthority, undefined, 'no release-authority rework wrapper is exported');
+});
+
+test('raw MCP rework refuses a bound candidate for an arbitrary client with any reviewRef, payload, or session string', async () => {
+  const { repository, slug, commit } = board('raw-mcp-reject');
+  const source = submittedSource(slug, commit, 'raw-mcp-reject');
+  const review = store.createTicket(slug, { title: 'raw mcp review', category: 'review-audit' }, { ref: source.ref, commit });
+  completeReview(slug, review.ref, 'reviewer-agent');
+  const before = bindingBytes(slug, source.ref, review.ref);
+  const copiedPayload = JSON.parse(JSON.stringify(store.getTicket(slug, source.ref).submission));
+
+  const forgeries: Array<[string, any]> = [
+    ['an arbitrary client', { by: 'arbitrary-mcp-client', review: 'audited the candidate', reviewRef: review.ref, reason: 'confirmed defect' }],
+    ['the copied candidate payload', { by: copiedPayload.by, review: JSON.stringify(copiedPayload), reviewRef: review.ref, reason: `confirmed defect in ${copiedPayload.commit}` }],
+    ['a publish-lock session string', { by: 'release-authority session=sidequest-publish-lock', review: 'audited the candidate', reviewRef: review.ref, reason: 'confirmed defect' }],
+  ];
+  for (const [label, forged] of forgeries) {
+    const response = await mcp.handleRequest({
+      jsonrpc: '2.0',
+      id: 4100,
+      method: 'tools/call',
+      params: { name: 'rework', arguments: Object.assign({ project: repository, ref: source.ref }, forged) },
+    });
+    assert.equal(response.result.isError, undefined, `rework returned a refusal payload for ${label}`);
+    const ack = JSON.parse(response.result.content[0].text);
+    assert.equal(ack.ok, false, `${label} cannot reject over raw MCP`);
+    assert.equal(ack.reason, 'candidate_review_locked', `${label} gets the lock`);
+    assert.match(ack.message, /A failed review records its evidence on the review ticket/);
+  }
+
+  // Session ids, publish-lock holders, and whole submission records cannot even
+  // be spelled as arguments, so there is no field left for a caller to forge.
+  const smuggled = await mcp.handleRequest({
+    jsonrpc: '2.0',
+    id: 4101,
+    method: 'tools/call',
+    params: {
+      name: 'rework',
+      arguments: {
+        project: repository,
+        ref: source.ref,
+        by: 'release-authority',
+        review: 'audited the candidate',
+        reason: 'confirmed defect',
+        session: 'sidequest-publish-lock',
+        publishLock: 'held',
+        submission: copiedPayload,
+      },
+    },
+  });
+  assert.equal(smuggled.result.isError, true, 'rework refuses arguments it does not accept');
+  assert.match(smuggled.result.content[0].text, /unknown arguments/);
+
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'raw MCP rework left both halves byte-identical');
+});
+
+test('the CLI rework command refuses a bound candidate and writes nothing', () => {
+  const { repository, slug, commit } = board('cli-reject');
+  const source = submittedSource(slug, commit, 'cli-reject');
+  const review = store.createTicket(slug, { title: 'cli review', category: 'review-audit' }, { ref: source.ref, commit });
+  completeReview(slug, review.ref, 'reviewer-agent');
+  const before = bindingBytes(slug, source.ref, review.ref);
+
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const result = require('node:child_process').spawnSync(process.execPath, [
+    cli, 'rework', source.ref,
+    '--project', repository,
+    '--by', 'reviewer',
+    '--review', 'audited the candidate',
+    '--review-ref', review.ref,
+    '--reason', 'confirmed defect',
+    '--json',
+  ], { encoding: 'utf8', windowsHide: true, env: { ...process.env, SIDEQUEST_HOME } });
+  assert.equal(result.status, 1, result.stderr);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.reason, 'candidate_review_locked');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'CLI rework left both halves byte-identical');
+});
+
+test('reconciliation refuses a pending rejection of the bound candidate and still finishes an older one', () => {
+  const { repository, slug, commit: older } = board('reconcile');
+  fs.writeFileSync(path.join(repository, 'candidate.txt'), 'second candidate\n');
+  git(repository, ['add', 'candidate.txt']);
+  git(repository, ['commit', '-m', 'second candidate']);
+  const bound = git(repository, ['rev-parse', 'HEAD']);
+
+  const source = submittedSource(slug, bound, 'reconcile');
+  const review = store.createTicket(slug, { title: 'reconcile review', category: 'review-audit' }, { ref: source.ref, commit: bound });
+  completeReview(slug, review.ref, 'reviewer-agent');
+
+  const matching = store.getTicket(slug, source.ref);
+  matching.rejectedSubmissions = [{
+    commit: bound,
+    rejectedAt: new Date().toISOString(),
+    rejectedBy: 'reviewer',
+    review: 'half-written rejection of the bound candidate',
+    reason: 'confirmed defect',
+    rejectionKind: 'validation',
+    validation: true,
+    preservationState: 'pending',
+    source: 'mcp',
+  }];
+  persist(slug, matching);
+  const before = bindingBytes(slug, source.ref, review.ref);
+
+  const refused = store.reconcileSubmissionRejections(slug, source.ref);
+  assert.equal(refused.ok, false, 'a pending rejection of the bound candidate cannot be finished');
+  assert.equal(refused.reason, 'candidate_review_locked');
+  assert.equal(bindingBytes(slug, source.ref, review.ref), before, 'reconciliation wrote nothing');
+  assert.equal(store.getTicket(slug, source.ref).rejectedSubmissions[0].preservationState, 'pending');
+
+  const stale = store.getTicket(slug, source.ref);
+  stale.rejectedSubmissions[0].commit = older;
+  persist(slug, stale);
+  const recovered = store.reconcileSubmissionRejections(slug, source.ref);
+  assert.equal(recovered.ok, true, recovered.message);
+  assert.equal(store.getTicket(slug, source.ref).rejectedSubmissions[0].preservationState, 'preserved');
+  assert.equal(store.getTicket(slug, source.ref).submission.commit, bound, 'the bound candidate stayed parked');
+});
+
+test('a failed exact review blocks integration and leaves the candidate and both binding halves untouched', () => {
+  const { slug, commit } = board('failed-review');
+  const source = submittedSource(slug, commit, 'failed-review');
+  const review = store.createTicket(slug, { title: 'failing review', category: 'review-audit' }, { ref: source.ref, commit });
   const pending = store.validateIntegrationSubmission(slug, source.ref, {});
   assert.equal(pending.ok, false);
   assert.equal(pending.reason, 'candidate_review_required');
   assert.match(pending.message, /has not terminally completed its bound review/);
 
-  const done = store.getTicket(slug, review.ref);
-  done.status = 'done';
-  done.dispatch = { terminalAt: new Date().toISOString(), outcome: 'done' };
-  persist(slug, done);
+  const before = bindingBytes(slug, source.ref, review.ref);
+  // What a review executor that found a real defect actually does: evidence on
+  // the review ticket, then release it for an external oracle.
+  const released = store.getTicket(slug, review.ref);
+  released.status = 'awaiting-oracle';
+  released.dispatch = { terminalAt: new Date().toISOString(), outcome: 'released', agentId: 'reviewer-agent', attempts: [{ outcome: 'released', agentId: 'reviewer-agent', terminalAt: new Date().toISOString() }] };
+  persist(slug, released);
 
-  const rejected = store.reworkSubmission(slug, source.ref, {
-    by: 'reviewer',
-    review: 'read the candidate diff end to end',
-    reviewRef: review.ref,
-    reason: 'the transition writes one half without the other',
-  });
-  assert.equal(rejected.ok, true);
-  assert.equal(rejected.freshRepairRequired, true);
-  const parked = store.getTicket(slug, source.ref);
-  assert.equal(parked.submission.commit, commit, 'the rejected candidate stays parked, not cleared');
-  assert.equal(parked.submission.review.outcome, 'rejected');
+  const blocked = store.validateIntegrationSubmission(slug, source.ref, {});
+  assert.equal(blocked.ok, false);
+  assert.equal(blocked.reason, 'candidate_review_required');
+  const after = store.getTicket(slug, source.ref);
+  assert.equal(JSON.stringify(after), JSON.stringify(JSON.parse(before).source), 'the source half is byte-identical');
+  assert.equal(after.submission.commit, commit);
+  assert.equal(after.submission.review.outcome, 'planned');
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.candidate.value, commit);
+});
+
+test('a historical rejected review outcome stays readable and keeps integration blocked', () => {
+  const { slug, commit } = board('legacy-rejected');
+  const source = submittedSource(slug, commit, 'legacy-rejected');
+  store.createTicket(slug, { title: 'legacy review', category: 'review-audit' }, { ref: source.ref, commit });
+  const legacy = store.getTicket(slug, source.ref);
+  legacy.submission.review.outcome = 'rejected';
+  legacy.rejectedSubmissions = [{
+    commit,
+    rejectedAt: '2026-01-01T00:00:00.000Z',
+    rejectedBy: 'legacy-reviewer',
+    review: 'recorded before public rejection was removed',
+    reason: 'legacy confirmed defect',
+    preservationState: 'preserved',
+    quarantineRef: `refs/sidequest/${source.ref}-rejected`,
+  }];
+  persist(slug, legacy);
+
   const blocked = store.validateIntegrationSubmission(slug, source.ref, {});
   assert.equal(blocked.ok, false);
   assert.equal(blocked.reason, 'candidate_rejected');
   assert.match(blocked.message, /repair needs fresh ticket, attempt, candidate, and review identities/);
+  assert.equal(store.getTicket(slug, source.ref).rejectedSubmissions.length, 1, 'the historical record is still readable');
 });
 
-test('rejecting a bound candidate needs the bound review ref, a terminal review, and a different identity', () => {
-  const { slug, commit } = board('reject-guards');
-  const source = submittedSource(slug, commit, 'reject-guards');
-  const review = store.createTicket(slug, { title: 'guard review', category: 'review-audit' }, { ref: source.ref, commit });
-  const evidence = { review: 'inspected the pinned candidate', reason: 'confirmed defect' };
+test('unbound owner rework still parks the candidate and reopens the ticket', () => {
+  const { slug, commit } = board('unbound-rework');
+  const source = submittedSource(slug, commit, 'unbound-rework');
+  const reworked = store.reworkSubmission(slug, source.ref, {
+    by: 'implementer',
+    review: 'the orchestrator read the diff',
+    reason: 'the range includes a foreign path',
+  });
+  assert.equal(reworked.ok, true, reworked.message);
+  const reopened = store.getTicket(slug, source.ref);
+  assert.equal(reopened.status, 'todo');
+  assert.equal(reopened.submission, null);
+  assert.equal(reopened.rejectedSubmissions[0].commit, commit);
+  assert.equal(reopened.rejectedSubmissions[0].preservationState, 'preserved');
+});
 
-  const unnamed = store.reworkSubmission(slug, source.ref, Object.assign({ by: 'reviewer' }, evidence));
-  assert.equal(unnamed.reason, 'review_identity_required');
-  assert.match(unnamed.message, new RegExp(`pass reviewRef ${review.ref}`));
+test('review provenance comes from immutable terminal attempts, not the mutable current dispatch', () => {
+  const { slug, commit } = board('provenance');
+  const source = submittedSource(slug, commit, 'provenance');
+  const review = store.createTicket(slug, { title: 'provenance review', category: 'review-audit' }, { ref: source.ref, commit });
 
-  const wrongReview = store.reworkSubmission(slug, source.ref, Object.assign({ by: 'reviewer', reviewRef: 'SQ-999999' }, evidence));
-  assert.equal(wrongReview.reason, 'review_identity_required');
+  // The exact terminal attempts an executor pair leaves behind.
+  const submittedAt = new Date(Date.now() - 60_000).toISOString();
+  const withAttempts = store.getTicket(slug, source.ref);
+  withAttempts.dispatch = {
+    attempts: [{ outcome: 'submitted', commit, agentId: 'source-a', terminalAt: submittedAt }],
+    // A LATER prepared dispatch: no outcome, no terminalAt, a foreign identity.
+    preparedAt: new Date().toISOString(),
+    outcome: null,
+    terminalAt: null,
+    agentId: null,
+  };
+  persist(slug, withAttempts);
 
-  const notTerminal = store.reworkSubmission(slug, source.ref, Object.assign({ by: 'reviewer', reviewRef: review.ref }, evidence));
-  assert.equal(notTerminal.reason, 'review_not_terminal');
-
+  const reviewedAt = new Date().toISOString();
   const done = store.getTicket(slug, review.ref);
   done.status = 'done';
-  done.dispatch = { terminalAt: new Date().toISOString(), outcome: 'done' };
+  done.dispatch = {
+    attempts: [{ outcome: 'done', agentId: 'review-b', terminalAt: reviewedAt }],
+    preparedAt: new Date().toISOString(),
+    outcome: null,
+    terminalAt: null,
+    agentId: 'someone-else-entirely',
+  };
   persist(slug, done);
 
-  const selfConfirmed = store.reworkSubmission(slug, source.ref, Object.assign({ by: 'implementer', reviewRef: review.ref }, evidence));
-  assert.equal(selfConfirmed.reason, 'fresh_repair_identity_required');
-  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'planned');
+  const provenance = reviewBinding.reviewProvenance(store.getTicket(slug, source.ref), store.getTicket(slug, review.ref));
+  assert.equal(provenance.reason, 'ok');
+  assert.equal(provenance.source.agentId, 'source-a', 'the source identity comes from the submitted attempt');
+  assert.equal(provenance.reviewer.agentId, 'review-b', 'the reviewer identity comes from the terminal done attempt');
+
+  const accepted = store.validateIntegrationSubmission(slug, source.ref, {});
+  assert.notEqual(accepted.reason, 'candidate_review_required', 'the completed independent review no longer blocks integration');
+  assert.notEqual(accepted.reason, 'candidate_rejected');
+});
+
+test('integration stays blocked when a matching attempt, an identity, or a distinct reviewer is missing', () => {
+  const cases: Array<[string, any, any]> = [
+    ['source attempt for another commit', [{ outcome: 'submitted', commit: 'f'.repeat(40), agentId: 'source-a', terminalAt: '2026-01-01T00:00:00.000Z' }], [{ outcome: 'done', agentId: 'review-b', terminalAt: '2026-01-02T00:00:00.000Z' }]],
+    ['no terminal done review attempt', null, [{ outcome: 'released', agentId: 'review-b', terminalAt: '2026-01-02T00:00:00.000Z' }]],
+    ['no reviewer identity', null, [{ outcome: 'done', agentId: null, terminalAt: '2026-01-02T00:00:00.000Z' }]],
+    ['the same agent on both sides', null, [{ outcome: 'done', agentId: 'source-a', terminalAt: '2026-01-02T00:00:00.000Z' }]],
+  ];
+  for (const [label, sourceAttempts, reviewAttempts] of cases) {
+    const { slug, commit } = board(`blocked-${label.replace(/\W+/g, '-')}`);
+    const source = submittedSource(slug, commit, 'blocked');
+    const review = store.createTicket(slug, { title: `blocked ${label}`, category: 'review-audit' }, { ref: source.ref, commit });
+    const withAttempts = store.getTicket(slug, source.ref);
+    withAttempts.dispatch = {
+      attempts: sourceAttempts || [{ outcome: 'submitted', commit, agentId: 'source-a', terminalAt: '2026-01-01T00:00:00.000Z' }],
+      outcome: 'submitted',
+      terminalAt: '2026-01-01T00:00:00.000Z',
+      agentId: 'source-a',
+    };
+    persist(slug, withAttempts);
+    const done = store.getTicket(slug, review.ref);
+    done.status = 'done';
+    done.dispatch = { attempts: reviewAttempts, outcome: 'done', terminalAt: '2026-01-02T00:00:00.000Z', agentId: 'review-b' };
+    persist(slug, done);
+
+    const blocked = store.validateIntegrationSubmission(slug, source.ref, {});
+    assert.equal(blocked.ok, false, `${label} blocks integration`);
+    assert.equal(blocked.reason, 'candidate_review_required', `${label} blocks integration`);
+    assert.equal(store.getTicket(slug, source.ref).submission.commit, commit, `${label} mutated nothing`);
+  }
 });
 
 test('dispatch pins a bound review to the exact candidate in an isolated checkout', () => {

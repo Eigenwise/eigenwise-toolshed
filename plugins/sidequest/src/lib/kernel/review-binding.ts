@@ -102,6 +102,66 @@ export function reviewRelationFor(
   });
 }
 
+export type ReviewProvenanceAttempt = Readonly<{ agentId: string; terminalAt: string; outcome: string }>;
+
+export type ReviewProvenanceReason =
+  | 'ok'
+  | 'source_attempt_missing'
+  | 'review_attempt_missing'
+  | 'agent_identity_missing'
+  | 'shared_agent_identity';
+
+export type ReviewProvenance = Readonly<{
+  source: ReviewProvenanceAttempt | null;
+  reviewer: ReviewProvenanceAttempt | null;
+  reason: ReviewProvenanceReason;
+}>;
+
+function terminalAttempts(ticket?: any): readonly any[] {
+  const attempts = ticket?.dispatch?.attempts;
+  return Array.isArray(attempts) ? attempts.filter((attempt: any) => attempt && attempt.terminalAt) : [];
+}
+
+function latestAttempt(attempts: readonly any[]): any {
+  return attempts
+    .slice()
+    .sort((left: any, right: any) => String(left.terminalAt).localeCompare(String(right.terminalAt)))
+    .pop() || null;
+}
+
+function identifiedAttempt(attempt?: any): ReviewProvenanceAttempt | null {
+  const agentId = String(attempt?.agentId || '').trim();
+  if (!agentId) return null;
+  return Object.freeze({ agentId, terminalAt: String(attempt.terminalAt), outcome: String(attempt.outcome || '') });
+}
+
+// The live dispatch record is mutable: preparing a later attempt overwrites its
+// agent id, outcome, and terminalAt in place, so anything read from it can be
+// replaced after the fact. Only the appended terminal attempt snapshots are
+// immutable, so provenance is selected from those and nothing else.
+export function submittedCandidateAttempt(sourceTicket?: any): any {
+  const commit = String(sourceTicket?.submission?.commit || '').trim().toLowerCase();
+  if (!commit) return null;
+  return latestAttempt(terminalAttempts(sourceTicket).filter((attempt: any) => String(attempt.outcome) === 'submitted'
+    && String(attempt.commit || '').trim().toLowerCase() === commit));
+}
+
+export function completedReviewAttempt(reviewTicket?: any): any {
+  return latestAttempt(terminalAttempts(reviewTicket).filter((attempt: any) => String(attempt.outcome) === 'done'));
+}
+
+export function reviewProvenance(sourceTicket?: any, reviewTicket?: any): ReviewProvenance {
+  const sourceAttempt = submittedCandidateAttempt(sourceTicket);
+  if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: 'source_attempt_missing' as ReviewProvenanceReason });
+  const reviewerAttempt = completedReviewAttempt(reviewTicket);
+  if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: 'review_attempt_missing' as ReviewProvenanceReason });
+  const source = identifiedAttempt(sourceAttempt);
+  const reviewer = identifiedAttempt(reviewerAttempt);
+  if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: 'agent_identity_missing' as ReviewProvenanceReason });
+  if (source.agentId === reviewer.agentId) return Object.freeze({ source, reviewer, reason: 'shared_agent_identity' as ReviewProvenanceReason });
+  return Object.freeze({ source, reviewer, reason: 'ok' as ReviewProvenanceReason });
+}
+
 export function reviewRelationRef(relation?: ReviewRelation | null): string {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || 'a candidate review';
 }
@@ -113,5 +173,7 @@ export function reviewRelationOutcome(relation?: ReviewRelation | null): string 
 export function reviewLockMessage(operation: string, ticket: any, relation: ReviewRelation): string {
   const candidate = relation.candidate?.value || 'its candidate';
   return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)}`
-    + ' and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.';
+    + ' and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.'
+    + ' A failed review records its evidence on the review ticket and releases it for an external oracle;'
+    + ' no route permanently rejects a bound candidate.';
 }

@@ -112,6 +112,24 @@ test('executor briefings require Board MCP reconnect and re-dispatch when unavai
   assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
 });
 
+test('a bound review briefing sends a confirmed defect to the oracle, never to a rejection route', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-REVIEW-BOUND', model: 'opus', effort: 'xhigh', dispatchExecutor: 'sidequest-exec-readonly-xhigh', category: {},
+    dispatch: { readonly: true, sharedTree: false },
+    reviewTarget: { ticketId: 't-source', ref: 'SQ-SOURCE', candidate: { source: 'git', value: 'a'.repeat(40) } },
+  }, 'bound-review-token');
+  assert.match(briefing, /Bound review closeout:/);
+  assert.match(briefing, new RegExp(`bound to SQ-SOURCE at candidate ${'a'.repeat(40)}`));
+  assert.match(briefing, /rework, submit --clear, reclaim, and amendment all refuse with candidate_review_locked/);
+  assert.match(briefing, /releases THIS ticket with kind oracle/);
+  assert.match(briefing, /Leave SQ-SOURCE untouched/);
+
+  const unbound = agentsync.renderTicketBriefing({
+    ref: 'SQ-NOT-A-REVIEW', model: 'opus', effort: 'xhigh', dispatchExecutor: 'sidequest-exec-xhigh', category: {},
+  }, 'unbound-token');
+  assert.doesNotMatch(unbound, /Bound review closeout:/);
+});
+
 test('read-only executor briefings keep temporary files outside the repository', () => {
   const briefing = agentsync.renderReadOnlyClaudeAgent('medium');
   assert.match(briefing, /Keep temporary files outside the repository working tree/);

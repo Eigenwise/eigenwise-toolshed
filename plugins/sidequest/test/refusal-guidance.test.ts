@@ -50,6 +50,21 @@ test('dispatch-required guidance names both routed and direct claim paths', () =
   assert.match(message, /direct:true/i);
 });
 
+test('bound-candidate guidance sends a failed review to the oracle instead of a rejection', () => {
+  const message = claimRefusalMessage('candidate_review_locked', 'SQ-42');
+  assert.match(message, /bound to a review-audit ticket/i);
+  assert.match(message, /--kind oracle/);
+  assert.match(message, /no route permanently rejects a bound candidate/i);
+  assert.doesNotMatch(message, /sidequest rework/i);
+});
+
+test('submitted guidance separates unbound rework from a locked bound candidate', () => {
+  const message = claimRefusalMessage('submitted', 'SQ-42');
+  assert.match(message, /While it is UNBOUND/);
+  assert.match(message, /rework, clear, reclaim, and amendment all refuse without writing/i);
+  assert.match(message, /kind `oracle`/);
+});
+
 test('routing-disabled guidance names the enabled and direct paths', () => {
   const message = routingDisabledMessage('SQ-42');
   assert.match(message, /sidequest routing enabled/i);

@@ -663,6 +663,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     "High-stakes verification:",
     "Enumerate and check EVERY consumer of each changed surface. Run every affected consumer suite, including dashboard build/tests when board payloads change. A review-audit pass is mandatory before integration."
   ] : [];
+  const boundReview = boundReviewGuidance(ticket);
   return [
     "## Dispatch, claim, worktree, lifecycle, and verification safety",
     "Claim first with this exact call. Do not pass direct or replace the prepared executor:",
@@ -675,9 +676,21 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     ticket.executorVerify && ticket.executorVerifyKind !== "attestation" ? "Run it through " + capturedVerifyCommand(ticket.executorVerify) + "; post [sidequest:verify-start] before it only for background verification or an expected no-op, and always post [sidequest:verify-complete] with status first after it exits." : "",
     "Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If its transport is unavailable, do not use the Sidequest CLI or raw Agent as a fallback: reload or reconnect Sidequest, then re-dispatch.",
     ...highStakes.length ? [highStakes.join("\n")] : [],
+    boundReview || "",
     closeout || "",
     "Stay within declared scope. If required context is omitted below, fetch it once with its listed retrieval call before editing. Do not guess or silently skip it."
   ].filter(Boolean).join("\n\n");
+}
+function boundReviewGuidance(ticket) {
+  const target = ticket?.reviewTarget;
+  if (!target) return null;
+  const source = String(target.ref || target.ticketId || "its bound source ticket");
+  const candidate = String(target.candidate?.value || "its bound candidate");
+  return [
+    "Bound review closeout:",
+    `This ticket is bound to ${source} at candidate ${candidate}. You cannot reject that candidate, and no by, reviewRef, session, or publish-lock value changes that: rework, submit --clear, reclaim, and amendment all refuse with candidate_review_locked and write nothing on either half of the binding.`,
+    `A pass closes normally with done. A confirmed defect records its exact evidence in a comment on this review ticket and then releases THIS ticket with kind oracle, naming what a human must decide. Leave ${source} untouched; integration stays blocked, and the orchestrator repairs through a fresh ticket, dispatch, claim, commit, review, and candidate.`
+  ].join("\n");
 }
 function rejectedSubmissionRows(ticket) {
   const rejections = Array.isArray(ticket?.rejectedSubmissions) ? ticket.rejectedSubmissions.filter((entry) => entry) : [];

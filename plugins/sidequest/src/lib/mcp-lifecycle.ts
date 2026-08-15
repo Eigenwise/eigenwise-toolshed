@@ -640,7 +640,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'rework',
-    description: 'Reject a reviewed submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review needs that reviewRef, a different confirming identity, and parks the original permanently.',
+    description: 'Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Report a failed review as evidence on the review ticket and release it with kind oracle; repair is a fresh ticket, dispatch, commit, review, and candidate.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -648,7 +648,7 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         review: { type: 'string' },
-        reviewRef: { type: 'string' },
+        reviewRef: { type: 'string', description: 'Accepted for compatibility and ignored; it grants no authority over a bound candidate.' },
         reason: { type: 'string' },
       },
       required: ['ref', 'by', 'review', 'reason'],
@@ -659,7 +659,6 @@ const tools: ToolDefinition[] = [
       return mutationAck(slug, store.reworkSubmission(slug, args.ref, {
         by,
         review: args.review,
-        reviewRef: args.reviewRef,
         reason: args.reason,
         source: 'mcp',
       }));
@@ -667,7 +666,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'submit',
-    description: 'Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. The server invokes the project source-revision capability with the candidate and dispatch-pinned baseline; callers cannot supply existence or membership facts. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. For a review rejection, use rework to retain the candidate and review evidence.',
+    description: 'Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. The server invokes the project source-revision capability with the candidate and dispatch-pinned baseline; callers cannot supply existence or membership facts. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. To bounce an unbound candidate back for repair, use rework; a review-bound candidate cannot be rejected by any route.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -701,7 +700,7 @@ const tools: ToolDefinition[] = [
         worktree: { type: 'string', description: 'Absolute path to this executor’s git worktree root. Required for isolated worktrees.' },
         body: { type: 'string', description: 'Final report: paths, verification, and skips.' },
         session: { type: 'string' },
-        clear: { type: 'boolean', description: 'Drop a pending submission only after an integration bounce. Use rework for a review rejection so the candidate and review evidence are retained.' },
+        clear: { type: 'boolean', description: 'Drop a pending submission only after an integration bounce. Use rework to bounce an unbound candidate; a review-bound candidate refuses both.' },
         status: { type: 'string', enum: store.VALID_STATUS, description: 'With clear:true, move the ticket to this status (usually "todo") in the same step.' },
         force: { type: 'boolean', description: 'Allow the existing submitted candidate owner to replace their own pending submission without a claim. Never authorizes a foreign submit or rejection.' },
       },

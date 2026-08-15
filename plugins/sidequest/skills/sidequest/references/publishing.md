@@ -120,9 +120,13 @@ board (submissions stay parked — fail closed).
    executor (or `security-audit`) bound with `reviewTarget` to that ticket and its exact submitted
    commit, so the review runs against a pinned immutable checkout, and read its findings before
    continuing. A bound candidate cannot be reclaimed, amended, cleared, superseded, or integrated until
-   its review finishes; confirming a defect (`rework` with `reviewRef`, by an identity other than the
-   submitter) rejects that candidate permanently and forces fresh ticket, attempt, commit, and review
-   identities for the repair.
+   its review finishes, and it cannot be rejected at all: `rework` and every other public route return
+   `candidate_review_locked` without writing. A review that finds a defect records its evidence on the
+   review ticket and releases that review with `kind=oracle`, which leaves the candidate and both halves
+   of the binding byte-identical and integration blocked. Repair is a fresh ticket, dispatch, claim,
+   commit, review, and candidate. Integration also needs both runtime identities from the immutable
+   terminal dispatch attempts (the source's `submitted` attempt for that exact commit, the review's `done`
+   attempt) and refuses when either is missing or both are the same agent.
    Resolve or explicitly accept every finding before pushing. A finding that needs rework is an
    integration failure: drop that ticket's range, leave its submission parked, and file a scoped ticket
    (see "Integration failures fail closed") — never push code you have only tested and not read.

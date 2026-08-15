@@ -184,7 +184,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   commit: "Commit declared worktree paths.",
   add: "File a ticket. review-audit binds reviewTarget to one terminal candidate.",
   update: "Update ticket fields by scope. reviewTarget binds once and never clears.",
-  rework: "Reject candidate for repair; candidate owner only. A bound candidate needs reviewRef and rejects permanently.",
+  rework: "Reject an unbound candidate for repair; candidate owner only. A review-bound candidate is locked.",
   submit: "Submit verified work; clear needs owner; force only lets owner replace candidate.",
   integrate: "Deliver verified work.",
   comment: "Add a handoff comment.",

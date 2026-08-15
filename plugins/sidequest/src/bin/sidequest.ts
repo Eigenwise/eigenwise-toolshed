@@ -220,7 +220,7 @@ const HELP_COMMANDS: any = {
   'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration [--override-legacy-scope] | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"]]',
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
-  rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair"',
+  rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',
   submit: 'sidequest submit <id|SQ-n> --by who (--commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] | --source-revision-source <kind> --source-revision-value <revision> --source-revision-observed-at <ISO-time> --changed-surface <path> [--no-process] [--no-worktree] [--review] --verify "attestation: ..." | --clear [-s todo]) [--body-file path] [--force]. Source revision existence and dispatch-baseline membership come only from the registered project capability.',
   integrate: 'sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--skip-verify] [--json]',
   publish: 'sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]',
@@ -313,7 +313,8 @@ Working the board safely (multi-agent):
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling
   sidequest commit <id|SQ-n> --by who --message "message"  commit only the ticket's declared scope; staged foreign paths stay staged
-  sidequest rework <id|SQ-n> --by reviewer --review <review-ticket-or-evidence> --reason "what needs repair"  reject a ready submission for repair, retain its candidate and review evidence, then dispatch the same ticket for a normal replacement claim
+  sidequest rework <id|SQ-n> --by reviewer --review <review-ticket-or-evidence> --reason "what needs repair"  reject an UNBOUND ready submission for repair, retain its candidate and review evidence, then dispatch the same ticket for a normal replacement claim
+    a candidate bound to a review-audit ticket is locked: this refuses without writing, and --review-ref is accepted only for compatibility. Record the failed review's evidence on the review ticket, release that review with --kind oracle, and repair through a fresh ticket, dispatch, commit, review, and candidate
   sidequest submit <id|SQ-n> --by who --commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "<cmd>"] [--worktree path] [--body-file path] [--force]
     executor terminal for repo-changing tickets: park the verified LOCAL commit as READY_FOR_INTEGRATION
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).

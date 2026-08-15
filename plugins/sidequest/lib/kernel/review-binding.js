@@ -18,13 +18,16 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var review_binding_exports = {};
 __export(review_binding_exports, {
+  completedReviewAttempt: () => completedReviewAttempt,
   isReviewCommit: () => isReviewCommit,
   reviewCandidateFromSubmission: () => reviewCandidateFromSubmission,
   reviewLockMessage: () => reviewLockMessage,
+  reviewProvenance: () => reviewProvenance,
   reviewRelationFor: () => reviewRelationFor,
   reviewRelationOutcome: () => reviewRelationOutcome,
   reviewRelationRef: () => reviewRelationRef,
-  sameReviewCandidate: () => sameReviewCandidate
+  sameReviewCandidate: () => sameReviewCandidate,
+  submittedCandidateAttempt: () => submittedCandidateAttempt
 });
 module.exports = __toCommonJS(review_binding_exports);
 const REVIEW_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -85,6 +88,37 @@ function reviewRelationFor(sourceTicket, tickets, resolveTicket) {
     side: "mirror-only"
   });
 }
+function terminalAttempts(ticket) {
+  const attempts = ticket?.dispatch?.attempts;
+  return Array.isArray(attempts) ? attempts.filter((attempt) => attempt && attempt.terminalAt) : [];
+}
+function latestAttempt(attempts) {
+  return attempts.slice().sort((left, right) => String(left.terminalAt).localeCompare(String(right.terminalAt))).pop() || null;
+}
+function identifiedAttempt(attempt) {
+  const agentId = String(attempt?.agentId || "").trim();
+  if (!agentId) return null;
+  return Object.freeze({ agentId, terminalAt: String(attempt.terminalAt), outcome: String(attempt.outcome || "") });
+}
+function submittedCandidateAttempt(sourceTicket) {
+  const commit = String(sourceTicket?.submission?.commit || "").trim().toLowerCase();
+  if (!commit) return null;
+  return latestAttempt(terminalAttempts(sourceTicket).filter((attempt) => String(attempt.outcome) === "submitted" && String(attempt.commit || "").trim().toLowerCase() === commit));
+}
+function completedReviewAttempt(reviewTicket) {
+  return latestAttempt(terminalAttempts(reviewTicket).filter((attempt) => String(attempt.outcome) === "done"));
+}
+function reviewProvenance(sourceTicket, reviewTicket) {
+  const sourceAttempt = submittedCandidateAttempt(sourceTicket);
+  if (!sourceAttempt) return Object.freeze({ source: null, reviewer: null, reason: "source_attempt_missing" });
+  const reviewerAttempt = completedReviewAttempt(reviewTicket);
+  if (!reviewerAttempt) return Object.freeze({ source: null, reviewer: null, reason: "review_attempt_missing" });
+  const source = identifiedAttempt(sourceAttempt);
+  const reviewer = identifiedAttempt(reviewerAttempt);
+  if (!source || !reviewer) return Object.freeze({ source, reviewer, reason: "agent_identity_missing" });
+  if (source.agentId === reviewer.agentId) return Object.freeze({ source, reviewer, reason: "shared_agent_identity" });
+  return Object.freeze({ source, reviewer, reason: "ok" });
+}
 function reviewRelationRef(relation) {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || "a candidate review";
 }
@@ -93,15 +127,18 @@ function reviewRelationOutcome(relation) {
 }
 function reviewLockMessage(operation, ticket, relation) {
   const candidate = relation.candidate?.value || "its candidate";
-  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.`;
+  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A failed review records its evidence on the review ticket and releases it for an external oracle; no route permanently rejects a bound candidate.`;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  completedReviewAttempt,
   isReviewCommit,
   reviewCandidateFromSubmission,
   reviewLockMessage,
+  reviewProvenance,
   reviewRelationFor,
   reviewRelationOutcome,
   reviewRelationRef,
-  sameReviewCandidate
+  sameReviewCandidate,
+  submittedCandidateAttempt
 });
