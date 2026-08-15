@@ -7,6 +7,8 @@ const path = require('node:path');
 
 const ROOT = path.join(__dirname, '..');
 const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
+const userStory = fs.readFileSync(path.join(ROOT, 'skills', 'user-story', 'SKILL.md'), 'utf8');
+const ticketAuthoring = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 const activeGuidance = [skill, orchestration, executorTemplate];
@@ -43,6 +45,20 @@ test('published guidance excludes retired instructions', () => {
     assert.doesNotMatch(source, new RegExp('native' + '_agent', 'i'));
     assert.doesNotMatch(source, new RegExp(['MCP `dispatch`', ' are disabled'].join(''), 'i'));
   }
+});
+
+test('published guidance pins surgical planning before substantial dispatch', () => {
+  assert.match(skill, /Before dispatching substantial or ambiguous work, pin a contract/);
+  assert.match(userStory, /Outcome and explicit non-goals/);
+  assert.match(userStory, /Smallest authority/);
+  assert.match(userStory, /Surgical boundaries/);
+  assert.match(userStory, /bounded executable done-oracle per piece/);
+  assert.match(userStory, /Review budget/);
+  assert.match(userStory, /Design-reopen evidence/);
+  assert.match(userStory, /"do your thing", "use your judgment", or "whatever you think"/);
+  assert.match(userStory, /use two\s+or three bounded proposals only when the approach is genuinely contested/);
+  assert.match(ticketAuthoring, /Unrelated findings become separately prioritized tickets/);
+  assert.match(ticketAuthoring, /After two independently rejected candidates in one defect chain/);
 });
 
 export {};

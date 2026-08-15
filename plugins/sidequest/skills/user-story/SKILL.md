@@ -59,6 +59,29 @@ expected raises the size; write that in the story log so the jump is on the reco
 De-escalating is equally fine: if the panel converges on one obvious answer, stop paying for the
 panel.
 
+## Planning checkpoint
+
+Before dispatching a substantial or ambiguous feature, put one visible, pinned contract on the story,
+a planning ticket, or the ticket descriptions. It is the handoff from planning to execution, not a
+second design process. Pin:
+
+- **Outcome and explicit non-goals**, so later work has a boundary to cut against.
+- **Smallest authority**, the source of truth or existing seam that decides behavior. Prefer deleting
+  competing ambiguous authorities or fallbacks over another heuristic layer.
+- **Surgical boundaries**, the files each piece may change and every public surface it may expose or
+  deliberately leave alone.
+- **A bounded executable done-oracle per piece**, the behavior it observes, and the named consumer or
+  regression input that would fail if the piece were wrong.
+- **Review budget**, from the sizing table, including the exact reason an oracle alone is enough or the
+  lens a review ticket must cover.
+- **Design-reopen evidence**, concrete findings that would invalidate the contract, such as a consumer
+  that cannot use the pinned seam, a required compatibility break, or an oracle that cannot observe the
+  claimed outcome.
+
+Exact small work keeps its lightweight path: state the outcome and oracle and dispatch one ticket. A
+pinned contract does not earn proposal theater. Write one authored contract for settled work; use two
+or three bounded proposals only when the approach is genuinely contested.
+
 ## The shape
 
 1. Frame the outcome, check this flow applies, and state the size.
@@ -111,16 +134,18 @@ ticket, not the orchestrator crawling the tree itself.
 ## 3. One question round, or none
 
 Collect every genuinely contract-changing ambiguity and ask them together in a single
-`AskUserQuestion` (up to four). One round respects the user's attention and gets better answers,
-because they see the whole shape of the decision at once. Asking one question per ambiguity trains
-them to stop reading.
+`AskUserQuestion` (up to four). Ask only when the answer changes user-visible behavior,
+compatibility, migration, public API, dependencies, or expensive-to-reverse scope. One round respects
+the user's attention and gets better answers, because they see the whole shape of the decision at once.
+Asking one question per ambiguity trains them to stop reading.
 
 Worth asking: a user-visible behavior with two defensible answers, a scope boundary that changes how
 much gets built, a compatibility break, a data migration, anything else expensive to reverse.
 
 Not worth asking: naming, file layout, test placement, error copy, ordering, and every other call you
-can make and change later. State the assumption in the contract and keep going. "Whatever you think"
-means pick, record the pick, move on.
+can make and change later. State the assumption in the contract and keep going. Explicit phrases such
+as "do your thing", "use your judgment", or "whatever you think" delegate the current feature: pick,
+record the pick, and move on. They do not create a durable standing preference.
 
 This is where the generic flow is deliberately narrowed. It waits for answers before designing;
 Sidequest defaults autonomous, because a stalled feature costs the user more than a decision they can
@@ -251,8 +276,15 @@ How much review sits on top of that floor scales with the work:
 
 Give reviewers an adversarial mandate: try to break it, name the failing input or the broken consumer,
 and default to "not proven" when uncertain. A verdict of "looks good" with no evidence is not a review
-pass, and treating it as one is worse than not having run it. Findings become fix tickets that block
-the ship, and their verdicts land as comments starting `reviewed-by:`.
+pass, and treating it as one is worse than not having run it. Review verifies the pinned contract and
+its oracle, never silently expands the active feature. Route unrelated concerns into separately
+prioritized tickets; they block this ship only when the contract or a proven regression requires it.
+Findings that do block ship become fix tickets, and their verdicts land as comments starting
+`reviewed-by:`.
+
+After two independently rejected candidates in one defect chain, stop local patching. Re-plan, narrow
+the contract, or replace the authority or architecture before another candidate. Involve the user when
+the current feature was not delegated.
 
 Through all of it, do not reopen the diff yourself. Judging code you did not write, on the priciest
 model in the loop, is slower and less reliable than the verify command the ticket already carried and
