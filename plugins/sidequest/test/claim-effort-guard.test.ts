@@ -483,6 +483,78 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
   assert.match(current.stdout, /prior-token-secret-測試/);
 });
 
+test('structured files alone determine ignored worktree warnings', () => {
+  const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-structured-visibility-'));
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: visibilityProject }).status, 0);
+  fs.writeFileSync(path.join(visibilityProject, '.gitignore'), '..scope/\n.dot/\nignored punctuation \\[x\\]/\nprose-only/\nverify-only/\n');
+  const slug = store.ensureProject(visibilityProject).slug;
+  const visibilityWarning = store.dispatchWarnings({
+    files: ['..scope/file.ts', '.dot/file.ts', 'ignored punctuation [x]/file.ts', '../outside.ts', path.join(os.tmpdir(), 'outside.ts')],
+    description: 'prose-only/file.ts must not become visibility scope.',
+    executorVerify: 'node verify-only/file.ts',
+    dispatch: { sharedTree: false },
+  }, slug).find((warning?: any) => warning.startsWith('Worktree visibility warning:')) || '';
+
+  assert.match(visibilityWarning, /\.\.scope\/file\.ts/);
+  assert.match(visibilityWarning, /\.dot\/file\.ts/);
+  assert.match(visibilityWarning, /ignored punctuation \[x\]\/file\.ts/);
+  assert.doesNotMatch(visibilityWarning, /prose-only|verify-only|outside\.ts/);
+});
+
+test('visibility keeps NFC and NFD declared paths distinct', () => {
+  const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-visibility-unicode-'));
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: visibilityProject }).status, 0);
+  fs.writeFileSync(path.join(visibilityProject, '.gitignore'), 'NFC-é/\nNFD-é/\n');
+  const slug = store.ensureProject(visibilityProject).slug;
+  const visibilityWarning = store.dispatchWarnings({
+    files: ['NFC-é/entry.ts', 'NFD-é/entry.ts'],
+    dispatch: { sharedTree: false },
+  }, slug).find((warning?: any) => warning.startsWith('Worktree visibility warning:')) || '';
+
+  assert.match(visibilityWarning, /NFC-é\/entry\.ts/);
+  assert.match(visibilityWarning, /NFD-é\/entry\.ts/);
+});
+
+test('visibility handles ten thousand declared paths without scanning ticket prose', () => {
+  const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-visibility-bounds-'));
+  assert.equal(spawnSync('git', ['init', '-q'], { cwd: visibilityProject }).status, 0);
+  fs.writeFileSync(path.join(visibilityProject, '.gitignore'), 'declared/\n');
+  const slug = store.ensureProject(visibilityProject).slug;
+  const visibilityWarning = store.dispatchWarnings({
+    files: ['declared/output.ts', ...Array.from({ length: 9_999 }, (_value, index) => `visible-${index}/output.ts`)],
+    description: `prose-only/path.ts ${'x'.repeat(2_000_000)}`,
+    executorVerify: 'node another-prose/path.ts',
+    dispatch: { sharedTree: false },
+  }, slug).find((warning?: any) => warning.startsWith('Worktree visibility warning:')) || '';
+
+  assert.match(visibilityWarning, /declared\/output\.ts/);
+  assert.doesNotMatch(visibilityWarning, /prose-only|another-prose/);
+});
+
+test('visibility preserves quoted newline paths from NUL-delimited Git output', () => {
+  const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-visibility-nul-'));
+  const linkedWorktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-visibility-linked-'));
+  const ignoredPath = 'ignored/quoted"\nsource.ts';
+  const sourcePath = path.resolve(visibilityProject, ignoredPath);
+  const worker = spawnSync(process.execPath, ['-e', `
+    const childProcess = require('node:child_process');
+    const fs = require('node:fs');
+    const [repository, worktree, source, ignored] = process.argv.slice(1);
+    const originalExecFileSync = childProcess.execFileSync;
+    const originalExistsSync = fs.existsSync;
+    childProcess.execFileSync = () => Buffer.from(ignored + '\\0');
+    const worktrees = require(${JSON.stringify(path.join(__dirname, '..', 'lib', 'worktrees.js'))});
+    fs.existsSync = (target) => target === source ? true : originalExistsSync(target);
+    console.log(JSON.stringify(worktrees.ignoredPathsMissingFromWorktree(repository, worktree, [ignored])));
+    childProcess.execFileSync = originalExecFileSync;
+    fs.existsSync = originalExistsSync;
+  `, visibilityProject, linkedWorktree, sourcePath, ignoredPath], { encoding: 'utf8' });
+  const nonNulLineParser = `${ignoredPath}\0`.split(/\r?\n/).map((entry) => entry.trim()).filter(Boolean);
+
+  assert.equal(worker.status, 0, worker.stderr);
+  assert.deepEqual(JSON.parse(worker.stdout), [ignoredPath]);
+  assert.notDeepEqual(nonNulLineParser, [ignoredPath]);
+});
 test('serialized dispatch spawn stays below the launch ceiling while briefing keeps a huge packet', () => {
   const slug = store.ensureProject(PROJ).slug;
   const hugeDescription = [

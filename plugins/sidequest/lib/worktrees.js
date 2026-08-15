@@ -38,7 +38,7 @@ function git(cwd, args) {
 }
 function pathIsInside(root, candidate) {
   const relative = path.relative(root, candidate);
-  return relative === "" || !relative.startsWith("..") && !path.isAbsolute(relative);
+  return relative === "" || relative !== ".." && !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
 }
 function preferredWorktreeIntegrationTarget(repository, branch) {
   const local = `refs/heads/${branch}`;
@@ -75,18 +75,18 @@ function ignoredPathsMissingFromWorktree(repository, worktree, candidatePaths) {
   if (!nativeFs.existsSync(repository) || !nativeFs.existsSync(worktree) || !candidatePaths.length) return [];
   const scopes = candidatePaths.map((candidate) => path.resolve(repository, candidate)).filter((candidate) => pathIsInside(repository, candidate));
   if (!scopes.length) return [];
-  let output = "";
+  let output;
   try {
-    output = execFileSync("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory"], {
+    output = execFileSync("git", ["ls-files", "--others", "--ignored", "--exclude-standard", "--directory", "-z"], {
       cwd: repository,
-      encoding: "utf8",
+      encoding: "buffer",
       windowsHide: true,
       stdio: ["ignore", "pipe", "ignore"]
     });
   } catch (_) {
     return [];
   }
-  return output.split(/\r?\n/).map((entry) => entry.trim().replace(/[\\/]+$/, "").replace(/\\/g, "/")).filter(Boolean).filter((relativePath) => !dependencyCachePath(relativePath)).filter((relativePath) => {
+  return output.toString("utf8").split("\0").filter(Boolean).filter((relativePath) => !dependencyCachePath(relativePath)).filter((relativePath) => {
     const repositoryPath = path.resolve(repository, relativePath);
     if (!pathIsInside(repository, repositoryPath) || !nativeFs.existsSync(repositoryPath)) return false;
     if (nativeFs.existsSync(path.resolve(worktree, relativePath))) return false;

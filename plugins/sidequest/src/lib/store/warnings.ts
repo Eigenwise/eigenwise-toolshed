@@ -317,7 +317,9 @@ function readonlyBrowserReviewWarning(ticket?: any) {
 
 function relativePathWithin(root?: any, target?: any) {
   const relative = path.relative(String(root), String(target));
-  return relative && !relative.startsWith('..') && !path.isAbsolute(relative) ? relative : relative === '' ? '.' : null;
+  if (relative === '') return '.';
+  if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) return null;
+  return relative;
 }
 
 function packageRootForScope(projectPath?: any, scope?: any) {
@@ -822,37 +824,43 @@ function dispatchUncertaintyWarnings(ticket?: any, slug?: any) {
   return warnings.map((warning) => `Dispatch warning: ${warning}`);
 }
 
-function worktreeVisibilityTokens(ticket?: any) {
-  const tokens = new Set(normalizeFiles(ticket?.files));
-  const text = [ticket?.executorVerify, ticket?.description].filter(Boolean).join('\n');
-  const pathLike = /(?:\.{1,2}[\\/])?(?:[A-Za-z0-9_@.-]+[\\/])+[A-Za-z0-9_@.-]+|(?:[A-Za-z0-9_-]+\.)+[A-Za-z0-9_-]+/g;
-  for (const match of text.matchAll(pathLike)) tokens.add(match[0]);
-  return [...tokens];
+function worktreeVisibilityPaths(ticket?: any, projectPath?: any) {
+  if (!projectPath || !Array.isArray(ticket?.files)) return [];
+  const candidates = new Set<string>();
+  for (const declaredPath of ticket.files) {
+    const candidate = String(declaredPath);
+    if (!candidate || candidate.includes('\0')) continue;
+    const absolute = path.resolve(projectPath, candidate);
+    if (relativePathWithin(projectPath, absolute) === null) continue;
+    candidates.add(candidate);
+  }
+  return [...candidates];
 }
 
 function ignoredWorktreePaths(ticket?: any, projectPath?: any) {
   if (!projectPath || dispatchState(ticket)?.sharedTree !== false) return [];
-  const ignored = new Set<string>();
-  for (const token of worktreeVisibilityTokens(ticket)) {
-    const absolute = path.resolve(projectPath, token);
-    const relative = relativePathWithin(projectPath, absolute);
-    if (!relative || relative === '.' || fs.existsSync(absolute)) continue;
-    try {
-      execFileSync('git', ['check-ignore', '-q', '--', relative], {
-        cwd: projectPath,
-        windowsHide: true,
-        stdio: 'ignore',
-      });
-      ignored.add(relative.replace(/\\/g, '/'));
-    } catch (_: any) {}
+  const candidates = worktreeVisibilityPaths(ticket, projectPath)
+    .filter((candidate) => !fs.existsSync(path.resolve(projectPath, candidate)));
+  if (!candidates.length) return [];
+  try {
+    const output = execFileSync('git', ['check-ignore', '-z', '--stdin'], {
+      cwd: projectPath,
+      encoding: 'buffer',
+      input: Buffer.from(`${candidates.join('\0')}\0`),
+      windowsHide: true,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }) as Buffer;
+    return output.toString('utf8').split('\0').filter(Boolean);
+  } catch (error: any) {
+    if (error?.status === 1) return [];
+    throw error;
   }
-  return [...ignored].sort();
 }
 
 function ignoredPathsMissingFromDispatchedWorktree(ticket?: any, projectPath?: any) {
   const worktree = String(dispatchState(ticket)?.worktree || '').trim();
   return projectPath && worktree
-    ? ignoredPathsMissingFromWorktree(projectPath, worktree, worktreeVisibilityTokens(ticket))
+    ? ignoredPathsMissingFromWorktree(projectPath, worktree, worktreeVisibilityPaths(ticket, projectPath))
     : [];
 }
 
@@ -1129,7 +1137,7 @@ function presentWarnings(ticket?: any, warnings?: any, sessionId?: any) {
   return [...visible, `Warning summary: ${ranked.length - WARNING_RETURN_LIMIT + 1} lower-priority warnings suppressed for this call.`];
 }
 
-  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityTokens, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, scopeConsumerWarningDetails, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
+  return { DISPATCH_DESCRIPTION_MIN, executorText, manualVerify, VERIFY_ORACLE_KINDS, normalizeVerifyOracleKind, attestationErrors, verifyOracleErrors, requireVerifyOracle, verifyCommandErrors, verifyCommandError, requireVerifyCommand, ticketReferenceWarnings, ticketPrescribesFix, ticketCategoryWarnings, quantitativePremiseWarning, readonlyCategoryWriteIntentWarning, noDeclaredScopeWarning, readonlyBrowserReviewWarning, relativePathWithin, packageRootForScope, buildOutputDirectories, packageBuildOutputs, isTrackedBuildOutput, scopeIncludesPath, sourceBuildOutputWarnings, verifyCommandWarning, dispatchVerifyCommandError, dispatchDescriptionError, storyContractDriftWarnings, crossTicketStateWarnings, staleWorktreeCwdWarning, dispatchUncertaintyWarnings, worktreeVisibilityPaths, ignoredWorktreePaths, worktreeVisibilityWarning, composeFilesBindingProjectRoot, composeWorktreeWarning, dispatchWarnings, dispatchDeclaredFiles, externalDeclaredFiles, nonRepoExternalOutput, fencedBlocks, diffShapedBlock, evidenceShapedBlock, embedsCompleteEdit, presolvedRoutingWarnings, scopeConsumerWarningDetails, ticketPlanningWarnings, normalizeReadonlyOverride, requestedReadonlyOverride, presentWarnings };
 }
 
 module.exports = { createWarnings };
