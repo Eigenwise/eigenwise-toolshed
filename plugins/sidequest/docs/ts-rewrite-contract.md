@@ -120,7 +120,7 @@ The mapping is exact:
 
 A dedicated `dist/` plus forwarding wrappers loses on both compatibility and hook startup. The current CLI path is named in skills, tests, repository permissions, and documentation. The MCP config launches `bin/sidequest-mcp.js` directly ([`.mcp.json:1-8`](../.mcp.json#L1-L8)), while every hook command names a root `hooks/*.js` file ([`hooks/hooks.json:4-130`](../hooks/hooks.json#L4-L130)). Direct output keeps those files and both JSON configs byte-for-byte unchanged. It also keeps `lib/`-relative dashboard, manifest, and template paths valid.
 
-`build.mjs` owns only generated `.js` files under `bin/`, `lib/`, and the known hook entry list. It must never delete or rewrite `hooks/hooks.json`, dashboard assets, skills, docs, fixtures, the plugin manifest, or the marketplace manifest. Build output is deterministic. CI regenerates it and fails on a diff in `bin`, `lib`, or generated hook files.
+`build.mjs` owns only generated `.js` files under `bin/`, `lib/`, and the known hook entry list. It must never delete or rewrite `hooks/hooks.json`, dashboard assets, skills, docs, fixtures, the plugin manifest, or the marketplace manifest. Build output is deterministic. The build-check gate regenerates it and fails when any file in `bin`, `lib`, or the generated hook files changes during that run.
 
 The source tree is the editing surface. Generated JavaScript stays readable enough for installed stack traces. Runtime source maps and loader registration stay out of the marketplace artifact.
 
@@ -242,12 +242,16 @@ Add package scripts with this contract:
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "build": "node scripts/build.mjs",
-    "build:check": "npm run build && git diff --exit-code -- bin lib hooks",
+    "build:check": "node scripts/build-check.mjs",
     "test:full": "npm run typecheck && npm run build:check && node scripts/test-full.mjs",
     "test:perf": "node --import tsx --test test/*.perf.test.ts"
   }
 }
 ```
+
+`build:check` validates the build's output, not the checkout's state against `HEAD`. It hashes every file under `bin/`, `lib/`, and `hooks/` before running `scripts/build.mjs`, then hashes those directories again. A changed, added, or removed generated file is reported by path and fails the check. Because it does not invoke Git, pre-existing uncommitted source or generated output is allowed and the caller's Git state is not itself a failure condition.
+
+The build runs as an owned child phase with a 300,000 ms deadline. Windows uses the child process's job-object ownership so descendants are terminated with it. POSIX uses a detached supervisor and process group; cleanup requests `SIGTERM`, escalates to `SIGKILL` after the 300 ms grace period, and allows another 500 ms for process and output channels to drain. A timeout always fails the check, even if the child later reports status 0. A non-zero or signal termination, a spawn or control-protocol error, a live owned group after cleanup, or a cleanup `signal-error` also fails it. Successful completion still fails when the before/after hashes differ.
 
 From the repository root, the exact full-suite command on Windows is:
 
