@@ -157,7 +157,7 @@ const rootWithDescendantScript = writeScript(
     + 'descendant.unref();\n'
     + "process.stdout.write('ready\\n');\n"
     + "if (rootLifetime === 'spin') setInterval(() => {}, 1000);\n"
-    + 'else setTimeout(() => process.exit(0), Number(rootLifetime));\n',
+    + "else { const exitDelay = rootLifetime.startsWith('until:') ? Math.max(0, Number(rootLifetime.slice(6)) - Date.now()) : Number(rootLifetime); setTimeout(() => process.exit(0), exitDelay); }\n",
 );
 const rootWithSessionDetachedDescendantScript = writeScript(
   'root-with-session-detached-descendant.js',
@@ -177,7 +177,7 @@ interface DescendantFixture {
 
 let descendantFixtureCount = 0;
 
-function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boolean, rootLifetime: number | 'spin'): DescendantFixture {
+function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boolean, rootLifetime: number | 'spin' | `until:${number}`): DescendantFixture {
   descendantFixtureCount += 1;
   const descendantPidPath = workspacePath(`descendant-${descendantFixtureCount}.pid`);
   const markerPath = workspacePath(`descendant-${descendantFixtureCount}.marker`);
@@ -534,13 +534,12 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
   const rows: Array<{ timedOut: boolean; descendantPid: number; markerWritten: () => boolean }> = [];
   try {
     for (let row = 0; row < 100; row += 1) {
-      // The root's own 60ms lifetime lands inside the jitter of the 100ms deadline, so
-      // every row genuinely races the clock against the root's natural exit.
-      const fixture = descendantFixture(2000, false, 60);
+      const deadlineMilliseconds = 500;
+      const fixture = descendantFixture(2000, false, `until:${Date.now() + deadlineMilliseconds}`);
       const result = await runOwnedPhase(silently({
         command: process.execPath,
         args: fixture.args,
-        timeoutMilliseconds: 100,
+        timeoutMilliseconds: deadlineMilliseconds,
         terminationGraceMilliseconds: 60,
         cleanupDrainMilliseconds: 200,
       }));
