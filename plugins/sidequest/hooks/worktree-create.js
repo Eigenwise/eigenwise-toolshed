@@ -123,15 +123,18 @@ function createWorktree(binding, name) {
   git(repository, ["worktree", "add", "-b", branch, target, baseline]);
   return true;
 }
+function registeredProject(store, repository) {
+  return store.findProject(store.nearestRepoRoot(repository));
+}
 function bindCreation(repository, sessionId, worktree) {
   const store = require(runtimeModule("store"));
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
 function completeCreation(repository, sessionId, worktree) {
   const store = require(runtimeModule("store"));
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
@@ -162,12 +165,12 @@ function preparedWorktreeLease(binding, name) {
 }
 function provisioningConfig(repository) {
   const store = require(runtimeModule("store"));
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
 function recoverCreatedWorktree(repository, sessionId, target, error) {
   const store = require(runtimeModule("store"));
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return "worktree recovery preserved the checkout because its project binding is unavailable";
   const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error);
   if (!recovery.ok) return `worktree recovery preserved the checkout because ${recovery.reason || "its dispatch binding is unavailable"}`;
@@ -213,7 +216,7 @@ function main() {
       throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
   }
-  process.stdout.write(`${boundCreation.worktree}
+  process.stdout.write(`${target}
 `);
 }
 try {

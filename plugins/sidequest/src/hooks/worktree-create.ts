@@ -108,22 +108,34 @@ interface CreationBinding {
   expectedRevision?: string | null;
 }
 
+interface ProjectLookup {
+  ok: boolean;
+  slug?: string;
+}
+
+interface WorktreeStore {
+  findProject: (project: string) => ProjectLookup;
+  nearestRepoRoot: (project: string) => string;
+}
+
+function registeredProject(store: WorktreeStore, repository: string): ProjectLookup {
+  return store.findProject(store.nearestRepoRoot(repository));
+}
+
 function bindCreation(repository: string, sessionId: string, worktree: string): CreationBinding {
-  const store = require(runtimeModule('store')) as {
-    findProject: (project: string) => { ok: boolean; slug?: string };
+  const store = require(runtimeModule('store')) as WorktreeStore & {
     bindDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string) => CreationBinding;
   };
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
   return store.bindDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
 
 function completeCreation(repository: string, sessionId: string, worktree: string): CreationBinding {
-  const store = require(runtimeModule('store')) as {
-    findProject: (project: string) => { ok: boolean; slug?: string };
+  const store = require(runtimeModule('store')) as WorktreeStore & {
     completeDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string) => CreationBinding;
   };
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
   return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
@@ -158,24 +170,22 @@ function preparedWorktreeLease(binding: Required<Pick<CreationBinding, 'ref' | '
 }
 
 function provisioningConfig(repository: string): { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null } {
-  const store = require(runtimeModule('store')) as {
-    findProject: (project: string) => { ok: boolean; slug?: string };
+  const store = require(runtimeModule('store')) as WorktreeStore & {
     boardConfig: (slug: string) => { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null } | null;
   };
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   return project.ok && project.slug ? store.boardConfig(project.slug) || {} : {};
 }
 
 function recoverCreatedWorktree(repository: string, sessionId: string, target: string, error: unknown): string | null {
-  const store = require(runtimeModule('store')) as {
-    findProject: (project: string) => { ok: boolean; slug?: string };
+  const store = require(runtimeModule('store')) as WorktreeStore & {
     recoverDispatchWorktreeCreation: (slug: string, sessionId: string, worktree: string, error: unknown) => {
       ok: boolean;
       reason?: string;
       cleanup?: { reclaimed?: boolean; reason?: string; message?: string } | null;
     };
   };
-  const project = store.findProject(repository);
+  const project = registeredProject(store, repository);
   if (!project.ok || !project.slug) return 'worktree recovery preserved the checkout because its project binding is unavailable';
   const recovery = store.recoverDispatchWorktreeCreation(project.slug, sessionId, target, error);
   if (!recovery.ok) return `worktree recovery preserved the checkout because ${recovery.reason || 'its dispatch binding is unavailable'}`;
@@ -225,7 +235,7 @@ function main(): void {
       throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
   }
-  process.stdout.write(`${boundCreation.worktree}\n`);
+  process.stdout.write(`${target}\n`);
 }
 
 try {

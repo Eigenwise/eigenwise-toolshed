@@ -2740,6 +2740,54 @@ test('worktree-create refuses an unbound request before Git or target mutation',
   assert.throws(() => gitFixture(['show-ref', '--verify', `refs/heads/worktree-${name}`], repo));
 });
 
+test('worktree-create binds a linked checkout to its registered main board', () => {
+  const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-linked-worktree-hook-repo-'));
+  const linkedCheckout = path.join(os.tmpdir(), `sq-linked-worktree-hook-${++sqSeq}`);
+  gitFixture(['init', '--quiet', '-b', 'main'], repository);
+  gitFixture(['config', 'user.email', 'test@example.invalid'], repository);
+  gitFixture(['config', 'user.name', 'Linked Worktree Hook Test'], repository);
+  fs.writeFileSync(path.join(repository, 'tracked.txt'), 'seed\n');
+  gitFixture(['add', 'tracked.txt'], repository);
+  gitFixture(['commit', '--quiet', '-m', 'seed'], repository);
+  const project = store.ensureProject(repository, 'linked worktree hook').slug;
+  const category = `linked-worktree-hook-${sqSeq}`;
+  store.setCategory({
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'medium' },
+    fallback: null,
+    enabled: true,
+  });
+  const ticket = store.createTicket(project, { title: 'linked worktree creation', category, files: ['tracked.txt'] });
+  const sessionId = `linked-worktree-hook-${sqSeq}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { sessionId });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  gitFixture(['worktree', 'add', '--detach', linkedCheckout], repository);
+  const name = `agent-linked-${sqSeq}`;
+  const target = worktrees.namedWorktreePath(linkedCheckout, name);
+  try {
+    assert.equal(store.findProject(linkedCheckout).ok, false);
+    const output = execFileSync(process.execPath, [WORKTREE_CREATE], {
+      input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: sessionId, cwd: linkedCheckout, name }),
+      encoding: 'utf8',
+      env: process.env,
+    }).trim();
+    assert.equal(output, target, 'the hook must return the host-facing path spelling');
+    assert.equal(store.findProject(linkedCheckout).ok, false, 'the linked checkout must not mint a second board');
+    const dispatch = store.getTicket(project, ticket.ref).dispatch;
+    assert.equal(store.findProject(repository).slug, project);
+    assert.equal(worktrees.canonicalPath(dispatch.worktree), worktrees.canonicalPath(target));
+  } finally {
+    if (fs.existsSync(target)) gitFixture(['worktree', 'remove', '--force', target], repository);
+    if (fs.existsSync(linkedCheckout)) gitFixture(['worktree', 'remove', '--force', linkedCheckout], repository);
+    try { gitFixture(['branch', '-D', `worktree-${name}`], repository); } catch (_) {}
+  }
+});
+
 test('worktree-create refuses a pre-existing same-repository checkout without creation proof', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-existing-worktree-repo-'));
   gitFixture(['init', '--quiet', '-b', 'main'], repo);
