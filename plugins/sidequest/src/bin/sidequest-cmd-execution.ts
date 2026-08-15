@@ -242,6 +242,7 @@ async function cmdGroomClose(opts: any, positional: any) {
     by,
     reason,
     purpose,
+    overrideLegacyScope: opts['override-legacy-scope'] === true,
     deliveryCommit: opts['delivery-commit'],
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);

@@ -1298,6 +1298,46 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   }
 });
 
+test('MCP integrate preflight keeps malformed legacy submissions structured when options are omitted', async () => {
+  const repo = committedRepo('sq-mcp-legacy-preflight-');
+  const project = store.ensureProject(repo).slug;
+  const ticket = store.createTicket(project, {
+    title: 'Malformed legacy submission',
+    files: ['lib/legacy.js'],
+    complexity: 3,
+    complexityWhy: 'fixture for legacy integration preflight',
+    labels: ['direct-ok'],
+  });
+  const legacy = store.getTicket(project, ticket.ref);
+  const commit = gitAt(repo, ['rev-parse', 'HEAD']);
+  const gitRef = `refs/sidequest/${ticket.ref}`;
+  gitAt(repo, ['update-ref', gitRef, commit]);
+  legacy.status = 'doing';
+  legacy.executorVerifyKind = 'attestation';
+  legacy.submission = {
+    commit,
+    gitRef,
+    verify: 'attestation: legacy record',
+    base: commit,
+    upstream: 'main',
+    upstreamCommit: commit,
+    commits: [],
+    changedPaths: [],
+    noOp: true,
+  };
+  const dbModule = require('../lib/db.js');
+  dbModule.putRow(dbModule.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: legacy.id, project, ref: legacy.ref, status: legacy.status,
+    archived: 0, ord: legacy.order, claim_by: null, data: legacy,
+  });
+
+  const result = await callHandler('integrate', { project, ref: ticket.ref, by: 'payload-tester' });
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'missing_scope_snapshot');
+  const groomClose = mcp.toolDescriptors().find((descriptor: any) => descriptor.name === 'groomClose');
+  assert.equal(groomClose.inputSchema.properties.overrideLegacyScope.type, 'boolean');
+});
+
 test('integrate returns actionable post-merge verification failures', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-integrate-verify-failure-')).slug;
   const original = store.integrateSubmission;

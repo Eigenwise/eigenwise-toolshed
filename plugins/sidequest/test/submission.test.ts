@@ -1372,33 +1372,91 @@ test('integration closure consumes an in-scope submission with control-plane pro
   assert.ok(!store.submissionsPayload(slug).tickets.some((x?: any) => x.ref === t.ref));
 });
 
-test('legacy submission scope bypass is removed and the handoff stays parked', () => {
+test('legacy root scope override records an exact reachable delivery without replay', () => {
   cleanBranch();
-  const t = addTicket('legacy scope snapshot', { files: ['lib/legacy.js'] });
-  assert.strictEqual(runCli(['claim', t.ref, '--by', 'legacy-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
-  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
-  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'legacy.js'), 'legacy\n');
-  git(['add', 'lib/legacy.js']);
-  git(['commit', '-m', 'legacy scope candidate']);
-  const commit = git(['rev-parse', 'HEAD']);
-  pin(t, commit);
-  assert.strictEqual(runCli(['submit', t.ref, '--by', 'legacy-worker', '--commit', commit]).status, 0);
-  const legacy = store.getTicket(slug, t.ref);
-  delete legacy.submission.admittedScope;
-  persist(legacy);
+  const originalConfig = store.boardConfig(slug);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+  try {
+    const t = addTicket('legacy root scope snapshot', { files: ['lib/legacy.js'] });
+    assert.strictEqual(runCli(['claim', t.ref, '--by', 'legacy-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'legacy.js'), 'legacy\n');
+    git(['add', 'lib/legacy.js']);
+    git(['commit', '-m', 'legacy root scope candidate']);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(t, commit);
+    assert.strictEqual(runCli(['submit', t.ref, '--by', 'legacy-worker', '--commit', commit]).status, 0);
+    const legacy = store.getTicket(slug, t.ref);
+    legacy.submission.admittedScope = [' . ', '.'];
+    persist(legacy);
 
-  const queued = cliJson(['publish', 'queue', '--json']).tickets.find((entry?: any) => entry.ref === t.ref);
-  assert.strictEqual(queued.rangeValidation.reason, 'missing_scope_snapshot');
-  const refused = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', 'Legacy handoff was integrated before scope snapshots shipped.']);
-  assert.strictEqual(refused.status, 1);
-  assert.match(refused.stderr + refused.stdout, /no admitted scope snapshot/);
+    const preflight = store.validateIntegrationSubmission(slug, t.ref);
+    assert.strictEqual(preflight.ok, false);
+    assert.strictEqual(preflight.reason, 'outside_scope');
+    const closed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', `Recorded ${commit} at the configured integration target.`]);
+    assert.strictEqual(closed.status, 0, closed.stderr + closed.stdout);
+    const after = store.getTicket(slug, t.ref);
+    assert.strictEqual(after.status, 'done');
+    assert.strictEqual(after.completion.legacyScopeOverride.reason, `Recorded ${commit} at the configured integration target.`);
+    assert.strictEqual(after.submission.integration.mode, 'recorded');
+    assert.strictEqual(after.submission.integration.pinnedCommit, commit);
+    assert.strictEqual(after.submission.integration.resultingHead, commit);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
 
-  const bypass = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Legacy handoff was integrated before scope snapshots shipped.']);
-  assert.strictEqual(bypass.status, 1);
-  assert.match(bypass.stderr + bypass.stdout, /unknown or unsupported flag --override-legacy-scope/);
-  const after = store.getTicket(slug, t.ref);
-  assert.strictEqual(after.status, 'doing');
-  assert.ok(after.submission);
+test('legacy scope override keeps mixed scopes and undelivered candidates refused', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  try {
+    const mixed = addTicket('mixed legacy scope', { files: ['lib/mixed.js'] });
+    assert.strictEqual(runCli(['claim', mixed.ref, '--by', 'mixed-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'mixed.js'), 'mixed\n');
+    git(['add', 'lib/mixed.js']);
+    git(['commit', '-m', 'mixed legacy scope candidate']);
+    const mixedCommit = git(['rev-parse', 'HEAD']);
+    pin(mixed, mixedCommit);
+    assert.strictEqual(runCli(['submit', mixed.ref, '--by', 'mixed-worker', '--commit', mixedCommit]).status, 0);
+    const mixedRecord = store.getTicket(slug, mixed.ref);
+    mixedRecord.submission.admittedScope = ['.', 'allowed.ts'];
+    persist(mixedRecord);
+    const mixedResult = runCli(['groom-close', mixed.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Mixed scope must stay concrete.']);
+    assert.strictEqual(mixedResult.status, 1);
+    assert.match(mixedResult.stderr + mixedResult.stdout, /outside its admitted scope/);
+    assert.strictEqual(store.getTicket(slug, mixed.ref).status, 'doing');
+
+    cleanBranch();
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: 'main' });
+    const undelivered = addTicket('undelivered legacy candidate', { files: ['lib/undelivered.js'] });
+    assert.strictEqual(runCli(['claim', undelivered.ref, '--by', 'undelivered-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'undelivered.js'), 'undelivered\n');
+    git(['add', 'lib/undelivered.js']);
+    git(['commit', '-m', 'undelivered legacy candidate']);
+    const undeliveredCommit = git(['rev-parse', 'HEAD']);
+    pin(undelivered, undeliveredCommit);
+    const undeliveredSubmit = runCli(['submit', undelivered.ref, '--by', 'undelivered-worker', '--commit', undeliveredCommit]);
+    assert.strictEqual(undeliveredSubmit.status, 0, undeliveredSubmit.stderr + undeliveredSubmit.stdout);
+    const undeliveredRecord = store.getTicket(slug, undelivered.ref);
+    undeliveredRecord.submission.admittedScope = ['.'];
+    persist(undeliveredRecord);
+    const undeliveredResult = runCli(['groom-close', undelivered.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Candidate has not reached main.']);
+    assert.strictEqual(undeliveredResult.status, 1);
+    assert.match(undeliveredResult.stderr + undeliveredResult.stdout, /not reachable from the configured integration branch/);
+    assert.strictEqual(store.getTicket(slug, undelivered.ref).status, 'doing');
+
+    const nonexistent = store.getTicket(slug, undelivered.ref);
+    nonexistent.submission.commit = 'ffffffffffffffffffffffffffffffffffffffff';
+    persist(nonexistent);
+    const nonexistentResult = runCli(['groom-close', undelivered.ref, '--by', 'orchestrator', '--integration', '--override-legacy-scope', '--reason', 'Candidate must exist at the integration target.']);
+    assert.strictEqual(nonexistentResult.status, 1);
+    assert.match(nonexistentResult.stderr + nonexistentResult.stdout, /not reachable from the configured integration branch/);
+    assert.strictEqual(store.getTicket(slug, undelivered.ref).status, 'doing');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
 });
 
 test('scope snapshots refuse changed paths at queue and integration after ticket scope changes', () => {

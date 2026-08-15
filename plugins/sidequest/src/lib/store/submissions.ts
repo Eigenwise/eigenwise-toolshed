@@ -630,7 +630,14 @@ function changedIntegrationPaths(repo: string, submission: any) {
   return integrationGit(repo, ['diff', '--name-only', submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
 }
 
+function overridesLegacyScope(submission?: any, opts?: any) {
+  if (opts?.overrideLegacyScope !== true) return false;
+  const admittedScope = commitScope.scopedPaths(submission?.admittedScope);
+  return !admittedScope.length || (admittedScope.length === 1 && admittedScope[0] === '.');
+}
+
 function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
+  opts = opts || {};
   const ticket = getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: 'not_found' };
   if (!pendingSubmission(ticket)) {
@@ -674,10 +681,11 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
     };
   }
   const project = readMeta(slug);
+  const legacyScopeOverride = overridesLegacyScope(ticket.submission, opts);
   const scopeValidation = isArtifactSubmission(ticket.submission)
     ? { ok: true, changedPaths: ticket.submission.changedPaths || [] }
     : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref);
-  if (!scopeValidation.ok) {
+  if (!scopeValidation.ok && !legacyScopeOverride) {
     const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
     return {
       ok: false,
@@ -690,7 +698,7 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
         : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(', ')}.`),
     };
   }
-  return { ok: true, ticket, scopeValidation };
+  return { ok: true, ticket, scopeValidation, legacyScopeOverride };
 }
 
 function updateSubmissionIntegration(slug: any, id: any, patch: any) {

@@ -557,7 +557,13 @@ ${verify.outputTail}` : null
     if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
     return integrationGit(repo, ["diff", "--name-only", submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
   }
+  function overridesLegacyScope(submission, opts) {
+    if (opts?.overrideLegacyScope !== true) return false;
+    const admittedScope = commitScope.scopedPaths(submission?.admittedScope);
+    return !admittedScope.length || admittedScope.length === 1 && admittedScope[0] === ".";
+  }
   function validateIntegrationSubmission(slug, idOrRef, opts) {
+    opts = opts || {};
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
     if (!pendingSubmission(ticket)) {
@@ -601,8 +607,9 @@ ${verify.outputTail}` : null
       };
     }
     const project = readMeta(slug);
+    const legacyScopeOverride = overridesLegacyScope(ticket.submission, opts);
     const scopeValidation = isArtifactSubmission(ticket.submission) ? { ok: true, changedPaths: ticket.submission.changedPaths || [] } : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref);
-    if (!scopeValidation.ok) {
+    if (!scopeValidation.ok && !legacyScopeOverride) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
       return {
         ok: false,
@@ -613,7 +620,7 @@ ${verify.outputTail}` : null
         message: scopeValidation.message || (scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it before integration.` : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.`)
       };
     }
-    return { ok: true, ticket, scopeValidation };
+    return { ok: true, ticket, scopeValidation, legacyScopeOverride };
   }
   function updateSubmissionIntegration(slug, id, patch) {
     return withTicketLock(slug, id, () => {

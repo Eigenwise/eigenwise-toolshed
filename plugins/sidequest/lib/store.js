@@ -2314,11 +2314,17 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     ticket
   };
   let legacyScopeOverride = false;
+  let legacyDelivery = null;
   if (purpose === "integration") {
     const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
     if (!admitted.ok) return admitted;
     legacyScopeOverride = !!admitted.legacyScopeOverride;
+    if (legacyScopeOverride) {
+      legacyDelivery = recordedDelivery(slug, ticket.submission?.commit, reason);
+      if (!legacyDelivery.ok) return Object.assign({ ticket }, legacyDelivery);
+    }
   }
+  const recorded = delivery || legacyDelivery;
   const advisory = purpose === "integration" && ticket.highStakes && !recordedReviewPass(ticket) && !linkedReviewPass(slug, ticket) ? HIGH_STAKES_REVIEW_WARNING : null;
   const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
     body: reason,
@@ -2326,18 +2332,18 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     completionAuthority: CONTROL_PLANE_COMPLETION,
     completionProvenance: Object.assign(
       { authority: "control-plane", purpose, reason },
-      delivery?.ok ? {
+      recorded?.ok ? {
         delivery: {
-          commit: delivery.commit,
-          targetBranch: delivery.target.branch,
-          targetRef: delivery.target.upstream,
-          integrationRevision: delivery.integrationRevision,
-          evidence: delivery.evidence
+          commit: recorded.commit,
+          targetBranch: recorded.target.branch,
+          targetRef: recorded.target.upstream,
+          integrationRevision: recorded.integrationRevision,
+          evidence: recorded.evidence
         }
       } : {},
       legacyScopeOverride ? { legacyScopeOverride: { reason } } : {}
     ),
-    ...delivery?.ok ? { recordedDelivery: delivery } : {}
+    ...recorded?.ok ? { recordedDelivery: recorded } : {}
   }));
   return advisory ? Object.assign(result, { advisory }) : result;
 }

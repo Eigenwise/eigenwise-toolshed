@@ -354,6 +354,7 @@ const tools = [
         by: { type: "string" },
         reason: { type: "string" },
         integration: { type: "boolean" },
+        overrideLegacyScope: { type: "boolean", description: "Close an empty or root-only legacy scope only when the submitted commit is already reachable from the configured integration target." },
         deliveryCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "Commit already on the integration branch." },
         recoveryEvidence: { type: "string", description: "Observed terminal-agent evidence for an unclaimed dispatch." }
       },
@@ -374,6 +375,7 @@ const tools = [
         by,
         reason,
         purpose,
+        overrideLegacyScope: args.overrideLegacyScope === true,
         deliveryCommit: args.deliveryCommit
       });
       if (res.ok) closeDispatchExecutor(ticket);
