@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.465.0 (2026-08-15)
+
+### sidequest 4.50.1 → 4.50.2
+
+#### Fixes
+
+- Stabilize owned-process deadline checks (SQ-2127)
+  Stabilized the exact-deadline process ownership check so CI consistently verifies descendant cleanup without affecting unrelated processes.
+- Isolate submission tests from gateway state (SQ-2128)
+  Submission lifecycle tests now use a fixed available route instead of local Model Gateway readiness.
+
 ## v3.464.0 (2026-08-15)
 
 ### sidequest 4.50.0 → 4.50.1
