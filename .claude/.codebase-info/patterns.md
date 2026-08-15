@@ -1,6 +1,6 @@
 # Patterns
 
-Last Updated: 2026-08-14
+Last Updated: 2026-08-15
 
 - Build from source, run committed output: Sidequest TypeScript under `src/` compiles to `lib/`, `bin/`, and bundled hook files. Runtime manifests point at generated files; release suite discovery is shared through `plugins/sidequest/lib/suite-resolver.js` and re-exported by `scripts/release/lib/suites.mjs`.
 - Bounded context projections: Sidequest freezes dispatch contracts and pages large MCP reads with opaque revision-bound handles; callers continue through `context_page` and rerun mutable reads when a revision is stale.
@@ -13,6 +13,7 @@ Last Updated: 2026-08-14
 - Serialize board mutations: MCP mutation handlers enqueue per-board work before touching state.
 - Pull results from the owning root: Workbench's TypeScript tools require a canonical project root, keep one language server per root, and discard TS7 push diagnostics so parent and worktree results cannot bleed into one another.
 - Preserve exact ownership: Sidequest reclaims claims and pre-claim dispatch bindings only after confirmed terminal process evidence, keeps unknown owners protected, and checks ownership before forced submission, release, or rejection-history mutation.
+- Owned process phases: `plugins/sidequest/scripts/owned-process-tree.js` starts each gate under a detached supervisor, classifies terminal process and group states, bounds retained output, and delays settlement until cleanup evidence is drained. Unknown or still-live ownership remains blocking.
 - Batch-local Stop responsibility: each plugin deduplicates only its own Stop work using stable inputs; mutable transcript metadata and prompt identifiers do not define responsibility, and stale lock cleanup is generation-bound.
 - Atomic gateway updates and request recovery: Model Gateway stages proxy replacements, renames atomically with rollback, compares serving versions, and defers restart when the listener cannot exit immediately. An active request can start or recover the shared proxy without waiting for another Claude SessionStart.
 - Shared-tree artifacts are marker-gated and confined to an approved artifact root; dirty baselines and closeout deltas are checked.

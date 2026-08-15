@@ -1,6 +1,6 @@
 # Architecture
 
-Last Updated: 2026-08-14
+Last Updated: 2026-08-15
 
 ## Repository shape
 
@@ -8,7 +8,7 @@ The repository is a plugin marketplace. Seven plugins are published: `plugins/si
 
 ## Runtime flow
 
-Claude Code loads runtime files declared by plugin manifests and hook manifests. Sidequest builds TypeScript from `plugins/sidequest/src/` into committed `lib/`, `bin/`, and `hooks/` output. Its MCP entry is `plugins/sidequest/bin/sidequest-mcp.js`, configured by `plugins/sidequest/.mcp.json`; hooks are registered in `plugins/sidequest/hooks/hooks.json`. CLI and MCP handlers share store operations in `plugins/sidequest/src/lib/store.ts`. The typed lifecycle reducers and worktree lease decisions live under `plugins/sidequest/src/lib/kernel/`; transports adapt repository, immutable-revision, process, and checkout facts into that kernel.
+Claude Code loads runtime files declared by plugin manifests and hook manifests. Sidequest builds TypeScript from `plugins/sidequest/src/` into committed `lib/`, `bin/`, and `hooks/` output. Its MCP entry is `plugins/sidequest/bin/sidequest-mcp.js`, configured by `plugins/sidequest/.mcp.json`; hooks are registered in `plugins/sidequest/hooks/hooks.json`. CLI and MCP handlers share store operations in `plugins/sidequest/src/lib/store.ts`. The typed lifecycle reducers and worktree lease decisions live under `plugins/sidequest/src/lib/kernel/`; transports adapt repository, immutable-revision, process, and checkout facts into that kernel. Release and test phases use `plugins/sidequest/scripts/owned-process-tree.js` with its detached supervisor to retain process ownership through cleanup.
 
 Sidequest persists board state in SQLite and serializes mutations per board. The orchestration loop covers dispatch, routing, categories, executors, claims, submissions, scope enforcement, and worktree management through typed store and lifecycle modules. Confirmed terminal process evidence can release the exact dead claim or pre-claim dispatch binding; live and unknown owners remain protected, and ownership is checked before forced submission or release mutations. `plugins/sidequest/src/lib/agentsync.ts` compiles dispatch briefings through `context-packet.ts` into bounded projections, `mcp-read.ts` exposes `context_page`, and `mcp-shared.ts` creates and resolves its revision-bound retrieval handles. The dashboard is a separate Svelte/Vite app that talks to the local server over HTTP `/api/*` and polls state.
 

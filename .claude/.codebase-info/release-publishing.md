@@ -1,10 +1,10 @@
 # Release and publishing
 
-Last Updated: 2026-08-14
+Last Updated: 2026-08-15
 
 The marketplace manifests on `main` are delivery. Verified integration lands on `main` and writes a release fragment in the same push with `node scripts/release/note.mjs`. Plugin version bumps ship with that integration; do not hold a bump for a later GitHub Release.
 
-Sidequest executors stop at immutable submitted candidates. The orchestrator assembles the accepted terminal wave, leaves every review-rejected candidate quarantined, reruns property-level oracles for overlapping changes, and runs one merged full gate before advancing `main`. Board closure follows delivery reachability: accepted submissions close only after their delivered commits are ancestors of the integration branch, while rejected predecessors are superseded with the integrated repair evidence.
+Sidequest executors stop at immutable submitted candidates. The orchestrator assembles the accepted terminal wave, leaves every review-rejected candidate quarantined, reruns property-level oracles for overlapping changes, and runs one merged full gate before advancing `main`. Board closure follows delivery reachability: accepted submissions close only after their delivered commits are ancestors of the integration branch, while rejected predecessors are superseded with the integrated repair evidence. Integration refuses a dirty target and preserves unrelated working paths when applying a candidate.
 
 Every plugin release updates three version fields: the marketplace top-level version, the plugin entry version in `.claude-plugin/marketplace.json`, and `plugins/<name>/.claude-plugin/plugin.json`. `scripts/release/lib/manifests.mjs` owns these writes after a plugin has matching bootstrap versions.
 

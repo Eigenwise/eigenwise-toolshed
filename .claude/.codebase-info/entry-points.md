@@ -1,6 +1,6 @@
 # Entry points
 
-Last Updated: 2026-08-14
+Last Updated: 2026-08-15
 
 ## User and runtime entry points
 
@@ -20,6 +20,6 @@ Last Updated: 2026-08-14
 
 ## Maintainer entry points
 
-- Sidequest build and tests: `plugins/sidequest/package.json` scripts.
+- Sidequest build and tests: `plugins/sidequest/package.json` scripts. `plugins/sidequest/scripts/build-check.mjs` and `test-full.mjs` run package gates through the owned process boundary in `plugins/sidequest/scripts/owned-process-tree.js`.
 - Release workflow: `scripts/release/README.md`, then the release CLI and `.release/` files; `scripts/release/daily-release.mjs` drives the once-a-day notification release.
 - Docs build and reference generation: `docs/package.json` and `docs/scripts/generate-reference.mjs`.

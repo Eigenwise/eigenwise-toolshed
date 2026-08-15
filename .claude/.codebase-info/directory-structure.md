@@ -1,10 +1,10 @@
 # Directory structure
 
-Last Updated: 2026-08-14
+Last Updated: 2026-08-15
 
 - `.claude/`: project settings, live rules, and generated codebase map.
 - `.claude-plugin/`: marketplace manifest and published plugin entries.
-- `plugins/sidequest/`: board engine, MCP server, CLI, hooks, dashboard, tests, and committed build output. Pure lifecycle and worktree decisions live in `src/lib/kernel/`; persistence is split under `src/lib/store/`, with matching compiled modules under `lib/`.
+- `plugins/sidequest/`: board engine, MCP server, CLI, hooks, dashboard, tests, and committed build output. Pure lifecycle and worktree decisions live in `src/lib/kernel/`; persistence is split under `src/lib/store/`, with matching compiled modules under `lib/`. `plugins/sidequest/scripts/owned-process-tree.js` and `plugins/sidequest/scripts/owned-phase-supervisor.js` keep test and release subprocess ownership explicit through cleanup.
 - `plugins/workbench/`: workspace setup, updater, doctor skills, pull-only MCP code intelligence under `lib/code-intel/`, with one module per language in `lib/code-intel/language-server-locators/`, and freshness and billing-path hooks.
 - `plugins/observability/`: observer, statusline, Collector setup, and sinks under `observability/sinks/`, plus the eight lifecycle hooks and the `enable-project-telemetry` skill.
 - `plugins/model-gateway/`: local model gateway CLI, registry hook, skills, and tests.
