@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.466.0 (2026-08-15)
+
+### sidequest 4.50.2 → 4.50.3
+
+#### Fixes
+
+- Preserve Sidequest worktree path casing (SQ-2132)
+
 ## v3.465.0 (2026-08-15)
 
 ### sidequest 4.50.1 → 4.50.2
