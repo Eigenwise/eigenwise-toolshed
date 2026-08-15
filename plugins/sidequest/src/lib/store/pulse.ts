@@ -3,8 +3,8 @@
 const { execFileSync } = require('node:child_process');
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
 
-function createGitHubCiRunsProvider(projectPath: string) {
-  const command = (program: string, arguments_: string[]) => execFileSync(program, arguments_, {
+function createGitHubCiRunsProvider(projectPath: string, execute = execFileSync) {
+  const command = (program: string, arguments_: string[]) => execute(program, arguments_, {
     cwd: projectPath,
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'ignore'],
@@ -24,13 +24,11 @@ function createGitHubCiRunsProvider(projectPath: string) {
         const completedRuns = runs.filter((run: any) => run.status === 'completed');
         const greenRuns = completedRuns.filter((run: any) => run.conclusion === 'success');
         const lastGreenHeadSha = greenRuns[0]?.headSha || null;
-        const localHead = command('git', ['rev-parse', 'HEAD']);
         const hasCompletedGreenRun = greenRuns.some((run: any) => run.headSha === remoteHead);
-        const localHeadIsAheadOfGreen = lastGreenHeadSha && command('git', ['merge-base', '--is-ancestor', lastGreenHeadSha, localHead]) === '';
         return {
           headSha: remoteHead,
           lastGreenHeadSha,
-          hasCompletedGreenRun: hasCompletedGreenRun || !localHeadIsAheadOfGreen,
+          hasCompletedGreenRun,
           runs: completedRuns.map((run: any) => ({
             id: run.databaseId,
             headSha: run.headSha,

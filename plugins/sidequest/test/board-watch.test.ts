@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 
-const { createBoardWatch } = require('../lib/store/pulse');
+const { createBoardWatch, createGitHubCiRunsProvider } = require('../lib/store/pulse');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
 
 function ticket(overrides: Record<string, unknown> = {}) {
@@ -33,6 +33,18 @@ function watch(polls: unknown[], watchingAuthor = 'orchestrator', ciPolls: unkno
     writeError: (line: string) => errors.push(line),
   });
   return { boardWatch, lines, errors };
+}
+
+function ciProvider(remoteHead: string, runs: Record<string, unknown>[]) {
+  return createGitHubCiRunsProvider('/project', (_program: string, arguments_: string[]) => {
+    const command = arguments_.join(' ');
+    if (command === 'rev-parse --abbrev-ref --symbolic-full-name @{u}') return 'origin/main';
+    if (command === 'remote get-url origin') return 'git@github.com:eigenwise/toolshed.git';
+    if (command === 'auth status') return '';
+    if (command === 'ls-remote origin refs/heads/main') return `${remoteHead}\trefs/heads/main`;
+    if (command === 'run list --branch main --limit 100 --json databaseId,headSha,status,conclusion,name') return JSON.stringify(runs);
+    throw new Error(`unexpected CI command: ${command}`);
+  });
 }
 
 test('project watch consumes only its board changes', () => {
@@ -196,6 +208,93 @@ test('watch emits a red GitHub run once across polls', () => {
   boardWatch.poll();
 
   assert.deepEqual(lines, ['CI abcdef failed test 2', 'CI abcdef unchecked - -']);
+});
+
+test('provider keeps an origin main success green when a local release branch is ahead', () => {
+  const headSha = '528ce317a5e587571047a14482952104a1d16169';
+  const provider = ciProvider(headSha, [
+    { databaseId: 1, headSha, status: 'completed', conclusion: 'success', name: 'Test' },
+    { databaseId: 2, headSha, status: 'completed', conclusion: 'success', name: 'Release guard' },
+    { databaseId: 3, headSha, status: 'completed', conclusion: 'success', name: 'Deploy docs' },
+    { databaseId: 4, headSha, status: 'completed', conclusion: 'success', name: 'Daily GitHub Release' },
+  ]);
+
+  assert.ok(provider);
+  const ci = provider();
+  assert.equal(ci?.headSha, headSha);
+  assert.equal(ci?.hasCompletedGreenRun, true);
+  assert.equal(ci?.runs.length, 4);
+
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [] },
+    { serverTime: '2026-08-13T00:00:02.000Z', tickets: [] },
+  ], 'orchestrator', [ci, ci]);
+  boardWatch.poll();
+  boardWatch.poll();
+
+  assert.deepEqual(lines, []);
+});
+
+test('watch reports a genuinely unchecked new CI head', () => {
+  const headSha = 'new-head';
+  const ci = { headSha, lastGreenHeadSha: 'previous-green', hasCompletedGreenRun: false, runs: [] };
+  const { boardWatch, lines } = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [] }], 'orchestrator', [ci]);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['CI new-head unchecked - -']);
+});
+
+test('watch reports a pending CI check as unchecked', () => {
+  const ci = {
+    headSha: 'pending-head',
+    lastGreenHeadSha: 'previous-green',
+    hasCompletedGreenRun: false,
+    runs: [{ id: 8, headSha: 'pending-head', status: 'in_progress', conclusion: null, workflowName: 'Test', failingJobCount: 0 }],
+  };
+  const { boardWatch, lines } = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [] }], 'orchestrator', [ci]);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['CI pending-head unchecked - -']);
+});
+
+test('watch reports a cancelled CI check as unchecked', () => {
+  const ci = {
+    headSha: 'cancelled-head',
+    lastGreenHeadSha: 'previous-green',
+    hasCompletedGreenRun: false,
+    runs: [{ id: 9, headSha: 'cancelled-head', status: 'completed', conclusion: 'cancelled', workflowName: 'Test', failingJobCount: 0 }],
+  };
+  const { boardWatch, lines } = watch([{ serverTime: '2026-08-13T00:00:01.000Z', tickets: [] }], 'orchestrator', [ci]);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['CI cancelled-head failed Test 0', 'CI cancelled-head unchecked - -']);
+});
+
+test('watch quiets an already-reported failure once its head turns green', () => {
+  const failed = {
+    headSha: 'recovered-head',
+    lastGreenHeadSha: 'previous-green',
+    hasCompletedGreenRun: false,
+    runs: [{ id: 10, headSha: 'recovered-head', status: 'completed', conclusion: 'failure', workflowName: 'Test', failingJobCount: 1 }],
+  };
+  const green = {
+    headSha: 'recovered-head',
+    lastGreenHeadSha: 'recovered-head',
+    hasCompletedGreenRun: true,
+    runs: [{ id: 11, headSha: 'recovered-head', status: 'completed', conclusion: 'success', workflowName: 'Test', failingJobCount: 0 }],
+  };
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [] },
+    { serverTime: '2026-08-13T00:00:02.000Z', tickets: [] },
+  ], 'orchestrator', [failed, green]);
+
+  boardWatch.poll();
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['CI recovered-head failed Test 1', 'CI recovered-head unchecked - -']);
 });
 
 test('two board watches emit only their own actionable events', () => {
