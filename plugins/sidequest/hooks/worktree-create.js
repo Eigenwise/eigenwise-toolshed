@@ -86,10 +86,12 @@ function samePath(left, right) {
 }
 function linkedCheckoutIdentity(target) {
   try {
-    const worktree = import_node_path2.default.resolve(git(target, ["rev-parse", "--show-toplevel"]));
+    const hostWorktreePath = git(target, ["rev-parse", "--show-toplevel"]);
+    const worktree = import_node_path2.default.resolve(hostWorktreePath);
     const gitPath = (value) => import_node_path2.default.isAbsolute(value) ? value : import_node_path2.default.resolve(worktree, value);
     const gitDirectory = gitPath(git(worktree, ["rev-parse", "--git-dir"]));
     return {
+      hostWorktreePath,
       worktree,
       gitDirectory,
       commonGitDirectory: gitPath(git(worktree, ["rev-parse", "--git-common-dir"])),
@@ -204,9 +206,9 @@ function main() {
   const created = createWorktree(boundCreation, name);
   if (created) {
     try {
-      const identity = linkedCheckoutIdentity(boundCreation.worktree);
-      if (!identity) throw new Error("new worktree identity is unavailable");
-      leaseKernel.createCheckoutInstanceMarker(identity.gitDirectory);
+      const identity2 = linkedCheckoutIdentity(boundCreation.worktree);
+      if (!identity2) throw new Error("new worktree identity is unavailable");
+      leaseKernel.createCheckoutInstanceMarker(identity2.gitDirectory);
       worktrees.provisionWorktree(boundCreation.repository, boundCreation.worktree, provisioningConfig(boundCreation.repository));
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
       if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || "completion binding is incomplete"}`);
@@ -216,7 +218,9 @@ function main() {
       throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
   }
-  process.stdout.write(`${target}
+  const identity = linkedCheckoutIdentity(boundCreation.worktree);
+  if (!identity) throw new Error("created worktree identity is unavailable");
+  process.stdout.write(`${identity.hostWorktreePath}
 `);
 }
 try {

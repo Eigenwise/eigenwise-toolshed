@@ -40,6 +40,7 @@ function samePath(left: string, right: string): boolean {
 }
 
 interface LinkedCheckoutIdentity {
+  hostWorktreePath: string;
   worktree: string;
   gitDirectory: string;
   commonGitDirectory: string;
@@ -49,10 +50,12 @@ interface LinkedCheckoutIdentity {
 
 function linkedCheckoutIdentity(target: string): LinkedCheckoutIdentity | null {
   try {
-    const worktree = path.resolve(git(target, ['rev-parse', '--show-toplevel']));
+    const hostWorktreePath = git(target, ['rev-parse', '--show-toplevel']);
+    const worktree = path.resolve(hostWorktreePath);
     const gitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(worktree, value);
     const gitDirectory = gitPath(git(worktree, ['rev-parse', '--git-dir']));
     return {
+      hostWorktreePath,
       worktree,
       gitDirectory,
       commonGitDirectory: gitPath(git(worktree, ['rev-parse', '--git-common-dir'])),
@@ -235,7 +238,9 @@ function main(): void {
       throw new Error(preservation ? `${message}; ${preservation}` : message);
     }
   }
-  process.stdout.write(`${target}\n`);
+  const identity = linkedCheckoutIdentity(boundCreation.worktree);
+  if (!identity) throw new Error('created worktree identity is unavailable');
+  process.stdout.write(`${identity.hostWorktreePath}\n`);
 }
 
 try {

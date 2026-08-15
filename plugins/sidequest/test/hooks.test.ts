@@ -2776,7 +2776,7 @@ test('worktree-create binds a linked checkout to its registered main board', () 
       encoding: 'utf8',
       env: process.env,
     }).trim();
-    assert.equal(output, target, 'the hook must return the host-facing path spelling');
+    assert.equal(output, gitFixture(['rev-parse', '--show-toplevel'], target), 'the hook must return Git’s host-facing path spelling');
     assert.equal(store.findProject(linkedCheckout).ok, false, 'the linked checkout must not mint a second board');
     const dispatch = store.getTicket(project, ticket.ref).dispatch;
     assert.equal(store.findProject(repository).slug, project);
@@ -2930,6 +2930,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
     input: JSON.stringify(payload), encoding: 'utf8', env: process.env,
   }).trim();
   assert.equal(worktrees.canonicalPath(first), worktrees.canonicalPath(expected));
+  assert.equal(first, gitFixture(['rev-parse', '--show-toplevel'], expected), 'the hook must preserve Git’s exact checkout path spelling');
   assert.equal(path.relative(repo, first).startsWith('..'), true);
   assert.equal(worktrees.canonicalPath(gitFixture(['rev-parse', '--show-toplevel'], first)), worktrees.canonicalPath(expected));
   assert.equal(gitFixture(['branch', '--show-current'], first), `worktree-${name}`);
