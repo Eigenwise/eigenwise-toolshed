@@ -375,6 +375,7 @@ const tools: ToolDefinition[] = [
       }
       const ticket = store.getTicket(slug, args.ref);
       if (!ticket) throw new Error(`native_agent: no ticket "${args.ref}".`);
+      if (ticket.reviewTarget) throw new Error(`native_agent: ${ticket.ref} reviews a bound candidate; use dispatch so the store pins its exact immutable checkout.`);
       const sessionId = sessionOf(args);
       const executorClaimRefusal = store.executorClaimDispatchRefusal(slug, sessionId);
       if (executorClaimRefusal) throw new Error(executorClaimRefusal);

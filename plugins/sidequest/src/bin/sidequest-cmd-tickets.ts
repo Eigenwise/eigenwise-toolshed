@@ -108,6 +108,20 @@ function readonlyFromOpts(opts: any) {
   fail('--readonly accepts true or false.');
 }
 
+function reviewTargetFromOpts(opts: any) {
+  const ref = opts['review-ref'];
+  const commit = opts['review-commit'];
+  const source = opts['review-source'];
+  const value = opts['review-revision'];
+  if (![ref, commit, source, value].some((entry) => entry != null)) return undefined;
+  if (!ref) fail('--review-ref names the reviewed ticket and is required with a review target.');
+  const hasCommit = commit != null;
+  const hasRevision = source != null || value != null;
+  if (hasCommit === hasRevision) fail('pass exactly --review-commit, or both --review-source and --review-revision.');
+  if (hasRevision && (!source || !value)) fail('--review-source and --review-revision must be provided together.');
+  return { ref, ...(hasCommit ? { commit } : { sourceRevision: { source, value } }) };
+}
+
 function highStakesFromOpts(opts: any) {
   if (opts['high-stakes'] === undefined) return undefined;
   return String(opts['high-stakes']).toLowerCase() !== 'false';
@@ -152,6 +166,7 @@ async function addPreview(opts: any, category: any, complexity: any) {
     executorVerify: opts.verify || '',
     storyId: opts.story || null,
     category,
+    reviewTarget: reviewTargetFromOpts(opts),
     route: ticketRouteFromOpts(opts),
     complexity,
     complexityWhy: opts.why || '',
@@ -200,7 +215,7 @@ async function cmdAdd(opts: any) {
     route,
     source: opts.source || 'cli',
     onAssetError: (src: any) => warnings.push(`could not attach image: ${src}`),
-  });
+  }, reviewTargetFromOpts(opts));
   // Re-read through getTicket so the returned ticket carries its derived
   // model/effort (stamped from complexity at read time) for display/JSON.
   const ticket = store.getTicket(slug, created.ref) || created;
@@ -328,7 +343,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (route !== undefined) patch.route = route;
   if (opts.by != null) patch.by = opts.by;
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
-  const saved = store.updateTicket(slug, idOrRef, patch);
+  const saved = store.updateTicket(slug, idOrRef, patch, reviewTargetFromOpts(opts));
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
   // Re-read so derived model/effort (stamped from complexity at read time) show.
   const updated = store.getTicket(slug, saved.ref) || saved;

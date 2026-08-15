@@ -175,8 +175,8 @@ publish transaction (lock → delivery → merged-tree gate → central version 
 `references/publishing.md`.
 **BOOKEND SUPERVISION.** Between dispatch and submission, do nothing with that ticket: no pulses,
 comment reads, or peeks. At integration, read the submit report, deliver the range, and run the
-merged-tree gate once per wave. Judge by that oracle, never by opening source or reviewing diffs. A human-grade review need is a separately routed `review-audit`
-(or `security-audit`) ticket, never orchestrator re-review. Never mark a submitted ticket done without
+merged-tree gate once per wave. Judge by that oracle, never by opening source or diffs. A human-grade review need is a separately routed `review-audit`
+(or `security-audit`) ticket bound with `reviewTarget`, never orchestrator re-review. Never mark a submitted ticket done without
 integrating it; never re-dispatch one (refused as `submitted`). A dead executor's `done` only proves
 the board transition, never that work shipped: salvage and close it per `references/publishing.md`.
 

@@ -94,6 +94,19 @@ const VERIFY_ORACLE_PROP = {
   description: 'Verify the required property on produced output. An implementation-name grep is diagnostic evidence, not a behavior oracle. When verifyKind is command (the default), use one runnable cmd.exe command (for example `cd plugins/sidequest && npm run test:full`) or `manual: <what you checked>`. cmd.exe uses &&, never ;. When verifyKind is attestation, use exactly `attestation: <artifact> | <evidence produced> | <what it showed>` and replace <artifact> with attestationArtifact.',
 };
 
+const REVIEW_TARGET_PROP = {
+  type: 'object',
+  properties: {
+    ref: { type: 'string' },
+    commit: { type: 'string' },
+    sourceRevision: {
+      type: 'object',
+      properties: { source: { type: 'string' }, value: { type: 'string' } },
+    },
+  },
+  required: ['ref'],
+};
+
 const tools: ToolDefinition[] = [
   {
     name: 'add',
@@ -121,6 +134,7 @@ const tools: ToolDefinition[] = [
         complexity: { type: 'integer', minimum: 1, maximum: 10, description: 'Legacy score. Requires why (min 20 chars).' },
         why: { type: 'string', description: 'Motivation for the complexity score (min 20 chars).' },
         category: { type: 'string', description: 'Enabled category id from category_list.' },
+        reviewTarget: REVIEW_TARGET_PROP,
         route: {
           type: 'object',
           properties: { model: { type: 'string' }, effort: { type: 'string', enum: store.VALID_EFFORTS } },
@@ -176,7 +190,7 @@ const tools: ToolDefinition[] = [
         category,
         route: args.route,
         source: 'mcp',
-      });
+      }, args.reviewTarget);
       const ticket = store.getTicket(slug, created.ref) || created;
       const warnings = store.ticketReferenceWarnings(slug, ticket.title, ticket.description);
       warnings.push(...store.ticketCategoryWarnings(ticket));
@@ -216,7 +230,8 @@ const tools: ToolDefinition[] = [
         storyId: { anyOf: [{ type: 'string', pattern: '^US-\\d+$' }, { const: 'none' }] },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
         why: { type: 'string' },
-        category: { type: 'string', description: 'Enabled category id from category_list. Use "none" to clear.' },
+        category: { type: 'string', description: 'Enabled category id from category_list. Use "none" to clear. A bound reviewTarget pins its review-audit category.' },
+        reviewTarget: REVIEW_TARGET_PROP,
         route: {
           anyOf: [
             {
@@ -289,7 +304,7 @@ const tools: ToolDefinition[] = [
       }
       if (args.why !== undefined) patch.complexityWhy = args.why;
       if (args.route !== undefined) patch.route = args.route === 'none' || args.route === null ? null : args.route;
-      const updated = store.updateTicket(slug, args.ref, patch);
+      const updated = store.updateTicket(slug, args.ref, patch, args.reviewTarget);
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
       const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);

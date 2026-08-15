@@ -580,7 +580,7 @@ const tools = [
   },
   {
     name: "rework",
-    description: "Reject a reviewed submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it.",
+    description: "Reject a reviewed submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review needs that reviewRef, a different confirming identity, and parks the original permanently.",
     inputSchema: {
       type: "object",
       properties: {
@@ -588,6 +588,7 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         review: { type: "string" },
+        reviewRef: { type: "string" },
         reason: { type: "string" }
       },
       required: ["ref", "by", "review", "reason"]
@@ -598,6 +599,7 @@ const tools = [
       return mutationAck(slug, store.reworkSubmission(slug, args.ref, {
         by,
         review: args.review,
+        reviewRef: args.reviewRef,
         reason: args.reason,
         source: "mcp"
       }));

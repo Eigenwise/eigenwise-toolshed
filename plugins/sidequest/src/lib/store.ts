@@ -39,6 +39,7 @@ const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require('./worktrees.js');
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
+const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
 const { configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
@@ -864,6 +865,7 @@ const {
   categoryReadOnly,
   readOnlyOverrideActive,
   dispatchReadOnly,
+  submissionReviewRelation,
   createTicket,
   normalizeLabels,
   normalizeFiles,
@@ -926,6 +928,7 @@ const {
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyOracle,
+  transaction: (...args: any[]) => transaction(...args),
   normalizeVerifyOracleKind,
   saveAssetData,
   ticketLockPath,
@@ -1620,6 +1623,17 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
   const result = withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id); // fresh read, under the lock
     if (!t) return { ok: false, reason: 'not_found' };
+    // A bound candidate is frozen for its review: reclaiming it would let the
+    // implementer resume or amend the exact revision under audit.
+    const candidateReview = submissionReviewRelation(slug, t);
+    if (candidateReview) {
+      return {
+        ok: false,
+        reason: 'candidate_review_locked',
+        ticket: t,
+        message: reviewLockMessage('claim', t, candidateReview),
+      };
+    }
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
     const directClaimReason = directReason(opts.reason);
@@ -2813,6 +2827,7 @@ module.exports = {
   updateTicket,
   deleteTicket,
   dispatchReadOnly,
+  submissionReviewRelation,
   stableExecutorName,
   canonicalPreparedDispatchExecutor,
   executorClaimDispatchRefusal,

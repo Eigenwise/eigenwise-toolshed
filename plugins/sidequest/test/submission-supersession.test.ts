@@ -49,7 +49,10 @@ function persist(slug: string, ticket: any) {
 
 function fixture(label: string, retiredPaths: string[] = []) {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), `sq-supersession-${label}-`));
-  git(repository, ['init']);
+  // -b main pins the fixture to the branch the board treats as the integration
+  // target; without it the local init.defaultBranch decides and the delivery
+  // reachability checks fail on any machine that still defaults to master.
+  git(repository, ['init', '-b', 'main']);
   git(repository, ['config', 'user.name', 'Sidequest Test']);
   git(repository, ['config', 'user.email', 'sidequest-test@example.invalid']);
   const base = commit(repository, 'README.md', 'base\n');

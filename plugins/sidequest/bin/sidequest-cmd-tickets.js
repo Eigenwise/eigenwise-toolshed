@@ -89,6 +89,19 @@ function readonlyFromOpts(opts) {
   if (value === "false") return false;
   fail("--readonly accepts true or false.");
 }
+function reviewTargetFromOpts(opts) {
+  const ref = opts["review-ref"];
+  const commit = opts["review-commit"];
+  const source = opts["review-source"];
+  const value = opts["review-revision"];
+  if (![ref, commit, source, value].some((entry) => entry != null)) return void 0;
+  if (!ref) fail("--review-ref names the reviewed ticket and is required with a review target.");
+  const hasCommit = commit != null;
+  const hasRevision = source != null || value != null;
+  if (hasCommit === hasRevision) fail("pass exactly --review-commit, or both --review-source and --review-revision.");
+  if (hasRevision && (!source || !value)) fail("--review-source and --review-revision must be provided together.");
+  return { ref, ...hasCommit ? { commit } : { sourceRevision: { source, value } } };
+}
 function highStakesFromOpts(opts) {
   if (opts["high-stakes"] === void 0) return void 0;
   return String(opts["high-stakes"]).toLowerCase() !== "false";
@@ -128,6 +141,7 @@ async function addPreview(opts, category, complexity) {
     executorVerify: opts.verify || "",
     storyId: opts.story || null,
     category,
+    reviewTarget: reviewTargetFromOpts(opts),
     route: ticketRouteFromOpts(opts),
     complexity,
     complexityWhy: opts.why || "",
@@ -175,7 +189,7 @@ async function cmdAdd(opts) {
     route,
     source: opts.source || "cli",
     onAssetError: (src) => warnings.push(`could not attach image: ${src}`)
-  });
+  }, reviewTargetFromOpts(opts));
   const ticket = store.getTicket(slug, created.ref) || created;
   warnings.push(...store.ticketReferenceWarnings(slug, ticket.title, ticket.description));
   warnings.push(...store.ticketCategoryWarnings(ticket));
@@ -294,7 +308,7 @@ async function cmdUpdate(opts, positional) {
   if (route !== void 0) patch.route = route;
   if (opts.by != null) patch.by = opts.by;
   patch.source = opts.source || "cli";
-  const saved = store.updateTicket(slug, idOrRef, patch);
+  const saved = store.updateTicket(slug, idOrRef, patch, reviewTargetFromOpts(opts));
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
   const updated = store.getTicket(slug, saved.ref) || saved;
   const warnings = [

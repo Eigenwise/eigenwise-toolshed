@@ -1,5 +1,7 @@
 'use strict';
 
+const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationRef } = require('../kernel/review-binding');
+
 function createTickets(dependencies: any) {
   const {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
@@ -8,9 +10,29 @@ function createTickets(dependencies: any) {
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
-    ticketLockPath, ticketStoryId, touchClaimActivity, upperRef, withTicketLock,
+    ticketLockPath, ticketStoryId, touchClaimActivity, transaction, upperRef, withTicketLock,
   } = dependencies;
   const coerceStoryId = ticketStoryId;
+
+function submissionReviewRelation(slug?: any, sourceTicket?: any) {
+  return reviewRelationFor(sourceTicket, listTickets(slug), (idOrRef: string) => getTicket(slug, idOrRef));
+}
+
+function terminallySubmitted(ticket?: any) {
+  const state = dispatchState(ticket);
+  return Boolean(
+    (state?.terminalAt && state.outcome === 'submitted')
+    || ticket?.lifecycleAttempt?.state === 'submitted',
+  );
+}
+
+// Test-only crash seam sitting exactly between the review write and the source
+// mirror write, so a suite can prove the pair rolls back together instead of
+// leaving the half-bound state this contract exists to make impossible.
+function injectedReviewBindingFault(stage: string) {
+  if (String(process.env.SIDEQUEST_TEST_REVIEW_BINDING_FAULT || '').trim() !== stage) return;
+  throw new Error(`injected review binding fault after the ${stage} write`);
+}
 
 function categoryReadOnly(ticket?: any) {
   return ticket?.category?.readonly === true;
@@ -41,8 +63,111 @@ function storyLogRevision(slug?: any, storyId?: any) {
   return Number(story?.logRevision) || 0;
 }
 
-function createTicket(slug?: any, fields?: any) {
+function normalizedReviewTarget(slug: any, reviewTicket: any, requested: any) {
+  if (!requested || typeof requested !== 'object') {
+    throw new Error('reviewTarget requires ref plus the exact submitted candidate');
+  }
+  const targetRef = String(requested.ref || '').trim().toUpperCase();
+  if (!targetRef) throw new Error('reviewTarget.ref is required');
+  const sourceTicket = getTicket(slug, targetRef);
+  if (!sourceTicket) throw new Error(`reviewTarget.ref ${targetRef} does not exist`);
+  if (sourceTicket.id === reviewTicket?.id) throw new Error(`${reviewTicket.ref} cannot review its own submission`);
+  if (sourceTicket.claim?.by) {
+    throw new Error(`reviewTarget ${sourceTicket.ref} is still live-claimed by ${sourceTicket.claim.by}; it must submit and release before review binds`);
+  }
+  if (!pendingSubmission(sourceTicket) || !terminallySubmitted(sourceTicket)) {
+    throw new Error(`reviewTarget ${sourceTicket.ref} has no claim-free terminal submission to review`);
+  }
+  const candidate = reviewCandidateFromSubmission(sourceTicket.submission);
+  if (!candidate) throw new Error(`reviewTarget ${sourceTicket.ref} has no immutable candidate identity`);
+  const requestedCommit = String(requested.commit || '').trim().toLowerCase();
+  const requestedRevision = requested.sourceRevision && typeof requested.sourceRevision === 'object'
+    ? { source: String(requested.sourceRevision.source || '').trim(), value: String(requested.sourceRevision.value || '').trim() }
+    : null;
+  const hasCommit = Boolean(requestedCommit);
+  const hasRevision = Boolean(requestedRevision?.source && requestedRevision.value);
+  if (hasCommit === hasRevision) throw new Error('reviewTarget requires exactly one of commit or sourceRevision');
+  if (!sameReviewCandidate(candidate, hasCommit ? { source: 'git', value: requestedCommit } : requestedRevision)) {
+    throw new Error(`reviewTarget ${sourceTicket.ref} candidate does not match its submitted ${candidate.source}:${candidate.value}`);
+  }
+  const relation = submissionReviewRelation(slug, sourceTicket);
+  if (relation && (relation.conflict || !reviewTicket?.id || relation.reviewTicket?.id !== reviewTicket.id)) {
+    throw new Error(`reviewTarget ${sourceTicket.ref} candidate is already bound to ${reviewRelationRef(relation)}`);
+  }
+  return {
+    sourceTicket,
+    target: {
+      ticketId: sourceTicket.id,
+      ref: sourceTicket.ref,
+      candidate,
+      submittedAt: sourceTicket.submission.at,
+      submittedBy: sourceTicket.submission.by,
+      ...(sourceTicket.submission.gitRef ? { gitRef: sourceTicket.submission.gitRef } : {}),
+    },
+  };
+}
+
+// The one authoritative review-binding transition. The review's reviewTarget and
+// the source submission's review mirror are two halves of a single fact, so both
+// rows commit inside one storage transaction: a fault between them rolls the
+// review write back with the mirror and leaves neither side bound.
+function bindReviewTarget(slug: any, reviewTicket: any, requested: any, persistReview: any) {
+  const category = String(reviewTicket?.category?.id || reviewTicket?.category || '').trim().toLowerCase();
+  if (requested === undefined) {
+    persistReview(reviewTicket);
+    return reviewTicket;
+  }
+  if (category !== 'review-audit') throw new Error('reviewTarget is only valid for category review-audit');
+  const bound = normalizedReviewTarget(slug, reviewTicket, requested);
+  const previousTarget = reviewTicket.reviewTarget || null;
+  // Immutable means the whole identity, not just the candidate value: two
+  // tickets can submit the same commit, so retargeting across them must refuse.
+  if (previousTarget
+    && (previousTarget.ticketId !== bound.target.ticketId || !sameReviewCandidate(previousTarget.candidate, bound.target.candidate))) {
+    throw new Error(`${reviewTicket.ref} reviewTarget is immutable; retarget needs a fresh review ticket`);
+  }
+  const now = new Date().toISOString();
+  try {
+    transaction(() => {
+      reviewTicket.reviewTarget = bound.target;
+      persistReview(reviewTicket);
+      injectedReviewBindingFault('review');
+      const sourceTicket = getTicket(slug, bound.sourceTicket.id);
+      if (!sourceTicket?.submission) throw new Error(`reviewTarget ${bound.target.ref} lost its submission mid-binding`);
+      const mirror = sourceTicket.submission.review;
+      sourceTicket.submission.review = {
+        ticketId: reviewTicket.id,
+        ref: reviewTicket.ref,
+        candidate: bound.target.candidate,
+        createdAt: mirror?.createdAt || now,
+        outcome: mirror?.outcome || 'planned',
+      };
+      sourceTicket.updatedAt = now;
+      putTicket(slug, sourceTicket);
+    });
+  } catch (error: any) {
+    if (previousTarget) reviewTicket.reviewTarget = previousTarget;
+    else delete reviewTicket.reviewTarget;
+    throw error;
+  }
+  return reviewTicket;
+}
+
+function persistWithReviewBinding(slug: any, ticket: any, requested: any) {
+  const persistReview = (review: any) => putTicket(slug, review);
+  const targetRef = requested === undefined ? '' : String(requested?.ref || '').trim().toUpperCase();
+  const sourceTicket = targetRef ? getTicket(slug, targetRef) : null;
+  if (!sourceTicket) return bindReviewTarget(slug, ticket, requested, persistReview);
+  const bound = withTicketLock(slug, sourceTicket.id, () => bindReviewTarget(slug, ticket, requested, persistReview));
+  queueEventNotification(slug, getTicket(slug, sourceTicket.id), 'status', ticket.lastEventSource || 'cli');
+  return bound;
+}
+
+function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   fields = fields || {};
+  if (Object.hasOwn(fields, 'reviewTarget')) {
+    throw new Error('generic ticket fields cannot set reviewTarget; pass the review target transition separately');
+  }
   const status = fields.status === undefined ? 'todo' : requireStatus(fields.status);
   const id = newTicketId();
   const seq = nextSeq(slug);
@@ -119,7 +244,7 @@ function createTicket(slug?: any, fields?: any) {
   };
   const verifyError = authoringVerifyError(ticket, readMeta(slug)?.path);
   if (verifyError) throw new Error(`${verifyError} Keep acceptance criteria in a comment, not the verify field.`);
-  putTicket(slug, ticket);
+  persistWithReviewBinding(slug, ticket, reviewTarget);
   queueEventNotification(slug, ticket, 'created', ticket.lastEventSource);
   return ticket;
 }
@@ -813,16 +938,23 @@ function activeClaimScopeRefusal(slug?: any, ticket?: any, files?: any, patch?: 
 // Apply a partial update. Only known fields are written; unknown keys ignored.
 // Locked (like every other mutator) so a concurrent comment/claim/link append
 // can never be silently overwritten by an update whose read predates it.
-function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
+function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any) {
   const found = getTicket(slug, idOrRef);
   if (!found) return null;
   patch = patch || {};
+  if (Object.hasOwn(patch, 'reviewTarget')) {
+    throw new Error('generic ticket patch cannot set, change, or clear reviewTarget; pass the review target transition separately');
+  }
   const apply = (t?: any) => {
     const nextStatus = patch.status == null ? null : requireStatus(patch.status);
     const doneRefusal = nextStatus === 'done' ? updateDoneRefusal(t) : null;
     if (doneRefusal) throw new Error(doneRefusal);
     const reopenRefusal = nextStatus != null && nextStatus !== 'done' ? updateReopenRefusal(t, nextStatus) : null;
     if (reopenRefusal) throw new Error(reopenRefusal);
+    if (t.reviewTarget && patch.category !== undefined
+      && String(patch.category == null ? '' : patch.category).trim().toLowerCase() !== 'review-audit') {
+      throw new Error(`${t.ref} reviewTarget is immutable and cannot be cleared by changing category; file a fresh ticket`);
+    }
     const prevStatus = t.status;
     if (patch.title != null) t.title = String(patch.title).trim().slice(0, 300) || t.title;
     if (patch.description != null) t.description = String(patch.description).trim();
@@ -926,19 +1058,29 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any) {
     if (t.status !== prevStatus) t.statusTransition = { from: prevStatus, to: t.status, at: now };
     t.updatedAt = now;
     t.referenceUpdatedAt = now;
-    putTicket(slug, t);
+    bindReviewTarget(slug, t, reviewTarget, (review: any) => putTicket(slug, review));
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
     return t;
   };
-  const lock = ticketLockPath(slug, found.id);
-  const locked = acquireLock(lock); // best-effort: still applies the update if contention outlasts the retries
-  try {
-    const t = getTicket(slug, found.id); // fresh read, under the lock when we have it
-    if (!t) return null;
-    return apply(t);
-  } finally {
-    if (locked) releaseLock(lock, locked);
-  }
+  const applyUnderTicketLock = () => {
+    const lock = ticketLockPath(slug, found.id);
+    const locked = acquireLock(lock); // best-effort: still applies the update if contention outlasts the retries
+    try {
+      const t = getTicket(slug, found.id); // fresh read, under the lock when we have it
+      if (!t) return null;
+      return apply(t);
+    } finally {
+      if (locked) releaseLock(lock, locked);
+    }
+  };
+  const targetRef = reviewTarget === undefined ? '' : String(reviewTarget?.ref || '').trim().toUpperCase();
+  const sourceTicket = targetRef ? getTicket(slug, targetRef) : null;
+  if (!sourceTicket) return applyUnderTicketLock();
+  // The source lock is taken first and always in that order, so a review binding
+  // and a concurrent source mutation can never deadlock against each other.
+  const updated = withTicketLock(slug, sourceTicket.id, applyUnderTicketLock);
+  queueEventNotification(slug, getTicket(slug, sourceTicket.id), 'status', patch.source ? String(patch.source) : 'cli');
+  return updated;
 }
 
 // Locked so a delete can never yank the ticket/lock file out from under a
@@ -1026,7 +1168,7 @@ function listActive(slug?: any) {
   return queryTickets(String(slug || ''), { archived: false });
 }
 
-  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
+  return { DECLARED_FILES_MAX, CONTRACT_NAMES_MAX, LABELS_MAX, categoryReadOnly, readOnlyOverrideActive, dispatchReadOnly, submissionReviewRelation, createTicket, normalizeLabels, normalizeFiles, scopeExpansionFiles, scopeExpansionCommand, requestScope, migrateLegacyScopeRequest, overlappingScopePaths, scopesOverlap, normalizeContracts, contractCollisionReasons, contractMetadata, readyWaves, readyWaveDependencies, normalizeAssignee, updateTicket, deleteTicket, archiveTicket, unarchiveTicket, archiveAllDone, listArchived, listActive };
 }
 
 module.exports = { createTickets };

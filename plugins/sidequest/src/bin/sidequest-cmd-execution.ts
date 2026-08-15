@@ -416,6 +416,7 @@ async function cmdRework(opts: any, positional: any) {
   const res = store.reworkSubmission(slug, idOrRef, {
     by,
     review,
+    reviewRef: opts['review-ref'],
     reason,
     source: opts.source || 'cli',
   });
@@ -424,7 +425,8 @@ async function cmdRework(opts: any, positional: any) {
     if (!res.ok) process.exitCode = 1;
     return;
   }
-  if (res.ok) console.log(`✓ ${res.ticket.ref} rejected for rework; dispatch it for repair  [${res.ticket.status}]  — ${meta.name}`);
+  if (res.ok && res.freshRepairRequired) console.log(`✓ ${res.ticket.ref} candidate rejected permanently; repair needs a fresh ticket, attempt, candidate, and review  — ${meta.name}`);
+  else if (res.ok) console.log(`✓ ${res.ticket.ref} rejected for rework; dispatch it for repair  [${res.ticket.status}]  — ${meta.name}`);
   else reportClaimFailure('rework submission', idOrRef, res, meta);
 }
 

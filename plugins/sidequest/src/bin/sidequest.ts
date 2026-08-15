@@ -17,12 +17,12 @@ const ARRAY_FLAG_ALIASES: Record<string, string> = { files: 'file', labels: 'lab
 const BOOLEAN_FLAGS = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure', 'allow-unscoped', 'no-process', 'no-worktree', 'review']);
 const COMMON_FLAGS = new Set(['help', 'json', 'project', 'source']);
 const COMMAND_FLAGS: Record<string, string[]> = {
-  add: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'unclassified', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'dry-run', 'name'],
+  add: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'unclassified', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'review-ref', 'review-commit', 'review-source', 'review-revision', 'dry-run', 'name'],
   list: ['status', 'archived', 'brief', 'limit', 'cursor', 'all'],
   pulse: [],
   changes: ['since'],
   watch: ['interval'],
-  update: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'by'],
+  update: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'review-ref', 'review-commit', 'review-source', 'review-revision', 'by'],
   rm: ['force'],
   profile: ['retired', 'name', 'title', 'description', 'desc', 'from', 'project', 'profile', 'from-project', 'by', 'dry-run'],
   category: ['profile', 'route-model', 'route-effort', 'fallback-model', 'fallback-effort', 'no-fallback', 'name', 'title', 'description', 'desc', 'contract', 'artifact-roots', 'readonly', 'enabled', 'disabled'],
@@ -41,7 +41,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   release: ['by', 'reason', 'oracle', 'release-kind', 'command', 'exit-code', 'output-tail', 'candidate', 'deliverable', 'force', 'status'],
   'scope-request': ['by', 'file', 'force'],
   commit: ['by', 'message'],
-  rework: ['by', 'review', 'reason'],
+  rework: ['by', 'review', 'review-ref', 'reason'],
   integrate: ['by', 'mode', 'skip-verify'],
   publish: ['repo', 'steal', 'force'],
   assign: ['to', 'by'],

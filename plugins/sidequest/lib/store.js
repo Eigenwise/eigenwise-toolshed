@@ -12,6 +12,7 @@ const commitScope = require("./commit-scope.js");
 const { commitPaths } = commitScope;
 const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree } = require("./worktrees.js");
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
+const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
 const { configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
@@ -942,6 +943,7 @@ const {
   categoryReadOnly,
   readOnlyOverrideActive,
   dispatchReadOnly,
+  submissionReviewRelation,
   createTicket,
   normalizeLabels,
   normalizeFiles,
@@ -1004,6 +1006,7 @@ const {
   requestedReadonlyOverride,
   requireStatus,
   requireVerifyOracle,
+  transaction: (...args) => transaction(...args),
   normalizeVerifyOracleKind,
   saveAssetData,
   ticketLockPath,
@@ -1610,6 +1613,15 @@ function claimTicket(slug, idOrRef, by, opts) {
   const result = withTicketLock(slug, found.id, () => {
     const t2 = getTicket(slug, found.id);
     if (!t2) return { ok: false, reason: "not_found" };
+    const candidateReview = submissionReviewRelation(slug, t2);
+    if (candidateReview) {
+      return {
+        ok: false,
+        reason: "candidate_review_locked",
+        ticket: t2,
+        message: reviewLockMessage("claim", t2, candidateReview)
+      };
+    }
     const delay = testClaimLockDelayMs();
     if (delay) busyWait(delay);
     const directClaimReason = directReason(opts.reason);
@@ -2657,6 +2669,7 @@ module.exports = {
   updateTicket,
   deleteTicket,
   dispatchReadOnly,
+  submissionReviewRelation,
   stableExecutorName,
   canonicalPreparedDispatchExecutor,
   executorClaimDispatchRefusal,

@@ -1,5 +1,6 @@
 "use strict";
 const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js");
+const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
@@ -70,6 +71,59 @@ function createDispatch(dependencies) {
   }
   function dispatchState(ticket) {
     return ticket && ticket.dispatch && typeof ticket.dispatch === "object" ? ticket.dispatch : null;
+  }
+  function reviewDispatchTarget(slug, ticket) {
+    const target = ticket?.reviewTarget;
+    if (!target) return null;
+    if (String(ticketCategory(ticket) || "").trim().toLowerCase() !== "review-audit") {
+      throw new Error(`prepare dispatch: ${ticket.ref} carries a reviewTarget outside category review-audit.`);
+    }
+    if (!target.ticketId || !target.ref || !target.candidate?.source || !target.candidate.value) {
+      throw new Error(`prepare dispatch: ${ticket.ref} has an incomplete reviewTarget; rebind it through add or update.`);
+    }
+    const sourceTicket = getTicket(slug, target.ticketId);
+    if (!sourceTicket || sourceTicket.ref !== target.ref) {
+      throw new Error(`prepare dispatch: ${ticket.ref} reviewTarget ${target.ref} no longer resolves to its source ticket.`);
+    }
+    if (sourceTicket.claim?.by) {
+      throw new Error(`prepare dispatch: ${ticket.ref} reviewTarget ${sourceTicket.ref} is live-claimed by ${sourceTicket.claim.by}.`);
+    }
+    const submission = sourceTicket.submission;
+    const sourceDispatch = dispatchState(sourceTicket);
+    const terminal = Boolean(
+      sourceDispatch?.terminalAt && sourceDispatch.outcome === "submitted" || sourceTicket.lifecycleAttempt?.state === "submitted"
+    );
+    if (!terminal || !submission || submission.integratedAt) {
+      throw new Error(`prepare dispatch: ${ticket.ref} reviewTarget ${sourceTicket.ref} is not a pending terminal submission.`);
+    }
+    const candidate = reviewCandidateFromSubmission(submission);
+    if (!sameReviewCandidate(candidate, target.candidate)) {
+      throw new Error(`prepare dispatch: ${ticket.ref} reviewTarget ${sourceTicket.ref} no longer matches its exact submitted candidate.`);
+    }
+    const relation = reviewRelationFor(sourceTicket, listTickets(slug), (idOrRef) => getTicket(slug, idOrRef));
+    if (!relation || relation.conflict || relation.reviewTicket?.id !== ticket.id) {
+      throw new Error(`prepare dispatch: ${ticket.ref} is not the sole authoritative review bound to ${sourceTicket.ref}.`);
+    }
+    if (reviewRelationOutcome(relation) === "rejected") {
+      throw new Error(`prepare dispatch: ${ticket.ref} candidate was permanently rejected; repair needs fresh ticket, attempt, candidate, and review identities.`);
+    }
+    if (candidate.source === "git") {
+      let resolved = "";
+      try {
+        resolved = execFileSync("git", ["rev-parse", "--verify", `${candidate.value}^{commit}`], {
+          cwd: String(readMeta(slug)?.path || "").trim(),
+          encoding: "utf8",
+          windowsHide: true,
+          stdio: ["ignore", "pipe", "ignore"]
+        }).trim().toLowerCase();
+      } catch (_) {
+        throw new Error(`prepare dispatch: ${ticket.ref} candidate commit ${candidate.value} is unavailable in this checkout.`);
+      }
+      if (resolved !== candidate.value) {
+        throw new Error(`prepare dispatch: ${ticket.ref} candidate must be the full immutable commit ${resolved}.`);
+      }
+    }
+    return { sourceTicket, submission, candidate };
   }
   function executorClaimDispatchRefusal(slug, sessionId) {
     const callerSessionId = String(sessionId || "").trim();
@@ -897,9 +951,16 @@ function createDispatch(dependencies) {
       const requestedSharedTree = opts.sharedTree === true || !Object.hasOwn(opts, "sharedTree") && Boolean(current?.sharedTree);
       const explicitIsolation = Object.hasOwn(opts, "sharedTree") && opts.sharedTree === false;
       const worktreeIsolation = normalizeWorktreeIsolation(readMeta(slug)?.worktreeIsolation);
-      let sharedTree = worktreeIsolation ? requestedSharedTree : true;
+      const reviewTargetState = reviewDispatchTarget(slug, t);
+      if (reviewTargetState && opts.sharedTree === true) {
+        throw new Error(`prepare dispatch: ${t.ref} reviews candidate ${reviewTargetState.candidate.value} and requires an isolated immutable checkout.`);
+      }
+      let sharedTree = reviewTargetState ? false : worktreeIsolation ? requestedSharedTree : true;
       const nonRepoOutput = nonRepoExternalOutput(t, effectiveFiles);
       const worktreeWarning = !worktreeIsolation && explicitIsolation ? "Board worktree isolation is disabled; explicit sharedTree:false was overridden. Spawning in shared tree. Executor must scoped-commit immediately." : !sharedTree && effectiveFiles.length ? worktreeIsolationWarning(slug) : null;
+      if (reviewTargetState && worktreeWarning) {
+        throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
+      }
       if (worktreeWarning) sharedTree = true;
       const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
       if (runtimeRefusal) throw new Error(runtimeRefusal);
@@ -964,7 +1025,8 @@ function createDispatch(dependencies) {
         ...sharedTree && releasedContinuation?.continuation ? { continuationFallback: continuationFallback("continuation_checkpoint_requires_isolated_worktree", releasedContinuation.continuation.sourceWorktree) } : {},
         // Record the integration target commit so an isolated executor can bring
         // its harness-created worktree forward before changing it.
-        baseCommit: integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || ""),
+        baseCommit: reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || ""),
+        ...reviewTargetState ? { reviewTarget: t.reviewTarget } : {},
         ...integrationTargetState ? { integrationTarget: integrationTargetState } : {},
         ...localAheadWarning ? { localAheadWarning } : {},
         readonly,

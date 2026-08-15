@@ -2,6 +2,7 @@
 const { resolveSuite } = require("../suite-resolver.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
+const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage } = require("../kernel/review-binding");
 function createSubmissions(dependencies) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
@@ -91,6 +92,33 @@ function createSubmissions(dependencies) {
   }
   function putTicketTransaction(slug, ticket) {
     return transaction(() => putTicket(slug, ticket));
+  }
+  function candidateReviewRelation(slug, ticket) {
+    return reviewRelationFor(ticket, listTickets(slug), (idOrRef) => getTicket(slug, idOrRef));
+  }
+  function candidateReviewLocked(slug, ticket, operation) {
+    const relation = candidateReviewRelation(slug, ticket);
+    if (!relation) return null;
+    return {
+      ok: false,
+      reason: "candidate_review_locked",
+      ticket,
+      relation,
+      message: reviewLockMessage(operation, ticket, relation)
+    };
+  }
+  function terminalReviewFailure(ticket, relation) {
+    const reviewTicket = relation.reviewTicket;
+    const reviewDispatch = dispatchState(reviewTicket);
+    if (relation.conflict || !reviewTicket || reviewTicket.status !== "done" || !reviewDispatch?.terminalAt || reviewDispatch.outcome !== "done") {
+      return `${reviewRelationRef(relation)} has not terminally completed its bound review of ${ticket.ref}`;
+    }
+    const target = reviewTicket.reviewTarget;
+    const submitted = reviewCandidateFromSubmission(ticket.submission);
+    if (target?.ticketId !== ticket.id || target?.candidate?.source !== submitted?.source || target?.candidate?.value !== submitted?.value) {
+      return `${reviewRelationRef(relation)} is not the review of this exact candidate`;
+    }
+    return null;
   }
   function rejectionQuarantineRef(ticket, rejectionNumber) {
     return `refs/sidequest/${ticket.ref}-rejected${rejectionNumber === 1 ? "" : `-${rejectionNumber}`}`;
@@ -535,6 +563,21 @@ ${verify.outputTail}` : null
     if (!pendingSubmission(ticket)) {
       return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no submission to integrate.` };
     }
+    const candidateReview = candidateReviewRelation(slug, ticket);
+    if (candidateReview) {
+      if (reviewRelationOutcome(candidateReview) === "rejected") {
+        return {
+          ok: false,
+          reason: "candidate_rejected",
+          ticket,
+          message: `${ticket.ref} candidate was rejected by ${reviewRelationRef(candidateReview)}. Integration is permanently blocked; repair needs fresh ticket, attempt, candidate, and review identities.`
+        };
+      }
+      const reviewFailure = terminalReviewFailure(ticket, candidateReview);
+      if (reviewFailure) {
+        return { ok: false, reason: "candidate_review_required", ticket, message: `${ticket.ref} integration refused; ${reviewFailure}.` };
+      }
+    }
     if (ticket.executorVerifyKind !== "attestation" && !isArtifactSubmission(ticket.submission)) {
       const recordedVerify = String(ticket.submission?.verify || "").trim();
       const verifyError = verifyCommandErrors(recordedVerify)[0];
@@ -896,6 +939,8 @@ ${verify.outputTail}` : null
     return withTicketLock(slug, found.id, () => {
       const t = getTicket(slug, found.id);
       if (!t) return { ok: false, reason: "not_found" };
+      const reviewLock = candidateReviewLocked(slug, t, "submit");
+      if (reviewLock) return reviewLock;
       const retryCheckpoint = t.submissionRetry || null;
       const submissionOptions = hydratedSubmissionOptions(opts, retryCheckpoint);
       const commit = String(submissionOptions.commit || "").trim().toLowerCase();
@@ -1124,6 +1169,10 @@ ${verify.outputTail}` : null
       if (!pendingSubmission(source)) {
         return { ok: false, reason: "submission_required", ticket: source, message: `${source.ref} has no pending submission to supersede.` };
       }
+      const candidateReview = candidateReviewRelation(slug, source);
+      if (candidateReview && reviewRelationOutcome(candidateReview) !== "rejected") {
+        return candidateReviewLocked(slug, source, "supersede");
+      }
       const repaired = integratedRepairTicket(slug, source, repairRef);
       if (!repaired.ok) return Object.assign({ ticket: source }, repaired);
       const repo = readMeta(slug)?.path;
@@ -1307,10 +1356,60 @@ ${verify.outputTail}` : null
       return preserved;
     });
   }
+  function rejectBoundCandidate(slug, ticket, relation, opts) {
+    const boundRef = reviewRelationRef(relation);
+    if (!opts.reviewRef || opts.reviewRef !== boundRef) {
+      return { ok: false, reason: "review_identity_required", ticket, message: `rework: refused ${ticket.ref}; pass reviewRef ${boundRef}, the review bound to this candidate.` };
+    }
+    const reviewFailure = terminalReviewFailure(ticket, relation);
+    if (reviewFailure) {
+      return { ok: false, reason: "review_not_terminal", ticket, message: `rework: refused ${ticket.ref}; ${reviewFailure}.` };
+    }
+    if (String(ticket.submission?.by || "").trim() === opts.by) {
+      return { ok: false, reason: "fresh_repair_identity_required", ticket, message: `rework: refused ${ticket.ref}; the submitted candidate owner cannot confirm its own defect.` };
+    }
+    const history = rejectionHistory(ticket);
+    const existing = history.find((entry) => entry.reviewRef === opts.reviewRef && rejectedSubmissionMatches(ticket.submission, entry));
+    if (existing && existing.preservationState !== "pending") {
+      return { ok: true, ticket, rejected: existing, freshRepairRequired: true };
+    }
+    const rejected = existing || Object.assign({}, ticket.submission, {
+      rejectedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      rejectedBy: opts.by,
+      review: opts.review,
+      reviewRef: opts.reviewRef,
+      reason: opts.reason,
+      validation: true,
+      rejectionKind: "validation",
+      preservationState: "pending",
+      source: opts.source
+    });
+    if (!existing) {
+      if (!Array.isArray(ticket.rejectedSubmissions)) ticket.rejectedSubmissions = [];
+      ticket.rejectedSubmissions.push(rejected);
+      ticket.updatedAt = rejected.rejectedAt;
+      putTicketTransaction(slug, ticket);
+    }
+    const preserved = preserveRejectedSubmission(slug, ticket, rejected, String(readMeta(slug)?.path || "").trim());
+    if (!preserved.ok) return preserved;
+    transaction(() => {
+      ticket.submission.review = Object.assign({}, ticket.submission.review, {
+        outcome: "rejected",
+        rejectedAt: rejected.rejectedAt,
+        rejectedBy: opts.by,
+        reason: opts.reason
+      });
+      ticket.updatedAt = rejected.rejectedAt;
+      putTicket(slug, ticket);
+    });
+    queueEventNotification(slug, ticket, "status", opts.source);
+    return { ok: true, ticket, rejected, freshRepairRequired: true };
+  }
   function reworkSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const by = String(opts.by || "").trim();
     const review = String(opts.review || "").trim();
+    const reviewRef = String(opts.reviewRef || "").trim().toUpperCase();
     const reason = String(opts.reason || "").trim();
     if (!by) throw new Error("rework requires the reviewer or orchestrator identity in by");
     if (!review) throw new Error("rework requires review evidence");
@@ -1325,6 +1424,8 @@ ${verify.outputTail}` : null
       if (!pendingSubmission(ticket) && !retryCheckpoint) {
         return { ok: false, reason: "submission_required", ticket, message: `${ticket.ref} has no pending submission or retry candidate to reject for rework.` };
       }
+      const candidateReview = candidateReviewRelation(slug, ticket);
+      if (candidateReview) return rejectBoundCandidate(slug, ticket, candidateReview, { by, review, reviewRef, reason, source: opts.source || "cli" });
       const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
       if (ownershipFailure) return ownershipFailure;
       const history = rejectionHistory(ticket);
@@ -1415,6 +1516,8 @@ ${verify.outputTail}` : null
       const ticket = getTicket(slug, found.id);
       if (!ticket) return { ok: false, reason: "not_found" };
       if (!ticket.submission) return { ok: false, reason: "no_submission", ticket };
+      const reviewLock = candidateReviewLocked(slug, ticket, "clear submission");
+      if (reviewLock) return reviewLock;
       const ownershipFailure = submissionOwnershipFailure(ticket, by, { allowSubmittedOwner: true });
       if (ownershipFailure) return ownershipFailure;
       const cleared = ticket.submission;

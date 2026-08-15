@@ -249,6 +249,24 @@ waiting. At integration, read the submit report, run the ticket's verify command
 source or inspect diffs to re-review executor work. File a separately routed `review-audit` only when the
 stakes need human-grade review.
 
+### Candidate-addressed review binding
+
+File the `review-audit` ticket with `reviewTarget`: the reviewed ticket's ref plus the exact submitted
+candidate (`commit`, or `sourceRevision` for a non-Git artifact). `add` and `update` are the only ways to
+set it, and the store writes the review's `reviewTarget` and the source's `submission.review` mirror in one
+transaction, so a failure between them leaves neither. The source must be claim-free with a terminal
+submission whose candidate matches exactly; a live claim, a stale commit, or a candidate another review
+already owns is refused. The binding is immutable: no generic patch sets, changes, or clears it, retarget
+needs a fresh review ticket, and a category move away from `review-audit` is refused.
+
+Binding freezes the candidate. Reclaim, amendment, `clearSubmission`, and supersede all fail closed on the
+source, including a legacy one-sided binding, so the implementer cannot resume or amend the revision under
+audit. Dispatch revalidates the binding and pins the review to that exact immutable commit in an isolated
+checkout; a shared-tree request and a native-agent spawn are both refused. Integration waits for the bound review to reach
+a terminal `done`. A confirmed defect is `rework` with `reviewRef` set to the bound review, confirmed by an
+identity other than the candidate's submitter: it parks the candidate permanently instead of returning it
+to `todo`, blocks integration for good, and forces a fresh ticket, attempt, commit, and review for repair.
+
 ## Natural orchestrator checkpoints
 
 At every natural wakeup, do a short self-check before launching more work. Check payload and context bloat

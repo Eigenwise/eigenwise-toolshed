@@ -242,7 +242,7 @@
   },
   {
     "name": "add",
-    "description": "File a new ticket.",
+    "description": "File a ticket. review-audit binds reviewTarget to one terminal candidate.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -338,6 +338,31 @@
         "category": {
           "type": "string"
         },
+        "reviewTarget": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "ref"
+          ]
+        },
         "route": {
           "type": "object",
           "properties": {
@@ -371,7 +396,7 @@
   },
   {
     "name": "update",
-    "description": "Update ticket fields by scope.",
+    "description": "Update ticket fields by scope. reviewTarget binds once and never clears.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -487,6 +512,31 @@
         },
         "category": {
           "type": "string"
+        },
+        "reviewTarget": {
+          "type": "object",
+          "properties": {
+            "ref": {
+              "type": "string"
+            },
+            "commit": {
+              "type": "string"
+            },
+            "sourceRevision": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "required": [
+            "ref"
+          ]
         },
         "route": {
           "anyOf": [
@@ -982,7 +1032,7 @@
   },
   {
     "name": "rework",
-    "description": "Reject candidate for repair; candidate owner only.",
+    "description": "Reject candidate for repair; candidate owner only. A bound candidate needs reviewRef and rejects permanently.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -996,6 +1046,9 @@
           "type": "string"
         },
         "review": {
+          "type": "string"
+        },
+        "reviewRef": {
           "type": "string"
         },
         "reason": {
@@ -1368,7 +1421,7 @@
         },
         "sharedTree": {
           "type": "boolean",
-          "description": "Use only from the declared shared checkout. Omit to share zero-scope read-only work. Executors with live claims cannot dispatch child work."
+          "description": "Use only from the declared shared checkout. Omit for an isolated checkout. Executors with live claims cannot dispatch child work."
         },
         "allowRepeatFailure": {
           "type": "boolean"

@@ -1764,7 +1764,9 @@ test('ordinary, resumed, and reworked launches all carry a readable name and the
   assert.equal(resumed.ticket.dispatch.launchName, ordinary.ticket.dispatch.launchName);
   assert.equal(resumed.ticket.dispatch.launchSeq, 1);
 
-  const prompt = `Ref: ${ticket.ref}\n--project "${PROJECT}" --token ${resumed.token}`;
+  // The hook only corrects a launch it can recognise, and recognition is the
+  // exact prepared briefing line, so the prompt has to be the prepared stub.
+  const prompt = agentsync.renderDispatchStub(resumed.ticket, resumed.ticket.dispatchNonce, PROJECT);
   const launch = runForceBypass({
     session_id: sessionId,
     cwd: PROJECT,
