@@ -1,13 +1,13 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawnSync } from 'node:child_process';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
 import { suiteEnvironment } from '../../../scripts/release/cut.mjs';
 
 const require = createRequire(import.meta.url);
 const { STARTER_GATEWAY_MODEL_SLUGS } = require('../lib/category-defaults.js');
+const { runOwnedPhase } = require('./owned-process-tree.js');
 
 const pluginRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const testDirectory = path.join(pluginRoot, 'test');
@@ -76,21 +76,37 @@ const testFiles = (await fs.readdir(testDirectory))
   .sort()
   .map((name) => path.join(testDirectory, name));
 
-function runTests(phase, files, environment) {
+// A deadline is a failed phase whatever the root managed to report on its way out.
+// Accepting a timeout that happened to carry status 0 is how a killed gate phase passed
+// as green in SQ-2050: a root can handle SIGTERM and exit 0, and a phase the clock ended
+// never finished its tests.
+export function describePhaseFailure(phase, result, phaseTimeoutMilliseconds, concurrency, cores) {
+  if (result.timedOut) return formatTestPhaseTimeoutError(phase, phaseTimeoutMilliseconds, concurrency, cores);
+  if (result.cleanupError) return `Sidequest ${phase} tests could not be cleaned up: ${result.cleanupError}`;
+  if (result.status !== 0) {
+    return `Sidequest ${phase} tests exited ${result.status ?? `on signal ${result.signal ?? 'unknown'}`}.`;
+  }
+  return null;
+}
+
+// The phase runs over pipes so its output stays bounded and its tree stays owned, which
+// costs the TTY detection node:test uses to pick the readable reporter. Ask for it back
+// when a human is watching.
+const interactiveReporterArguments = process.stdout.isTTY ? ['--test-reporter=spec'] : [];
+
+async function runTests(phase, files, environment) {
   const phaseStartTime = performance.now();
-  const result = spawnSync(process.execPath, ['--import', 'tsx', '--import', './test/_sidequest-test-home.ts', '--test', `--test-concurrency=${testConcurrency}`, ...files], {
+  const result = await runOwnedPhase({
+    command: process.execPath,
+    args: ['--import', 'tsx', '--import', './test/_sidequest-test-home.ts', '--test', `--test-concurrency=${testConcurrency}`, ...interactiveReporterArguments, ...files],
     cwd: pluginRoot,
-    stdio: 'inherit',
-    windowsHide: true,
     env: environment,
-    timeout: testPhaseTimeoutMilliseconds,
+    timeoutMilliseconds: testPhaseTimeoutMilliseconds,
   });
   const phaseDurationMilliseconds = performance.now() - phaseStartTime;
-  if (result.error?.code === 'ETIMEDOUT') {
-    throw new Error(formatTestPhaseTimeoutError(phase, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism));
-  }
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`Sidequest ${phase} tests exited ${result.status ?? 1}.`);
+  const failure = describePhaseFailure(phase, result, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism);
+  if (failure) throw new Error(failure);
   // Warn, never throw: a passing run that is merely close to its budget must not
   // become a red build. Turning slowness into a failure is the false red SQ-1537
   // exists to remove.
@@ -133,7 +149,7 @@ async function main() {
   };
 
   try {
-    runTests('functional', testFiles, suiteTestEnvironment);
+    await runTests('functional', testFiles, suiteTestEnvironment);
   } finally {
     await fs.rm(suiteTemporaryDirectory, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 });
   }
