@@ -407,14 +407,14 @@ async function ensureObservability(options = {}) {
     }
 
     if (state.dashboard) {
-      const activityStart = dashboardActivityStart(dataDir, options.now ?? Date.now());
-      const activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
-        ...options,
-        activityStart,
-      });
-      const activeProjects = projectsWithActivity(state.optedInProjects, activeProjectNames);
-      const dashboardDir = provisionDashboards(dataDir, activeProjects);
       if (setup.dockerAvailable(options)) {
+        const activityStart = dashboardActivityStart(dataDir, options.now ?? Date.now());
+        const activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
+          ...options,
+          activityStart,
+        });
+        const activeProjects = projectsWithActivity(state.optedInProjects, activeProjectNames);
+        const dashboardDir = provisionDashboards(dataDir, activeProjects);
         dashboard = grafanaLgtm.setup(state.sinks[DEFAULT_SINK] || {}, {
           ...options,
           dataDir,

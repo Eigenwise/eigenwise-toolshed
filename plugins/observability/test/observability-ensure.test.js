@@ -249,10 +249,7 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   });
   assert.equal(skipped.dashboardSkipped, true);
   assert.equal(readObservabilityConfig(configFile).observability.dashboardVersion, '0.0.0');
-  const generatedDashboard = JSON.parse(fs.readFileSync(path.join(dataDir, 'grafana-dashboards', 'claude-code-usage.json'), 'utf8'));
-  const generatedExpressions = generatedDashboard.panels.flatMap((panel) => panel.targets || []).map(({ expr }) => expr);
-  assert.ok(generatedExpressions.some((expression) => expression.includes('workbench_attribute_project_name="atlas"')));
-  assert.ok(fs.existsSync(path.join(dataDir, 'grafana-dashboards', `claude-code-${'a'.repeat(16)}.json`)));
+  assert.equal(fs.existsSync(path.join(dataDir, 'grafana-dashboards')), false);
   const dockerCalls = [];
 
   const result = await ensureObservability({
@@ -310,7 +307,7 @@ test('ensure reclaims a stale versioned ensure owner and restores the observer',
   assert.deepEqual(result.started, ['observer', 'collector']);
 });
 
-test('ensure starts the observer before probing an optional dashboard', async (t) => {
+test('ensure starts local telemetry before checking an unavailable dashboard', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
   const collectorBinary = path.join(dataDir, 'collector-test-binary');
@@ -321,6 +318,7 @@ test('ensure starts the observer before probing an optional dashboard', async (t
   config.observability.sinks = { 'grafana-lgtm': {} };
   writeObservabilityConfig(configFile, config);
   const started = [];
+  const dockerCalls = [];
 
   const result = await ensureObservability({
     dataDir,
@@ -329,14 +327,16 @@ test('ensure starts the observer before probing an optional dashboard', async (t
     checkPort: async () => false,
     waitForPort: async () => true,
     startProcess(name) { started.push(name); return 1000; },
-    dockerAvailable: () => {
-      assert.ok(started.includes('observer'));
-      return false;
+    spawnSync(command, args) {
+      assert.deepEqual(started, ['observer', 'collector']);
+      dockerCalls.push([command, args]);
+      return { status: 1, stdout: '' };
     },
   });
 
   assert.equal(result.dashboardSkipped, true);
   assert.deepEqual(started, ['observer', 'collector']);
+  assert.deepEqual(dockerCalls.map(([command, args]) => [command, args[0]]), [['docker', 'info']]);
 });
 
 test('start records the managed process provenance next to its PID', (t) => {
