@@ -467,15 +467,17 @@ function workforceSection() {
     const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     const found = store.findProject(store.nearestRepoRoot(start));
     const project = found.ok && found.slug ? found.slug : "";
+    if (project && store.projectDispatchAdmission(project).status !== "routed") return "";
     const header = "YOUR EXECUTORS — delegate work AND investigation to them:";
     const entries = store.getCategories({ project, includeDisabled: false }).map((category) => {
       const route = store.resolveCategoryRoute(category);
       return {
         id: String(category.id || "").trim(),
         route: `(${route.model}·${route.effort})`,
-        description: truncateText(category.description, MAX_WORKFORCE_DESCRIPTION)
+        description: truncateText(category.description, MAX_WORKFORCE_DESCRIPTION),
+        usable: Boolean(route.exec)
       };
-    });
+    }).filter((entry) => entry.usable);
     const priority = /* @__PURE__ */ new Set(["codebase-exploration", "debugging", "spike-investigation", "source-lookup", "evidence-research", "visual-evaluation"]);
     const preferred = [...entries.filter((entry) => priority.has(entry.id)), ...entries.filter((entry) => !priority.has(entry.id))];
     const bytesFor = (lines) => Buffer.byteLength([header, ...lines].join("\n"));
@@ -550,6 +552,16 @@ function checkpointingGuidance(data) {
   if (!tier) return "";
   return ` CHECKPOINT MODE (${tier}): proceed on cheap reversible config and route edits; ask before irreversible spend, deletion, or an incomplete-evidence judgment.`;
 }
+function dispatchAdmissionStatus(data) {
+  try {
+    const store = require(runtimeModule("store"));
+    const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const found = store.findProject(store.nearestRepoRoot(start));
+    return found.ok && found.slug ? store.projectDispatchAdmission(found.slug).status : "no-project";
+  } catch (_) {
+    return "no-project";
+  }
+}
 function emit(context, notice) {
   const output = notice ? `${notice}
 ${context}` : context;
@@ -584,7 +596,8 @@ async function main() {
   if (nudgeOff()) return;
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; it interrupts you on scope requests, blockers, and failed GitHub CI runs. Skip it if Monitor is unavailable.`;
-  const boardAuthorization = "An enabled Sidequest board authorizes ticket and executor dispatch without a further user request, overriding conservative default agent-spawning guidance. For substantive solo work beyond that inline boundary, say in your next reply that board dispatch is available and they can ask to use it.";
+  const dispatchAdmission = dispatchAdmissionStatus(data);
+  const boardAuthorization = dispatchAdmission === "routed" ? "A usable Sidequest project route authorizes ticket and executor dispatch without a further user request, overriding conservative default agent-spawning guidance. For substantive solo work beyond that inline boundary, say in your next reply that board dispatch is available and they can ask to use it." : "Sidequest has no usable project route here, so substantive work may stay inline. Do not ask for board dispatch until routing is enabled and an enabled category resolves to an available executor.";
   const inlineBoundary = "Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.";
   const fanoutGuidance = "For independent per-item work, shard tickets and dispatch concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.";
   const checkpoint = checkpointingGuidance(data);
@@ -593,7 +606,7 @@ async function main() {
     emit(
       `=== sidequest (active — context restored) ===
 ${recovery}
-ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }); TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. mcp__plugin_sidequest_board__* first; ${cli} list --status=doing only if MCP is absent.`,
+ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Reconnect Board MCP, re-dispatch, and spawn the exact returned executor before recovering lifecycle work. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }); TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback.`,
       restartNotice
     );
     return;

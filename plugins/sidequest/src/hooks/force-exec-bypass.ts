@@ -76,8 +76,13 @@ interface TerminalExecutorTicket {
   outcome: string;
 }
 
+interface DispatchAdmission {
+  status: 'no-project' | 'routing-disabled' | 'no-usable-route' | 'routed';
+}
+
 interface Store {
   findProject: (project: string) => { ok: boolean; slug?: string };
+  projectDispatchAdmission: (slug: string) => DispatchAdmission;
   getTicket: (slug: string, ref: string) => Ticket | null;
   recordDispatchLaunch: (slug: string, ref: string, options: Record<string, unknown>) => unknown;
   listProjects: (options: { all: boolean }) => Array<{ slug: string }>;
@@ -205,7 +210,7 @@ function agentDenyReason(type: string, classification: ExecutorClassification): 
     return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
   return `sidequest: ${type || 'custom'} is a generic Agent, not a Sidequest ticket executor. ` +
-    `For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. If dispatch is broken, use ${DIAGNOSTIC_PROBE_NAME} only: read-only, three turns, foreground, no refs or isolation. WebSearch is executor-only: file and dispatch a research ticket once dispatch works. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
+    'For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.';
 }
 
 const REF_RE = /\bSQ-\d+\b/gi;
@@ -356,6 +361,19 @@ function resolveStampedModel(input: HookInput): ResolveResult {
   }
   if (models.size !== 1) return { status: 'conflicting', refs, models: [...models] };
   return { status: 'ok', refs, model: [...models][0] };
+}
+
+function dispatchAdmission(input: HookInput): DispatchAdmission {
+  const toolInput = toolInputOf(input);
+  const project = extractProjectArg(toolInput?.prompt) || stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR;
+  if (!project) return { status: 'no-project' };
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const found = store.findProject(project);
+    return found.ok && found.slug ? store.projectDispatchAdmission(found.slug) : { status: 'no-project' };
+  } catch (_) {
+    return { status: 'no-project' };
+  }
 }
 
 const ROUTE_MARKER_RE = /^\[sidequest-route model=([a-z0-9][a-z0-9.-]{0,63}) effort=(low|medium|high|xhigh|max)\]$/gm;
@@ -773,6 +791,15 @@ function main(): void {
     return;
   }
   const isDispatchExecutor = classification.kind === 'codex_dispatch' || classification.kind === 'read_only_codex_dispatch';
+  const admission = dispatchAdmission(input);
+  if (isCurrentExecutor(classification) && (admission.status === 'routing-disabled' || admission.status === 'no-usable-route')) {
+    writeDeny('PreToolUse', 'sidequest: this project has no usable executor route. Continue only bounded inline work, or restore routing and an available category route before a fresh Board MCP dispatch.');
+    return;
+  }
+  if (!isCurrentExecutor(classification) && !type.startsWith('sidequest-') && (admission.status === 'routing-disabled' || admission.status === 'no-usable-route')) {
+    writeDeny('PreToolUse', 'sidequest: this project has no usable executor route. Continue bounded inline work with direct tools; do not create a fake Sidequest or raw Agent lifecycle fallback.');
+    return;
+  }
   const dispatchValidation = preparedDispatchValidation(input);
   if (isDispatchExecutor && dispatchValidation.status !== 'valid') {
     writeDeny('PreToolUse', dispatchValidation.status === 'stale'

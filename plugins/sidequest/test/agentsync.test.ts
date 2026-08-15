@@ -103,12 +103,13 @@ test('repair briefings require bounded retrieval of the complete rejection histo
   ]);
 });
 
-test('executor briefings name the version-pinned CLI when board MCP tools are unavailable', () => {
+test('executor briefings require Board MCP reconnect and re-dispatch when unavailable', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-CLI-FALLBACK', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
   }, 'cli-fallback-token');
-  assert.match(briefing, /If board MCP tools are absent, use the version-pinned CLI fallback/);
-  assert.match(briefing, /bin[\\/]sidequest\.js/);
+  assert.match(briefing, /Board MCP is the executor lifecycle authority/);
+  assert.match(briefing, /reload or reconnect Sidequest, then re-dispatch/);
+  assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
 });
 
 test('read-only executor briefings keep temporary files outside the repository', () => {

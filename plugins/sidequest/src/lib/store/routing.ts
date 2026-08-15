@@ -11,6 +11,7 @@ function createRouting(dependencies: any) {
     discoverExternalModels,
     invalidateStoreCaches,
     listProjects,
+    projectRoutingEnabled,
     providerReadiness,
     readGlobal,
     readMeta,
@@ -1160,6 +1161,17 @@ function resolveCategoryRoute(category?: any) {
   return { model: primary.model, effort: primary.effort, exec: null, warnings };
 }
 
+function projectDispatchAdmission(project?: any) {
+  const slug = String(project || '').trim();
+  if (!slug) return { status: 'no-project', slug: null, route: null };
+  if (!projectRoutingEnabled(slug)) return { status: 'routing-disabled', slug, route: null };
+  for (const category of getCategories({ project: slug, includeDisabled: false })) {
+    const route = resolveCategoryRoute(category);
+    if (route.exec) return { status: 'routed', slug, route };
+  }
+  return { status: 'no-usable-route', slug, route: null };
+}
+
 function resolveCategoryFallback(category?: any, failedModel?: any) {
   const failedRoute = normalizeRoute({ model: failedModel, effort: 'low' });
   const provider = routeProvider(failedRoute);
@@ -1371,6 +1383,7 @@ function applyDerivedRouting(t?: any, opts?: any) {
     classifierCategories,
     routeProvider,
     routeReadyForAutomaticFallback,
+    projectDispatchAdmission,
     resolveTicketRoute,
     resolveCategoryRoute,
     resolveCategoryFallback,

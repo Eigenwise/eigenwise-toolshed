@@ -137,7 +137,7 @@ function boardFor(input) {
   const store = require(runtimeModule("store"));
   const start = stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const found = store.findProject(store.nearestRepoRoot(start));
-  if (!found.ok || !found.slug || !store.projectRoutingEnabled(found.slug)) return null;
+  if (!found.ok || !found.slug || store.projectDispatchAdmission(found.slug).status !== "routed") return null;
   return found.slug;
 }
 function main() {

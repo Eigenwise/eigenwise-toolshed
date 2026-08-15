@@ -553,15 +553,16 @@ test('pre-tool hook: arbitrary implementation agents are denied and directed to 
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny', subagent_type);
     assert.match(reason, /generic Agent, not a Sidequest ticket executor/);
     assert.match(reason, /Read, Glob, Grep, or WebFetch inline, not WebSearch/);
-    assert.match(reason, /sidequest-diagnostic-probe only: read-only, three turns, foreground, no refs or isolation/);
-    assert.match(reason, /WebSearch is executor-only: file and dispatch a research ticket once dispatch works/);
+    assert.match(reason, /A usable route needs a fresh Board MCP dispatch and its exact returned executor/);
+    assert.match(reason, /Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch/);
+    assert.match(reason, /Do not use a raw Agent or Sidequest CLI fallback/);
     assert.match(reason, /quick investigation, needs a ticket: file a spike/);
     assert.match(reason, /codebase-exploration/);
     assert.match(reason, /route it, dispatch it, then spawn the returned executor/);
     assert.match(reason, /blocked work still gates any dependent action/);
     assert.match(reason, /do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed/);
     assert.match(reason, /rerouting around this block is a violation/);
-    assert.doesNotMatch(reason, /fresh dispatch briefing/);
+    assert.doesNotMatch(reason, /sidequest-diagnostic-probe only|WebSearch is executor-only/);
   }
   const mismatch = runHookOutput(FORCE_BYPASS, {
     tool_name: 'Agent',
@@ -1164,12 +1165,23 @@ test('pre-tool inline-work hook tells solo work to surface the board choice once
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
   });
   assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
-  assert.match(output.systemMessage, /substantive solo work/i);
-  assert.match(output.systemMessage, /board dispatch is available/i);
-  assert.match(output.systemMessage, /next user-visible reply/i);
+  assert.match(output.systemMessage, /inline-safe boundary/i);
+  assert.match(output.systemMessage, /concrete reason for continuing inline/i);
+  assert.match(output.systemMessage, /offer Sidequest board dispatch/i);
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
   }), null);
+});
+
+test('pre-tool inline-work hook keeps bounded transcript lookups inline-safe', () => {
+  const output = runHookOutput(INLINE_WORK_NUDGE, {
+    session_id: `inline-transcript-${Date.now()}`,
+    cwd: BOARD_PATH,
+    prompt: 'Find the session transcript entry for this claim.',
+    tool_name: 'Bash',
+    tool_input: { command: 'node -p "process.argv.slice(1, 2)[0]" transcript --limit 1' },
+  });
+  assert.equal(output, null);
 });
 
 test('pre-tool inline-work hook records activity without injecting repeat reminders after board interaction', () => {
@@ -1221,6 +1233,36 @@ test('pre-tool inline-work nudge ignores subagent identity variants and routing-
   } finally {
     store.setProjectRouting(slug, 'enabled');
   }
+});
+
+test('usable-route admission keeps unavailable boards inline without a raw Agent fallback', () => {
+  const categories = store.getCategories({ project: slug, includeDisabled: false });
+  try {
+    for (const category of categories) {
+      if (category.id !== 'general') store.setProjectCategory(slug, category.id, 'DISABLE', {});
+    }
+    store.setProjectCategory(slug, 'general', 'OVERRIDE', {
+      route: { model: 'unavailable-test-route', effort: 'high' },
+    });
+    assert.equal(store.projectDispatchAdmission(slug).status, 'no-usable-route');
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id: `inline-unavailable-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
+    }), null);
+    const denied = runHookOutput(FORCE_BYPASS, {
+      cwd: BOARD_PATH,
+      tool_name: 'Agent',
+      tool_input: { subagent_type: 'general-purpose', prompt: 'Inspect this repository.' },
+    });
+    assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Continue bounded inline work with direct tools/);
+    assert.match(denied.hookSpecificOutput.permissionDecisionReason, /do not create a fake Sidequest or raw Agent lifecycle fallback/);
+  } finally {
+    store.removeProjectCategory(slug, 'general');
+    for (const category of categories) {
+      if (category.id !== 'general') store.removeProjectCategory(slug, category.id);
+    }
+  }
+  assert.equal(store.projectDispatchAdmission(slug).status, 'routed');
 });
 
 test('pre-tool inline-work nudge ignores automation prompts', () => {
@@ -2377,13 +2419,11 @@ test('session-start: tells orchestrators to arm the board watch when Monitor exi
   }
 });
 
-test('session-start: states board authorization while preserving the specific-edit boundary', () => {
+test('session-start: states usable-route admission while preserving the specific-edit boundary', () => {
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `authorization-${source || 'startup'}`, source });
-    assert.match(context, /board authorizes ticket and executor dispatch without a further user request/i);
-    assert.match(context, /overriding conservative default agent-spawning guidance/i);
-    assert.match(context, /substantive solo work beyond that inline boundary/i);
-    assert.match(context, /next reply that board dispatch is available and they can ask to use it/i);
+    assert.match(context, /no usable project route here, so substantive work may stay inline/i);
+    assert.match(context, /Do not ask for board dispatch until routing is enabled/i);
     assert.match(context, /one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch/i);
     assert.match(context, /ask before work beyond the approved scope unless explicit standing permission covers it/i);
   }
@@ -2647,26 +2687,23 @@ test('session-start skips an unavailable integration target without failing the 
   assert.doesNotMatch(context, /worktree sweep failed/);
 });
 
-test('session-start compact contexts retain executable safeguards', () => {
+test('negative control: session-start recovery rejects the retired CLI fallback for resume and compact', () => {
   for (const source of ['compact', 'resume']) {
     const ctx = runHookForBudget(SESSION, { session_id: 't', source });
     assert.match(ctx, /never\s+TaskOutput/i, `${source} must ban native Agent TaskOutput polling`);
-    assert.ok(/list --status(?: |=)doing/.test(ctx), `${source} must retain the CLI fallback`);
+    assert.match(ctx, /Reconnect Board MCP, re-dispatch, and spawn the exact returned executor/i, `${source} must reconnect before lifecycle recovery`);
+    assert.match(ctx, /Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback/i, `${source} must reject lifecycle fallbacks`);
+    assert.doesNotMatch(ctx, /list --status(?: |=)doing.*MCP is absent/i, `${source} must reject the retired SessionStart fallback`);
     assert.ok(!ctx.includes('external tracker'), `${source} must not inject the full block`);
     assert.match(ctx, /board path refuses verified work, deliver it yourself through groomClose with deliveryCommit/i);
     assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `${source} block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
   }
 });
 
-test('session-start: embeds the expanded plugin path in CLI fallbacks', () => {
-  const pluginRoot = FIXED_PLUGIN_ROOT;
-  const ctx = runHookForBudget(
-    SESSION,
-    { session_id: 't', source: 'compact' }
-  );
-  assert.ok(ctx.includes(`node "${pluginRoot}/bin/sidequest.js"`), 'CLI fallback must embed the hook runtime plugin path');
-  assert.ok(!ctx.includes('${CLAUDE_PLUGIN_ROOT}'), 'CLI fallback must not rely on an unset shell variable');
-  assert.ok(Buffer.byteLength(ctx) <= BUDGET.compact, `compact block is ${Buffer.byteLength(ctx)} bytes — budget is ${BUDGET.compact}`);
+test('session-start source excludes the retired lifecycle CLI fallback', () => {
+  const source = fs.readFileSync(SESSION, 'utf8');
+  assert.doesNotMatch(source, /list --status=doing only if MCP is absent/);
+  assert.match(source, /Reconnect Board MCP, re-dispatch, and spawn the exact returned executor/);
 });
 
 test('session-start: SIDEQUEST_NUDGE=off silences it', () => {

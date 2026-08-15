@@ -8,14 +8,14 @@ const AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notifi
 interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string };
-  projectRoutingEnabled: (slug: string) => boolean;
+  projectDispatchAdmission: (slug: string) => { status: string };
 }
 
 function boardFor(input: HookInput): string | null {
   const store = require(runtimeModule('store')) as Store;
   const start = stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const found = store.findProject(store.nearestRepoRoot(start));
-  if (!found.ok || !found.slug || !store.projectRoutingEnabled(found.slug)) return null;
+  if (!found.ok || !found.slug || store.projectDispatchAdmission(found.slug).status !== 'routed') return null;
   return found.slug;
 }
 

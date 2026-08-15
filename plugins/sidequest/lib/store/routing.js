@@ -10,6 +10,7 @@ function createRouting(dependencies) {
     discoverExternalModels,
     invalidateStoreCaches,
     listProjects,
+    projectRoutingEnabled,
     providerReadiness,
     readGlobal,
     readMeta,
@@ -1032,6 +1033,16 @@ function createRouting(dependencies) {
     }
     return { model: primary.model, effort: primary.effort, exec: null, warnings };
   }
+  function projectDispatchAdmission(project) {
+    const slug = String(project || "").trim();
+    if (!slug) return { status: "no-project", slug: null, route: null };
+    if (!projectRoutingEnabled(slug)) return { status: "routing-disabled", slug, route: null };
+    for (const category of getCategories({ project: slug, includeDisabled: false })) {
+      const route = resolveCategoryRoute(category);
+      if (route.exec) return { status: "routed", slug, route };
+    }
+    return { status: "no-usable-route", slug, route: null };
+  }
   function resolveCategoryFallback(category, failedModel) {
     const failedRoute = normalizeRoute({ model: failedModel, effort: "low" });
     const provider = routeProvider(failedRoute);
@@ -1228,6 +1239,7 @@ function createRouting(dependencies) {
     classifierCategories,
     routeProvider,
     routeReadyForAutomaticFallback,
+    projectDispatchAdmission,
     resolveTicketRoute,
     resolveCategoryRoute,
     resolveCategoryFallback,

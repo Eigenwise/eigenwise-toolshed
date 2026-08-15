@@ -8,14 +8,14 @@ const AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notifi
 interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string };
-  projectRoutingEnabled: (slug: string) => boolean;
+  projectDispatchAdmission: (slug: string) => { status: string };
 }
 
 function boardFor(input: HookInput): string | null {
   const store = require(runtimeModule('store')) as Store;
   const start = stringField(input, 'cwd') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const found = store.findProject(store.nearestRepoRoot(start));
-  if (!found.ok || !found.slug || !store.projectRoutingEnabled(found.slug)) return null;
+  if (!found.ok || !found.slug || store.projectDispatchAdmission(found.slug).status !== 'routed') return null;
   return found.slug;
 }
 
@@ -36,9 +36,16 @@ function isPureRead(command: string): boolean {
   return parts.every((part) => /^(?:cd\s+\S+|(?:git\s+)?(?:status|diff|log|show|branch\s+--show-current|rev-parse|ls-files)|(?:ls|dir|pwd|cat|head|tail|rg|grep|find|which|where)\b)/i.test(part));
 }
 
-function isSubstantive(toolName: string, command: string): boolean {
+function isBoundedTranscriptLookup(command: string, prompt: string): boolean {
+  if (!/\b(?:find|search|locate|look\s+up)\b[\s\S]*\b(?:session|transcript)\b/i.test(prompt)) return false;
+  if (!/\b(?:node|python(?:3)?)\b/i.test(command)) return false;
+  if (!/\b(?:limit|head|slice|take|max(?:[-_ ]?results)?|break|first)\b|\[\s*:\s*\d+/i.test(command)) return false;
+  return !/\b(?:write(?:File|_text|_bytes|FileSync)?|appendFile(?:Sync)?|unlink(?:Sync)?|remove|rename|replace|mkdir|rmdir|chmod|chown|copy(?:File)?|shutil\.|subprocess\.|os\.system|exec(?:File)?(?:Sync)?|spawn(?:Sync)?|open\([^)]*,\s*['"][wa+]|rm|del|mv|cp|git\s+(?:commit|reset|checkout|clean|merge|rebase)|npm\s+(?:install|publish))\b|(?<!\d)>\s*(?!&)/i.test(command);
+}
+
+function isSubstantive(toolName: string, command: string, prompt: string): boolean {
   if (toolName === 'Edit' || toolName === 'Write' || toolName === 'NotebookEdit') return true;
-  return toolName === 'Bash' && Boolean(command) && !isPureRead(command);
+  return toolName === 'Bash' && Boolean(command) && !isPureRead(command) && !isBoundedTranscriptLookup(command, prompt);
 }
 
 function isReadClass(toolName: string, command: string): boolean {
@@ -60,12 +67,12 @@ function main(): void {
   const state = readSessionState(file);
   if (isBoardInteraction(toolName, command)) {
     state.boardInteraction = true;
-  } else if (isSubstantive(toolName, command)) {
+  } else if (isSubstantive(toolName, command, prompt)) {
     state.substantiveActions = (Number(state.substantiveActions) || 0) + 1;
     if (!state.boardInteraction && !state.soloChoiceSurfaced) {
       state.soloChoiceSurfaced = true;
       writeSessionState(file, state);
-      writeSystemMessage('PreToolUse', 'sidequest: You are choosing substantive solo work while board dispatch is available. In your next user-visible reply, say so and say that they can ask to use Sidequest board dispatch.');
+      writeSystemMessage('PreToolUse', 'sidequest: This action crosses the inline-safe boundary. In your next user-visible reply, state the concrete reason for continuing inline or offer Sidequest board dispatch.');
       return;
     }
   } else if (isReadClass(toolName, command)) {
