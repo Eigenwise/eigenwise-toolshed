@@ -167,12 +167,21 @@ function createTickets(dependencies) {
     }
     return reviewTicket;
   }
+  function withSourceTicketLock(slug, sourceId, fn) {
+    const lock = ticketLockPath(slug, sourceId);
+    const locked = acquireLock(lock);
+    try {
+      return fn();
+    } finally {
+      if (locked) releaseLock(lock, locked);
+    }
+  }
   function persistWithReviewBinding(slug, ticket, requested) {
     const persistReview = (review) => putTicket(slug, review);
     const targetRef = requested === void 0 ? "" : String(requested?.ref || "").trim().toUpperCase();
     const sourceTicket = targetRef ? getTicket(slug, targetRef) : null;
     if (!sourceTicket) return bindReviewTarget(slug, ticket, requested, persistReview);
-    const bound = withTicketLock(slug, sourceTicket.id, () => bindReviewTarget(slug, ticket, requested, persistReview));
+    const bound = withSourceTicketLock(slug, sourceTicket.id, () => bindReviewTarget(slug, ticket, requested, persistReview));
     queueEventNotification(slug, getTicket(slug, sourceTicket.id), "status", ticket.lastEventSource || "cli");
     return bound;
   }
@@ -964,7 +973,7 @@ function createTickets(dependencies) {
     const targetRef = reviewTarget === void 0 ? "" : String(reviewTarget?.ref || "").trim().toUpperCase();
     const sourceTicket = targetRef ? getTicket(slug, targetRef) : null;
     if (!sourceTicket) return applyUnderTicketLock();
-    const updated = withTicketLock(slug, sourceTicket.id, applyUnderTicketLock);
+    const updated = withSourceTicketLock(slug, sourceTicket.id, applyUnderTicketLock);
     queueEventNotification(slug, getTicket(slug, sourceTicket.id), "status", patch.source ? String(patch.source) : "cli");
     return updated;
   }

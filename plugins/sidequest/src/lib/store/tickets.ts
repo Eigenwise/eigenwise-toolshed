@@ -153,12 +153,26 @@ function bindReviewTarget(slug: any, reviewTicket: any, requested: any, persistR
   return reviewTicket;
 }
 
+// Deliberately not withTicketLock: that helper runs its callback inside
+// transaction(), which would make the transition's own boundary a reentrant
+// no-op and hand the atomicity guarantee to the caller. The binding owns its
+// boundary, so the source lock here is mutual exclusion only.
+function withSourceTicketLock(slug: any, sourceId: any, fn: any) {
+  const lock = ticketLockPath(slug, sourceId);
+  const locked = acquireLock(lock); // best-effort, matching the per-ticket update lock
+  try {
+    return fn();
+  } finally {
+    if (locked) releaseLock(lock, locked);
+  }
+}
+
 function persistWithReviewBinding(slug: any, ticket: any, requested: any) {
   const persistReview = (review: any) => putTicket(slug, review);
   const targetRef = requested === undefined ? '' : String(requested?.ref || '').trim().toUpperCase();
   const sourceTicket = targetRef ? getTicket(slug, targetRef) : null;
   if (!sourceTicket) return bindReviewTarget(slug, ticket, requested, persistReview);
-  const bound = withTicketLock(slug, sourceTicket.id, () => bindReviewTarget(slug, ticket, requested, persistReview));
+  const bound = withSourceTicketLock(slug, sourceTicket.id, () => bindReviewTarget(slug, ticket, requested, persistReview));
   queueEventNotification(slug, getTicket(slug, sourceTicket.id), 'status', ticket.lastEventSource || 'cli');
   return bound;
 }
@@ -1078,7 +1092,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
   if (!sourceTicket) return applyUnderTicketLock();
   // The source lock is taken first and always in that order, so a review binding
   // and a concurrent source mutation can never deadlock against each other.
-  const updated = withTicketLock(slug, sourceTicket.id, applyUnderTicketLock);
+  const updated = withSourceTicketLock(slug, sourceTicket.id, applyUnderTicketLock);
   queueEventNotification(slug, getTicket(slug, sourceTicket.id), 'status', patch.source ? String(patch.source) : 'cli');
   return updated;
 }
