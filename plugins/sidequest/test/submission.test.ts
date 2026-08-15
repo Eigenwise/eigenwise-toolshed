@@ -2345,6 +2345,7 @@ test('a submit after a terminal dispatch is gated on current ticket scope, not t
 
 test('no-Git submission fixtures pin the available fixture route', () => {
   const { project, ticket } = noGitCliTicket('fixture routing', ['wiki/page.md']);
+  assert.strictEqual(ticket.category, 'submission.fixture');
   const prepared = store.prepareDispatch(project, ticket.ref, { sharedTree: true });
   assert.deepStrictEqual(
     { model: prepared.ticket.model, effort: prepared.ticket.effort },
