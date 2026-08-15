@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.3 (2026-08-15)
+
+Released in v3.463.0, up from 0.5.2.
+
+### Fixes
+
+- Remove the retired retro runtime alias (SQ-1966)
+  Quartermaster no longer accepts the retired `mark-retro` command. Use `mark-resupply`.
+
 ## 0.5.2 (2026-08-13)
 
 Released in v3.462.0, up from 0.5.1.

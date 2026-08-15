@@ -8,6 +8,148 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.463.0 (2026-08-15)
+
+### model-gateway 0.48.6 → 0.48.7
+
+#### Fixes
+
+- Self-heal the shared model proxy (SQ-1996)
+  Model Gateway's shim supervisor now checks proxy readiness, recovers an unavailable proxy with bounded single-flight backoff, and records timestamped recovery evidence.
+
+### observability 0.7.9 → 0.7.10
+
+#### Fixes
+
+- Keep local telemetry ingesting during dashboard recovery (SQ-1954)
+  Keep the observer and SQLite ingestion running when Docker or Grafana is unavailable, and report dashboard port drift without changing the dashboard container.
+- Preserve telemetry storage headroom (SQ-1963)
+  Observability now preserves writable SQLite headroom before its database cap, reports pressure actions and unrecoverable storage failures, and checks free disk space before a full manual vacuum.
+- Start local telemetry before optional dashboard checks (SQ-2125)
+  Observability now starts its local observer and collector before checking dashboard availability. When Docker is unavailable, dashboard activity lookup and provisioning are skipped while local telemetry continues to start.
+
+### quartermaster 0.5.2 → 0.5.3
+
+#### Fixes
+
+- Remove the retired retro runtime alias (SQ-1966)
+  Quartermaster no longer accepts the retired `mark-retro` command. Use `mark-resupply`.
+
+### sidequest 4.49.0 → 4.50.0
+
+#### Features
+
+- Centralize project-neutral lifecycle transitions (SQ-1915)
+  Sidequest now runs dispatched, direct, Git-backed, and immutable source-revision work through explicit lifecycle paths. Projects without Git, processes, or worktrees can submit, verify, integrate, and close reviewed revisions without invoking those adapters.
+- Replace split worktree ownership with one lease (SQ-1917)
+  Sidequest now admits worktree cleanup only through a terminal, identity-bound lease for a canonical registered worktree. Unknown, live, locked, unregistered, and reparse-point worktrees stay protected.
+- Bind revision facts to hydrated candidates (SQ-1947)
+  Sidequest now admits Git and immutable source revisions through one kernel decision. Source-revision retries restore the checkpointed candidate before one server-owned capability call, bind unavailable and successful facts to that candidate and its dispatch baseline, and prevent stale resolver registrations from returning after teardown.
+- Make review binding transactional (SQ-2038)
+  Sidequest binds a `review-audit` ticket to the exact candidate it reviews through one transactional
+  transition. `add` and `update` take a `reviewTarget` (reviewed ref plus the submitted commit or source
+  revision) and the store commits the review's `reviewTarget` and the source submission's `review` mirror
+  inside a single storage transaction, so a failure between the two writes leaves neither side bound. No
+  generic field or patch can set, change, or clear the binding, and retargeting needs a fresh review ticket.
+
+  A bound candidate is frozen: reclaim, amendment, `clearSubmission`, and supersede fail closed, including
+  on a legacy one-sided binding, and integration waits for the bound review to terminally complete. Dispatch
+  revalidates the binding and pins the review to that exact immutable commit in an isolated checkout.
+  Confirming a defect with `rework --review-ref` (by an identity other than the submitter) rejects the
+  candidate permanently and forces a fresh ticket, attempt, commit, and review for the repair.
+- Remove public candidate rejection (SQ-2120)
+  Sidequest no longer lets any public route permanently reject a candidate that is bound to a
+  `review-audit` ticket. `recordSubmissionRejection`, `reworkSubmission`, raw MCP `rework`, CLI `rework`,
+  and reconciliation of a matching pending rejection all return one pre-write `candidate_review_locked`
+  refusal, whatever `by` or `reviewRef` says, and neither half of the binding changes. There is no
+  authenticated release principal to check: a handler sees nothing but caller-supplied JSON, so `by`,
+  session labels, and publish-lock strings are all forgeable and none of them can stand in for one.
+  `reviewRef` is still accepted and is now ignored.
+
+  A review that finds a real defect records its evidence on the review ticket and releases that review with
+  `kind=oracle`. The source submission, its `review` mirror, the review's `reviewTarget`, and the candidate
+  commit stay byte-identical, integration stays blocked, and repair goes through a fresh ticket, dispatch,
+  claim, commit, review, and candidate. `rework` still bounces an UNBOUND candidate back to `todo` for its
+  owner, and historical rejected records stay readable and keep blocking integration.
+
+  Integration now reads both runtime identities from the immutable terminal dispatch attempts instead of the
+  mutable current dispatch: the source's `submitted` attempt for that exact commit and the review's terminal
+  `done` attempt. A later prepared dispatch cannot rewrite that selection. A missing attempt, a missing agent
+  id on either side, or the same agent id on both leaves integration blocked with `candidate_review_required`.
+
+#### Fixes
+
+- Keep board watches project-local (SQ-1925)
+  Board watches now keep their notifications scoped to the selected project, so unrelated board activity cannot wake a Claude session.
+- Retire terminal Sidequest teammates (SQ-1952)
+  Sidequest now retires completed native teammates after preserving their terminal board handoff, so finished work no longer stays in the session roster.
+- Restore auto-release recovery guidance (SQ-1953)
+  Sidequest now tells an executor whose claim was auto-released how to recover the preserved commit.
+- Refuse stale Sidequest mutations (SQ-1956)
+  Sidequest now refuses board writes before they create work from a stale loaded plugin, naming the loaded and installed versions and directing agents to `/reload-plugins`. Reads remain available for diagnosis.
+- Fold sibling warning paths (SQ-1958)
+  Fold repetitive same-basename sibling warnings while retaining the full path set through board context retrieval.
+- Pin story decisions in dispatch briefings (SQ-1960)
+  Dispatch briefings now carry the exact story decision-log revision prepared for the ticket and identify later changes correctly.
+- Make Sidequest full gate gateway-independent (SQ-1965)
+  Sidequest's full test gate now uses its own ready Model Gateway catalog fixture, so it does not depend on a live local gateway.
+- Wait for active waves before integration (SQ-1967)
+  Sidequest waits for live claims in a submitted story wave to finish before reminding the orchestrator to integrate.
+- Bind isolated worktrees before mutation (SQ-1968)
+  Sidequest now reserves an isolated checkout against its dispatch before Git creates it, verifies the host-reported checkout when the executor starts, and refuses writes from unbound lookalike worktrees.
+- Resolve delivery reachability against the live integration revision (SQ-1970)
+  Hand-delivered Sidequest closures now retain the exact integration revision they checked, including commits added after the board started.
+- Emit unchanged board warnings once (SQ-1971)
+  Board watches now avoid repeating unchanged warnings after unrelated ticket updates while still delivering changed warning facts.
+- Refuse invalid child shared-tree dispatches (SQ-1973)
+  Shared-tree dispatch now requires the real project checkout, and executor-held claims cannot start child dispatches or a second live claim.
+- Recover pre-claim dispatch retries (SQ-1975)
+  Recover terminal dispatches that stopped before claiming while preserving worktree candidates with real progress.
+- Keep test fixture boards private (SQ-1976)
+  Sidequest test runs now use a private board home, so fixture projects no longer appear in your dashboard.
+- Bind leases to checkout instances (SQ-1978)
+  Sidequest now binds each isolated worktree lease to the checkout instance created for its dispatch. Recreating a linked checkout at the same path no longer inherits write or cleanup authority.
+- Make claim identity transport-neutral (SQ-1986)
+  Sidequest claim admission now resolves token files once in the store and validates the exact prepared executor consistently for CLI and MCP claims.
+- Repair merged typecheck blockers (SQ-1989)
+  Sidequest's merged lifecycle code now typechecks after preserving nullable story-warning boundaries and the canonical active dispatch route name.
+- Restore EnterWorktree repository folding (SQ-1994)
+  Sidequest now anchors EnterWorktree checkouts to their owning repository.
+- Keep Sidequest skill loading lean (SQ-1995)
+  Ticket-authoring detail now loads on demand, keeping the always-loaded Sidequest skill within its session budget.
+- Reject stale provider catalogs (SQ-2000)
+  Sidequest only advertises ready Model Gateway routes from fresh catalogs, keeping routing and the live model list aligned.
+- Canonicalize prepared executor identity (SQ-2003)
+  Sidequest now hydrates one canonical prepared-dispatch executor identity across briefing, claim admission, guidance, and lifecycle adapters.
+- Enforce terminal cleanup authority (SQ-2009)
+  Sidequest now removes isolated checkouts only when the store recorded a terminal lifecycle transition and the checkout still matches its completed WorktreeCreate identity. Nonterminal, markerless, recreated, ambiguous sibling, and mismatched checkouts are preserved.
+- Fix CLI delivery closure (SQ-2011)
+  `groom-close --delivery-commit` now delegates delivery validation and closure to the shared store transition instead of crashing on a private helper.
+- Align readonly dispatch checkout (SQ-2014)
+  Read-only dispatches now default to an isolated checkout, so their Agent spawn and briefing agree when an orchestrator is already in a linked worktree.
+- Accept merge delivery lineage (SQ-2016)
+  Reviewed hand-delivered repairs now derive merge delivery paths from the first parent delta, so valid recovery supersession stays available.
+- Enforce exact dispatch launch (SQ-2028)
+  Dispatch executors now require the exact current prepared briefing command before their launch is recorded.
+- Repair usable-route recovery guidance (SQ-2035)
+  Sidequest now keeps unavailable routes inline and requires Board MCP reconnect and fresh dispatch for lifecycle recovery.
+- Stop false unchecked CI events (SQ-2049)
+  Sidequest's board watch now decides whether the tracked remote head is green only from completed successful runs for that exact SHA. A local branch ahead of its upstream cannot turn a terminal-green historical head into an actionable unchecked event.
+- Document bounded build checks (SQ-2057)
+  Sidequest's TypeScript rewrite contract now documents isolated generated-output checks and bounded build process cleanup.
+- Fail cleanup signal errors (SQ-2070)
+  Sidequest now treats owner cleanup signal failures as failed full-gate phases and rejects malformed, duplicate, or out-of-state diagnostics with `EPROTO`.
+- Pin surgical planning before dispatch (SQ-2073)
+  Sidequest now pins a visible surgical planning contract before substantial or ambiguous feature work dispatches, with bounded review and re-planning rules in its shipped guidance.
+- Ban implementer self-review explicitly (SQ-2087)
+  Sidequest implementation executors now explicitly leave review of their own candidates to the orchestrator, alongside the existing ban on controlling candidate review tickets.
+- Preserve ignored path bytes (SQ-2095)
+  Sidequest now keeps ignored paths NUL-delimited through linked-worktree visibility checks, including names with quotes and newlines.
+- Refuse dirty integration targets (SQ-2105)
+  Sidequest now refuses integration into targets with staged, unstaged, untracked, or unmerged checkout state.
+- Close normalized delivered legacy scope (SQ-2108)
+  Sidequest can close delivered legacy submissions with only an empty or normalized root scope, while preserving exact target reachability and concrete scope checks.
+
 ## v3.462.0 (2026-08-13)
 
 ### codebase-mapper 2.15.2 → 2.15.3
