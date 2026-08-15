@@ -271,6 +271,19 @@ function renderReadOnlyClaudeAgent(effort?: any, readOnlyDeniedTools?: any) {
   });
 }
 
+function implementationExecutorSources(): Map<string, string> {
+  const sources = new Map<string, string>();
+  sources.set(`${stableDispatchName()}.md`, renderDispatchAgent());
+  for (const effort of EXEC_EFFORTS) {
+    sources.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
+      name: stableClaudeName(effort),
+      effort,
+      marker: MARKER,
+    }));
+  }
+  return sources;
+}
+
 function refToken(ref?: any) {
   return String(ref || 'ticket').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '') || 'ticket';
 }
@@ -1412,14 +1425,11 @@ function syncExecAgents(_prefs?: any, opts?: SyncOptions): SyncResult {
   // marker. The Claude ladder stays per-effort because frontmatter is the only effort
   // carrier on that path.
   wanted.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
-  wanted.set(`${stableDispatchName()}.md`, renderDispatchAgent());
+  for (const [filename, source] of implementationExecutorSources()) {
+    wanted.set(filename, source);
+  }
   wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(undefined, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
-    wanted.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
-      name: stableClaudeName(effort),
-      effort,
-      marker: MARKER,
-    }));
     wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
   }
 
@@ -1492,6 +1502,7 @@ module.exports = {
   READ_ONLY_DENIED_TOOLS,
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
+  implementationExecutorSources,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,

@@ -164,6 +164,18 @@ function renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools) {
     disallowedTools: readOnlyTools.disallowedTools
   });
 }
+function implementationExecutorSources() {
+  const sources = /* @__PURE__ */ new Map();
+  sources.set(`${stableDispatchName()}.md`, renderDispatchAgent());
+  for (const effort of EXEC_EFFORTS) {
+    sources.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
+      name: stableClaudeName(effort),
+      effort,
+      marker: MARKER
+    }));
+  }
+  return sources;
+}
 function refToken(ref) {
   return String(ref || "ticket").toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "ticket";
 }
@@ -1169,14 +1181,11 @@ function syncExecAgents(_prefs, opts) {
   const readOnlyDeniedTools = opts.readOnlyDeniedTools;
   const wanted = /* @__PURE__ */ new Map();
   wanted.set(`${DIAGNOSTIC_PROBE_NAME}.md`, renderDiagnosticProbe());
-  wanted.set(`${stableDispatchName()}.md`, renderDispatchAgent());
+  for (const [filename, source] of implementationExecutorSources()) {
+    wanted.set(filename, source);
+  }
   wanted.set(`${stableReadOnlyDispatchName()}.md`, renderReadOnlyDispatchAgent(void 0, readOnlyDeniedTools));
   for (const effort of EXEC_EFFORTS) {
-    wanted.set(`${stableClaudeName(effort)}.md`, renderExecAgent({
-      name: stableClaudeName(effort),
-      effort,
-      marker: MARKER
-    }));
     wanted.set(`${stableReadOnlyClaudeName(effort)}.md`, renderReadOnlyClaudeAgent(effort, readOnlyDeniedTools));
   }
   let existing = [];
@@ -1240,6 +1249,7 @@ module.exports = {
   READ_ONLY_DENIED_TOOLS,
   resolveReadOnlyTools,
   EXECUTOR_SKILLS,
+  implementationExecutorSources,
   ticketCommentsPacket,
   ticketAssetsPacket,
   routeMarker,

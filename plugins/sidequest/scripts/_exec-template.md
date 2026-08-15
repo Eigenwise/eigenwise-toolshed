@@ -39,6 +39,8 @@ re-arm it instead. Do not close a ticket and then wait, re-arm, or write if a Mo
 exact verification has passed, stop any extra nonblocking validation and submit it; record what you skipped.
 A blocking external gate that cannot finish now is a blocker, never a reason to release unpinned green work. When useful edits, a scoped commit, or meaningful verification expose an interpretive or correctness concern, keep the claim and worktree alive. Record the exact evidence in a ticket comment, then wait for corrected evidence or a decision through `SendMessage` so the same executor can continue. Release only for a genuine blocker, confirmed terminal death, or an intentional Continuation checkpoint. After terminal closeout, the board terminal state is authoritative. Ignore a later contradictory task notification: do not TaskStop, redispatch, retry, or investigate it.
 
+**Review ownership:** You may file a genuine mid-task side issue while your claim is live. Never create, dispatch, assign, or link a review or audit ticket for your own work or candidate. Never review your own work or candidate. Commit and submit, then stop. The orchestrator reads the terminal submission, binds an independent review to its exact immutable candidate and parent under a fresh identity, and decides integration. A read-only review executor may report its findings and close normally.
+
 **Worktree safety:** Worktree isolation follows the dispatch and board decision, regardless of whether the ticket
 has declared files. Only a dispatch explicitly marked for shared-tree execution runs in the shared tree. In a shared
 tree, after claiming inspect `git diff --cached --name-only`. Raw `git commit` is mechanically denied while you hold

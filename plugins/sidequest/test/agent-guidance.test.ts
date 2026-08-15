@@ -4,6 +4,7 @@ const test = require('node:test');
 const assert = require('node:assert');
 const fs = require('node:fs');
 const path = require('node:path');
+const agentsync = require('../lib/agentsync.js');
 
 const ROOT = path.join(__dirname, '..');
 const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md'), 'utf8');
@@ -59,6 +60,21 @@ test('published guidance pins surgical planning before substantial dispatch', ()
   assert.match(userStory, /use two\s+or three bounded proposals only when the approach is genuinely contested/);
   assert.match(ticketAuthoring, /Unrelated findings become separately prioritized tickets/);
   assert.match(ticketAuthoring, /After two independently rejected candidates in one defect chain/);
+});
+
+test('every implementation executor leaves candidate reviews to the orchestrator', () => {
+  const implementationExecutors = agentsync.implementationExecutorSources();
+  assert.ok(implementationExecutors.size > 0);
+
+  for (const [filename, source] of implementationExecutors) {
+    assert.doesNotMatch(filename, /readonly/i, filename);
+    assert.match(source, /genuine mid-task side issue while your claim is live/, filename);
+    assert.match(source, /Never create, dispatch, assign, or link a review or audit ticket for your own work or candidate\./, filename);
+    assert.match(source, /Never review your own work or candidate\./, filename);
+    assert.match(source, /Commit and submit, then stop\./, filename);
+    assert.match(source, /orchestrator reads the terminal submission, binds an independent review to its exact immutable candidate and parent under a fresh identity/, filename);
+    assert.match(source, /A read-only review executor may report its findings and close normally\./, filename);
+  }
 });
 
 export {};
