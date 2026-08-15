@@ -640,8 +640,23 @@ ${verify.outputTail}` : null
       message: `Delivered ${delivery.commit} to ${delivery.targetBranch} at ${delivery.resultingHead}; board record failed: ${detail}`
     };
   }
-  function rollbackPostMergeVerification(repo, before) {
+  function integrationTargetCheckoutState(repo) {
+    return integrationGit(repo, ["status", "--porcelain=v2", "--untracked-files=all"]).split(/\r?\n/).filter(Boolean);
+  }
+  function integrationOperationResidue(repo) {
+    return ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].filter((reference) => {
+      const operationPath = integrationGit(repo, ["rev-parse", "--git-path", reference]);
+      return fs.existsSync(operationPath);
+    });
+  }
+  function restoreCleanIntegrationCheckout(repo, before) {
     integrationGit(repo, ["reset", "--merge", before]);
+    const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
+    const checkoutState = integrationTargetCheckoutState(repo);
+    const operationResidue = integrationOperationResidue(repo);
+    if (resultingHead !== before || checkoutState.length || operationResidue.length) {
+      throw new Error(`Expected clean checkout at ${before}; HEAD is ${resultingHead}, status has ${checkoutState.length} entries, operation residue: ${operationResidue.join(", ") || "none"}.`);
+    }
   }
   function deliveryLockPath(repo) {
     return path.resolve(repo, integrationGit(repo, ["rev-parse", "--git-common-dir"]), "sidequest-delivery.lock");
@@ -657,7 +672,7 @@ ${verify.outputTail}` : null
   function postMergeVerificationFailure(slug, ticket, verify, repo, mode, before) {
     const verificationMessage = `${ticket.ref} verification failed after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
     try {
-      rollbackPostMergeVerification(repo, before);
+      restoreCleanIntegrationCheckout(repo, before);
     } catch (error) {
       return integrationFailure(slug, ticket, {
         reason: "verify_failed_post_merge_rollback_failed",
@@ -741,6 +756,21 @@ ${verify.outputTail}` : null
     if (!repo || !target || !target.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
     const submission = ticket.submission;
     const gitRef = String(submission.gitRef || submissionGitRef(ticket));
+    let checkoutState;
+    try {
+      checkoutState = integrationTargetCheckoutState(repo);
+    } catch (error) {
+      return { ok: false, reason: "integration_target_unavailable", ticket, message: integrationGitError(error) };
+    }
+    if (checkoutState.length) {
+      return {
+        ok: false,
+        reason: "integration_target_dirty",
+        ticket,
+        checkoutState,
+        message: `${mode} refused; integration target has pending checkout state.`
+      };
+    }
     let pinnedCommit;
     let changedPaths;
     let delivered = null;
@@ -792,20 +822,6 @@ ${verify.outputTail}` : null
         });
         return result2.ok ? { ok: true, ticket: result2.ticket, integration: result2.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result2);
       }
-      const dirty = integrationGit(repo, ["diff", "--name-only"]).split(/\r?\n/).filter(Boolean);
-      const staged = integrationGit(repo, ["diff", "--cached", "--name-only"]).split(/\r?\n/).filter(Boolean);
-      const untracked = integrationGit(repo, ["ls-files", "--others", "--exclude-standard"]).split(/\r?\n/).filter(Boolean);
-      const dirtyPaths = Array.from(/* @__PURE__ */ new Set([...dirty, ...staged]));
-      const workingPaths = Array.from(/* @__PURE__ */ new Set([...dirtyPaths, ...untracked]));
-      const deliveredDirtyPaths = workingPaths.filter((entry) => commitScope.isInScope(entry, changedPaths));
-      const ignoredDirtyPaths = dirtyPaths.filter((entry) => !commitScope.isInScope(entry, changedPaths));
-      if (deliveredDirtyPaths.length) {
-        return integrationFailure(slug, ticket, {
-          reason: "dirty_scope",
-          dirtyPaths: deliveredDirtyPaths,
-          message: `${mode} refused; uncommitted changes overlap paths this delivery would write: ${deliveredDirtyPaths.join(", ")}.`
-        });
-      }
       const before = integrationGit(repo, ["rev-parse", "HEAD"]);
       const commits = Array.isArray(submission.commits) && submission.commits.length ? submission.commits : [submission.commit];
       if (!submission.noOp && mode === "merge") {
@@ -815,8 +831,14 @@ ${verify.outputTail}` : null
           const conflictedPaths = unmergedIntegrationPaths(repo);
           const message = integrationConflictMessage(error, conflictedPaths);
           try {
-            integrationGit(repo, ["merge", "--abort"]);
-          } catch (_) {
+            restoreCleanIntegrationCheckout(repo, before);
+          } catch (rollbackError) {
+            return integrationFailure(slug, ticket, {
+              reason: "merge_failed_rollback_failed",
+              conflictedPaths,
+              before,
+              message: `${message} Rollback failed: ${integrationGitError(rollbackError)}`
+            });
           }
           return integrationFailure(slug, ticket, { reason: "merge_failed", conflictedPaths, message, before });
         }
@@ -828,23 +850,22 @@ ${verify.outputTail}` : null
             const conflictedPaths = unmergedIntegrationPaths(repo);
             const message = integrationConflictMessage(error, conflictedPaths);
             try {
-              integrationGit(repo, ["cherry-pick", "--abort"]);
-            } catch (_) {
-            }
-            let rollbackNote = "";
-            if (mode === "replay") {
-              try {
-                integrationGit(repo, ["reset", "--merge", before]);
-              } catch (rollbackError) {
-                rollbackNote = ` Rollback to ${before} refused: ${integrationGitError(rollbackError)}.`;
-              }
+              restoreCleanIntegrationCheckout(repo, before);
+            } catch (rollbackError) {
+              return integrationFailure(slug, ticket, {
+                reason: `${mode}_failed_rollback_failed`,
+                failedCommit: commit,
+                before,
+                conflictedPaths,
+                message: `${message} Rollback failed: ${integrationGitError(rollbackError)}`
+              });
             }
             return integrationFailure(slug, ticket, {
               reason: `${mode}_failed`,
               failedCommit: commit,
               before,
               conflictedPaths,
-              message: `${message}${rollbackNote}`
+              message
             });
           }
         }
@@ -865,7 +886,7 @@ ${verify.outputTail}` : null
         verify,
         dirtyFiles: mode === "apply" ? deliveredFiles : [],
         deliveredFiles,
-        ignoredDirtyPaths
+        ignoredDirtyPaths: []
       });
       return result.ok ? { ok: true, ticket: result.ticket, integration: result.ticket.submission.integration } : deliveryRecordFailure(ticket, delivered, result);
     } catch (error) {

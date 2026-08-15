@@ -49,6 +49,7 @@ function makeRepo(label: string) {
   git(['config', 'user.name', 'Sidequest Test'], repo);
   git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'advance fixture\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.claude/*\n');
   git(['add', '.'], repo);
   git(['commit', '-m', 'base'], repo);
   git(['branch', '-M', 'main'], repo);
@@ -492,113 +493,45 @@ test('integrate records an explicit skipped verification choice', () => {
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
 });
 
-test('replay conflict aborts, restores HEAD, and keeps the pinned ref', () => {
-  const { fixture, slug, ticket, runCli } = deliveryTicket('replay-conflict');
-  const before = commitFile(fixture.repo, 'feature.txt', 'conflicting local work\n');
+function makeUnmergedTarget(repo: string, label: string) {
+  const currentBranch = git(['branch', '--show-current'], repo);
+  const competingBranch = `unmerged-${label}`;
+  git(['branch', competingBranch], repo);
+  commitFile(repo, 'target-conflict.txt', 'current target\n');
+  git(['checkout', competingBranch], repo);
+  commitFile(repo, 'target-conflict.txt', 'competing target\n');
+  git(['checkout', currentBranch], repo);
+  assert.throws(() => git(['merge', competingBranch], repo));
+}
 
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'replay', '--json']);
+const dirtyIntegrationTargetStates = [
+  ['unstaged', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'unstaged target edit\n')],
+  ['staged', (fixture: any) => {
+    fs.writeFileSync(path.join(fixture.repo, 'README.md'), 'staged target edit\n');
+    git(['add', 'README.md'], fixture.repo);
+  }],
+  ['untracked', (fixture: any) => fs.writeFileSync(path.join(fixture.repo, 'target-scratch.log'), 'untracked target file\n')],
+  ['unmerged', (fixture: any, ticket: any) => makeUnmergedTarget(fixture.repo, ticket.ref)],
+] as const;
 
-  assert.equal(result.status, 1);
-  assert.equal(head(fixture.repo), before);
-  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), '');
-  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
-  const stored = store.getTicket(slug, ticket.ref);
-  assert.equal(stored.status, 'doing');
-  assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
-});
+for (const [state, dirtyTarget] of dirtyIntegrationTargetStates) {
+  test(`integrate refuses a ${state} target without changing the pending submission`, () => {
+    const { fixture, slug, ticket } = deliveryTicket(`dirty-target-${state}`);
+    dirtyTarget(fixture, ticket);
+    const checkoutBefore = git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo);
+    const submissionBefore = store.getTicket(slug, ticket.ref).submission;
+    const headBefore = head(fixture.repo);
 
-test('replay conflict preserves an unrelated dirty tracked file during rollback', () => {
-  const { fixture, slug, ticket, runCli } = deliveryTicket('replay-conflict-unrelated-dirty');
-  commitFile(fixture.repo, 'feature.txt', 'conflicting local work\n');
-  const unrelatedEdit = 'uncommitted work outside the ticket scope\n';
-  fs.writeFileSync(path.join(fixture.repo, 'README.md'), unrelatedEdit);
+    const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
 
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'replay', '--json']);
-
-  assert.equal(result.status, 1);
-  assert.equal(fs.readFileSync(path.join(fixture.repo, 'README.md'), 'utf8'), unrelatedEdit);
-  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
-  const stored = store.getTicket(slug, ticket.ref);
-  assert.equal(stored.status, 'doing');
-  assert.equal(stored.submission.integration.failedCommit, fixture.submitted);
-});
-
-test('apply refuses an overlapping dirty path and names it without dropping the pinned ref', () => {
-  const { fixture, slug, ticket, runCli } = deliveryTicket('apply-overlap');
-  fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'user edit\n');
-
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'apply', '--json']);
-
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /apply refused; uncommitted changes overlap paths this delivery would write: feature\.txt/);
-  assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
-  const stored = store.getTicket(slug, ticket.ref);
-  assert.equal(stored.status, 'doing');
-  assert.deepEqual(stored.submission.integration.dirtyPaths, ['feature.txt']);
-});
-
-test('integrate merge preserves unrelated dirty files', () => {
-  const { fixture, ticket, runCli } = deliveryTicket('merge-ignores-unrelated-dirty');
-  const unrelated = path.join(fixture.repo, 'README.md');
-  fs.writeFileSync(unrelated, 'user keeps working\n');
-  const before = fs.readFileSync(unrelated);
-
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
-
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  const payload = JSON.parse(result.stdout);
-  assert.deepEqual(payload.delivery.ignoredDirtyPaths, ['README.md']);
-  assert.deepEqual(fs.readFileSync(unrelated), before);
-  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
-});
-
-test('integrate merge ignores a dirty declared path outside the delivered submission', () => {
-  const { fixture, ticket, runCli } = deliveryTicket('merge-ignores-dirty-declared-path', {
-    files: ['feature.txt', 'docs'],
+    assert.equal(result.ok, false);
+    assert.equal(result.reason, 'integration_target_dirty');
+    assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), checkoutBefore);
+    assert.equal(head(fixture.repo), headBefore);
+    assert.deepEqual(store.getTicket(slug, ticket.ref).submission, submissionBefore);
+    assert.equal(git(['rev-parse', `refs/sidequest/${ticket.ref}`], fixture.repo), fixture.submitted);
   });
-  fs.mkdirSync(path.join(fixture.repo, 'docs'), { recursive: true });
-  commitFile(fixture.repo, 'docs/guide.md', 'committed docs\n');
-  const dirtyDocs = path.join(fixture.repo, 'docs', 'guide.md');
-  fs.writeFileSync(dirtyDocs, 'uncommitted docs\n');
-
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
-
-  assert.equal(result.status, 0, result.stderr + result.stdout);
-  const payload = JSON.parse(result.stdout);
-  assert.deepEqual(payload.delivery.ignoredDirtyPaths, ['docs/guide.md']);
-  assert.equal(fs.readFileSync(dirtyDocs, 'utf8'), 'uncommitted docs\n');
-  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M docs/guide.md');
-});
-
-test('integrate merge refuses a dirty path the delivered submission would write', () => {
-  const { fixture, slug, ticket, runCli } = deliveryTicket('merge-dirty-scope');
-  const scoped = path.join(fixture.repo, 'feature.txt');
-  fs.writeFileSync(scoped, 'user edit\n');
-  const before = fs.readFileSync(scoped);
-
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
-
-  assert.equal(result.status, 1);
-  assert.match(result.stderr, /merge refused; uncommitted changes overlap paths this delivery would write: feature\.txt/);
-  assert.deepEqual(fs.readFileSync(scoped), before);
-  assert.equal(store.getTicket(slug, ticket.ref).submission.integration.reason, 'dirty_scope');
-});
-
-test('a failed merged-tree gate restores the submitted work without resetting unrelated dirty files', () => {
-  const { fixture, ticket, runCli } = deliveryTicket('rollback-keeps-unrelated-dirty', {
-    verify: nodeVerify("console.error('integration verify failure'); process.exit(7)"),
-  });
-  const unrelated = path.join(fixture.repo, 'README.md');
-  fs.writeFileSync(unrelated, 'user keeps working\n');
-  const before = fs.readFileSync(unrelated);
-
-  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
-
-  assert.equal(result.status, 1, result.stderr + result.stdout);
-  assert.deepEqual(fs.readFileSync(unrelated), before);
-  assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), 'M README.md');
-  assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
-});
+}
 
 function makeGreenfieldRepo(label: string, locked = true) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-greenfield-${label}-`));
@@ -606,6 +539,7 @@ function makeGreenfieldRepo(label: string, locked = true) {
   git(['config', 'user.name', 'Sidequest Test'], repo);
   git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'greenfield fixture\n');
+  fs.writeFileSync(path.join(repo, '.gitignore'), '.claude/*\n');
   git(['add', '.'], repo);
   git(['commit', '-m', 'base'], repo);
   git(['branch', '-M', 'main'], repo);
