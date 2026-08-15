@@ -21,6 +21,8 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 
 ## Plan substantial work on the board first
 
+Before dispatching substantial or ambiguous work, pin a contract; see `user-story`.
+
 For substantial work:
 
 0. **solo-fit gate.** **SOLO-FIT picks one-executor vs wave; it NEVER means you implement
@@ -48,9 +50,7 @@ For substantial work:
    sequential/shared-design work together; size shards by items and verify cost.
 4. **Execute proportionally** — "Route execution down" below.
 
-Complexity 4+ needs planning: scope, anchors, a scoped verify. Executors test the changed
-surface; the full suite runs once on the merged tree at integration. Property-level done-oracles
-rerun after overlapping wave assembly; see `references/ticket-authoring.md`.
+Complexity 4+ needs scope, anchors, and a scoped verify; full suite runs once on the merged tree.
 A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.

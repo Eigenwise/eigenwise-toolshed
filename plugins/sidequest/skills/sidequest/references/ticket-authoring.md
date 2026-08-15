@@ -2,6 +2,31 @@
 
 Declare scope by the surfaces a change reaches, not just the first file you found. For a cross-cutting change inside one plugin, declare its `src/lib`, `test`, and, where relevant, `hooks` directories. Use file-granular scope for surgical work where blast-radius control is the point.
 
+## Pinned planning contract
+
+Before dispatching a substantial or ambiguous feature, publish one visible planning checkpoint on its
+story, planning ticket, or execution tickets. It must name:
+
+1. The intended outcome and explicit non-goals.
+2. The smallest source of truth or authority that decides the behavior. Remove ambiguous competing
+   authorities or fallbacks when that is the actual ambiguity.
+3. The surgical source-file boundary for each piece, and every public surface each piece may change or
+   must leave unchanged.
+4. One bounded executable done-oracle per piece, including the observed behavior and a regression input
+   or consumer that exercises it.
+5. The review budget from the feature size, with a reason when the oracle alone is sufficient.
+6. Concrete evidence that reopens design, such as an incompatible consumer, a necessary migration, an
+   unobservable outcome, or a seam that cannot meet the stated boundary.
+
+A settled feature gets one authored contract. Use two or three bounded proposals only when the approach
+is genuinely contested. An exact small edit keeps the lightweight path: record its outcome and oracle,
+then use one ticket.
+
+Ask the user once, in one batch, only for choices that change user-visible behavior, compatibility,
+migration, public API, dependency, or expensive-to-reverse scope. Explicit current-feature delegation
+("do your thing", "use your judgment", or "whatever you think") lets the author decide and record the
+choice; it never establishes a durable preference.
+
 ## Sidequest category and config schema
 
 A Sidequest category or config-schema change normally spans `src/lib/store.ts`, `src/lib/category-defaults.ts`, `src/lib/exec-names.ts`, `src/lib/agentsync.ts`, `src/lib/mcp.ts`, `src/bin`, `SKILL.md`, and their tests. Include `category-defaults.json`, `mcp-tool-descriptors.json`, and `cli-goldens.json` fixtures/goldens, plus generated `hooks/*.js` when the change reaches hooks.
@@ -29,6 +54,10 @@ recon. The executor starts where you left off, never cold. This removes orientat
 ## Review-gated acceptance
 
 Before the first dispatch, give review-gated work adversarial acceptance criteria: name the exact
-bypass classes the reviewer must probe, not a generic "review it" request. After two rework rounds,
-re-spec the ticket with the failed contract, anchors, and acceptance criteria. Do not re-dispatch a
-third time; that avoids the 21x rework tail observed in SQ-203.
+bypass classes the reviewer must probe, not a generic "review it" request. Review checks the pinned
+contract and its done-oracle. Unrelated findings become separately prioritized tickets and block the
+active ship only when the contract or a proven regression requires it.
+
+After two independently rejected candidates in one defect chain, stop local patching. Re-plan, narrow
+the contract, or replace the authority or architecture before another candidate; involve the user when
+the feature was not delegated. Do not dispatch a third local patch against the same unexamined premise.
