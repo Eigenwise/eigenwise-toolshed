@@ -3075,4 +3075,99 @@ test('SQ-2184: control-plane closure recognizes released submissions and consume
   }
 });
 
+test('SQ-2188: grooming abandons a candidate that never landed and refuses to abandon one that did', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const strandedTicket = addTicket('stranded candidate', { files: ['lib/stranded.js'] });
+    const branchBeforeCandidate = git(['rev-parse', 'HEAD']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'stranded.js'), 'candidate\n');
+    git(['add', 'lib/stranded.js']);
+    git(['commit', '-m', 'stranded candidate']);
+    const strandedCandidate = git(['rev-parse', 'HEAD']);
+    pin(strandedTicket, strandedCandidate);
+    assert.strictEqual(store.claimTicket(slug, strandedTicket.ref, 'stranded-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, strandedTicket.ref, 'stranded-worker', { commit: strandedCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submittedStranded = store.getTicket(slug, strandedTicket.ref);
+    Object.assign(submittedStranded.submission, {
+      base: branchBeforeCandidate,
+      upstream: integrationBranch,
+      upstreamCommit: strandedCandidate,
+      integrationBranch,
+      commits: [strandedCandidate],
+      changedPaths: ['lib/stranded.js'],
+    });
+    persist(submittedStranded);
+
+    // Strand the candidate the way main really strands them: the branch goes back and moves on
+    // without it, so the commit still exists but is no longer an ancestor of the branch.
+    git(['reset', '--hard', branchBeforeCandidate]);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'moved-on.js'), 'the branch moved on\n');
+    git(['add', 'lib/moved-on.js']);
+    git(['commit', '-m', 'branch moved past the stranded candidate']);
+
+    const groomedWithoutFlag = store.completeTicketAsControlPlane(slug, strandedTicket.ref, {
+      by: 'orchestrator',
+      purpose: 'grooming',
+      reason: 'The candidate never reached the integration branch.',
+    });
+    assert.strictEqual(groomedWithoutFlag.ok, false);
+    assert.match(
+      String(groomedWithoutFlag.message || ''),
+      /--abandon-submission/,
+      'a refused delivery must name the abandonment path, or grooming has no legal move left',
+    );
+
+    const abandoned = store.completeTicketAsControlPlane(slug, strandedTicket.ref, {
+      by: 'orchestrator',
+      purpose: 'grooming',
+      abandonSubmission: true,
+      reason: 'The candidate never reached the integration branch and no longer merges.',
+    });
+    assert.strictEqual(abandoned.ok, true, abandoned.message);
+    assert.strictEqual(abandoned.ticket.status, 'done');
+    assert.strictEqual(abandoned.ticket.submission.integration.outcome, 'abandoned');
+    assert.strictEqual(abandoned.ticket.submission.integration.candidateState, 'unreachable');
+    // The whole point of the closure: the board must stop counting this as awaiting integration.
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, strandedTicket.ref)), false);
+
+    const landedTicket = addTicket('landed candidate', { files: ['lib/landed.js'] });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'landed.js'), 'candidate\n');
+    git(['add', 'lib/landed.js']);
+    git(['commit', '-m', 'landed candidate']);
+    const landedCandidate = git(['rev-parse', 'HEAD']);
+    pin(landedTicket, landedCandidate);
+    assert.strictEqual(store.claimTicket(slug, landedTicket.ref, 'landed-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, landedTicket.ref, 'landed-worker', { commit: landedCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submittedLanded = store.getTicket(slug, landedTicket.ref);
+    Object.assign(submittedLanded.submission, {
+      base: git(['rev-parse', `${landedCandidate}^`]),
+      upstream: integrationBranch,
+      upstreamCommit: landedCandidate,
+      integrationBranch,
+      commits: [landedCandidate],
+      changedPaths: ['lib/landed.js'],
+    });
+    persist(submittedLanded);
+
+    // The safety property: abandonment stays illegal while the work is actually on the branch,
+    // so the flag can never be used to write off something that shipped.
+    const refusedAbandon = store.completeTicketAsControlPlane(slug, landedTicket.ref, {
+      by: 'orchestrator',
+      purpose: 'grooming',
+      abandonSubmission: true,
+      reason: 'Attempting to abandon work that is already on the integration branch.',
+    });
+    assert.strictEqual(refusedAbandon.ok, false);
+    assert.strictEqual(refusedAbandon.reason, 'candidate_already_landed');
+    assert.strictEqual(store.getTicket(slug, landedTicket.ref).status !== 'done', true);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 export {};

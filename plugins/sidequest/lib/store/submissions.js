@@ -853,6 +853,60 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "delivery_evidence_unavailable", ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
     }
   }
+  function recordAbandonedSubmission(slug, idOrRef, opts) {
+    opts = opts || {};
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    const reason = String(opts.reason || "").trim();
+    if (!reason) return { ok: false, reason: "evidence_required", ticket: found, message: `${found.ref} abandonment requires evidence that the candidate never landed.` };
+    if (!pendingSubmission(found)) return { ok: false, reason: "submission_required", ticket: found, message: `${found.ref} has no pending submission to abandon.` };
+    const target = opts.target;
+    const repo = String(readMeta(slug)?.path || "").trim();
+    if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket: found };
+    const candidate = String(found.submission?.commit || "").trim();
+    let candidateState = "unresolvable";
+    if (submissionUsesGit(found) && candidate) {
+      try {
+        const resolved = integrationGit(repo, ["rev-parse", "--verify", `${candidate}^{commit}`]).toLowerCase();
+        try {
+          integrationGit(repo, ["merge-base", "--is-ancestor", resolved, `refs/heads/${target.branch}`]);
+          return {
+            ok: false,
+            reason: "candidate_already_landed",
+            ticket: found,
+            message: `${found.ref} cannot be abandoned: its candidate ${resolved} is reachable from ${target.branch}, so it shipped. Close it as a delivery with that commit as the delivery evidence instead.`
+          };
+        } catch (error) {
+          if (error?.status !== 1) throw error;
+        }
+        candidateState = "unreachable";
+      } catch (error) {
+        candidateState = "unresolvable";
+      }
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      if (!ticket?.submission) return { ok: false, reason: "submission_required", ticket };
+      ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, {
+        mode: "abandoned",
+        outcome: "abandoned",
+        pinnedRef: submissionGitRef(ticket),
+        pinnedCommit: candidate || null,
+        candidateState,
+        targetBranch: target.branch,
+        targetUpstream: target.upstream,
+        evidence: reason,
+        abandonedAt: now,
+        completedAt: now
+      });
+      ticket.submission.integratedAt = now;
+      ticket.updatedAt = now;
+      putTicket(slug, ticket);
+      queueEventNotification(slug, ticket, "status", "integration");
+      return { ok: true, ticket, integration: ticket.submission.integration };
+    });
+  }
   function integrateSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
@@ -1712,6 +1766,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
 }
 module.exports = { createSubmissions };

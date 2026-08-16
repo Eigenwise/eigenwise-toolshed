@@ -45,7 +45,10 @@ const SERVER_NAME = 'sidequest';
 const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // The listing is loaded into every MCP session. Keep a distinct reserve for
 // protocol growth so the contributor-facing budget remains visible in tests.
-const MCP_TOOLS_LIST_MAX_BYTES = 23000;
+// Raised from 23000 for groomClose.abandonSubmission (SQ-2188): the old ceiling left 6 bytes of
+// slack, so any new property broke it. The alternative was deleting another tool's guidance to make
+// room, which costs an agent more than the ~25 tokens per session this adds.
+const MCP_TOOLS_LIST_MAX_BYTES = 23100;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {

@@ -1085,6 +1085,7 @@ const {
   verifyIntegration,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
+  recordAbandonedSubmission,
   integrateSubmission,
   closeSubmissionAsSuperseded,
   submissionOwnershipFailure,
@@ -2319,12 +2320,19 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     } catch (error) {
       return { ok: false, reason: "integration_target_unavailable", ticket, message: String(error?.message || error) };
     }
-    const deliveredSubmission = recordDeliveredSubmission(slug, idOrRef, {
-      target,
-      deliveryCommit: ticket.submission?.commit,
-      reason
-    });
-    if (!deliveredSubmission.ok) return deliveredSubmission;
+    if (opts.abandonSubmission === true) {
+      const abandoned = recordAbandonedSubmission(slug, idOrRef, { target, reason });
+      if (!abandoned.ok) return abandoned;
+    } else {
+      const deliveredSubmission = recordDeliveredSubmission(slug, idOrRef, {
+        target,
+        deliveryCommit: ticket.submission?.commit,
+        reason
+      });
+      if (!deliveredSubmission.ok) return Object.assign({}, deliveredSubmission, {
+        message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered (${deliveredSubmission.reason}).`)} If this candidate never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`). That path is refused while the candidate is still reachable from ${target?.branch || "the integration branch"}.`
+      });
+    }
   }
   const delivery = purpose === "delivery" ? recordedDelivery(slug, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
@@ -2656,6 +2664,7 @@ module.exports = {
   normalizeDeliveryMode,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
+  recordAbandonedSubmission,
   integrateSubmission,
   submissionUsesGit,
   closeSubmissionAsSuperseded,

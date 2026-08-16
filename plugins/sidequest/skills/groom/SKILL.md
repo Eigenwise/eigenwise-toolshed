@@ -123,6 +123,27 @@ sidequest add -t "Backfill retry metrics dashboard" --complexity 5 \
 sidequest link SQ-50 depends-on SQ-31
 ```
 
+### Closing a ticket that still holds a pending submission
+
+A ticket in (a), (b) or (d) may still hold a submitted candidate that was never integrated. Two
+different closures apply, and picking the wrong one gets refused rather than guessed at:
+
+```bash
+# the candidate DID land (its commit is reachable from the integration branch) — plain grooming
+# records it as delivered, no extra flag needed
+sidequest groom-close SQ-14 --reason "Candidate a1b2c3d is an ancestor of main; see the evidence comment."
+
+# the candidate never landed and no longer merges — record it abandoned, never as a delivery
+sidequest groom-close SQ-15 --abandon-submission \
+  --reason "Candidate f00dfeed forked 61 commits back, no longer merges, and main already fixed this in
+9bd41f2; see the evidence comment."
+```
+
+`--abandon-submission` is refused while the candidate is still reachable from the integration branch,
+so it cannot be used to write off work that actually shipped. Its evidence has to say why the
+candidate is dead: the fork depth, that it no longer merges, and where the behavior now comes from
+instead. "Stale" on its own is not evidence.
+
 Normalize priorities while you're in each ticket if one is obviously miscalibrated against what you now
 know (e.g. a "todo/low" ticket for something that turned out urgent, or vice versa) — but only when the
 evidence you already gathered supports the change; don't relitigate priority calls that aren't part of

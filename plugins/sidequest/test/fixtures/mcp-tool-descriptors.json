@@ -859,6 +859,9 @@
           "type": "string",
           "pattern": "^[0-9a-fA-F]{7,64}$"
         },
+        "abandonSubmission": {
+          "type": "boolean"
+        },
         "recoveryEvidence": {
           "type": "string"
         }
