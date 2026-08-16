@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.468.0 (2026-08-16)
+
+### codebase-mapper 2.15.3 → 2.15.4
+
+#### Fixes
+
+- Repair Stop-veto teardown race (SQ-2137)
+  Keep a releasing Stop lock from deleting a replacement generation.
+
+### sidequest 4.50.6 → 4.50.7
+
+#### Fixes
+
+- Reject stale shared-tree submissions (SQ-2152)
+- Stabilize exact-deadline descendant evidence (SQ-2168)
+
 ## v3.467.0 (2026-08-16)
 
 ### sidequest 4.50.5 → 4.50.6
