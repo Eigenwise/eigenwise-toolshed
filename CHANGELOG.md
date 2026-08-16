@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.467.0 (2026-08-16)
+
+### sidequest 4.50.5 → 4.50.6
+
+#### Fixes
+
+- Bind read-only review identity after target completion (SQ-2159)
+  A read-only executor whose subagent start raced its own worktree creation used to run to completion with no hook-bound runtime identity, so a finished independent review could not satisfy the candidate review gate and integration refused it. Sidequest now rebinds that identity on the executor's next board call, which every run makes to claim and to close, and only the exact reserved worktree binds. The shared checkout, a sibling or foreign target, a foreign agent, an ambiguous or terminal attempt, a replaced checkout, and a changed revision all stay unbound.
+- Preserve delayed phase exit during cleanup (SQ-2166)
+  Sidequest now keeps one phase exit from an already-started phase valid while timeout cleanup is in progress. Other post-timeout control traffic remains a protocol error.
+
 ## v3.466.2 (2026-08-16)
 
 Hotfix release cut from `main`.
