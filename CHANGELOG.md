@@ -8,6 +8,34 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.470.0 (2026-08-16)
+
+### sidequest 4.50.8 → 4.51.0
+
+#### Features
+
+- Grooming can close a submission that never landed (SQ-2188)
+  A ticket holding a submitted candidate that never reached the integration branch could not be closed at all. Grooming tried to record the candidate as delivered, which is refused because the commit is not reachable from the branch, and integration is refused because the candidate no longer merges. That left 46 tickets on one board with no legal closure, which is how a board fills up with work nobody can retire.
+
+  `groom-close` now takes `--abandon-submission` (MCP `abandonSubmission`), which records the candidate as abandoned instead of dressing it up as a delivery. The reachability test is the mirror of the delivery path's: abandonment is legal only while the candidate is absent from the integration branch, so it can never be used to write off work that actually shipped. Attempting it on a candidate that did land is refused as `candidate_already_landed` and points at the delivery closure instead.
+
+  The refusal an agent gets when a delivery closure fails now names the abandonment path and the evidence it needs, rather than leaving grooming with no move it knows about. That hint keys on whether the candidate is actually reachable from the integration branch, not on the refusal code: a stranded candidate is refused for divergence long before reachability is ever checked, and a candidate that did land can be refused for reasons abandonment would not fix, such as a pending candidate review. Keying it on the code sent one such ticket a message telling it to abandon work that had already shipped.
+
+#### Fixes
+
+- Stop the owned-process-tree gate failing on healthy code (SQ-2179)
+  Two tests in the owned-process-tree suite failed on windows-latest against code they do not exercise, four times in one day across three commits, and passed on rerun of unchanged shas. Both were measuring the runner instead of the product.
+
+  The exact-deadline race test collected all 100 descendant process ids and only probed them once the loop finished, about 50 seconds later. Windows recycles process ids aggressively, so an exited descendant's id could land on an unrelated live process by the time it was probed, which read as a leaked descendant. Each row now proves its own descendant terminal immediately, while that id still names only that descendant.
+
+  The Windows live-handle test asserted termination finished in under 20ms as a stand-in for "no helper process was spawned". That timed the CI runner's load. The mechanism is stated directly in the result instead: only the directly-owned path reports no owned group id and makes the phase process its own owner. The latency bound stays, widened to the grace window the phase was actually given, where it still catches an escalation or a spawned terminator without failing on a busy machine.
+- Grooming can close tickets whose work already shipped (SQ-2184)
+  Closing a ticket whose work was already released used to be impossible. Every control-plane path refused it: plain grooming said `pending_submission`, passing a delivery commit said `missing_release_fragment`, and both `--integration` and `integrate` said `tip_mismatch` with a bare `.` as the offending path.
+
+  Two things were wrong. The delivery-closure fragment check asked whether the release fragment still existed on disk, but the release cut deletes fragments when it consumes them, so the check was permanently false for anything already shipped. And a submission whose commit had already reached the integration branch produced an empty range, which the scope validator reported as the repo root being out of scope.
+
+  The fragment check is now split: the pre-submit gate still requires the fragment on disk, while a delivery closure only requires it in the delivery commit that added it. A submission already reachable from the integration branch is recognised as reconciled instead of refused. Grooming a ticket that still holds a pending submission now records that submission as delivered, provided the commit is reachable from the integration branch and preserves the submitted content.
+
 ## v3.469.0 (2026-08-16)
 
 ### model-gateway 0.48.7 → 0.48.8
