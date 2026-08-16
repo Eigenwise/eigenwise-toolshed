@@ -257,6 +257,14 @@ function runSupervisedPhase(options) {
       cleanupError = cleanupError === null ? message : `${cleanupError} ${message}`;
     }
 
+    function armDeadline() {
+      if (options.timeoutMilliseconds === null || deadlineTimer !== null) return;
+      deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        startTimeoutSettlement();
+      }, options.timeoutMilliseconds);
+    }
+
     function refreshOwnedGroupState() {
       if (ownedGroupId === null || ownedGroupState !== 'live') return ownedGroupState;
       try {
@@ -365,6 +373,11 @@ function runSupervisedPhase(options) {
       requestCleanup();
     }
 
+    function startTimeoutSettlement() {
+      supervisorProtocolState = supervisorProtocolState === 'running' ? 'timed-out-awaiting-phase-exit' : 'terminal';
+      requestCleanup();
+    }
+
     function hasExactFields(message, fields) {
       const messageFields = Object.keys(message).sort();
       return messageFields.length === fields.length && messageFields.every((field, index) => field === fields[index]);
@@ -403,6 +416,24 @@ function runSupervisedPhase(options) {
         failSupervisorProtocol('the message was not an object with a string type');
         return;
       }
+      if (supervisorProtocolState === 'timed-out-awaiting-phase-exit') {
+        if (message.type === 'phase-exit') {
+          if (!isPhaseExit(message)) {
+            failSupervisorProtocol('phase-exit did not contain exactly one status or signal');
+            return;
+          }
+          phaseStatus = message.status;
+          phaseSignal = message.signal;
+          startTerminalSettlement();
+          return;
+        }
+        if (message.type === 'signal-error') {
+          recordSignalError(message);
+          return;
+        }
+        failSupervisorProtocol(`timeout cleanup cannot accept ${JSON.stringify(message.type)} after phase start`);
+        return;
+      }
       if (supervisorProtocolState === 'terminal') {
         if (message.type === 'signal-error') recordSignalError(message);
         else failSupervisorProtocol(`received ${JSON.stringify(message.type)} after terminal settlement started`);
@@ -421,7 +452,9 @@ function runSupervisedPhase(options) {
           } catch (error) {
             phaseError = error instanceof Error ? error : new Error(String(error));
             startTerminalSettlement();
+            return;
           }
+          armDeadline();
           return;
         }
         if (message.type === 'phase-error') {
@@ -496,16 +529,6 @@ function runSupervisedPhase(options) {
       env: options.env,
     });
 
-    if (options.timeoutMilliseconds !== null) {
-      // A deadline is a failed phase whichever way the root behaves next, so termination
-      // starts here and escalates on its own clock. Waiting for the root's exit event to
-      // begin escalation is what let a root ignoring SIGTERM hang the gate forever.
-      deadlineTimer = setTimeout(() => {
-        timedOut = true;
-        supervisorProtocolState = 'terminal';
-        requestCleanup();
-      }, options.timeoutMilliseconds);
-    }
   });
 }
 
@@ -596,6 +619,14 @@ function runDirectlyOwnedPhase(options) {
       }, milliseconds);
     }
 
+    function armDeadline() {
+      if (options.timeoutMilliseconds === null || deadlineTimer !== null) return;
+      deadlineTimer = setTimeout(() => {
+        timedOut = true;
+        terminateOwnedTree();
+      }, options.timeoutMilliseconds);
+    }
+
     function terminateOwnedTree() {
       if (terminationRequestedAt !== null) return;
       terminationRequestedAt = performance.now();
@@ -635,16 +666,12 @@ function runDirectlyOwnedPhase(options) {
       settleWhenDrained();
     });
 
-    if (typeof child.pid === 'number') {
-      options.onPhaseStarted({ ownerPid: child.pid, ownedGroupId: null, phasePid: child.pid });
-    }
-
-    if (options.timeoutMilliseconds !== null) {
-      deadlineTimer = setTimeout(() => {
-        timedOut = true;
-        terminateOwnedTree();
-      }, options.timeoutMilliseconds);
-    }
+    child.once('spawn', () => {
+      if (typeof child.pid === 'number') {
+        options.onPhaseStarted({ ownerPid: child.pid, ownedGroupId: null, phasePid: child.pid });
+      }
+      armDeadline();
+    });
   });
 }
 

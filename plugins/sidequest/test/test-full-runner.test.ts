@@ -169,6 +169,42 @@ const rootWithSessionDetachedDescendantScript = writeScript(
     + 'descendant.unref();\n',
 );
 
+const delayedStartSupervisorScript = writeScript(
+  'delayed-start-supervisor.js',
+  `const { spawn } = require('node:child_process');
+let cleanupStarted = false;
+for (const signal of ['SIGTERM', 'SIGINT', 'SIGHUP']) process.on(signal, () => {});
+function cleanup(terminationGraceMilliseconds) {
+  if (cleanupStarted) return;
+  cleanupStarted = true;
+  process.kill(-process.pid, 'SIGTERM');
+  setTimeout(() => process.kill(-process.pid, 'SIGKILL'), terminationGraceMilliseconds);
+}
+function reportPhaseError(error) {
+  process.send({ type: 'phase-error', message: error.message, code: error.code ?? null, errno: error.errno ?? null, syscall: error.syscall ?? null, path: error.path ?? null });
+}
+function startDelayedPhase(request) {
+  setTimeout(() => {
+    if (cleanupStarted) return;
+    const phase = spawn(request.command, request.args ?? [], {
+      cwd: request.cwd ?? undefined,
+      env: request.env ?? undefined,
+      stdio: ['ignore', 'inherit', 'inherit'],
+      windowsHide: true,
+    });
+    phase.once('error', reportPhaseError);
+    phase.once('exit', (status, signal) => process.send({ type: 'phase-exit', status, signal }));
+    process.send({ type: 'phase-started', pid: phase.pid });
+  }, 600);
+}
+process.on('message', (message) => {
+  if (message?.type === 'start') startDelayedPhase(message);
+  else if (message?.type === 'cleanup') cleanup(message.terminationGraceMilliseconds ?? 300);
+});
+process.on('disconnect', () => cleanup(300));
+`,
+);
+
 interface DescendantFixture {
   args: string[];
   descendantPid: () => number;
@@ -421,6 +457,19 @@ test('malformed control data after owner exit or timeout still cannot produce a 
   assert.equal(timeoutResult.timedOut, true);
 });
 
+test('a node 22 exact-deadline control probe accepts the delayed exit of an already-started phase', () => {
+  const supervisorModulePath = writeScript(
+    'supervisor-delayed-timeout-exit.js',
+    "process.on('message', (message) => { if (message.type === 'start') process.send({ type: 'phase-started', pid: 12345 }); else if (message.type === 'cleanup') setTimeout(() => { process.send({ type: 'phase-exit', status: null, signal: 'SIGTERM' }); process.exit(0); }, 10); });\n",
+  );
+  const forcePosixOwnership = runsOnWindows ? "Object.defineProperty(process, 'platform', { value: 'linux' });" : '';
+  const probeSource = `${forcePosixOwnership}const { runOwnedPhase } = require(${JSON.stringify(runnerModulePath)}); runOwnedPhase({ command: process.execPath, args: [${JSON.stringify(helloScript)}], timeoutMilliseconds: 200, terminationGraceMilliseconds: 50, cleanupDrainMilliseconds: 100, supervisorModulePath: ${JSON.stringify(supervisorModulePath)}, forwardStdout() {}, forwardStderr() {} }).then((result) => process.stdout.write(JSON.stringify({ error: result.error?.code ?? null, status: result.status, signal: result.signal, timedOut: result.timedOut })));`;
+  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+
+  assert.equal(probe.status, 0, probe.stderr);
+  assert.deepEqual(JSON.parse(probe.stdout), { error: null, status: null, signal: 'SIGTERM', timedOut: true });
+});
+
 test('large phase output is forwarded whole while the retained tail stays bounded', async () => {
   let forwardedStdoutBytes = 0;
   let forwardedStderrBytes = 0;
@@ -522,6 +571,40 @@ test('an owned phase leaves no exit listener, timer or channel holding the event
   assert.equal(report.activeTimers, 0);
 });
 
+test('an exact deadline starts after the owner reports its phase root', { ...posixOnly, timeout: 60_000 }, async () => {
+  const sentinel = spawn(process.execPath, [sleepScript, '180000'], {
+    stdio: 'ignore',
+    detached: true,
+    windowsHide: true,
+  });
+  sentinel.unref();
+  const sentinelPid = requireProcessId(sentinel.pid, 'the unrelated sentinel');
+  const fixture = descendantFixture(2000, false, 'spin');
+  try {
+    const result = await runOwnedPhase(silently({
+      command: process.execPath,
+      args: fixture.args,
+      timeoutMilliseconds: 500,
+      terminationGraceMilliseconds: 60,
+      cleanupDrainMilliseconds: 200,
+      supervisorModulePath: delayedStartSupervisorScript,
+    }));
+
+    assert.equal(result.error, null);
+    assert.equal(result.timedOut, true);
+    assert.equal(result.cleanupError, null);
+    await assertTerminalWithin(fixture.descendantPid(), 5000, 'the delayed-start descendant');
+    assert.equal(fixture.markerWritten(), false);
+    assert.equal(classifyProcessState(sentinelPid), 'live');
+  } finally {
+    try {
+      process.kill(sentinelPid, 'SIGKILL');
+    } catch {
+      // The sentinel assertion above already reported anything worth knowing.
+    }
+  }
+});
+
 test('100 exact-deadline races leave no descendant behind and spare an unrelated process', { timeout: 300_000 }, async () => {
   const sentinel = spawn(process.execPath, [sleepScript, '180000'], {
     stdio: 'ignore',
@@ -543,6 +626,7 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
         terminationGraceMilliseconds: 60,
         cleanupDrainMilliseconds: 200,
       }));
+      assert.equal(result.error, null, `row ${row} reported ${result.error?.message}`);
       assert.equal(result.cleanupError, null, `row ${row} reported ${result.cleanupError}`);
       assert.equal(result.unexpectedSignalErrorCode, null, `row ${row} hit signal error ${result.unexpectedSignalErrorCode}`);
       rows.push({ timedOut: result.timedOut, descendantPid: fixture.descendantPid(), markerWritten: fixture.markerWritten });
