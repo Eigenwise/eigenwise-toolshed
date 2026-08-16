@@ -2769,6 +2769,101 @@ test('a read-only isolated review satisfies the candidate gate only once its boa
   }
 });
 
+test('SQ-2169: integrate records an already delivered reviewed candidate or a resolved equivalent patch', () => {
+  cleanBranch();
+  const ticket = addTicket('record delivered reviewed candidate', { files: ['README.md'] });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'submission fixture\ncandidate\n');
+  git(['add', 'README.md']);
+  git(['commit', '-m', 'recorded delivery candidate']);
+  const candidate = git(['rev-parse', 'HEAD']);
+  pin(ticket, candidate);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, 'recorded-delivery-source', {
+    direct: true,
+    reason: 'The submission fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, 'recorded-delivery-source', {
+    commit: candidate,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+  const base = git(['rev-parse', `${candidate}^`]);
+  Object.assign(submitted.submission, {
+    base,
+    upstream: 'origin/main',
+    upstreamCommit: base,
+    commits: [candidate],
+    changedPaths: ['README.md'],
+  });
+  submitted.dispatch = {
+    outcome: 'submitted',
+    terminalAt: new Date(Date.now() - 60_000).toISOString(),
+    attempts: [{ outcome: 'submitted', commit: candidate, agentId: 'recorded-delivery-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+  };
+  persist(submitted);
+
+  const originalConfig = store.boardConfig(slug);
+  try {
+    const review = dispatchedIsolatedReview('recorded delivery review', ticket.ref, candidate, 'recorded-delivery-review');
+    const candidateTarget = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+    const missingReview = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: candidateTarget,
+      deliveryCommit: candidate,
+      reason: 'Candidate commit already reached the integration branch.',
+    });
+    assert.strictEqual(missingReview.ok, false);
+    assert.strictEqual(missingReview.reason, 'candidate_review_required');
+
+    completeIsolatedReview(review, true);
+    const alreadyApplied = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target: candidateTarget,
+      deliveryCommit: candidate,
+      reason: 'Candidate commit already reached the integration branch.',
+    });
+    assert.strictEqual(alreadyApplied.ok, true, alreadyApplied.message);
+    assert.strictEqual(alreadyApplied.integration.contentEvidence, 'candidate_ancestor');
+
+    git(['checkout', '-f', '-B', `recorded-delivery-${++branchSeq}`, 'origin/main']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'submission fixture\ntarget\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'recorded delivery target']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'submission fixture\ntarget\ncandidate\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'recorded delivery resolution']);
+    const delivery = git(['rev-parse', 'HEAD']);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+    const target = store.integrationTarget(slug);
+
+    const unreachable = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target,
+      deliveryCommit: candidate,
+      reason: 'The candidate branch is not the integration branch.',
+    });
+    assert.strictEqual(unreachable.ok, false);
+    assert.strictEqual(unreachable.reason, 'delivery_not_reachable');
+
+    const recorded = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target,
+      deliveryCommit: delivery,
+      reason: 'Resolved the shared README conflict and retained both changes.',
+    });
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.integration.contentEvidence, 'equivalent_patches');
+    assert.strictEqual(recorded.integration.deliveryCommit, delivery);
+    assert.strictEqual(recorded.integration.verify.status, 'passed');
+
+    const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
+      by: 'recorded-delivery-integrator',
+      reason: recorded.integration.evidence,
+      purpose: 'integration',
+    });
+    assert.strictEqual(closed.ok, true, closed.message);
+    assert.strictEqual(closed.ticket.status, 'done');
+    assert.strictEqual(closed.ticket.submission.integration.deliveryCommit, delivery);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
 test('SQ-2152: shared-tree retries replace stale candidates while disjoint descendants remain admissible', async () => {
   git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
   cleanBranch();

@@ -42,7 +42,7 @@ const COMMAND_FLAGS = {
   "scope-request": ["by", "file", "force"],
   commit: ["by", "message"],
   rework: ["by", "review", "review-ref", "reason"],
-  integrate: ["by", "mode", "skip-verify"],
+  integrate: ["by", "mode", "delivery-commit", "reason", "skip-verify"],
   publish: ["repo", "steal", "force"],
   assign: ["to", "by"],
   unassign: [],
@@ -258,7 +258,7 @@ const HELP_COMMANDS = {
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',
   submit: 'sidequest submit <id|SQ-n> --by who (--commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] | --source-revision-source <kind> --source-revision-value <revision> --source-revision-observed-at <ISO-time> --changed-surface <path> [--no-process] [--no-worktree] [--review] --verify "attestation: ..." | --clear [-s todo]) [--body-file path] [--force]. Source revision existence and dispatch-baseline membership come only from the registered project capability.',
-  integrate: "sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply] [--skip-verify] [--json]",
+  integrate: 'sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply | --delivery-commit <sha> --reason "evidence"] [--skip-verify] [--json]',
   publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
@@ -378,6 +378,7 @@ Working the board safely (multi-agent):
     --force only lets the existing submitted candidate owner replace their own pending candidate; it never authorizes a foreign submit or rejection.
   sidequest submit <id|SQ-n> --clear [-s todo]     orchestrator reset: drop a submission after a bounced integration
   sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply]   deliver a ready Git range or immutable source revision, verify it, and close it
+    --delivery-commit <sha> --reason "evidence" records a reviewed candidate already delivered by external conflict resolution; the commit must be reachable on the integration branch, preserve the candidate content, and pass the merged-tree gate
   sidequest publish lock|unlock|status [--repo path] [--steal] [--force]   cross-process publish lock (owner pid +
     session metadata in the repo's common git dir; stale/dead holders reclaimable, --steal takes over explicitly)
   sidequest publish queue [--json]                 tickets awaiting the publish transaction, oldest first

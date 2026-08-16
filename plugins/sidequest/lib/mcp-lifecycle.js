@@ -735,6 +735,8 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         mode: { type: "string", enum: ["merge", "replay", "apply"], description: "Defaults to the board delivery setting." },
+        deliveryCommit: { type: "string", description: "Delivery commit." },
+        reason: { type: "string" },
         skipVerify: { type: "boolean" },
         session: { type: "string" }
       },
@@ -781,6 +783,26 @@ const tools = [
         message: admitted.message || `integrate: refused ${args.ref}; ${admitted.reason}.`
       });
       if (failures.length) return mutationAck(slug, combinedRefusal(ticket, failures));
+      if (args.deliveryCommit != null) {
+        const recorded = store.recordDeliveredSubmission(slug, args.ref, {
+          target,
+          deliveryCommit: args.deliveryCommit,
+          reason: args.reason,
+          skipVerify: args.skipVerify === true
+        });
+        if (!recorded.ok) return mutationAck(slug, recorded);
+        const closed2 = store.completeTicketAsControlPlane(slug, args.ref, {
+          by,
+          reason: args.reason,
+          purpose: "integration"
+        });
+        if (closed2.ok) closeDispatchExecutor(recorded.ticket);
+        return mutationAck(slug, closed2, {
+          delivery: compactIntegrationDelivery(recorded.integration),
+          verify: recorded.integration.verify,
+          ...closed2.ok ? { completion: closed2.ticket.completion } : {}
+        });
+      }
       const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
       const delivery = store.integrateSubmission(slug, args.ref, {
         mode,

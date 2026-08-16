@@ -552,6 +552,28 @@ async function cmdIntegrate(opts, positional) {
       return;
     }
   }
+  if (opts["delivery-commit"] != null) {
+    const recorded = store.recordDeliveredSubmission(slug, idOrRef, {
+      target,
+      deliveryCommit: opts["delivery-commit"],
+      reason: opts.reason,
+      skipVerify: !!opts["skip-verify"]
+    });
+    if (!recorded.ok) fail(`integrate: ${recorded.message || recorded.reason}.`);
+    const closed2 = store.completeTicketAsControlPlane(slug, idOrRef, {
+      by,
+      reason: opts.reason,
+      purpose: "integration"
+    });
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: recorded.integration, verify: recorded.integration.verify }, closed2), null, 2) + "\n");
+      if (!closed2.ok) process.exitCode = 1;
+      return;
+    }
+    if (!closed2.ok) fail(`integrate: recorded delivery for ${idOrRef}, but could not close it: ${closed2.message || closed2.reason}.`);
+    console.log(`✓ ${closed2.ticket.ref} recorded delivered commit ${recorded.integration.deliveryCommit} onto ${recorded.integration.targetBranch} — ${meta.name}`);
+    return;
+  }
   const mode = opts.mode == null ? store.boardConfig(slug).delivery : opts.mode;
   const delivery = store.integrateSubmission(slug, idOrRef, {
     mode,

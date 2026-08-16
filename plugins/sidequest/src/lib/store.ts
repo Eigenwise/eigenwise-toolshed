@@ -1013,6 +1013,7 @@ const {
   submissionUsesGit,
   verifyIntegration,
   validateIntegrationSubmission,
+  recordDeliveredSubmission,
   integrateSubmission,
   closeSubmissionAsSuperseded,
   submissionOwnershipFailure,
@@ -1868,7 +1869,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
             reason: 'pending_submission',
             ticket: t,
             submission: t.submission,
-            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. If this work already landed on the integration branch by hand, close it with \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha> --reason "why"\` instead of reopening it. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
+            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`,
           };
         }
         reopenedSubmission = t.submission;
@@ -2791,6 +2792,7 @@ module.exports = {
   integrationTarget,
   normalizeDeliveryMode,
   validateIntegrationSubmission,
+  recordDeliveredSubmission,
   integrateSubmission,
   submissionUsesGit,
   closeSubmissionAsSuperseded,

@@ -872,7 +872,7 @@
   },
   {
     "name": "release",
-    "description": "Release claim. Use kind oracle with an ask to park awaiting-oracle, then exit. The oracle handoff stays visible until a verdict is recorded.",
+    "description": "Release claim. Oracle needs an ask, then exits awaiting-oracle; oracle handoff stays until verdict.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1165,7 +1165,7 @@
   },
   {
     "name": "integrate",
-    "description": "Deliver verified work.",
+    "description": "Deliver work.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1185,6 +1185,12 @@
             "replay",
             "apply"
           ]
+        },
+        "deliveryCommit": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
         },
         "skipVerify": {
           "type": "boolean"

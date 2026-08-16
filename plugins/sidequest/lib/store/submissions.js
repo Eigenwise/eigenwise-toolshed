@@ -748,6 +748,105 @@ ${verify.outputTail}` : null
     const recorded = updateSubmissionIntegration(slug, ticket.id, integration);
     return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
   }
+  function patchIdForCommit(repo, commit) {
+    const parent = integrationGit(repo, ["rev-parse", `${commit}^`]);
+    const patch = execFileSync("git", ["diff", "--no-ext-diff", "--unified=0", parent, commit], {
+      cwd: repo,
+      encoding: "utf8",
+      windowsHide: true,
+      stdio: ["ignore", "pipe", "pipe"]
+    });
+    const result = spawnSync("git", ["patch-id", "--stable"], {
+      cwd: repo,
+      encoding: "utf8",
+      input: patch,
+      windowsHide: true,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    if (result?.status !== 0) throw new Error(String(result?.stderr || result?.error?.message || "could not calculate patch identity"));
+    const patchId = String(result.stdout || "").trim().split(/\s+/)[0] || "";
+    if (!/^[0-9a-f]{40}$/i.test(patchId)) throw new Error(`could not calculate a content identity for ${commit}`);
+    return patchId.toLowerCase();
+  }
+  function deliveryContainsSubmittedContent(repo, submission, deliveryCommit) {
+    const candidate = String(submission.commit || "").toLowerCase();
+    try {
+      integrationGit(repo, ["merge-base", "--is-ancestor", candidate, deliveryCommit]);
+      return { ok: true, evidence: "candidate_ancestor" };
+    } catch (error) {
+      if (error?.status !== 1) throw error;
+    }
+    const commonBase = integrationGit(repo, ["merge-base", candidate, deliveryCommit]);
+    const deliveredCommits = integrationGit(repo, ["rev-list", "--reverse", `${commonBase}..${deliveryCommit}`]).split(/\r?\n/).filter(Boolean);
+    const deliveredPatchIds = new Set(deliveredCommits.map((commit) => patchIdForCommit(repo, commit)));
+    const candidateCommits = Array.isArray(submission.commits) && submission.commits.length ? submission.commits : [candidate];
+    const missing = candidateCommits.filter((commit) => !deliveredPatchIds.has(patchIdForCommit(repo, String(commit))));
+    return missing.length ? { ok: false, missing } : { ok: true, evidence: "equivalent_patches" };
+  }
+  function recordDeliveredSubmission(slug, idOrRef, opts) {
+    opts = opts || {};
+    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+    if (!admitted.ok) return admitted;
+    const ticket = admitted.ticket;
+    if (!submissionUsesGit(ticket)) return { ok: false, reason: "git_delivery_required", ticket, message: `${ticket.ref} has no Git candidate to reconcile.` };
+    const reason = String(opts.reason || "").trim();
+    const requestedCommit = String(opts.deliveryCommit || "").trim();
+    if (!reason) return { ok: false, reason: "evidence_required", ticket, message: `${ticket.ref} reconciliation requires delivery evidence.` };
+    if (!SUBMISSION_COMMIT_RE.test(requestedCommit)) return { ok: false, reason: "delivery_commit_required", ticket, message: `${ticket.ref} reconciliation requires the delivery commit hash.` };
+    if (opts.skipVerify === true) return { ok: false, reason: "delivery_verify_required", ticket, message: `${ticket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
+    const repo = String(readMeta(slug)?.path || "").trim();
+    const target = opts.target;
+    if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
+    try {
+      const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
+      if (currentBranch !== target.branch) {
+        return { ok: false, reason: "branch_not_checked_out", ticket, message: `${target.branch} must be checked out before recording an external delivery; currently on ${currentBranch || "detached HEAD"}.` };
+      }
+      const deliveryCommit = integrationGit(repo, ["rev-parse", "--verify", `${requestedCommit}^{commit}`]).toLowerCase();
+      const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]).toLowerCase();
+      try {
+        integrationGit(repo, ["merge-base", "--is-ancestor", deliveryCommit, resultingHead]);
+      } catch (error) {
+        if (error?.status === 1) {
+          return { ok: false, reason: "delivery_not_reachable", ticket, message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}.` };
+        }
+        throw error;
+      }
+      const content = deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
+      if (!content.ok) {
+        return { ok: false, reason: "delivery_content_missing", ticket, missingCommits: content.missing, message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(", ")}.` };
+      }
+      const verify = verifyDeliveredSubmission(slug, ticket);
+      if (verify.status !== "passed") {
+        return integrationFailure(slug, ticket, {
+          reason: "verify_failed_recorded_delivery",
+          verify,
+          message: `${ticket.ref} merged-tree verification failed for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`
+        });
+      }
+      const recorded = updateSubmissionIntegration(slug, ticket.id, {
+        mode: "recorded",
+        pinnedRef: submissionGitRef(ticket),
+        pinnedCommit: ticket.submission.commit,
+        deliveryCommit,
+        resultingHead,
+        targetBranch: target.branch,
+        targetUpstream: target.upstream,
+        changedPaths: changedIntegrationPaths(repo, ticket.submission),
+        deliveredFiles: changedIntegrationPaths(repo, ticket.submission),
+        verify,
+        evidence: reason,
+        contentEvidence: content.evidence,
+        outcome: "verified",
+        recordedAt: (/* @__PURE__ */ new Date()).toISOString(),
+        deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
+        verifiedAt: (/* @__PURE__ */ new Date()).toISOString()
+      });
+      return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
+    } catch (error) {
+      return { ok: false, reason: "delivery_evidence_unavailable", ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
+    }
+  }
   function integrateSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
@@ -870,7 +969,7 @@ ${verify.outputTail}` : null
               message: `${message} Rollback failed: ${integrationGitError(rollbackError)}`
             });
           }
-          return integrationFailure(slug, ticket, { reason: "merge_failed", conflictedPaths, message, before });
+          return integrationFailure(slug, ticket, { reason: "merge_failed", conflictedPaths, message: `${message} If the conflict is resolved and delivered outside this integration attempt, record that exact delivery with integrate deliveryCommit and reason; it still requires the bound review and a passing merged-tree gate.`, before });
         }
       } else if (!submission.noOp) {
         for (const commit of commits) {
@@ -895,7 +994,7 @@ ${verify.outputTail}` : null
               failedCommit: commit,
               before,
               conflictedPaths,
-              message
+              message: `${message} If the conflict is resolved and delivered outside this integration attempt, record that exact delivery with integrate deliveryCommit and reason; it still requires the bound review and a passing merged-tree gate.`
             });
           }
         }
@@ -1607,6 +1706,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
 }
 module.exports = { createSubmissions };
