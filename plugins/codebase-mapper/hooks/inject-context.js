@@ -210,12 +210,17 @@ function acquireStateLock(file) {
 
 function releaseStateLock(ownerFile) {
   const lockDirectory = path.dirname(ownerFile);
+  try {
+    fs.rmSync(ownerFile, { force: true });
+  } catch (_) {
+    return;
+  }
   for (let attempt = 0; attempt < STATE_LOCK_REMOVE_RETRIES; attempt += 1) {
     try {
-      fs.rmSync(ownerFile, { force: true });
-      fs.rmSync(lockDirectory, { recursive: true, force: true });
+      fs.rmdirSync(lockDirectory);
       return;
-    } catch (_) {
+    } catch (error) {
+      if (error.code !== 'ENOTEMPTY') return;
       Atomics.wait(stateLockWaitBuffer, 0, 0, STATE_LOCK_RETRY_MS);
     }
   }

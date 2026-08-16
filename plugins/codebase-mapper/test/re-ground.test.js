@@ -527,6 +527,62 @@ test('two stale-lock cleaners cannot delete a live replacement generation', asyn
   assert.ok(results.every((result) => result.stderr === ''));
 });
 
+test('a releasing Stop lock cannot remove a replacement generation', async () => {
+  const directory = project();
+  const state = path.join(directory, 'state');
+  const sessionId = 'replacement-during-release';
+  const stateFile = path.join(state, 'stop-veto-' + crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
+  const lockDirectory = stateFile + '.lock-v2';
+  const retiredLockDirectory = lockDirectory + '.retired';
+  const releaseGate = path.join(directory, 'release.gate');
+  const releaseMarker = path.join(directory, 'release.marker');
+  const preload = path.join(directory, 'pause-release.js');
+  fs.writeFileSync(releaseGate, 'hold');
+  fs.writeFileSync(preload, [
+    "'use strict';",
+    "const fs = require('node:fs');",
+    "const path = require('node:path');",
+    'const lockDirectory = process.env.CODEBASE_MAPPER_TEST_RELEASE_LOCK_DIRECTORY;',
+    'const releaseGate = process.env.CODEBASE_MAPPER_TEST_RELEASE_GATE;',
+    'const releaseMarker = process.env.CODEBASE_MAPPER_TEST_RELEASE_MARKER;',
+    'const originalRemove = fs.rmSync;',
+    'let paused = false;',
+    'fs.rmSync = function removeWithReleasePause(file, options) {',
+    '  const result = originalRemove.call(this, file, options);',
+    "  if (!paused && path.dirname(file) === lockDirectory && path.basename(file).startsWith('owner-')) {",
+    '    paused = true;',
+    "    fs.writeFileSync(releaseMarker, process.pid + '\\n');",
+    '    while (fs.existsSync(releaseGate)) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 5);',
+    '  }',
+    '  return result;',
+    '};',
+  ].join('\n'));
+  const stop = {
+    hook_event_name: 'Stop',
+    session_id: sessionId,
+    reason: 'end_turn',
+    last_assistant_message: 'Documentation check complete. Running /codebase-mapper:update-codebase-map to update documentation.',
+  };
+
+  const pending = hookAsync(startHook, directory, state, stop, {
+    CODEBASE_MAPPER_TEST_RELEASE_LOCK_DIRECTORY: lockDirectory,
+    CODEBASE_MAPPER_TEST_RELEASE_GATE: releaseGate,
+    CODEBASE_MAPPER_TEST_RELEASE_MARKER: releaseMarker,
+    NODE_OPTIONS: `--require=${preload}`,
+  });
+  await waitForPath(releaseMarker);
+  fs.renameSync(lockDirectory, retiredLockDirectory);
+  const replacementOwner = publishStateLock(lockDirectory, process.pid);
+  fs.rmSync(releaseGate, { force: true });
+  const result = await pending;
+
+  assert.strictEqual(result.status, 0);
+  assert.strictEqual(result.stderr, '');
+  assert.strictEqual(fs.existsSync(replacementOwner), true, 'release cleanup preserves a replacement lock generation');
+  fs.rmSync(lockDirectory, { recursive: true, force: true });
+  fs.rmSync(retiredLockDirectory, { recursive: true, force: true });
+});
+
 test('prompt-less Stop responsibilities reset after the map update and warn again later', () => {
   const directory = project();
   const state = path.join(directory, 'state');
