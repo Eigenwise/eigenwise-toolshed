@@ -93,6 +93,7 @@ function createWorktreeLease(facts) {
     ...facts,
     identity: Object.freeze({ ...facts.identity }),
     liveness: Object.freeze({ ...facts.liveness }),
+    sanctionedRevisions: Object.freeze((facts.sanctionedRevisions || []).map((revision) => String(revision).toLowerCase())),
     canonicalRepository: canonicalPath(facts.repository),
     canonicalGitDirectory: canonicalPath(facts.gitDirectory),
     canonicalCommonGitDirectory: canonicalPath(facts.commonGitDirectory),
@@ -112,9 +113,18 @@ function allowed(reason) {
 function unknownIdentityDecision(operation) {
   return denied(`${operation} requires a bound worktree identity.`);
 }
+function sanctionedRevision(lease, revision) {
+  return Boolean(revision && (lease.sanctionedRevisions || []).includes(revision.toLowerCase()));
+}
+function shortRevision(revision) {
+  return String(revision || "").slice(0, 12);
+}
 function incorrectBaselineDecision(lease) {
   if (!lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision) return null;
-  return denied(`dispatch baseline ${lease.dispatchBaseline} differs from observed worktree revision ${lease.observedRevision}.`);
+  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+  return denied(
+    `this revision was not sanctioned by the board for this claim, so it reads as drift from the dispatch baseline; not a scope decision (baseline ${shortRevision(lease.dispatchBaseline)}, observed ${shortRevision(lease.observedRevision)}).`
+  );
 }
 function boundRevisionDecision(lease) {
   if (!lease.boundRevision || !lease.observedRevision || lease.boundRevision === lease.observedRevision) return null;

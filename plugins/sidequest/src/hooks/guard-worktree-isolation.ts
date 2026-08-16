@@ -54,6 +54,7 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
     commonGitDirectory: gitPath(git(['rev-parse', '--git-common-dir'])),
     dispatchRef: found?.ref || null,
     dispatchBaseline: found?.dispatchBaseline || null,
+    sanctionedRevisions: found?.sanctionedRevisions || [],
     observedRevision: git(['rev-parse', '--verify', 'HEAD^{commit}']),
     observedWorktree: worktree,
     boundRevision: found?.expectedRevision || null,
@@ -90,9 +91,15 @@ function boundedText(value: string, limit: number): string {
   return `${result}${suffix}`;
 }
 
+// A refusal stays short by capping each fact, but the cap has to leave the line that EXPLAINS the refusal
+// intact: the lease decision is a full sentence naming the cause, and truncating it once cut the sentence
+// saying scope was not the problem, which is the sentence an executor most needs (SQ-2182). Keying the cap
+// on the label beats keying it on the recovery prose, which silently changed limits when wording changed.
+const REFUSAL_FACT_LIMITS: Record<string, number> = { 'writing to': 60, 'lease decision': 240 };
+const DEFAULT_REFUSAL_FACT_LIMIT = 140;
+
 function boundedRefusal(summary: string, facts: Array<[string, string]>, recovery: string): string {
-  const detailLimit = recovery.startsWith('Use the worktree assigned') ? 140 : 100;
-  const factLines = facts.map(([label, value]) => `  ${label}: ${boundedText(value, label === 'writing to' ? 60 : detailLimit)}`);
+  const factLines = facts.map(([label, value]) => `  ${label}: ${boundedText(value, REFUSAL_FACT_LIMITS[label] ?? DEFAULT_REFUSAL_FACT_LIMIT)}`);
   return [
     `sidequest: refusing this write. ${boundedText(summary, 180)}`,
     ...factLines,
@@ -158,9 +165,16 @@ function leaseRefusal(found: IsolationExpectation | null, target: string, reason
 }
 
 function linkedWorktreeLeaseRefusal(found: IsolationExpectation, target: string, actualRoot: string, reason: string): string {
+  const expected = found.expectedWorktree || '(unavailable)';
+  // The whole refusal shares one hook byte budget, and a worktree path is the longest thing in it. When the
+  // executor IS in its assigned tree the two paths are identical, so printing both spent ~130 bytes saying
+  // nothing and pushed the lease decision, the only line naming the cause, past the budget (SQ-2182).
+  const worktreeFacts: Array<[string, string]> = found.expectedWorktree && samePath(expected, actualRoot)
+    ? [['worktree', actualRoot]]
+    : [['expected worktree', expected], ['actual worktree', actualRoot]];
   return boundedRefusal(
     `${found.ref} has no write lease for this linked worktree.`,
-    [['expected worktree', found.expectedWorktree || '(unavailable)'], ['actual worktree', actualRoot], ['writing to', target], ['lease decision', reason]],
+    [...worktreeFacts, ['writing to', target], ['lease decision', reason]],
     'Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket.',
   );
 }

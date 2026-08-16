@@ -326,6 +326,8 @@ async function cmdCommit(opts, positional) {
   }
   store.touchClaim(slug, ticket.ref, by);
   const warnings = [];
+  const sanctioned = store.recordSanctionedCommit(slug, ticket.ref, { by, commit: result.commit });
+  if (!sanctioned.ok && sanctioned.reason !== "no_dispatch") warnings.push(store.unrecordedSanctionedCommitWarning(sanctioned.reason));
   if (result.unscopedPaths.length) {
     const comment = store.addComment(slug, ticket.ref, { by, body: outOfScopeComment(result.unscopedPaths), kind: "comment", source: "cli" });
     if (!comment.ok) warnings.push(`out-of-scope paths weren't recorded: ${comment.reason}`);

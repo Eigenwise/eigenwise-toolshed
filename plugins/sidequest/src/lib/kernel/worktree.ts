@@ -14,6 +14,10 @@ export type WorktreeLeaseFacts = Readonly<{
   commonGitDirectory: string;
   dispatchRef: string | null;
   dispatchBaseline: string | null;
+  // Revisions the board itself authored for this dispatch, while its claim is still held. A commit the
+  // lifecycle sanctioned is not drift away from the baseline, so it must not revoke the lease that
+  // authorized it (SQ-2182).
+  sanctionedRevisions?: readonly string[];
   observedRevision: string | null;
   observedWorktree: string | null;
   boundRevision?: string | null;
@@ -95,6 +99,7 @@ export function createWorktreeLease(facts: WorktreeLeaseFacts): WorktreeLease {
     ...facts,
     identity: Object.freeze({ ...facts.identity }),
     liveness: Object.freeze({ ...facts.liveness }),
+    sanctionedRevisions: Object.freeze((facts.sanctionedRevisions || []).map((revision) => String(revision).toLowerCase())),
     canonicalRepository: canonicalPath(facts.repository),
     canonicalGitDirectory: canonicalPath(facts.gitDirectory),
     canonicalCommonGitDirectory: canonicalPath(facts.commonGitDirectory),
@@ -118,9 +123,30 @@ function unknownIdentityDecision(operation: string): LeaseDecision {
   return denied(`${operation} requires a bound worktree identity.`);
 }
 
+function sanctionedRevision(lease: WorktreeLease, revision: string | null): boolean {
+  return Boolean(revision && (lease.sanctionedRevisions || []).includes(revision.toLowerCase()));
+}
+
+// A refusal delivered through a hook has a hard byte budget, and full hashes are 40 bytes each of the
+// least actionable content in the sentence. Twelve is past any collision an executor will meet, and the
+// full value is one rev-parse away.
+function shortRevision(revision: string | null): string {
+  return String(revision || '').slice(0, 12);
+}
+
 function incorrectBaselineDecision(lease: WorktreeLease): LeaseDecision | null {
   if (!lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision) return null;
-  return denied(`dispatch baseline ${lease.dispatchBaseline} differs from observed worktree revision ${lease.observedRevision}.`);
+  // The board sanctioned this HEAD for this dispatch while its claim was held, so the executor's own
+  // committed work is not drift. Before this, the first sanctioned commit permanently revoked the write
+  // lease, and submit then demanded a release fragment the executor was mechanically forbidden to create
+  // (SQ-2182). Scope is named as a non-cause on purpose: the refusal read like a permission problem and
+  // sent executors to request access they already held. Both clauses lead, ahead of the hashes, because
+  // the hook budget truncates the tail and the meaning must be what survives.
+  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+  return denied(
+    'this revision was not sanctioned by the board for this claim, so it reads as drift from the dispatch baseline; '
+    + `not a scope decision (baseline ${shortRevision(lease.dispatchBaseline)}, observed ${shortRevision(lease.observedRevision)}).`,
+  );
 }
 
 function boundRevisionDecision(lease: WorktreeLease): LeaseDecision | null {

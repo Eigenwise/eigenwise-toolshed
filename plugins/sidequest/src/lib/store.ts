@@ -383,6 +383,7 @@ const {
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
   activeSharedTreeClaim,
@@ -2293,7 +2294,14 @@ function missingDeliveredReleaseFragment(repoPath?: any, ref?: any, changedPaths
 }
 
 function missingReleaseFragmentMessage(ref?: any, fragmentPath?: any, plugins?: any) {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin: any) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Create it with:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin: any) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin: any) => plugin.source).join(', ')}) but does not include ${fragmentPath}. Write the fragment, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:\n---\nref: ${ref}\ntitle: <short user-facing title>\nbump: patch\nplugins:\n${plugins.map((plugin: any) => `  - ${plugin.name}`).join('\n')}\n---\n\nDescribe the user-facing change.`;
+}
+
+// Only reachable when a dispatch exists and recording still failed. A directly-claimed ticket has no
+// dispatch and therefore no baseline for the commit to drift from, so warning there would predict a
+// refusal that cannot happen (SQ-2182).
+function unrecordedSanctionedCommitWarning(reason?: any) {
+  return `this commit was not recorded as sanctioned (${reason}), so further writes in this worktree may be refused until redispatch`;
 }
 
 function recordedDelivery(slug?: any, commit?: any, evidence?: any) {
@@ -2894,6 +2902,7 @@ module.exports = {
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -2908,6 +2917,7 @@ module.exports = {
   missingReleaseFragment,
   missingDeliveredReleaseFragment,
   missingReleaseFragmentMessage,
+  unrecordedSanctionedCommitWarning,
   clearUnclaimedDispatch,
   closeTicketForGrooming,
   makeWorkedBy,

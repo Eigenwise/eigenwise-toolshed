@@ -1401,6 +1401,28 @@ function createDispatch(dependencies) {
     const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
     return { ok: true, ticket: terminal.ticket, cleanup };
   }
+  function recordSanctionedCommit(slug, idOrRef, opts) {
+    const by = String(opts?.by || "").trim();
+    const commit = String(opts?.commit || "").trim().toLowerCase();
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    if (!by || !commit) return { ok: false, reason: "missing_sanctioned_commit_facts" };
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      const state = dispatchState(ticket);
+      if (!state) return { ok: false, reason: "no_dispatch", ticket };
+      if (ticket.claim?.by !== by) return { ok: false, reason: "not_owner", ticket };
+      const recorded = Array.isArray(state.sanctionedCommits) ? state.sanctionedCommits.map(String) : [];
+      if (!recorded.includes(commit)) recorded.push(commit);
+      state.sanctionedCommits = recorded;
+      putTicket(slug, ticket);
+      return { ok: true, ticket, sanctionedCommits: recorded };
+    });
+  }
+  function sanctionedRevisionsForLiveClaim(ticket, state) {
+    if (!ticket?.claim?.by || !Array.isArray(state?.sanctionedCommits)) return [];
+    return state.sanctionedCommits.map((commit) => String(commit).toLowerCase());
+  }
   function worktreeIdentityKey(worktree) {
     const normalized = canonicalPath(String(worktree || "")).replace(/\\/g, "/");
     return process.platform === "win32" ? normalized.toLowerCase() : normalized;
@@ -1441,6 +1463,7 @@ function createDispatch(dependencies) {
           worktreeObservedRevision: state.worktreeObservedRevision ? String(state.worktreeObservedRevision) : null,
           worktreeBindingSource: state.worktreeBindingSource ? String(state.worktreeBindingSource) : null,
           baseCommit: state.baseCommit ? String(state.baseCommit) : null,
+          sanctionedRevisions: sanctionedRevisionsForLiveClaim(ticket, state),
           phase: state.terminalAt ? "terminal" : state.outcome === "claimed" ? "claimed" : "bound"
         };
         if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
@@ -1464,6 +1487,7 @@ function createDispatch(dependencies) {
       matchedBy: matchedByAgentIdentity ? "agent" : "session",
       identityBound: Boolean(agentId && expectation.agentId === agentId),
       dispatchBaseline: expectation.baseCommit,
+      sanctionedRevisions: expectation.sanctionedRevisions,
       phase: expectation.phase,
       expectedWorktree: expectation.worktree,
       expectedGitDirectory: expectation.worktreeGitDirectory,
@@ -1817,6 +1841,7 @@ function createDispatch(dependencies) {
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
+    recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
     activeSharedTreeClaim,

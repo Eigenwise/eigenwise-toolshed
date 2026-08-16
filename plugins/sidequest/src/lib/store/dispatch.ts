@@ -1589,6 +1589,36 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
 // longer has a legal write target, and the guard must keep refusing its writes.
 // Session fallback deliberately excludes terminal no-claim dispatches so an
 // old executor cannot taint a different agent in the same session.
+// A commit the board authored for a held claim, so the write lease can tell the executor's own
+// sanctioned work from drift. Recorded rather than derived because the observed HEAD alone cannot say who
+// moved it, and the lease must keep refusing a revision this dispatch did not create (SQ-2182).
+function recordSanctionedCommit(slug?: any, idOrRef?: any, opts?: any) {
+  const by = String(opts?.by || '').trim();
+  const commit = String(opts?.commit || '').trim().toLowerCase();
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: 'not_found' };
+  if (!by || !commit) return { ok: false, reason: 'missing_sanctioned_commit_facts' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    const state = dispatchState(ticket);
+    if (!state) return { ok: false, reason: 'no_dispatch', ticket };
+    if (ticket.claim?.by !== by) return { ok: false, reason: 'not_owner', ticket };
+    const recorded: string[] = Array.isArray(state.sanctionedCommits) ? state.sanctionedCommits.map(String) : [];
+    if (!recorded.includes(commit)) recorded.push(commit);
+    state.sanctionedCommits = recorded;
+    putTicket(slug, ticket);
+    return { ok: true, ticket, sanctionedCommits: recorded };
+  });
+}
+
+// Only while the claim is still held. A released claim leaves the recorded commits in place as history,
+// and reading them through this gate is what keeps the rebind following the claim instead of widening the
+// write window for anyone who later lands in the same worktree.
+function sanctionedRevisionsForLiveClaim(ticket?: any, state?: any): string[] {
+  if (!ticket?.claim?.by || !Array.isArray(state?.sanctionedCommits)) return [];
+  return state.sanctionedCommits.map((commit: any) => String(commit).toLowerCase());
+}
+
 function worktreeIdentityKey(worktree?: any) {
   const normalized = canonicalPath(String(worktree || '')).replace(/\\/g, '/');
   return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
@@ -1637,6 +1667,7 @@ function dispatchIsolationExpectation(identity?: any) {
         worktreeObservedRevision: state.worktreeObservedRevision ? String(state.worktreeObservedRevision) : null,
         worktreeBindingSource: state.worktreeBindingSource ? String(state.worktreeBindingSource) : null,
         baseCommit: state.baseCommit ? String(state.baseCommit) : null,
+        sanctionedRevisions: sanctionedRevisionsForLiveClaim(ticket, state),
         phase: state.terminalAt ? 'terminal' : state.outcome === 'claimed' ? 'claimed' : 'bound',
       };
       if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
@@ -1661,6 +1692,7 @@ function dispatchIsolationExpectation(identity?: any) {
     matchedBy: matchedByAgentIdentity ? 'agent' : 'session',
     identityBound: Boolean(agentId && expectation.agentId === agentId),
     dispatchBaseline: expectation.baseCommit,
+    sanctionedRevisions: expectation.sanctionedRevisions,
     phase: expectation.phase,
     expectedWorktree: expectation.worktree,
     expectedGitDirectory: expectation.worktreeGitDirectory,
@@ -2057,6 +2089,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
+    recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,
     activeSharedTreeClaim,

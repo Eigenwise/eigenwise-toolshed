@@ -633,6 +633,10 @@ const tools: ToolDefinition[] = [
       }
       store.touchClaim(slug, ticket.ref, by); // committing is proof of life; keep the backstop honest
       const warnings: string[] = [];
+      // Without this the executor's own commit reads as baseline drift and revokes its write lease, so
+      // submit's release-fragment requirement becomes unsatisfiable from inside the claim (SQ-2182).
+      const sanctioned = store.recordSanctionedCommit(slug, ticket.ref, { by, commit: result.commit });
+      if (!sanctioned.ok && sanctioned.reason !== 'no_dispatch') warnings.push(store.unrecordedSanctionedCommitWarning(sanctioned.reason));
       if (result.unscopedPaths.length) {
         const comment = store.addComment(slug, ticket.ref, { by, body: outOfScopeComment(result.unscopedPaths), kind: 'comment', source: 'mcp' });
         if (!comment.ok) warnings.push(`out-of-scope paths weren't recorded: ${comment.reason}`);

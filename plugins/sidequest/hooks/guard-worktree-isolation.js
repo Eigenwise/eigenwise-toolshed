@@ -214,6 +214,7 @@ function observedWorktreeLease(found, worktree, agentId) {
     commonGitDirectory: gitPath(git(["rev-parse", "--git-common-dir"])),
     dispatchRef: found?.ref || null,
     dispatchBaseline: found?.dispatchBaseline || null,
+    sanctionedRevisions: found?.sanctionedRevisions || [],
     observedRevision: git(["rev-parse", "--verify", "HEAD^{commit}"]),
     observedWorktree: worktree,
     boundRevision: found?.expectedRevision || null,
@@ -245,9 +246,10 @@ function boundedText(value, limit) {
   }
   return `${result}${suffix}`;
 }
+var REFUSAL_FACT_LIMITS = { "writing to": 60, "lease decision": 240 };
+var DEFAULT_REFUSAL_FACT_LIMIT = 140;
 function boundedRefusal(summary, facts, recovery) {
-  const detailLimit = recovery.startsWith("Use the worktree assigned") ? 140 : 100;
-  const factLines = facts.map(([label, value]) => `  ${label}: ${boundedText(value, label === "writing to" ? 60 : detailLimit)}`);
+  const factLines = facts.map(([label, value]) => `  ${label}: ${boundedText(value, REFUSAL_FACT_LIMITS[label] ?? DEFAULT_REFUSAL_FACT_LIMIT)}`);
   return [
     `sidequest: refusing this write. ${boundedText(summary, 180)}`,
     ...factLines,
@@ -286,9 +288,11 @@ function leaseRefusal(found, target, reason) {
   );
 }
 function linkedWorktreeLeaseRefusal(found, target, actualRoot, reason) {
+  const expected = found.expectedWorktree || "(unavailable)";
+  const worktreeFacts = found.expectedWorktree && samePath(expected, actualRoot) ? [["worktree", actualRoot]] : [["expected worktree", expected], ["actual worktree", actualRoot]];
   return boundedRefusal(
     `${found.ref} has no write lease for this linked worktree.`,
-    [["expected worktree", found.expectedWorktree || "(unavailable)"], ["actual worktree", actualRoot], ["writing to", target], ["lease decision", reason]],
+    [...worktreeFacts, ["writing to", target], ["lease decision", reason]],
     "Use the worktree assigned to this executor. If it no longer exists, stop and ask the orchestrator to redispatch the ticket."
   );
 }

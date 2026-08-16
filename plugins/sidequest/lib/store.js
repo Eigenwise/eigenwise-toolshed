@@ -508,6 +508,7 @@ const {
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
   activeSharedTreeClaim,
@@ -2190,7 +2191,7 @@ function missingDeliveredReleaseFragment(repoPath, ref, changedPaths) {
   return shippedPluginsWithoutReleaseFragment(repoPath, ref, changedPaths, () => true);
 }
 function missingReleaseFragmentMessage(ref, fragmentPath, plugins) {
-  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Create it with:
+  return `submit: refused ${ref}; submitted range changes shipped plugin paths (${plugins.map((plugin) => plugin.source).join(", ")}) but does not include ${fragmentPath}. Write the fragment, then commit it, then submit again. Next time write it BEFORE your first commit so it rides along:
 ---
 ref: ${ref}
 title: <short user-facing title>
@@ -2200,6 +2201,9 @@ ${plugins.map((plugin) => `  - ${plugin.name}`).join("\n")}
 ---
 
 Describe the user-facing change.`;
+}
+function unrecordedSanctionedCommitWarning(reason) {
+  return `this commit was not recorded as sanctioned (${reason}), so further writes in this worktree may be refused until redispatch`;
 }
 function recordedDelivery(slug, commit, evidence) {
   const requestedCommit = String(commit || "").trim();
@@ -2729,6 +2733,7 @@ module.exports = {
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
   terminalDispatchTarget,
@@ -2743,6 +2748,7 @@ module.exports = {
   missingReleaseFragment,
   missingDeliveredReleaseFragment,
   missingReleaseFragmentMessage,
+  unrecordedSanctionedCommitWarning,
   clearUnclaimedDispatch,
   closeTicketForGrooming,
   makeWorkedBy,

@@ -2032,7 +2032,8 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   });
   assert.equal(refused.ok, false);
   assert.equal(refused.reason, 'missing_release_fragment');
-  assert.match(refused.message, new RegExp(`Create it with:\\n---\\nref: ${missing.ref}`));
+  assert.match(refused.message, new RegExp(`so it rides along:\\n---\\nref: ${missing.ref}`));
+  assert.match(refused.message, /Write the fragment, then commit it, then submit again\./);
   assert.doesNotMatch(refused.message, /Request scope/);
   assert.match(refused.message, /ref: .*\ntitle: <short user-facing title>\nbump: patch\nplugins:/);
   assert.ok(store.getTicket(missingProject, missing.ref).claim, 'fragment refusal keeps the claim');
@@ -2195,7 +2196,7 @@ test('MCP submit reports every independently fixable completion refusal together
     'missing_release_fragment',
   ]);
   const refusalMessages = refused.failures.map((failure: any) => failure.message).join('\n');
-  assert.match(refusalMessages, /Create it with:/);
+  assert.match(refusalMessages, /Write the fragment, then commit it, then submit again\./);
   assert.match(refusalMessages, /has not recorded a negative control/);
   assert.match(refusalMessages, /must match the declared executor verify command/);
 });
@@ -2284,7 +2285,7 @@ test('CLI submit requires release fragments for marketplace plugin changes', asy
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
   assert.notEqual(refused.status, 0);
-  assert.match(refused.stdout, new RegExp(`Create it with:\\n---\\nref: ${missing.ref}`));
+  assert.match(refused.stdout, new RegExp(`so it rides along:\\n---\\nref: ${missing.ref}`));
   assert.doesNotMatch(refused.stdout, /Request scope/);
   assert.ok(store.getTicket(missingProject, missing.ref).claim, 'CLI fragment refusal keeps the claim');
 

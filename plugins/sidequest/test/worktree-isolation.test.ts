@@ -57,12 +57,15 @@ function runHook(script: string, payload: unknown) {
   return out.trim() ? JSON.parse(out) : null;
 }
 
-function runCli(args: string[]) {
+// The commit command reads its checkout from the working directory, so a test that drives it has to say
+// which worktree it is standing in rather than inheriting the runner's.
+function runCli(args: string[], cwd?: string) {
   return execFileSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), ...args], {
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_HOME },
     windowsHide: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(cwd ? { cwd } : {}),
   }).trim();
 }
 
@@ -243,6 +246,81 @@ test('an assigned worktree at a changed dispatch revision is refused', () => {
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
     assert.match(out.hookSpecificOutput.permissionDecisionReason, /dispatch baseline/);
   } finally {
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+// SQ-2182. An executor committed through the board, verified clean, and was then told submit needed
+// `.release/unreleased/<REF>.md`. Writing it was refused because the lease still expected the dispatch
+// baseline while its own sanctioned commit had moved HEAD, so submit demanded an artifact the lifecycle
+// forbade creating. The negative control matters as much as the fix: the rebind follows the claim.
+test('SQ-2182: a sanctioned commit keeps the write lease, and losing the claim takes it away again', () => {
+  const agentId = 'a2sanctioned';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = ticket.dispatch.worktree;
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  completeCheckoutCreation(sessionId, linked);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, linked).ok, true);
+  const worker = `${agentId}-worker`;
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      token: store.getTicket(slug, ticket.ref).dispatchNonce,
+      executor,
+    }).ok, true);
+
+    fs.appendFileSync(path.join(linked, 'README.md'), 'sanctioned work\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: linked, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', 'sanctioned work'], { cwd: linked, windowsHide: true });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
+    assert.notEqual(head, ticket.dispatch.baseCommit, 'the fixture must move HEAD off the dispatch baseline');
+
+    // Before the commit is recorded, this is indistinguishable from foreign drift and stays refused.
+    const beforeRecording = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
+    assert.equal(beforeRecording.hookSpecificOutput.permissionDecision, 'deny');
+    assert.match(beforeRecording.hookSpecificOutput.permissionDecisionReason, /not sanctioned by the board for this claim/);
+    assert.match(beforeRecording.hookSpecificOutput.permissionDecisionReason, /not a scope decision/);
+
+    const wrongOwner = store.recordSanctionedCommit(slug, ticket.ref, { by: `${worker}-impostor`, commit: head });
+    assert.equal(wrongOwner.ok, false);
+    assert.equal(wrongOwner.reason, 'not_owner');
+
+    assert.equal(store.recordSanctionedCommit(slug, ticket.ref, { by: worker, commit: head }).ok, true);
+    // The whole point: the release fragment the submit gate demands is now writable from inside the claim.
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, '.release', 'unreleased', `${ticket.ref}.md`), linked)), null);
+
+    assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo' }).ok, true);
+    const afterRelease = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
+    assert.equal(afterRelease.hookSpecificOutput.permissionDecision, 'deny', 'a recorded commit must not keep granting writes once the claim is gone');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+// SQ-2182 again, one layer out. The test above proves the kernel and the store agree, but it records the
+// commit itself, so it would still pass with the recording call missing from the commit command, and that
+// missing call IS the defect. This drives the real command and then writes the file submit asks for.
+test('SQ-2182: committing through the board leaves the worktree writable', () => {
+  const agentId = 'a2boardcommit';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = ticket.dispatch.worktree;
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  completeCheckoutCreation(sessionId, linked);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, linked).ok, true);
+  const worker = `${agentId}-worker`;
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      token: store.getTicket(slug, ticket.ref).dispatchNonce,
+      executor,
+    }).ok, true);
+    fs.appendFileSync(path.join(linked, 'README.md'), 'work committed through the board\n');
+    runCli(['commit', ticket.ref, '--project', PROJECT, '--by', worker, '--message', 'work committed through the board'], linked);
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
+    assert.notEqual(head, ticket.dispatch.baseCommit, 'the board commit must move HEAD off the dispatch baseline');
+    assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.sanctionedCommits, [head.toLowerCase()]);
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, '.release', 'unreleased', `${ticket.ref}.md`), linked)), null);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
   }
 });

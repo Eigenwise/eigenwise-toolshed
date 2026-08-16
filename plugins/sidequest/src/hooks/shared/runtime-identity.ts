@@ -16,6 +16,7 @@ export interface IsolationExpectation {
   matchedBy: string;
   identityBound: boolean;
   dispatchBaseline: string | null;
+  sanctionedRevisions: readonly string[];
   phase: DispatchPhase;
   sharedTree: boolean;
   terminal: boolean;
