@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.466.2 (2026-08-16)
+
+Hotfix release cut from `main`.
+
+### sidequest 4.50.4 → 4.50.5
+
+#### Fixes
+
+- Retry identity binding after worktree completion (SQ-2153) [`6b2ddb2`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6b2ddb2c9584b054d370d0983be74cdba3981fb3)
+  Retries a worktree-isolated runtime binding only after its exact completed target is observed.
+
 ## v3.466.1 (2026-08-16)
 
 Hotfix release cut from `main`.
