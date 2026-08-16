@@ -377,6 +377,12 @@ function isAncestor(cwd, ancestor, descendant) {
     return false;
   }
 }
+function submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride) {
+  if (submission.noOp === true) return false;
+  const commit = String(submission.commit || "").trim();
+  const integrationBranch = String(integrationBranchOverride || submission.integrationBranch || submission.upstream || "").trim();
+  return Boolean(commit && integrationBranch && isAncestor(cwd, commit, integrationBranch));
+}
 function parentCommits(cwd, commit) {
   const parents = gitResult(cwd, ["rev-list", "--parents", "-n", "1", commit]);
   return parents.ok ? parents.value.trim().split(/\s+/).slice(1).filter(Boolean) : [];
@@ -560,8 +566,9 @@ function submissionRange(cwd, options) {
     return { ok: false, reason: "git_error", message: errorMessage(error) };
   }
 }
-function validateStoredSubmissionRange(cwd, submissionValue, ticketRef) {
+function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrationBranchOverride) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const candidateReachedIntegration = submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride);
   const range = submissionRange(cwd, {
     commit: submission.commit,
     gitRef: submission.gitRef,
@@ -570,7 +577,7 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef) {
     integrationBranch: submission.integrationBranch,
     base: submission.base
   });
-  const reconciliation = !range.ok && range.reason === "expected_upstream_diverged" ? submissionAlreadyOnIntegrationBranch(cwd, submission) : { reconciled: false };
+  const reconciliation = candidateReachedIntegration ? { reconciled: true } : !range.ok && range.reason === "expected_upstream_diverged" ? submissionAlreadyOnIntegrationBranch(cwd, submission) : { reconciled: false };
   if (!range.ok && !reconciliation.reconciled) {
     if (reconciliation.divergedPath) {
       return Object.assign({}, range, {

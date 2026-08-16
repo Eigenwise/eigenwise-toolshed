@@ -395,6 +395,13 @@ function isAncestor(cwd: string, ancestor: string, descendant: string): boolean 
   }
 }
 
+function submissionCommitReachedIntegrationBranch(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): boolean {
+  if (submission.noOp === true) return false;
+  const commit = String(submission.commit || '').trim();
+  const integrationBranch = String(integrationBranchOverride || submission.integrationBranch || submission.upstream || '').trim();
+  return Boolean(commit && integrationBranch && isAncestor(cwd, commit, integrationBranch));
+}
+
 function parentCommits(cwd: string, commit: string): string[] {
   const parents = gitResult(cwd, ['rev-list', '--parents', '-n', '1', commit]);
   return parents.ok ? parents.value.trim().split(/\s+/).slice(1).filter(Boolean) : [];
@@ -620,8 +627,9 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 }
 
-export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown) {
+export function validateStoredSubmissionRange(cwd: string, submissionValue: unknown, ticketRef?: unknown, integrationBranchOverride?: unknown) {
   const submission = isRecord(submissionValue) ? submissionValue : {};
+  const candidateReachedIntegration = submissionCommitReachedIntegrationBranch(cwd, submission, integrationBranchOverride);
   const range = submissionRange(cwd, {
     commit: submission.commit,
     gitRef: submission.gitRef,
@@ -630,9 +638,11 @@ export function validateStoredSubmissionRange(cwd: string, submissionValue: unkn
     integrationBranch: submission.integrationBranch,
     base: submission.base,
   });
-  const reconciliation = !range.ok && range.reason === 'expected_upstream_diverged'
-    ? submissionAlreadyOnIntegrationBranch(cwd, submission)
-    : { reconciled: false };
+  const reconciliation = candidateReachedIntegration
+    ? { reconciled: true }
+    : !range.ok && range.reason === 'expected_upstream_diverged'
+      ? submissionAlreadyOnIntegrationBranch(cwd, submission)
+      : { reconciled: false };
   if (!range.ok && !reconciliation.reconciled) {
     if (reconciliation.divergedPath) {
       return Object.assign({}, range, {

@@ -2977,4 +2977,102 @@ test('SQ-2152: shared-tree retries replace stale candidates while disjoint desce
   assert.strictEqual(store.getTicket(slug, disjointTicket.ref).submission.commit, disjointCandidate);
 });
 
+test('SQ-2184: control-plane closure recognizes released submissions and consumed fragments', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const groomingTicket = addTicket('released grooming submission', { files: ['lib/released-grooming.js'] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'released-grooming.js'), 'candidate\n');
+    git(['add', 'lib/released-grooming.js']);
+    git(['commit', '-m', 'released grooming candidate']);
+    const groomingCandidate = git(['rev-parse', 'HEAD']);
+    pin(groomingTicket, groomingCandidate);
+    assert.strictEqual(store.claimTicket(slug, groomingTicket.ref, 'released-grooming-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, groomingTicket.ref, 'released-grooming-worker', { commit: groomingCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submittedGroomingTicket = store.getTicket(slug, groomingTicket.ref);
+    Object.assign(submittedGroomingTicket.submission, {
+      base: git(['rev-parse', `${groomingCandidate}^`]),
+      upstream: integrationBranch,
+      upstreamCommit: groomingCandidate,
+      integrationBranch,
+      commits: [groomingCandidate],
+      changedPaths: ['lib/released-grooming.js'],
+    });
+    persist(submittedGroomingTicket);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'delivery-after-grooming.js'), 'delivered\n');
+    git(['add', 'lib/delivery-after-grooming.js']);
+    git(['commit', '-m', 'released grooming delivery']);
+
+    const groomed = store.completeTicketAsControlPlane(slug, groomingTicket.ref, {
+      by: 'orchestrator',
+      purpose: 'grooming',
+      reason: 'The submitted candidate is reachable from the integration branch.',
+    });
+    assert.strictEqual(groomed.ok, true, groomed.message);
+    assert.strictEqual(groomed.ticket.status, 'done');
+    assert.strictEqual(groomed.ticket.submission.integration.outcome, 'verified');
+
+    const integrationTicket = addTicket('released integration submission', { files: ['lib/released-integration.js'] });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'released-integration.js'), 'candidate\n');
+    git(['add', 'lib/released-integration.js']);
+    git(['commit', '-m', 'released integration candidate']);
+    const integrationCandidate = git(['rev-parse', 'HEAD']);
+    pin(integrationTicket, integrationCandidate);
+    assert.strictEqual(store.claimTicket(slug, integrationTicket.ref, 'released-integration-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, integrationTicket.ref, 'released-integration-worker', { commit: integrationCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submittedIntegrationTicket = store.getTicket(slug, integrationTicket.ref);
+    Object.assign(submittedIntegrationTicket.submission, {
+      base: git(['rev-parse', `${integrationCandidate}^`]),
+      upstream: integrationBranch,
+      upstreamCommit: integrationCandidate,
+      integrationBranch,
+      commits: [integrationCandidate],
+      changedPaths: ['lib/released-integration.js'],
+    });
+    persist(submittedIntegrationTicket);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'delivery-after-integration.js'), 'delivered\n');
+    git(['add', 'lib/delivery-after-integration.js']);
+    git(['commit', '-m', 'released integration delivery']);
+    pin(integrationTicket, git(['rev-parse', 'HEAD']));
+
+    const integrated = store.completeTicketAsControlPlane(slug, integrationTicket.ref, {
+      by: 'orchestrator',
+      purpose: 'integration',
+      reason: 'The submitted candidate is already an ancestor of the integration branch.',
+    });
+    assert.strictEqual(integrated.ok, true, integrated.message);
+    assert.strictEqual(integrated.ticket.status, 'done');
+
+    fs.mkdirSync(path.join(PROJECT_DIR, '.claude-plugin'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, '.claude-plugin', 'marketplace.json'), JSON.stringify({ plugins: [{ name: 'released-fixture', source: 'plugins/released-fixture' }] }));
+    git(['add', '.claude-plugin/marketplace.json']);
+    git(['commit', '-m', 'add released fixture manifest']);
+    const deliveryTicket = addTicket('released delivery fragment', { files: ['plugins/released-fixture/index.js'] });
+    const fragmentPath = `.release/unreleased/${deliveryTicket.ref}.md`;
+    fs.mkdirSync(path.join(PROJECT_DIR, 'plugins', 'released-fixture'), { recursive: true });
+    fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, fragmentPath)), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'plugins', 'released-fixture', 'index.js'), 'released\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, fragmentPath), 'fragment\n');
+    git(['add', 'plugins/released-fixture/index.js', fragmentPath]);
+    git(['commit', '-m', 'released delivery candidate']);
+    const deliveryCommit = git(['rev-parse', 'HEAD']);
+    fs.rmSync(path.join(PROJECT_DIR, fragmentPath));
+
+    const delivered = store.completeTicketAsControlPlane(slug, deliveryTicket.ref, {
+      by: 'orchestrator',
+      purpose: 'delivery',
+      deliveryCommit,
+      reason: 'The release cut consumed this ticket fragment.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    assert.strictEqual(delivered.ticket.status, 'done');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 export {};

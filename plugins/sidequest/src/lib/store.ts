@@ -1048,6 +1048,7 @@ const {
   execFileSync,
   fs,
   getTicket,
+  integrationTarget,
   listTickets,
   manualVerify,
   VERIFY_ORACLE_KINDS,
@@ -2258,7 +2259,7 @@ function linkedReviewPass(slug?: any, ticket?: any) {
 const HIGH_STAKES_REVIEW_WARNING = 'high-stakes ticket integrated without a recorded review pass. Record one with a comment starting reviewed-by: <ref>, or link a completed review-audit ticket.';
 const DELIVERY_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
 
-function missingReleaseFragment(repoPath?: any, ref?: any, changedPaths?: any) {
+function shippedPluginsWithoutReleaseFragment(repoPath?: any, ref?: any, changedPaths?: any, fragmentExists?: any) {
   const repo = String(repoPath || '').trim();
   if (!repo) return null;
   const marketplacePath = path.join(repo, '.claude-plugin', 'marketplace.json');
@@ -2275,9 +2276,18 @@ function missingReleaseFragment(repoPath?: any, ref?: any, changedPaths?: any) {
   });
   if (!shipped.length) return null;
   const fragmentPath = `.release/unreleased/${ref}.md`;
-  return changed.includes(fragmentPath) && fs.existsSync(path.join(repo, fragmentPath))
+  return changed.includes(fragmentPath) && fragmentExists(fragmentPath)
     ? null
     : { fragmentPath, plugins: shipped };
+}
+
+function missingReleaseFragment(repoPath?: any, ref?: any, changedPaths?: any) {
+  const repo = String(repoPath || '').trim();
+  return shippedPluginsWithoutReleaseFragment(repo, ref, changedPaths, (fragmentPath: string) => fs.existsSync(path.join(repo, fragmentPath)));
+}
+
+function missingDeliveredReleaseFragment(repoPath?: any, ref?: any, changedPaths?: any) {
+  return shippedPluginsWithoutReleaseFragment(repoPath, ref, changedPaths, () => true);
 }
 
 function missingReleaseFragmentMessage(ref?: any, fragmentPath?: any, plugins?: any) {
@@ -2376,7 +2386,6 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
         ticket,
       };
     }
-    if (pendingSubmission(ticket)) return { ok: false, reason: 'pending_submission', ticket };
   }
   if (purpose === 'delivery') {
     if (ticket.claim?.by || ticket.dispatchNonce || (state && !state.terminalAt)) {
@@ -2400,9 +2409,23 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
   if (!reason) return { ok: false, reason: 'evidence_required', ticket };
   const by = String(opts.by || '').trim();
   if (!by) return { ok: false, reason: 'identity_required', ticket };
+  if (purpose === 'grooming' && pendingSubmission(ticket)) {
+    let target: any;
+    try {
+      target = integrationTarget(slug);
+    } catch (error: any) {
+      return { ok: false, reason: 'integration_target_unavailable', ticket, message: String(error?.message || error) };
+    }
+    const deliveredSubmission = recordDeliveredSubmission(slug, idOrRef, {
+      target,
+      deliveryCommit: ticket.submission?.commit,
+      reason,
+    });
+    if (!deliveredSubmission.ok) return deliveredSubmission;
+  }
   const delivery = purpose === 'delivery' ? recordedDelivery(slug, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
-  const missingFragment = delivery ? missingReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || '', delivery.commit)) : null;
+  const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || '', delivery.commit)) : null;
   if (missingFragment) return {
     ok: false,
     reason: 'missing_release_fragment',
@@ -2864,6 +2887,7 @@ module.exports = {
   completeTicket,
   completeTicketAsControlPlane,
   missingReleaseFragment,
+  missingDeliveredReleaseFragment,
   missingReleaseFragmentMessage,
   clearUnclaimedDispatch,
   closeTicketForGrooming,
