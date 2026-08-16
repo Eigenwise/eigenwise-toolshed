@@ -8,6 +8,16 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.466.1 (2026-08-16)
+
+Hotfix release cut from `main`.
+
+### sidequest 4.50.3 → 4.50.4
+
+#### Fixes
+
+- Bind parent-started isolated agents to completed targets (SQ-2150) [`8cd7a22`](https://github.com/Eigenwise/eigenwise-toolshed/commit/8cd7a22d16592e3ea12f5dd2678d4a3265223d82)
+
 ## v3.466.0 (2026-08-15)
 
 ### sidequest 4.50.2 → 4.50.3
