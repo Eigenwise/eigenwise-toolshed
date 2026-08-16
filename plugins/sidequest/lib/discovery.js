@@ -35,6 +35,7 @@ __export(discovery_exports, {
   providerReadiness: () => providerReadiness
 });
 module.exports = __toCommonJS(discovery_exports);
+var import_node_child_process = require("node:child_process");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
@@ -58,6 +59,48 @@ function readJsonSafe(file) {
 }
 function isRecord(value) {
   return value !== null && typeof value === "object";
+}
+function versionParts(version) {
+  const match = typeof version === "string" && version.match(/^(\d+)\.(\d+)\.(\d+)/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+function isNewerVersion(candidate, current) {
+  for (const index of [0, 1, 2]) {
+    if (candidate[index] !== current[index]) return candidate[index] > current[index];
+  }
+  return false;
+}
+function newestGatewayCatalogCommand() {
+  if (process.env.SIDEQUEST_DISCOVERY_DIRS?.trim()) return null;
+  const registry = readJsonSafe(import_node_path.default.join(import_node_os.default.homedir(), ".claude", "plugins", "installed_plugins.json"));
+  if (!isRecord(registry) || !isRecord(registry.plugins)) return null;
+  const entries = registry.plugins["model-gateway@eigenwise-toolshed"];
+  if (!Array.isArray(entries)) return null;
+  let newest = null;
+  for (const entry of entries) {
+    if (!isRecord(entry) || typeof entry.installPath !== "string") continue;
+    const version = versionParts(entry.version);
+    const command = import_node_path.default.join(entry.installPath, "bin", "model-gateway.js");
+    if (!version || !import_node_fs.default.existsSync(command) || newest && !isNewerVersion(version, newest.version)) continue;
+    newest = { command, version };
+  }
+  return newest?.command ?? null;
+}
+function refreshGatewayCatalog() {
+  const command = newestGatewayCatalogCommand();
+  if (!command) return null;
+  try {
+    const result = (0, import_node_child_process.spawnSync)(process.execPath, [command, "catalog", "--refresh", "--json"], {
+      encoding: "utf8",
+      timeout: 5e3,
+      windowsHide: true
+    });
+    if (result.status !== 0) return null;
+    const catalog = JSON.parse(result.stdout);
+    return isRecord(catalog) ? catalog : null;
+  } catch {
+    return null;
+  }
 }
 const CATALOG_STALE_MS = 5 * 60 * 1e3;
 function usableCatalog(data, schemas) {
@@ -85,9 +128,16 @@ function catalogProviderReadiness(catalog, provider) {
 function providerReadiness(provider) {
   for (const root of discoveryRoots()) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = usableCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
-      if (!catalog) continue;
-      const readiness = catalogProviderReadiness(catalog, provider);
+      const storedCatalog = readJsonSafe(import_node_path.default.join(root, relPath));
+      let catalog = usableCatalog(storedCatalog, schemas);
+      let readiness = catalog && catalogProviderReadiness(catalog, provider);
+      if (provider === "codex" && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
+        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(), schemas);
+        if (refreshedCatalog) {
+          catalog = refreshedCatalog;
+          readiness = catalogProviderReadiness(catalog, provider);
+        }
+      }
       if (readiness) return readiness;
     }
   }

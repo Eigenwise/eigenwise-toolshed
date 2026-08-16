@@ -121,7 +121,7 @@ const USAGE = `usage: model-gateway.js <command>
   ensure [--quiet] start whatever isn't running; used by the SessionStart hook
   status           show what's running
   models           show the model list the shim advertises to Claude Code
-  catalog [--json] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
+  catalog [--json] [--refresh] print the sidequest-readable model catalog (${path.join(STATE, 'catalog.json')})
   pin [--opus|--sonnet|--fable <model|default>]
                    show or persist Claude alias pins (${PIN_OVERRIDE_PATH})
   env [--write-user | --remove] [--reconcile]
@@ -269,7 +269,7 @@ async function getCodexReadiness({
     shimRunning,
     servingVersion,
     installedVersion: PLUGIN_VERSION,
-    servingVersionMatches: shimRunning && servingVersion === PLUGIN_VERSION,
+    servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
   };
   const upstreamBlocked = readUpstreamBlocked();
   const state = readinessState(checks, upstreamBlocked);
@@ -501,6 +501,13 @@ function semverLt(a, b) {
     if (a[i] !== b[i]) return a[i] < b[i];
   }
   return false;
+}
+
+function servingVersionIsCurrentOrNewer(servingVersion, installedVersion) {
+  if (servingVersion === installedVersion) return true;
+  const serving = parseSemver(servingVersion);
+  const installed = parseSemver(installedVersion);
+  return Boolean(serving && installed && !semverLt(serving, installed));
 }
 
 // Fail-soft: read the running proxy's --version and, if it's below
@@ -1384,9 +1391,10 @@ function readCatalog() {
 
 async function catalogCommand() {
   const jsonOut = flag('--json');
+  const refresh = flag('--refresh');
   let catalog = readCatalog();
   const stale = !catalog || (Date.now() - Date.parse(catalog.updatedAt || 0) > CATALOG_STALE_MS);
-  if (stale && (await shimHealthy())) {
+  if ((refresh || stale) && (await shimHealthy())) {
     catalog = (await writeCatalog().catch(() => null)) || catalog;
   }
   if (!catalog) die('no catalog available yet (run setup or start first)');

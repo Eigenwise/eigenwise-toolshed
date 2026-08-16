@@ -102,7 +102,7 @@ async function getCodexReadiness({
     shimRunning,
     servingVersion,
     installedVersion: PLUGIN_VERSION,
-    servingVersionMatches: shimRunning && servingVersion === PLUGIN_VERSION,
+    servingVersionMatches: shimRunning && servingVersionIsCurrentOrNewer(servingVersion, PLUGIN_VERSION),
   };
   const upstreamBlocked = readUpstreamBlocked();
   const state = readinessState(checks, upstreamBlocked);
@@ -163,6 +163,17 @@ async function fetchShimHealth() {
 
 function servingShimVersion(health) {
   return health?.supervisorVersion || health?.version || null;
+}
+
+function servingVersionIsCurrentOrNewer(servingVersion, installedVersion) {
+  if (servingVersion === installedVersion) return true;
+  const serving = String(servingVersion || '').match(/(\d+)\.(\d+)\.(\d+)/);
+  const installed = String(installedVersion || '').match(/(\d+)\.(\d+)\.(\d+)/);
+  if (!serving || !installed) return false;
+  for (let index = 1; index <= 3; index++) {
+    if (serving[index] !== installed[index]) return Number(serving[index]) > Number(installed[index]);
+  }
+  return true;
 }
 
 function displayName(id, backend = 'codex') {

@@ -140,6 +140,9 @@ test('readiness reports each local failure state from an isolated home', async (
 
   const staleShim = await runReadiness(home, proxyPort, { binary: true, auth: true, version: '0.0.0' });
   assert.equal(staleShim.before.state, 'serving-version-mismatch');
+
+  const newerShim = await runReadiness(home, proxyPort, { binary: true, auth: true, version: '99.0.0' });
+  assert.equal(newerShim.before.state, 'ready');
 });
 
 test('upstream-blocked survives a health check and clears on a successful Codex request', async (t) => {

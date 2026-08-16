@@ -84,6 +84,54 @@ test('discovery reads the gateway readiness contract independently of catalog mo
   });
 });
 
+test('discovery refreshes an unready Codex catalog through the newest installed gateway', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-refresh-'));
+  const previousHome = process.env.HOME;
+  const previousUserProfile = process.env.USERPROFILE;
+  const previousDiscoveryDirs = process.env.SIDEQUEST_DISCOVERY_DIRS;
+  t.after(() => {
+    process.env.HOME = previousHome;
+    process.env.USERPROFILE = previousUserProfile;
+    process.env.SIDEQUEST_DISCOVERY_DIRS = previousDiscoveryDirs;
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  delete process.env.SIDEQUEST_DISCOVERY_DIRS;
+
+  const readyCatalog = {
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    providers: { codex: { ready: true, state: 'ready', message: 'Codex is ready.' } },
+    models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex' }],
+  };
+  const installs = ['0.48.6', '0.48.7'].map((version) => {
+    const installPath = path.join(home, 'plugins', version);
+    const command = path.join(installPath, 'bin', 'model-gateway.js');
+    const catalog = version === '0.48.7'
+      ? readyCatalog
+      : { ...readyCatalog, providers: { codex: { ready: false, state: 'serving-version-mismatch', message: 'old session' } } };
+    fs.mkdirSync(path.dirname(command), { recursive: true });
+    fs.writeFileSync(command, `process.stdout.write(${JSON.stringify(JSON.stringify(catalog))});`);
+    return { installPath, version };
+  });
+  fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'model-gateway@eigenwise-toolshed': installs },
+  }));
+  fs.mkdirSync(path.join(home, '.claude', 'model-gateway'), { recursive: true });
+  fs.writeFileSync(path.join(home, '.claude', 'model-gateway', 'catalog.json'), JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    providers: { codex: { ready: false, state: 'serving-version-mismatch', message: 'old session' } },
+    models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex' }],
+  }));
+
+  assert.deepEqual(discovery.providerReadiness('codex'), {
+    provider: 'codex', ready: true, state: 'ready', message: 'Codex is ready.',
+  });
+});
+
 test('discovery validates concrete catalog identity and drops routing hints', () => {
   writeCatalog([
     { slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', suggestedTier: 'ignored' },
