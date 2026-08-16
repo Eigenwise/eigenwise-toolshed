@@ -587,8 +587,10 @@ test('an exact deadline starts after the owner reports its phase root', { ...pos
       command: process.execPath,
       args: fixture.args,
       timeoutMilliseconds: 500,
-      terminationGraceMilliseconds: 60,
-      cleanupDrainMilliseconds: 200,
+      // Same load sensitivity as the race loop below, and the same reasoning: these bound a broken
+      // termination path, so they are deliberately generous rather than tight (SQ-2179).
+      terminationGraceMilliseconds: 400,
+      cleanupDrainMilliseconds: 600,
       supervisorModulePath: delayedStartSupervisorScript,
     }));
 
@@ -626,8 +628,13 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
         command: process.execPath,
         args: fixture.args,
         timeoutMilliseconds: deadlineMilliseconds,
-        terminationGraceMilliseconds: 60,
-        cleanupDrainMilliseconds: 200,
+        // These are the windows in which a broken termination path fails to settle, not tuned numbers.
+        // Both are timeouts rather than sleeps, so widening them costs nothing when the tree dies
+        // promptly. At 60ms and 200ms one row in a hundred on windows-latest reported its phase root
+        // still alive after 260ms, which measured runner contention and failed the gate on unchanged
+        // code, the same way the pid probe below did (SQ-2179).
+        terminationGraceMilliseconds: 400,
+        cleanupDrainMilliseconds: 600,
       }));
       assert.equal(result.error, null, `row ${row} reported ${result.error?.message}`);
       assert.equal(result.cleanupError, null, `row ${row} reported ${result.cleanupError}`);
