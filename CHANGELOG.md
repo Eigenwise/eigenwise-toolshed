@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.469.0 (2026-08-16)
+
+### model-gateway 0.48.7 → 0.48.8
+
+#### Fixes
+
+- Keep newer gateway shims ready (SQ-2178)
+  Keep active sessions routing through newer healthy gateway shims and refresh stale Codex readiness.
+
+### sidequest 4.50.7 → 4.50.8
+
+#### Fixes
+
+- Close reviewed delivered submissions (SQ-2169)
+- Keep newer gateway shims ready (SQ-2178)
+  Keep active sessions routing through newer healthy gateway shims and refresh stale Codex readiness.
+- Keep shared-checkout git available to the integrating session (SQ-2181)
+
 ## v3.468.0 (2026-08-16)
 
 ### codebase-mapper 2.15.3 → 2.15.4
