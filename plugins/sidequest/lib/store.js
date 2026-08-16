@@ -2329,9 +2329,12 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
         deliveryCommit: ticket.submission?.commit,
         reason
       });
-      if (!deliveredSubmission.ok) return Object.assign({}, deliveredSubmission, {
-        message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered (${deliveredSubmission.reason}).`)} If this candidate never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`). That path is refused while the candidate is still reachable from ${target?.branch || "the integration branch"}.`
-      });
+      if (!deliveredSubmission.ok) {
+        const landed = commitScope.submissionCommitReachedIntegrationBranch(readMeta(slug)?.path || "", ticket.submission || {}, target?.branch);
+        return landed ? deliveredSubmission : Object.assign({}, deliveredSubmission, {
+          message: `${String(deliveredSubmission.message || `${ticket.ref} submission could not be recorded as delivered.`)} Its candidate is not reachable from ${target?.branch || "the integration branch"}, so if it never landed and no longer merges, close it as an abandoned submission instead: \`sidequest groom-close ${ticket.ref} --abandon-submission --reason "<evidence it never landed>"\` (MCP \`abandonSubmission: true\`).`
+        });
+      }
     }
   }
   const delivery = purpose === "delivery" ? recordedDelivery(slug, opts.deliveryCommit, reason) : null;

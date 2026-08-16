@@ -395,7 +395,7 @@ function isAncestor(cwd: string, ancestor: string, descendant: string): boolean 
   }
 }
 
-function submissionCommitReachedIntegrationBranch(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): boolean {
+export function submissionCommitReachedIntegrationBranch(cwd: string, submission: UnknownRecord, integrationBranchOverride?: unknown): boolean {
   if (submission.noOp === true) return false;
   const commit = String(submission.commit || '').trim();
   const integrationBranch = String(integrationBranchOverride || submission.integrationBranch || submission.upstream || '').trim();

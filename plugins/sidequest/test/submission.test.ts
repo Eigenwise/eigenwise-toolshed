@@ -3105,6 +3105,9 @@ test('SQ-2188: grooming abandons a candidate that never landed and refuses to ab
     // Strand the candidate the way main really strands them: the branch goes back and moves on
     // without it, so the commit still exists but is no longer an ancestor of the branch.
     git(['reset', '--hard', branchBeforeCandidate]);
+    // The reset takes lib/ with it when the candidate created it, so this test cannot assume the
+    // directory survived; running it alone is what exposes that.
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
     fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'moved-on.js'), 'the branch moved on\n');
     git(['add', 'lib/moved-on.js']);
     git(['commit', '-m', 'branch moved past the stranded candidate']);
@@ -3164,6 +3167,20 @@ test('SQ-2188: grooming abandons a candidate that never landed and refuses to ab
     assert.strictEqual(refusedAbandon.ok, false);
     assert.strictEqual(refusedAbandon.reason, 'candidate_already_landed');
     assert.strictEqual(store.getTicket(slug, landedTicket.ref).status !== 'done', true);
+
+    // The abandonment hint on a failed delivery keys on reachability, not on the refusal code: a
+    // stranded candidate is refused for divergence before reachability is ever checked, and a
+    // candidate that did land can be refused for reasons abandonment would not fix. SQ-2153 was
+    // refused for a pending candidate review and got told to abandon a submission that had shipped.
+    const commitScope = require('../src/lib/commit-scope.js');
+    assert.strictEqual(
+      commitScope.submissionCommitReachedIntegrationBranch(PROJECT_DIR, store.getTicket(slug, landedTicket.ref).submission, integrationBranch),
+      true,
+    );
+    assert.strictEqual(
+      commitScope.submissionCommitReachedIntegrationBranch(PROJECT_DIR, submittedStranded.submission, integrationBranch),
+      false,
+    );
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
