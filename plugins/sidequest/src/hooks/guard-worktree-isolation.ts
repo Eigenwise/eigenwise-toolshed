@@ -1,34 +1,24 @@
 #!/usr/bin/env node
-import fs from 'node:fs';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
 import { runtimeModule } from './shared/paths.js';
+import {
+  bindObservedRuntimeIdentity,
+  canonicalPath,
+  enclosingCheckout,
+  executorAgent,
+  isolationExpectation,
+  type IsolationExpectation,
+} from './shared/runtime-identity.js';
 
 const leaseKernel = require(runtimeModule('kernel/worktree')) as {
-  canonicalPath: (value: string) => string;
   createWorktreeLease: (facts: unknown) => unknown;
   worktreeWriteDecision: (lease: unknown, target: string) => { allowed: boolean; reason: string };
 };
 
 const WRITE_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit']);
-
-interface IsolationExpectation {
-  ref: string;
-  projectPath: string | null;
-  expectedWorktree: string | null;
-  expectedGitDirectory: string | null;
-  expectedCommonGitDirectory: string | null;
-  expectedCheckoutInstance: string | null;
-  expectedRevision: string | null;
-  matchedBy: string;
-  identityBound: boolean;
-  dispatchBaseline: string | null;
-  phase: 'prepared' | 'created' | 'bound' | 'claimed' | 'working' | 'submitted' | 'integrated' | 'terminal';
-  sharedTree: boolean;
-  terminal: boolean;
-}
 
 function targetPath(input: Record<string, unknown>): string {
   const toolInput = input.tool_input;
@@ -36,27 +26,6 @@ function targetPath(input: Record<string, unknown>): string {
   const value = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
   const target = value == null ? '' : String(value);
   return target && path.isAbsolute(target) ? path.resolve(target) : '';
-}
-
-function canonicalPath(value: string): string {
-  return leaseKernel.canonicalPath(value);
-}
-
-function repoRootFor(target: string): { root: string; linked: boolean } | null {
-  let directory = path.dirname(canonicalPath(target));
-  for (;;) {
-    const gitEntry = path.join(directory, '.git');
-    let stats: fs.Stats | null = null;
-    try {
-      stats = fs.statSync(gitEntry);
-    } catch (_) {
-      stats = null;
-    }
-    if (stats) return { root: directory, linked: stats.isFile() };
-    const parent = path.dirname(directory);
-    if (parent === directory) return null;
-    directory = parent;
-  }
 }
 
 function samePath(a: string, b: string): boolean {
@@ -99,52 +68,6 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
   });
 }
 
-function executorAgent(type: string): boolean {
-  if (!type) return false;
-  try {
-    return require(runtimeModule('exec-names')).classify(type).kind !== 'unknown';
-  } catch (_) {
-    return /^sidequest-exec-/.test(type);
-  }
-}
-
-function expectation(input: Record<string, unknown>, agentId: string, executor: string): IsolationExpectation | null {
-  try {
-    const store = require(runtimeModule('store')) as {
-      dispatchIsolationExpectation: (identity: unknown) => IsolationExpectation | null;
-    };
-    return store.dispatchIsolationExpectation({
-      agentId,
-      executor,
-      sessionId: stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '',
-    });
-  } catch (_) {
-    return null;
-  }
-}
-
-// The refusal has to be usable by an agent that believes it is isolated: name
-// the ticket, the tree it was promised, the tree it is actually writing to, and
-// the one move that saves the work. Losing the worktree is a platform failure,
-// not executor misbehaviour, so the message must not read like an accusation.
-function retryObservedWorktreeBinding(input: Record<string, unknown>, agentId: string, executor: string, worktree: string): void {
-  try {
-    const store = require(runtimeModule('store')) as {
-      bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null, worktree: string) => unknown;
-    };
-    const sessionId = stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '';
-    if (!sessionId) return;
-    store.bindDispatchAgent(
-      sessionId,
-      executor,
-      agentId,
-      stringField(input, 'agent_name', 'agentName', 'name') || null,
-      worktree,
-    );
-  } catch (_) {
-  }
-}
-
 function expectedWorktree(found: IsolationExpectation): string {
   if (found.sharedTree && found.projectPath) return found.projectPath;
   return found.expectedWorktree || '(immutable worktree binding unavailable)';
@@ -174,6 +97,10 @@ function boundedRefusal(summary: string, facts: Array<[string, string]>, recover
   ].join('\n');
 }
 
+// The refusal has to be usable by an agent that believes it is isolated: name
+// the ticket, the tree it was promised, the tree it is actually writing to, and
+// the one move that saves the work. Losing the worktree is a platform failure,
+// not executor misbehaviour, so the message must not read like an accusation.
 function refusal(found: IsolationExpectation, target: string, repoRoot: string, cwd: string): string {
   const expected = expectedWorktree(found);
   const sharedCheckout = `${repoRoot}${cwd && !samePath(cwd, repoRoot) ? ` (cwd ${cwd})` : ''}`;
@@ -233,12 +160,12 @@ function main(): void {
 
   const target = targetPath(input);
   if (!target) return;
-  const repo = repoRootFor(target);
+  const repo = enclosingCheckout(path.dirname(canonicalPath(target)));
   if (!repo) return;
-  let found = expectation(input, agentId, executor);
+  let found = isolationExpectation(input, agentId, executor);
   if (!found?.terminal && !found?.identityBound && repo.linked) {
-    retryObservedWorktreeBinding(input, agentId, executor, repo.root);
-    found = expectation(input, agentId, executor);
+    bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
+    found = isolationExpectation(input, agentId, executor);
   }
   if (found?.terminal) {
     writeDeny('PreToolUse', terminalRefusal(found, target));

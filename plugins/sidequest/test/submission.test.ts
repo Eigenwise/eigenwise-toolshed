@@ -1,5 +1,6 @@
 import './_temp-cleanup.js';
 import './_sidequest-install-fixture.js';
+import './_hook-runtime.js';
 'use strict';
 /**
  * Tests for the ready-for-integration submission lifecycle (SQ-398).
@@ -66,7 +67,11 @@ store.setCategory({
   fallback: null,
   enabled: true,
 });
+const reviewAudit = store.getCategory('review-audit');
+store.setCategory(Object.assign({}, reviewAudit, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
+const BIND_RUNTIME_IDENTITY = path.join(__dirname, '..', 'hooks', 'bind-runtime-identity.js');
+const worktreeLease = require('../lib/kernel/worktree.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT_DIR }, { cwd: PROJECT_DIR });
 
 const COMMIT = 'abc1234def5678abc1234def5678abc1234def56';
@@ -2654,6 +2659,114 @@ test('SQ-1947: kernel refuses authentic facts bound to a different retry candida
   assert.strictEqual(mismatched.reason, 'baseline_membership_unavailable');
   assert.deepStrictEqual(store.getTicket(project, ticket.ref).submissionRetry.candidate, checkpointCandidate);
   assert.strictEqual(store.getTicket(project, ticket.ref).submission, undefined);
+});
+
+// SQ-2159. A read-only review that completed its exact candidate still failed
+// integration with candidate_review_required, because its SubagentStart raced
+// its own worktree creation and no later write ever repaired the identity the
+// gate reads out of the terminal done attempt.
+function submittedGateSource(title: string, filename: string, agentId: string) {
+  const ticket = addTicket(title);
+  const commit = createCandidateCommit(filename, `${filename} candidate\n`);
+  pin(ticket, commit);
+  assert.strictEqual(store.claimTicket(slug, ticket.ref, agentId, {
+    direct: true,
+    reason: 'The submission fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, ticket.ref, agentId, {
+    commit,
+    verify: 'node --test plugins/sidequest/test/submission.test.js',
+  }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+  submitted.dispatch = {
+    attempts: [{ outcome: 'submitted', commit, agentId, terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+  };
+  persist(submitted);
+  return { ticket: submitted, commit };
+}
+
+function dispatchedIsolatedReview(title: string, sourceRef: string, commit: string, agentId: string) {
+  const review = store.createTicket(slug, {
+    title,
+    category: 'review-audit',
+    files: [`lib/${title.replace(/\W+/g, '-')}.js`],
+    executorVerify: 'manual: read the candidate',
+  }, { ref: sourceRef, commit });
+  const sessionId = `gate-review-session-${agentId}`;
+  const prepared = store.prepareDispatch(slug, review.ref, { sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  const worktree = path.join(SIDEQUEST_HOME, 'gate-review-worktrees', agentId);
+  assert.strictEqual(store.recordDispatchLaunch(slug, review.ref, {
+    token: prepared.token,
+    executor,
+    sessionId,
+    agentName: agentId,
+  }).ok, true);
+  assert.strictEqual(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+
+  // The delivered race: the native agent starts before its worktree exists.
+  const raced = store.bindDispatchAgent(sessionId, executor, agentId, agentId, PROJECT_DIR);
+  assert.strictEqual(raced.ok, false);
+  assert.strictEqual(raced.reason, 'worktree_binding_unavailable');
+
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  const gitDirectoryValue = execFileSync('git', ['rev-parse', '--git-dir'], { cwd: worktree, encoding: 'utf8', windowsHide: true }).trim();
+  worktreeLease.createCheckoutInstanceMarker(path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue));
+  assert.strictEqual(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  return { review, sessionId, executor, agentId, worktree };
+}
+
+function completeIsolatedReview(review: { review: any; sessionId: string; executor: string; agentId: string; worktree: string }, bindThroughBoardCall: boolean) {
+  if (bindThroughBoardCall) {
+    execFileSync(process.execPath, [BIND_RUNTIME_IDENTITY], {
+      input: JSON.stringify({
+        session_id: review.sessionId,
+        agent_id: review.agentId,
+        agent_type: review.executor,
+        cwd: review.worktree,
+        tool_name: 'mcp__plugin_sidequest_board__done',
+        tool_input: { ref: review.review.ref, by: review.agentId },
+      }),
+      encoding: 'utf8',
+      env: { ...process.env, SIDEQUEST_HOME },
+      windowsHide: true,
+    });
+  }
+  const dispatched = store.getTicket(slug, review.review.ref);
+  assert.strictEqual(store.claimTicket(slug, review.review.ref, `${review.agentId}-worker`, {
+    token: dispatched.dispatchNonce,
+    executor: review.executor,
+  }).ok, true);
+  const done = store.completeTicket(slug, review.review.ref, `${review.agentId}-worker`, { model: 'sonnet', effort: 'medium' });
+  assert.strictEqual(done.ok, true, done.message);
+  return (store.getTicket(slug, review.review.ref).dispatch.attempts || []).at(-1);
+}
+
+test('a read-only isolated review satisfies the candidate gate only once its board call bound its runtime identity', () => {
+  const unrepaired = submittedGateSource('gate source without review identity', 'gate-unrepaired.js', 'gate-source-unrepaired');
+  const unrepairedReview = dispatchedIsolatedReview('gate review unrepaired', unrepaired.ticket.ref, unrepaired.commit, 'gate-review-unrepaired');
+  const unrepairedAttempt = completeIsolatedReview(unrepairedReview, false);
+  assert.strictEqual(unrepairedAttempt.outcome, 'done');
+  assert.strictEqual(unrepairedAttempt.agentId, null, 'the raced read-only review completes with no hook-bound identity');
+
+  const blocked = store.validateIntegrationSubmission(slug, unrepaired.ticket.ref, {});
+  assert.strictEqual(blocked.ok, false);
+  assert.strictEqual(blocked.reason, 'candidate_review_required');
+  assert.match(blocked.message, /do not both carry a hook-bound runtime agent identity/);
+
+  const repaired = submittedGateSource('gate source with review identity', 'gate-repaired.js', 'gate-source-repaired');
+  const repairedReview = dispatchedIsolatedReview('gate review repaired', repaired.ticket.ref, repaired.commit, 'gate-review-repaired');
+  const repairedAttempt = completeIsolatedReview(repairedReview, true);
+  assert.strictEqual(repairedAttempt.outcome, 'done');
+  assert.strictEqual(repairedAttempt.agentId, repairedReview.agentId, 'the board call bound the exact reserved runtime identity');
+
+  const accepted = store.validateIntegrationSubmission(slug, repaired.ticket.ref, {});
+  assert.notStrictEqual(accepted.reason, 'candidate_review_required', 'the identified independent review no longer blocks integration');
+
+  for (const worktree of [unrepairedReview.worktree, repairedReview.worktree]) {
+    if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT_DIR, windowsHide: true });
+  }
 });
 
 export {};

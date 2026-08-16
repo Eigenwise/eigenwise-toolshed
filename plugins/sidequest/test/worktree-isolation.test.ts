@@ -26,6 +26,7 @@ const worktreeLease = require('../lib/kernel/worktree.js');
 
 const HOOKS = path.join(__dirname, '..', 'hooks');
 const GUARD_ISOLATION = path.join(HOOKS, 'guard-worktree-isolation.js');
+const BIND_RUNTIME_IDENTITY = path.join(HOOKS, 'bind-runtime-identity.js');
 const GUARD_SHARED_CHECKOUT_GIT = path.join(HOOKS, 'guard-shared-checkout-git.js');
 const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 
@@ -97,6 +98,20 @@ function dispatched(agentId: string, options: { sharedTree?: boolean } = {}) {
   assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
   const bound = store.getTicket(slug, ticket.ref);
   return { ticket: bound, sessionId, executor: bound.dispatchExecutor };
+}
+
+// The harness reports the agent identity and the checkout it placed the agent
+// in; the ticket ref in tool_input is the executor's own claim and is never
+// read for identity.
+function boardCallPayload(agentId: string, executor: string, sessionId: string, cwd: string) {
+  return {
+    session_id: sessionId,
+    agent_id: agentId,
+    agent_type: executor,
+    cwd,
+    tool_name: 'mcp__plugin_sidequest_board__done',
+    tool_input: { ref: 'SQ-1', by: agentId },
+  };
 }
 
 function writePayload(agentId: string, executor: string, sessionId: string, filePath: string, cwd: string) {
@@ -364,6 +379,117 @@ test('a completed linked worktree write retries its exact runtime identity bindi
   } finally {
     for (const target of [first, second]) {
       store.releaseTicket(slug, target.ticket.ref, 'retry-binding-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  }
+});
+
+// SQ-2159. SQ-2153 repaired the pre-completion identity race in the declared-
+// write guard, which a read-only review never reaches: SQ-2156 completed its
+// exact review with no hook-bound identity and SQ-2137 integration still
+// refused. A read-only run always reaches the board, so its board call is where
+// the binding gets a second chance.
+test('a read-only isolated executor rebinds its exact runtime identity before its terminal done', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const sessionId = `readonly-review-session-${sequence}`;
+  const created: Array<{ ref: string; worktree: string }> = [];
+  const reserve = (name: string) => {
+    const agentId = `${name}-${sequence}`;
+    const ticket = store.createTicket(slug, {
+      title: `read-only review fixture ${agentId}`,
+      category: 'codebase-exploration',
+      description: 'A read-only review whose native agent starts before its worktree finished being created.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    const worktree = path.join(SIDEQUEST_HOME, 'readonly-review-targets', agentId);
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      sessionId,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    created.push({ ref: ticket.ref, worktree });
+    return { ticket, executor, agentId, worktree };
+  };
+  const createCheckout = (target: { worktree: string }) => {
+    fs.mkdirSync(path.dirname(target.worktree), { recursive: true });
+    execFileSync('git', ['worktree', 'add', '--detach', target.worktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(sessionId, target.worktree);
+  };
+  const boundAgent = (ref: string) => store.getTicket(slug, ref).dispatch.agentId;
+  const terminalAttempt = (ref: string) => (store.getTicket(slug, ref).dispatch.attempts || []).at(-1);
+
+  const review = reserve('readonly-review');
+  const control = reserve('readonly-control');
+  const changed = reserve('readonly-changed');
+  const replaced = reserve('readonly-replaced');
+  const terminal = reserve('readonly-terminal');
+  assert.match(review.executor, /^sidequest-exec(?:-dispatch)?-readonly-/, 'the fixture routes a read-only executor');
+
+  try {
+    // The delivered race: SubagentStart reaches the store from the parent
+    // checkout while the reserved worktree is still being created.
+    const race = store.bindDispatchAgent(sessionId, review.executor, review.agentId, review.agentId, PROJECT);
+    assert.equal(race.ok, false);
+    assert.equal(race.reason, 'worktree_binding_unavailable');
+
+    for (const target of [review, control, changed, replaced, terminal]) createCheckout(target);
+    assert.equal(boundAgent(review.ticket.ref), undefined, 'finishing the worktree rebinds nothing by itself');
+
+    assert.equal(runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(review.agentId, review.executor, sessionId, PROJECT)), null);
+    assert.equal(boundAgent(review.ticket.ref), undefined, 'a board call from the shared checkout cannot bind an isolated target');
+
+    assert.equal(runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(review.agentId, review.executor, sessionId, review.worktree)), null);
+    assert.equal(boundAgent(review.ticket.ref), review.agentId, 'the exact reserved worktree binds its own native agent');
+
+    runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(control.agentId, control.executor, sessionId, review.worktree));
+    assert.equal(boundAgent(control.ticket.ref), undefined, 'an unbound agent cannot claim a sibling worktree');
+    assert.equal(boundAgent(review.ticket.ref), review.agentId, 'the sibling attempt left the bound target alone');
+
+    runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(`foreign-${sequence}`, review.executor, sessionId, review.worktree));
+    assert.equal(boundAgent(review.ticket.ref), review.agentId, 'a foreign agent cannot inherit a bound runtime identity');
+
+    fs.appendFileSync(path.join(changed.worktree, 'README.md'), 'changed after creation\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: changed.worktree, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', 'changed after creation'], { cwd: changed.worktree, windowsHide: true });
+    runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(changed.agentId, changed.executor, sessionId, changed.worktree));
+    assert.equal(boundAgent(changed.ticket.ref), undefined, 'a worktree at a changed revision cannot bind');
+
+    execFileSync('git', ['worktree', 'remove', '--force', replaced.worktree], { cwd: PROJECT, windowsHide: true });
+    execFileSync('git', ['worktree', 'add', '--detach', replaced.worktree], { cwd: PROJECT, windowsHide: true });
+    runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(replaced.agentId, replaced.executor, sessionId, replaced.worktree));
+    assert.equal(boundAgent(replaced.ticket.ref), undefined, 'an exact-path replacement checkout cannot bind');
+
+    const terminalDispatch = store.getTicket(slug, terminal.ticket.ref);
+    assert.equal(store.claimTicket(slug, terminal.ticket.ref, `${terminal.agentId}-worker`, {
+      token: terminalDispatch.dispatchNonce,
+      executor: terminal.executor,
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, terminal.ticket.ref, `${terminal.agentId}-worker`, { status: 'todo' }).ok, true);
+    runHook(BIND_RUNTIME_IDENTITY, boardCallPayload(terminal.agentId, terminal.executor, sessionId, terminal.worktree));
+    assert.equal(boundAgent(terminal.ticket.ref), undefined, 'a terminal attempt cannot bind a runtime identity');
+
+    // The repaired identity is what the terminal done snapshots, which is the
+    // half of review provenance the integration gate reads.
+    for (const target of [review, control]) {
+      const dispatched = store.getTicket(slug, target.ticket.ref);
+      assert.equal(store.claimTicket(slug, target.ticket.ref, `${target.agentId}-worker`, {
+        token: dispatched.dispatchNonce,
+        executor: target.executor,
+      }).ok, true);
+      const done = store.completeTicket(slug, target.ticket.ref, `${target.agentId}-worker`, { model: 'sonnet', effort: 'medium' });
+      assert.equal(done.ok, true, done.message);
+    }
+    assert.equal(terminalAttempt(review.ticket.ref).outcome, 'done');
+    assert.equal(terminalAttempt(review.ticket.ref).agentId, review.agentId, 'the repaired read-only done carries its hook-bound identity');
+    assert.equal(terminalAttempt(control.ticket.ref).outcome, 'done');
+    assert.equal(terminalAttempt(control.ticket.ref).agentId, null, 'a read-only done that never reached the binding stays identity-less');
+  } finally {
+    for (const target of created) {
+      store.releaseTicket(slug, target.ref, 'readonly-review-cleanup', { status: 'todo', source: 'test', force: true });
       if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
     }
   }

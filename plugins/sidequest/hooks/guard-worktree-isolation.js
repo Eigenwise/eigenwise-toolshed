@@ -24,8 +24,7 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/guard-worktree-isolation.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path2 = __toESM(require("node:path"));
+var import_node_path3 = __toESM(require("node:path"));
 var import_node_child_process = require("node:child_process");
 
 // src/hooks/shared/input.ts
@@ -116,21 +115,26 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
-// src/hooks/guard-worktree-isolation.ts
-var leaseKernel = require(runtimeModule("kernel/worktree"));
-var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
-function targetPath(input) {
-  const toolInput = input.tool_input;
-  if (!isRecord(toolInput)) return "";
-  const value = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
-  const target = value == null ? "" : String(value);
-  return target && import_node_path2.default.isAbsolute(target) ? import_node_path2.default.resolve(target) : "";
-}
+// src/hooks/shared/runtime-identity.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_path2 = __toESM(require("node:path"));
 function canonicalPath(value) {
-  return leaseKernel.canonicalPath(value);
+  const kernel = require(runtimeModule("kernel/worktree"));
+  return kernel.canonicalPath(value);
 }
-function repoRootFor(target) {
-  let directory = import_node_path2.default.dirname(canonicalPath(target));
+function executorAgent(type) {
+  if (!type) return false;
+  try {
+    return require(runtimeModule("exec-names")).classify(type).kind !== "unknown";
+  } catch (_) {
+    return /^sidequest-exec-/.test(type);
+  }
+}
+function hookSessionId(input) {
+  return stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+}
+function enclosingCheckout(start) {
+  let directory = canonicalPath(start);
   for (; ; ) {
     const gitEntry = import_node_path2.default.join(directory, ".git");
     let stats = null;
@@ -144,6 +148,40 @@ function repoRootFor(target) {
     if (parent === directory) return null;
     directory = parent;
   }
+}
+function isolationExpectation(input, agentId, executor) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+  } catch (_) {
+    return null;
+  }
+}
+function bindObservedRuntimeIdentity(input, agentId, executor, worktree) {
+  try {
+    const store = require(runtimeModule("store"));
+    const sessionId = hookSessionId(input);
+    if (!sessionId) return;
+    store.bindDispatchAgent(
+      sessionId,
+      executor,
+      agentId,
+      stringField(input, "agent_name", "agentName", "name") || null,
+      worktree
+    );
+  } catch (_) {
+  }
+}
+
+// src/hooks/guard-worktree-isolation.ts
+var leaseKernel = require(runtimeModule("kernel/worktree"));
+var WRITE_TOOLS = /* @__PURE__ */ new Set(["Edit", "Write", "MultiEdit", "NotebookEdit"]);
+function targetPath(input) {
+  const toolInput = input.tool_input;
+  if (!isRecord(toolInput)) return "";
+  const value = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
+  const target = value == null ? "" : String(value);
+  return target && import_node_path3.default.isAbsolute(target) ? import_node_path3.default.resolve(target) : "";
 }
 function samePath(a, b) {
   const normalize = (value) => {
@@ -159,7 +197,7 @@ function observedWorktreeLease(found, worktree, agentId) {
     windowsHide: true,
     stdio: ["ignore", "pipe", "ignore"]
   }).trim();
-  const gitPath = (value) => import_node_path2.default.isAbsolute(value) ? value : import_node_path2.default.resolve(worktree, value);
+  const gitPath = (value) => import_node_path3.default.isAbsolute(value) ? value : import_node_path3.default.resolve(worktree, value);
   const repository = found?.projectPath || worktree;
   return leaseKernel.createWorktreeLease({
     repository,
@@ -180,41 +218,6 @@ function observedWorktreeLease(found, worktree, agentId) {
     liveness: found?.terminal ? { status: "terminal", evidence: "the dispatch is terminal" } : found ? { status: "live", evidence: `dispatch ${found.ref} is active` } : { status: "unknown", evidence: "no dispatch matched this agent" },
     provisioning: "host"
   });
-}
-function executorAgent(type) {
-  if (!type) return false;
-  try {
-    return require(runtimeModule("exec-names")).classify(type).kind !== "unknown";
-  } catch (_) {
-    return /^sidequest-exec-/.test(type);
-  }
-}
-function expectation(input, agentId, executor) {
-  try {
-    const store = require(runtimeModule("store"));
-    return store.dispatchIsolationExpectation({
-      agentId,
-      executor,
-      sessionId: stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || ""
-    });
-  } catch (_) {
-    return null;
-  }
-}
-function retryObservedWorktreeBinding(input, agentId, executor, worktree) {
-  try {
-    const store = require(runtimeModule("store"));
-    const sessionId = stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
-    if (!sessionId) return;
-    store.bindDispatchAgent(
-      sessionId,
-      executor,
-      agentId,
-      stringField(input, "agent_name", "agentName", "name") || null,
-      worktree
-    );
-  } catch (_) {
-  }
 }
 function expectedWorktree(found) {
   if (found.sharedTree && found.projectPath) return found.projectPath;
@@ -287,12 +290,12 @@ function main() {
   if (!agentId || !executorAgent(executor)) return;
   const target = targetPath(input);
   if (!target) return;
-  const repo = repoRootFor(target);
+  const repo = enclosingCheckout(import_node_path3.default.dirname(canonicalPath(target)));
   if (!repo) return;
-  let found = expectation(input, agentId, executor);
+  let found = isolationExpectation(input, agentId, executor);
   if (!found?.terminal && !found?.identityBound && repo.linked) {
-    retryObservedWorktreeBinding(input, agentId, executor, repo.root);
-    found = expectation(input, agentId, executor);
+    bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
+    found = isolationExpectation(input, agentId, executor);
   }
   if (found?.terminal) {
     writeDeny("PreToolUse", terminalRefusal(found, target));
