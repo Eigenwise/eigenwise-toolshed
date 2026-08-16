@@ -207,6 +207,7 @@ process.on('disconnect', () => cleanup(300));
 
 interface DescendantFixture {
   args: string[];
+  rootLifetime: number | 'spin' | `until:${number}`;
   descendantPid: () => number;
   markerWritten: () => boolean;
 }
@@ -226,6 +227,7 @@ function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boo
       ignoresTerm ? '1' : '0',
       String(rootLifetime),
     ],
+    rootLifetime,
     descendantPid: () => {
       assert.equal(fs.existsSync(descendantPidPath), true, 'the phase root never reported its descendant, so this row proves nothing');
       return Number(fs.readFileSync(descendantPidPath, 'utf8'));
@@ -618,7 +620,8 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
   try {
     for (let row = 0; row < 100; row += 1) {
       const deadlineMilliseconds = 500;
-      const fixture = descendantFixture(2000, false, `until:${Date.now() + deadlineMilliseconds}`);
+      const fixture = descendantFixture(2000, false, 'spin');
+      assert.equal(fixture.rootLifetime, 'spin', `row ${row} let its root exit before cleanup could prove descendant terminality`);
       const result = await runOwnedPhase(silently({
         command: process.execPath,
         args: fixture.args,
