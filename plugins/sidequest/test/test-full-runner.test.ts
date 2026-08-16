@@ -632,11 +632,17 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
       assert.equal(result.error, null, `row ${row} reported ${result.error?.message}`);
       assert.equal(result.cleanupError, null, `row ${row} reported ${result.cleanupError}`);
       assert.equal(result.unexpectedSignalErrorCode, null, `row ${row} hit signal error ${result.unexpectedSignalErrorCode}`);
-      rows.push({ timedOut: result.timedOut, descendantPid: fixture.descendantPid(), markerWritten: fixture.markerWritten });
+      const descendantPid = fixture.descendantPid();
+      // Prove terminality now, while this pid still unambiguously names this row's
+      // descendant. Collecting all 100 pids and probing them afterwards left a ~50s
+      // window in which the OS could recycle an exited descendant's pid onto an
+      // unrelated live process, which then read as a leaked descendant and failed the
+      // gate on unchanged code (SQ-2179).
+      await assertTerminalWithin(descendantPid, 5000, `the descendant of race row ${row}`);
+      rows.push({ timedOut: result.timedOut, descendantPid, markerWritten: fixture.markerWritten });
     }
 
     for (const [index, row] of rows.entries()) {
-      await assertTerminalWithin(row.descendantPid, 5000, `the descendant of race row ${index}`);
       assert.equal(row.markerWritten(), false, `row ${index} let its descendant act after the phase ended`);
     }
     assert.equal(rows.length, 100);
@@ -660,11 +666,19 @@ test('the Windows deadline ends the owned tree through its live handle without h
   }));
 
   assert.equal(result.timedOut, true);
+  // "Through its live handle" is a claim about which code path ran, and the result says so
+  // outright: only the directly-owned path reports no group id and makes the phase process its
+  // own owner. The supervisor path always carries a group id. Asserting that beats timing it.
   assert.equal(result.ownedGroupId, null);
   assert.equal(typeof result.ownerPid, 'number');
+  assert.equal(result.ownerPid, result.phasePid);
+  // The bound is the grace window this phase was given, not a tuned number: staying inside it
+  // means the handle close ended the tree on its own, with no escalation and no room for a
+  // spawned terminator. The old sub-20ms bound measured runner load instead, and failed on
+  // windows-latest against unchanged code (SQ-2179).
   assert.ok(
-    (result.terminationLatencyMilliseconds ?? Infinity) < 20,
-    `termination took ${result.terminationLatencyMilliseconds}ms, which is helper-process latency, not a live kernel handle`,
+    (result.terminationLatencyMilliseconds ?? Infinity) < 200,
+    `termination took ${result.terminationLatencyMilliseconds}ms, so the live handle did not end the tree within its grace window`,
   );
   assert.equal(await waitUntilTerminal(fixture.descendantPid(), 5000), 'gone');
   assert.equal(fixture.markerWritten(), false);
