@@ -127,6 +127,24 @@ function expectation(input: Record<string, unknown>, agentId: string, executor: 
 // the ticket, the tree it was promised, the tree it is actually writing to, and
 // the one move that saves the work. Losing the worktree is a platform failure,
 // not executor misbehaviour, so the message must not read like an accusation.
+function retryObservedWorktreeBinding(input: Record<string, unknown>, agentId: string, executor: string, worktree: string): void {
+  try {
+    const store = require(runtimeModule('store')) as {
+      bindDispatchAgent: (sessionId: string, executor: string, agentId: string | null, agentName: string | null, worktree: string) => unknown;
+    };
+    const sessionId = stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '';
+    if (!sessionId) return;
+    store.bindDispatchAgent(
+      sessionId,
+      executor,
+      agentId,
+      stringField(input, 'agent_name', 'agentName', 'name') || null,
+      worktree,
+    );
+  } catch (_) {
+  }
+}
+
 function expectedWorktree(found: IsolationExpectation): string {
   if (found.sharedTree && found.projectPath) return found.projectPath;
   return found.expectedWorktree || '(immutable worktree binding unavailable)';
@@ -215,13 +233,17 @@ function main(): void {
 
   const target = targetPath(input);
   if (!target) return;
-  const found = expectation(input, agentId, executor);
+  const repo = repoRootFor(target);
+  if (!repo) return;
+  let found = expectation(input, agentId, executor);
+  if (!found?.terminal && !found?.identityBound && repo.linked) {
+    retryObservedWorktreeBinding(input, agentId, executor, repo.root);
+    found = expectation(input, agentId, executor);
+  }
   if (found?.terminal) {
     writeDeny('PreToolUse', terminalRefusal(found, target));
     return;
   }
-  const repo = repoRootFor(target);
-  if (!repo) return;
   if (!found) {
     try {
       const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);

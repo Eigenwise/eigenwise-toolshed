@@ -1574,13 +1574,20 @@ function createDispatch(dependencies) {
     if (!normalizedSessionId || !normalizedExecutor || !normalizedAgentId && !normalizedAgentName) {
       return { ok: false, reason: "missing_identity" };
     }
-    const matches = [];
+    let matches = [];
     for (const project of listProjects({ all: true })) {
       for (const ticket of listTickets(project.slug)) {
         const state = dispatchState(ticket);
         if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
-        matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree });
+        matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
       }
+    }
+    if (!normalizedAgentName && normalizedWorktree) {
+      const completedWorktreeMatches = matches.filter((match) => {
+        const completed = completedWorktreeCreationFacts(match.state);
+        return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree && match.state.worktreeBindingSource === "worktree-create" && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
+      });
+      if (completedWorktreeMatches.length) matches = completedWorktreeMatches;
     }
     if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {
       return { ok: false, reason: matches.length ? "ambiguous" : "not_found" };

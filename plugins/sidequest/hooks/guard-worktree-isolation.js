@@ -201,6 +201,21 @@ function expectation(input, agentId, executor) {
     return null;
   }
 }
+function retryObservedWorktreeBinding(input, agentId, executor, worktree) {
+  try {
+    const store = require(runtimeModule("store"));
+    const sessionId = stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+    if (!sessionId) return;
+    store.bindDispatchAgent(
+      sessionId,
+      executor,
+      agentId,
+      stringField(input, "agent_name", "agentName", "name") || null,
+      worktree
+    );
+  } catch (_) {
+  }
+}
 function expectedWorktree(found) {
   if (found.sharedTree && found.projectPath) return found.projectPath;
   return found.expectedWorktree || "(immutable worktree binding unavailable)";
@@ -272,13 +287,17 @@ function main() {
   if (!agentId || !executorAgent(executor)) return;
   const target = targetPath(input);
   if (!target) return;
-  const found = expectation(input, agentId, executor);
+  const repo = repoRootFor(target);
+  if (!repo) return;
+  let found = expectation(input, agentId, executor);
+  if (!found?.terminal && !found?.identityBound && repo.linked) {
+    retryObservedWorktreeBinding(input, agentId, executor, repo.root);
+    found = expectation(input, agentId, executor);
+  }
   if (found?.terminal) {
     writeDeny("PreToolUse", terminalRefusal(found, target));
     return;
   }
-  const repo = repoRootFor(target);
-  if (!repo) return;
   if (!found) {
     try {
       const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);

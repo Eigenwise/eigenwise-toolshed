@@ -287,6 +287,88 @@ test('SubagentStart cannot mint authority for an unreserved same-repository look
   }
 });
 
+test('a completed linked worktree write retries its exact runtime identity binding', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const sessionId = `retry-session-${sequence}`;
+  const prepareTarget = (agentId: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `retry binding fixture ${agentId}`,
+      category: 'codebase-exploration',
+      description: 'A fixture whose native agent starts before its worktree is available.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    const worktree = path.join(SIDEQUEST_HOME, 'retry-binding-targets', agentId);
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      sessionId,
+      agentName: agentId,
+    }).ok, true);
+    return { ticket, executor, agentId, worktree };
+  };
+  const first = prepareTarget(`retry-first-${sequence}`);
+  const second = prepareTarget(`retry-second-${sequence}`);
+  assert.equal(first.executor, second.executor);
+
+  try {
+    for (const target of [first, second]) {
+      const initialBinding = store.bindDispatchAgent(sessionId, target.executor, target.agentId, target.agentId, target.worktree);
+      assert.equal(initialBinding.ok, false);
+      assert.equal(initialBinding.reason, 'worktree_binding_unavailable');
+      assert.equal(store.getTicket(slug, target.ticket.ref).dispatch.agentId, undefined);
+    }
+
+    for (const target of [first, second]) {
+      assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, target.worktree).ok, true);
+      fs.mkdirSync(path.dirname(target.worktree), { recursive: true });
+      execFileSync('git', ['worktree', 'add', '--detach', target.worktree], { cwd: PROJECT, windowsHide: true });
+      completeCheckoutCreation(sessionId, target.worktree);
+    }
+
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(
+      first.agentId,
+      first.executor,
+      sessionId,
+      path.join(first.worktree, 'README.md'),
+      first.worktree,
+    )), null);
+
+    const siblingWrite = runHook(GUARD_ISOLATION, writePayload(
+      first.agentId,
+      first.executor,
+      sessionId,
+      path.join(second.worktree, 'README.md'),
+      second.worktree,
+    ));
+    assert.equal(siblingWrite?.hookSpecificOutput.permissionDecision, 'deny', 'bound agent cannot use sibling worktree');
+
+    const sharedCheckoutWrite = runHook(GUARD_ISOLATION, writePayload(
+      first.agentId,
+      first.executor,
+      sessionId,
+      path.join(PROJECT, 'README.md'),
+      PROJECT,
+    ));
+    assert.equal(sharedCheckoutWrite?.hookSpecificOutput.permissionDecision, 'deny', 'bound agent cannot use shared checkout');
+
+    const foreignWrite = runHook(GUARD_ISOLATION, writePayload(
+      `foreign-${sequence}`,
+      first.executor,
+      sessionId,
+      path.join(first.worktree, 'README.md'),
+      first.worktree,
+    ));
+    assert.equal(foreignWrite?.hookSpecificOutput.permissionDecision, 'deny', 'foreign agent cannot inherit runtime binding');
+  } finally {
+    for (const target of [first, second]) {
+      store.releaseTicket(slug, target.ticket.ref, 'retry-binding-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  }
+});
+
 test('parent-checkout SubagentStart binds each completed isolated target to its reserved native agent', () => {
   const created: Array<{ ref: string; worktree: string }> = [];
   const sequence = `${process.pid}-${Date.now()}`;
