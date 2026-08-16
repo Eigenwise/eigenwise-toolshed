@@ -8,6 +8,33 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.471.0 (2026-08-17)
+
+### sidequest 4.51.0 → 4.52.0
+
+#### Features
+
+- Concurrent dispatches from one session no longer collapse into no dispatch at all (SQ-2189)
+  Two write executors launched from the same orchestrator session were both refused their FIRST edit, inside their own isolated worktree, and told they had no dispatch record for a shared-checkout write. Both correctly followed the recovery text and ended themselves, so write dispatch was unusable on that board for the rest of the session.
+
+  The cause is that a dispatch record carries the session id and the executor name, and a fan-out gives every sibling the same pair. `dispatchIsolationExpectation` resolved a set of two candidates to no match at all, exactly as if the board had never heard of the executor. A dispatch that ran alone in the same session bound its runtime identity and wrote fine, which is why this only showed up under concurrency.
+
+  The observed checkout now breaks the tie. Callers pass the worktree they are acting in, and a candidate set is narrowed to the dispatch that reserved that path, which can only ever pick from candidates that already matched on session and executor. The same evidence now also disambiguates runtime identity binding, where it had been used only when no agent name was supplied at all: a completed creation target is a reserved path unique to one dispatch, so it outranks a name, and gating it on a missing name left a named bind ambiguous whenever a sibling had no recorded name to filter against.
+
+  Two things about the refusal itself:
+
+  - A write confined to the agent's own linked worktree is no longer called a shared-checkout write. That classification pointed every reader at the wrong fault while the real one, an unresolvable dispatch identity, went unnamed.
+  - The refusal now carries what the board actually saw: how many live dispatch records matched the session, the session and executor together, the agent id, and the observed worktree. Every cause of an unresolved identity used to produce the same sentence, and the hook payload that separates them is gone by the time anyone investigates.
+
+#### Fixes
+
+- Exact-deadline race rows no longer measure runner load (SQ-2191)
+  The 100-row exact-deadline race test failed on windows-latest against unchanged production code: one row reported its phase root still alive 260ms after termination started, which is the sum of a 60ms termination grace and a 200ms cleanup drain. On a contended runner that window is not long enough to reap a spinning phase root every time.
+
+  Both values are timeouts rather than sleeps, so a wider window costs nothing when the tree dies promptly and only changes what counts as a broken termination path. Raised to 400ms and 600ms. The combined window stays well under the descendant fixture's own 2000ms lifetime, which is what keeps the assertion honest: a descendant that self-exits instead of being terminated is still caught.
+
+  Same class as the pid-recycling failure in the same test: a tuned millisecond bound measuring the runner instead of the behavior under test.
+
 ## v3.470.0 (2026-08-16)
 
 ### sidequest 4.50.8 → 4.51.0
