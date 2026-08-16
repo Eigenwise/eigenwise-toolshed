@@ -91,10 +91,10 @@ function enclosingCheckout(start) {
     directory = parent;
   }
 }
-function isolationExpectation(input, agentId, executor, includeSessionFallback = true) {
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true, observedWorktree = "") {
   try {
     const store = require(runtimeModule("store"));
-    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
     return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
   } catch (_) {
     return null;
@@ -127,7 +127,7 @@ function main() {
   if (!cwd) return;
   const checkout = enclosingCheckout(cwd);
   if (!checkout?.linked) return;
-  const found = isolationExpectation(input, agentId, executor);
+  const found = isolationExpectation(input, agentId, executor, true, checkout.root);
   if (found?.terminal || found?.identityBound) return;
   bindObservedRuntimeIdentity(input, agentId, executor, checkout.root);
 }

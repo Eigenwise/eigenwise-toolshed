@@ -1401,10 +1401,24 @@ function createDispatch(dependencies) {
     const cleanup = reclaimUnclaimedDispatchWorktree(meta.path, dispatchState(terminal.ticket));
     return { ok: true, ticket: terminal.ticket, cleanup };
   }
+  function worktreeIdentityKey(worktree) {
+    const normalized = canonicalPath(String(worktree || "")).replace(/\\/g, "/");
+    return process.platform === "win32" ? normalized.toLowerCase() : normalized;
+  }
+  function dispatchesForObservedWorktree(candidates, observedWorktree) {
+    if (candidates.length <= 1 || !observedWorktree) return candidates;
+    const observed = worktreeIdentityKey(observedWorktree);
+    return candidates.filter((candidate) => {
+      if (!candidate.worktree) return false;
+      const expected = worktreeIdentityKey(candidate.worktree);
+      return observed === expected || observed.startsWith(`${expected}/`);
+    });
+  }
   function dispatchIsolationExpectation(identity) {
     const sessionId = String(identity?.sessionId || "").trim();
     const executor = String(identity?.executor || "").trim();
     const agentId = String(identity?.agentId || "").trim();
+    const observedWorktree = String(identity?.observedWorktree || "").trim();
     if (!agentId && !(sessionId && executor)) return null;
     const byAgent = [];
     const bySession = [];
@@ -1435,7 +1449,10 @@ function createDispatch(dependencies) {
         }
       }
     }
-    const matched = byAgent.length === 1 ? byAgent : bySession.length === 1 ? bySession : [];
+    const agentMatches = dispatchesForObservedWorktree(byAgent, observedWorktree);
+    const sessionMatches = dispatchesForObservedWorktree(bySession, observedWorktree);
+    const matchedByAgentIdentity = agentMatches.length === 1;
+    const matched = matchedByAgentIdentity ? agentMatches : sessionMatches.length === 1 ? sessionMatches : [];
     if (!matched.length) return null;
     const expectation = matched[0];
     return {
@@ -1444,7 +1461,7 @@ function createDispatch(dependencies) {
       projectPath: expectation.projectPath,
       sharedTree: matched.some((candidate) => candidate.sharedTree),
       terminal: matched.some((candidate) => candidate.terminal),
-      matchedBy: byAgent.length ? "agent" : "session",
+      matchedBy: matchedByAgentIdentity ? "agent" : "session",
       identityBound: Boolean(agentId && expectation.agentId === agentId),
       dispatchBaseline: expectation.baseCommit,
       phase: expectation.phase,
@@ -1455,6 +1472,28 @@ function createDispatch(dependencies) {
       expectedRevision: expectation.worktreeObservedRevision,
       worktreeBindingSource: expectation.worktreeBindingSource
     };
+  }
+  function dispatchIdentityDiagnosis(identity) {
+    const sessionId = String(identity?.sessionId || "").trim();
+    const executor = String(identity?.executor || "").trim();
+    const agentId = String(identity?.agentId || "").trim();
+    const observedWorktree = String(identity?.observedWorktree || "").trim();
+    const observed = observedWorktree ? worktreeIdentityKey(observedWorktree) : "";
+    const counts = { live: 0, session: 0, sessionExecutor: 0, agent: 0, worktree: 0 };
+    for (const project of listProjects({ all: true })) {
+      for (const ticket of listTickets(project.slug)) {
+        const state = dispatchState(ticket);
+        if (!state || state.terminalAt && !ticket.claim?.by || !["launched", "claimed"].includes(state.outcome)) continue;
+        counts.live += 1;
+        if (sessionId && state.sessionId === sessionId) {
+          counts.session += 1;
+          if (executor && state.executor === executor) counts.sessionExecutor += 1;
+        }
+        if (agentId && state.agentId && String(state.agentId) === agentId) counts.agent += 1;
+        if (observed && state.worktree && worktreeIdentityKey(state.worktree) === observed) counts.worktree += 1;
+      }
+    }
+    return counts;
   }
   function dispatchWorkspace(slug, ticket) {
     const state = dispatchState(ticket);
@@ -1582,7 +1621,7 @@ function createDispatch(dependencies) {
         matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
       }
     }
-    if (!normalizedAgentName && normalizedWorktree) {
+    if (normalizedWorktree) {
       const completedWorktreeMatches = matches.filter((match) => {
         const completed = completedWorktreeCreationFacts(match.state);
         return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree && match.state.worktreeBindingSource === "worktree-create" && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
@@ -1776,6 +1815,7 @@ function createDispatch(dependencies) {
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
     recoverDispatchWorktreeCreation,
+    dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchWorkspace,
     dispatchDelta,

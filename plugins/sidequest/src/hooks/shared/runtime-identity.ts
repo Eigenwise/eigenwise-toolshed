@@ -64,13 +64,37 @@ export function enclosingCheckout(start: string): CheckoutLocation | null {
   }
 }
 
-export function isolationExpectation(input: HookInput, agentId: string, executor: string, includeSessionFallback = true): IsolationExpectation | null {
+// `observedWorktree` is the checkout the caller is about to act in. It is only a tiebreaker: when one
+// session dispatches two executors, both records carry the same session id and executor name, and
+// without it the store reports two candidates and resolves to nothing at all (SQ-2189).
+export function isolationExpectation(input: HookInput, agentId: string, executor: string, includeSessionFallback = true, observedWorktree = ''): IsolationExpectation | null {
   try {
     const store = require(runtimeModule('store')) as {
       dispatchIsolationExpectation: (identity: unknown) => IsolationExpectation | null;
     };
-    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
     return agentId && !includeSessionFallback && found?.matchedBy === 'session' ? null : found;
+  } catch (_) {
+    return null;
+  }
+}
+
+export interface IdentityDiagnosis {
+  live: number;
+  session: number;
+  sessionExecutor: number;
+  agent: number;
+  worktree: number;
+}
+
+// What the store saw when it could not resolve the caller, so a refusal can say which key failed instead
+// of leaving every reader to re-derive it from dispatch records that are terminal by then (SQ-2189).
+export function identityDiagnosis(input: HookInput, agentId: string, executor: string, observedWorktree: string): IdentityDiagnosis | null {
+  try {
+    const store = require(runtimeModule('store')) as {
+      dispatchIdentityDiagnosis: (identity: unknown) => IdentityDiagnosis;
+    };
+    return store.dispatchIdentityDiagnosis({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
   } catch (_) {
     return null;
   }

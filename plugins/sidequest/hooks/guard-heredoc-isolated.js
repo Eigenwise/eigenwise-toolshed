@@ -160,7 +160,8 @@ function dispatchedInWorktree(input) {
     const found = store.dispatchIsolationExpectation({
       agentId: stringField(input, "agent_id", "agentId"),
       executor: stringField(input, "agent_type", "agentType", "subagent_type"),
-      sessionId: stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || ""
+      sessionId: stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "",
+      observedWorktree: stringField(input, "cwd") || process.cwd()
     });
     return found?.sharedTree === false;
   } catch (_) {

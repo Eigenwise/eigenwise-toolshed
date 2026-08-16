@@ -27,7 +27,7 @@ function main(): void {
   const checkout = enclosingCheckout(cwd);
   if (!checkout?.linked) return;
 
-  const found = isolationExpectation(input, agentId, executor);
+  const found = isolationExpectation(input, agentId, executor, true, checkout.root);
   if (found?.terminal || found?.identityBound) return;
   bindObservedRuntimeIdentity(input, agentId, executor, checkout.root);
 }

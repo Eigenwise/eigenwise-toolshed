@@ -495,6 +495,92 @@ test('a read-only isolated executor rebinds its exact runtime identity before it
   }
 });
 
+// SQ-2189. A fan-out of two write executors from one orchestrator session gives both dispatches the same
+// session id and the same executor name, so session matching alone reported two candidates and the store
+// resolved that to no dispatch at all. Both executors were then refused their FIRST edit, inside their own
+// isolated worktree, and told they had no dispatch record for a shared-checkout write.
+test('SQ-2189: concurrent dispatches from one session each resolve to the worktree its write lands in', () => {
+  const created: Array<{ ref: string; worktree: string }> = [];
+  const sequence = `${process.pid}-${Date.now()}`;
+  const sessionId = `sq2189-session-${sequence}`;
+  const dispatchInto = (label: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `concurrent fan-out fixture ${label}`,
+      category: 'codebase-exploration',
+      description: 'One of two dispatches launched from a single orchestrator session.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    const agentName = `sq2189-${label}-${sequence}`;
+    const worktree = path.join(SIDEQUEST_HOME, 'sq2189-targets', `${label}-${sequence}`);
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      sessionId,
+      agentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(sessionId, worktree);
+    created.push({ ref: ticket.ref, worktree });
+    return { ticket, executor, agentName, worktree };
+  };
+
+  try {
+    const first = dispatchInto('first');
+    const second = dispatchInto('second');
+    assert.equal(first.executor, second.executor, 'the fixture only reproduces SQ-2189 while both dispatches share an executor name');
+
+    // What the store saw before the fix: session matching alone cannot separate them.
+    assert.equal(store.dispatchIsolationExpectation({ sessionId, executor: first.executor }), null);
+    for (const target of [first, second]) {
+      const expectation = store.dispatchIsolationExpectation({
+        sessionId,
+        executor: target.executor,
+        observedWorktree: target.worktree,
+      });
+      assert.equal(expectation?.ref, target.ticket.ref);
+      assert.equal(expectation.expectedWorktree, worktrees.canonicalPath(target.worktree));
+    }
+
+    // The harness agent id is never the one the board recorded, so each executor arrives unbound. The
+    // guard must still let it write inside its own worktree, and must still refuse the other's.
+    for (const target of [first, second]) {
+      const agentId = `a2189${target.agentName.replace(/[^a-z0-9]/g, '')}`;
+      const other = target === first ? second : first;
+      const ownWrite = writePayload(agentId, target.executor, sessionId, path.join(target.worktree, 'README.md'), target.worktree);
+      Object.assign(ownWrite, { agent_name: target.agentName });
+      assert.equal(runHook(GUARD_ISOLATION, ownWrite), null, `${target.ticket.ref} was refused a write inside its own worktree`);
+      const foreignWrite = writePayload(agentId, target.executor, sessionId, path.join(other.worktree, 'README.md'), other.worktree);
+      Object.assign(foreignWrite, { agent_name: target.agentName });
+      assert.equal(runHook(GUARD_ISOLATION, foreignWrite).hookSpecificOutput.permissionDecision, 'deny');
+    }
+
+    // An identity that genuinely resolves to nothing still gets refused, but the refusal has to name the
+    // checkout it observed and carry the counts that separate a wrong session id from an unbound agent.
+    const stray = runHook(GUARD_ISOLATION, writePayload(
+      'a2189stray',
+      first.executor,
+      `sq2189-unrecorded-session-${sequence}`,
+      path.join(first.worktree, 'README.md'),
+      first.worktree,
+    ));
+    assert.equal(stray.hookSpecificOutput.permissionDecision, 'deny');
+    const strayReason = stray.hookSpecificOutput.permissionDecisionReason;
+    assert.match(strayReason, /isolated worktree/);
+    assert.ok(!/shared-checkout write/.test(strayReason), `a write inside a linked worktree was called a shared-checkout write: ${strayReason}`);
+    assert.match(strayReason, /session 0, session\+executor 0/);
+    assert.match(strayReason, /worktree 1/);
+  } finally {
+    for (const target of created) {
+      store.releaseTicket(slug, target.ref, 'sq2189-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  }
+});
+
 test('parent-checkout SubagentStart binds each completed isolated target to its reserved native agent', () => {
   const created: Array<{ ref: string; worktree: string }> = [];
   const sequence = `${process.pid}-${Date.now()}`;

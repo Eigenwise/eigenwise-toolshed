@@ -9,7 +9,10 @@ import {
   canonicalPath,
   enclosingCheckout,
   executorAgent,
+  identityDiagnosis,
   isolationExpectation,
+  type CheckoutLocation,
+  type IdentityDiagnosis,
   type IsolationExpectation,
 } from './shared/runtime-identity.js';
 
@@ -119,11 +122,22 @@ function terminalRefusal(found: IsolationExpectation, target: string): string {
   );
 }
 
-function unknownRefusal(target: string): string {
+// Which checkout the write landed in changes what went wrong. In the shared tree it means an executor
+// writing somewhere it was never sent. Inside a linked worktree it means the board cannot resolve a run
+// that IS where it belongs, and calling that a shared-checkout write pointed every reader at the wrong
+// fault while the real one, an unresolvable dispatch identity, went unnamed (SQ-2189).
+function unknownRefusal(target: string, repo: CheckoutLocation, diagnosis: IdentityDiagnosis | null): string {
+  // Terse on purpose: the fact lines are byte-capped, and a prose version of these five counts is long
+  // enough that the last and most diagnostic of them gets truncated away.
+  const matches = diagnosis
+    ? `live ${diagnosis.live}, session ${diagnosis.session}, session+executor ${diagnosis.sessionExecutor}, agent id ${diagnosis.agent}, worktree ${diagnosis.worktree}`
+    : '(unavailable)';
   return boundedRefusal(
-    'This executor has no active dispatch record for a shared-checkout write.',
-    [['writing to', target]],
-    'Do not work around this. Stop any owned background tasks and end the executor. Redispatch before making more changes.',
+    repo.linked
+      ? 'This executor is in an isolated worktree the board cannot match to any dispatch record, so it holds no write authority here.'
+      : 'This executor has no active dispatch record for a shared-checkout write.',
+    [['writing to', target], [repo.linked ? 'isolated worktree' : 'shared checkout', repo.root], ['dispatch records', matches]],
+    'Do not work around this. Stop any owned background tasks and end the executor. Report these dispatch-record counts to the orchestrator so it can tell an unbound identity from a wrong one, and redispatch before making more changes.',
   );
 }
 
@@ -162,10 +176,10 @@ function main(): void {
   if (!target) return;
   const repo = enclosingCheckout(path.dirname(canonicalPath(target)));
   if (!repo) return;
-  let found = isolationExpectation(input, agentId, executor);
+  let found = isolationExpectation(input, agentId, executor, true, repo.root);
   if (!found?.terminal && !found?.identityBound && repo.linked) {
     bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
-    found = isolationExpectation(input, agentId, executor);
+    found = isolationExpectation(input, agentId, executor, true, repo.root);
   }
   if (found?.terminal) {
     writeDeny('PreToolUse', terminalRefusal(found, target));
@@ -174,9 +188,9 @@ function main(): void {
   if (!found) {
     try {
       const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);
-      if (!decision.allowed) writeDeny('PreToolUse', unknownRefusal(target));
+      if (!decision.allowed) writeDeny('PreToolUse', unknownRefusal(target, repo, identityDiagnosis(input, agentId, executor, repo.root)));
     } catch (_) {
-      writeDeny('PreToolUse', unknownRefusal(target));
+      writeDeny('PreToolUse', unknownRefusal(target, repo, identityDiagnosis(input, agentId, executor, repo.root)));
     }
     return;
   }

@@ -149,11 +149,19 @@ function enclosingCheckout(start) {
     directory = parent;
   }
 }
-function isolationExpectation(input, agentId, executor, includeSessionFallback = true) {
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true, observedWorktree = "") {
   try {
     const store = require(runtimeModule("store"));
-    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
     return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
+  } catch (_) {
+    return null;
+  }
+}
+function identityDiagnosis(input, agentId, executor, observedWorktree) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.dispatchIdentityDiagnosis({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
   } catch (_) {
     return null;
   }
@@ -262,11 +270,12 @@ function terminalRefusal(found, target) {
     "Do not work around this or re-arm any Monitor. Stop owned background tasks and end this executor. Redispatch the ticket if more work is needed."
   );
 }
-function unknownRefusal(target) {
+function unknownRefusal(target, repo, diagnosis) {
+  const matches = diagnosis ? `live ${diagnosis.live}, session ${diagnosis.session}, session+executor ${diagnosis.sessionExecutor}, agent id ${diagnosis.agent}, worktree ${diagnosis.worktree}` : "(unavailable)";
   return boundedRefusal(
-    "This executor has no active dispatch record for a shared-checkout write.",
-    [["writing to", target]],
-    "Do not work around this. Stop any owned background tasks and end the executor. Redispatch before making more changes."
+    repo.linked ? "This executor is in an isolated worktree the board cannot match to any dispatch record, so it holds no write authority here." : "This executor has no active dispatch record for a shared-checkout write.",
+    [["writing to", target], [repo.linked ? "isolated worktree" : "shared checkout", repo.root], ["dispatch records", matches]],
+    "Do not work around this. Stop any owned background tasks and end the executor. Report these dispatch-record counts to the orchestrator so it can tell an unbound identity from a wrong one, and redispatch before making more changes."
   );
 }
 function leaseRefusal(found, target, reason) {
@@ -293,10 +302,10 @@ function main() {
   if (!target) return;
   const repo = enclosingCheckout(import_node_path3.default.dirname(canonicalPath(target)));
   if (!repo) return;
-  let found = isolationExpectation(input, agentId, executor);
+  let found = isolationExpectation(input, agentId, executor, true, repo.root);
   if (!found?.terminal && !found?.identityBound && repo.linked) {
     bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
-    found = isolationExpectation(input, agentId, executor);
+    found = isolationExpectation(input, agentId, executor, true, repo.root);
   }
   if (found?.terminal) {
     writeDeny("PreToolUse", terminalRefusal(found, target));
@@ -305,9 +314,9 @@ function main() {
   if (!found) {
     try {
       const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);
-      if (!decision.allowed) writeDeny("PreToolUse", unknownRefusal(target));
+      if (!decision.allowed) writeDeny("PreToolUse", unknownRefusal(target, repo, identityDiagnosis(input, agentId, executor, repo.root)));
     } catch (_) {
-      writeDeny("PreToolUse", unknownRefusal(target));
+      writeDeny("PreToolUse", unknownRefusal(target, repo, identityDiagnosis(input, agentId, executor, repo.root)));
     }
     return;
   }

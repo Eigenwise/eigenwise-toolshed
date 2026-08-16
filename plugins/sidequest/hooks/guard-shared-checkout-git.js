@@ -132,10 +132,10 @@ function executorAgent(type) {
 function hookSessionId(input) {
   return stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
 }
-function isolationExpectation(input, agentId, executor, includeSessionFallback = true) {
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true, observedWorktree = "") {
   try {
     const store = require(runtimeModule("store"));
-    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input), observedWorktree });
     return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
   } catch (_) {
     return null;

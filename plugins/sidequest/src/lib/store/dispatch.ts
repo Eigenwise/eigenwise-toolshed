@@ -1589,10 +1589,32 @@ function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?:
 // longer has a legal write target, and the guard must keep refusing its writes.
 // Session fallback deliberately excludes terminal no-claim dispatches so an
 // old executor cannot taint a different agent in the same session.
+function worktreeIdentityKey(worktree?: any) {
+  const normalized = canonicalPath(String(worktree || '')).replace(/\\/g, '/');
+  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+}
+
+// Two dispatches in one session share a session id and an executor name, so session matching alone
+// reports both and the caller cannot tell them apart. Their worktrees are distinct, and the guard
+// already knows which checkout the write landed in, so the observed worktree names exactly one of
+// them. This can only ever narrow an already-matched set, never widen it (SQ-2189).
+function dispatchesForObservedWorktree(candidates: any[], observedWorktree: string) {
+  if (candidates.length <= 1 || !observedWorktree) return candidates;
+  const observed = worktreeIdentityKey(observedWorktree);
+  return candidates.filter((candidate) => {
+    if (!candidate.worktree) return false;
+    const expected = worktreeIdentityKey(candidate.worktree);
+    // Callers observe a checkout root, but some only know a working directory somewhere inside it, so a
+    // path under the worktree still names that dispatch and nothing else.
+    return observed === expected || observed.startsWith(`${expected}/`);
+  });
+}
+
 function dispatchIsolationExpectation(identity?: any) {
   const sessionId = String(identity?.sessionId || '').trim();
   const executor = String(identity?.executor || '').trim();
   const agentId = String(identity?.agentId || '').trim();
+  const observedWorktree = String(identity?.observedWorktree || '').trim();
   if (!agentId && !(sessionId && executor)) return null;
   const byAgent: any[] = [];
   const bySession: any[] = [];
@@ -1624,7 +1646,10 @@ function dispatchIsolationExpectation(identity?: any) {
       }
     }
   }
-  const matched = byAgent.length === 1 ? byAgent : bySession.length === 1 ? bySession : [];
+  const agentMatches = dispatchesForObservedWorktree(byAgent, observedWorktree);
+  const sessionMatches = dispatchesForObservedWorktree(bySession, observedWorktree);
+  const matchedByAgentIdentity = agentMatches.length === 1;
+  const matched = matchedByAgentIdentity ? agentMatches : sessionMatches.length === 1 ? sessionMatches : [];
   if (!matched.length) return null;
   const expectation = matched[0];
   return {
@@ -1633,7 +1658,7 @@ function dispatchIsolationExpectation(identity?: any) {
     projectPath: expectation.projectPath,
     sharedTree: matched.some((candidate) => candidate.sharedTree),
     terminal: matched.some((candidate) => candidate.terminal),
-    matchedBy: byAgent.length ? 'agent' : 'session',
+    matchedBy: matchedByAgentIdentity ? 'agent' : 'session',
     identityBound: Boolean(agentId && expectation.agentId === agentId),
     dispatchBaseline: expectation.baseCommit,
     phase: expectation.phase,
@@ -1644,6 +1669,34 @@ function dispatchIsolationExpectation(identity?: any) {
     expectedRevision: expectation.worktreeObservedRevision,
     worktreeBindingSource: expectation.worktreeBindingSource,
   };
+}
+
+// Every cause of an unresolved identity produces the same refusal sentence, and the hook payload that
+// would tell them apart is gone by the time anyone reads it. SQ-2189 cost a full investigation to
+// establish which one it was, so the counts travel with the refusal: a zero session count means the id
+// the caller reported is not the one the dispatch recorded, a count above one on session+executor means
+// concurrent dispatches share an identity, and a zero agent-id count means runtime binding never landed.
+function dispatchIdentityDiagnosis(identity?: any) {
+  const sessionId = String(identity?.sessionId || '').trim();
+  const executor = String(identity?.executor || '').trim();
+  const agentId = String(identity?.agentId || '').trim();
+  const observedWorktree = String(identity?.observedWorktree || '').trim();
+  const observed = observedWorktree ? worktreeIdentityKey(observedWorktree) : '';
+  const counts = { live: 0, session: 0, sessionExecutor: 0, agent: 0, worktree: 0 };
+  for (const project of listProjects({ all: true })) {
+    for (const ticket of listTickets(project.slug)) {
+      const state = dispatchState(ticket);
+      if (!state || (state.terminalAt && !ticket.claim?.by) || !['launched', 'claimed'].includes(state.outcome)) continue;
+      counts.live += 1;
+      if (sessionId && state.sessionId === sessionId) {
+        counts.session += 1;
+        if (executor && state.executor === executor) counts.sessionExecutor += 1;
+      }
+      if (agentId && state.agentId && String(state.agentId) === agentId) counts.agent += 1;
+      if (observed && state.worktree && worktreeIdentityKey(state.worktree) === observed) counts.worktree += 1;
+    }
+  }
+  return counts;
 }
 
 // Where this dispatch's executor is working and what its work is measured
@@ -1789,7 +1842,10 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
       matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
     }
   }
-  if (!normalizedAgentName && normalizedWorktree) {
+  // A completed creation target is stronger evidence than a name: it is a reserved path, unique to one
+  // dispatch, and the caller had to already be inside it to report it. Gating this on a missing name left
+  // a named bind ambiguous whenever a sibling dispatch had no recorded name to filter on (SQ-2189).
+  if (normalizedWorktree) {
     const completedWorktreeMatches = matches.filter((match) => {
       const completed = completedWorktreeCreationFacts(match.state);
       return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree
@@ -1999,6 +2055,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
     recoverDispatchWorktreeCreation,
+    dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
     dispatchWorkspace,
     dispatchDelta,
