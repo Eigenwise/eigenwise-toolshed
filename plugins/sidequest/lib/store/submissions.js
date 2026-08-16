@@ -59,13 +59,20 @@ function createSubmissions(dependencies) {
       left?.source && right?.source && left.source === right.source && left.value === right.value
     );
   }
+  function replacesGitRetryCandidate(retryCheckpoint, checkpoint) {
+    return retryCheckpoint?.candidate?.source === "git" && checkpoint?.candidate?.source === "git" && retryCheckpoint.candidate.value !== checkpoint.candidate.value;
+  }
   function submissionRetryCheckpoint(ticket, checkpoint) {
-    if (ticket.submissionRetry) return ticket.submissionRetry;
-    ticket.submissionRetry = checkpoint;
+    if (!ticket.submissionRetry || replacesGitRetryCandidate(ticket.submissionRetry, checkpoint)) {
+      ticket.submissionRetry = checkpoint;
+    }
     return ticket.submissionRetry;
   }
+  function hasExplicitSubmissionCandidate(opts) {
+    return Boolean(String(opts?.commit || "").trim());
+  }
   function hydratedSubmissionOptions(opts, retryCheckpoint) {
-    if (!retryCheckpoint) return opts;
+    if (!retryCheckpoint || hasExplicitSubmissionCandidate(opts)) return opts;
     const candidate = retryCheckpoint.candidate;
     const sourceRevision = candidate?.source === "git" ? null : candidate;
     return {
@@ -917,6 +924,30 @@ ${verify.outputTail}` : null
       return integrationFailure(slug, ticket, { reason: "integration_error", message: integrationGitError(error) });
     }
   }
+  function sharedTreeDescendantPaths(slug, ticket, range, admittedScope) {
+    const candidate = Array.isArray(range?.commits) ? range.commits[range.commits.length - 1] : null;
+    if (dispatchState(ticket)?.sharedTree !== true || !candidate || !range?.upstreamCommit || !admittedScope.length) {
+      return { ok: true, paths: [] };
+    }
+    let root;
+    try {
+      root = commitScope.repoRoot(String(readMeta(slug)?.path || ""));
+    } catch (error) {
+      return { ok: false, message: error?.message || String(error) };
+    }
+    try {
+      execFileSync("git", ["merge-base", "--is-ancestor", candidate, range.upstreamCommit], { cwd: root, encoding: "utf8", windowsHide: true });
+    } catch (error) {
+      if (error?.status === 1) return { ok: true, paths: [] };
+      return { ok: false, message: error?.message || String(error) };
+    }
+    try {
+      const paths = String(execFileSync("git", ["diff", "--name-only", `${candidate}..${range.upstreamCommit}`, "--", ...admittedScope], { cwd: root, encoding: "utf8", windowsHide: true })).split(/\r?\n/).map((file) => file.trim()).filter(Boolean);
+      return { ok: true, paths: Array.from(new Set(paths)) };
+    } catch (error) {
+      return { ok: false, message: error?.message || String(error) };
+    }
+  }
   function submissionAdmissionDecision(slug, ticket, by, opts, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
@@ -926,6 +957,8 @@ ${verify.outputTail}` : null
     const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
     const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
     const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
+    const descendantPaths = sourceRevision ? { ok: true, paths: [] } : sharedTreeDescendantPaths(slug, ticket, range, scope);
+    const staleDescendantPaths = descendantPaths.ok && Array.isArray(descendantPaths.paths) ? descendantPaths.paths : [];
     const submittedSurfaces = sourceRevision ? changedSurfaces : range?.changedPaths || [];
     const inherited = inheritedDirtyPaths(slug, ticket);
     const reportedPaths = submissionUnscopedPaths(opts.unscopedPaths);
@@ -969,7 +1002,19 @@ ${verify.outputTail}` : null
       sourceBaseline: sourceRevision ? pinnedBaseline : null,
       surfaces: { declared: scope, admitted: scope, changed: submittedSurfaces, pending: adapterFacts.surfaces?.pending || [], ...adapterFacts.surfaces || {} },
       duplicate,
-      requirements: [...adapterFacts.requirements || [], ...readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]]
+      requirements: [
+        ...adapterFacts.requirements || [],
+        ...descendantPaths.ok ? staleDescendantPaths.length ? [{
+          code: "stale_shared_tree_candidate",
+          message: `submit: refused ${ticket.ref}; newer shared-tree commits changed this candidate's admitted paths: ${staleDescendantPaths.join(", ")}. Commit and verify a replacement candidate against the current integration tip before submitting.`,
+          retryable: true
+        }] : [] : [{
+          code: "shared_tree_candidate_history_unavailable",
+          message: `submit: could not inspect newer shared-tree commits for ${ticket.ref}: ${descendantPaths.message}. Preserve the candidate and retry after Git history is available.`,
+          retryable: true
+        }],
+        ...readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]
+      ]
     });
     return { decision, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
   }

@@ -2769,4 +2769,117 @@ test('a read-only isolated review satisfies the candidate gate only once its boa
   }
 });
 
+test('SQ-2152: shared-tree retries replace stale candidates while disjoint descendants remain admissible', async () => {
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  cleanBranch();
+
+  const staleTicket = addTicket('stale shared-tree candidate', {
+    files: ['lib/shared-stale.js'],
+    category: 'submission.fixture',
+  });
+  const staleDispatch = store.prepareDispatch(slug, staleTicket.ref, { sessionId: 'stale-shared-tree', sharedTree: true });
+  assert.strictEqual(staleDispatch.ticket.dispatch.sharedTree, true);
+  assert.strictEqual(store.claimTicket(slug, staleTicket.ref, 'stale-shared-tree-worker', {
+    token: staleDispatch.token,
+    executor: staleDispatch.ticket.dispatchExecutor,
+    sessionId: 'stale-shared-tree',
+  }).ok, true);
+
+  const staleFragment = `.release/unreleased/${staleTicket.ref}.md`;
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.mkdirSync(path.dirname(path.join(PROJECT_DIR, staleFragment)), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'shared-stale.js'), 'candidate\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, staleFragment), 'candidate fragment\n');
+  git(['add', 'lib/shared-stale.js', staleFragment]);
+  git(['commit', '-m', 'stale shared-tree candidate']);
+  const staleCandidate = git(['rev-parse', 'HEAD']);
+  pin(staleTicket, staleCandidate);
+
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'shared-stale.js'), 'orchestrator descendant\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, staleFragment), 'orchestrator fragment\n');
+  git(['add', 'lib/shared-stale.js', staleFragment]);
+  git(['commit', '-m', 'orchestrator touches stale candidate scope']);
+  const staleDescendant = git(['rev-parse', 'HEAD']);
+  git(['update-ref', 'refs/remotes/origin/main', staleDescendant]);
+  git(['update-ref', 'refs/heads/main', staleDescendant]);
+
+  const staleRefusal = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: staleTicket.ref,
+    by: 'stale-shared-tree-worker',
+    commit: staleCandidate,
+    worktree: PROJECT_DIR,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    body: 'Stale shared-tree candidate refusal fixture.',
+  });
+  assert.strictEqual(staleRefusal.ok, false);
+  assert.strictEqual(staleRefusal.reason, 'stale_shared_tree_candidate');
+  assert.match(staleRefusal.message, /lib\/shared-stale\.js/);
+  assert.match(staleRefusal.message, new RegExp(staleFragment.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.strictEqual(store.getTicket(slug, staleTicket.ref).submissionRetry.candidate.value, staleCandidate);
+
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'shared-stale.js'), 'replacement candidate\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, staleFragment), 'replacement fragment\n');
+  git(['add', 'lib/shared-stale.js', staleFragment]);
+  git(['commit', '-m', 'replacement shared-tree candidate']);
+  const replacementCandidate = git(['rev-parse', 'HEAD']);
+  pin(staleTicket, replacementCandidate);
+
+  const replacement = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: staleTicket.ref,
+    by: 'stale-shared-tree-worker',
+    commit: replacementCandidate,
+    base: staleDescendant,
+    worktree: PROJECT_DIR,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    body: 'Replacement shared-tree candidate fixture.',
+  });
+  assert.strictEqual(replacement.ok, true, replacement.message);
+  const replacementTicket = store.getTicket(slug, staleTicket.ref);
+  assert.strictEqual(replacementTicket.submission.commit, replacementCandidate);
+  assert.deepStrictEqual(replacementTicket.submission.commits, [replacementCandidate]);
+  assert.strictEqual(replacementTicket.submission.base, staleDescendant);
+  assert.strictEqual(replacementTicket.submission.worktree, PROJECT_DIR);
+  assert.ok(replacementTicket.submission.admittedScope.includes(staleFragment));
+
+  cleanBranch();
+  const disjointTicket = addTicket('disjoint shared-tree candidate', {
+    files: ['lib/disjoint-candidate.js'],
+    category: 'submission.fixture',
+  });
+  const disjointDispatch = store.prepareDispatch(slug, disjointTicket.ref, { sessionId: 'disjoint-shared-tree', sharedTree: true });
+  assert.strictEqual(store.claimTicket(slug, disjointTicket.ref, 'disjoint-shared-tree-worker', {
+    token: disjointDispatch.token,
+    executor: disjointDispatch.ticket.dispatchExecutor,
+    sessionId: 'disjoint-shared-tree',
+  }).ok, true);
+
+  const disjointFragment = `.release/unreleased/${disjointTicket.ref}.md`;
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'disjoint-candidate.js'), 'candidate\n');
+  fs.writeFileSync(path.join(PROJECT_DIR, disjointFragment), 'candidate fragment\n');
+  git(['add', 'lib/disjoint-candidate.js', disjointFragment]);
+  git(['commit', '-m', 'disjoint shared-tree candidate']);
+  const disjointCandidate = git(['rev-parse', 'HEAD']);
+  pin(disjointTicket, disjointCandidate);
+
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'orchestrator-only.js'), 'independent descendant\n');
+  git(['add', 'lib/orchestrator-only.js']);
+  git(['commit', '-m', 'orchestrator changes disjoint path']);
+  git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
+  git(['update-ref', 'refs/heads/main', 'HEAD']);
+
+  const disjointAdmission = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: disjointTicket.ref,
+    by: 'disjoint-shared-tree-worker',
+    commit: disjointCandidate,
+    worktree: PROJECT_DIR,
+    verify: 'npm run test:files -- test/submission.test.ts',
+    body: 'Disjoint shared-tree candidate fixture.',
+  });
+  assert.strictEqual(disjointAdmission.ok, true, disjointAdmission.message);
+  assert.strictEqual(store.getTicket(slug, disjointTicket.ref).submission.commit, disjointCandidate);
+});
+
 export {};
