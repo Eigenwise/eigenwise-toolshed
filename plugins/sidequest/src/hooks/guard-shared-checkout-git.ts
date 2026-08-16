@@ -4,13 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readStdin, stringField, isRecord } from './shared/input.js';
 import { writeDeny } from './shared/output.js';
-import { runtimeModule } from './shared/paths.js';
-
-interface IsolationExpectation {
-  projectPath: string | null;
-  sharedTree: boolean;
-  terminal: boolean;
-}
+import { executorAgent, isolationExpectation } from './shared/runtime-identity.js';
 
 const MUTATING_SUBCOMMANDS = new Set([
   'add', 'am', 'apply', 'branch', 'checkout', 'cherry-pick', 'clean', 'commit', 'merge', 'mv',
@@ -21,30 +15,6 @@ const MUTATING_SUBCOMMANDS = new Set([
 function commandText(input: Record<string, unknown>): string {
   const toolInput = input.tool_input;
   return isRecord(toolInput) ? String(toolInput.command || '') : '';
-}
-
-function executorAgent(type: string): boolean {
-  if (!type) return false;
-  try {
-    return require(runtimeModule('exec-names')).classify(type).kind !== 'unknown';
-  } catch (_) {
-    return /^sidequest-exec-/.test(type);
-  }
-}
-
-function expectation(input: Record<string, unknown>, agentId: string, executor: string): IsolationExpectation | null {
-  try {
-    const store = require(runtimeModule('store')) as {
-      dispatchIsolationExpectation: (identity: unknown) => IsolationExpectation | null;
-    };
-    return store.dispatchIsolationExpectation({
-      agentId,
-      executor,
-      sessionId: stringField(input, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || '',
-    });
-  } catch (_) {
-    return null;
-  }
 }
 
 function canonicalPath(value: string): string {
@@ -94,7 +64,7 @@ function main(): void {
   const agentId = stringField(input, 'agent_id', 'agentId');
   const executor = stringField(input, 'agent_type', 'agentType', 'subagent_type');
   if (!agentId || !executorAgent(executor)) return;
-  const found = expectation(input, agentId, executor);
+  const found = isolationExpectation(input, agentId, executor, false);
   if (!found || found.sharedTree || found.terminal || !found.projectPath) return;
   const invocation = gitInvocation(commandText(input));
   if (!invocation || !MUTATING_SUBCOMMANDS.has(invocation.subcommand)) return;

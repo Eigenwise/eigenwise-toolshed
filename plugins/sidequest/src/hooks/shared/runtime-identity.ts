@@ -64,12 +64,13 @@ export function enclosingCheckout(start: string): CheckoutLocation | null {
   }
 }
 
-export function isolationExpectation(input: HookInput, agentId: string, executor: string): IsolationExpectation | null {
+export function isolationExpectation(input: HookInput, agentId: string, executor: string, includeSessionFallback = true): IsolationExpectation | null {
   try {
     const store = require(runtimeModule('store')) as {
       dispatchIsolationExpectation: (identity: unknown) => IsolationExpectation | null;
     };
-    return store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    return agentId && !includeSessionFallback && found?.matchedBy === 'session' ? null : found;
   } catch (_) {
     return null;
   }

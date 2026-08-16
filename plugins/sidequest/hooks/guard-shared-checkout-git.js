@@ -24,8 +24,8 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 ));
 
 // src/hooks/guard-shared-checkout-git.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path2 = __toESM(require("node:path"));
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_path3 = __toESM(require("node:path"));
 var import_node_child_process = require("node:child_process");
 
 // src/hooks/shared/input.ts
@@ -107,6 +107,10 @@ function writeDeny(hookEventName, permissionDecisionReason) {
   });
 }
 
+// src/hooks/shared/runtime-identity.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_path2 = __toESM(require("node:path"));
+
 // src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
@@ -114,6 +118,28 @@ function pluginRoot() {
 }
 function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/shared/runtime-identity.ts
+function executorAgent(type) {
+  if (!type) return false;
+  try {
+    return require(runtimeModule("exec-names")).classify(type).kind !== "unknown";
+  } catch (_) {
+    return /^sidequest-exec-/.test(type);
+  }
+}
+function hookSessionId(input) {
+  return stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
+}
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true) {
+  try {
+    const store = require(runtimeModule("store"));
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
+  } catch (_) {
+    return null;
+  }
 }
 
 // src/hooks/guard-shared-checkout-git.ts
@@ -144,31 +170,11 @@ function commandText(input) {
   const toolInput = input.tool_input;
   return isRecord(toolInput) ? String(toolInput.command || "") : "";
 }
-function executorAgent(type) {
-  if (!type) return false;
-  try {
-    return require(runtimeModule("exec-names")).classify(type).kind !== "unknown";
-  } catch (_) {
-    return /^sidequest-exec-/.test(type);
-  }
-}
-function expectation(input, agentId, executor) {
-  try {
-    const store = require(runtimeModule("store"));
-    return store.dispatchIsolationExpectation({
-      agentId,
-      executor,
-      sessionId: stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || ""
-    });
-  } catch (_) {
-    return null;
-  }
-}
 function canonicalPath(value) {
   try {
-    return import_node_fs2.default.realpathSync.native(value);
+    return import_node_fs3.default.realpathSync.native(value);
   } catch (_) {
-    return import_node_path2.default.resolve(value);
+    return import_node_path3.default.resolve(value);
   }
 }
 function samePath(left, right) {
@@ -183,7 +189,7 @@ function gitInvocation(command) {
   return { target, subcommand: match[2].toLowerCase() };
 }
 function targetRoot(target, cwd) {
-  const directory = import_node_path2.default.resolve(cwd || ".", target);
+  const directory = import_node_path3.default.resolve(cwd || ".", target);
   try {
     return canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
       cwd: directory,
@@ -204,7 +210,7 @@ function main() {
   const agentId = stringField(input, "agent_id", "agentId");
   const executor = stringField(input, "agent_type", "agentType", "subagent_type");
   if (!agentId || !executorAgent(executor)) return;
-  const found = expectation(input, agentId, executor);
+  const found = isolationExpectation(input, agentId, executor, false);
   if (!found || found.sharedTree || found.terminal || !found.projectPath) return;
   const invocation = gitInvocation(commandText(input));
   if (!invocation || !MUTATING_SUBCOMMANDS.has(invocation.subcommand)) return;

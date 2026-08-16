@@ -815,6 +815,25 @@ test('an isolated executor can inspect but not mutate the shared checkout with g
   assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Read-only git commands/);
 });
 
+test('an unrelated executor subagent does not inherit a session fallback claim', () => {
+  const activeAgentId = 'active-shared-git';
+  const { sessionId, executor } = dispatched(activeAgentId);
+  const integratorAgentId = 'integrator-subagent';
+
+  const command = (agentId: string) => runHook(GUARD_SHARED_CHECKOUT_GIT, {
+    session_id: sessionId,
+    agent_id: agentId,
+    agent_type: executor,
+    cwd: path.join(PROJECT, '.claude', 'worktrees', `agent-${activeAgentId}`),
+    tool_name: 'Bash',
+    tool_input: { command: `git -C "${PROJECT}" reset --hard HEAD` },
+  });
+
+  assert.equal(command(integratorAgentId), null, 'the integrator subagent retains shared-checkout access');
+  const denied = command(activeAgentId);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny', 'a live isolated executor remains blocked');
+});
+
 test('a destructive git command is refused while the shared checkout carries uncommitted work', () => {
   const repo = initRepo('sq-destructive-repo-');
   const clean = runHook(GUARD_DESTRUCTIVE, {

@@ -149,10 +149,11 @@ function enclosingCheckout(start) {
     directory = parent;
   }
 }
-function isolationExpectation(input, agentId, executor) {
+function isolationExpectation(input, agentId, executor, includeSessionFallback = true) {
   try {
     const store = require(runtimeModule("store"));
-    return store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    const found = store.dispatchIsolationExpectation({ agentId, executor, sessionId: hookSessionId(input) });
+    return agentId && !includeSessionFallback && found?.matchedBy === "session" ? null : found;
   } catch (_) {
     return null;
   }
