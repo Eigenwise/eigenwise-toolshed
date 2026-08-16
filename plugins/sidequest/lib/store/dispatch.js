@@ -714,6 +714,21 @@ function createDispatch(dependencies) {
       return null;
     }
   }
+  function completedWorktreeCreationFacts(state) {
+    if (!state?.worktreeCreationCompletedAt || !state.worktree || !state.worktreeGitDirectory || !state.worktreeCommonGitDirectory || !state.worktreeCheckoutInstance || !state.worktreeObservedRevision) return null;
+    return {
+      worktree: canonicalPath(state.worktree),
+      gitDirectory: canonicalPath(state.worktreeGitDirectory),
+      commonGitDirectory: canonicalPath(state.worktreeCommonGitDirectory),
+      checkoutInstance: String(state.worktreeCheckoutInstance),
+      revision: String(state.worktreeObservedRevision)
+    };
+  }
+  function reportsRegisteredProjectCheckout(slug, worktree) {
+    const projectPath = String(readMeta(slug)?.path || "").trim();
+    const reportedWorktree = String(worktree || "").trim();
+    return Boolean(projectPath && reportedWorktree && canonicalPath(projectPath) === canonicalPath(reportedWorktree));
+  }
   function releasedContinuationState(slug, ticket, state) {
     if (!state || state.outcome !== "released" || !state.terminalAt || state.sharedTree !== false) return null;
     const recordedWorktree = String(state.worktree || "").trim();
@@ -1572,7 +1587,7 @@ function createDispatch(dependencies) {
     }
     const tickets = [];
     for (const match of matches) {
-      const worktreeFacts = match.sharedTree === false && normalizedWorktree ? immutableWorktreeFacts(match.slug, normalizedWorktree) : null;
+      const reportsParentCheckout = match.sharedTree === false && normalizedWorktree && reportsRegisteredProjectCheckout(match.slug, normalizedWorktree);
       const result = withTicketLock(match.slug, match.id, () => {
         const t = getTicket(match.slug, match.id);
         const state = dispatchState(t);
@@ -1580,6 +1595,11 @@ function createDispatch(dependencies) {
           return { ok: false };
         }
         if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && (state.worktreeBindingSource !== "worktree-create" || !state.worktree)) {
+          return { ok: false, reason: "worktree_binding_unavailable" };
+        }
+        const completedTargetFacts = reportsParentCheckout ? completedWorktreeCreationFacts(state) : null;
+        const worktreeFacts = reportsParentCheckout ? completedTargetFacts ? immutableWorktreeFacts(match.slug, completedTargetFacts.worktree) : null : state.sharedTree === false && normalizedWorktree ? immutableWorktreeFacts(match.slug, normalizedWorktree) : null;
+        if (reportsParentCheckout && !completedTargetFacts) {
           return { ok: false, reason: "worktree_binding_unavailable" };
         }
         if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && !worktreeFacts) {

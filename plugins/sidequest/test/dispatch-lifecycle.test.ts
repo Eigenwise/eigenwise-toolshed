@@ -1227,6 +1227,7 @@ test('released handbacks carry registered native worktrees into continuation dis
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.getTicket(slug, ticket.ref).dispatch.worktree, worktrees.canonicalPath(worktree));
     assert.equal(store.claimTicket(slug, ticket.ref, 'continuation-worker', {
@@ -1389,6 +1390,7 @@ test('dirty released worktrees without commits resume in place for a continuatio
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-continuation-worker', {
       sessionId,
@@ -1459,6 +1461,7 @@ test('dirty released worktrees with checkpoints fall back to cherry-picking the 
     assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(slug, ticket.ref, 'dirty-checkpoint-worker', {
       sessionId,
@@ -1519,6 +1522,7 @@ test('released handbacks carry checkpoints through 8.3 project aliases', { skip:
     assert.equal(store.bindDispatchWorktreeCreation(aliasSlug, sessionId, worktree).ok, true);
     execFileSync('git', ['worktree', 'add', '-b', branch, worktree, 'HEAD'], { cwd: PROJECT });
     markCheckoutInstance(worktree);
+    assert.equal(store.completeDispatchWorktreeCreation(aliasSlug, sessionId, worktree).ok, true);
     assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, worktree).ok, true);
     assert.equal(store.claimTicket(aliasSlug, ticket.ref, 'continuation-short-path-worker', {
       sessionId,

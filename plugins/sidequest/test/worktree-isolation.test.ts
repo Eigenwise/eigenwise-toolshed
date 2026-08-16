@@ -287,6 +287,128 @@ test('SubagentStart cannot mint authority for an unreserved same-repository look
   }
 });
 
+test('parent-checkout SubagentStart binds each completed isolated target to its reserved native agent', () => {
+  const created: Array<{ ref: string; worktree: string }> = [];
+  const sequence = `${process.pid}-${Date.now()}`;
+  const reserveTarget = (agentId: string, sessionId: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `parent checkout fixture ${agentId}`,
+      category: 'codebase-exploration',
+      description: 'A fixture dispatch with a native target created by the parent checkout.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const executor = prepared.ticket.dispatchExecutor;
+    const worktree = path.join(SIDEQUEST_HOME, 'parent-checkout-targets', agentId);
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor,
+      sessionId,
+      agentName: agentId,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    created.push({ ref: ticket.ref, worktree });
+    return { ticket, executor, sessionId, agentId, worktree };
+  };
+  const createTarget = (agentId: string, sessionId: string) => {
+    const target = reserveTarget(agentId, sessionId);
+    execFileSync('git', ['worktree', 'add', '--detach', target.worktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(target.sessionId, target.worktree);
+    return target;
+  };
+
+  try {
+    const incomplete = reserveTarget(`parent-incomplete-${sequence}`, `parent-incomplete-session-${sequence}`);
+
+    const first = createTarget(`parent-first-${sequence}`, `parent-first-session-${sequence}`);
+    const second = createTarget(`parent-second-${sequence}`, `parent-second-session-${sequence}`);
+    const foreignProject = initRepo(`sq-parent-foreign-${sequence}-`);
+    const wrongProjectBinding = store.bindDispatchAgent(
+      first.sessionId,
+      first.executor,
+      first.agentId,
+      first.agentId,
+      foreignProject,
+    );
+    assert.equal(wrongProjectBinding.ok, false);
+
+    assert.equal(store.bindDispatchAgent(first.sessionId, first.executor, first.agentId, first.agentId, PROJECT).ok, true);
+    assert.equal(store.bindDispatchAgent(second.sessionId, second.executor, second.agentId, second.agentId, PROJECT).ok, true);
+    const preCompletionBinding = store.bindDispatchAgent(
+      incomplete.sessionId,
+      incomplete.executor,
+      incomplete.agentId,
+      incomplete.agentId,
+      PROJECT,
+    );
+    assert.equal(preCompletionBinding.ok, false);
+    assert.equal(preCompletionBinding.reason, 'worktree_binding_unavailable');
+    const firstExpectation = store.dispatchIsolationExpectation({
+      agentId: first.agentId,
+      sessionId: first.sessionId,
+      executor: first.executor,
+    });
+    const secondExpectation = store.dispatchIsolationExpectation({
+      agentId: second.agentId,
+      sessionId: second.sessionId,
+      executor: second.executor,
+    });
+    assert.equal(firstExpectation.expectedWorktree, worktrees.canonicalPath(first.worktree));
+    assert.equal(secondExpectation.expectedWorktree, worktrees.canonicalPath(second.worktree));
+    assert.notEqual(firstExpectation.expectedWorktree, secondExpectation.expectedWorktree);
+
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(first.agentId, first.executor, first.sessionId, path.join(first.worktree, 'README.md'), first.worktree)), null);
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(second.agentId, second.executor, second.sessionId, path.join(second.worktree, 'README.md'), second.worktree)), null);
+    for (const deniedWrite of [
+      writePayload(first.agentId, first.executor, first.sessionId, path.join(second.worktree, 'README.md'), second.worktree),
+      writePayload(second.agentId, second.executor, second.sessionId, path.join(first.worktree, 'README.md'), first.worktree),
+      writePayload(first.agentId, first.executor, first.sessionId, path.join(PROJECT, 'README.md'), PROJECT),
+    ]) {
+      assert.equal(runHook(GUARD_ISOLATION, deniedWrite).hookSpecificOutput.permissionDecision, 'deny');
+    }
+
+    const foreignAgentBinding = store.bindDispatchAgent(first.sessionId, first.executor, `foreign-agent-${sequence}`, first.agentId, PROJECT);
+    assert.equal(foreignAgentBinding.ok, false);
+
+    const changed = createTarget(`parent-changed-${sequence}`, `parent-changed-session-${sequence}`);
+    fs.appendFileSync(path.join(changed.worktree, 'README.md'), 'changed before binding\n');
+    execFileSync('git', ['add', 'README.md'], { cwd: changed.worktree, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', 'changed before parent binding'], { cwd: changed.worktree, windowsHide: true });
+    const changedRevisionBinding = store.bindDispatchAgent(changed.sessionId, changed.executor, changed.agentId, changed.agentId, PROJECT);
+    assert.equal(changedRevisionBinding.ok, false);
+    assert.equal(changedRevisionBinding.reason, 'worktree_binding_mismatch');
+
+    const replacement = createTarget(`parent-replacement-${sequence}`, `parent-replacement-session-${sequence}`);
+    execFileSync('git', ['worktree', 'remove', '--force', replacement.worktree], { cwd: PROJECT, windowsHide: true });
+    execFileSync('git', ['worktree', 'add', '--detach', replacement.worktree], { cwd: PROJECT, windowsHide: true });
+    const checkoutInstanceBinding = store.bindDispatchAgent(replacement.sessionId, replacement.executor, replacement.agentId, replacement.agentId, PROJECT);
+    assert.equal(checkoutInstanceBinding.ok, false);
+
+    const ambiguousAgent = `parent-ambiguous-${sequence}`;
+    const ambiguousSession = `parent-ambiguous-session-${sequence}`;
+    const ambiguousFirst = reserveTarget(ambiguousAgent, ambiguousSession);
+    reserveTarget(ambiguousAgent, ambiguousSession);
+    const ambiguousBinding = store.bindDispatchAgent(ambiguousFirst.sessionId, ambiguousFirst.executor, ambiguousAgent, ambiguousAgent, PROJECT);
+    assert.equal(ambiguousBinding.ok, false);
+    assert.equal(ambiguousBinding.reason, 'ambiguous');
+
+    const firstDispatch = store.getTicket(slug, first.ticket.ref);
+    assert.equal(store.claimTicket(slug, first.ticket.ref, 'parent-terminal-worker', {
+      token: firstDispatch.dispatchNonce,
+      executor: first.executor,
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, first.ticket.ref, 'parent-terminal-worker', { status: 'todo' }).ok, true);
+    const terminalBinding = store.bindDispatchAgent(first.sessionId, first.executor, first.agentId, first.agentId, PROJECT);
+    assert.equal(terminalBinding.ok, false);
+  } finally {
+    for (const target of created) {
+      store.releaseTicket(slug, target.ref, 'parent-checkout-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  }
+});
+
 test('a harness worktree beneath the invoking linked worktree is allowed', () => {
   const agentId = 'a2nestedharnessroot';
   const sessionId = `session-${agentId}`;
