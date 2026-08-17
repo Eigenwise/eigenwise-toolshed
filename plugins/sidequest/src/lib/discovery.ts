@@ -95,33 +95,53 @@ function newestGatewayCatalogCommand(): string | null {
   return newest?.command ?? null;
 }
 
-function refreshGatewayCatalog(): CatalogData | null {
-  const command = newestGatewayCatalogCommand();
-  if (!command) return null;
+function gatewayRefreshSucceeded(command: string): boolean {
   try {
-    const result = spawnSync(process.execPath, [command, 'catalog', '--refresh', '--json'], {
+    return spawnSync(process.execPath, [command, 'catalog', '--refresh', '--json'], {
       encoding: 'utf8', timeout: 5000, windowsHide: true,
-    });
-    if (result.status !== 0) return null;
-    const catalog = JSON.parse(result.stdout) as unknown;
-    return isRecord(catalog) ? catalog as CatalogData : null;
+    }).status === 0;
   } catch {
-    return null;
+    return false;
   }
 }
 
 export const CATALOG_STALE_MS = 5 * 60 * 1000;
+// A refresh that fails is retried soon rather than pinned for the whole catalog window, but not on every call:
+// a gateway that is down would otherwise spawn a child process per route resolution.
+const REFRESH_RETRY_MS = 30 * 1000;
+
+const gatewayRefreshAttempts = new Map<string, { at: number; refreshed: boolean }>();
+
+// Run the refresh for its side effect and re-read the file, which is the authority. Parsing the gateway CLI's
+// stdout made this return null the moment that CLI printed a diagnostic line ahead of the JSON, so the refresh
+// silently did nothing in the exact case it exists for (SQ-2208). Its exit code is not the authority either: it
+// exits 0 printing the stored catalog when the proxy is down, so an attempt only counts as a refresh when the
+// file it left behind is current. Attempts are remembered per catalog file, so readiness and model listing
+// share one child process rather than spawning one each.
+function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
+  const attempt = gatewayRefreshAttempts.get(catalogPath);
+  const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
+  if (!attempt || Date.now() - attempt.at > window) {
+    const command = newestGatewayCatalogCommand();
+    const written = command !== null && gatewayRefreshSucceeded(command) ? readJsonSafe(catalogPath) : null;
+    gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
+    return isRecord(written) ? written as CatalogData : null;
+  }
+  const catalog = attempt.refreshed ? readJsonSafe(catalogPath) : null;
+  return isRecord(catalog) ? catalog as CatalogData : null;
+}
+
+function catalogWithinFreshnessWindow(data: unknown): boolean {
+  if (!isRecord(data) || typeof data.updatedAt !== 'string') return false;
+  const age = Date.now() - Date.parse(data.updatedAt);
+  return Number.isFinite(age) && age >= 0 && age <= CATALOG_STALE_MS;
+}
 
 function usableCatalog(data: unknown, schemas: ReadonlySet<number>): CatalogData | null {
-  if (!isRecord(data)) return null;
+  if (!isRecord(data) || !catalogWithinFreshnessWindow(data)) return null;
   const catalog = data as CatalogData;
   const schema = catalog.schemaVersion ?? catalog.schema;
-  const updatedAt = typeof catalog.updatedAt === 'string' ? Date.parse(catalog.updatedAt) : Number.NaN;
-  const age = Date.now() - updatedAt;
-  return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models)
-    && Number.isFinite(updatedAt) && age >= 0 && age <= CATALOG_STALE_MS
-    ? catalog
-    : null;
+  return typeof schema === 'number' && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
 }
 
 function catalogSchema(catalog: CatalogData): number {
@@ -146,11 +166,12 @@ function catalogProviderReadiness(catalog: CatalogData, provider: string): Provi
 export function providerReadiness(provider: string): ProviderReadiness | null {
   for (const root of discoveryRoots()) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
-      const storedCatalog = readJsonSafe(path.join(root, relPath));
+      const catalogPath = path.join(root, relPath);
+      const storedCatalog = readJsonSafe(catalogPath);
       let catalog = usableCatalog(storedCatalog, schemas);
       let readiness = catalog && catalogProviderReadiness(catalog, provider);
       if (provider === 'codex' && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
-        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(), schemas);
+        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
         if (refreshedCatalog) {
           catalog = refreshedCatalog;
           readiness = catalogProviderReadiness(catalog, provider);
@@ -160,6 +181,17 @@ export function providerReadiness(provider: string): ProviderReadiness | null {
     }
   }
   return null;
+}
+
+// Nothing writes the catalog on its own, so once the stored one ages past CATALOG_STALE_MS every model in it
+// disappeared from the board while the gateway was perfectly healthy, and stayed gone until some unrelated
+// command happened to rewrite the file. Readiness already refreshed itself; the model list has to too, or a
+// board routing to Codex categories stops dispatching for no stated reason (SQ-2208).
+function currentCatalog(catalogPath: string, schemas: ReadonlySet<number>): CatalogData | null {
+  const storedCatalog = readJsonSafe(catalogPath);
+  const usable = usableCatalog(storedCatalog, schemas);
+  if (usable || !isRecord(storedCatalog)) return usable;
+  return usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
 }
 
 function validateEntry(raw: unknown, source: string, schema: number): ExternalModel | null {
@@ -182,7 +214,7 @@ export function configuredExternalModelProvider(slug: string): string | null {
   if (!SLUG_RE.test(normalizedSlug)) return null;
   for (const root of discoveryRoots()) {
     for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = usableCatalog(readJsonSafe(path.join(root, relPath)), schemas);
+      const catalog = currentCatalog(path.join(root, relPath), schemas);
       if (!catalog) continue;
       for (const raw of catalog.models as unknown[]) {
         const entry = validateEntry(raw, source, catalogSchema(catalog));
@@ -198,7 +230,7 @@ export function discoverExternalModels(): ExternalModel[] {
   const seen = new Set<string>();
   for (const root of discoveryRoots()) {
     for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = usableCatalog(readJsonSafe(path.join(root, relPath)), schemas);
+      const catalog = currentCatalog(path.join(root, relPath), schemas);
       if (!catalog) continue;
       for (const raw of catalog.models as unknown[]) {
         const entry = validateEntry(raw, source, catalogSchema(catalog));

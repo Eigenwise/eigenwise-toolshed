@@ -86,30 +86,42 @@ function newestGatewayCatalogCommand() {
   }
   return newest?.command ?? null;
 }
-function refreshGatewayCatalog() {
-  const command = newestGatewayCatalogCommand();
-  if (!command) return null;
+function gatewayRefreshSucceeded(command) {
   try {
-    const result = (0, import_node_child_process.spawnSync)(process.execPath, [command, "catalog", "--refresh", "--json"], {
+    return (0, import_node_child_process.spawnSync)(process.execPath, [command, "catalog", "--refresh", "--json"], {
       encoding: "utf8",
       timeout: 5e3,
       windowsHide: true
-    });
-    if (result.status !== 0) return null;
-    const catalog = JSON.parse(result.stdout);
-    return isRecord(catalog) ? catalog : null;
+    }).status === 0;
   } catch {
-    return null;
+    return false;
   }
 }
 const CATALOG_STALE_MS = 5 * 60 * 1e3;
+const REFRESH_RETRY_MS = 30 * 1e3;
+const gatewayRefreshAttempts = /* @__PURE__ */ new Map();
+function refreshGatewayCatalog(catalogPath) {
+  const attempt = gatewayRefreshAttempts.get(catalogPath);
+  const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
+  if (!attempt || Date.now() - attempt.at > window) {
+    const command = newestGatewayCatalogCommand();
+    const written = command !== null && gatewayRefreshSucceeded(command) ? readJsonSafe(catalogPath) : null;
+    gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
+    return isRecord(written) ? written : null;
+  }
+  const catalog = attempt.refreshed ? readJsonSafe(catalogPath) : null;
+  return isRecord(catalog) ? catalog : null;
+}
+function catalogWithinFreshnessWindow(data) {
+  if (!isRecord(data) || typeof data.updatedAt !== "string") return false;
+  const age = Date.now() - Date.parse(data.updatedAt);
+  return Number.isFinite(age) && age >= 0 && age <= CATALOG_STALE_MS;
+}
 function usableCatalog(data, schemas) {
-  if (!isRecord(data)) return null;
+  if (!isRecord(data) || !catalogWithinFreshnessWindow(data)) return null;
   const catalog = data;
   const schema = catalog.schemaVersion ?? catalog.schema;
-  const updatedAt = typeof catalog.updatedAt === "string" ? Date.parse(catalog.updatedAt) : Number.NaN;
-  const age = Date.now() - updatedAt;
-  return typeof schema === "number" && schemas.has(schema) && Array.isArray(catalog.models) && Number.isFinite(updatedAt) && age >= 0 && age <= CATALOG_STALE_MS ? catalog : null;
+  return typeof schema === "number" && schemas.has(schema) && Array.isArray(catalog.models) ? catalog : null;
 }
 function catalogSchema(catalog) {
   return catalog.schemaVersion ?? catalog.schema;
@@ -128,11 +140,12 @@ function catalogProviderReadiness(catalog, provider) {
 function providerReadiness(provider) {
   for (const root of discoveryRoots()) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
-      const storedCatalog = readJsonSafe(import_node_path.default.join(root, relPath));
+      const catalogPath = import_node_path.default.join(root, relPath);
+      const storedCatalog = readJsonSafe(catalogPath);
       let catalog = usableCatalog(storedCatalog, schemas);
       let readiness = catalog && catalogProviderReadiness(catalog, provider);
       if (provider === "codex" && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
-        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(), schemas);
+        const refreshedCatalog = usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
         if (refreshedCatalog) {
           catalog = refreshedCatalog;
           readiness = catalogProviderReadiness(catalog, provider);
@@ -142,6 +155,12 @@ function providerReadiness(provider) {
     }
   }
   return null;
+}
+function currentCatalog(catalogPath, schemas) {
+  const storedCatalog = readJsonSafe(catalogPath);
+  const usable = usableCatalog(storedCatalog, schemas);
+  if (usable || !isRecord(storedCatalog)) return usable;
+  return usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
 }
 function validateEntry(raw, source, schema) {
   if (!isRecord(raw)) return null;
@@ -160,7 +179,7 @@ function configuredExternalModelProvider(slug) {
   if (!SLUG_RE.test(normalizedSlug)) return null;
   for (const root of discoveryRoots()) {
     for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = usableCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
+      const catalog = currentCatalog(import_node_path.default.join(root, relPath), schemas);
       if (!catalog) continue;
       for (const raw of catalog.models) {
         const entry = validateEntry(raw, source, catalogSchema(catalog));
@@ -175,7 +194,7 @@ function discoverExternalModels() {
   const seen = /* @__PURE__ */ new Set();
   for (const root of discoveryRoots()) {
     for (const { source, relPath, schemas } of CATALOG_SOURCES) {
-      const catalog = usableCatalog(readJsonSafe(import_node_path.default.join(root, relPath)), schemas);
+      const catalog = currentCatalog(import_node_path.default.join(root, relPath), schemas);
       if (!catalog) continue;
       for (const raw of catalog.models) {
         const entry = validateEntry(raw, source, catalogSchema(catalog));

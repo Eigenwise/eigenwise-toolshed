@@ -485,6 +485,53 @@ test('writeCatalogFile replaces a catalog when the fetched set contains a new mo
   }
 });
 
+test('SQ-2208: catalog --refresh --json keeps stdout parseable while it logs a preserved subset', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-json-stdout-'));
+  const state = path.join(home, '.claude', 'model-gateway');
+  fs.mkdirSync(state, { recursive: true });
+  fs.writeFileSync(path.join(state, 'catalog.json'), JSON.stringify(gw.buildCatalog([
+    'claude-gpt-5.6-terra',
+    'claude-gpt-5.6-sol',
+  ])));
+
+  const port = await freePort();
+  const shim = http.createServer((request, response) => {
+    response.writeHead(200, { 'content-type': 'application/json' });
+    response.end(request.url === '/healthz' ? '{"ok":true}' : '{"data":[{"id":"claude-gpt-5.6-terra"}]}');
+  });
+  await new Promise((resolve) => shim.listen(port, '127.0.0.1', resolve));
+  t.after(() => {
+    shim.close();
+    fs.rmSync(home, { recursive: true, force: true });
+  });
+
+  // Not spawnSync: this fake shim answers from the test's own event loop, which a synchronous child blocks.
+  const result = await new Promise((resolve) => {
+    const child = spawn(process.execPath, [CLI, 'catalog', '--refresh', '--json'], {
+      env: {
+        ...process.env,
+        HOME: home,
+        USERPROFILE: home,
+        CODEX_GATEWAY_PORT: String(port),
+        CODEX_GATEWAY_WORKER_PORT: String(port),
+      },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.on('close', (status) => resolve({ status, stdout, stderr }));
+  });
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stderr, /catalog: preserved claude-gpt-5\.6-sol from a subset write/);
+  assert.deepEqual(
+    JSON.parse(result.stdout).models.map((model) => model.id),
+    ['claude-gpt-5.6-terra', 'claude-gpt-5.6-sol'],
+    'a --json invocation is a machine contract, so a human diagnostic belongs on stderr',
+  );
+});
+
 test('doctor prints the catalog writer version', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-doctor-'));
   try {

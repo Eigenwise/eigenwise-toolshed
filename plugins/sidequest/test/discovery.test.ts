@@ -26,6 +26,7 @@ process.env.SIDEQUEST_DISCOVERY_DIRS = empty;
 const discovery = require('../lib/discovery.js') as {
   discoverExternalModels(): Array<{ slug: string; id: string; label: string; provider: string; source: string }>;
   providerReadiness(provider: string): { provider: string; ready: boolean; state: string; message: string } | null;
+  configuredExternalModelProvider(slug: string): string | null;
 };
 const store = require('../lib/store.js') as {
   CLAUDE_RUNTIMES: readonly string[];
@@ -84,7 +85,25 @@ test('discovery reads the gateway readiness contract independently of catalog mo
   });
 });
 
-test('discovery refreshes an unready Codex catalog through the newest installed gateway', (t) => {
+function readyCatalog(updatedAt = new Date().toISOString()) {
+  return {
+    schemaVersion: 4,
+    updatedAt,
+    providers: { codex: { ready: true, state: 'ready', message: 'Codex is ready.' } },
+    models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex' }],
+  };
+}
+
+function unreadyCatalog(updatedAt = new Date().toISOString()) {
+  return {
+    ...readyCatalog(updatedAt),
+    providers: { codex: { ready: false, state: 'serving-version-mismatch', message: 'old session' } },
+  };
+}
+
+// A refresh is a side effect on the catalog FILE, and the real gateway also reports what it did on stdout, so a
+// fake that only prints the catalog would pass while the shipped code silently gave up on that report (SQ-2208).
+function seedGatewayHome(t: { after(fn: () => void): void }, stored: unknown, refreshWrites: Record<string, unknown>) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-refresh-'));
   const previousHome = process.env.HOME;
   const previousUserProfile = process.env.USERPROFILE;
@@ -99,37 +118,41 @@ test('discovery refreshes an unready Codex catalog through the newest installed 
   process.env.USERPROFILE = home;
   delete process.env.SIDEQUEST_DISCOVERY_DIRS;
 
-  const readyCatalog = {
-    schemaVersion: 4,
-    updatedAt: new Date().toISOString(),
-    providers: { codex: { ready: true, state: 'ready', message: 'Codex is ready.' } },
-    models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex' }],
-  };
-  const installs = ['0.48.6', '0.48.7'].map((version) => {
+  const catalogPath = path.join(home, '.claude', 'model-gateway', 'catalog.json');
+  const installs = Object.entries(refreshWrites).map(([version, catalog]) => {
     const installPath = path.join(home, 'plugins', version);
     const command = path.join(installPath, 'bin', 'model-gateway.js');
-    const catalog = version === '0.48.7'
-      ? readyCatalog
-      : { ...readyCatalog, providers: { codex: { ready: false, state: 'serving-version-mismatch', message: 'old session' } } };
     fs.mkdirSync(path.dirname(command), { recursive: true });
-    fs.writeFileSync(command, `process.stdout.write(${JSON.stringify(JSON.stringify(catalog))});`);
+    fs.writeFileSync(command, [
+      `require('fs').writeFileSync(${JSON.stringify(catalogPath)}, ${JSON.stringify(JSON.stringify(catalog))});`,
+      "process.stdout.write('catalog: preserved claude-grok-build from a subset write\\n');",
+    ].join('\n'));
     return { installPath, version };
   });
   fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
   fs.writeFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
     plugins: { 'model-gateway@eigenwise-toolshed': installs },
   }));
-  fs.mkdirSync(path.join(home, '.claude', 'model-gateway'), { recursive: true });
-  fs.writeFileSync(path.join(home, '.claude', 'model-gateway', 'catalog.json'), JSON.stringify({
-    schemaVersion: 4,
-    updatedAt: new Date().toISOString(),
-    providers: { codex: { ready: false, state: 'serving-version-mismatch', message: 'old session' } },
-    models: [{ slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex' }],
-  }));
+  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+  fs.writeFileSync(catalogPath, JSON.stringify(stored));
+}
+
+test('discovery refreshes an unready Codex catalog through the newest installed gateway', (t) => {
+  seedGatewayHome(t, unreadyCatalog(), { '0.48.6': unreadyCatalog(), '0.48.7': readyCatalog() });
 
   assert.deepEqual(discovery.providerReadiness('codex'), {
     provider: 'codex', ready: true, state: 'ready', message: 'Codex is ready.',
   });
+});
+
+test('SQ-2208: models survive a catalog that aged out of the freshness window', (t) => {
+  const agedOut = new Date(Date.now() - 6 * 60 * 1000).toISOString();
+  seedGatewayHome(t, readyCatalog(agedOut), { '0.48.7': readyCatalog() });
+
+  assert.deepEqual(discovery.discoverExternalModels(), [{
+    slug: 'codex-gpt-test', id: 'claude-test', label: 'GPT Test', provider: 'codex', source: 'model-gateway',
+  }]);
+  assert.equal(discovery.configuredExternalModelProvider('codex-gpt-test'), 'codex');
 });
 
 test('discovery validates concrete catalog identity and drops routing hints', () => {

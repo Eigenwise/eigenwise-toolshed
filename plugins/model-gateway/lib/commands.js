@@ -142,7 +142,11 @@ const cmd = process.argv[2];
 const args = process.argv.slice(3);
 const flag = (f) => args.includes(f);
 
-function log(m) { console.log(m); }
+// A `--json` invocation's stdout is a machine contract. `catalog --refresh --json` writes the catalog on the
+// way out, and that write logs when it preserves models from a subset response, so a diagnostic line landed
+// ahead of the JSON and Sidequest's catalog refresh threw on parse and silently gave up (SQ-2208). Human lines
+// still get emitted, on stderr, where they belong once stdout is data.
+function log(m) { if (flag('--json')) console.error(m); else console.log(m); }
 function die(m, code) { console.error('model-gateway: ' + m); process.exit(code == null ? 1 : code); }
 function readPluginVersion() {
   try {
