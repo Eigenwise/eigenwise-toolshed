@@ -1464,6 +1464,7 @@ function createDispatch(dependencies) {
           worktreeBindingSource: state.worktreeBindingSource ? String(state.worktreeBindingSource) : null,
           baseCommit: state.baseCommit ? String(state.baseCommit) : null,
           sanctionedRevisions: sanctionedRevisionsForLiveClaim(ticket, state),
+          claimHeld: Boolean(ticket.claim && ticket.claim.by),
           phase: state.terminalAt ? "terminal" : state.outcome === "claimed" ? "claimed" : "bound"
         };
         if (agentId && candidate.agentId === agentId) byAgent.push(candidate);
@@ -1488,6 +1489,7 @@ function createDispatch(dependencies) {
       identityBound: Boolean(agentId && expectation.agentId === agentId),
       dispatchBaseline: expectation.baseCommit,
       sanctionedRevisions: expectation.sanctionedRevisions,
+      claimHeld: expectation.claimHeld,
       phase: expectation.phase,
       expectedWorktree: expectation.worktree,
       expectedGitDirectory: expectation.worktreeGitDirectory,

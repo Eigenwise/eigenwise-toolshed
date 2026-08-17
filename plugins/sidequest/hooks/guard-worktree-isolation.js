@@ -207,6 +207,15 @@ function observedWorktreeLease(found, worktree, agentId) {
     stdio: ["ignore", "pipe", "ignore"]
   }).trim();
   const gitPath = (value) => import_node_path3.default.isAbsolute(value) ? value : import_node_path3.default.resolve(worktree, value);
+  const baselineAncestry = (baseline) => {
+    if (!baseline) return "unknown";
+    try {
+      git(["merge-base", "--is-ancestor", baseline, "HEAD"]);
+      return "ancestor";
+    } catch (error) {
+      return error.status === 1 ? "unrelated" : "unknown";
+    }
+  };
   const repository = found?.projectPath || worktree;
   return leaseKernel.createWorktreeLease({
     repository,
@@ -215,6 +224,8 @@ function observedWorktreeLease(found, worktree, agentId) {
     dispatchRef: found?.ref || null,
     dispatchBaseline: found?.dispatchBaseline || null,
     sanctionedRevisions: found?.sanctionedRevisions || [],
+    baselineAncestry: baselineAncestry(found?.dispatchBaseline || null),
+    claimHeld: Boolean(found?.claimHeld),
     observedRevision: git(["rev-parse", "--verify", "HEAD^{commit}"]),
     observedWorktree: worktree,
     boundRevision: found?.expectedRevision || null,

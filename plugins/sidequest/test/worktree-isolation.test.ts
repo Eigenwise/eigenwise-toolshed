@@ -244,7 +244,10 @@ test('an assigned worktree at a changed dispatch revision is refused', () => {
     execFileSync('git', ['commit', '--quiet', '-m', 'changed dispatch revision'], { cwd: linked, windowsHide: true });
     const out = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
     assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(out.hookSpecificOutput.permissionDecisionReason, /dispatch baseline/);
+    // This fixture never claims the ticket, and since SQ-2193 that is the operative reason: forward history
+    // buys a write lease only while the claim that authorized the worktree is held. Foreign history is
+    // refused whether or not a claim exists, which the SQ-2193 test covers separately.
+    assert.match(out.hookSpecificOutput.permissionDecisionReason, /claim that authorized this worktree is no longer held/);
   } finally {
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
   }
@@ -274,11 +277,10 @@ test('SQ-2182: a sanctioned commit keeps the write lease, and losing the claim t
     const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
     assert.notEqual(head, ticket.dispatch.baseCommit, 'the fixture must move HEAD off the dispatch baseline');
 
-    // Before the commit is recorded, this is indistinguishable from foreign drift and stays refused.
-    const beforeRecording = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
-    assert.equal(beforeRecording.hookSpecificOutput.permissionDecision, 'deny');
-    assert.match(beforeRecording.hookSpecificOutput.permissionDecisionReason, /not sanctioned by the board for this claim/);
-    assert.match(beforeRecording.hookSpecificOutput.permissionDecisionReason, /not a scope decision/);
+    // This used to be a refusal, on the grounds that an unrecorded commit was indistinguishable from
+    // foreign drift. It is distinguishable: it descends from the baseline, which SQ-2193 now allows on its
+    // own. What this test is really about is the rebind following the claim, asserted below.
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked)), null);
 
     const wrongOwner = store.recordSanctionedCommit(slug, ticket.ref, { by: `${worker}-impostor`, commit: head });
     assert.equal(wrongOwner.ok, false);
@@ -291,6 +293,11 @@ test('SQ-2182: a sanctioned commit keeps the write lease, and losing the claim t
     assert.equal(store.releaseTicket(slug, ticket.ref, worker, { status: 'todo' }).ok, true);
     const afterRelease = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
     assert.equal(afterRelease.hookSpecificOutput.permissionDecision, 'deny', 'a recorded commit must not keep granting writes once the claim is gone');
+    // Releasing makes the dispatch terminal, and the terminal-state refusal fires ahead of any lease
+    // decision, so this is what actually stops the write. Worth naming: the lease path that revokes a
+    // moved HEAD when the claim is gone is reached while the dispatch is still live, and the bound-but-
+    // never-claimed test above is what covers it.
+    assert.match(afterRelease.hookSpecificOutput.permissionDecisionReason, /already reached a terminal board state/);
   } finally {
     store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
@@ -319,6 +326,49 @@ test('SQ-2182: committing through the board leaves the worktree writable', () =>
     assert.notEqual(head, ticket.dispatch.baseCommit, 'the board commit must move HEAD off the dispatch baseline');
     assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.sanctionedCommits, [head.toLowerCase()]);
     assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, '.release', 'unreleased', `${ticket.ref}.md`), linked)), null);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test', force: true });
+    execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });
+  }
+});
+
+// SQ-2193. SQ-2182 fixed the commit path the board owns, and a raw `git commit` reached the identical dead
+// end by a route no guard covered: guard-shared-tree-commit skips any checkout whose `.git` is a file, so
+// the commit succeeds, records nothing, and every later write is refused for the rest of the run. That is
+// not optional to allow either, since a dirty continuation's preserve step is told to run exactly this
+// command. The orphan branch is the negative control: forward history stays allowed, foreign history does
+// not.
+test('SQ-2193: a raw commit that descends from the baseline keeps the write lease, foreign history does not', () => {
+  const agentId = 'a2rawcommit';
+  const { ticket, sessionId, executor } = dispatched(agentId);
+  const linked = ticket.dispatch.worktree;
+  execFileSync('git', ['worktree', 'add', '--detach', linked], { cwd: PROJECT, windowsHide: true });
+  completeCheckoutCreation(sessionId, linked);
+  assert.equal(store.bindDispatchAgent(sessionId, executor, agentId, agentId, linked).ok, true);
+  const worker = `${agentId}-worker`;
+  try {
+    assert.equal(store.claimTicket(slug, ticket.ref, worker, {
+      token: store.getTicket(slug, ticket.ref).dispatchNonce,
+      executor,
+    }).ok, true);
+
+    fs.appendFileSync(path.join(linked, 'README.md'), 'preserved by a raw commit\n');
+    execFileSync('git', ['add', '-A'], { cwd: linked, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', 'preserved by a raw commit'], { cwd: linked, windowsHide: true });
+    const head = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: linked, encoding: 'utf8', windowsHide: true }).trim();
+    assert.notEqual(head, ticket.dispatch.baseCommit, 'the fixture must move HEAD off the dispatch baseline');
+    assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.sanctionedCommits ?? [], [], 'a raw commit must not be recorded, or this proves nothing about ancestry');
+
+    // The file submit demands once the range touches shipped plugin paths. Refusing it here is the whole
+    // catch-22: verified work that cannot be submitted.
+    assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, '.release', 'unreleased', `${ticket.ref}.md`), linked)), null);
+
+    execFileSync('git', ['checkout', '--quiet', '--orphan', 'foreign-history'], { cwd: linked, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '--allow-empty', '-m', 'unrelated root commit'], { cwd: linked, windowsHide: true });
+    const foreign = runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, path.join(linked, 'README.md'), linked));
+    assert.equal(foreign.hookSpecificOutput.permissionDecision, 'deny', 'a parentless commit is not this dispatch history moving forward');
+    assert.match(foreign.hookSpecificOutput.permissionDecisionReason, /left the history the board dispatched/);
+    assert.match(foreign.hookSpecificOutput.permissionDecisionReason, /not a scope decision/);
   } finally {
     store.releaseTicket(slug, ticket.ref, worker, { status: 'todo', source: 'test', force: true });
     execFileSync('git', ['worktree', 'remove', '--force', linked], { cwd: PROJECT, windowsHide: true });

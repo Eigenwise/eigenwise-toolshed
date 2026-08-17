@@ -47,6 +47,18 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
     stdio: ['ignore', 'pipe', 'ignore'],
   }).trim();
   const gitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(worktree, value);
+  // `merge-base --is-ancestor` reports its answer as an exit code, so the false case arrives as a throw
+  // and has to be told apart from a probe that could not run at all. Anything other than a clean exit 1
+  // stays 'unknown', which keeps refusing rather than guessing the worktree is on the right history.
+  const baselineAncestry = (baseline: string | null): 'ancestor' | 'unrelated' | 'unknown' => {
+    if (!baseline) return 'unknown';
+    try {
+      git(['merge-base', '--is-ancestor', baseline, 'HEAD']);
+      return 'ancestor';
+    } catch (error) {
+      return (error as { status?: number }).status === 1 ? 'unrelated' : 'unknown';
+    }
+  };
   const repository = found?.projectPath || worktree;
   return leaseKernel.createWorktreeLease({
     repository,
@@ -55,6 +67,8 @@ function observedWorktreeLease(found: IsolationExpectation | null, worktree: str
     dispatchRef: found?.ref || null,
     dispatchBaseline: found?.dispatchBaseline || null,
     sanctionedRevisions: found?.sanctionedRevisions || [],
+    baselineAncestry: baselineAncestry(found?.dispatchBaseline || null),
+    claimHeld: Boolean(found?.claimHeld),
     observedRevision: git(['rev-parse', '--verify', 'HEAD^{commit}']),
     observedWorktree: worktree,
     boundRevision: found?.expectedRevision || null,

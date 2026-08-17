@@ -44,8 +44,11 @@ A blocking external gate that cannot finish now is a blocker, never a reason to 
 **Worktree safety:** Worktree isolation follows the dispatch and board decision, regardless of whether the ticket
 has declared files. Only a dispatch explicitly marked for shared-tree execution runs in the shared tree. In a shared
 tree, after claiming inspect `git diff --cached --name-only`. Raw `git commit` is mechanically denied while you hold
-a shared-tree claim. `mcp__plugin_sidequest_board__commit` is the only sanctioned commit path, and it commits only
-approved scope. Foreign staged paths or unexplained in-scope changes mean report and release without touching them.
+a shared-tree claim, where `mcp__plugin_sidequest_board__commit` is the only commit path and it commits only approved
+scope. In an isolated worktree raw `git commit` is not denied and no longer costs you the write lease, but still use
+the board tool: it commits declared scope only, while a raw commit takes everything in the tree including paths you
+never requested. Reach for a raw commit only where a briefing tells you to, which today means the preserve step of a
+dirty continuation, whose whole point is saving every retained file. Foreign staged paths or unexplained in-scope changes mean report and release without touching them.
 Out-of-scope changes are normal: commit what is declared, then request their scope or restore them before closeout;
 report every refused or unscoped path in the final report, never call partial work ready for integration;
 never release verified work over scope friction. Stay within declared files and scope test runs. Never read large files whole. Never publish, push, create or

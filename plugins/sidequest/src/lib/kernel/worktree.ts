@@ -8,6 +8,7 @@ export type LeaseIdentity = Readonly<{ status: 'bound'; agentId?: string; dispat
 export type LeaseLiveness = Readonly<{ status: 'live'; evidence: string } | { status: 'terminal'; evidence: string } | { status: 'unknown' }>;
 export type LeasePhase = 'prepared' | 'created' | 'bound' | 'claimed' | 'working' | 'submitted' | 'integrated' | 'terminal';
 export type WorktreeProvisioning = 'host' | 'sidequest-copy' | 'sidequest-link' | 'unknown';
+export type BaselineAncestry = 'ancestor' | 'unrelated' | 'unknown';
 export type WorktreeLeaseFacts = Readonly<{
   repository: string;
   gitDirectory: string;
@@ -18,6 +19,13 @@ export type WorktreeLeaseFacts = Readonly<{
   // lifecycle sanctioned is not drift away from the baseline, so it must not revoke the lease that
   // authorized it (SQ-2182).
   sanctionedRevisions?: readonly string[];
+  // Whether the dispatch baseline is reachable from the observed revision. Three states rather than a
+  // boolean because "we read the ancestry and it is unrelated" and "we could not read it" must not
+  // collapse into one falsy value: only 'ancestor' permits a write, and 'unknown' keeps refusing.
+  baselineAncestry?: BaselineAncestry;
+  // Whether the claim that authorized this worktree is still held. Ancestry is a plain git fact and knows
+  // nothing about the lifecycle, so the gate that keeps authority following the claim lives here.
+  claimHeld?: boolean;
   observedRevision: string | null;
   observedWorktree: string | null;
   boundRevision?: string | null;
@@ -100,6 +108,8 @@ export function createWorktreeLease(facts: WorktreeLeaseFacts): WorktreeLease {
     identity: Object.freeze({ ...facts.identity }),
     liveness: Object.freeze({ ...facts.liveness }),
     sanctionedRevisions: Object.freeze((facts.sanctionedRevisions || []).map((revision) => String(revision).toLowerCase())),
+    baselineAncestry: facts.baselineAncestry || 'unknown',
+    claimHeld: Boolean(facts.claimHeld),
     canonicalRepository: canonicalPath(facts.repository),
     canonicalGitDirectory: canonicalPath(facts.gitDirectory),
     canonicalCommonGitDirectory: canonicalPath(facts.commonGitDirectory),
@@ -134,19 +144,56 @@ function shortRevision(revision: string | null): string {
   return String(revision || '').slice(0, 12);
 }
 
-function incorrectBaselineDecision(lease: WorktreeLease): LeaseDecision | null {
-  if (!lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision) return null;
-  // The board sanctioned this HEAD for this dispatch while its claim was held, so the executor's own
-  // committed work is not drift. Before this, the first sanctioned commit permanently revoked the write
-  // lease, and submit then demanded a release fragment the executor was mechanically forbidden to create
-  // (SQ-2182). Scope is named as a non-cause on purpose: the refusal read like a permission problem and
-  // sent executors to request access they already held. Both clauses lead, ahead of the hashes, because
-  // the hook budget truncates the tail and the meaning must be what survives.
-  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+function revisionIsBaseline(lease: WorktreeLease): boolean {
+  return !lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision;
+}
+
+// Scope is named as a non-cause on purpose: the refusal read like a permission problem and sent executors
+// to request access they already held (SQ-2182). The cause clause leads, ahead of the hashes, because the
+// hook budget truncates the tail and the meaning must be what survives.
+function unsanctionedRevisionRefusal(lease: WorktreeLease, cause: string): LeaseDecision {
   return denied(
-    'this revision was not sanctioned by the board for this claim, so it reads as drift from the dispatch baseline; '
-    + `not a scope decision (baseline ${shortRevision(lease.dispatchBaseline)}, observed ${shortRevision(lease.observedRevision)}).`,
+    `${cause}; not a scope decision `
+    + `(baseline ${shortRevision(lease.dispatchBaseline)}, observed ${shortRevision(lease.observedRevision)}).`,
   );
+}
+
+// Creation demands the exact baseline, and deliberately does not accept a descendant the way a write does.
+// Submission ranges are computed against this baseline (see sameBaseline in kernel/submission.ts), so a
+// worktree created even one commit ahead of it would attribute a commit this executor never wrote to this
+// ticket.
+function creationBaselineDecision(lease: WorktreeLease): LeaseDecision | null {
+  if (revisionIsBaseline(lease)) return null;
+  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+  return unsanctionedRevisionRefusal(lease, 'this revision is not the dispatch baseline and was not sanctioned by the board for this claim');
+}
+
+// A write needs the worktree to be on the history this dispatch started from, not frozen at its first
+// commit. Two ways to be on it. A revision the board itself authored while the claim was held is
+// sanctioned outright: before that, the first board commit permanently revoked the write lease, and submit
+// then demanded a release fragment the executor was mechanically forbidden to create (SQ-2182). A revision
+// that merely descends from the baseline is equally not drift, and refusing it contradicted the
+// synchronization step in the executor's own briefing, which defines a correct worktree as one where
+// `git merge-base --is-ancestor <baseCommit> HEAD` passes. A raw `git commit` in an isolated worktree
+// reached the same dead end as the sanctioned one did, by a route no guard covered (SQ-2193).
+function writeBaselineDecision(lease: WorktreeLease): LeaseDecision | null {
+  if (revisionIsBaseline(lease)) return null;
+  // Both routes off the baseline require the authorizing claim to still be held. The sanctioned list
+  // carries that gate itself, since the store returns none without a live claim; ancestry is a plain git
+  // fact, so its gate has to be stated here.
+  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+  if (lease.baselineAncestry === 'ancestor' && lease.claimHeld) return null;
+  return unsanctionedRevisionRefusal(lease, writeBaselineCause(lease));
+}
+
+function writeBaselineCause(lease: WorktreeLease): string {
+  if (lease.baselineAncestry === 'unrelated') {
+    return 'HEAD does not descend from the dispatch baseline, so this worktree left the history the board dispatched';
+  }
+  if (lease.baselineAncestry === 'ancestor') {
+    return 'the claim that authorized this worktree is no longer held, so commits made under it no longer carry a write lease';
+  }
+  return 'this revision was not sanctioned by the board for this claim and its descent from the dispatch baseline could not be read';
 }
 
 function boundRevisionDecision(lease: WorktreeLease): LeaseDecision | null {
@@ -184,7 +231,7 @@ export function worktreeCreateDecision(lease: WorktreeLease): LeaseDecision {
   if (lease.phase !== 'prepared') return denied('Creation requires a prepared worktree lease.');
   if (!lease.dispatchRef) return denied('Creation requires a dispatch binding.');
   if (!lease.canonicalWorktree || !lease.canonicalBoundWorktree) return denied('Creation requires a bound worktree target.');
-  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed('the prepared dispatch owns the bound worktree target.');
+  return repositoryDecision(lease) || creationBaselineDecision(lease) || allowed('the prepared dispatch owns the bound worktree target.');
 }
 
 export function worktreeWriteDecision(lease: WorktreeLease, target: string): LeaseDecision {
@@ -195,7 +242,7 @@ export function worktreeWriteDecision(lease: WorktreeLease, target: string): Lea
   if (repository) return repository;
   const checkoutInstance = checkoutInstanceDecision(lease);
   if (checkoutInstance) return checkoutInstance;
-  const baseline = incorrectBaselineDecision(lease);
+  const baseline = writeBaselineDecision(lease);
   if (baseline) return baseline;
   const relative = path.relative(lease.canonicalWorktree, canonicalPath(target));
   return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))

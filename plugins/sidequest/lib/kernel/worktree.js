@@ -94,6 +94,8 @@ function createWorktreeLease(facts) {
     identity: Object.freeze({ ...facts.identity }),
     liveness: Object.freeze({ ...facts.liveness }),
     sanctionedRevisions: Object.freeze((facts.sanctionedRevisions || []).map((revision) => String(revision).toLowerCase())),
+    baselineAncestry: facts.baselineAncestry || "unknown",
+    claimHeld: Boolean(facts.claimHeld),
     canonicalRepository: canonicalPath(facts.repository),
     canonicalGitDirectory: canonicalPath(facts.gitDirectory),
     canonicalCommonGitDirectory: canonicalPath(facts.commonGitDirectory),
@@ -119,12 +121,33 @@ function sanctionedRevision(lease, revision) {
 function shortRevision(revision) {
   return String(revision || "").slice(0, 12);
 }
-function incorrectBaselineDecision(lease) {
-  if (!lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision) return null;
-  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+function revisionIsBaseline(lease) {
+  return !lease.dispatchBaseline || !lease.observedRevision || lease.dispatchBaseline === lease.observedRevision;
+}
+function unsanctionedRevisionRefusal(lease, cause) {
   return denied(
-    `this revision was not sanctioned by the board for this claim, so it reads as drift from the dispatch baseline; not a scope decision (baseline ${shortRevision(lease.dispatchBaseline)}, observed ${shortRevision(lease.observedRevision)}).`
+    `${cause}; not a scope decision (baseline ${shortRevision(lease.dispatchBaseline)}, observed ${shortRevision(lease.observedRevision)}).`
   );
+}
+function creationBaselineDecision(lease) {
+  if (revisionIsBaseline(lease)) return null;
+  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+  return unsanctionedRevisionRefusal(lease, "this revision is not the dispatch baseline and was not sanctioned by the board for this claim");
+}
+function writeBaselineDecision(lease) {
+  if (revisionIsBaseline(lease)) return null;
+  if (sanctionedRevision(lease, lease.observedRevision)) return null;
+  if (lease.baselineAncestry === "ancestor" && lease.claimHeld) return null;
+  return unsanctionedRevisionRefusal(lease, writeBaselineCause(lease));
+}
+function writeBaselineCause(lease) {
+  if (lease.baselineAncestry === "unrelated") {
+    return "HEAD does not descend from the dispatch baseline, so this worktree left the history the board dispatched";
+  }
+  if (lease.baselineAncestry === "ancestor") {
+    return "the claim that authorized this worktree is no longer held, so commits made under it no longer carry a write lease";
+  }
+  return "this revision was not sanctioned by the board for this claim and its descent from the dispatch baseline could not be read";
 }
 function boundRevisionDecision(lease) {
   if (!lease.boundRevision || !lease.observedRevision || lease.boundRevision === lease.observedRevision) return null;
@@ -156,7 +179,7 @@ function worktreeCreateDecision(lease) {
   if (lease.phase !== "prepared") return denied("Creation requires a prepared worktree lease.");
   if (!lease.dispatchRef) return denied("Creation requires a dispatch binding.");
   if (!lease.canonicalWorktree || !lease.canonicalBoundWorktree) return denied("Creation requires a bound worktree target.");
-  return repositoryDecision(lease) || incorrectBaselineDecision(lease) || allowed("the prepared dispatch owns the bound worktree target.");
+  return repositoryDecision(lease) || creationBaselineDecision(lease) || allowed("the prepared dispatch owns the bound worktree target.");
 }
 function worktreeWriteDecision(lease, target) {
   if (lease.identity.status === "unknown") return unknownIdentityDecision("A write");
@@ -166,7 +189,7 @@ function worktreeWriteDecision(lease, target) {
   if (repository) return repository;
   const checkoutInstance = checkoutInstanceDecision(lease);
   if (checkoutInstance) return checkoutInstance;
-  const baseline = incorrectBaselineDecision(lease);
+  const baseline = writeBaselineDecision(lease);
   if (baseline) return baseline;
   const relative = import_node_path.default.relative(lease.canonicalWorktree, canonicalPath(target));
   return relative === "" || !relative.startsWith("..") && !import_node_path.default.isAbsolute(relative) ? allowed("target belongs to the bound worktree.") : denied("target is outside the bound worktree.");
