@@ -41,7 +41,7 @@ const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCand
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require('./kernel/worktree.js');
 const { reviewLockMessage } = require('./kernel/review-binding.js');
 const { migrateIfNeeded } = require('./migrate.js');
-const { configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require('./discovery.js');
+const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require('./discovery.js');
 const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
@@ -1105,6 +1105,7 @@ const {
 });
 
 let refreshingRoutingProfileSeeds = false;
+const routingProfileSeedStates = new Map<string, string>();
 
 function installedProviderSeedProfiles() {
   return starterRoutingProfilesFor(discoverExternalModels()
@@ -1187,6 +1188,13 @@ function refreshReadonlyCategorySeeds(handle?: any) {
   });
 }
 
+function refreshRoutingProfileSeedsForCatalogState(handle: unknown, root: string) {
+  const currentState = catalogStateFingerprint();
+  if (routingProfileSeedStates.get(root) === currentState) return;
+  refreshRoutingProfileSeeds(handle);
+  routingProfileSeedStates.set(root, catalogStateFingerprint());
+}
+
 function database() {
   const root = homeRoot();
   let handle = dbByHome.get(root);
@@ -1199,7 +1207,7 @@ function database() {
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
     try {
-      refreshRoutingProfileSeeds(handle);
+      refreshRoutingProfileSeedsForCatalogState(handle, root);
     } finally {
       refreshingRoutingProfileSeeds = false;
     }

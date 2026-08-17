@@ -14,7 +14,7 @@ const { preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCand
 const { canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = require("./kernel/worktree.js");
 const { reviewLockMessage } = require("./kernel/review-binding.js");
 const { migrateIfNeeded } = require("./migrate.js");
-const { configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
+const { catalogStateFingerprint, configuredExternalModelProvider, discoverExternalModels, providerReadiness } = require("./discovery.js");
 const telemetry = require("./telemetry.js");
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
@@ -1169,6 +1169,7 @@ const {
   withTicketLock
 });
 let refreshingRoutingProfileSeeds = false;
+const routingProfileSeedStates = /* @__PURE__ */ new Map();
 function installedProviderSeedProfiles() {
   return starterRoutingProfilesFor(discoverExternalModels().filter((model) => providerReadiness(model.provider)?.ready === true));
 }
@@ -1251,6 +1252,12 @@ function refreshReadonlyCategorySeeds(handle) {
     if (changed) refreshPreparedDispatches(handle, [...affected], [...readonlyIds]);
   });
 }
+function refreshRoutingProfileSeedsForCatalogState(handle, root) {
+  const currentState = catalogStateFingerprint();
+  if (routingProfileSeedStates.get(root) === currentState) return;
+  refreshRoutingProfileSeeds(handle);
+  routingProfileSeedStates.set(root, catalogStateFingerprint());
+}
 function database() {
   const root = homeRoot();
   let handle = dbByHome.get(root);
@@ -1263,7 +1270,7 @@ function database() {
   if (!refreshingRoutingProfileSeeds) {
     refreshingRoutingProfileSeeds = true;
     try {
-      refreshRoutingProfileSeeds(handle);
+      refreshRoutingProfileSeedsForCatalogState(handle, root);
     } finally {
       refreshingRoutingProfileSeeds = false;
     }

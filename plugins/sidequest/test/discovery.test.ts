@@ -39,12 +39,14 @@ function writeCatalog(models: CatalogModel[], catalog: CatalogHeader = {
   schemaVersion: 3,
   source: 'model-gateway',
   codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
-}) {
+}): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-discovery-'));
   const dir = path.join(root, 'model-gateway');
+  const catalogPath = path.join(dir, 'catalog.json');
   fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, 'catalog.json'), JSON.stringify({ updatedAt: new Date().toISOString(), ...catalog, models }));
+  fs.writeFileSync(catalogPath, JSON.stringify({ updatedAt: new Date().toISOString(), ...catalog, models }));
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
+  return catalogPath;
 }
 
 test('missing and malformed catalogs fail soft', () => {
@@ -54,6 +56,25 @@ test('missing and malformed catalogs fail soft', () => {
   fs.writeFileSync(path.join(root, 'model-gateway', 'catalog.json'), '{bad');
   process.env.SIDEQUEST_DISCOVERY_DIRS = root;
   assert.deepEqual(discovery.discoverExternalModels(), []);
+});
+
+test('catalog cache re-reads a rewritten catalog', () => {
+  const catalogPath = writeCatalog([{ slug: 'codex-gpt-first', id: 'claude-first', label: 'First model' }]);
+  assert.deepEqual(discovery.discoverExternalModels(), [{
+    slug: 'codex-gpt-first', id: 'claude-first', label: 'First model', provider: 'codex', source: 'model-gateway',
+  }]);
+
+  fs.writeFileSync(catalogPath, JSON.stringify({
+    schemaVersion: 3,
+    source: 'model-gateway',
+    updatedAt: new Date().toISOString(),
+    codexReadiness: { ready: true, state: 'ready', message: 'Codex is ready.' },
+    models: [{ slug: 'codex-gpt-reloaded', id: 'claude-reloaded-model', label: 'Reloaded model' }],
+  }));
+
+  assert.deepEqual(discovery.discoverExternalModels(), [{
+    slug: 'codex-gpt-reloaded', id: 'claude-reloaded-model', label: 'Reloaded model', provider: 'codex', source: 'model-gateway',
+  }]);
 });
 
 test('stale, invalid, and future catalog timestamps suppress both models and readiness', () => {

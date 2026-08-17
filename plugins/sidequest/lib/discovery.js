@@ -30,6 +30,7 @@ var discovery_exports = {};
 __export(discovery_exports, {
   CATALOG_SOURCES: () => CATALOG_SOURCES,
   CATALOG_STALE_MS: () => CATALOG_STALE_MS,
+  catalogStateFingerprint: () => catalogStateFingerprint,
   configuredExternalModelProvider: () => configuredExternalModelProvider,
   discoverExternalModels: () => discoverExternalModels,
   providerReadiness: () => providerReadiness
@@ -56,6 +57,24 @@ function readJsonSafe(file) {
   } catch {
     return null;
   }
+}
+const catalogCache = /* @__PURE__ */ new Map();
+function catalogFileFingerprint(file) {
+  try {
+    const stat = import_node_fs.default.statSync(file);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return null;
+  }
+}
+function readCatalogSafe(file) {
+  const resolvedFile = import_node_path.default.resolve(file);
+  const fingerprint = catalogFileFingerprint(resolvedFile);
+  const cached = catalogCache.get(resolvedFile);
+  if (cached?.fingerprint === fingerprint) return cached.data;
+  const data = readJsonSafe(resolvedFile);
+  catalogCache.set(resolvedFile, { fingerprint, data });
+  return data;
 }
 function isRecord(value) {
   return value !== null && typeof value === "object";
@@ -105,17 +124,24 @@ function refreshGatewayCatalog(catalogPath) {
   const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
   if (!attempt || Date.now() - attempt.at > window) {
     const command = newestGatewayCatalogCommand();
-    const written = command !== null && gatewayRefreshSucceeded(command) ? readJsonSafe(catalogPath) : null;
+    const written = command !== null && gatewayRefreshSucceeded(command) ? readCatalogSafe(catalogPath) : null;
     gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
     return isRecord(written) ? written : null;
   }
-  const catalog = attempt.refreshed ? readJsonSafe(catalogPath) : null;
+  const catalog = attempt.refreshed ? readCatalogSafe(catalogPath) : null;
   return isRecord(catalog) ? catalog : null;
 }
 function catalogWithinFreshnessWindow(data) {
   if (!isRecord(data) || typeof data.updatedAt !== "string") return false;
   const age = Date.now() - Date.parse(data.updatedAt);
   return Number.isFinite(age) && age >= 0 && age <= CATALOG_STALE_MS;
+}
+function catalogStateFingerprint() {
+  return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
+    const catalogPath = import_node_path.default.resolve(root, relPath);
+    const freshness = catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? "fresh" : "stale";
+    return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? "missing"}:${freshness}`;
+  })).join("|");
 }
 function usableCatalog(data, schemas) {
   if (!isRecord(data) || !catalogWithinFreshnessWindow(data)) return null;
@@ -141,7 +167,7 @@ function providerReadiness(provider) {
   for (const root of discoveryRoots()) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
       const catalogPath = import_node_path.default.join(root, relPath);
-      const storedCatalog = readJsonSafe(catalogPath);
+      const storedCatalog = readCatalogSafe(catalogPath);
       let catalog = usableCatalog(storedCatalog, schemas);
       let readiness = catalog && catalogProviderReadiness(catalog, provider);
       if (provider === "codex" && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
@@ -157,7 +183,7 @@ function providerReadiness(provider) {
   return null;
 }
 function currentCatalog(catalogPath, schemas) {
-  const storedCatalog = readJsonSafe(catalogPath);
+  const storedCatalog = readCatalogSafe(catalogPath);
   const usable = usableCatalog(storedCatalog, schemas);
   if (usable || !isRecord(storedCatalog)) return usable;
   return usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
@@ -212,6 +238,7 @@ function discoverExternalModels() {
 0 && (module.exports = {
   CATALOG_SOURCES,
   CATALOG_STALE_MS,
+  catalogStateFingerprint,
   configuredExternalModelProvider,
   discoverExternalModels,
   providerReadiness

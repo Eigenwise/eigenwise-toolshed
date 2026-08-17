@@ -19,8 +19,24 @@ const pluginRoot = path.join(__dirname, '..');
 const hooksRoot = path.join(pluginRoot, 'hooks');
 const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-perf-home-'));
 const fixtureRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-perf-projects-'));
+const discoveryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-perf-discovery-'));
+const catalogPath = path.join(discoveryRoot, 'model-gateway', 'catalog.json');
 const projectPaths = Array.from({ length: 12 }, (_, index: number) => path.join(fixtureRoot, `project-${index + 1}`));
 for (const projectPath of projectPaths) fs.mkdirSync(projectPath, { recursive: true });
+
+function writeDiscoveryCatalog(generation: string): void {
+  fs.mkdirSync(path.dirname(catalogPath), { recursive: true });
+  fs.writeFileSync(catalogPath, JSON.stringify({
+    schemaVersion: 4,
+    updatedAt: new Date().toISOString(),
+    providers: { codex: { ready: true, state: 'ready', message: 'Codex is ready.' } },
+    models: [{ slug: 'codex-gpt-perf', id: 'claude-gpt-perf', label: 'GPT Perf', provider: 'codex' }],
+    generation,
+  }));
+}
+
+writeDiscoveryCatalog('initial');
+process.env.SIDEQUEST_DISCOVERY_DIRS = discoveryRoot;
 process.env.SIDEQUEST_HOME = home;
 process.env.CLAUDE_PROJECT_DIR = projectPaths[0];
 process.env.SIDEQUEST_AGENTS_DIR = path.join(home, 'agents');
@@ -36,8 +52,12 @@ store.setCategory({
   fallback: null,
   enabled: true,
 });
-const startTicket = store.createTicket(slugs[0], { title: 'Subagent start fixture', category: 'perf.fixture', source: 'test' });
-const stopTicket = store.createTicket(slugs[0], { title: 'Subagent stop fixture', category: 'perf.fixture', source: 'test' });
+const startTicket = store.createTicket(slugs[0], {
+  title: 'Subagent start fixture', category: 'perf.fixture', files: ['fixture.txt'], source: 'test',
+});
+const stopTicket = store.createTicket(slugs[0], {
+  title: 'Subagent stop fixture', category: 'perf.fixture', files: ['fixture.txt'], source: 'test',
+});
 const database = db.openDb(home);
 let backgroundId = 0;
 db.txn(database, () => {
@@ -152,6 +172,26 @@ function measure(run: (index: number) => void): { median: number; p95: number; c
     control: { median: percentile(controls, 0.5), p95: percentile(controls, 0.95) },
   };
 }
+
+test('a full sweep across seeded projects reads the catalog a bounded number of times', () => {
+  writeDiscoveryCatalog('catalog-state-after-store-startup');
+  let catalogReads = 0;
+  const originalReadFileSync = fs.readFileSync;
+  Object.defineProperty(fs, 'readFileSync', {
+    configurable: true,
+    value(...arguments_: unknown[]) {
+      const [file] = arguments_;
+      if (typeof file === 'string' && path.resolve(file) === catalogPath) catalogReads += 1;
+      return Reflect.apply(originalReadFileSync, fs, arguments_);
+    },
+  });
+  try {
+    store.sweepStaleClaims({ source: 'test' });
+    assert.ok(catalogReads <= 4, `expected at most four catalog reads, received ${catalogReads}`);
+  } finally {
+    Object.defineProperty(fs, 'readFileSync', { configurable: true, value: originalReadFileSync });
+  }
+});
 
 test('fresh-process hook latency reports benchmark measurements', (context: any) => {
   const sessionStart = measure(() => runHook('session-start.js', { session_id: 'perf-session', cwd: projectPaths[0] }));
