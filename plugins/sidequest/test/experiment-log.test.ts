@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_gateway-catalog-freshness.js';
 import './_sidequest-install-fixture.js';
 'use strict';
 

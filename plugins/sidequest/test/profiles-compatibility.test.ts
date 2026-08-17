@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_gateway-catalog-freshness.js';
 import './_sidequest-install-fixture.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
