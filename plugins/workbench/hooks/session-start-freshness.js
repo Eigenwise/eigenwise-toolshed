@@ -22,6 +22,29 @@ const MIN_NODE_VERSION = '22.5.0';
 const OFFICIAL_MARKETPLACE = 'claude-plugins-official';
 const seenStates = new Set();
 
+// The health report is SessionStart additional context, so only the model reads it. A finding the USER has to
+// go fix therefore reached nobody: on 2026-08-13 this hook correctly found a Sidequest board whose install had
+// been pruned away, plus auto-update off and a stale cache, and Kenny learned none of it until he asked what
+// hooks had fired (SQ-1900). Recording who must act at the point each finding is produced is what lets the one
+// user-facing line be built without matching on message text.
+const BLOCKS_THE_USER = 'blocking';
+const DRIFTING_ON_THE_USER = 'degraded';
+const USER_ACTION_SEVERITY = [BLOCKS_THE_USER, DRIFTING_ON_THE_USER];
+
+function finding(text, userAction = null) {
+  return { text, userAction };
+}
+
+function findingText(findings) {
+  return findings.map((item) => item.text);
+}
+
+function uniqueFindings(findings) {
+  const byText = new Map();
+  for (const item of findings) if (!byText.has(item.text)) byText.set(item.text, item);
+  return [...byText.values()].sort((left, right) => (left.text < right.text ? -1 : left.text > right.text ? 1 : 0));
+}
+
 function readJson(file) {
   return readJsonFrom(fs, file);
 }
@@ -201,20 +224,20 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
   for (const name of names) {
     const entry = marketplaces?.[name];
     if (!entry) {
-      problems.push(`${name} marketplace is not registered locally`);
+      problems.push(finding(`${name} marketplace is not registered locally`, BLOCKS_THE_USER));
       continue;
     }
-    if (!autoUpdateEnabled(name, entry)) problems.push(`${name} auto-update is off`);
+    if (!autoUpdateEnabled(name, entry)) problems.push(finding(`${name} auto-update is off`, DRIFTING_ON_THE_USER));
 
     const age = Date.parse(entry.lastUpdated || '');
     if (!Number.isFinite(age) || now - age > CACHE_MAX_AGE_MS) {
-      problems.push(`${name} marketplace cache is stale, installed freshness is unknown`);
+      problems.push(finding(`${name} marketplace cache is stale, installed freshness is unknown`, DRIFTING_ON_THE_USER));
       continue;
     }
 
     const manifest = manifestFor(name, entry);
     if (!manifest) {
-      problems.push(`${name} marketplace cache is missing, installed freshness is unknown`);
+      problems.push(finding(`${name} marketplace cache is missing, installed freshness is unknown`, DRIFTING_ON_THE_USER));
       continue;
     }
     manifests.set(name, new Map((manifest.plugins || []).map((plugin) => [plugin.name, plugin])));
@@ -225,22 +248,24 @@ function installedFreshness(instances, marketplaces, now, manifestFor, gitFreshn
     if (!parts || !manifests.has(parts.marketplace)) continue;
     const plugin = manifests.get(parts.marketplace).get(parts.name);
     if (!plugin) {
-      problems.push(`${instance.id} freshness is unknown because it is missing from its cached marketplace manifest`);
+      problems.push(finding(`${instance.id} freshness is unknown because it is missing from its cached marketplace manifest`));
       continue;
     }
 
+    // A behind install carries no user-action severity: the update notice below already names it with its
+    // remedy, and saying the same thing twice on one session start is the noise this contract rules out.
     if (plugin.version) {
       const comparison = compareVersions(instance.version, plugin.version);
       if (comparison === -1) {
-        problems.push(`${instance.id} ${instance.version} is behind cached ${plugin.version}`);
+        problems.push(finding(`${instance.id} ${instance.version} is behind cached ${plugin.version}`));
         updates.push({ name: parts.name, installed: instance.version, available: plugin.version, marketplace: parts.marketplace });
-      } else if (comparison === null) problems.push(`${instance.id} freshness is unknown because its version cannot be compared`);
+      } else if (comparison === null) problems.push(finding(`${instance.id} freshness is unknown because its version cannot be compared`));
       continue;
     }
 
     const freshness = gitFreshness(instance, plugin, marketplaces[parts.marketplace]);
-    if (freshness === 'behind') problems.push(`${instance.id} is behind its cached source`);
-    else if (freshness === 'unknown') problems.push(`${instance.id} freshness is unknown because its cached source cannot be compared`);
+    if (freshness === 'behind') problems.push(finding(`${instance.id} is behind its cached source`));
+    else if (freshness === 'unknown') problems.push(finding(`${instance.id} freshness is unknown because its cached source cannot be compared`));
   }
 
   return problems;
@@ -250,21 +275,21 @@ function gatewayFreshness(instances, checkGateway) {
   const gateway = instances.find((instance) => instance.id === 'model-gateway@eigenwise-toolshed');
   if (!gateway) return [];
   const check = checkGateway(gateway);
-  if (!check?.available) return ['model-gateway local health check is unavailable'];
+  if (!check?.available) return [finding('model-gateway local health check is unavailable', DRIFTING_ON_THE_USER)];
 
   const problems = [];
   const floor = check.minProxyVersion || proxyVersionFloor(gateway);
-  if (!semver(check.proxyVersion)) problems.push('model-gateway proxy is missing or has no readable version');
-  else if (compareVersions(check.proxyVersion, floor) === -1) problems.push(`model-gateway proxy ${check.proxyVersion} is below required ${floor}`);
-  if (check.auth === false) problems.push('model-gateway is not authenticated');
-  if (check.proxy === false || check.shim === false) problems.push('model-gateway proxy or router is down');
+  if (!semver(check.proxyVersion)) problems.push(finding('model-gateway proxy is missing or has no readable version', BLOCKS_THE_USER));
+  else if (compareVersions(check.proxyVersion, floor) === -1) problems.push(finding(`model-gateway proxy ${check.proxyVersion} is below required ${floor}`, BLOCKS_THE_USER));
+  if (check.auth === false) problems.push(finding('model-gateway is not authenticated', BLOCKS_THE_USER));
+  if (check.proxy === false || check.shim === false) problems.push(finding('model-gateway proxy or router is down', BLOCKS_THE_USER));
   return problems;
 }
 
 function requiredVersions(versions) {
   const problems = [];
-  if (compareVersions(versions.node, MIN_NODE_VERSION) === -1) problems.push(`Node ${versions.node} is below required ${MIN_NODE_VERSION}`);
-  if (versions.claude && compareVersions(versions.claude, MIN_CLAUDE_CODE_VERSION) === -1) problems.push(`Claude Code ${versions.claude} is below required ${MIN_CLAUDE_CODE_VERSION}`);
+  if (compareVersions(versions.node, MIN_NODE_VERSION) === -1) problems.push(finding(`Node ${versions.node} is below required ${MIN_NODE_VERSION}`, BLOCKS_THE_USER));
+  if (versions.claude && compareVersions(versions.claude, MIN_CLAUDE_CODE_VERSION) === -1) problems.push(finding(`Claude Code ${versions.claude} is below required ${MIN_CLAUDE_CODE_VERSION}`, BLOCKS_THE_USER));
   return problems;
 }
 
@@ -280,9 +305,9 @@ function boardMappings(boards, instances) {
     return { name: board.name || board.path, path: board.path, status };
   });
   const problems = missing.length === 1
-    ? [`Sidequest board ${missing[0].board.name || missing[0].board.path} has ${missing[0].status === 'user-only' ? 'no project/local' : 'no'} Sidequest install`]
+    ? [finding(`Sidequest board ${missing[0].board.name || missing[0].board.path} has ${missing[0].status === 'user-only' ? 'no project/local' : 'no'} Sidequest install`, BLOCKS_THE_USER)]
     : missing.length > 1
-      ? [`${missing.length} Sidequest boards lack a project/local Sidequest install`]
+      ? [finding(`${missing.length} Sidequest boards lack a project/local Sidequest install`, BLOCKS_THE_USER)]
       : [];
   return { mappings, problems };
 }
@@ -336,12 +361,12 @@ function audit(options = {}) {
     sidequestHome: options.sidequestHome,
   });
   return {
-    problems: [...new Set(problems)].sort(),
+    problems: uniqueFindings(problems),
     mappings: mappings.mappings,
     instances,
     updates,
     projectInstances,
-    projectProblems: [...new Set(projectProblems)].sort(),
+    projectProblems: uniqueFindings(projectProblems),
     projectUpdates,
     staleProcesses,
   };
@@ -349,7 +374,7 @@ function audit(options = {}) {
 
 function warning(problems) {
   if (!problems.length) return '';
-  const shown = problems.slice(0, 5);
+  const shown = findingText(problems).slice(0, 5);
   const extra = problems.length > shown.length ? `; +${problems.length - shown.length} more` : '';
   return `Toolshed local health: ${shown.join('; ')}${extra}. Cached version signals are advisory; the prompt guard decides release freshness. Run /update-toolshed for deliberate updates.`;
 }
@@ -357,7 +382,7 @@ function warning(problems) {
 function emitWarning(problems, debouncer = defaultDebouncer) {
   const message = warning(problems);
   if (!message) return '';
-  const state = crypto.createHash('sha256').update(problems.join('\n')).digest('hex');
+  const state = crypto.createHash('sha256').update(findingText(problems).join('\n')).digest('hex');
   return debouncer.first(state) ? message : '';
 }
 
@@ -395,9 +420,22 @@ function systemMessage(result, loadedVersion) {
 }
 
 function projectWarning(problems) {
-  const shown = problems.slice(0, 3);
+  const shown = findingText(problems).slice(0, 3);
   const extra = problems.length > shown.length ? `; +${problems.length - shown.length} more` : '';
   return shown.length ? `Toolshed project health: ${shown.join('; ')}${extra}.` : '';
+}
+
+// One line, on every session start, so noise discipline is part of the contract: the worst finding, the count
+// of the rest, and where the detail lives. The detail lives in model-facing context the user cannot see, which
+// is the whole defect, so the line has to tell them how to get it out of the model (SQ-1900).
+function userActionNotice(problems) {
+  const actionable = problems.filter((problem) => problem.userAction);
+  if (!actionable.length) return '';
+  const worst = actionable
+    .slice()
+    .sort((left, right) => USER_ACTION_SEVERITY.indexOf(left.userAction) - USER_ACTION_SEVERITY.indexOf(right.userAction))[0];
+  const rest = actionable.length - 1;
+  return `Toolshed needs you: ${worst.text}${rest ? `, +${rest} more` : ''} — ask me for the Toolshed health report.`;
 }
 
 function sessionInput() {
@@ -418,10 +456,10 @@ function main() {
       projectWarning(result.projectProblems),
       ...result.staleProcesses.map((process) => `Stale worktree process: pid ${process.pid}, started ${process.startTime || 'unknown'}, path ${process.stalePath}`),
     ].filter(Boolean).join('\n');
-    const notice = systemMessage({
-      instances: result.projectInstances,
-      updates: result.projectUpdates,
-    }, loadedVersion);
+    const notice = [
+      systemMessage({ instances: result.projectInstances, updates: result.projectUpdates }, loadedVersion),
+      userActionNotice(result.projectProblems),
+    ].filter(Boolean).join(' ');
     if (context || notice) {
       const output = {};
       if (context) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: context };
@@ -447,6 +485,8 @@ module.exports = {
   compressedUpdates,
   createDebouncer,
   emitWarning,
+  finding,
+  findingText,
   gatewayFreshness,
   installedFreshness,
   loadedPluginVersion,
@@ -456,5 +496,6 @@ module.exports = {
   sourceFreshness,
   staleWorktreeProcesses,
   systemMessage,
+  userActionNotice,
   warning,
 };

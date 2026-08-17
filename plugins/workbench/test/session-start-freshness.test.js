@@ -12,6 +12,8 @@ const {
   audit,
   createDebouncer,
   emitWarning,
+  finding,
+  findingText,
   sourceFreshness,
 } = require('../hooks/session-start-freshness.js');
 
@@ -54,7 +56,7 @@ test('enumerates every board and maps it to its Sidequest project install', () =
     { name: 'One', path: 'C:/work/one', status: 'installed' },
     { name: 'Two', path: 'C:/work/two', status: 'missing' },
   ]);
-  assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
+  assert.match(findingText(result.problems).join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
 test('maps a Sidequest board through an existing project alias', (t) => {
@@ -83,7 +85,7 @@ test('keeps other projects out of the SessionStart health context', () => {
   }));
 
   assert.deepEqual(result.projectProblems, []);
-  assert.match(result.problems.join('\n'), /Sidequest board Two has no Sidequest install/);
+  assert.match(findingText(result.problems).join('\n'), /Sidequest board Two has no Sidequest install/);
 });
 
 test('reports stale Sidequest worktree processes but ignores live worktrees', { skip: process.platform !== 'win32' && 'worktree root derivation uses host path semantics; the feature is win32-gated' }, () => {
@@ -116,7 +118,7 @@ test('reports freshness problems for the current project', () => {
     }),
   }));
 
-  assert.deepEqual(result.projectProblems, ['sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0']);
+  assert.deepEqual(result.projectProblems, [finding('sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0')]);
 });
 test('finds stale versions and marks absent manifest entries as unknown', () => {
   const input = fixture({
@@ -134,9 +136,9 @@ test('finds stale versions and marks absent manifest entries as unknown', () => 
   });
 
   const result = audit(input);
-  assert.match(result.problems.join('\n'), /sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0/);
-  assert.match(result.problems.join('\n'), /missing@other-marketplace freshness is unknown/);
-  assert.doesNotMatch(result.problems.join('\n'), /absent from/);
+  assert.match(findingText(result.problems).join('\n'), /sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0/);
+  assert.match(findingText(result.problems).join('\n'), /missing@other-marketplace freshness is unknown/);
+  assert.doesNotMatch(findingText(result.problems).join('\n'), /absent from/);
 });
 
 test('honors the official marketplace default and third-party explicit settings', () => {
@@ -154,8 +156,8 @@ test('honors the official marketplace default and third-party explicit settings'
     manifestFor: (name) => ({ plugins: [{ name: name === 'claude-plugins-official' ? 'official' : 'third-party', version: '1.0.0' }] }),
   }));
 
-  assert.doesNotMatch(result.problems.join('\n'), /claude-plugins-official auto-update is off/);
-  assert.match(result.problems.join('\n'), /other-marketplace auto-update is off/);
+  assert.doesNotMatch(findingText(result.problems).join('\n'), /claude-plugins-official auto-update is off/);
+  assert.match(findingText(result.problems).join('\n'), /other-marketplace auto-update is off/);
 });
 
 test('compares rolling plugins against only their cached source path', () => {
@@ -213,7 +215,7 @@ test('reports rolling plugin freshness as unknown when local git cannot prove it
     gitFreshness: () => 'unknown',
   }));
 
-  assert.match(result.problems.join('\n'), /rolling@other-marketplace freshness is unknown/);
+  assert.match(findingText(result.problems).join('\n'), /rolling@other-marketplace freshness is unknown/);
 });
 
 test('reports stale marketplace caches without claiming remote freshness', () => {
@@ -225,8 +227,8 @@ test('reports stale marketplace caches without claiming remote freshness', () =>
     manifestFor: (name) => ({ plugins: [{ name: name === 'eigenwise-toolshed' ? 'sidequest' : 'plugin', version: '9.0.0' }] }),
   }));
 
-  assert.match(result.problems.join('\n'), /eigenwise-toolshed marketplace cache is stale, installed freshness is unknown/);
-  assert.doesNotMatch(result.problems.join('\n'), /sidequest@eigenwise-toolshed.*behind/);
+  assert.match(findingText(result.problems).join('\n'), /eigenwise-toolshed marketplace cache is stale, installed freshness is unknown/);
+  assert.doesNotMatch(findingText(result.problems).join('\n'), /sidequest@eigenwise-toolshed.*behind/);
 });
 
 test('flags a codex proxy version below its bundled floor', () => {
@@ -247,7 +249,7 @@ test('flags a codex proxy version below its bundled floor', () => {
     }),
   }));
 
-  assert.match(result.problems.join('\n'), /model-gateway proxy 0.1.13 is below required 0.1.14/);
+  assert.match(findingText(result.problems).join('\n'), /model-gateway proxy 0.1.13 is below required 0.1.14/);
 });
 
 test('stays silent for a healthy fleet', () => {
@@ -259,7 +261,7 @@ test('stays silent for a healthy fleet', () => {
 test('collapses multiple problems into one actionable warning', () => {
   const message = emitWarning([
     'one', 'two', 'three', 'four', 'five', 'six',
-  ], createDebouncer(new Set()));
+  ].map((text) => finding(text)), createDebouncer(new Set()));
 
   assert.match(message, /^Toolshed local health: /);
   assert.match(message, /\+1 more/);
@@ -269,18 +271,31 @@ test('collapses multiple problems into one actionable warning', () => {
 
 test('debounces the same state but reports a changed state', () => {
   const debouncer = createDebouncer(new Set());
-  assert.match(emitWarning(['stale cache'], debouncer), /stale cache/);
-  assert.equal(emitWarning(['stale cache'], debouncer), '');
-  assert.match(emitWarning(['stale cache', 'proxy down'], debouncer), /proxy down/);
+  assert.match(emitWarning([finding('stale cache')], debouncer), /stale cache/);
+  assert.equal(emitWarning([finding('stale cache')], debouncer), '');
+  assert.match(emitWarning([finding('stale cache'), finding('proxy down')], debouncer), /proxy down/);
 });
 
 const hookPath = path.join(__dirname, '..', 'hooks', 'session-start-freshness.js');
 
-function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, input = {} }) {
+function seedSidequestBoards(home, boards) {
+  const { DatabaseSync } = require('node:sqlite');
+  const directory = path.join(home, '.claude', 'sidequest');
+  fs.mkdirSync(directory, { recursive: true });
+  const database = new DatabaseSync(path.join(directory, 'sidequest.db'));
+  database.exec('CREATE TABLE projects (slug TEXT PRIMARY KEY, data TEXT)');
+  for (const board of boards) {
+    database.prepare('INSERT INTO projects (slug, data) VALUES (?, ?)').run(board.name, JSON.stringify(board));
+  }
+  database.close();
+}
+
+function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, input = {}, boards = [] }) {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-freshness-'));
   const cache = path.join(home, 'marketplace');
   const pluginRoot = path.join(home, 'workbench');
   try {
+    if (boards.length) seedSidequestBoards(home, boards);
     fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
     fs.mkdirSync(path.join(cache, '.claude-plugin'), { recursive: true });
     fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
@@ -327,6 +342,37 @@ test('writes a reload notice to SessionStart hook stdout for the current project
 
   assert.equal(output.systemMessage, 'Toolshed: workbench 0.48.0 loaded, 0.49.0 installed — /reload-plugins to pick it up.');
   assert.equal(output.hookSpecificOutput, undefined);
+});
+
+test('SQ-1900: a finding the user has to fix reaches the user, not only the model', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+    }, { workbench: '0.49.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current' },
+    boards: [{ name: 'current', path: 'C:/work/current' }],
+  });
+
+  assert.equal(
+    output.systemMessage,
+    'Toolshed needs you: Sidequest board current has no Sidequest install — ask me for the Toolshed health report.',
+  );
+  assert.match(output.hookSpecificOutput.additionalContext, /Sidequest board current has no Sidequest install/);
+});
+
+test('SQ-1900: a healthy project says nothing to the user at all', () => {
+  const output = hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+      'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '2.42.0' }],
+    }, { workbench: '0.49.0', sidequest: '2.42.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: 'C:/work/current' },
+    boards: [{ name: 'current', path: 'C:/work/current' }],
+  });
+
+  assert.equal(output, null, 'a session start with nothing wrong emits no systemMessage and no context');
 });
 
 test('writes cached update availability to SessionStart hook stdout for the current project', () => {
@@ -514,7 +560,7 @@ test('a healthy doctor report produces no gateway problems from the audit', () =
     checkGateway: () => ({ minProxyVersion: '0.1.14', ...parseGatewayDoctorOutput(healthy) }),
   }));
 
-  assert.doesNotMatch(result.problems.join('\n'), /model-gateway/);
+  assert.doesNotMatch(findingText(result.problems).join('\n'), /model-gateway/);
 });
 
 test('the doctor phrasings the audit parses still exist in model-gateway', () => {
