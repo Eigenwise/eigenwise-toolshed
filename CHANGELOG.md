@@ -8,6 +8,166 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.477.0 (2026-08-17)
+
+### codebase-mapper 2.15.4 → 2.15.5
+
+#### Fixes
+
+- Test fixtures pin their initial git branch, and a guard keeps them pinned (SQ-2201)
+  `git init` takes its branch name from `init.defaultBranch`, and the full suite runs with global and system git
+  config nulled out, so the same fixture started on `main` under `npm run test:files` and `master` under
+  `npm run test:full`. A fixture that later named a branch did not fail cleanly there: `git checkout main` with
+  no local `main` and an `origin/main` present creates a local branch tracking the remote, so the assertions ran
+  against a tree the fixture never built. That cost two full-gate failures whose entire output was two
+  unexplained shas.
+
+  Every git fixture across both suites now passes `-b main` to `git init` (43 call sites), and a new guard test
+  scans the sidequest test directory for a `git init` that inherits the ambient default. A test that is
+  deliberately about the unconfigured default opts out with an `unpinned-initial-branch: <why>` comment, which
+  is how the one honest case, the assertion that the full suite has no default branch configured, stays.
+
+### model-gateway 0.48.8 → 0.48.9
+
+#### Fixes
+
+- Codex and Grok models stop vanishing five minutes after the gateway's last catalog write (SQ-2208)
+  Sidequest treats a model-gateway catalog older than five minutes as absent, which is right: a catalog nobody
+  has rewritten proves nothing about a gateway that may be down. Nothing rewrites it on its own, though, so on a
+  healthy machine every Codex and Grok model silently disappeared from every board five minutes after whatever
+  command last happened to touch the file, and stayed gone until some unrelated command touched it again. A board
+  routing a category to a gateway model then refused to dispatch it as "not available from the live catalog".
+
+  Readiness already refreshed a stale catalog through the newest installed gateway; the model list now shares that
+  path, so a stale catalog costs one refresh per process instead of going dark. A failed refresh is retried after
+  thirty seconds rather than pinned for the whole five-minute window, and a gateway that is down cannot spawn a
+  child process per route resolution.
+
+  That refresh had never actually worked. It parsed the gateway CLI's stdout, and `catalog --refresh --json` prints
+  a human diagnostic line when the write preserves models from a subset response, so the parse threw and the
+  refresh returned nothing in the exact case it exists for. Two fixes, one per side: the refresh now runs for its
+  side effect and re-reads the catalog file, which is the authority, and the gateway keeps a `--json` invocation's
+  stdout to data by emitting human lines on stderr. Its exit code is not the authority either, since it exits 0
+  printing the stored catalog when the proxy is down, so an attempt counts as a refresh only when the file it left
+  behind is current.
+
+### sidequest 4.52.5 → 4.52.6
+
+#### Fixes
+
+- A missing remote integration ref refuses instead of silently rebasing the dispatch (SQ-2089)
+  With `worktreeBase: origin-main`, a configured `integrationBranch` whose remote ref did not exist silently
+  produced no integration target, so the isolated checkout was based on whatever main happened to be rather
+  than on the branch the board named as its authority. That is how a recovery wave generated an immutable
+  candidate parented on a stale commit nobody had configured.
+
+  One catch covered two different situations. A repository with no `origin` at all has no remote baseline to
+  want, so falling through to the non-integration default is right there and stays. A repository that HAS an
+  origin but is missing that branch's remote ref is a configured authority that did not resolve, and it now
+  refuses with the missing ref named and both ways out: fetch or push the branch, or set `worktreeBase` to
+  `local-main` to fork the local branch instead. A refused baseline mints no dispatch token.
+
+  Measured across a fixture with three distinct commits (stale `origin/main`, an advanced local `main`, and a
+  separate configured branch), the other three combinations were already correct and still are: `origin-main`
+  forks the remote ref even when local main is ahead, `local-main` forks the local branch, and a configured
+  non-main branch is the authority rather than main. `dispatch.baseCommit` and the created worktree HEAD agree
+  in every case that launches, and pushing the previously-unpushed branch makes the identical configuration
+  legal.
+- Test fixtures pin their initial git branch, and a guard keeps them pinned (SQ-2201)
+  `git init` takes its branch name from `init.defaultBranch`, and the full suite runs with global and system git
+  config nulled out, so the same fixture started on `main` under `npm run test:files` and `master` under
+  `npm run test:full`. A fixture that later named a branch did not fail cleanly there: `git checkout main` with
+  no local `main` and an `origin/main` present creates a local branch tracking the remote, so the assertions ran
+  against a tree the fixture never built. That cost two full-gate failures whose entire output was two
+  unexplained shas.
+
+  Every git fixture across both suites now passes `-b main` to `git init` (43 call sites), and a new guard test
+  scans the sidequest test directory for a `git init` that inherits the ambient default. A test that is
+  deliberately about the unconfigured default opts out with an `unpinned-initial-branch: <why>` comment, which
+  is how the one honest case, the assertion that the full suite has no default branch configured, stays.
+- A candidate review is told to synchronize its worktree to the exact candidate (SQ-2203)
+  A `review-audit` dispatch bound to a candidate recorded that commit as its baseline, and then nothing told the
+  reviewer to go there. The only emitter of the "Worktree synchronization (run before work)" instruction
+  required `dispatch.integrationTarget`, and a readonly dispatch never has one, because `readonly` alone makes
+  `isolatedRepositoryDispatch` false where that target is chosen. So the reviewer kept whatever commit the
+  harness gave its worktree, ran that tree's suite, and could reject a candidate whose own declared suite
+  passed.
+
+  The briefing now emits a candidate synchronization instruction whenever a dispatch carries a Git review
+  candidate, whether or not an integration target exists: check `git rev-parse HEAD`, detach onto the candidate
+  if it differs, and stop and report if that fails rather than reviewing what the worktree holds. No fetch is
+  involved, because a linked worktree shares the project repository's object database and preparation has
+  already resolved the commit there.
+
+  The orchestration reference said dispatch "pins the review to that exact immutable commit in an isolated
+  checkout", which was true of the board record and not of the checkout. It now says how the checkout gets
+  there.
+- Dispatching a ticket whose submission is pending refuses instead of minting an unclaimable attempt (SQ-2204)
+  A ticket with a pending submission is parked for the publish transaction, and claiming one has always been
+  refused with reason `submitted` because re-claiming would fork an already-verified commit. Preparing a
+  dispatch over it was not refused, so it minted a token no executor could ever claim, and the fresh prepared
+  attempt then outranked the submitted one in the dispatch projection while the submission stayed valid.
+  Anything reading the current `dispatch.agentId` for provenance read an executor that never touched the
+  candidate.
+
+  Preparation now refuses while a submission is pending, before anything is written, and names the three exits:
+  integrate it, `rework` it (which clears the submission, so it is the path to a replacement executor), or close
+  it as an abandoned submission with evidence it never landed. A refused preparation mints no token and leaves
+  the submitted attempt on top, so an attempt already recorded on a board this way stays in history rather than
+  being retroactively dropped.
+- An unprepared Codex claim names the executor the ticket actually answers to (SQ-2205)
+  A readonly Codex ticket with no prepared dispatch refused a claim from the only executor it is ever spawned
+  as, `sidequest-exec-dispatch-readonly`, and the refusal told it to spawn `sidequest-exec-dispatch` instead.
+  The guard compared the caller's name against `exec.agent`, which is the read-write dispatch name for every
+  Codex route whether the category is readonly or not. That is the exact refusal pair reported in SQ-2110, and
+  it reproduces on a single version with no plugin skew.
+
+  Claim refusals now name the executor prepare would record, which is the same authority the prepared-dispatch
+  comparison already used, so the three refusals that name an executor before a dispatch exists
+  (`executor_mismatch`, `effort_mismatch`, `direct_not_allowed`) all agree with it.
+
+  Two agent-facing reference surfaces were stale in the same place. `routing-details.md` still showed the
+  pre-collapse `sidequest-exec-dispatch-<effort>` shape and told the orchestrator to spawn `exec.agent`, which
+  is the wrong executor for a readonly category; it now points at the executor the dispatch returned.
+  `orchestration.md` claimed all five effort levels are provisioned for Codex dispatch, where in fact Codex
+  dispatch is one read-write def and one readonly def, with effort carried by the route marker.
+- A bound dispatch that never claimed can be retired on evidence instead of stranding its ticket (SQ-2206)
+  A dispatch that bound a runtime and never claimed had exactly one exit: its own stop hook. Redispatch refused
+  it as a live attempt, recovery evidence refused it as bound to a runtime, and session-start reconciliation
+  skips bound attempts deliberately. So a runtime that died without firing that hook, a killed process, a closed
+  session, a harness crash, left the ticket unreachable by every board path. The recorded recovery for that
+  state was resuming the original session just to let it exit.
+
+  A claim is a bound executor's FIRST action, so a bound attempt that has not claimed within the board's
+  claim-idle backstop is not winding down, it is gone. Recovery evidence now retires that attempt, and only
+  after the backstop: inside the window a live executor stays protected exactly as before, and the refusal says
+  how many minutes are left and that the terminal hook is the normal exit. The retired attempt is recorded with
+  failure shape `stranded_bound_launch_superseded`, distinct from the unbound `unclaimed_launch_superseded`.
+
+  `pulse` now reports that state as `stalled` with "dispatch bound a runtime that never claimed, past the
+  claim-idle backstop", because an orchestrator cannot reach for a recovery it is never told about. The CLI help,
+  the MCP `recoveryEvidence` description, the claim-token refusal guidance, and the orchestration reference all
+  name the second shape now.
+- Codex and Grok models stop vanishing five minutes after the gateway's last catalog write (SQ-2208)
+  Sidequest treats a model-gateway catalog older than five minutes as absent, which is right: a catalog nobody
+  has rewritten proves nothing about a gateway that may be down. Nothing rewrites it on its own, though, so on a
+  healthy machine every Codex and Grok model silently disappeared from every board five minutes after whatever
+  command last happened to touch the file, and stayed gone until some unrelated command touched it again. A board
+  routing a category to a gateway model then refused to dispatch it as "not available from the live catalog".
+
+  Readiness already refreshed a stale catalog through the newest installed gateway; the model list now shares that
+  path, so a stale catalog costs one refresh per process instead of going dark. A failed refresh is retried after
+  thirty seconds rather than pinned for the whole five-minute window, and a gateway that is down cannot spawn a
+  child process per route resolution.
+
+  That refresh had never actually worked. It parsed the gateway CLI's stdout, and `catalog --refresh --json` prints
+  a human diagnostic line when the write preserves models from a subset response, so the parse threw and the
+  refresh returned nothing in the exact case it exists for. Two fixes, one per side: the refresh now runs for its
+  side effect and re-reads the catalog file, which is the authority, and the gateway keeps a `--json` invocation's
+  stdout to data by emitting human lines on stderr. Its exit code is not the authority either, since it exits 0
+  printing the stored catalog when the proxy is down, so an attempt counts as a refresh only when the file it left
+  behind is current.
+
 ## v3.476.0 (2026-08-17)
 
 ### sidequest 4.52.4 → 4.52.5
