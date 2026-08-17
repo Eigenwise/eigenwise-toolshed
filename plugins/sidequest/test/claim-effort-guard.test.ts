@@ -144,6 +144,34 @@ test('Codex category routes reject a generic executor even when effort matches',
   assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected, '--token', prepared.token]).ok, true);
 });
 
+// SQ-2205, from SQ-2110: a readonly Codex dispatch was refused as executor_mismatch while prepare, pulse and
+// the briefing all named `sidequest-exec-dispatch-readonly`, and the refusal told it to spawn
+// `sidequest-exec-dispatch`. This is the path that produces that pair: with no prepared nonce the guard
+// compared against the route's agent, which is the read-write name for every Codex route, readonly or not.
+test('SQ-2205: an unprepared readonly Codex claim expects the readonly executor, not the route agent', () => {
+  const slug = store.ensureProject(PROJ).slug;
+  const ref = seed('guard.readonly');
+  const derived = ticket(ref);
+  assert.equal(derived.exec.agent, 'sidequest-exec-dispatch');
+  assert.ok(!derived.dispatchNonce, 'the fixture claims with no dispatch prepared');
+
+  const readonlyName = store.claimTicket(slug, ref, 'sq-2205-readonly-name', { executor: 'sidequest-exec-dispatch-readonly' });
+  assert.equal(readonlyName.reason, 'dispatch_required', 'the ticket answers to its readonly name, so the only thing missing is a dispatch');
+
+  const readWriteName = store.claimTicket(slug, ref, 'sq-2205-read-write-name', { executor: 'sidequest-exec-dispatch' });
+  assert.equal(readWriteName.reason, 'executor_mismatch');
+  assert.equal(readWriteName.expectedExecutor, 'sidequest-exec-dispatch-readonly');
+  assert.match(readWriteName.message, /spawn sidequest-exec-dispatch-readonly/);
+  assert.equal(ticket(ref).status, 'todo');
+
+  const refusedDirect = store.claimTicket(slug, ref, 'sq-2205-direct', {
+    direct: true,
+    reason: 'Context already loaded in this session for these files.',
+  });
+  assert.equal(refusedDirect.reason, 'direct_not_allowed');
+  assert.equal(refusedDirect.expectedExecutor, 'sidequest-exec-dispatch-readonly');
+});
+
 test('a category-route effort mismatch refuses the claim without mutation', () => {
   const ref = seed('guard.claude');
   const derived = ticket(ref);

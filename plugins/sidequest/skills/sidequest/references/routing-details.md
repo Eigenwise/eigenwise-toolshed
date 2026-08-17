@@ -49,11 +49,13 @@ A fresh read returns this ticket projection:
   "category": { "id": "coding.normal", "route": { "model": "codex-gpt-5-6-terra", "effort": "high" } },
   "model": "codex-gpt-5-6-terra",
   "effort": "high",
-  "exec": { "agent": "sidequest-exec-dispatch-high", "model": null, "backend": "codex" }
+  "exec": { "agent": "sidequest-exec-dispatch", "model": null, "backend": "codex" }
 }
 ```
 
-Spawn the exact `exec.agent` with `model` omitted. A degraded route still uses the same dispatch
+Spawn the exact executor the dispatch returned (`spawn.subagent_type`, recorded as `dispatch.executor`)
+with `model` omitted. It is `exec.agent` for a read-write category and `sidequest-exec-dispatch-readonly`
+for a readonly one, and it is the only name the board's claim accepts. A degraded route still uses the same dispatch
 flow because the read's `exec` projection is authoritative. Another session adopts work by dispatching
 the ticket again, which returns a fresh token and current spawn for the stable executor.
 
@@ -68,8 +70,9 @@ the exact executor and spawn object a fresh `dispatch <ref>` returned.
   Claude-route executor without `model:` — an omitted model inherits the session model (usually the
   priciest route), silently defeating routing. The bundled PreToolUse hook injects or blocks as a
   backstop, but the spawn call must carry it.
-- **Codex routes (`exec.model` null):** spawn the EXACT shared dispatch executor named by
-  `exec.agent` (`sidequest-exec-dispatch-<effort>`) with `mode: "bypassPermissions"`, a unique
+- **Codex routes (`exec.model` null):** spawn the EXACT shared dispatch executor the dispatch returned as
+  `spawn.subagent_type` (`sidequest-exec-dispatch`, or `sidequest-exec-dispatch-readonly` for a readonly
+  category; both are effort-collapsed) with `mode: "bypassPermissions"`, a unique
   `name`, and the `model` parameter OMITTED entirely — `exec.model` is null precisely so you leave
   it out. The def pins the virtual `claude-codex-auto`; the REAL model rides the spawn prompt's
   `[sidequest-route model=... effort=...]` marker, which the codex-gateway shim resolves per

@@ -1495,6 +1495,16 @@ function isRoutedTicket(ticket?: any) {
   return Boolean(ticket && ticket.model && ticket.effort && ticket.exec);
 }
 
+// The executor name a claim refusal should name. A recorded dispatch is authoritative; without one, the name
+// prepare WOULD record is, because `exec.agent` is the read-write dispatch name for every Codex route whether
+// the ticket is readonly or not, and naming it sent readonly executors to spawn their read-write twin
+// (SQ-2110, SQ-2205).
+function expectedClaimExecutor(ticket?: any) {
+  const prepared = canonicalPreparedDispatchExecutor(ticket);
+  if (ticket?.dispatch?.executor || ticket?.dispatchExecutor) return prepared;
+  return isRoutedTicket(ticket) ? stableExecutorName(ticket) : prepared;
+}
+
 function directReason(reason?: any) {
   const value = String(reason || '').trim();
   return value.length >= DIRECT_REASON_MIN_LENGTH ? value : null;
@@ -1573,7 +1583,7 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
     const claimedEffort = String(opts.effort).toLowerCase();
     if (derivedEffort && claimedEffort !== derivedEffort) {
       const resolved = resolveExec(ticket.model, derivedEffort);
-      const expectedExecutor = (ticket.exec && ticket.exec.agent) || (resolved && resolved.agent) || `sidequest-exec-${derivedEffort}`;
+      const expectedExecutor = expectedClaimExecutor(ticket) || (resolved && resolved.agent) || `sidequest-exec-${derivedEffort}`;
       return {
         ok: false,
         reason: 'effort_mismatch',
@@ -1588,9 +1598,9 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
   }
   const token = dispatchTokenForRequest(opts.token, opts.tokenFile);
   if (!ticket.dispatchNonce) {
-    if (!opts.executor || !ticket.exec || ticket.exec.backend !== 'codex' || opts.executor === ticket.exec.agent) {
-      return { ok: true, ticket, token };
-    }
+    if (!opts.executor || !ticket.exec || ticket.exec.backend !== 'codex') return { ok: true, ticket, token };
+    const expectedExecutor = expectedClaimExecutor(ticket);
+    if (opts.executor === expectedExecutor) return { ok: true, ticket, token };
     return {
       ok: false,
       reason: 'executor_mismatch',
@@ -1598,8 +1608,8 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
       derivedModel: ticket.model,
       derivedEffort: ticket.effort,
       executor: opts.executor,
-      expectedExecutor: ticket.exec.agent,
-      message: `${ticket.ref} resolves to ${ticket.exec.runsLabel} · ${ticket.effort} (${ticket.exec.backend}), but ${opts.executor} is not its generated executor. Run sidequest dispatch ${ticket.ref}, then spawn ${ticket.exec.agent}.`,
+      expectedExecutor,
+      message: `${ticket.ref} resolves to ${ticket.exec.runsLabel} · ${ticket.effort} (${ticket.exec.backend}), but ${opts.executor} is not its generated executor. Run sidequest dispatch ${ticket.ref}, then spawn ${expectedExecutor}.`,
     };
   }
   if (!dispatchTokenMatches(ticket.dispatchNonce, token)) {
@@ -1652,7 +1662,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (delay) busyWait(delay);
     const directClaimReason = directReason(opts.reason);
     if (opts.direct && isRoutedTicket(t) && !directClaimReason) return { ok: false, reason: 'direct_reason_required', ticket: t };
-    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: canonicalPreparedDispatchExecutor(t) };
+    if (opts.direct && isRoutedTicket(t) && !directReasonAllowed(directClaimReason)) return { ok: false, reason: 'direct_not_allowed', ticket: t, expectedExecutor: expectedClaimExecutor(t) };
     const admission = claimAdmission(slug, found.id, opts);
     if (!admission.ok) return admission;
     const currentDispatch = dispatchState(t);
