@@ -426,8 +426,10 @@ returned token and exact stable executor name.
 
 Cross-session adoption is a fresh `dispatch <ref>` in the adopting session. It rotates
 the token and returns the current spawn for the same stable route. A retained-worktree continuation
-omits `spawn.isolation`, so the executor starts from its caller context and can follow its briefing's
-required `EnterWorktree` handoff. Ordinary isolated dispatches still return `isolation: 'worktree'`.
+omits `spawn.isolation`, so the executor starts from its caller context and works the retained worktree by
+absolute path, with `git -C <retained>`. It does not call `EnterWorktree`, which only accepts worktrees
+under `<repo>/.claude/worktrees` and can never reach a board-retained one. Ordinary isolated dispatches
+still return `isolation: 'worktree'`.
 
 Re-dispatch rotates the token while the stable executor name remains fixed. A stale token is refused,
 and `done` or `release` clears the dispatch guard for either mode. An Agent acknowledgement means only

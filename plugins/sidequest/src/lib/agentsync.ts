@@ -562,6 +562,19 @@ function continuationResumeDecision(continuation?: any) {
   }
 }
 
+// EnterWorktree only accepts worktrees under `<repo>/.claude/worktrees`, which the harness owns, and a
+// board-retained worktree lives under the Sidequest home. Those are different trees and nothing reconciles
+// them, so the old instruction to enter one failed on every continuation for every ticket, and two
+// executors released without doing any work after being handed a contract they could not follow (SQ-2183).
+// Nothing actually needed the cwd to move: the claim binds this ticket to the retained worktree, so writes
+// there are authorized, and the shared-checkout git guard only refuses mutations aimed at the shared root.
+function retainedWorktreeAccess(worktree: string): string[] {
+  return [
+    `Work in that retained worktree by absolute path, and do NOT call EnterWorktree: it only accepts worktrees under \`<repo>/.claude/worktrees\`, so it can never enter a board-retained one.`,
+    `Run git there as \`git -C ${worktree} <command>\`, and give Edit and Write absolute paths under it. Your own working directory stays the shared checkout, where mutating git is refused by design.`,
+  ];
+}
+
 function ticketContinuationPacket(ticket?: any) {
   const continuation = ticket?.dispatch?.continuation;
   const resume = continuationResumeDecision(continuation);
@@ -572,9 +585,9 @@ function ticketContinuationPacket(ticket?: any) {
       `The previous executor released this same ticket from retained worktree ${continuation.sourceWorktree}.`,
       `Previous branch: ${branch}`,
       `Checkpoint commit: ${continuation.commit}`,
-      'After claiming and before any other work, call EnterWorktree with `path` set to that retained worktree.',
-      `Then verify \`git rev-parse HEAD\` equals \`${continuation.commit}\` and continue from that checkpoint.`,
-      'The board binds this ticket to the retained worktree at claim time. This continuation spawn starts without native worktree isolation so EnterWorktree can enter that retained worktree before any work.',
+      ...retainedWorktreeAccess(continuation.sourceWorktree),
+      `Before any other work, verify \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and continue from that checkpoint.`,
+      'The board binds this ticket to the retained worktree at claim time, so that tree is the only place your writes are authorized.',
       'Do not cherry-pick the checkpoint or rediscover the checkpointed work.',
     ].join('\n');
   }
@@ -583,9 +596,10 @@ function ticketContinuationPacket(ticket?: any) {
       'Continuation handoff:',
       `The previous executor released this same ticket with uncommitted work in retained worktree ${continuation.sourceWorktree}.`,
       `Recorded HEAD: ${continuation.commit}`,
-      'After claiming and before any other work, call EnterWorktree with `path` set to that retained worktree.',
-      `Then verify \`git rev-parse HEAD\` equals \`${continuation.commit}\`, preserve the existing working changes, and continue.`,
-      'The board binds this ticket to the retained worktree at claim time. This continuation spawn starts without native worktree isolation so EnterWorktree can enter that retained worktree before any work.',
+      ...retainedWorktreeAccess(continuation.sourceWorktree),
+      `Before any other work, verify \`git -C ${continuation.sourceWorktree} rev-parse HEAD\` equals \`${continuation.commit}\` and that \`git -C ${continuation.sourceWorktree} status --porcelain\` still lists the retained changes.`,
+      'Those changes were never committed and never stashed, so that worktree is the only copy anywhere. Preserve them and continue from them.',
+      'The board binds this ticket to the retained worktree at claim time, so that tree is the only place your writes are authorized.',
     ].join('\n');
   }
   if (continuation && !resume.allowed) return `Continuation fallback: the retained worktree lease refused resume (${resume.reason}). This dispatch uses a fresh worktree.`;
@@ -615,6 +629,25 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
       `Worktree synchronization (run before work): check \`git merge-base --is-ancestor ${commit} HEAD\`.`,
       `If it fails, run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` then \`git rebase --onto ${commit} ${checkpointBase}\`.`,
       'If the rebase conflicts, stop and report the conflict. Do not reset the retained checkpoint or resolve toward either side.',
+    ].join(' ');
+  }
+  // This mode exists ONLY because the retained worktree holds uncommitted work (see dispatch.ts, where a
+  // dirty status with no commits produces it), so the discard below would destroy the very thing the
+  // continuation was created to resume. An executor followed the discard wording as far as reading it and
+  // stopped to ask rather than lose 11 uncommitted files (SQ-2180).
+  if (continuation?.mode === 'dirty_worktree_resume') {
+    if (!checkpointBase) {
+      return [
+        `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Check \`git merge-base --is-ancestor ${commit} HEAD\` and change nothing if it passes.`,
+        'If it fails, stop and report that the retained base was not recorded. Do not move the base or discard anything: the retained changes exist nowhere else.',
+      ].join(' ');
+    }
+    return [
+      `Worktree synchronization (run before work): this worktree holds uncommitted work retained from the previous attempt. Check \`git merge-base --is-ancestor ${commit} HEAD\` and change nothing if it passes.`,
+      `If it fails, preserve before moving: commit every retained change on this worktree's own branch with \`git add -A && git commit\`, confirm \`git status --porcelain\` is empty and \`git show --stat HEAD\` lists every file you expected, then run \`git fetch ${quotedShellArgument(root)} ${quotedShellArgument(branch)}\` and \`git rebase --onto ${commit} ${checkpointBase}\`.`,
+      'Never check out or discard over the retained changes, and never use `git stash`: the stash stack is shared across worktrees and concurrent sessions on this machine, so a pop can take an entry that is not yours.',
+      'Rebase, never merge. Cutting a release deletes the `.release/unreleased/*.md` fragments it consumed, and merging an older base forward resurrects them, which re-ships changelog entries for already-released work.',
+      'If the commit, the rebase, or either verification fails, stop and report it rather than moving the base with unpreserved work in the tree.',
     ].join(' ');
   }
   return [

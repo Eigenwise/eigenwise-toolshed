@@ -1278,8 +1278,12 @@ test('released handbacks carry registered native worktrees into continuation dis
       'retained continuation fixture',
     );
     assert.equal(Object.hasOwn(spawn, 'isolation'), false);
-    assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
-    assert.ok(briefing.includes(`git rev-parse HEAD\` equals \`${checkpoint}\``));
+    // SQ-2183. The contract used to open with an EnterWorktree call that cannot reach a board-retained
+    // worktree, so continuations released without doing any work. The retained tree is reachable by
+    // absolute path, which is what the contract must say instead.
+    assert.doesNotMatch(briefing, /call EnterWorktree with/);
+    assert.match(briefing, /do NOT call EnterWorktree/);
+    assert.ok(briefing.includes(`git -C ${worktree} rev-parse HEAD\` equals \`${checkpoint}\``));
     assert.match(briefing, new RegExp(`git rebase --onto ${continued.ticket.dispatch.baseCommit} ${continued.ticket.dispatch.continuation.baseCommit}`));
     assert.match(briefing, /If the rebase conflicts, stop and report the conflict/);
     assert.doesNotMatch(briefing, new RegExp(`git reset --hard ${continued.ticket.dispatch.baseCommit}`));
@@ -1403,7 +1407,14 @@ test('dirty released worktrees without commits resume in place for a continuatio
       source: 'test',
     }).ok, true);
 
-    const continued = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-next` });
+    // An integration target is what makes the briefing render its worktree-synchronization step, and that
+    // step is the one that used to say discard. Without a target here the fixture silently skipped the
+    // section entirely, which is how the instruction shipped uncovered (SQ-2180).
+    const continued = store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sessionId}-next`,
+      integrationMode: 'local',
+      integrationBranch: 'main',
+    });
     assert.equal(continued.ticket.dispatch.continuation.mode, 'dirty_worktree_resume');
     const briefing = agentsync.renderTicketBriefing(continued.ticket, continued.token, slug, PROJECT);
     const spawn = agentsync.agentSpawn(
@@ -1416,8 +1427,23 @@ test('dirty released worktrees without commits resume in place for a continuatio
     );
     assert.equal(Object.hasOwn(spawn, 'isolation'), false);
     assert.match(briefing, /with uncommitted work in retained worktree/);
-    assert.match(briefing, /EnterWorktree with `path` set to that retained worktree/);
+    // SQ-2183, same unreachable contract on the dirty-resume path, where the retained tree is the only
+    // copy of the work, so being unable to enter it stranded the ticket outright.
+    assert.doesNotMatch(briefing, /call EnterWorktree with/);
+    assert.match(briefing, /do NOT call EnterWorktree/);
+    assert.ok(briefing.includes(`git -C ${continued.ticket.dispatch.continuation.sourceWorktree} status --porcelain`));
+    assert.match(briefing, /never committed and never stashed, so that worktree is the only copy/);
     assert.doesNotMatch(briefing, /git cherry-pick/);
+    // SQ-2180. This continuation exists BECAUSE the tree holds uncommitted work, so the sync step must
+    // never hand the executor a discard. One did read that instruction and stopped rather than lose 11
+    // files that were committed nowhere and stashed nowhere.
+    assert.match(briefing, /this worktree holds uncommitted work retained from the previous attempt/);
+    assert.match(briefing, /preserve before moving/);
+    assert.match(briefing, /git rebase --onto/);
+    assert.match(briefing, /never use `git stash`/);
+    assert.match(briefing, /Rebase, never merge/);
+    assert.doesNotMatch(briefing, /reset --hard/);
+    assert.doesNotMatch(briefing, /git checkout --/);
 
     const continuationExecutor = continued.ticket.dispatchExecutor;
     const continuationAgentId = `${agentId}-next`;

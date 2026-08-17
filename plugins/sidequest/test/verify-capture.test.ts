@@ -79,13 +79,19 @@ test('verify capture returns a timeout with partial output', async () => {
   const slowCommand = process.platform === 'win32'
     ? 'echo partial-output && ping -n 30 127.0.0.1'
     : 'printf partial-output; sleep 30';
-  const capture = await runVerifyCapture(slowCommand, process.cwd(), 100);
+  // The child has to get its first write through the pipe before the deadline kills it, so this bound is
+  // racing process startup, not measuring anything. At 100ms the echo lost that race under full-gate load
+  // and the log came back empty on unchanged code, the same way the tuned bounds in SQ-2179 and SQ-2191
+  // did. Two seconds is still nowhere near the 30s the command would otherwise run for, so the timeout
+  // path is exactly as covered as before.
+  const timeoutMilliseconds = 2000;
+  const capture = await runVerifyCapture(slowCommand, process.cwd(), timeoutMilliseconds);
   try {
     assert.deepStrictEqual(
       { status: capture.status, exitCode: capture.exitCode },
       { status: 'could-not-run', exitCode: 2 },
     );
-    assert.equal(capture.reason, 'Verification timed out after 100ms; partial output captured.');
+    assert.equal(capture.reason, `Verification timed out after ${timeoutMilliseconds}ms; partial output captured.`);
     assert.match(fs.readFileSync(capture.logPath, 'utf8'), /partial-output/);
   } finally {
     deleteLog(capture);
