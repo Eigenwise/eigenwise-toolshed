@@ -8,6 +8,73 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.479.0 (2026-08-17)
+
+### sidequest 4.52.7 → 4.52.8
+
+#### Fixes
+
+- The board tells you how to call it before it refuses you (SQ-1955)
+  Some board calls have a requirement the schema has no way to state: `release` needs a reason even though the schema
+  only marks `ref` and `by` required, an `attestation` verify has an exact grammar, and `groomClose` is one tool doing
+  three different jobs with three different gates. The grammar was written out in the source all along, but MCP strips
+  property descriptions that are not on its whitelist, so it reached nobody and three tickets in a row were refused for
+  guessing it.
+
+  The contracts that a caller cannot get right on the first try now ship in the published tool schemas, which cost the
+  tools/list budget a raise and are worth it. The reasons behind them, the synonyms the validator quietly accepts
+  (`m` for a comment `body`, `target` for a link's `to`, `priority: "medium"` for `"normal"`), and the places the CLI
+  and MCP name the same thing differently live in the skill's new `invocation-contracts` reference, drift-tested against
+  the aliases and enums in code so a stale synonym list fails the build instead of misleading an agent.
+- Foreign worktree diagnostics are labelled by the lease that owns them (SQ-1957)
+  Claude Code keys its LSP diagnostics registry per session rather than per agent, so an executor's errors land in
+  the orchestrator's context and nothing in the product can stop them: there is no setting, and no hook runs between
+  publication and the attachment. That was already known. What the warning about it said was too flat to use. It
+  covered only `<project>/.claude/worktrees/agent-*`, so it stayed silent for the root Sidequest actually provisions
+  under, and it said nothing at all about paths already swept from disk, which is the case where every diagnostic is
+  guaranteed false.
+
+  The warning now reads the board and names each foreign worktree by the lease that owns it: a live claim (expected
+  mid-refactor state that never outranks that executor's own verify), a path already gone from disk (always false),
+  or a candidate awaiting integration (worth reading before you integrate, and it outweighs an executor's `verify
+  passed`). Both worktree roots are covered, and a swept path keeps its line only while it can still be publishing.
+- A fan-out that crossed two worktrees now sorts itself out (SQ-2190)
+  Worktree creation cannot tell which dispatch a new checkout belongs to. Its hook knows the session and the path,
+  and the harness agent id that names the path only reaches the board later, so under a fan-out every sibling
+  reservation is eligible and creation attributes them in creation order. Create them in any other order and each
+  reservation ends up holding a sibling's checkout, which both executors then discover the hard way: the binding is
+  crossed, so their claims fail as `unbound_dispatch` and two runs die on a reason nobody can act on.
+
+  The first moment anything can tell them apart is the agent reporting the checkout it is actually running in, and an
+  observation outranks a guess, so the pair is exchanged instead of refused. It only ever happens between two
+  reservations of the same session that are both still unclaimed and identity-unbound, so a checkout is never taken
+  from an executor that has proven it owns one, and a path no reservation in the session created still matches
+  nothing and is still refused.
+
+### workbench 0.88.3 → 0.88.4
+
+#### Fixes
+
+- Health findings stop calling an installed plugin missing (SQ-2211)
+  A project can enable a plugin two ways: install it, or list it under `enabledPlugins` in its own
+  `.claude/settings.json`. The second way leaves no row in Claude Code's install registry, and the health check
+  only read the registry, so it announced "this project has a codebase map but no codebase-mapper install, so
+  nothing maintains it" at a project whose committed settings enable exactly that plugin. Same for a Sidequest
+  board enabled the same way. Both findings are classed as blocking the user, which is the worst place to be
+  wrong.
+
+  Marketplaces have the same split: a project can declare its own under `extraKnownMarketplaces` with
+  `autoUpdate: true`, and that flag never lands in the user registry either, so two marketplaces that update
+  themselves fine were reported as having auto-update off.
+
+  Both questions now read the project's settings alongside the registry, honoring an explicit `false` in a
+  higher-precedence file as the disable it is, while a layer that merely names something without a flag changes
+  nothing. A user-level enable still reads as enabled everywhere rather than installed here. The registry keeps
+  doing what it is actually good for, which is saying which version a project runs and where its cache lives.
+
+  Net effect on the project that turned this up: three findings, all of them announced as blocking, down to the
+  one that was true.
+
 ## v3.478.0 (2026-08-17)
 
 ### model-gateway 0.48.9 → 0.48.10
