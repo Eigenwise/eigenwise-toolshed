@@ -48,6 +48,7 @@ function createPulse(dependencies) {
   const {
     boardConfig,
     checkpointProjection,
+    claimIdleMs,
     claimPulse,
     commitScope,
     dispatchState,
@@ -171,6 +172,9 @@ function createPulse(dependencies) {
     if (claim?.verifying) return { state: "alive", evidence: "verification marker is active" };
     if (dispatch?.outcome === "launched" && !dispatch.boundAt && !dispatch.agentId && !claim && !ticket?.checkpoint) {
       return { state: "stalled", evidence: "dispatch launched without a bound runtime identity, claim, or checkpoint" };
+    }
+    if (dispatch?.outcome === "launched" && dispatch.boundAt && !dispatch.claimedAt && !claim && !ticket?.checkpoint && Date.now() - Date.parse(dispatch.boundAt) >= claimIdleMs()) {
+      return { state: "stalled", evidence: "dispatch bound a runtime that never claimed, past the claim-idle backstop" };
     }
     if (claim && dispatch && !dispatch.terminalAt && (dispatch.agentId || dispatch.boundAt)) {
       return { state: "unknown", evidence: "a runtime identity was bound, but Sidequest has no process heartbeat" };

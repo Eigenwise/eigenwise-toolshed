@@ -11,7 +11,7 @@ function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -411,13 +411,41 @@ function supersedableUnboundAttempt(ticket?: any, state?: any) {
   );
 }
 
-function unboundSupersessionBlocker(ticket?: any, state?: any) {
+// A bound runtime's FIRST action is its tokened claim, so a bound attempt that has not claimed within the
+// claim-idle backstop is not winding down, it is gone. Only its stop hook could retire it, and a runtime that
+// dies without firing that hook left the ticket unreachable by every board path: redispatch refused it as a
+// live attempt, evidence refused it as bound, and session-start reconciliation skips bound attempts by design
+// (SQ-2110's recovery needed a resumed no-op exit in the same session; SQ-2206 measured the dead end).
+function strandedBoundAttempt(ticket?: any, state?: any) {
+  if (!state || !ticket?.dispatchNonce || !PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return false;
+  if (state.terminalAt || state.claimedAt || ticket.claim?.by || ticket.checkpoint) return false;
+  const boundMs = Date.parse(state.boundAt);
+  return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
+}
+
+function evidenceRetirableAttempt(ticket?: any, state?: any) {
+  return supersedableUnboundAttempt(ticket, state) || strandedBoundAttempt(ticket, state);
+}
+
+function describeMinutes(ms: number) {
+  const minutes = Math.max(1, Math.round(ms / 60000));
+  return `${minutes} minute${minutes === 1 ? '' : 's'}`;
+}
+
+function boundRuntimeBlocker(state?: any) {
+  const boundMs = Date.parse(state?.boundAt);
+  if (!Number.isFinite(boundMs)) return 'bound to a runtime';
+  const waited = Date.now() - boundMs;
+  return `bound to a runtime ${describeMinutes(waited)} ago and still unclaimed, which becomes retirable on evidence in ${describeMinutes(claimIdleMs() - waited)} unless its terminal hook fires first`;
+}
+
+function evidenceSupersessionBlocker(ticket?: any, state?: any) {
   if (!state || !ticket?.dispatchNonce) return 'not an active attempt';
   if (state.terminalAt) return `already terminal (${state.outcome || 'terminal'})`;
   if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
   if (state.claimedAt) return 'claimed';
   if (ticket.checkpoint) return 'checkpointed';
-  if (state.boundAt || state.agentId) return 'bound to a runtime';
+  if (state.boundAt || state.agentId) return boundRuntimeBlocker(state);
   return `in unrecognized state ${pulseDispatchState(state)}`;
 }
 
@@ -429,15 +457,19 @@ function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     const state = dispatchState(ticket);
-    if (!supersedableUnboundAttempt(ticket, state)) {
+    if (!evidenceRetirableAttempt(ticket, state)) {
       return {
         ok: false,
         reason: 'unclaimed_launch_not_supersedable',
         ticket,
-        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${unboundSupersessionBlocker(ticket, state)}. Evidence retires an attempt that minted a token and never reached a runtime; anything past that waits for its own terminal record.`,
+        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${evidenceSupersessionBlocker(ticket, state)}. Evidence retires an attempt whose runtime is gone: one that minted a token and never reached a runtime, or one bound and unclaimed past the claim-idle backstop. Anything past that waits for its own terminal record.`,
       };
     }
-    setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', { slug, failureShape: 'unclaimed_launch_superseded' });
+    const strandedBound = strandedBoundAttempt(ticket, state);
+    setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', {
+      slug,
+      failureShape: strandedBound ? 'stranded_bound_launch_superseded' : 'unclaimed_launch_superseded',
+    });
     const attempt = state.attempts?.at(-1);
     if (attempt) attempt.recoveryEvidence = evidence;
     ticket.dispatchNonce = null;
@@ -1026,9 +1058,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by)
       && Boolean(current.launchedAt || current.boundAt);
     if (activeRuntimeAttempt) {
-      const recovery = supersedableUnboundAttempt(t, current)
-        ? ` It is unbound and unclaimed, so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`
-        : ' Wait for that executor\'s terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.';
+      const evidenceCall = `so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`;
+      let recovery = ` Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down. It is ${evidenceSupersessionBlocker(t, current)}.`;
+      if (supersedableUnboundAttempt(t, current)) recovery = ` It is unbound and unclaimed, ${evidenceCall}`;
+      else if (strandedBoundAttempt(t, current)) recovery = ` It bound a runtime and never claimed, and a claim is a bound runtime's first action, so that runtime is gone: ${evidenceCall}`;
       throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery}`);
     }
     const repeatFailure = repeatNoCommitDispatchError(t, current);

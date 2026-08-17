@@ -956,7 +956,7 @@ test('the idle backstop only applies when no executor is associated', () => {
   assert.strictEqual(store.claimReleaseVerdict(store.getTicket(slug, routed.ref)), null, 'a bound executor is not idle just because it is quiet');
 });
 
-test('a launched unbound dispatch can be superseded with observed evidence, but a bound or claimed dispatch cannot', () => {
+test('a launched unbound dispatch can be superseded with observed evidence, but a freshly bound or claimed dispatch cannot', () => {
   const ticket = addRouted('supersedable unclaimed launch');
   const first = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-supersedable-launch' });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
@@ -989,6 +989,44 @@ test('a launched unbound dispatch can be superseded with observed evidence, but 
     token: claimedPrepared.token, executor: claimedPrepared.ticket.dispatchExecutor, sessionId: 'session-claimed-protected',
   }).ok, true);
   assert.throws(() => store.prepareDispatch(slug, claimed.ref, { sharedTree: true, recoveryEvidence: 'The executor reported a refusal.' }), /cannot be superseded/);
+});
+
+// SQ-2206: a bound attempt that never claimed had no exit but its own stop hook, so a runtime that died
+// without firing it stranded the ticket for good: redispatch refused it as live, evidence refused it as bound,
+// and session-start reconciliation skips bound attempts on purpose.
+test('SQ-2206: a bound launch that never claimed becomes retirable on evidence past the idle backstop', () => {
+  const ticket = addRouted('stranded bound launch');
+  const sessionId = 'session-stranded-bound';
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token, executor: prepared.ticket.dispatchExecutor, sessionId, agentName: 'stranded-bound-agent',
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, 'stranded-bound-id', 'stranded-bound-agent').ok, true);
+
+  const evidence = 'The native task for this launch completed without ever claiming, observed by the orchestrator.';
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: `${sessionId}-early`, recoveryEvidence: evidence }),
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in .* unless its terminal hook fires first/,
+    'inside the backstop a live executor stays protected, and the refusal says how long is left',
+  );
+
+  const originalIdleMinutes = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+  process.env.SIDEQUEST_CLAIM_IDLE_MIN = '0.000001';
+  try {
+    const replacement = store.prepareDispatch(slug, ticket.ref, {
+      sharedTree: true,
+      sessionId: `${sessionId}-replacement`,
+      recoveryEvidence: evidence,
+    });
+    const retired = replacement.ticket.dispatch.attempts.at(-1);
+    assert.equal(retired.failureShape, 'stranded_bound_launch_superseded');
+    assert.equal(retired.recoveryEvidence, evidence);
+    assert.ok(retired.boundAt, 'the retired attempt is preserved as the bound one it was');
+    assert.notEqual(replacement.token, prepared.token);
+  } finally {
+    if (originalIdleMinutes === undefined) delete process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+    else process.env.SIDEQUEST_CLAIM_IDLE_MIN = originalIdleMinutes;
+  }
 });
 
 test('SQ-2136: a prepared dispatch that never launched is retirable on evidence, and the refusal names the real blocker', () => {

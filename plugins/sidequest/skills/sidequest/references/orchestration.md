@@ -197,14 +197,18 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
   escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
-- **Retire an attempt that never reached a runtime.** When `pulse` reports the dispatch `prepared` or
-  `launched` with no bound runtime identity, no claim, and no checkpoint, there is nothing to wait for: the
-  spawn never started or never bound. Retire it in one call with `sidequest dispatch <ref> --recovery-evidence
-  "<observed failure evidence>"` (MCP `recoveryEvidence`). That records the evidence on the failed attempt,
-  keeps it in `dispatch.attempts` as history, and prepares exactly one fresh identity. It refuses once the
-  attempt is bound, claimed, checkpointed, or terminal, and the refusal names which of those it found. A bound
-  or claimed executor that is provably dead goes through claim release or `groomClose --recoveryEvidence`
-  instead; do not reach for recovery evidence to shortcut a live attempt.
+- **Retire an attempt no runtime will finish.** Two shapes qualify. When `pulse` reports the dispatch
+  `prepared` or `launched` with no bound runtime identity, no claim, and no checkpoint, there is nothing to
+  wait for: the spawn never started or never bound. And when it reports `stalled` with "bound a runtime that
+  never claimed, past the claim-idle backstop", that runtime is gone: a claim is a bound executor's FIRST
+  action, and its stop hook never fired, so nothing else will ever retire the attempt. Retire either in one
+  call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
+  `recoveryEvidence`). That records the evidence on the failed attempt, keeps it in `dispatch.attempts` as
+  history, and prepares exactly one fresh identity. It refuses while a bound attempt is still inside the
+  backstop, and once the attempt is claimed, checkpointed, or terminal; the refusal names which of those it
+  found and, for a bound one, how long is left. A claimed executor that is provably dead goes through claim
+  release or `groomClose --recoveryEvidence` instead; do not reach for recovery evidence to shortcut a live
+  attempt.
 - **A submitted ticket is not dispatchable.** While a submission is pending, the ticket is parked for the
   publish transaction, and a claim on it is refused as `submitted`, so dispatching would mint a token nobody
   can claim. Preparation refuses there and names the three exits: integrate it, `rework` it (which clears the
