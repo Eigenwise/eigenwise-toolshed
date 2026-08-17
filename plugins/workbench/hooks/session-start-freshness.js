@@ -293,14 +293,36 @@ function requiredVersions(versions) {
   return problems;
 }
 
-function boardMappings(boards, instances) {
+// A plugin is also active because a project's settings say so, and that path leaves no registry row at all:
+// contractify enables codebase-mapper in a committed .claude/settings.json, and the registry holds rows for
+// three of the other four plugins in that same block but none for it, so the plugin was invisible here and
+// the "nothing maintains it" finding fired against a maintained map (SQ-2211). Registry rows stay the
+// authority on which VERSION a project runs; they were never the authority on whether the plugin is there.
+// Later layers win, so an explicit false in a higher-precedence file disables what a lower one enabled.
+function settingsActivationScope(pluginId, projectPath, home) {
+  const layers = [
+    ['user', path.join(home, '.claude', 'settings.json')],
+    ['project', projectPath && path.join(projectPath, '.claude', 'settings.json')],
+    ['project', projectPath && path.join(projectPath, '.claude', 'settings.local.json')],
+  ];
+  let scope = null;
+  for (const [layerScope, file] of layers) {
+    if (!file) continue;
+    const enabled = readJson(file)?.enabledPlugins?.[pluginId];
+    if (typeof enabled === 'boolean') scope = enabled ? layerScope : null;
+  }
+  return scope;
+}
+
+function boardMappings(boards, instances, home) {
   const sidequestInstalls = instances.filter((instance) => instance.id === 'sidequest@eigenwise-toolshed');
   const missing = [];
   const mappings = boards.map((board) => {
     const boardPath = normalizedPath(board.path);
     const matching = sidequestInstalls.filter((instance) => instance.projectPath && normalizedPath(instance.projectPath) === boardPath);
-    const user = sidequestInstalls.some((instance) => instance.scope === 'user');
-    const status = matching.length ? 'installed' : user ? 'user-only' : 'missing';
+    const settingsScope = settingsActivationScope('sidequest@eigenwise-toolshed', board.path, home);
+    const user = sidequestInstalls.some((instance) => instance.scope === 'user') || settingsScope === 'user';
+    const status = matching.length || settingsScope === 'project' ? 'installed' : user ? 'user-only' : 'missing';
     if (status !== 'installed') missing.push({ board, status });
     return { name: board.name || board.path, path: board.path, status };
   });
@@ -316,11 +338,12 @@ function boardMappings(boards, instances) {
 // carrying .claude/.codebase-info with codebase-mapper uninstalled keeps injecting that map on every session
 // start, which reads as maintained while it quietly rots (SQ-2209, split out of SQ-1900). Same user-only
 // distinction as the board check: a user-scope install is not the same as none.
-function mapMaintenance(currentProject, instances) {
+function mapMaintenance(currentProject, instances, home) {
   if (!currentProject || !fs.existsSync(path.join(currentProject, '.claude', '.codebase-info'))) return [];
   const installs = instances.filter((instance) => instance.id === 'codebase-mapper@eigenwise-toolshed');
-  if (installs.some((instance) => isCurrentProjectPath(instance.projectPath, currentProject))) return [];
-  const scope = installs.some((instance) => instance.scope === 'user') ? 'no project/local' : 'no';
+  const settingsScope = settingsActivationScope('codebase-mapper@eigenwise-toolshed', currentProject, home);
+  if (settingsScope === 'project' || installs.some((instance) => isCurrentProjectPath(instance.projectPath, currentProject))) return [];
+  const scope = settingsScope === 'user' || installs.some((instance) => instance.scope === 'user') ? 'no project/local' : 'no';
   return [finding(`this project has a codebase map but ${scope} codebase-mapper install, so nothing maintains it`, BLOCKS_THE_USER)];
 }
 
@@ -348,7 +371,7 @@ function audit(options = {}) {
     claude: runVersion(options.claudeCommand || 'claude', ['--version']),
   };
   const boards = options.boards || sidequestBoards(home);
-  const mappings = boardMappings(boards, instances);
+  const mappings = boardMappings(boards, instances, home);
   const updates = [];
   const problems = [
     ...installedFreshness(instances, marketplaces, now, manifestFor, gitFreshness, updates),
@@ -362,8 +385,8 @@ function audit(options = {}) {
   const projectProblems = options.currentProject ? [
     ...installedFreshness(projectInstances, marketplaces, now, manifestFor, gitFreshness, projectUpdates),
     ...gatewayFreshness(projectInstances, checkGateway),
-    ...boardMappings(projectBoards, instances).problems,
-    ...mapMaintenance(options.currentProject, instances),
+    ...boardMappings(projectBoards, instances, home).problems,
+    ...mapMaintenance(options.currentProject, instances, home),
   ] : [];
   const staleProcesses = staleWorktreeProcesses({
     project: options.currentProject,

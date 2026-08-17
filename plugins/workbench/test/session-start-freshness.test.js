@@ -10,6 +10,7 @@ const test = require('node:test');
 const {
   CACHE_MAX_AGE_MS,
   audit,
+  boardMappings,
   createDebouncer,
   emitWarning,
   finding,
@@ -615,6 +616,46 @@ test('SQ-2209: a user-scope codebase-mapper is named as such, and a project inst
     /no project\/local codebase-mapper install/,
   );
   assert.equal(fixture([{ scope: 'project', projectPath: project, version: '2.15.5' }]), null);
+});
+
+function enablePlugins(directory, file, enabledPlugins) {
+  fs.mkdirSync(path.join(directory, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(directory, '.claude', file), JSON.stringify({ enabledPlugins }));
+}
+
+test('SQ-2211: settings that enable codebase-mapper leave no registry row but do maintain the map', (t) => {
+  const project = mappedProject(t);
+  enablePlugins(project, 'settings.json', { 'codebase-mapper@eigenwise-toolshed': true });
+  const output = () => hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+    }, { workbench: '0.49.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: project },
+  });
+
+  assert.equal(output(), null);
+
+  enablePlugins(project, 'settings.local.json', { 'codebase-mapper@eigenwise-toolshed': false });
+  assert.match(output().systemMessage, /this project has a codebase map but no codebase-mapper install/);
+});
+
+test('SQ-2211: a board whose settings enable Sidequest is not reported as missing an install', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-board-'));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  enablePlugins(project, 'settings.local.json', { 'sidequest@eigenwise-toolshed': true });
+
+  const enabledBoard = boardMappings([{ name: 'current', path: project }], [], home);
+  assert.deepEqual(enabledBoard.problems, []);
+  assert.equal(enabledBoard.mappings[0].status, 'installed');
+
+  // Enabled for every project is still not an install on this board, so the wording has to keep saying so.
+  enablePlugins(home, 'settings.json', { 'sidequest@eigenwise-toolshed': true });
+  const otherBoard = boardMappings([{ name: 'other', path: path.join(home, 'board-without-settings') }], [], home);
+  assert.equal(otherBoard.mappings[0].status, 'user-only');
+  assert.deepEqual(findingText(otherBoard.problems), ['Sidequest board other has no project/local Sidequest install']);
 });
 
 test('SQ-2209: a project without a codebase map is not asked to install a mapper', (t) => {
