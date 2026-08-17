@@ -8,6 +8,28 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.475.0 (2026-08-17)
+
+### sidequest 4.52.3 → 4.52.4
+
+#### Fixes
+
+- A race row that loses its own startup race no longer fails the gate (SQ-2197)
+  The exact-deadline race test gives each row a 500ms deadline, and the phase root has to start a node
+  interpreter, spawn a second node and record its descendant's pid inside that window. On a loaded
+  windows-latest runner the deadline sometimes wins, and nothing about termination is broken when it does.
+
+  Before SQ-2195 this appeared as a zero-byte pid file parsed as pid 0, reported as a descendant still live
+  after 5000ms, blaming termination for a pid that was never written. With the pid file now written by rename it
+  surfaced honestly as "the phase root never reported its descendant", which is accurate but still failed the
+  gate on unchanged code.
+
+  The row cannot simply be skipped: the root spawns its descendant before recording the pid, so a missing pid
+  does not prove that no descendant exists. A row without a pid now skips only the by-pid terminality probe and
+  still contributes to the marker check every row gets, which asserts the descendant never acted, the property
+  the test exists to prove. At least 60 of the 100 roots must record a descendant, so the test reports a runner
+  too loaded to be testing termination instead of quietly passing on marker checks alone.
+
 ## v3.474.0 (2026-08-17)
 
 ### sidequest 4.52.2 → 4.52.3
