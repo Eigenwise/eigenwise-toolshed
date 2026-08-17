@@ -18,11 +18,12 @@ const { openObservabilityStore } = require('../lib/observability/store.js');
 const { startFakeOtlpReceiver, testSink } = require('./observability-test-support.js');
 
 const PROJECT_ID = 'a'.repeat(64);
+const FIXTURE_NOW = new Date('2026-08-07T12:00:00.000Z');
 
 function temporaryStore(t) {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-'));
   const file = path.join(directory, 'ledger.db');
-  const store = openObservabilityStore(file);
+  const store = openObservabilityStore(file, { now: () => FIXTURE_NOW });
   t.after(() => {
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
@@ -619,7 +620,11 @@ test('health reports a hook spool drain that remains in flight past its deadline
 
 test('observer reports unrecoverable storage pressure without dropping the triggering ingestion', async (t) => {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-pressure-'));
-  const store = openObservabilityStore(path.join(directory, 'ledger.db'), { maxDatabaseBytes: 1, storageReserveBytes: 0 });
+  const store = openObservabilityStore(path.join(directory, 'ledger.db'), {
+    maxDatabaseBytes: 1,
+    storageReserveBytes: 0,
+    now: () => FIXTURE_NOW,
+  });
   t.after(() => {
     store.close();
     fs.rmSync(directory, { recursive: true, force: true });
