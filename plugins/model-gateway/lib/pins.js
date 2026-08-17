@@ -3,6 +3,7 @@
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const { writeFileAtomically } = require('./atomic-file.js');
 const {
   CLAUDE_BIN, CLAUDE_BIN_IS_BATCH, CODEX_FAMILY_RE, COMPAT_BASE_URL, DEFAULT_BASE_URL,
   DISPATCH_MODEL_ID, GROK_PREFIX, KNOWN_GOOD_PINS, LEGACY_CODEX_PREFIX, PIN_ALIASES,
@@ -53,9 +54,7 @@ function detectedPinDefaults() {
 
 function writeDetectedPinCache(cache) {
   fs.mkdirSync(STATE, { recursive: true });
-  const temporary = `${PIN_CACHE_PATH}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
-  fs.renameSync(temporary, PIN_CACHE_PATH);
+  writeFileAtomically(PIN_CACHE_PATH, JSON.stringify(cache, null, 2) + '\n', { mode: 0o600 });
 }
 
 function terminateProbe(child) {

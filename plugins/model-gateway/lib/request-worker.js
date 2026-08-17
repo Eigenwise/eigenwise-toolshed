@@ -10,6 +10,7 @@ const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
 const zlib = require('node:zlib');
+const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
 const { fetchUrl } = require('./process-supervision.js');
@@ -399,9 +400,7 @@ class DispatchSessionRouteCache {
     if (!this.cachePath) return;
     try {
       fs.mkdirSync(path.dirname(this.cachePath), { recursive: true });
-      const tempPath = `${this.cachePath}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-      fs.writeFileSync(tempPath, JSON.stringify({ version: 1, routes: [...this.routes] }) + '\n', { mode: 0o600 });
-      fs.renameSync(tempPath, this.cachePath);
+      writeFileAtomically(this.cachePath, JSON.stringify({ version: 1, routes: [...this.routes] }) + '\n', { mode: 0o600 });
     } catch {}
   }
 }
@@ -659,9 +658,7 @@ function writeCatalogFile(catalogPath, catalog) {
     throw new Error(`refusing to overwrite catalog schema ${storedVersion} at ${catalogPath}; this gateway supports schema ${CATALOG_SCHEMA_VERSION}, upgrade required`);
   }
   const nextCatalog = mergeSubsetCatalog(existing, catalog);
-  const tempPath = `${catalogPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(nextCatalog, null, 2) + '\n');
-  fs.renameSync(tempPath, catalogPath);
+  writeFileAtomically(catalogPath, JSON.stringify(nextCatalog, null, 2) + '\n');
   return nextCatalog;
 }
 
