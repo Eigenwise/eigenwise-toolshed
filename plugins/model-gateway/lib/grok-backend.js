@@ -3,6 +3,7 @@
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { writeFileAtomically } = require('./atomic-file.js');
 
 const GROK_ENDPOINT = 'https://cli-chat-proxy.grok.com/v1/responses';
 const GROK_TOKEN_ENDPOINT = 'https://auth.x.ai/oauth/token';
@@ -60,9 +61,7 @@ function authExpiresSoon(entry, now = Date.now(), skewMs = 5 * 60 * 1000) {
 }
 
 function writeGrokAuth(file, auth) {
-  const temporary = `${file}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(temporary, JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 });
-  fs.renameSync(temporary, file);
+  writeFileAtomically(file, JSON.stringify(auth, null, 2) + '\n', { mode: 0o600 });
 }
 
 async function oidcTokenEndpoint(entry, request) {
