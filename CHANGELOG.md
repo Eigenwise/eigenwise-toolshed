@@ -8,6 +8,40 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.473.0 (2026-08-17)
+
+### sidequest 4.52.1 → 4.52.2
+
+#### Fixes
+
+- A continuation with retained uncommitted work is no longer told to discard it (SQ-2180)
+  When an executor picked up a ticket whose previous attempt had left uncommitted work in its worktree, and
+  a release had landed in between, the sync step told it to `git reset --hard` onto the new base. That would
+  have destroyed the retained work, which existed nowhere else: not committed, not stashed, not pinned. One
+  executor read the instruction, said it would destroy 11 files, and stopped to ask instead of following it.
+
+  That state now gets a preserve-first sequence: commit the retained changes on the worktree's own branch,
+  check that the commit really covers them, then rebase onto the new base. It also says why not to reach for
+  `git stash` (the stash stack is shared with other worktrees and sessions, so a pop can take someone else's
+  entry) and why to rebase rather than merge (a release deletes the changelog fragments it consumed, and
+  merging an older base forward brings them back and re-ships released entries).
+
+  The sync step for a clean worktree is unchanged.
+- Continuations can reach their retained worktree again (SQ-2183)
+  A ticket that ended with a retained worktree could not be redispatched. The continuation briefing opened by
+  telling the executor to call `EnterWorktree` on that worktree, and `EnterWorktree` only accepts worktrees
+  under `<repo>/.claude/worktrees` while board-retained ones live under the Sidequest home. Nothing
+  reconciles those two locations, so the call failed every time, and executors released without doing any
+  work because the first step of their contract was impossible.
+
+  Moving the working directory was never necessary. The claim already binds the ticket to the retained
+  worktree, so writes there are authorized, and the shared-checkout guard only refuses git mutations aimed at
+  the shared root. The briefing now says to work the retained worktree by absolute path and run git against
+  it with `git -C`, and it says plainly not to call `EnterWorktree`.
+
+  The dirty-resume contract also now states that the retained changes were never committed and never stashed,
+  so that worktree holds the only copy.
+
 ## v3.472.0 (2026-08-17)
 
 ### sidequest 4.52.0 → 4.52.1
