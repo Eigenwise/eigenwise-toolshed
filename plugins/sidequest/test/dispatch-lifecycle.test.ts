@@ -316,6 +316,26 @@ test('claim-token binding accepts prepared and launched attempts', () => {
 });
 
 test('tokened stale compatibility refusals retire only proven mismatches', () => {
+  // This test flips the install identity that checkSidequestInstall hashes. The full suite
+  // shares one SIDEQUEST_CLAUDE_HOME across every test process (scripts/test-full.mjs), so
+  // mutating the shared manifest turns concurrent launches in OTHER files into proven
+  // mismatches and retires their healthy attempts — three v3.482.0 cut attempts failed on
+  // exactly that. Same isolation pattern as test/claim-effort-guard.test.ts: a private
+  // claude home for the duration, restored in finally, before any prepare snapshots it.
+  const isolatedClaudeHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-stale-compat-home-'));
+  const isolatedInstallPath = path.join(isolatedClaudeHome, 'sidequest-test-install');
+  const manifestPath = path.join(isolatedInstallPath, '.mcp.json');
+  const originalManifest = JSON.stringify({ mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } } });
+  fs.mkdirSync(path.join(isolatedClaudeHome, 'plugins'), { recursive: true });
+  fs.mkdirSync(isolatedInstallPath, { recursive: true });
+  fs.writeFileSync(manifestPath, originalManifest);
+  const loadedVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
+  fs.writeFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: { 'sidequest@eigenwise-toolshed': [{ scope: 'user', installPath: isolatedInstallPath, version: loadedVersion }] },
+  }));
+  const sharedClaudeHome = process.env.SIDEQUEST_CLAUDE_HOME;
+  process.env.SIDEQUEST_CLAUDE_HOME = isolatedClaudeHome;
+
   const claimTicket = createFixture('stale compatibility claim fixture');
   const launchTicket = createFixture('stale compatibility launch fixture');
   const transientLaunchTicket = createFixture('unreadable compatibility launch fixture');
@@ -324,10 +344,6 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
   const launchPrepared = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-${Date.now()}` });
   const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `unreadable-compatibility-launch-${Date.now()}` });
   const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `unreadable-compatibility-claim-${Date.now()}` });
-  const registry = JSON.parse(fs.readFileSync(path.join(process.env.SIDEQUEST_CLAUDE_HOME!, 'plugins', 'installed_plugins.json'), 'utf8'));
-  const installed = registry.plugins['sidequest@eigenwise-toolshed'].find((entry: { scope?: string }) => entry.scope === 'user');
-  const manifestPath = path.join(installed.installPath, '.mcp.json');
-  const originalManifest = fs.readFileSync(manifestPath, 'utf8');
 
   try {
     fs.writeFileSync(manifestPath, '');
@@ -385,10 +401,12 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
     const launchReplacement = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-replacement-${Date.now()}` });
     assert.notEqual(launchReplacement.token, launchPrepared.token);
   } finally {
-    fs.writeFileSync(manifestPath, originalManifest);
+    if (sharedClaudeHome === undefined) delete process.env.SIDEQUEST_CLAUDE_HOME;
+    else process.env.SIDEQUEST_CLAUDE_HOME = sharedClaudeHome;
     for (const ticket of [claimTicket, launchTicket, transientLaunchTicket, transientClaimTicket]) {
       store.releaseTicket(slug, ticket.ref, 'stale-compatibility-cleanup', { status: 'todo', source: 'test', force: true });
     }
+    fs.rmSync(isolatedClaudeHome, { recursive: true, force: true });
   }
 });
 
