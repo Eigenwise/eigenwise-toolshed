@@ -62,6 +62,32 @@ function readJsonSafe(file: string): unknown {
   }
 }
 
+interface CachedCatalog {
+  fingerprint: string | null;
+  data: unknown;
+}
+
+const catalogCache = new Map<string, CachedCatalog>();
+
+function catalogFileFingerprint(file: string): string | null {
+  try {
+    const stat = fs.statSync(file);
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return null;
+  }
+}
+
+function readCatalogSafe(file: string): unknown {
+  const resolvedFile = path.resolve(file);
+  const fingerprint = catalogFileFingerprint(resolvedFile);
+  const cached = catalogCache.get(resolvedFile);
+  if (cached?.fingerprint === fingerprint) return cached.data;
+  const data = readJsonSafe(resolvedFile);
+  catalogCache.set(resolvedFile, { fingerprint, data });
+  return data;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === 'object';
 }
@@ -123,11 +149,11 @@ function refreshGatewayCatalog(catalogPath: string): CatalogData | null {
   const window = attempt?.refreshed ? CATALOG_STALE_MS : REFRESH_RETRY_MS;
   if (!attempt || Date.now() - attempt.at > window) {
     const command = newestGatewayCatalogCommand();
-    const written = command !== null && gatewayRefreshSucceeded(command) ? readJsonSafe(catalogPath) : null;
+    const written = command !== null && gatewayRefreshSucceeded(command) ? readCatalogSafe(catalogPath) : null;
     gatewayRefreshAttempts.set(catalogPath, { at: Date.now(), refreshed: catalogWithinFreshnessWindow(written) });
     return isRecord(written) ? written as CatalogData : null;
   }
-  const catalog = attempt.refreshed ? readJsonSafe(catalogPath) : null;
+  const catalog = attempt.refreshed ? readCatalogSafe(catalogPath) : null;
   return isRecord(catalog) ? catalog as CatalogData : null;
 }
 
@@ -135,6 +161,14 @@ function catalogWithinFreshnessWindow(data: unknown): boolean {
   if (!isRecord(data) || typeof data.updatedAt !== 'string') return false;
   const age = Date.now() - Date.parse(data.updatedAt);
   return Number.isFinite(age) && age >= 0 && age <= CATALOG_STALE_MS;
+}
+
+export function catalogStateFingerprint(): string {
+  return discoveryRoots().flatMap((root) => CATALOG_SOURCES.map(({ relPath }) => {
+    const catalogPath = path.resolve(root, relPath);
+    const freshness = catalogWithinFreshnessWindow(readCatalogSafe(catalogPath)) ? 'fresh' : 'stale';
+    return `${catalogPath}:${catalogFileFingerprint(catalogPath) ?? 'missing'}:${freshness}`;
+  })).join('|');
 }
 
 function usableCatalog(data: unknown, schemas: ReadonlySet<number>): CatalogData | null {
@@ -167,7 +201,7 @@ export function providerReadiness(provider: string): ProviderReadiness | null {
   for (const root of discoveryRoots()) {
     for (const { relPath, schemas } of CATALOG_SOURCES) {
       const catalogPath = path.join(root, relPath);
-      const storedCatalog = readJsonSafe(catalogPath);
+      const storedCatalog = readCatalogSafe(catalogPath);
       let catalog = usableCatalog(storedCatalog, schemas);
       let readiness = catalog && catalogProviderReadiness(catalog, provider);
       if (provider === 'codex' && isRecord(storedCatalog) && (!catalog || !readiness?.ready)) {
@@ -188,7 +222,7 @@ export function providerReadiness(provider: string): ProviderReadiness | null {
 // command happened to rewrite the file. Readiness already refreshed itself; the model list has to too, or a
 // board routing to Codex categories stops dispatching for no stated reason (SQ-2208).
 function currentCatalog(catalogPath: string, schemas: ReadonlySet<number>): CatalogData | null {
-  const storedCatalog = readJsonSafe(catalogPath);
+  const storedCatalog = readCatalogSafe(catalogPath);
   const usable = usableCatalog(storedCatalog, schemas);
   if (usable || !isRecord(storedCatalog)) return usable;
   return usableCatalog(refreshGatewayCatalog(catalogPath), schemas);
