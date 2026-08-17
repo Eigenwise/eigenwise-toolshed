@@ -55,7 +55,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-telemetry-home-
 const PROJ = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-telemetry-project-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.CLAUDE_PROJECT_DIR = PROJ;
-execFileSync('git', ['init', '--quiet'], { cwd: PROJ });
+execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: PROJ });
 execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: PROJ });
 execFileSync('git', ['config', 'user.name', 'Telemetry Test'], { cwd: PROJ });
 fs.mkdirSync(path.join(PROJ, 'lib'));

@@ -41,7 +41,7 @@ function git(args: string[], cwd: string) {
 
 function submitIntegrationFixture(title: string, reviewed = false) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-high-stakes-integration-'));
-  git(['init'], repo);
+  git(['init', '-b', 'main'], repo);
   git(['config', 'user.name', 'Sidequest Test'], repo);
   git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');

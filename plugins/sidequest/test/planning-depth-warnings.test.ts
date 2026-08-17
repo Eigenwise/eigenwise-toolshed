@@ -270,7 +270,7 @@ test('submission-review anchors resolve against their explicit pinned ref or com
   fs.mkdirSync(path.join(project, 'test'), { recursive: true });
   fs.writeFileSync(path.join(project, 'README.md'), 'fixture\n');
   fs.writeFileSync(path.join(project, 'test', 'context-projection-benchmark.test.ts'), 'export {};\n');
-  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['init', '-b', 'main'], { cwd: project, encoding: 'utf8' }).status, 0);
   assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
   assert.strictEqual(spawnSync('git', ['-c', 'user.name=fixture', '-c', 'user.email=fixture@example.test', 'commit', '-m', 'seed pinned review'], { cwd: project, encoding: 'utf8' }).status, 0);
   const pinned = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: project, encoding: 'utf8' }).stdout.trim();
@@ -566,7 +566,7 @@ test('warns when tracked package build output is omitted from source scope', () 
   ].join('\n'));
   fs.writeFileSync(path.join(project, 'src', 'lib', 'store.ts'), 'export {};\n');
   fs.writeFileSync(path.join(project, 'lib', 'store.js'), 'module.exports = {};\n');
-  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['init', '-b', 'main'], { cwd: project, encoding: 'utf8' }).status, 0);
   assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
 
   const omitted = cliJsonAt(project, ['add', '-t', 'source change', '--category', 'coding.normal', '--file', 'src/lib/store.ts']);
@@ -713,7 +713,7 @@ test('discovers bundled hook output from the build script export', () => {
   ].join('\n'));
   fs.writeFileSync(path.join(project, 'src', 'hooks', 'subagent-stop.ts'), 'export {};\n');
   fs.writeFileSync(path.join(project, 'hooks', 'subagent-stop.js'), 'module.exports = {};\n');
-  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['init', '-b', 'main'], { cwd: project, encoding: 'utf8' }).status, 0);
   assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
 
   const omitted = cliJsonAt(project, ['add', '-t', 'hook source change', '--category', 'coding.normal', '--file', 'src/hooks/subagent-stop.ts']);
@@ -746,7 +746,7 @@ test('readonly tickets skip build-output and consumer write-scope warnings on ad
   fs.writeFileSync(path.join(project, 'src', 'hooks', 'subagent-stop.ts'), 'export {};\n');
   fs.writeFileSync(path.join(project, 'lib', 'store.js'), 'module.exports = {};\n');
   fs.writeFileSync(path.join(project, 'hooks', 'subagent-stop.js'), 'module.exports = {};\n');
-  assert.strictEqual(spawnSync('git', ['init'], { cwd: project, encoding: 'utf8' }).status, 0);
+  assert.strictEqual(spawnSync('git', ['init', '-b', 'main'], { cwd: project, encoding: 'utf8' }).status, 0);
   assert.strictEqual(spawnSync('git', ['add', '.'], { cwd: project, encoding: 'utf8' }).status, 0);
 
   const writable = cliJsonAt(project, [

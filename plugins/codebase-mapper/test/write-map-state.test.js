@@ -56,7 +56,7 @@ test('write-map-state discovers added and removed documents before atomically re
 test('write-map-state records the current commit in a git project', () => {
   const { projectDir, mapDir } = fixtureProject();
   const git = (args) => childProcess.execFileSync('git', args, { cwd: projectDir, encoding: 'utf8', windowsHide: true });
-  git(['init']);
+  git(['init', '-b', 'main']);
   git(['config', 'user.name', 'Map test']);
   git(['config', 'user.email', 'map-test@example.test']);
   git(['add', '.']);

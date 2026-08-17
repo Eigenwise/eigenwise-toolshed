@@ -36,14 +36,14 @@ const REMOTE_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-remote-'
 function git(args?: any) {
   return execFileSync('git', args, { cwd: PROJECT_DIR, encoding: 'utf8', windowsHide: true }).trim();
 }
-git(['init']);
+git(['init', '-b', 'main']);
 git(['config', 'user.name', 'Sidequest Test']);
 git(['config', 'user.email', 'sidequest-test@example.invalid']);
 fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'submission fixture\n');
 git(['add', '.']);
 git(['commit', '-m', 'base']);
 git(['branch', '-M', 'main']);
-execFileSync('git', ['init', '--bare', REMOTE_DIR], { encoding: 'utf8', windowsHide: true });
+execFileSync('git', ['init', '-b', 'main', '--bare', REMOTE_DIR], { encoding: 'utf8', windowsHide: true });
 git(['remote', 'add', 'origin', REMOTE_DIR]);
 git(['push', '-u', 'origin', 'main']);
 let branchSeq = 0;

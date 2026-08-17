@@ -33,7 +33,7 @@ const GUARD_DESTRUCTIVE = path.join(HOOKS, 'guard-destructive-git.js');
 function initRepo(prefix: string) {
   const repo = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), prefix)));
   const git = (args: string[]) => execFileSync('git', args, { cwd: repo, encoding: 'utf8', windowsHide: true });
-  git(['init']);
+  git(['init', '-b', 'main']);
   git(['config', 'user.name', 'Sidequest Test']);
   git(['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.writeFileSync(path.join(repo, 'README.md'), 'isolation fixture\n');
@@ -1213,10 +1213,6 @@ test('closure refusals name the next legal action instead of only their precondi
 test('SQ-2089: the configured integration authority decides the isolated baseline, or the dispatch refuses', () => {
   const repository = initRepo('sq-baseline-authority-');
   const git = (args: string[], cwd = repository) => execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
-  // The full suite runs git with no global config, so `git init` names the first branch master there and main
-  // here. This fixture is entirely about which named branch a baseline comes from, and an unpinned name let
-  // `git checkout main` invent a local main tracking origin/main instead of selecting the branch under test.
-  git(['branch', '-M', 'main']);
   const commit = (message: string) => {
     fs.appendFileSync(path.join(repository, 'README.md'), `${message}\n`);
     git(['add', 'README.md']);
@@ -1227,7 +1223,7 @@ test('SQ-2089: the configured integration authority decides the isolated baselin
   // The incident shape: a remote pinned at a stale commit, a local main ahead of it, and a third branch
   // configured as the integration authority. All three commits differ, so any baseline names its own source.
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-baseline-remote-'));
-  git(['init', '--bare', '--quiet'], remote);
+  git(['init', '-b', 'main', '--bare', '--quiet'], remote);
   git(['remote', 'add', 'origin', remote]);
   git(['push', '--quiet', 'origin', 'HEAD:refs/heads/main']);
   const staleRemoteMain = git(['rev-parse', 'refs/remotes/origin/main']);

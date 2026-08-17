@@ -14,7 +14,7 @@ process.env.SIDEQUEST_HOME = HOME;
 const store = require('../lib/store.js');
 const boardPath = path.join(HOME, 'board');
 fs.mkdirSync(boardPath, { recursive: true });
-execFileSync('git', ['init', '--quiet'], { cwd: boardPath, windowsHide: true });
+execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: boardPath, windowsHide: true });
 const { slug } = store.ensureProject(boardPath);
 const hookPath = path.join(__dirname, '..', 'hooks', 'compaction-policy.js');
 
@@ -69,7 +69,7 @@ test('PreCompact pinning stays within the prompt budget for crowded boards', () 
 
 test('PreCompact preserves a live claimed ticket before stale doing rows', () => {
   const crowdedBoardPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-compaction-live-first-'));
-  execFileSync('git', ['init', '--quiet'], { cwd: crowdedBoardPath, windowsHide: true });
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: crowdedBoardPath, windowsHide: true });
   const { slug: crowdedSlug } = store.ensureProject(crowdedBoardPath);
   const staleRefs: string[] = [];
   for (let index = 0; index < 30; index += 1) {

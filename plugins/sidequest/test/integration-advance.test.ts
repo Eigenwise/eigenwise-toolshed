@@ -45,7 +45,7 @@ function remoteRefs(repo: string) {
 // checkout and bumps a version on top, and local main is left behind.
 function makeRepo(label: string) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-advance-${label}-`));
-  git(['init'], repo);
+  git(['init', '-b', 'main'], repo);
   git(['config', 'user.name', 'Sidequest Test'], repo);
   git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'advance fixture\n');
@@ -118,7 +118,7 @@ test('a clean fast-forward advances the local integration branch to the integrat
 test('advancing a local branch leaves every remote-tracking ref where it was', async () => {
   const fixture = makeRepo('remoterefs');
   const bare = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-advance-bare-'));
-  execFileSync('git', ['init', '--bare', bare], { encoding: 'utf8', windowsHide: true });
+  execFileSync('git', ['init', '-b', 'main', '--bare', bare], { encoding: 'utf8', windowsHide: true });
   git(['remote', 'add', 'origin', bare], fixture.repo);
   git(['push', '-u', 'origin', 'main'], fixture.repo);
   const refsBefore = remoteRefs(fixture.repo);
@@ -535,7 +535,7 @@ for (const [state, dirtyTarget] of dirtyIntegrationTargetStates) {
 
 function makeGreenfieldRepo(label: string, locked = true) {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), `sq-greenfield-${label}-`));
-  git(['init'], repo);
+  git(['init', '-b', 'main'], repo);
   git(['config', 'user.name', 'Sidequest Test'], repo);
   git(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'greenfield fixture\n');

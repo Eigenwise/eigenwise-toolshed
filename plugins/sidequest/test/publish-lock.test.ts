@@ -13,7 +13,7 @@ const publish = require('../lib/publish.js');
 
 function tempRepo(): string {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-publish-lock-'));
-  execFileSync('git', ['init', '-q', dir], { encoding: 'utf8' });
+  execFileSync('git', ['init', '-b', 'main', '-q', dir], { encoding: 'utf8' });
   return dir;
 }
 

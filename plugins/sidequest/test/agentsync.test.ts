@@ -152,7 +152,7 @@ test('read-only briefings name the temporary-file location for each checkout mod
 
 test('briefings surface tracked generated outputs paired into effective scope', () => {
   const root = tmpDir();
-  assert.equal(git(root, ['init']).status, 0);
+  assert.equal(git(root, ['init', '-b', 'main']).status, 0);
   assert.equal(git(root, ['config', 'user.name', 'Sidequest Test']).status, 0);
   assert.equal(git(root, ['config', 'user.email', 'sidequest-test@example.invalid']).status, 0);
   const source = 'plugins/sidequest/src/hooks/brief.ts';
@@ -968,7 +968,7 @@ test('stale worktree cwd warnings identify dispatch-specific consequences', () =
   const store = require('../lib/store.js');
   const worktrees = require('../lib/worktrees.js');
   const projectRoot = tmpDir();
-  assert.equal(git(projectRoot, ['init', '--quiet']).status, 0);
+  assert.equal(git(projectRoot, ['init', '-b', 'main', '--quiet']).status, 0);
   assert.equal(git(projectRoot, ['config', 'user.email', 'sidequest@example.invalid']).status, 0);
   assert.equal(git(projectRoot, ['config', 'user.name', 'Sidequest Tests']).status, 0);
   fs.writeFileSync(path.join(projectRoot, 'README.md'), 'stale cwd fixture\n');

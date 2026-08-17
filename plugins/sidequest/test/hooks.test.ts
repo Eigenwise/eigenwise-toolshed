@@ -446,7 +446,7 @@ test('pre-tool hook: an executor cannot redispatch its own active ticket', () =>
 
 test('pre-tool hook: shared-tree claims cannot run raw git commit', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-shared-commit-'));
-  gitFixture(['init', '--quiet'], projectPath);
+  gitFixture(['init', '-b', 'main', '--quiet'], projectPath);
   gitFixture(['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], projectPath);
   const project = store.ensureProject(projectPath).slug;
   const ticket = store.createTicket(project, { title: 'shared commit guard', category: 'debugging', source: 'cli' });
@@ -895,7 +895,7 @@ test('pre-tool hook: external linked worktrees preserve helper scope enforcement
   fs.mkdirSync(path.join(projectPath, 'lib'));
   fs.writeFileSync(path.join(projectPath, 'lib', 'allowed.js'), 'export const allowed = true;\n');
   fs.writeFileSync(path.join(projectPath, 'lib', 'outside.js'), 'export const outside = true;\n');
-  gitFixture(['init', '--quiet'], projectPath);
+  gitFixture(['init', '-b', 'main', '--quiet'], projectPath);
   gitFixture(['config', 'user.email', 'sidequest@example.invalid'], projectPath);
   gitFixture(['config', 'user.name', 'Sidequest Tests'], projectPath);
   gitFixture(['add', '.'], projectPath);
@@ -955,7 +955,7 @@ test('pre-tool hook: an unbound helper can restore only one declared file to HEA
   const committedContent = 'export const guard = true;\n';
   fs.writeFileSync(allowedPath, committedContent);
   fs.writeFileSync(outsidePath, committedContent);
-  gitFixture(['init', '--quiet'], projectPath);
+  gitFixture(['init', '-b', 'main', '--quiet'], projectPath);
   gitFixture(['config', 'user.email', 'sidequest@example.invalid'], projectPath);
   gitFixture(['config', 'user.name', 'Sidequest Tests'], projectPath);
   gitFixture(['add', 'lib/allowed.js', 'lib/outside.js'], projectPath);
@@ -1578,7 +1578,7 @@ test('peer-message hooks refuse a submitted executor by its exact SendMessage ta
 test('peer-guard: missing isolated worktree blocks a non-terminal resume only', () => {
   const isolatedRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-missing-worktree-'));
   fs.writeFileSync(path.join(isolatedRoot, 'fixture.txt'), 'fixture\n');
-  gitFixture(['init'], isolatedRoot);
+  gitFixture(['init', '-b', 'main'], isolatedRoot);
   gitFixture(['config', 'user.email', 'sidequest@example.test'], isolatedRoot);
   gitFixture(['config', 'user.name', 'Sidequest Test'], isolatedRoot);
   gitFixture(['add', 'fixture.txt'], isolatedRoot);
@@ -1962,7 +1962,7 @@ test('session-end leaves an unbound old patch-equivalent worktree untouched and 
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-project-'));
   const worktrees = path.join(project, '.claude', 'worktrees');
   const projectGit = (args: string[], cwd?: string) => execFileSync('git', args, { cwd: cwd || project, encoding: 'utf8', windowsHide: true }).trim();
-  projectGit(['init']);
+  projectGit(['init', '-b', 'main']);
   projectGit(['config', 'user.name', 'Sidequest Test']);
   projectGit(['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.writeFileSync(path.join(project, 'README.md'), 'session-end fixture\n');
@@ -2554,7 +2554,7 @@ test('session-start preserves the live linked worktree that started the sweep', 
   const live = path.join(worktrees, 'agent-session-live');
   const sessionId = `session-live-${crypto.randomUUID()}`;
   try {
-    gitFixture(['init'], repo);
+    gitFixture(['init', '-b', 'main'], repo);
     gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
     gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
     fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
@@ -2586,7 +2586,7 @@ test('session-start leaves an old unbound worktree untouched', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-'));
   const worktrees = path.join(repo, '.claude', 'worktrees');
   const old = path.join(worktrees, 'agent-session-sweep');
-  gitFixture(['init'], repo);
+  gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
   gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
@@ -2652,7 +2652,7 @@ test('session-start: a deferred sweep report is drained into the next session', 
 test('sweep worker: records its notices for the next session instead of dropping them', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-worker-home-'));
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-worker-'));
-  gitFixture(['init'], repo);
+  gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
   gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
@@ -2672,7 +2672,7 @@ test('sweep worker: records its notices for the next session instead of dropping
 
 test('session-start skips an unavailable integration target without failing the sweep', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-target-'));
-  gitFixture(['init'], repo);
+  gitFixture(['init', '-b', 'main'], repo);
   gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
   gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
   fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
@@ -2977,7 +2977,7 @@ test('worktree-create provisions configured dependencies before dispatch and rem
 
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-diagnostic-worktrees-'));
-  gitFixture(['init'], repo);
+  gitFixture(['init', '-b', 'main'], repo);
   const worktrees = path.join(repo, '.claude', 'worktrees');
   const current = path.join(worktrees, 'agent-current');
   fs.mkdirSync(current, { recursive: true });

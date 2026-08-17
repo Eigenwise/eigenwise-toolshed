@@ -23,7 +23,7 @@ function createFixture() {
     scripts: { 'build:check': 'node scripts/build-check.mjs' },
   }));
   fs.writeFileSync(path.join(fixture, 'src', 'hooks', 'unexpected-hook.ts'), 'export const unexpected = true;\n');
-  const initialize = run('git', ['init', '--quiet'], fixture);
+  const initialize = run('git', ['init', '-b', 'main', '--quiet'], fixture);
   assert.equal(initialize.status, 0, initialize.stderr);
   return fixture;
 }

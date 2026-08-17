@@ -14,7 +14,7 @@ function git(repository: string, arguments_: string[]): string {
 
 function repositoryFixture() {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-worktree-lease-'));
-  git(repository, ['init']);
+  git(repository, ['init', '-b', 'main']);
   git(repository, ['config', 'user.name', 'Sidequest Test']);
   git(repository, ['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.writeFileSync(path.join(repository, 'README.md'), 'fixture\n');

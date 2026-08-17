@@ -2100,7 +2100,7 @@ test('worktreeBase local-main records the local main commit while default dispat
     fs.writeFileSync(path.join(repository, 'tracked.js'), 'module.exports = 1;\n');
     execFileSync('git', ['add', 'tracked.js'], { cwd: repository });
     execFileSync('git', ['commit', '--quiet', '-m', 'remote base'], { cwd: repository });
-    execFileSync('git', ['init', '--bare', remote], { windowsHide: true });
+    execFileSync('git', ['init', '-b', 'main', '--bare', remote], { windowsHide: true });
     execFileSync('git', ['remote', 'add', 'origin', remote], { cwd: repository });
     execFileSync('git', ['push', '--quiet', '-u', 'origin', 'main'], { cwd: repository });
     const originMain = execFileSync('git', ['rev-parse', 'origin/main'], { cwd: repository, encoding: 'utf8' }).trim();

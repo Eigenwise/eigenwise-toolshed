@@ -36,7 +36,7 @@ const { makeCliRunner } = require('./_helpers.js');
 function git(args?: any) {
   return execFileSync('git', args, { cwd: PROJECT_DIR, encoding: 'utf8', windowsHide: true }).trim();
 }
-git(['init']);
+git(['init', '-b', 'main']);
 git(['config', 'user.name', 'Sidequest Test']);
 git(['config', 'user.email', 'sidequest-test@example.invalid']);
 fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });

@@ -485,7 +485,7 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
 
 test('structured files alone determine ignored worktree warnings', () => {
   const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-structured-visibility-'));
-  assert.equal(spawnSync('git', ['init', '-q'], { cwd: visibilityProject }).status, 0);
+  assert.equal(spawnSync('git', ['init', '-b', 'main', '-q'], { cwd: visibilityProject }).status, 0);
   fs.writeFileSync(path.join(visibilityProject, '.gitignore'), '..scope/\n.dot/\nignored punctuation \\[x\\]/\nprose-only/\nverify-only/\n');
   const slug = store.ensureProject(visibilityProject).slug;
   const visibilityWarning = store.dispatchWarnings({
@@ -503,7 +503,7 @@ test('structured files alone determine ignored worktree warnings', () => {
 
 test('visibility keeps NFC and NFD declared paths distinct', () => {
   const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-visibility-unicode-'));
-  assert.equal(spawnSync('git', ['init', '-q'], { cwd: visibilityProject }).status, 0);
+  assert.equal(spawnSync('git', ['init', '-b', 'main', '-q'], { cwd: visibilityProject }).status, 0);
   fs.writeFileSync(path.join(visibilityProject, '.gitignore'), 'NFC-é/\nNFD-é/\n');
   const slug = store.ensureProject(visibilityProject).slug;
   const visibilityWarning = store.dispatchWarnings({
@@ -517,7 +517,7 @@ test('visibility keeps NFC and NFD declared paths distinct', () => {
 
 test('visibility handles ten thousand declared paths without scanning ticket prose', () => {
   const visibilityProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-visibility-bounds-'));
-  assert.equal(spawnSync('git', ['init', '-q'], { cwd: visibilityProject }).status, 0);
+  assert.equal(spawnSync('git', ['init', '-b', 'main', '-q'], { cwd: visibilityProject }).status, 0);
   fs.writeFileSync(path.join(visibilityProject, '.gitignore'), 'declared/\n');
   const slug = store.ensureProject(visibilityProject).slug;
   const visibilityWarning = store.dispatchWarnings({

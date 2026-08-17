@@ -59,7 +59,7 @@ function git(repo: string, args: string[]): string {
 
 function repo(): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-'));
-  git(root, ['init']);
+  git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Sidequest Test']);
   git(root, ['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.mkdirSync(path.join(root, 'plugins', 'sidequest'), { recursive: true });
@@ -426,7 +426,7 @@ function pin(root: string, ref: string, commit: string): void {
 
 function greenfieldRepo(file: string): string {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-root-'));
-  git(root, ['init']);
+  git(root, ['init', '-b', 'main']);
   git(root, ['config', 'user.name', 'Sidequest Test']);
   git(root, ['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.mkdirSync(path.dirname(path.join(root, file)), { recursive: true });

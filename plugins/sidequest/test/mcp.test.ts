@@ -30,7 +30,7 @@ process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 const FIXTURE_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-fixtures-'));
 const PROJ = path.join(FIXTURE_ROOT, 'board');
 fs.mkdirSync(PROJ, { recursive: true });
-execFileSync('git', ['init', '--quiet'], { cwd: PROJ, windowsHide: true });
+execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: PROJ, windowsHide: true });
 execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '--allow-empty', '-m', 'fixture'], { cwd: PROJ, windowsHide: true });
 process.env.CLAUDE_PROJECT_DIR = PROJ;
 const MCP_SESSION_ID = `mcp-test-session-${process.pid}`;
@@ -208,14 +208,14 @@ function createGitWorktree() {
   // what the temp tracker and `temp cleanup` key on.
   const worktree = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp worktree-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-remote-'));
-  gitAt(worktree, ['init']);
+  gitAt(worktree, ['init', '-b', 'main']);
   gitAt(worktree, ['config', 'user.name', 'Sidequest Test']);
   gitAt(worktree, ['config', 'user.email', 'sidequest-test@example.invalid']);
   fs.writeFileSync(path.join(worktree, 'README.md'), 'base\n');
   gitAt(worktree, ['add', 'README.md']);
   gitAt(worktree, ['commit', '-m', 'base']);
   gitAt(worktree, ['branch', '-M', 'main']);
-  execFileSync('git', ['init', '--bare', remote], { encoding: 'utf8', windowsHide: true });
+  execFileSync('git', ['init', '-b', 'main', '--bare', remote], { encoding: 'utf8', windowsHide: true });
   gitAt(worktree, ['remote', 'add', 'origin', remote]);
   gitAt(worktree, ['push', '-u', 'origin', 'main']);
   return worktree;
@@ -3095,7 +3095,7 @@ test('dispatch returns a complete Claude worktree spawn spec', async () => {
 
 test('MCP dispatch falls back to shared tree when the repo has no commits', async () => {
   const unborn = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-unborn-'));
-  execFileSync('git', ['init', '--quiet'], { cwd: unborn, windowsHide: true });
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: unborn, windowsHide: true });
   const added = await callTool('add', {
     project: unborn,
     title: 'unborn repo dispatch',

@@ -13,6 +13,7 @@ test('full suite runs without ambient git configuration', (t) => {
   assert.equal(process.env.GIT_CONFIG_NOSYSTEM, '1');
   assert.equal(process.env.GIT_CONFIG_GLOBAL, process.platform === 'win32' ? 'NUL' : '/dev/null');
   assert.equal(process.env.GIT_CONFIG_SYSTEM, process.platform === 'win32' ? 'NUL' : '/dev/null');
+  // unpinned-initial-branch: this assertion is the proof that no default branch is configured here.
   execFileSync('git', ['init', '--quiet'], { cwd: root, windowsHide: true });
   assert.equal(execFileSync('git', ['symbolic-ref', '--short', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true }).trim(), 'master');
 });
