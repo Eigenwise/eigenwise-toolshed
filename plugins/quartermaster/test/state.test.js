@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('node:assert');
+const crypto = require('node:crypto');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
@@ -33,12 +34,56 @@ function tallyWith(overrides = {}) {
   return { prompts: 5, toolCalls: 20, toolErrors: 0, denials: 0, interrupts: 0, corrections: 0, ...overrides };
 }
 
+function alternateProjectSpelling(projectDir) {
+  return process.platform === 'win32' ? projectDir.replace(/\\/g, '/') : `${projectDir}${path.sep}`;
+}
+
+function legacyProjectStateFile(projectDir) {
+  const legacyKey = crypto.createHash('sha256').update(String(projectDir).replace(/\r/g, '')).digest('hex').slice(0, 16);
+  return path.join(environment.QUARTERMASTER_STATE_DIR, 'projects', `${legacyKey}.json`);
+}
+
 test('recordSessionTally persists and replaces by session id', () => {
   recordSessionTally(PROJECT, 'session-1', tallyWith({ denials: 2 }), environment);
   recordSessionTally(PROJECT, 'session-1', tallyWith({ denials: 3 }), environment);
   const state = readProjectState(PROJECT, environment);
   assert.equal(state.sessions.length, 1);
   assert.equal(state.sessions[0].tally.denials, 3);
+});
+
+test('path spellings share one project state for reads and writes', () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-project-test-'));
+  const alternateDir = alternateProjectSpelling(projectDir);
+
+  recordSessionTally(projectDir, 'session-1', tallyWith({ denials: 2 }), environment);
+  markNudged(alternateDir, environment);
+
+  const state = readProjectState(projectDir, environment);
+  assert.equal(state.sessions.length, 1, 'read through the original spelling finds the alternate spelling write');
+  assert.ok(state.lastNudgeAt, 'write through the alternate spelling updates the shared state');
+  assert.equal(projectStateFile(projectDir, environment), projectStateFile(alternateDir, environment));
+});
+
+test('a legacy raw-keyed state migrates to the canonical project key', () => {
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-project-test-'));
+  const legacySpelling = alternateProjectSpelling(projectDir);
+  const legacyFile = legacyProjectStateFile(legacySpelling);
+  fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+  fs.writeFileSync(legacyFile, JSON.stringify({
+    version: 1,
+    projectDir: legacySpelling,
+    sessions: [{ sessionId: 'legacy-session', endedAt: new Date().toISOString(), tally: tallyWith({ denials: 2 }) }],
+    lastResupplyAt: null,
+    lastNudgeAt: null,
+  }), 'utf8');
+
+  const state = readProjectState(projectDir, environment);
+  const canonicalFile = projectStateFile(projectDir, environment);
+  const stored = JSON.parse(fs.readFileSync(canonicalFile, 'utf8'));
+
+  assert.equal(state.sessions[0].sessionId, 'legacy-session');
+  assert.equal(fs.existsSync(legacyFile), false, 'legacy file is removed after migration');
+  assert.equal(stored.projectDir, state.projectDir, 'canonical state stores the canonical project directory');
 });
 
 test('statusFor nudges on friction threshold and respects cooldown', () => {
@@ -108,6 +153,26 @@ test('verifyDecisions reports improvement against the targeted signal', () => {
   assert.equal(result.verdict, 'improved');
   assert.equal(result.perSessionBefore, 4);
   assert.equal(result.perSessionAfter, 0);
+});
+
+test('verifyDecisions matches decisions recorded through another path spelling', () => {
+  const now = Date.now();
+  const projectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-project-test-'));
+  const alternateDir = alternateProjectSpelling(projectDir);
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(projectDir, `before-${index}`, tallyWith({ denials: 4 }), environment, now - (10 - index) * DAY_MS);
+  }
+  const decision = appendDecision(
+    { projectDir: alternateDir, fingerprint: 'permission:Bash:npm', status: 'applied', title: 'allow npm', signal: 'denials' },
+    environment,
+    now - 5 * DAY_MS,
+  );
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(projectDir, `after-${index}`, tallyWith({ denials: 0 }), environment, now - (4 - index) * DAY_MS);
+  }
+
+  const result = verifyDecisions(projectDir, environment).find((entry) => entry.id === decision.id);
+  assert.equal(result.verdict, 'improved', 'decision recorded under another spelling verifies against this project state');
 });
 
 test('verifyDecisions declines to judge on thin data', () => {

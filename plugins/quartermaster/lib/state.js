@@ -27,12 +27,32 @@ function nudgeThresholds(env = process.env) {
   };
 }
 
+function canonicalProjectDir(projectDir) {
+  const resolved = path.resolve(String(projectDir).replace(/\r/g, ''));
+  let canonical = resolved;
+  try {
+    canonical = fs.realpathSync.native(resolved);
+  } catch {
+    // A project can be configured before its directory exists.
+  }
+  canonical = canonical.replace(/\\/g, '/');
+  return process.platform === 'win32' ? canonical.toLowerCase() : canonical;
+}
+
 function projectKey(projectDir) {
-  return crypto.createHash('sha256').update(String(projectDir).replace(/\r/g, '')).digest('hex').slice(0, 16);
+  return crypto.createHash('sha256').update(canonicalProjectDir(projectDir)).digest('hex').slice(0, 16);
+}
+
+function projectStateDirectory(env = process.env) {
+  return path.join(stateRoot(env), 'projects');
+}
+
+function projectStateFileForKey(key, env = process.env) {
+  return path.join(projectStateDirectory(env), `${key}.json`);
 }
 
 function projectStateFile(projectDir, env = process.env) {
-  return path.join(stateRoot(env), 'projects', `${projectKey(projectDir)}.json`);
+  return projectStateFileForKey(projectKey(projectDir), env);
 }
 
 function decisionsFile(env = process.env) {
@@ -55,18 +75,85 @@ function writeJsonAtomic(file, value) {
   fs.renameSync(temporary, file);
 }
 
-function readProjectState(projectDir, env = process.env) {
-  const state = readJson(projectStateFile(projectDir, env), {
+function emptyProjectState(projectDir) {
+  return {
     version: 1,
-    projectDir: String(projectDir),
+    projectDir,
     sessions: [],
     lastResupplyAt: null,
     lastNudgeAt: null,
-  });
-  // State written before the skill was renamed carries lastRetroAt. Reading it forward keeps an
-  // existing install's history intact, so the first run after an update does not look like a
-  // project that has never been reviewed.
+  };
+}
+
+function latestTimestamp(first, second) {
+  if (!first) return second ?? null;
+  if (!second) return first;
+  return Date.parse(second) > Date.parse(first) ? second : first;
+}
+
+function mergeProjectStates(projectDir, legacyStates) {
+  const merged = emptyProjectState(projectDir);
+  const sessionsById = new Map();
+
+  for (const state of legacyStates) {
+    const previousResupplyAt = merged.lastResupplyAt;
+    const previousNudgeAt = merged.lastNudgeAt;
+    Object.assign(merged, state);
+    merged.lastResupplyAt = latestTimestamp(previousResupplyAt, state.lastResupplyAt ?? state.lastRetroAt);
+    merged.lastNudgeAt = latestTimestamp(previousNudgeAt, state.lastNudgeAt);
+    for (const session of state.sessions ?? []) {
+      if (!session || typeof session !== 'object' || !session.sessionId) continue;
+      const existing = sessionsById.get(session.sessionId);
+      if (!existing || Date.parse(session.endedAt) >= Date.parse(existing.endedAt)) {
+        sessionsById.set(session.sessionId, session);
+      }
+    }
+  }
+
+  merged.projectDir = projectDir;
+  merged.sessions = [...sessionsById.values()].sort((first, second) => first.endedAt.localeCompare(second.endedAt));
+  delete merged.lastRetroAt;
+  return merged;
+}
+
+function migrateLegacyProjectState(projectDir, env = process.env) {
+  const directory = projectStateDirectory(env);
+  let entries;
+  try {
+    entries = fs.readdirSync(directory, { withFileTypes: true });
+  } catch {
+    return emptyProjectState(projectDir);
+  }
+
+  const legacyFiles = [];
+  const legacyStates = [];
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.json')) continue;
+    const file = path.join(directory, entry.name);
+    const state = readJson(file, null);
+    if (!state || typeof state.projectDir !== 'string') continue;
+    if (canonicalProjectDir(state.projectDir) !== projectDir) continue;
+    legacyFiles.push(file);
+    legacyStates.push(state);
+  }
+
+  if (!legacyStates.length) return emptyProjectState(projectDir);
+
+  const migrated = mergeProjectStates(projectDir, legacyStates);
+  writeJsonAtomic(projectStateFile(projectDir, env), migrated);
+  for (const file of legacyFiles) fs.rmSync(file, { force: true });
+  return migrated;
+}
+
+function readProjectState(projectDir, env = process.env) {
+  const canonicalDir = canonicalProjectDir(projectDir);
+  const file = projectStateFile(canonicalDir, env);
+  const state = fs.existsSync(file)
+    ? readJson(file, emptyProjectState(canonicalDir))
+    : migrateLegacyProjectState(canonicalDir, env);
+  state.projectDir = canonicalDir;
   if (state.lastResupplyAt === undefined) state.lastResupplyAt = state.lastRetroAt ?? null;
+  if (!Array.isArray(state.sessions)) state.sessions = [];
   delete state.lastRetroAt;
   return state;
 }
@@ -102,7 +189,7 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
   const overThreshold = unanalyzed.length >= thresholds.minSessions || friction >= thresholds.minFriction;
 
   return {
-    projectDir: String(projectDir),
+    projectDir: state.projectDir,
     trackedSessions: state.sessions.length,
     unanalyzedSessions: unanalyzed.length,
     frictionEvents: friction,
@@ -179,10 +266,11 @@ function rejectedFingerprints(env = process.env) {
  */
 function verifyDecisions(projectDir, env = process.env) {
   const state = readProjectState(projectDir, env);
+  const canonicalDir = canonicalProjectDir(projectDir);
   const results = [];
   for (const decision of readDecisions(env)) {
     if (decision.status !== 'applied') continue;
-    if (decision.projectDir && decision.projectDir !== String(projectDir)) continue;
+    if (decision.projectDir && canonicalProjectDir(decision.projectDir) !== canonicalDir) continue;
     const signal = decision.signal && decision.signal !== 'any' ? decision.signal : null;
     const valueOf = (tally) => (signal ? tally?.[signal] ?? 0 : frictionOf(tally));
     const before = state.sessions.filter((session) => session.endedAt <= decision.at);
