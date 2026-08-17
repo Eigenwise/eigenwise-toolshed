@@ -3,31 +3,65 @@ name: Publish GitHub Release
 on:
   push:
     tags: ["v*"]
+  schedule:
+    - cron: "23 6 * * *"
   workflow_dispatch:
     inputs:
       tag:
-        description: Marketplace tag to publish
-        required: true
+        description: Marketplace tag to publish, or leave blank to catch up
+        required: false
         type: string
 
 permissions:
   contents: write
 
 concurrency:
-  group: github-release-${{ github.ref }}
+  group: github-release-daily
   cancel-in-progress: false
 
 jobs:
   publish:
     runs-on: ubuntu-latest
     steps:
-      - name: Create GitHub Release from a marketplace tag
+      - name: Create the newest eligible GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           # No checkout here, so gh cannot infer the repo from a git remote.
           GH_REPO: ${{ github.repository }}
-          TAG: ${{ inputs.tag || github.ref_name }}
+          EVENT_NAME: ${{ github.event_name }}
+          PUSH_TAG: ${{ github.ref_name }}
+          REQUESTED_TAG: ${{ inputs.tag || '' }}
         run: |
+          set -euo pipefail
+          today="$(date -u +%F)"
+          release_dates="$(gh release list --limit 100 --json createdAt)"
+          if node -e 'const [today, releases] = process.argv.slice(1); process.exit(JSON.parse(releases).some(({ createdAt }) => createdAt?.slice(0, 10) === today) ? 0 : 1)' "$today" "$release_dates"; then
+            echo "Deferring GitHub Release: one was already published on $today UTC."
+            exit 0
+          fi
+
+          if [ "$EVENT_NAME" = "push" ]; then
+            TAG="$PUSH_TAG"
+          elif [ -n "$REQUESTED_TAG" ]; then
+            TAG="$REQUESTED_TAG"
+          else
+            TAG=""
+            while IFS= read -r candidate; do
+              case "$candidate" in
+                v*) ;;
+                *) continue ;;
+              esac
+              if ! gh release view "$candidate" >/dev/null 2>&1; then
+                TAG="$candidate"
+                break
+              fi
+            done < <(gh api --paginate "repos/$GH_REPO/git/matching-refs/tags" --jq '.[].ref' | sed 's#^refs/tags/##' | sort -Vr)
+          fi
+
+          if [ -z "$TAG" ]; then
+            echo "No unreleased v* tag is waiting for a GitHub Release."
+            exit 0
+          fi
           case "$TAG" in
             v*) ;;
             *) echo "tag must start with v: $TAG" >&2; exit 1 ;;
@@ -35,6 +69,8 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             exit 0
           fi
+          # Generated notes compare with the previous published Release. Publishing the newest
+          # waiting tag once per day therefore includes every intermediate marketplace version.
           if ! gh release create "$TAG" --verify-tag --title "$TAG" --generate-notes; then
             gh release view "$TAG" >/dev/null
           fi
