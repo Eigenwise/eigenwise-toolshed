@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.480.0",
+  "version": "3.481.0",
   "plugins": [
     {
       "name": "workbench",
@@ -77,7 +77,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "4.52.9",
+      "version": "4.52.10",
       "author": {
         "name": "Eigenwise"
       },
@@ -123,7 +123,7 @@
       "name": "quartermaster",
       "source": "./plugins/quartermaster",
       "description": "Works out what your workspace is short of and gets it: a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving, plugins worth installing, rules worth writing, permissions worth allowing. A SessionEnd hook tallies each session locally (no LLM, no network); a resupply skill reads what you were actually working toward, proposes changes one at a time, each needing your approval, and the next pass reports whether what you applied helped. Its setup skill outfits a new or existing project with the Toolshed and stack plugins, grounded in your cross-project history. Sessions run to tens of megabytes, so the miner streams them and emits bounded aggregates instead of loading transcripts into context.",
-      "version": "0.5.3",
+      "version": "0.5.4",
       "author": {
         "name": "Eigenwise"
       },

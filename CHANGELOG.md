@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.481.0 (2026-08-17)
+
+### quartermaster 0.5.3 → 0.5.4
+
+#### Fixes
+
+- Canonicalize Quartermaster project state paths (SQ-2216)
+  Quartermaster now shares state and decision verification across equivalent project path spellings, and migrates existing raw-keyed state files on first read.
+
+### sidequest 4.52.9 → 4.52.10
+
+#### Fixes
+
+- Require dispatched tickets for builtin executor spawns (SQ-2215)
+  Modeled builtin executor spawns on routed boards now require a dispatched ticket, preventing unticketed work from bypassing the board.
+- Fix cold-session Sidequest briefing guidance (SQ-2217)
+  Cold SessionStart briefings no longer advertise unavailable executors, duplicate checkpoint guidance, or omit the board setup path.
+- Cap GitHub Releases at one per day (SQ-2218)
+  GitHub Release publishing now catches up once per UTC day without making successful release cuts wait for a deferred notification.
+
 ## v3.480.0 (2026-08-17)
 
 ### model-gateway 0.48.10 → 0.48.11

@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.4 (2026-08-17)
+
+Released in v3.481.0, up from 0.5.3.
+
+### Fixes
+
+- Canonicalize Quartermaster project state paths (SQ-2216)
+  Quartermaster now shares state and decision verification across equivalent project path spellings, and migrates existing raw-keyed state files on first read.
+
 ## 0.5.3 (2026-08-15)
 
 Released in v3.463.0, up from 0.5.2.
