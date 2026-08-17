@@ -501,6 +501,33 @@ function createDispatch(dependencies) {
     state.terminalWorktreeRevision = facts.revision;
     state.terminalWorktreeObservedAt = at;
   }
+  function sameRevision(left, right) {
+    const first = String(left || "").trim().toLowerCase();
+    const second = String(right || "").trim().toLowerCase();
+    if (first.length < 7 || second.length < 7) return false;
+    return first.startsWith(second) || second.startsWith(first);
+  }
+  function reviewCandidateTreeRefusal(slug, ticket) {
+    const state = dispatchState(ticket);
+    if (state?.reviewTarget?.candidate?.source !== "git") return null;
+    const candidate = String(state.baseCommit || "").trim();
+    if (!candidate) return null;
+    const worktree = String(state.worktree || "").trim();
+    const observed = worktree ? immutableWorktreeFacts(slug, worktree)?.revision : null;
+    if (!observed) {
+      return {
+        ok: false,
+        reason: "review_tree_unobservable",
+        message: `${ticket.ref} reviews candidate ${candidate} and its checkout cannot be read, so nothing can show the verdict was formed on that commit. Do not close it: comment what you verified and release ${ticket.ref} with kind \`technical_blocker\` so the orchestrator dispatches the review again into a readable isolated checkout.`
+      };
+    }
+    if (sameRevision(observed, candidate)) return null;
+    return {
+      ok: false,
+      reason: "review_tree_mismatch",
+      message: `${ticket.ref} cannot close: its checkout is on ${observed} rather than the candidate ${candidate}, so this verdict is about a different tree. A review ENDS on its candidate. Run \`git -C ${worktree} checkout --detach ${candidate}\`, re-run the declared verify there, then close. Comparing against the integration branch never needs HEAD to move: use \`git diff ${candidate}...main\` or \`git show\`.`
+    };
+  }
   function setDispatchTerminal(ticket, outcome, source, opts) {
     const state = dispatchState(ticket);
     if (!state) return;
@@ -1870,6 +1897,7 @@ function createDispatch(dependencies) {
     terminalDispatchTarget,
     terminalDispatchForIdle,
     soleIdleCandidate,
+    reviewCandidateTreeRefusal,
     setDispatchTerminal,
     appendReworkEvent,
     dispatchTokenDigest,

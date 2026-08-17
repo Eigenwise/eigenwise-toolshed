@@ -605,6 +605,40 @@ function captureTerminalWorktreeRevision(slug?: any, state?: any, at?: any) {
   state.terminalWorktreeObservedAt = at;
 }
 
+function sameRevision(left?: any, right?: any) {
+  const first = String(left || '').trim().toLowerCase();
+  const second = String(right || '').trim().toLowerCase();
+  if (first.length < 7 || second.length < 7) return false;
+  return first.startsWith(second) || second.startsWith(first);
+}
+
+// A review that never reached its candidate is a verdict on the wrong tree, which is how SQ-2124 rejected a
+// commit whose own suite passed 18/18. Asking the reviewer to STATE the revision it verified would prove
+// nothing, because the candidate sha is in its briefing and a copied value is not evidence; the ending tree is
+// already observable, so observe it. Only a `done` closure is checked: a review that finds a defect releases
+// with kind oracle, and a hand-delivered control-plane closure is not an executor claim (SQ-2207).
+function reviewCandidateTreeRefusal(slug?: any, ticket?: any) {
+  const state = dispatchState(ticket);
+  if (state?.reviewTarget?.candidate?.source !== 'git') return null;
+  const candidate = String(state.baseCommit || '').trim();
+  if (!candidate) return null;
+  const worktree = String(state.worktree || '').trim();
+  const observed = worktree ? immutableWorktreeFacts(slug, worktree)?.revision : null;
+  if (!observed) {
+    return {
+      ok: false,
+      reason: 'review_tree_unobservable',
+      message: `${ticket.ref} reviews candidate ${candidate} and its checkout cannot be read, so nothing can show the verdict was formed on that commit. Do not close it: comment what you verified and release ${ticket.ref} with kind \`technical_blocker\` so the orchestrator dispatches the review again into a readable isolated checkout.`,
+    };
+  }
+  if (sameRevision(observed, candidate)) return null;
+  return {
+    ok: false,
+    reason: 'review_tree_mismatch',
+    message: `${ticket.ref} cannot close: its checkout is on ${observed} rather than the candidate ${candidate}, so this verdict is about a different tree. A review ENDS on its candidate. Run \`git -C ${worktree} checkout --detach ${candidate}\`, re-run the declared verify there, then close. Comparing against the integration branch never needs HEAD to move: use \`git diff ${candidate}...main\` or \`git show\`.`,
+  };
+}
+
 function setDispatchTerminal(ticket?: any, outcome?: any, source?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (!state) return;
@@ -2139,6 +2173,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     terminalDispatchTarget,
     terminalDispatchForIdle,
     soleIdleCandidate,
+    reviewCandidateTreeRefusal,
     setDispatchTerminal,
     appendReworkEvent,
     dispatchTokenDigest,

@@ -488,6 +488,7 @@ const {
   terminalDispatchTarget,
   terminalDispatchForIdle,
   soleIdleCandidate,
+  reviewCandidateTreeRefusal,
   setDispatchTerminal,
   appendReworkEvent,
   dispatchTokenDigest,
@@ -1860,6 +1861,10 @@ function releaseTicket(slug, idOrRef, by, opts) {
     const activeReadOnlyDispatch = dispatch2?.readonly === true && liveClaim && activeDispatch;
     let sharedTreeCommittedScope = false;
     let completionDelta = null;
+    if (executorDone && liveClaim && activeDispatch) {
+      const reviewTree = reviewCandidateTreeRefusal(slug, t);
+      if (reviewTree) return Object.assign({ ticket: t }, reviewTree);
+    }
     if (executorDone && liveClaim && activeDispatch) {
       completionDelta = dispatchDelta(slug, t);
       if (completionDelta.ok && !activeArtifactDispatch) {

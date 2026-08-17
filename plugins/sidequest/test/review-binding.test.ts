@@ -17,6 +17,8 @@ const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
 const reviewBinding = require('../lib/kernel/review-binding.js');
+const worktrees = require('../lib/worktrees.js');
+const worktreeLease = require('../lib/kernel/worktree.js');
 
 function git(repository: string, args: string[]) {
   return execFileSync('git', args, { cwd: repository, encoding: 'utf8', windowsHide: true }).trim();
@@ -163,6 +165,7 @@ test('SQ-2203: a candidate review is told to synchronize its worktree to the exa
   assert.ok(briefing.includes('Candidate synchronization (run before any review work)'), 'the reviewer is told to synchronize');
   assert.ok(briefing.includes(`git checkout --detach ${commit}`), 'the instruction names the candidate commit');
   assert.ok(briefing.includes('stop and report that the candidate is not present'), 'an unreachable candidate stops the review instead of reviewing the wrong tree');
+  assert.ok(briefing.includes('A review also ENDS on its candidate'), 'the reviewer is told the closure rule the board enforces (SQ-2207)');
 });
 
 test('public update binds through the same transition and reads back identically every time', async () => {
@@ -662,4 +665,89 @@ test('dispatch refuses a bound review whose candidate moved out from under it', 
     () => store.prepareDispatch(slug, review.ref, { sessionId: `review-drift-${Date.now()}` }),
     /no longer matches its exact submitted candidate/,
   );
+});
+
+// A launched review standing in its own linked checkout at the candidate, which is where worktree creation binds
+// it and the only state the ending tree can be read from.
+function claimedReviewInWorktree(slug: string, repository: string, reviewRef: string, label: string) {
+  const sessionId = `review-close-${label}`;
+  const agentId = `review-closer-${label}`;
+  const prepared = store.prepareDispatch(slug, reviewRef, { sessionId });
+  assert.equal(store.recordDispatchLaunch(slug, reviewRef, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: agentId,
+  }).ok, true);
+  const worktree = worktrees.resolvedAgentWorktree(repository, agentId);
+  assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  git(repository, ['worktree', 'add', '--detach', worktree, String(prepared.ticket.dispatch.baseCommit)]);
+  worktreeLease.createCheckoutInstanceMarker(path.resolve(worktree, git(worktree, ['rev-parse', '--git-dir'])));
+  assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentId, agentId).ok, true);
+  assert.equal(store.claimTicket(slug, reviewRef, agentId, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  return { worktree, agentId };
+}
+
+// SQ-2207. A review that ends on a tree other than its candidate is a verdict about different code, which is how
+// SQ-2124 rejected a commit whose own suite passed. The reviewer is told to synchronize, and the briefing is not
+// evidence that it did: the board observes the ending checkout itself.
+test('SQ-2207: a review cannot close from a tree that is not its candidate', () => {
+  const { repository, slug, commit } = board('close-tree');
+  const source = submittedSource(slug, commit, 'close-tree');
+  // The later commit deliberately stays outside the review's declared scope: scope checking cannot see this drift,
+  // so the refusal below is the only thing standing between a wrong tree and a recorded verdict.
+  fs.writeFileSync(path.join(repository, 'elsewhere.txt'), 'unrelated later work\n');
+  git(repository, ['add', 'elsewhere.txt']);
+  git(repository, ['commit', '-m', 'work after the candidate, outside the review scope']);
+  const later = git(repository, ['rev-parse', 'HEAD']);
+  const review = store.createTicket(slug, {
+    title: 'review closing off the candidate',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+    executorVerify: 'manual: read the candidate',
+  }, { ref: source.ref, commit });
+  const { worktree, agentId } = claimedReviewInWorktree(slug, repository, review.ref, 'mismatch');
+  // The reviewer walks off the candidate mid-run, which is all it takes: nothing else in the board reads the
+  // checkout again, because a readonly review never asks for a write lease.
+  git(worktree, ['checkout', '--detach', later]);
+
+  const refused = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'review_tree_mismatch');
+  assert.ok(refused.message.includes(`its checkout is on ${later}`), refused.message);
+  assert.ok(refused.message.includes(`the candidate ${commit}`), refused.message);
+  assert.ok(
+    refused.message.includes(`git -C ${worktrees.canonicalPath(worktree)} checkout --detach ${commit}`),
+    refused.message,
+  );
+  assert.equal(store.getTicket(slug, review.ref).status, 'doing');
+
+  git(worktree, ['checkout', '--detach', commit]);
+  const closed = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(closed.ok, true, closed.message);
+  assert.equal(store.getTicket(slug, review.ref).status, 'done');
+});
+
+test('SQ-2207: a review whose checkout cannot be read is refused instead of closing unobserved', () => {
+  const { repository, slug, commit } = board('close-unreadable');
+  const source = submittedSource(slug, commit, 'close-unreadable');
+  const review = store.createTicket(slug, {
+    title: 'review with no readable checkout',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+    executorVerify: 'manual: read the candidate',
+  }, { ref: source.ref, commit });
+  const { worktree, agentId } = claimedReviewInWorktree(slug, repository, review.ref, 'unreadable');
+  git(repository, ['worktree', 'remove', '--force', worktree]);
+
+  const refused = store.releaseTicket(slug, review.ref, agentId, { status: 'done', source: 'test' });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'review_tree_unobservable');
+  assert.ok(refused.message.includes('technical_blocker'), refused.message);
+  assert.equal(store.getTicket(slug, review.ref).status, 'doing');
 });

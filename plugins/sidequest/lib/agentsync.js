@@ -451,7 +451,8 @@ function ticketWorktreeSync(ticket, projectPath) {
       `Candidate synchronization (run before any review work): the commit under review is ${commit}.`,
       `Check \`git rev-parse HEAD\`; if it differs, run \`git checkout --detach ${commit}\` and check again.`,
       "No fetch is needed: this worktree shares the project repository's object database.",
-      `If that checkout fails, stop and report that the candidate is not present in this worktree. Do not review what the worktree happens to hold: a baseline suite plus \`git show\` is not a review of ${commit}.`
+      `If that checkout fails, stop and report that the candidate is not present in this worktree. Do not review what the worktree happens to hold: a baseline suite plus \`git show\` is not a review of ${commit}.`,
+      `A review also ENDS on its candidate: leave HEAD at ${commit}, because the board reads this worktree's revision when you close and refuses a verdict formed on a different tree. Comparing against the integration branch never needs HEAD to move, so use \`git diff ${commit}...main\` or \`git show\` instead of checking anything else out.`
     ].join(" ");
   }
   if (!target || !commit) return null;

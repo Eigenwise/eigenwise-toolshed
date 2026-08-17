@@ -363,6 +363,7 @@ const {
   terminalDispatchTarget,
   terminalDispatchForIdle,
   soleIdleCandidate,
+  reviewCandidateTreeRefusal,
   setDispatchTerminal,
   appendReworkEvent,
   dispatchTokenDigest,
@@ -1920,6 +1921,14 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
     let sharedTreeCommittedScope = false;
     let completionDelta: any = null;
+    // Ahead of the scope check on purpose: a review sitting on another commit reports that tree's files as dirty
+    // or committed scope, and telling a readonly reviewer to commit or restore them is advice it cannot take
+    // (SQ-2207). It also only reports them when the drift happens to touch a declared file, so the wrong tree has
+    // to be named on its own.
+    if (executorDone && liveClaim && activeDispatch) {
+      const reviewTree = reviewCandidateTreeRefusal(slug, t);
+      if (reviewTree) return Object.assign({ ticket: t }, reviewTree);
+    }
     if (executorDone && liveClaim && activeDispatch) {
       completionDelta = dispatchDelta(slug, t);
       if (completionDelta.ok && !activeArtifactDispatch) {

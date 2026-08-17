@@ -282,7 +282,11 @@ audit. Dispatch revalidates the binding and pins the review to that exact immuta
 checkout: the baseline is the candidate rather than the integration branch, and the briefing tells the
 reviewer to detach onto it before any review work, then stop and report if it is unreachable rather than
 reviewing whatever commit its worktree happened to start on. A shared-tree request and a native-agent spawn
-are both refused. Integration waits for the bound review to reach
+are both refused. A review also ENDS on its candidate: a terminal `done` reads the review checkout's own
+revision and is refused as `review_tree_mismatch` when it sits on anything else, naming the observed
+revision, the candidate, and the `git -C <worktree> checkout --detach <candidate>` repair, and as
+`review_tree_unobservable` when the checkout cannot be read at all, which releases as a technical blocker
+and dispatches again. Integration waits for the bound review to reach
 a terminal `done`, and reads both identities from the immutable terminal dispatch attempts rather than the
 live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt.
 A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration
