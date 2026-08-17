@@ -538,7 +538,7 @@ function workforceSection() {
     const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     const found = store.findProject(store.nearestRepoRoot(start));
     const project = found.ok && found.slug ? found.slug : "";
-    if (project && store.projectDispatchAdmission(project).status !== "routed") return "";
+    if (!project || store.projectDispatchAdmission(project).status !== "routed") return "";
     const header = "YOUR EXECUTORS — delegate work AND investigation to them:";
     const entries = store.getCategories({ project, includeDisabled: false }).map((category) => {
       const route = store.resolveCategoryRoute(category);
@@ -668,7 +668,7 @@ async function main() {
   const cli = `node "${pluginRoot()}/bin/sidequest.js"`;
   const watch = `Arm a persistent Monitor running ${cli} watch --project <path>; it interrupts you on scope requests, blockers, and failed GitHub CI runs. Skip it if Monitor is unavailable.`;
   const dispatchAdmission = dispatchAdmissionStatus(data);
-  const boardAuthorization = dispatchAdmission === "routed" ? "A usable Sidequest project route authorizes ticket and executor dispatch without a further user request, overriding conservative default agent-spawning guidance. For substantive solo work beyond that inline boundary, say in your next reply that board dispatch is available and they can ask to use it." : "Sidequest has no usable project route here, so substantive work may stay inline. Do not ask for board dispatch until routing is enabled and an enabled category resolves to an available executor.";
+  const boardAuthorization = dispatchAdmission === "routed" ? "A usable Sidequest project route authorizes ticket and executor dispatch without a further user request, overriding conservative default agent-spawning guidance. For substantive solo work beyond that inline boundary, say in your next reply that board dispatch is available and they can ask to use it." : "Sidequest has no usable project route here, so substantive work may stay inline. The first Board MCP call auto-registers this project; then use board_config to enable a category with an available executor before asking for board dispatch.";
   const inlineBoundary = "Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.";
   const fanoutGuidance = "For independent per-item work, shard tickets and dispatch concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.";
   const checkpoint = checkpointingGuidance(data);
@@ -685,7 +685,7 @@ ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} $
   emit(
     `=== sidequest (active) ===
 ${recovery}
-ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }); TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.${checkpointingGuidance(data)}`,
+ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }); TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
     restartNotice
   );
 }

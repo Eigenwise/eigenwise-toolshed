@@ -251,6 +251,17 @@ function writeCategory(home?: any, category?: any) {
   database.close();
 }
 
+function registerProject(home: string, project: string): void {
+  const previousHome = process.env.SIDEQUEST_HOME;
+  process.env.SIDEQUEST_HOME = home;
+  try {
+    store.ensureProject(project);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
+    else process.env.SIDEQUEST_HOME = previousHome;
+  }
+}
+
 function writeModelPrefs(home?: any, prefs?: any) {
   const database = db.openDb(home);
   db.putRow(database, 'globals', { key: 'model-prefs', data: prefs });
@@ -2551,7 +2562,8 @@ test('session-start: states usable-route admission while preserving the specific
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `authorization-${source || 'startup'}`, source });
     assert.match(context, /no usable project route here, so substantive work may stay inline/i);
-    assert.match(context, /Do not ask for board dispatch until routing is enabled/i);
+    assert.match(context, /the first Board MCP call auto-registers this project/i);
+    assert.match(context, /use board_config to enable a category with an available executor before asking for board dispatch/i);
     assert.match(context, /one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch/i);
     assert.match(context, /ask before work beyond the approved scope unless explicit standing permission covers it/i);
   }
@@ -2569,6 +2581,7 @@ test('session-start adds model-specific checkpoint guidance only for eligible mo
   const defaultContext = runHook(SESSION, { session_id: 'checkpoint-none' });
   const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });
   assert.notEqual(sonnet, defaultContext);
+  assert.equal((sonnet.match(/CHECKPOINT MODE/g) || []).length, 1, 'checkpoint-mode startup guidance must appear once');
   const compactDefault = runHook(SESSION, { session_id: 'checkpoint-compact-none', source: 'compact' });
   const compact = runHook(SESSION, { session_id: 'checkpoint-compact', source: 'compact', model: 'claude-haiku-4-5' });
   assert.notEqual(compact, compactDefault);
@@ -2581,12 +2594,22 @@ test('session-start adds model-specific checkpoint guidance only for eligible mo
   }
 });
 
+test('session-start: suppresses workforce for an unregistered project', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-unregistered-workforce-'));
+  const context = runHookForBudget(SESSION, { session_id: 'unregistered-workforce', cwd: path.join(home, 'project') }, {
+    SIDEQUEST_HOME: home,
+  });
+  assert.doesNotMatch(context, /YOUR EXECUTORS — delegate work AND investigation to them:/);
+});
+
 test('session-start: shows the live investigation workforce within its cap', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-workforce-'));
+  const project = path.join(home, 'project');
+  registerProject(home, project);
   for (const source of ['', 'compact', 'resume']) {
     const ctx = runHookForBudget(SESSION, { session_id: `workforce-${source || 'startup'}`, source }, {
       SIDEQUEST_HOME: home,
-      CLAUDE_PROJECT_DIR: path.join(home, 'project'),
+      CLAUDE_PROJECT_DIR: project,
     });
     const start = ctx.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:');
     assert.ok(start >= 0, `${source || 'startup'} includes the workforce`);
@@ -2601,8 +2624,10 @@ test('session-start: shows the live investigation workforce within its cap', () 
 
 test('session-start: bounds oversized workforces and reports omitted categories', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-workforce-cap-'));
+  const project = path.join(home, 'project');
   writeOversizedRoutingProfile(home);
-  const output = JSON.parse(runSessionWithHomeForBudget(home, { CLAUDE_PROJECT_DIR: path.join(home, 'project') }));
+  registerProject(home, project);
+  const output = JSON.parse(runSessionWithHomeForBudget(home, { CLAUDE_PROJECT_DIR: project }));
   const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
   assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
   assert.match(workforce, /… \d+ more enabled categories\./);
@@ -2748,10 +2773,11 @@ function sweepReportFile(home: string, cwd: string): string {
 test('session-start: a sweep past its deadline still injects the full block and says so', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-deadline-home-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-deadline-cwd-'));
+  registerProject(home, cwd);
   const context = runHook(
     SESSION,
     { session_id: 'sweep-deadline', source: 'startup', cwd },
-    { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '0', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }
+    { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '0', CLAUDE_PROJECT_DIR: cwd, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }
   );
   assert.match(context, /worktree sweep exceeded its SessionStart budget/);
   assert.match(context, /arrives on the next session start/);
