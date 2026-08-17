@@ -335,6 +335,51 @@ function runHook(home, project, environment = {}) {
   return { code: result.status, stdout: result.stdout, stderr: result.stderr };
 }
 
+function migrateLegacyProjectSettings(home, project) {
+  const result = runNode(home, project, `process.stdout.write(JSON.stringify(require(${JSON.stringify(SETTINGS_WIRING)}).migrateLegacyProjectSettings()))`);
+  assert.equal(result.code, 0, result.output);
+  return JSON.parse(result.output);
+}
+
+test('SessionStart leaves a recorded project\'s unwired committed settings byte-identical', (t) => {
+  const { home, project } = fixture(t);
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  wireProject(project);
+  writeJson(projectRegistry(home), { projects: [project] });
+  const original = JSON.stringify({
+    enabledPlugins: { 'model-gateway@eigenwise-toolshed': true },
+    env: { ENABLE_TOOL_SEARCH: 'true' },
+  }, null, 2) + '\n';
+  fs.mkdirSync(path.dirname(legacyFile), { recursive: true });
+  fs.writeFileSync(legacyFile, original);
+
+  assert.deepEqual(migrateLegacyProjectSettings(home, project), { migrated: false });
+  assert.equal(fs.readFileSync(legacyFile, 'utf8'), original);
+  assert.equal(runHook(home, project).code, 0);
+  assert.equal(fs.readFileSync(legacyFile, 'utf8'), original);
+});
+
+test('SessionStart migrates a gateway-owned committed settings file', (t) => {
+  const { home, project } = fixture(t);
+  const legacyFile = path.join(project, '.claude', 'settings.json');
+  writeJson(legacyFile, {
+    enabledPlugins: { 'model-gateway@eigenwise-toolshed': true },
+    env: {
+      ANTHROPIC_BASE_URL: DEFAULT_BASE_URL,
+      CLAUDE_CODE_ENABLE_GATEWAY_MODEL_DISCOVERY: '1',
+      CLAUDE_CODE_DISABLE_NONSTREAMING_FALLBACK: '1',
+      ENABLE_TOOL_SEARCH: 'true',
+      CLAUDE_CODE_MAX_OUTPUT_TOKENS: '64000',
+      CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000',
+    },
+  });
+
+  assert.equal(runHook(home, project).code, 0);
+  assert.deepEqual(JSON.parse(fs.readFileSync(legacyFile, 'utf8')), {
+    enabledPlugins: { 'model-gateway@eigenwise-toolshed': true },
+  });
+});
+
 test('SQ-1901: the SessionStart hook shows the user an actionable state instead of only the model', (t) => {
   const { home, project } = fixture(t);
 
