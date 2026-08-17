@@ -575,3 +575,56 @@ test('the doctor phrasings the audit parses still exist in model-gateway', () =>
   assert.match(commandsSource, /codex auth: \$\{[^}]*'authenticated'/,
     'model-gateway reworded the codex auth line; update parseGatewayDoctorOutput in session-start-freshness.js');
 });
+
+// A real directory, because the detector reads the filesystem: an injected existsSync would also decide the
+// stale-worktree sweep, and the fake project paths every other test uses are exactly what keeps this quiet there.
+function mappedProject(t, { withMap = true } = {}) {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-mapped-project-'));
+  t.after(() => fs.rmSync(project, { recursive: true, force: true }));
+  if (withMap) fs.mkdirSync(path.join(project, '.claude', '.codebase-info'), { recursive: true });
+  return project;
+}
+
+test('SQ-2209: a codebase map with no codebase-mapper install reaches the user', (t) => {
+  const project = mappedProject(t);
+  const output = hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+    }, { workbench: '0.49.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: project },
+  });
+
+  assert.match(output.systemMessage, /this project has a codebase map but no codebase-mapper install/);
+  assert.match(output.hookSpecificOutput.additionalContext, /nothing maintains it/);
+});
+
+test('SQ-2209: a user-scope codebase-mapper is named as such, and a project install says nothing', (t) => {
+  const project = mappedProject(t);
+  const fixture = (instances) => hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+      'codebase-mapper@eigenwise-toolshed': instances,
+    }, { workbench: '0.49.0', 'codebase-mapper': '2.15.5' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: project },
+  });
+
+  assert.match(
+    fixture([{ scope: 'user', version: '2.15.5' }]).systemMessage,
+    /no project\/local codebase-mapper install/,
+  );
+  assert.equal(fixture([{ scope: 'project', projectPath: project, version: '2.15.5' }]), null);
+});
+
+test('SQ-2209: a project without a codebase map is not asked to install a mapper', (t) => {
+  const project = mappedProject(t, { withMap: false });
+
+  assert.equal(hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+    }, { workbench: '0.49.0' }),
+    loadedVersion: '0.49.0',
+    input: { cwd: project },
+  }), null);
+});

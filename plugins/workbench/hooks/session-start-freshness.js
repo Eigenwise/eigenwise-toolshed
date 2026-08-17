@@ -312,6 +312,18 @@ function boardMappings(boards, instances) {
   return { mappings, problems };
 }
 
+// A codebase map is only true while something maintains it, and nothing checked whether anything does. A project
+// carrying .claude/.codebase-info with codebase-mapper uninstalled keeps injecting that map on every session
+// start, which reads as maintained while it quietly rots (SQ-2209, split out of SQ-1900). Same user-only
+// distinction as the board check: a user-scope install is not the same as none.
+function mapMaintenance(currentProject, instances) {
+  if (!currentProject || !fs.existsSync(path.join(currentProject, '.claude', '.codebase-info'))) return [];
+  const installs = instances.filter((instance) => instance.id === 'codebase-mapper@eigenwise-toolshed');
+  if (installs.some((instance) => isCurrentProjectPath(instance.projectPath, currentProject))) return [];
+  const scope = installs.some((instance) => instance.scope === 'user') ? 'no project/local' : 'no';
+  return [finding(`this project has a codebase map but ${scope} codebase-mapper install, so nothing maintains it`, BLOCKS_THE_USER)];
+}
+
 function isCurrentProjectPath(projectPath, currentProject) {
   if (!projectPath || !currentProject) return false;
   const relative = path.relative(normalizedPath(projectPath), normalizedPath(currentProject));
@@ -351,6 +363,7 @@ function audit(options = {}) {
     ...installedFreshness(projectInstances, marketplaces, now, manifestFor, gitFreshness, projectUpdates),
     ...gatewayFreshness(projectInstances, checkGateway),
     ...boardMappings(projectBoards, instances).problems,
+    ...mapMaintenance(options.currentProject, instances),
   ] : [];
   const staleProcesses = staleWorktreeProcesses({
     project: options.currentProject,
@@ -490,6 +503,7 @@ module.exports = {
   gatewayFreshness,
   installedFreshness,
   loadedPluginVersion,
+  mapMaintenance,
   newerWorkbenchVersion,
   parseGatewayDoctorOutput,
   pluginInstances,
