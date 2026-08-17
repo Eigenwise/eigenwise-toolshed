@@ -1723,7 +1723,27 @@ test('a stopped attempt cannot invalidate the next dispatch token', () => {
 
 test('control plane records a hand delivery after recovering the dead unclaimed retry', () => {
   const ticket = createFixture('hand-delivered candidate recovery fixture');
-  const candidate = store.prepareDispatch(slug, ticket.ref, { sessionId: `candidate-${Date.now()}` });
+  // The dead attempt has to happen before the submission exists. A claim is refused while a submission is
+  // pending (reason `submitted`), so a dispatch prepared after one could never be claimed, and SQ-2117 is why
+  // preparation refuses there now.
+  const deadSession = `dead-retry-${Date.now()}`;
+  const dead = store.prepareDispatch(slug, ticket.ref, { sessionId: deadSession });
+  const agentName = `dead-retry-agent-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    sessionId: deadSession,
+    token: dead.token,
+    executor: dead.ticket.dispatchExecutor,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(deadSession, dead.ticket.dispatchExecutor, agentName, agentName).ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'orchestrator', { source: 'test' }).reason, 'unclaimed_active_dispatch');
+  assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
+    by: 'orchestrator',
+    agentName,
+    evidence: 'TaskStop reported this exact agent terminal after its claim refusal.',
+  }).ok, true);
+
+  const candidate = store.prepareDispatch(slug, ticket.ref, { sessionId: `candidate-${Date.now()}`, allowRepeatFailure: true });
   const owner = `candidate-owner-${ticket.id}`;
   assert.equal(store.claimTicket(slug, ticket.ref, owner, {
     token: candidate.token,
@@ -1733,23 +1753,6 @@ test('control plane records a hand delivery after recovering the dead unclaimed 
   assert.equal(store.submitTicket(slug, ticket.ref, owner, {
     commit: 'abcdef1234567',
     source: 'test',
-  }).ok, true);
-
-  const retrySession = `dead-retry-${Date.now()}`;
-  const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: retrySession });
-  const agentName = `dead-retry-agent-${ticket.id}`;
-  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
-    sessionId: retrySession,
-    token: retry.token,
-    executor: retry.ticket.dispatchExecutor,
-    agentName,
-  }).ok, true);
-  assert.equal(store.bindDispatchAgent(retrySession, retry.ticket.dispatchExecutor, agentName, agentName).ok, true);
-  assert.equal(store.releaseTicket(slug, ticket.ref, 'orchestrator', { source: 'test' }).reason, 'unclaimed_active_dispatch');
-  assert.equal(store.clearUnclaimedDispatch(slug, ticket.ref, {
-    by: 'orchestrator',
-    agentName,
-    evidence: 'TaskStop reported this exact agent terminal after its claim refusal.',
   }).ok, true);
 
   const recordedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
@@ -1764,6 +1767,46 @@ test('control plane records a hand delivery after recovering the dead unclaimed 
   assert.equal(closed.ticket.submission.commit, 'abcdef1234567');
   assert.equal(closed.ticket.submission.integration.resultingHead, recordedCommit);
   assert.equal(closed.ticket.completion.delivery.commit, recordedCommit);
+});
+
+test('SQ-2117: a pending submission refuses preparation instead of minting an unclaimable attempt', () => {
+  const ticket = createFixture('pending submission dispatch refusal fixture');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-submission-${Date.now()}` });
+  const owner = `pending-submission-owner-${ticket.id}`;
+  assert.equal(store.claimTicket(slug, ticket.ref, owner, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  commitFixtureChange();
+  // Rework preserves the rejected candidate into a quarantine ref, so this one has to be a real commit.
+  const candidateCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
+  assert.equal(store.submitTicket(slug, ticket.ref, owner, { commit: candidateCommit, source: 'test' }).ok, true);
+  const submitted = store.getTicket(slug, ticket.ref);
+
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-submission-retry-${Date.now()}` }),
+    new RegExp(`has a pending submission \\(${candidateCommit}\\)[\\s\\S]*sidequest integrate[\\s\\S]*sidequest rework[\\s\\S]*--abandon-submission`),
+  );
+
+  // The refusal has to leave the submitted attempt on top, because provenance readers take the agent from the
+  // current dispatch and a fresh prepared attempt would name one that never touched the candidate.
+  const afterRefusal = store.getTicket(slug, ticket.ref);
+  assert.equal(afterRefusal.dispatchNonce, submitted.dispatchNonce, 'a refused preparation mints no new token');
+  assert.deepEqual(afterRefusal.dispatch, submitted.dispatch, 'the submitted dispatch projection is untouched');
+  assert.equal(afterRefusal.submission.commit, candidateCommit);
+
+  // Rework is the path that dispatches again: it clears the submission first, so the same call then works.
+  const reworked = store.reworkSubmission(slug, ticket.ref, {
+    by: owner,
+    review: 'Reviewer found the candidate needs repair.',
+    reason: 'Repair the candidate and resubmit.',
+    source: 'test',
+  });
+  assert.equal(reworked.ok, true, `rework must clear the submission: ${reworked.reason || ''} ${reworked.message || ''}`);
+  assert.equal(store.getTicket(slug, ticket.ref).submission, null);
+  const replacement = store.prepareDispatch(slug, ticket.ref, { sessionId: `pending-submission-rework-${Date.now()}` });
+  assert.equal(replacement.ok, true);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'pending-submission-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
 test('claim holders can release routed write scope without submitting first', () => {

@@ -205,6 +205,11 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   attempt is bound, claimed, checkpointed, or terminal, and the refusal names which of those it found. A bound
   or claimed executor that is provably dead goes through claim release or `groomClose --recoveryEvidence`
   instead; do not reach for recovery evidence to shortcut a live attempt.
+- **A submitted ticket is not dispatchable.** While a submission is pending, the ticket is parked for the
+  publish transaction, and a claim on it is refused as `submitted`, so dispatching would mint a token nobody
+  can claim. Preparation refuses there and names the three exits: integrate it, `rework` it (which clears the
+  submission, and is the path when you want a replacement executor), or `groomClose --abandonSubmission` with
+  evidence it never landed. Resolve the submission first, then dispatch.
 - **Recover partial reasoning from an infrastructure death.** When an executor dies mid-run on a transient
   infrastructure error, release its claim first. Then use the one diagnose-first respawn: pass the dead
   executor's last visible output to the replacement only as a lead to confirm or refute with its own evidence.
