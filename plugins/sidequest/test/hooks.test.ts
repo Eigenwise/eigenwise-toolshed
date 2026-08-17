@@ -518,6 +518,99 @@ test('pre-tool hook: native Explore and approved harness utilities pass through 
       tool_input: { subagent_type, isolation: 'worktree', prompt: 'Read-only reconnaissance.' },
     }), null, subagent_type);
   }
+  for (const subagent_type of ['claude-code-guide', 'statusline-setup']) {
+    assert.equal(runHookOutput(FORCE_BYPASS, {
+      session_id: `utility-${subagent_type}-${Date.now()}`, cwd: BOARD_PATH,
+      tool_name: 'Agent',
+      tool_input: { subagent_type, prompt: 'Read-only reconnaissance.' },
+    }), null, `${subagent_type} stays untouched on a routed board`);
+  }
+});
+
+test('pre-tool hook: main-session Explore on a routed board nudges twice then denies fan-out', () => {
+  const session_id = `explore-fanout-${Date.now()}`;
+  const spawn = (round: number) => runHookOutput(FORCE_BYPASS, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', prompt: `Sweep the hooks directory, angle ${round}.` },
+  });
+  for (const round of [1, 2]) {
+    const out = spawn(round);
+    assert.equal(out.hookSpecificOutput.permissionDecision, undefined, `spawn ${round}`);
+    assert.match(out.hookSpecificOutput.additionalContext, /quick evidence sweeps/);
+    assert.match(out.hookSpecificOutput.additionalContext, /inherits the session model/);
+    assert.match(out.hookSpecificOutput.additionalContext, /codebase-exploration/);
+  }
+  const denied = spawn(3);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /Explore spawn 3 this session with no board interaction/);
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /codebase-exploration/);
+  assert.match(spawn(4).hookSpecificOutput.permissionDecisionReason, /no board interaction/, 'a denied spawn does not consume a pass');
+});
+
+test('pre-tool hook: board interaction lifts the Explore fan-out cap', () => {
+  const session_id = `explore-board-${Date.now()}`;
+  runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
+  });
+  for (let round = 1; round <= 4; round += 1) {
+    const out = runHookOutput(FORCE_BYPASS, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+      tool_input: { subagent_type: 'Explore', prompt: `Sweep the docs tree, angle ${round}.` },
+    });
+    if (round <= 2) {
+      assert.match(out.hookSpecificOutput.additionalContext, /quick evidence sweeps/, `spawn ${round}`);
+    } else {
+      assert.equal(out, null, `spawn ${round} passes silently after board interaction`);
+    }
+  }
+});
+
+test('pre-tool hook: denied generic work cannot relaunch as Explore', () => {
+  const session_id = `explore-reroute-${Date.now()}`;
+  const prompt = 'Deep dive: map every hook injection surface and report the guidance gaps.';
+  const denied = runHookOutput(FORCE_BYPASS, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+    tool_input: { subagent_type: 'general-purpose', description: 'Hook surface deep dive', prompt },
+  });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+
+  const sameDescription = runHookOutput(FORCE_BYPASS, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', description: 'Hook surface deep dive', prompt: 'Different text entirely.' },
+  });
+  assert.equal(sameDescription.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(sameDescription.hookSpecificOutput.permissionDecisionReason, /the work, not the agent type/);
+  assert.match(sameDescription.hookSpecificOutput.permissionDecisionReason, /rerouting denied work through Explore is a violation/);
+
+  const samePrompt = runHookOutput(FORCE_BYPASS, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', prompt: `  ${prompt.toUpperCase()}  ` },
+  });
+  assert.equal(samePrompt.hookSpecificOutput.permissionDecision, 'deny', 'prompt matching survives case and whitespace changes');
+
+  const helper = runHookOutput(FORCE_BYPASS, {
+    session_id, cwd: BOARD_PATH, agent_id: 'exec-helper', agent_type: 'sidequest-exec-dispatch',
+    tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', model: 'haiku', prompt },
+  });
+  assert.equal(helper.hookSpecificOutput.permissionDecision, undefined, 'executor Explore helpers bypass the fan-out guard');
+  assert.equal(helper.hookSpecificOutput.updatedInput.mode, 'bypassPermissions');
+});
+
+test('pre-tool hook: the Explore guard stays out of unrouted and unidentified sessions', () => {
+  store.setProjectRouting(slug, 'disabled');
+  try {
+    assert.equal(runHookOutput(FORCE_BYPASS, {
+      session_id: `explore-disabled-${Date.now()}`, cwd: BOARD_PATH, tool_name: 'Agent',
+      tool_input: { subagent_type: 'Explore', prompt: 'Sweep the repo.' },
+    }), null, 'routing-disabled boards leave Explore alone');
+  } finally {
+    store.setProjectRouting(slug, 'enabled');
+  }
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    cwd: BOARD_PATH, tool_name: 'Agent',
+    tool_input: { subagent_type: 'Explore', prompt: 'Sweep the repo.' },
+  }, { CLAUDE_CODE_SESSION_ID: '', CLAUDE_SESSION_ID: '' }), null, 'no session id means no tracking');
 });
 
 test('pre-tool hook: a bounded read-only diagnostic probe may self-test dispatch', () => {
@@ -1166,6 +1259,7 @@ test('pre-tool inline-work hook tells solo work to surface the board choice once
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
   });
   assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage, 'the nudge must reach the model, not only the terminal');
   assert.match(output.systemMessage, /inline-safe boundary/i);
   assert.match(output.systemMessage, /concrete reason for continuing inline/i);
   assert.match(output.systemMessage, /offer Sidequest board dispatch/i);
@@ -1278,7 +1372,8 @@ test('user-prompt reminder fires once for the first human prompt', () => {
   const payload = { session_id: `board-first-${Date.now()}`, cwd: BOARD_PATH, prompt: 'Fix the board hook.' };
   const reminder = runHookOutput(BOARD_FIRST_REMINDER, payload);
   assert.equal(reminder.hookSpecificOutput.hookEventName, 'UserPromptSubmit');
-  assert.match(reminder.hookSpecificOutput.additionalContext, /gather enough read-only evidence or use Explore/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /using Explore only for a quick sweep/);
+  assert.match(reminder.hookSpecificOutput.additionalContext, /codebase-exploration spike/);
   assert.equal(runHookOutput(BOARD_FIRST_REMINDER, payload), null);
 });
 

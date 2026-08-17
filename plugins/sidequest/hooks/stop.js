@@ -107,8 +107,16 @@ function writeJson(value) {
 function writeContext(hookEventName, additionalContext) {
   writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
 }
+var MODEL_VISIBLE_MIRROR_EVENTS = /* @__PURE__ */ new Set(["PreToolUse", "PostToolUseFailure"]);
 function writeSystemMessage(hookEventName, systemMessage) {
-  writeJson({ systemMessage: projectedText(hookEventName, systemMessage), hookSpecificOutput: { hookEventName } });
+  const projected = projectedText(hookEventName, systemMessage);
+  writeJson({
+    systemMessage: projected,
+    hookSpecificOutput: {
+      hookEventName,
+      ...MODEL_VISIBLE_MIRROR_EVENTS.has(hookEventName) ? { additionalContext: projected } : {}
+    }
+  });
 }
 
 // src/hooks/shared/paths.ts

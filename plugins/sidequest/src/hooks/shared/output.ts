@@ -64,15 +64,34 @@ export function writeDeny(hookEventName: string, permissionDecisionReason: strin
   });
 }
 
+// The model never reads systemMessage: Claude Code 2.1.233's attachment-to-model table maps
+// hook_system_message to nothing, and its own schema describes the field as "Warning message shown to the
+// user". Guidance meant to steer the MODEL has to ride hookSpecificOutput.additionalContext, which lands in
+// the conversation as an isMeta message (SQ-2213). Stop is deliberately absent from this set: Stop
+// additionalContext makes the conversation continue so the model can act on it, which would turn a
+// stop-time suggestion into a loop of resumed turns.
+const MODEL_VISIBLE_MIRROR_EVENTS = new Set(['PreToolUse', 'PostToolUseFailure']);
+
 export function writeSystemMessage(hookEventName: string, systemMessage: string): void {
-  writeJson({ systemMessage: projectedText(hookEventName, systemMessage), hookSpecificOutput: { hookEventName } });
+  const projected = projectedText(hookEventName, systemMessage);
+  writeJson({
+    systemMessage: projected,
+    hookSpecificOutput: {
+      hookEventName,
+      ...(MODEL_VISIBLE_MIRROR_EVENTS.has(hookEventName) ? { additionalContext: projected } : {}),
+    },
+  });
 }
 
 export function writeToolUpdate(updatedInput: Record<string, unknown>, systemMessage?: string | null): void {
   const context = systemMessage ? projectedText('PreToolUse', systemMessage) : '';
   writeJson({
     ...(context ? { systemMessage: context } : {}),
-    hookSpecificOutput: { hookEventName: 'PreToolUse', updatedInput },
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      updatedInput,
+      ...(context ? { additionalContext: context } : {}),
+    },
   });
 }
 

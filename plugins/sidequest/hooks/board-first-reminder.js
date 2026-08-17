@@ -151,7 +151,7 @@ function main() {
   if (state.reminded || !boardFor(input)) return;
   state.reminded = true;
   writeSessionState(file, state);
-  writeContext("UserPromptSubmit", "sidequest: gather enough read-only evidence or use Explore, then write precise tickets and route implementation by default. Use informed inline judgment when it fits.");
+  writeContext("UserPromptSubmit", "sidequest: gather enough read-only evidence, using Explore only for a quick sweep (it inherits the session model; deep or fan-out investigation is a codebase-exploration spike), then write precise tickets and route implementation by default. Use informed inline judgment when it fits.");
 }
 try {
   main();

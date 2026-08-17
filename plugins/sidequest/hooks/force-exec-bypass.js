@@ -24,9 +24,9 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
 
 // src/hooks/force-exec-bypass.ts
 var import_node_child_process = require("node:child_process");
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_os = __toESM(require("node:os"));
-var import_node_path2 = __toESM(require("node:path"));
+var import_node_fs3 = __toESM(require("node:fs"));
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path3 = __toESM(require("node:path"));
 
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
@@ -97,6 +97,9 @@ function projectedText(hookEventName, value) {
 function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
+function writeContext(hookEventName, additionalContext) {
+  writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
+}
 function writeDeny(hookEventName, permissionDecisionReason) {
   writeJson({
     hookSpecificOutput: {
@@ -110,7 +113,11 @@ function writeToolUpdate(updatedInput, systemMessage) {
   const context = systemMessage ? projectedText("PreToolUse", systemMessage) : "";
   writeJson({
     ...context ? { systemMessage: context } : {},
-    hookSpecificOutput: { hookEventName: "PreToolUse", updatedInput }
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      updatedInput,
+      ...context ? { additionalContext: context } : {}
+    }
   });
 }
 
@@ -121,6 +128,27 @@ function pluginRoot() {
 }
 function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
+}
+
+// src/hooks/shared/session-state.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_os = __toESM(require("node:os"));
+var import_node_path2 = __toESM(require("node:path"));
+function sessionStateFile(prefix, sessionId) {
+  const home = process.env.SIDEQUEST_HOME || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
+  return import_node_path2.default.join(home, "tmp", "state", `${prefix}-${encodeURIComponent(sessionId)}.json`);
+}
+function readSessionState(file) {
+  try {
+    const parsed = JSON.parse(import_node_fs2.default.readFileSync(file, "utf8"));
+    return parsed !== null && typeof parsed === "object" && !Array.isArray(parsed) ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+function writeSessionState(file, state) {
+  import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(file), { recursive: true });
+  import_node_fs2.default.writeFileSync(file, JSON.stringify(state));
 }
 
 // src/lib/exec-names.ts
@@ -195,7 +223,7 @@ function dispatchLaunchName(ref, title, sequence) {
 }
 
 // src/hooks/force-exec-bypass.ts
-var { canonicalPath } = require(import_node_path2.default.join(__dirname, "..", "lib", "worktrees.js"));
+var { canonicalPath } = require(import_node_path3.default.join(__dirname, "..", "lib", "worktrees.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
 var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
@@ -243,7 +271,7 @@ function helperModelDenyReason(type) {
 }
 function helperEvidenceRule(input) {
   const transcriptPath = stringField(input, "transcript_path", "transcriptPath").trim();
-  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path2.default.join(import_node_path2.default.dirname(transcriptPath), "subagents")] : [];
+  const sessionPaths = transcriptPath ? [transcriptPath, import_node_path3.default.join(import_node_path3.default.dirname(transcriptPath), "subagents")] : [];
   const knownLocations = sessionPaths.length ? ` Current session self-reference locations: ${sessionPaths.join(", ")}.` : "";
   return "\n\nEvidence rule: quoted ticket strings appear in this session’s context and generated transcripts. A match in the parent or helper session transcript, subagent transcript, or task-output files is self-reference, not evidence: report it as such. Do not search session, transcript, or task-output directories for evidence. Cite only the directly reachable artifact under investigation; if it is outside the parent worktree or otherwise unavailable, report a visibility block rather than a finding." + knownLocations;
 }
@@ -284,6 +312,61 @@ function agentDenyReason(type, classification) {
     return `sidequest: ${type} is an unknown Sidequest agent type. Use the executor returned by dispatch.`;
   }
   return `sidequest: ${type || "custom"} is a generic Agent, not a Sidequest ticket executor. For a tiny lookup, use Read, Glob, Grep, or WebFetch inline, not WebSearch. A usable route needs a fresh Board MCP dispatch and its exact returned executor. Board MCP is the lifecycle authority: reload or reconnect Sidequest, then re-dispatch. Do not use a raw Agent or Sidequest CLI fallback. Any delegated work, including a quick investigation, needs a ticket: file a spike (usually codebase-exploration), route it, dispatch it, then spawn the returned executor. The blocked work still gates any dependent action: do not proceed to a PR, merge, publish, or ship until its ticket is filed, dispatched, and closed; rerouting around this block is a violation.`;
+}
+var EXPLORE_FREE_SPAWNS = 2;
+var DENIED_WORK_PROMPT_PREFIX_CHARS = 160;
+var DENIED_WORK_MAX_RECORDS = 20;
+function guardSessionId(input) {
+  return (stringField(input, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "").trim();
+}
+function normalizedWork(value) {
+  return String(value ?? "").toLowerCase().replace(/\s+/g, " ").trim();
+}
+function deniedWorkPromptPrefix(toolInput) {
+  return normalizedWork(toolInput.prompt).slice(0, DENIED_WORK_PROMPT_PREFIX_CHARS);
+}
+function deniedWorkRecords(state) {
+  if (!Array.isArray(state.deniedWork)) return [];
+  return state.deniedWork.filter((record) => isRecord(record) && typeof record.description === "string" && typeof record.promptPrefix === "string");
+}
+function recordDeniedGenericWork(input, toolInput) {
+  const sessionId = guardSessionId(input);
+  if (!sessionId) return;
+  try {
+    const file = sessionStateFile("explore-fanout", sessionId);
+    const state = readSessionState(file);
+    const records = deniedWorkRecords(state);
+    records.push({ description: normalizedWork(toolInput.description), promptPrefix: deniedWorkPromptPrefix(toolInput) });
+    state.deniedWork = records.slice(-DENIED_WORK_MAX_RECORDS);
+    writeSessionState(file, state);
+  } catch (_) {
+  }
+}
+function matchesDeniedWork(records, toolInput) {
+  const description = normalizedWork(toolInput.description);
+  const promptPrefix = deniedWorkPromptPrefix(toolInput);
+  return records.some((record) => record.description !== "" && record.description === description || record.promptPrefix !== "" && record.promptPrefix === promptPrefix);
+}
+function guardMainSessionExplore(input, toolInput) {
+  const sessionId = guardSessionId(input);
+  if (!sessionId || dispatchAdmission(input).status !== "routed") return;
+  const file = sessionStateFile("explore-fanout", sessionId);
+  const state = readSessionState(file);
+  if (matchesDeniedWork(deniedWorkRecords(state), toolInput)) {
+    writeDeny("PreToolUse", "sidequest: this Explore spawn matches work a generic Agent was already denied for. The block applied to the work, not the agent type. File a spike ticket (usually codebase-exploration), route it, dispatch it, then spawn the returned executor; rerouting denied work through Explore is a violation.");
+    return;
+  }
+  const priorPasses = Number(state.explorePasses) || 0;
+  const boardInteraction = Boolean(readSessionState(sessionStateFile("inline-work", sessionId)).boardInteraction);
+  if (priorPasses >= EXPLORE_FREE_SPAWNS && !boardInteraction) {
+    writeDeny("PreToolUse", `sidequest: Explore spawn ${priorPasses + 1} this session with no board interaction. Explore inherits the session model; investigation at this scale belongs on the board, where a codebase-exploration spike runs a cheaper route. File the spike, route it, dispatch it, then spawn the returned executor.`);
+    return;
+  }
+  state.explorePasses = priorPasses + 1;
+  writeSessionState(file, state);
+  if (priorPasses < EXPLORE_FREE_SPAWNS) {
+    writeContext("PreToolUse", "sidequest: Explore is for quick evidence sweeps and inherits the session model. Deep or fan-out investigation belongs on the board: file a spike ticket (usually codebase-exploration), route it, dispatch it, and spawn the returned executor on its cheaper route.");
+  }
 }
 var REF_RE = /\bSQ-\d+\b/gi;
 function extractRefs(prompt) {
@@ -620,7 +703,7 @@ function writeTarget(input) {
   const raw = toolInput.file_path ?? toolInput.notebook_path ?? toolInput.path;
   if (raw == null || !String(raw).trim()) return "";
   const cwd = stringField(input, "cwd") || process.cwd();
-  return import_node_path2.default.resolve(cwd, String(raw));
+  return import_node_path3.default.resolve(cwd, String(raw));
 }
 function restoresCommittedContent(input, target) {
   try {
@@ -630,7 +713,7 @@ function restoresCommittedContent(input, target) {
     if (toolName === "Write" && typeof toolInput?.content === "string") {
       restored = toolInput.content;
     } else if (toolName === "Edit" && typeof toolInput?.old_string === "string" && typeof toolInput.new_string === "string") {
-      const current = import_node_fs2.default.readFileSync(target, "utf8");
+      const current = import_node_fs3.default.readFileSync(target, "utf8");
       const first = current.indexOf(toolInput.old_string);
       if (first < 0 || !toolInput.replace_all && current.indexOf(toolInput.old_string, first + toolInput.old_string.length) >= 0) return false;
       restored = toolInput.replace_all ? current.split(toolInput.old_string).join(toolInput.new_string) : `${current.slice(0, first)}${toolInput.new_string}${current.slice(first + toolInput.old_string.length)}`;
@@ -638,12 +721,12 @@ function restoresCommittedContent(input, target) {
       return false;
     }
     const repository = canonicalPath((0, import_node_child_process.execFileSync)("git", ["rev-parse", "--show-toplevel"], {
-      cwd: import_node_path2.default.dirname(target),
+      cwd: import_node_path3.default.dirname(target),
       encoding: "utf8",
       windowsHide: true
     }).trim());
-    const relative = import_node_path2.default.relative(repository, canonicalPath(target)).replace(/\\/g, "/");
-    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path2.default.isAbsolute(relative)) return false;
+    const relative = import_node_path3.default.relative(repository, canonicalPath(target)).replace(/\\/g, "/");
+    if (!relative || relative === ".." || relative.startsWith("../") || import_node_path3.default.isAbsolute(relative)) return false;
     const committed = (0, import_node_child_process.execFileSync)("git", ["show", `HEAD:${relative}`], {
       cwd: repository,
       windowsHide: true
@@ -654,13 +737,13 @@ function restoresCommittedContent(input, target) {
   }
 }
 function relativeInside(root, target) {
-  const relative = import_node_path2.default.relative(root, target).replace(/\\/g, "/");
-  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path2.default.isAbsolute(relative) ? relative : null;
+  const relative = import_node_path3.default.relative(root, target).replace(/\\/g, "/");
+  return relative && relative !== ".." && !relative.startsWith("../") && !import_node_path3.default.isAbsolute(relative) ? relative : null;
 }
 function linkedWorktreeRelative(target, projectPath) {
-  let existing = import_node_path2.default.dirname(target);
-  while (!import_node_fs2.default.existsSync(existing)) {
-    const parent = import_node_path2.default.dirname(existing);
+  let existing = import_node_path3.default.dirname(target);
+  while (!import_node_fs3.default.existsSync(existing)) {
+    const parent = import_node_path3.default.dirname(existing);
     if (parent === existing) return null;
     existing = parent;
   }
@@ -675,8 +758,8 @@ function linkedWorktreeRelative(target, projectPath) {
       encoding: "utf8",
       windowsHide: true
     }).trim();
-    const common = canonicalPath(import_node_path2.default.isAbsolute(commonOutput) ? commonOutput : import_node_path2.default.resolve(checkout, commonOutput));
-    if (common !== canonicalPath(import_node_path2.default.join(projectPath, ".git"))) return null;
+    const common = canonicalPath(import_node_path3.default.isAbsolute(commonOutput) ? commonOutput : import_node_path3.default.resolve(checkout, commonOutput));
+    if (common !== canonicalPath(import_node_path3.default.join(projectPath, ".git"))) return null;
     return relativeInside(checkout, target);
   } catch (_) {
     return null;
@@ -702,10 +785,10 @@ function inScope(target, scope) {
 }
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
-  const roots = [configuredRoot, import_node_path2.default.join(import_node_os.default.tmpdir(), "claude")].filter((root) => Boolean(root));
+  const roots = [configuredRoot, import_node_path3.default.join(import_node_os2.default.tmpdir(), "claude")].filter((root) => Boolean(root));
   return roots.some((root) => {
-    const relative = import_node_path2.default.relative(import_node_path2.default.resolve(root), target);
-    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path2.default.sep}`) && !import_node_path2.default.isAbsolute(relative);
+    const relative = import_node_path3.default.relative(import_node_path3.default.resolve(root), target);
+    return Boolean(relative) && relative !== ".." && !relative.startsWith(`..${import_node_path3.default.sep}`) && !import_node_path3.default.isAbsolute(relative);
   });
 }
 function guardHelperWrite(input) {
@@ -783,7 +866,10 @@ function main() {
     rewriteExecutorHelper(input, toolInput, type);
     return;
   }
-  if (PASS_THROUGH_AGENT_TYPES.has(type)) return;
+  if (PASS_THROUGH_AGENT_TYPES.has(type)) {
+    if (type === "Explore") guardMainSessionExplore(input, toolInput);
+    return;
+  }
   if (classification.kind === "diagnostic") {
     if (!isDiagnosticProbe(type, toolInput)) {
       writeDeny("PreToolUse", diagnosticProbeDenyReason());
@@ -823,6 +909,7 @@ function main() {
     }
   }
   if (!isCurrentExecutor(classification)) {
+    if (!type.startsWith("sidequest-") && admission.status === "routed") recordDeniedGenericWork(input, toolInput);
     writeDeny("PreToolUse", agentDenyReason(type, classification));
     return;
   }

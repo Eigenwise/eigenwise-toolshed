@@ -376,8 +376,11 @@ Default to fanning understanding out when it will help, while using read-only to
 gather enough evidence for precise ticket boundaries. A known file or one-step lookup can stay inline, and
 an unfamiliar subsystem can become a `codebase-exploration` spike when that gives the implementation wave
 a better brief. Spikes that must execute modified code: set `readonly:false` at filing time, don't recategorize. `Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities that may
-run without a prepared Sidequest dispatch. Other delegated implementation, research, review, or domain
-analysis needs a ticketed route; its concise findings inform the next ticket boundaries. Workflow agents
+run without a prepared Sidequest dispatch, but `Explore` is a quick evidence sweep, not an investigation
+route: it inherits the session model, and on a routed board the third Explore spawn without any board
+interaction is refused, as is any Explore relaunch of work a generic Agent was already denied for. Deep or
+fan-out investigation is a `codebase-exploration` spike. Other delegated implementation, research, review,
+or domain analysis needs a ticketed route; its concise findings inform the next ticket boundaries. Workflow agents
 remain governed by their Workflow contract.
 
 ## Agent teams (CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS)

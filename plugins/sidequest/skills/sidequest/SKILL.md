@@ -187,8 +187,9 @@ native `Explore`, then write precise tickets and route implementation by default
 to the INLINE-SAFE allowlist and its meaningful 20+ character recorded reason; it cannot retroactively
 legitimize prior inline investigation. Executors own their tickets; investigations return **compressed findings** (~1–2k tokens)
 as comments, not transcripts. Routed implementation agents use a freshly dispatched Sidequest executor.
-`Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness reconnaissance utilities; other
-delegated implementation or investigation work needs a ticketed route.
+`Explore`, `claude-code-guide`, and `statusline-setup` are narrow harness utilities; Explore is a quick
+sweep only, deep or fan-out investigation is a `codebase-exploration` spike; other delegated work needs a
+ticketed route.
 
 **The shape is a LOOP, not a hand-off**: spawn a wave → executors return terse reports and
 submit verified commits → read each thread, use scoped verification for each ticket, then run the

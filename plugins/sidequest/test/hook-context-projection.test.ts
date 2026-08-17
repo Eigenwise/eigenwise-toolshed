@@ -44,13 +44,33 @@ test('denial projections keep the recovery action inside the PreToolUse budget',
   assert.match(reason, /content omitted/);
 });
 
-test('routine system notices emit once within their aggregate model-facing budget', () => {
+// systemMessage is UI-only in Claude Code (the attachment-to-model table maps hook_system_message to
+// nothing), so model-facing notices must mirror into additionalContext (SQ-2213).
+test('system notices mirror onto the model-visible channel within budget', () => {
   const system = emittedOutput("output.writeSystemMessage('PostToolUseFailure', 'Recover now. ' + '🙂'.repeat(4000))");
   const hookOutput = system.hookSpecificOutput as { additionalContext?: string };
-  const aggregateBytes = Buffer.byteLength(String(system.systemMessage || ''), 'utf8') + Buffer.byteLength(String(hookOutput.additionalContext || ''), 'utf8');
-  assert.ok(aggregateBytes <= 512);
+  assert.ok(Buffer.byteLength(String(hookOutput.additionalContext || ''), 'utf8') <= 512);
+  assert.equal(hookOutput.additionalContext, system.systemMessage);
   assert.match(String(system.systemMessage || ''), /Recover now\./);
-  assert.equal(hookOutput.additionalContext, undefined);
+  const preToolUse = emittedOutput("output.writeSystemMessage('PreToolUse', 'Surface the board choice.')");
+  assert.equal((preToolUse.hookSpecificOutput as { additionalContext?: string }).additionalContext, 'Surface the board choice.');
   const teammate = emittedOutput("output.writeTeammateStop('End this idle executor. ' + '🙂'.repeat(4000))");
   assert.ok(Buffer.byteLength(String(teammate.stopReason || ''), 'utf8') <= 512);
+});
+
+test('stop-time notices stay UI-only because Stop additionalContext resumes the conversation', () => {
+  const stop = emittedOutput("output.writeSystemMessage('Stop', 'Compaction is safe here.')");
+  assert.equal((stop.hookSpecificOutput as { additionalContext?: string }).additionalContext, undefined);
+  assert.match(String(stop.systemMessage || ''), /Compaction is safe here\./);
+});
+
+test('tool updates carry their teaching message on the model-visible channel', () => {
+  const update = emittedOutput("output.writeToolUpdate({ mode: 'bypassPermissions' }, 'Always pass model: exec.model on Claude routes.')");
+  const hookOutput = update.hookSpecificOutput as { additionalContext?: string; updatedInput?: Record<string, unknown> };
+  assert.equal(hookOutput.additionalContext, update.systemMessage);
+  assert.match(String(hookOutput.additionalContext || ''), /Always pass model/);
+  assert.equal(hookOutput.updatedInput?.mode, 'bypassPermissions');
+  const silent = emittedOutput("output.writeToolUpdate({ mode: 'bypassPermissions' })");
+  assert.equal((silent.hookSpecificOutput as { additionalContext?: string }).additionalContext, undefined);
+  assert.equal(silent.systemMessage, undefined);
 });
