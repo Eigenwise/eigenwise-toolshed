@@ -1390,6 +1390,43 @@ function mergeSubsetCatalog(existing, catalog) {
   return { ...catalog, models, providers, codexReadiness: providers.codex ?? null };
 }
 
+const CATALOG_REPLACE_RETRY_DELAYS_MS = [20, 60, 140, 300];
+const RETRYABLE_REPLACE_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const ABANDONED_CATALOG_TEMP_MS = 5 * 60 * 1000;
+
+// Every caller swallows a failed catalog write, one of them commented "advisory only", so a rename that loses
+// is invisible except as an orphaned .tmp: 32 of them accumulated over eleven days, each a distinct catalog
+// that nobody ever read (SQ-2212). Concurrent readers are why they lose. Windows will not replace a file
+// another process holds open without FILE_SHARE_DELETE, and this catalog is read on every SessionStart, so the
+// loser has to wait out the reader instead of dropping the write.
+function replaceFileWithRetry(tempPath, targetPath) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      fs.renameSync(tempPath, targetPath);
+      return;
+    } catch (error) {
+      const delay = CATALOG_REPLACE_RETRY_DELAYS_MS[attempt];
+      if (delay == null || !RETRYABLE_REPLACE_CODES.has(error.code)) throw error;
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, delay);
+    }
+  }
+}
+
+function sweepAbandonedCatalogTemps(catalogPath, now = Date.now()) {
+  const directory = path.dirname(catalogPath);
+  const prefix = `${path.basename(catalogPath)}.`;
+  let entries = [];
+  try { entries = fs.readdirSync(directory); } catch { return; }
+  for (const entry of entries) {
+    if (!entry.startsWith(prefix) || !entry.endsWith('.tmp')) continue;
+    const file = path.join(directory, entry);
+    try {
+      if (now - fs.statSync(file).mtimeMs < ABANDONED_CATALOG_TEMP_MS) continue;
+      fs.unlinkSync(file);
+    } catch { /* another writer got there first, or it is still being written */ }
+  }
+}
+
 function writeCatalogFile(catalogPath, catalog) {
   const existing = readJsonFile(catalogPath);
   const storedVersion = catalogSchemaVersion(existing);
@@ -1398,8 +1435,16 @@ function writeCatalogFile(catalogPath, catalog) {
   }
   const nextCatalog = mergeSubsetCatalog(existing, catalog);
   const tempPath = `${catalogPath}.${process.pid}.${Date.now()}.tmp`;
-  fs.writeFileSync(tempPath, JSON.stringify(nextCatalog, null, 2) + '\n');
-  fs.renameSync(tempPath, catalogPath);
+  try {
+    fs.writeFileSync(tempPath, JSON.stringify(nextCatalog, null, 2) + '\n');
+    replaceFileWithRetry(tempPath, catalogPath);
+  } catch (error) {
+    log(`catalog: could not replace ${catalogPath} (${error.code || error.message}); the models list stays at its previous contents`);
+    throw error;
+  } finally {
+    try { fs.unlinkSync(tempPath); } catch (_) { /* the rename consumed it, which is the success path */ }
+  }
+  sweepAbandonedCatalogTemps(catalogPath);
   return nextCatalog;
 }
 

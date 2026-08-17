@@ -485,6 +485,80 @@ test('writeCatalogFile replaces a catalog when the fetched set contains a new mo
   }
 });
 
+// 32 orphaned catalog.json.<pid>.<ms>.tmp files piled up in a real state directory over eleven days, each a
+// distinct catalog that lost its rename and was then swallowed by a caller's .catch (SQ-2212).
+function catalogReplaceFixture(label) {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), `catalog-${label}-`));
+  const file = path.join(directory, 'catalog.json');
+  fs.writeFileSync(file, JSON.stringify(gw.buildCatalog(['claude-gpt-5.6-terra'])));
+  return { directory, file, replacement: gw.buildCatalog(['claude-gpt-5.6-terra', 'claude-gpt-5.6-sol']) };
+}
+
+test('SQ-2212: a replace that keeps failing gives up loudly and leaves no temp behind', () => {
+  const { directory, file, replacement } = catalogReplaceFixture('replace-failure');
+  const originalRename = fs.renameSync;
+  let attempts = 0;
+  try {
+    fs.renameSync = () => {
+      attempts += 1;
+      const error = new Error('permission denied');
+      error.code = 'EPERM';
+      throw error;
+    };
+
+    assert.throws(() => gw.writeCatalogFile(file, replacement), /permission denied/);
+
+    assert.equal(attempts, 5, 'one attempt plus every backoff in the retry table');
+    assert.deepEqual(fs.readdirSync(directory), ['catalog.json']);
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQ-2212: a replace that loses to a reader once still lands the write', () => {
+  const { directory, file, replacement } = catalogReplaceFixture('replace-retry');
+  const originalRename = fs.renameSync;
+  let remainingFailures = 1;
+  try {
+    fs.renameSync = (from, to) => {
+      if (remainingFailures-- > 0) {
+        const error = new Error('the target is open elsewhere');
+        error.code = 'EBUSY';
+        throw error;
+      }
+      return originalRename(from, to);
+    };
+
+    assert.deepEqual(gw.writeCatalogFile(file, replacement), replacement);
+
+    assert.deepEqual(JSON.parse(fs.readFileSync(file, 'utf8')), replacement);
+    assert.deepEqual(fs.readdirSync(directory), ['catalog.json']);
+  } finally {
+    fs.renameSync = originalRename;
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('SQ-2212: a successful write clears the temps earlier writes abandoned', () => {
+  const { directory, file, replacement } = catalogReplaceFixture('temp-sweep');
+  const abandoned = path.join(directory, 'catalog.json.4242.1754500000000.tmp');
+  const inFlight = path.join(directory, 'catalog.json.4243.1754500000001.tmp');
+  try {
+    fs.writeFileSync(abandoned, 'a catalog nobody read');
+    const longAgoSeconds = (Date.now() - 10 * 60 * 1000) / 1000;
+    fs.utimesSync(abandoned, longAgoSeconds, longAgoSeconds);
+    fs.writeFileSync(inFlight, 'another writer, mid-write');
+
+    gw.writeCatalogFile(file, replacement);
+
+    assert.equal(fs.existsSync(abandoned), false);
+    assert.equal(fs.existsSync(inFlight), true, 'a temp young enough to be live is left alone');
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test('SQ-2208: catalog --refresh --json keeps stdout parseable while it logs a preserved subset', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'catalog-json-stdout-'));
   const state = path.join(home, '.claude', 'model-gateway');
