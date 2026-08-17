@@ -67,6 +67,14 @@ A second live snapshot from 2026-08-09T07:00:00Z through 07:11:04Z tested the ex
 
 There is no supported Toolshed-side after state to report. The measured counterweight produced no reduction, and project hooks cannot reach the native seam. An upstream build with the filter below can run the same reproduction for the actual before/after comparison.
 
+## Re-verified on Claude Code 2.1.233
+
+Two independent systems deliver diagnostics. IDE MCP diagnostics are gated on a per-file baseline. The LSP `<new-diagnostics>` attachments are not: that delivery applies no path filter and no baseline, caps at 10 diagnostics per file and 30 per attachment, and suppresses repeats only through a 500-entry `delivered` LRU. Its registry is constructed per session, not per agent: the registry factory keys a `WeakMap` on the session root and is called with `session`, so every subagent of a session shares one pending set, and whichever agent next holds write tools drains it. Delivery is gated only on the receiving agent's tool set.
+
+No setting reaches this path. The binary contains no `lspIgnore`, `disableDiagnostics`, or `diagnosticsEnabled` key, and no hook event fires between publication and attachment. The required behavior below is still the only fix.
+
+What Toolshed can do is bound the damage the attachments cause once they arrive, so `SessionStart` and `SubagentStart` now tell the receiving agent which paths are not its own and what lease each one holds: a live claim (expected mid-refactor state), a path already swept from disk (always false), or a candidate awaiting integration (worth reading before integrating, and it outweighs an executor's `verify passed`). That advice comes from board state rather than from the directory, because the same path means different things at different points in a run. It removes no bytes and no attachments.
+
 ## Required behavior
 
 At `textDocument/publishDiagnostics`, after URI normalization and before registry insertion:

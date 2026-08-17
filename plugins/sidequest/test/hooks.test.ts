@@ -2992,7 +2992,7 @@ test('subagent-start warns only for embedded worktrees outside the receiving age
   assert.equal(runHook(SUBAGENT_START, payload), '', 'the receiving agent\'s own worktree must stay quiet');
   fs.mkdirSync(path.join(worktrees, 'agent-foreign'));
   const warning = runHook(SUBAGENT_START, payload);
-  assert.match(warning, /foreign agent worktrees detected/);
+  assert.match(warning, /1 foreign agent worktree in play/);
   assert.match(warning, /error-severity diagnostics/);
 });
 

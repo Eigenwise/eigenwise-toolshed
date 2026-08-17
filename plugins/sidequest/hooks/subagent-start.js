@@ -112,24 +112,24 @@ var DIAGNOSTIC_PROBE_NAME = "sidequest-diagnostic-probe";
 // src/hooks/diagnostic-worktree-warning.ts
 var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_path2 = __toESM(require("node:path"));
-var WARNING = "sidequest: foreign agent worktrees detected; diagnostics under `.claude/worktrees/agent-*` are stale and false when their path is gone from disk, otherwise ignore them unless the live worktree belongs to a ticket you are about to integrate, where they are actionable and outweigh an executor's `verify passed` claim. Keep error-severity diagnostics in your own files actionable.";
+var ENDED_RUN_WINDOW_MS = 2 * 60 * 60 * 1e3;
 function gitDirectory(entry) {
   try {
     if (import_node_fs2.default.statSync(entry).isDirectory()) return entry;
-    const gitDir = /^gitdir:\s*(.+)$/m.exec(import_node_fs2.default.readFileSync(entry, "utf8"))?.[1];
-    return gitDir ? import_node_path2.default.resolve(import_node_path2.default.dirname(entry), gitDir.trim()) : null;
+    const linkedGitDirectory = /^gitdir:\s*(.+)$/m.exec(import_node_fs2.default.readFileSync(entry, "utf8"))?.[1];
+    return linkedGitDirectory ? import_node_path2.default.resolve(import_node_path2.default.dirname(entry), linkedGitDirectory.trim()) : null;
   } catch (_) {
     return null;
   }
 }
 function checkoutLocation(start) {
   let current = import_node_path2.default.resolve(start);
-  while (true) {
-    const gitDir = gitDirectory(import_node_path2.default.join(current, ".git"));
-    if (gitDir) {
-      if (import_node_path2.default.basename(gitDir) === ".git") return { checkoutRoot: current, projectRoot: current };
-      const commonGitDir = import_node_path2.default.resolve(gitDir, "..", "..");
-      if (import_node_path2.default.basename(commonGitDir) === ".git") return { checkoutRoot: current, projectRoot: import_node_path2.default.dirname(commonGitDir) };
+  for (; ; ) {
+    const found = gitDirectory(import_node_path2.default.join(current, ".git"));
+    if (found) {
+      if (import_node_path2.default.basename(found) === ".git") return { checkoutRoot: current, projectRoot: current };
+      const commonGitDirectory = import_node_path2.default.resolve(found, "..", "..");
+      if (import_node_path2.default.basename(commonGitDirectory) === ".git") return { checkoutRoot: current, projectRoot: import_node_path2.default.dirname(commonGitDirectory) };
       return null;
     }
     const parent = import_node_path2.default.dirname(current);
@@ -137,21 +137,87 @@ function checkoutLocation(start) {
     current = parent;
   }
 }
-function isOwnWorktree(checkoutRoot, worktreesRoot, name) {
-  return import_node_path2.default.resolve(import_node_path2.default.dirname(checkoutRoot)) === import_node_path2.default.resolve(worktreesRoot) && import_node_path2.default.basename(checkoutRoot) === name;
+function comparablePath(value) {
+  const resolved = import_node_path2.default.resolve(value);
+  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
 }
-function diagnosticWorktreeWarning(input) {
+function agentWorktreeRoots(projectRoot) {
+  try {
+    const worktrees = require(runtimeModule("worktrees"));
+    return worktrees.agentWorktreeRoots(projectRoot);
+  } catch (_) {
+    return [import_node_path2.default.join(projectRoot, ".claude", "worktrees")];
+  }
+}
+function endedRecently(dispatch, now) {
+  const at = Date.parse(String(dispatch.terminalAt || dispatch.launchedAt || dispatch.preparedAt || ""));
+  return Number.isFinite(at) && now - at <= ENDED_RUN_WINDOW_MS;
+}
+function lifecycleOf(store, ticket, dispatch, now) {
+  if (!dispatch.terminalAt) return ticket.claim?.by && !store.claimReclaimable(ticket, now) ? "live" : "ended";
+  return store.pendingSubmission(ticket) ? "candidate" : "ended";
+}
+function boardWorktrees(projectRoot, now) {
+  try {
+    const store = require(runtimeModule("store"));
+    const project = store.findProject(projectRoot);
+    if (!project.ok || !project.slug) return [];
+    return store.listTickets(project.slug).flatMap((ticket) => {
+      const dispatch = ticket.dispatch;
+      const worktree = String(dispatch?.worktree || "").trim();
+      if (!dispatch || !worktree || dispatch.sharedTree !== false) return [];
+      const lifecycle = lifecycleOf(store, ticket, dispatch, now);
+      if (lifecycle === "ended" && !endedRecently(dispatch, now)) return [];
+      return [{ worktree, ref: String(ticket.ref || ""), lifecycle, onDisk: import_node_fs2.default.existsSync(worktree) }];
+    });
+  } catch (_) {
+    return [];
+  }
+}
+function unclaimedWorktreeDirectories(roots) {
+  return roots.flatMap((root) => {
+    try {
+      return import_node_fs2.default.readdirSync(root, { withFileTypes: true }).filter((entry) => entry.isDirectory() && entry.name.startsWith("agent-")).map((entry) => ({ worktree: import_node_path2.default.join(root, entry.name), ref: "", lifecycle: "ended", onDisk: true }));
+    } catch (_) {
+      return [];
+    }
+  });
+}
+function foreignWorktrees(location, roots, now) {
+  const own = comparablePath(location.checkoutRoot);
+  const byPath = /* @__PURE__ */ new Map();
+  for (const candidate of [...boardWorktrees(location.projectRoot, now), ...unclaimedWorktreeDirectories(roots)]) {
+    const key = comparablePath(candidate.worktree);
+    if (key === own || byPath.has(key)) continue;
+    byPath.set(key, candidate);
+  }
+  return [...byPath.values()];
+}
+function refList(worktrees) {
+  const refs = worktrees.map((entry) => entry.ref).filter(Boolean).sort();
+  return refs.length ? refs.join(", ") : "an unnamed dispatch";
+}
+function warningFor(worktrees, roots) {
+  const live = worktrees.filter((entry) => entry.lifecycle === "live");
+  const candidates = worktrees.filter((entry) => entry.lifecycle === "candidate");
+  const gone = worktrees.filter((entry) => !entry.onDisk);
+  const sentences = [
+    `sidequest: ${worktrees.length} foreign agent worktree${worktrees.length === 1 ? "" : "s"} in play, and Claude Code delivers their LSP diagnostics into YOUR context because that registry is keyed per session, not per agent.`,
+    `Nothing under ${roots.join(" or ")} is yours.`
+  ];
+  if (gone.length) sentences.push(`${gone.length} of those ${gone.length === 1 ? "paths is" : "paths are"} already gone from disk, and a diagnostic naming a path that no longer exists is always false.`);
+  if (live.length) sentences.push(`${live.length} hold${live.length === 1 ? "s" : ""} a live claim (${refList(live)}): errors there are expected mid-refactor state and never outrank that executor's own verify.`);
+  if (candidates.length) sentences.push(`Actionable exception: ${refList(candidates)} hold${candidates.length === 1 ? "s" : ""} a candidate awaiting integration, so a diagnostic in that worktree outweighs an executor's \`verify passed\` and is worth reading before you integrate.`);
+  sentences.push("Keep error-severity diagnostics in your own files actionable.");
+  return sentences.join(" ");
+}
+function diagnosticWorktreeWarning(input, now = Date.now()) {
   const start = stringField(input, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const location = checkoutLocation(start);
   if (!location) return "";
-  const worktreesRoot = import_node_path2.default.join(location.projectRoot, ".claude", "worktrees");
-  try {
-    return import_node_fs2.default.readdirSync(worktreesRoot, { withFileTypes: true }).some(
-      (entry) => entry.isDirectory() && entry.name.startsWith("agent-") && !isOwnWorktree(location.checkoutRoot, worktreesRoot, entry.name)
-    ) ? WARNING : "";
-  } catch (_) {
-    return "";
-  }
+  const roots = agentWorktreeRoots(location.projectRoot);
+  const worktrees = foreignWorktrees(location, roots, now);
+  return worktrees.length ? warningFor(worktrees, roots) : "";
 }
 
 // src/hooks/subagent-start.ts
