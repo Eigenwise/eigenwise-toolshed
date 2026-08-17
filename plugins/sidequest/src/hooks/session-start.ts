@@ -27,19 +27,6 @@ interface Store {
   reconcileLaunchedDispatches: (sessionId: string, options: { source: string }) => { reconciled?: string[] } | null;
 }
 
-interface SyncResult {
-  written: number;
-  removed: number;
-  unchanged: number;
-  skipped?: boolean;
-}
-
-interface AgentSync {
-  RESTART_NOTICE: string;
-  cleanupNativeAgents: (options: { staleBefore: number }) => unknown;
-  syncExecAgentsIfChanged: (prefs?: unknown, options?: unknown) => SyncResult;
-}
-
 function truncateText(value: unknown, max: number): string {
   const text = String(value || '').replace(/\s+/g, ' ').trim();
   return text.length <= max ? text : text.slice(0, Math.max(0, max - 1)).trimEnd() + '…';
@@ -107,28 +94,6 @@ function withWorkforce(context: string): string {
   return `${truncateUtf8(context, Math.max(0, contextBytes))}\n${section}`;
 }
 
-function provisionExecAgents(): SyncResult | null {
-  try {
-    const store = require(runtimeModule('store')) as Store;
-    const sync = require(runtimeModule('agentsync')) as AgentSync;
-    store.sweepStaleClaims({ source: 'session-start' });
-    sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1000 });
-    return sync.syncExecAgentsIfChanged();
-  } catch (_) {
-    return null;
-  }
-}
-
-function reconcileLostLaunches(data: HookInput): string[] {
-  try {
-    const sessionId = stringField(data, 'session_id', 'sessionId') || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || '';
-    const store = require(runtimeModule('store')) as Store;
-    const result = store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' });
-    return result && Array.isArray(result.reconciled) ? result.reconciled : [];
-  } catch (_) {
-    return [];
-  }
-}
 
 function nudgeOff(): boolean {
   const value = String(process.env.SIDEQUEST_NUDGE || '').trim().toLowerCase();
@@ -166,10 +131,8 @@ async function main(): Promise<void> {
     initializeCompactionState(sessionId, data.transcript_path || data.transcriptPath);
   }
 
-  const syncResult = provisionExecAgents();
   reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
   const freshnessNotice = sidequestReloadWarning(stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
-  const lostLaunches = reconcileLostLaunches(data);
   registerSweepSession(data);
   let sweepNotices: string[] = [];
   try {
@@ -180,8 +143,6 @@ async function main(): Promise<void> {
   const source = stringField(data, 'source');
   const restartNotice = [
     freshnessNotice,
-    syncResult && syncResult.written > 0 ? (require(runtimeModule('agentsync')) as AgentSync).RESTART_NOTICE : '',
-    lostLaunches.length ? `sidequest: ${lostLaunches.join(', ')} launched but never claimed. Re-dispatch and spawn the returned spec.` : '',
     source === 'compact' || source === 'resume' ? '' : diagnosticWorktreeWarning(data),
     ...sweepNotices,
   ].filter(Boolean).join('\n');

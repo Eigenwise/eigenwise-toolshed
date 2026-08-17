@@ -23,13 +23,6 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
-// src/hooks/shared/worktree-sweep.ts
-var import_node_child_process = require("node:child_process");
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_promises = require("node:fs/promises");
-var import_node_os = __toESM(require("node:os"));
-var import_node_path2 = __toESM(require("node:path"));
-
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 function stringField(input, ...names) {
@@ -50,6 +43,11 @@ function runtimeModule(name) {
 }
 
 // src/hooks/shared/worktree-sweep.ts
+var import_node_child_process = require("node:child_process");
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_promises = require("node:fs/promises");
+var import_node_os = __toESM(require("node:os"));
+var import_node_path2 = __toESM(require("node:path"));
 var MAX_PROJECTS_PER_START = 3;
 var MAX_CANDIDATES_PER_PROJECT = 8;
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
@@ -258,19 +256,62 @@ function argument(name) {
   const index = process.argv.indexOf(`--${name}`);
   return index >= 0 ? String(process.argv[index + 1] || "") : "";
 }
+function releasedClaimNotices(result) {
+  if (!result || typeof result !== "object" || !("released" in result) || !Array.isArray(result.released)) return [];
+  return result.released.flatMap((released) => {
+    if (!released || typeof released !== "object" || !("ref" in released)) return [];
+    const ref = String(released.ref || "").trim();
+    if (!ref) return [];
+    const kind = "kind" in released ? String(released.kind || "").trim() : "";
+    return [`sidequest: released ${kind || "stale"} claim ${ref}.`];
+  });
+}
+function provisionExecAgentNotices() {
+  try {
+    const store = require(runtimeModule("store"));
+    const sync = require(runtimeModule("agentsync"));
+    const sweepResult = store.sweepStaleClaims({ source: "session-start" });
+    sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1e3 });
+    const syncResult = sync.syncExecAgentsIfChanged();
+    return [
+      ...releasedClaimNotices(sweepResult),
+      syncResult.written > 0 ? sync.RESTART_NOTICE : ""
+    ].filter(Boolean);
+  } catch (_) {
+    return [];
+  }
+}
+function lostLaunchNotices(data) {
+  try {
+    const sessionId2 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
+    const store = require(runtimeModule("store"));
+    const result = store.reconcileLaunchedDispatches(sessionId2, { source: "session-start" });
+    if (!result || typeof result !== "object" || !("reconciled" in result) || !Array.isArray(result.reconciled)) return [];
+    const reconciled = result.reconciled.map((ref) => String(ref || "").trim()).filter(Boolean);
+    return reconciled.length ? [`sidequest: ${reconciled.join(", ")} launched but never claimed. Re-dispatch and spawn the returned spec.`] : [];
+  } catch (_) {
+    return [];
+  }
+}
+async function sessionStartMaintenance(data) {
+  const notices = [
+    ...provisionExecAgentNotices(),
+    ...lostLaunchNotices(data)
+  ];
+  try {
+    notices.push(...await sweepWorktrees(data, true));
+  } catch (error) {
+    notices.push(`sidequest: worktree sweep failed: ${error instanceof Error ? error.message : String(error)}`);
+  }
+  return notices;
+}
 async function main() {
   const cwd = argument("cwd") || process.cwd();
-  const data = { cwd, session_id: argument("session") };
-  let notices;
-  try {
-    notices = await sweepWorktrees(data, true);
-  } catch (error) {
-    notices = [`sidequest: worktree sweep failed: ${error && error.message || error}`];
-  }
+  const notices = await sessionStartMaintenance({ cwd, session_id: argument("session") });
   writeReport(cwd, notices);
 }
 main().catch((error) => {
   writeReport(argument("cwd") || process.cwd(), [
-    `sidequest: worktree sweep failed: ${error && error.message || error}`
+    `sidequest: session-start maintenance failed: ${error instanceof Error ? error.message : String(error)}`
   ]);
 });

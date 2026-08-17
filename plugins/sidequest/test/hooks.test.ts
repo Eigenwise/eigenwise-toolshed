@@ -2785,6 +2785,83 @@ test('session-start: a sweep past its deadline still injects the full block and 
   assert.ok(context.includes('YOUR EXECUTORS'), 'a deferred sweep must not cost the session its workforce');
 });
 
+test('session-start emits its briefing before slow claim maintenance finishes', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-slow-claim-sweep-home-'));
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-slow-claim-sweep-cwd-'));
+  const preload = path.join(home, 'slow-claim-sweep.cjs');
+  const blockMs = 200;
+  registerProject(home, cwd);
+  fs.writeFileSync(preload, `
+const Module = require('node:module');
+const load = Module._load;
+Module._load = function(request, parent, isMain) {
+  const loaded = load.call(this, request, parent, isMain);
+  if ((request.endsWith('/lib/store.js') || request.endsWith('\\\\lib\\\\store.js')) && !loaded.__slowClaimSweep) {
+    Object.defineProperty(loaded, '__slowClaimSweep', { value: true });
+    const sweep = loaded.sweepStaleClaims;
+    loaded.sweepStaleClaims = function(...args) {
+      const until = Date.now() + ${blockMs};
+      while (Date.now() < until) {}
+      return sweep.apply(this, args);
+    };
+  }
+  return loaded;
+};
+`);
+
+  const started = Date.now();
+  const result = await runHookProcessForBudget(
+    SESSION,
+    { session_id: 'slow-claim-sweep', source: 'startup', cwd },
+    {
+      SIDEQUEST_HOME: home,
+      SIDEQUEST_SWEEP_DEADLINE_MS: '25',
+      CLAUDE_PROJECT_DIR: cwd,
+      NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require "${preload.replaceAll(path.sep, '/')}"`.trim(),
+    },
+  );
+  const elapsed = Date.now() - started;
+  const output = result.stdout.trim() ? JSON.parse(result.stdout) : null;
+  const context = output?.hookSpecificOutput?.additionalContext || '';
+
+  assert.equal(result.status, 0, result.stderr);
+  assert.ok(elapsed < 500, `SessionStart took ${elapsed}ms while claim maintenance was blocked for ${blockMs}ms`);
+  assert.match(context, /=== sidequest \(active\) ===/);
+  assert.match(context, /ROLE: ORCHESTRATOR/);
+  assert.match(context, /YOUR EXECUTORS — delegate work AND investigation to them:/);
+  assert.match(context, /worktree sweep exceeded its SessionStart budget/);
+});
+
+test('session-start carries released-claim notices from background maintenance', async () => {
+  const stale = addTicket('background claim release');
+  store.updateTicket(slug, stale.ref, { labels: ['direct-ok'] });
+  assert.equal(store.claimTicket(slug, stale.ref, 'background-stale-session', {
+    direct: true,
+    reason: 'The background-maintenance fixture needs a direct claim.',
+  }).ok, true);
+  const staleTicket = store.getTicket(slug, stale.ref);
+  staleTicket.claim.at = new Date(Date.now() - store.claimIdleMs() - 1).toISOString();
+  db.putRow(database, 'tickets', {
+    id: staleTicket.id, project: slug, ref: staleTicket.ref, status: staleTicket.status,
+    archived: staleTicket.archived ? 1 : 0, ord: staleTicket.order, claim_by: staleTicket.claim.by, data: staleTicket,
+  });
+  const report = sweepReportFile(SIDEQUEST_HOME, BOARD_PATH);
+  fs.rmSync(report, { force: true });
+
+  runHook(SESSION, { session_id: 'background-claim-release', cwd: BOARD_PATH }, {
+    SIDEQUEST_SWEEP_DEADLINE_MS: '0',
+    CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..'),
+  });
+  await waitForPath(report);
+
+  const context = runHook(SESSION, { session_id: 'background-claim-release-next', cwd: BOARD_PATH }, {
+    SIDEQUEST_SWEEP_DEADLINE_MS: '0',
+    CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..'),
+  });
+  assert.equal(store.getTicket(slug, stale.ref).claim, null);
+  assert.match(context, new RegExp(`released .+ claim ${stale.ref}`));
+});
+
 test('session-start: a deferred sweep report is drained into the next session', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-drain-home-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-sweep-drain-cwd-'));
