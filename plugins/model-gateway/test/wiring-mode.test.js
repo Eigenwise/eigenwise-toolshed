@@ -318,3 +318,59 @@ test('doctor fails on a selected-mode contradiction and passes when modes agree'
   assert.equal(result.code, 0);
   assert.doesNotMatch(result.output, /ERROR:/);
 });
+
+// SQ-1901. `ensure --quiet` runs from SessionStart, whose stdout is model context and nothing else, so an
+// actionable state was told to the model and to nobody who could fix it: a session sat unwired for hours and it
+// took asking which hooks had run to find out. systemMessage is the only user-visible channel, and Claude Code
+// reads it only from a JSON stdout on a zero exit.
+function runHook(home, project, environment = {}) {
+  const { ANTHROPIC_BASE_URL, ...inherited } = process.env;
+  const result = spawnSync(process.execPath, [CLI, 'ensure', '--quiet'], {
+    cwd: project,
+    encoding: 'utf8',
+    timeout: 30000,
+    env: { ...inherited, HOME: home, USERPROFILE: home, CODEX_GATEWAY_PORT: '9', CODEX_GATEWAY_PROXY_PORT: '9', ...environment },
+  });
+  assert.ifError(result.error);
+  return { code: result.status, stdout: result.stdout, stderr: result.stderr };
+}
+
+test('SQ-1901: the SessionStart hook shows the user an actionable state instead of only the model', (t) => {
+  const { home, project } = fixture(t);
+
+  const hook = runHook(home, project);
+
+  assert.equal(hook.code, 0);
+  const output = JSON.parse(hook.stdout);
+  assert.match(output.systemMessage, /installed but not set up/);
+  assert.equal(output.hookSpecificOutput.hookEventName, 'SessionStart');
+  assert.match(output.hookSpecificOutput.additionalContext, /installed but not set up/);
+});
+
+test('SQ-1901: a refusal state reaches the user through the hook and still fails a direct ensure', (t) => {
+  const { home, project } = fixture(t);
+  writeJson(path.join(home, '.claude', 'settings.json'), { env: { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL } });
+
+  // Wired with no proxy binary: exactly the shape that refused Codex dispatch while the user was told nothing.
+  const hook = runHook(home, project);
+  assert.equal(hook.code, 0, 'a nonzero exit would trade the user-visible line for a bare "hook failed" badge');
+  const output = JSON.parse(hook.stdout);
+  assert.match(output.systemMessage, /claude-code-proxy is missing/);
+  assert.match(output.systemMessage, /setup/);
+
+  const direct = run(home, project, ['ensure']);
+  assert.equal(direct.code, 1, 'a person or the updater running ensure still gets a failing exit code');
+  assert.match(direct.output, /claude-code-proxy is missing/);
+  assert.doesNotMatch(direct.output, /hookSpecificOutput/);
+});
+
+test('SQ-1901: only states someone must act on become the user line', (t) => {
+  const { home, project } = fixture(t);
+
+  const output = JSON.parse(runHook(home, project).stdout);
+
+  // The context carries everything the hook printed; the user line is built from the actionable notices alone, so
+  // routine output (a catalog write, a pin sync) never reaches the transcript.
+  assert.equal(output.systemMessage, output.hookSpecificOutput.additionalContext.split('\n').pop());
+  assert.equal(output.systemMessage.includes('\n'), false);
+});

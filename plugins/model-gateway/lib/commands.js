@@ -146,8 +146,41 @@ const flag = (f) => args.includes(f);
 // way out, and that write logs when it preserves models from a subset response, so a diagnostic line landed
 // ahead of the JSON and Sidequest's catalog refresh threw on parse and silently gave up (SQ-2208). Human lines
 // still get emitted, on stderr, where they belong once stdout is data.
-function log(m) { if (flag('--json')) console.error(m); else console.log(m); }
-function die(m, code) { console.error('model-gateway: ' + m); process.exit(code == null ? 1 : code); }
+// SessionStart hook stdout is model context and nothing else, so every actionable gateway state reached the
+// model and nobody else: on 2026-08-13 this hook found the session unwired, said so, and the user only learned
+// it hours later by asking which hooks had run (SQ-1901). systemMessage is the one channel Claude Code shows
+// the user, and it is only readable inside a JSON object, so the hook path buffers its lines, hands the model
+// the same text it always got, and puts the states someone has to go fix in front of the user.
+let bufferedHookLines = null;
+const userActionNotices = [];
+
+function log(m) {
+  if (bufferedHookLines) { bufferedHookLines.push(String(m)); return; }
+  if (flag('--json')) console.error(m); else console.log(m);
+}
+
+function noticeForUser(text, { toStderr = false } = {}) {
+  userActionNotices.push(text);
+  if (bufferedHookLines) bufferedHookLines.push(text);
+  else if (toStderr) console.error(text);
+  else log(text);
+}
+
+function flushHookOutput() {
+  if (!bufferedHookLines) return;
+  const lines = bufferedHookLines;
+  bufferedHookLines = null;
+  const output = {};
+  if (lines.length) output.hookSpecificOutput = { hookEventName: 'SessionStart', additionalContext: lines.join('\n') };
+  const [worst, ...rest] = userActionNotices;
+  // One line, every session start, so noise discipline is part of the contract: the first actionable state names
+  // its own fix, and the rest are counted with the one command that lists them all.
+  if (worst) output.systemMessage = rest.length ? `${worst} (+${rest.length} more: run \`node "${CLI_PATH}" doctor\`)` : worst;
+  if (Object.keys(output).length) process.stdout.write(JSON.stringify(output));
+}
+// Flushes first so a die() from anywhere inside the hook path still emits what was buffered; otherwise the
+// buffering below would turn a mid-run failure into total silence.
+function die(m, code) { flushHookOutput(); console.error('model-gateway: ' + m); process.exit(code == null ? 1 : code); }
 function readPluginVersion() {
   try {
     const { version } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8'));
@@ -474,7 +507,10 @@ async function setup() {
   if (isWired()) {
     const current = wiredMode();
     if (!current || !current.scope) {
-      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write. Claude alias pins were left alone; set them where that base URL is defined.`);
+      // Refusing to copy an environment value into settings is deliberate (it may point at someone's dev
+      // instance), but saying only that left no route forward, so setup skipped the write on every run and the
+      // machine stayed permanently wired by one terminal (SQ-1901). Name the command that does converge it.
+      log(`already wired through ${current ? current.source : 'ANTHROPIC_BASE_URL'}, which has no settings file this command can write, so nothing here is permanent: any session started outside that environment is unwired. Run \`node "${CLI_PATH}" env --write-user\` to write ~/.claude/settings.json. Claude alias pins were left alone; they belong wherever that base URL is defined.`);
     } else if (current.mode !== mode) {
       writeEnv(current.scope, false, { mode, quiet: true });
       log(`model-gateway: hosts compatibility state changed since last wired; switched ${current.scope} settings to ${mode} mode. Restart Claude Code.`);
@@ -1792,41 +1828,58 @@ const commands = {
   },
   stop: () => { stopAll(); log('stopped'); },
   ensure: async () => {
+    const quiet = flag('--quiet');
+    if (quiet) bufferedHookLines = [];
+    // The hook path exits 0 even on a refusal state, because Claude Code reads a hook's stdout JSON only on a
+    // zero exit: exiting nonzero there trades the one user-visible line for a bare "hook failed" badge, which is
+    // this ticket's whole complaint (SQ-1901). A direct `ensure` still fails loudly for the updater and for a
+    // person running it by hand.
+    const finish = (code) => { flushHookOutput(); process.exit(quiet ? 0 : code); };
     cleanLegacyEnvSettings();
     cleanLegacyGatewayModelCache();
     sweepOldProxyBinaries();
-    const quiet = flag('--quiet');
     const wired = isWired();
     const initialReadiness = await getCodexReadiness();
     if (!initialReadiness.checks.proxyBinary) {
       if (wired) {
-        console.error(initialReadiness.message);
-        process.exit(1);
+        noticeForUser(initialReadiness.message, { toStderr: true });
+        finish(1);
       }
-      log('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
-      process.exit(0);
+      noticeForUser('model-gateway is installed but not set up. Offer to run its setup (one command; needs a ChatGPT browser sign-in) to put the user\'s ChatGPT/Codex models in the /model picker. See the model-gateway skill.');
+      finish(0);
     }
     await restartProxyIfOutdated({ quiet });
     const result = await startAll({ quiet });
-    if (!result.ok) { console.error('model-gateway: ' + result.reason); process.exit(1); }
+    if (!result.ok) {
+      noticeForUser(`model-gateway could not start: ${result.reason}. Run \`node "${CLI_PATH}" doctor\` to see which part is down.`, { toStderr: true });
+      finish(1);
+    }
     const readiness = await getCodexReadiness();
     if (wired && !readiness.ready) {
-      console.error(readiness.message);
-      process.exit(1);
+      noticeForUser(readiness.message, { toStderr: true });
+      finish(1);
     }
     warnIfProxyOutdated();
     if (!wired) {
-      log(readiness.checks.codexAuth
-        ? 'model-gateway is running but Claude Code is not wired to it. Run /model-gateway:model-gateway, then use its env --write-user command to write ~/.claude/settings.json, then restart.'
+      noticeForUser(readiness.checks.codexAuth
+        ? `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${CLI_PATH}" env --write-user\`, then restart Claude Code.`
         : 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.');
     } else {
       if (installScope() === 'project-only') {
-        log('model-gateway is installed PROJECT-ONLY, but wiring is global. Other projects route through a shim this hook will not keep alive. Reinstall at user scope.');
+        noticeForUser('model-gateway is installed PROJECT-ONLY, but wiring is global. Other projects route through a shim this hook will not keep alive. Reinstall at user scope.');
+      }
+      // isWired() accepts a base URL exported by the shell, which is how a machine ends up routed only in the
+      // terminal that exported it: background sessions and executor worktrees start unwired, and the only place
+      // that said so was a per-request stderr line in the worker.
+      const wiring = effectiveBaseUrl();
+      if (wiring.source === 'env' && !wiring.shadowed.some((definition) => definition.file)) {
+        noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${CLI_PATH}" env --write-user\` to make it permanent.`);
       }
       await syncCompatMode();
       await syncEffectivePins();
     }
     if (!quiet) await statusReport({ readiness });
+    flushHookOutput();
   },
   status: async () => { process.exitCode = (await statusReport()).ok ? 0 : 1; },
   models: async () => {

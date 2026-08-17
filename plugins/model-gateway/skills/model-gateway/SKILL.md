@@ -25,7 +25,9 @@ Wiring is global. `env --write-user` writes `~/.claude/settings.json` and covers
 To exempt a single project deliberately, put `ANTHROPIC_BASE_URL` in that project's `.claude/settings.local.json` by hand. `doctor` will show it winning as `[effective]`, which is the point: a deliberate override is visible, the old default was not.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
-state; act on it. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
+state; act on it. The user sees that same line in the transcript, because a state only they can fix used to
+reach the model alone. Anything routine stays out of it, and the hook always exits 0 so the line survives:
+run `ensure` yourself when you need an exit code. `setup` is one-shot and idempotent: it downloads the claude-code-proxy binary
 (sha256-verified) and starts everything. Re-running it later is also the upgrade path.
 
 ```bash
