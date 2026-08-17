@@ -449,6 +449,23 @@ function evidenceSupersessionBlocker(ticket?: any, state?: any) {
   return `in unrecognized state ${pulseDispatchState(state)}`;
 }
 
+function retirePreparedCompatibilityStaleAttempt(slug?: any, ticket?: any, source = 'tokened-claim-refusal') {
+  const state = dispatchState(ticket);
+  if (!state || state.terminalAt || !ticket?.dispatchNonce) return ticket;
+  const previousStatus = ticket.status;
+  setDispatchTerminal(ticket, 'failed', source, {
+    slug,
+    failureShape: 'prepared_compatibility_stale',
+  });
+  ticket.dispatchNonce = null;
+  ticket.dispatchExecutor = null;
+  if (!ticket.submission) ticket.status = 'todo';
+  if (ticket.status !== previousStatus) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: new Date().toISOString() };
+  stampDispatchEvent(ticket, source);
+  putTicket(slug, ticket);
+  return ticket;
+}
+
 function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   const evidence = String(opts?.evidence || '').trim();
   if (!evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'Superseding an unbound dispatch attempt requires observed failure evidence.' };
@@ -1370,7 +1387,13 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
       if (!currentInstall.ok
         || currentInstall.installPath !== state.preparedCompatibility.pluginInstall
         || currentInstall.identity !== state.preparedCompatibility.identity) {
-        return { ok: false, reason: 'prepared_compatibility_stale' };
+        const retired = retirePreparedCompatibilityStaleAttempt(slug, t, 'tokened-launch-refusal');
+        return {
+          ok: false,
+          reason: 'prepared_compatibility_stale',
+          ticket: retired,
+          message: `${t.ref}'s prepared dispatch was retired because its Sidequest install snapshot is stale. Stop this launch; the orchestrator can dispatch a fresh token.`,
+        };
       }
     }
     const now = new Date().toISOString();
@@ -2234,6 +2257,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     stampDispatchEvent,
     pulseDispatchState,
     supersedableUnboundAttempt,
+    retirePreparedCompatibilityStaleAttempt,
     supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,

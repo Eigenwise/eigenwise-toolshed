@@ -203,7 +203,9 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   never claimed, past the claim-idle backstop", that runtime is gone: a claim is a bound executor's FIRST
   action, and its stop hook never fired, so nothing else will ever retire the attempt. Retire either in one
   call with `sidequest dispatch <ref> --recovery-evidence "<observed failure evidence>"` (MCP
-  `recoveryEvidence`). That records the evidence on the failed attempt, keeps it in `dispatch.attempts` as
+  `recoveryEvidence`). A tokened claim refused as `prepared_compatibility_stale` is already terminal: that
+  refusal retires its own stale attempt, so the executor stops without claiming and the orchestrator dispatches
+  a fresh token. That records the evidence on the failed attempt, keeps it in `dispatch.attempts` as
   history, and prepares exactly one fresh identity. It refuses while a bound attempt is still inside the
   backstop, and once the attempt is claimed, checkpointed, or terminal; the refusal names which of those it
   found and, for a bound one, how long is left. A claimed executor that is provably dead goes through claim
