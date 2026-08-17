@@ -8,6 +8,49 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.480.0 (2026-08-17)
+
+### model-gateway 0.48.10 → 0.48.11
+
+#### Fixes
+
+- Catalog writes stop losing to whoever is reading the catalog (SQ-2212)
+  The model catalog is written by replacing the file, and on Windows you cannot replace a file another process
+  holds open. This one is read on every session start, so the write lost that race roughly three times a day:
+  one real state directory had 32 orphaned `catalog.json.*.tmp` files spanning eleven days, every one a distinct
+  catalog that was written in full and then never became the catalog. Nobody noticed because every caller
+  swallows the failure, one of them commented "advisory only".
+
+  The replace now waits out the reader and retries with a short backoff, the temp file is cleaned up whether the
+  write lands or not, a failure that survives all the retries says so instead of vanishing, and a successful
+  write sweeps up temps that earlier ones abandoned, so the orphans already on disk clear themselves.
+
+### sidequest 4.52.8 → 4.52.9
+
+#### Fixes
+
+- Hook guidance now reaches the model, not just the terminal (SQ-2213)
+  Every nudge and teaching message the hooks emitted through `systemMessage` was invisible to the model:
+  Claude Code renders that field in the terminal and sends the model nothing (verified in the 2.1.233 binary,
+  whose attachment table maps it to an empty message list). So the inline-work boundary nudge, the injected-model
+  lessons, and the quota-fallback guidance were read by the user and never by the agent they were written for.
+
+  Model-facing notices now mirror into `hookSpecificOutput.additionalContext`, which does land in the
+  conversation, for PreToolUse and PostToolUseFailure. The terminal copy stays. Stop-time notices deliberately
+  stay UI-only: Stop `additionalContext` resumes the conversation so the model can act on it, which would turn
+  a stop-time suggestion into a loop.
+- Explore fan-out no longer bypasses board routing (SQ-2214)
+  Explore spawns passed the executor gate unconditionally, so a session that got its generic Agent denied could
+  relaunch the same job as Explore and fan out on the session model. Observed live: four Explore deep-dives at
+  165k+ tokens each doing work that a routed `codebase-exploration` spike runs on a much cheaper route, and the
+  model admitting afterwards that it took the loophole.
+
+  On a routed board, main-session Explore now has a boundary: the first two spawns pass with a model-visible
+  reminder that Explore is a quick evidence sweep, the third and later are refused while the session has had no
+  board interaction, and an Explore spawn matching work a generic Agent was already denied for is refused
+  outright. Executors' Explore helpers, `claude-code-guide`, and `statusline-setup` are untouched, as are
+  unrouted projects. The board-first reminder and the orchestration skill text now state the same boundary.
+
 ## v3.479.0 (2026-08-17)
 
 ### sidequest 4.52.7 → 4.52.8
