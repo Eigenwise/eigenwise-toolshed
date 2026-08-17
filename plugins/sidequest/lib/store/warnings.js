@@ -698,17 +698,37 @@ ${String(ticket?.description || "")}`;
     }
     return deferredWarning;
   }
+  function verifySegmentBase(segment, directory) {
+    const prefix = /^npm\s+--prefix(?:=|\s+)(?:["']([^"']+)["']|([^\s;&|]+))\s+/.exec(segment);
+    if (!prefix) return { base: directory, arguments: segment };
+    return { base: path.resolve(directory, prefix[1] || prefix[2]), arguments: `npm ${segment.slice(prefix[0].length)}` };
+  }
   function verifyPathWarning(ticket, projectPath) {
     const verify = String(ticket?.executorVerify || "").trim();
     if (!projectPath || !verify || manualVerify(verify)) return null;
     const absent = /* @__PURE__ */ new Set();
-    const tokens = [...verify.matchAll(/(?:["']([^"']*)["']|([^\s;&|()]+))/g)].map((match) => match[1] ?? match[2]);
-    for (const token of tokens) {
-      if (!token || token.startsWith("-") || token === "." || token === "..") continue;
-      if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(token)) continue;
-      const pathToken = token.replace(/[?*].*$/, "");
-      if (!pathToken || fs.existsSync(path.resolve(projectPath, pathToken))) continue;
-      absent.add(token);
+    let directory = String(projectPath);
+    for (const segment of splitVerifyCommands(verify).segments) {
+      const changeDirectory = /^cd\s+(?:["']([^"']+)["']|([^&;|\s]+))\s*$/.exec(segment);
+      if (changeDirectory) {
+        directory = path.resolve(directory, changeDirectory[1] || changeDirectory[2]);
+        continue;
+      }
+      if (/^git(?:\s|$)/.test(segment)) continue;
+      const { base, arguments: argumentText } = verifySegmentBase(segment, directory);
+      if (!relativePathWithin(projectPath, base) || !fs.existsSync(base)) continue;
+      for (const match of argumentText.matchAll(/(?:["']([^"']*)["']|([^\s;&|()]+))/g)) {
+        const token = match[1] ?? match[2];
+        if (!token || token.startsWith("-") || token === "." || token === "..") continue;
+        if (token.includes("=") || token.includes("..")) continue;
+        if (!/[\\/]|\.[A-Za-z0-9_-]+$/.test(token)) continue;
+        const pathToken = token.replace(/[?*].*$/, "");
+        if (!pathToken) continue;
+        const resolved = path.resolve(base, pathToken);
+        if (fs.existsSync(resolved)) continue;
+        const relative = relativePathWithin(projectPath, resolved);
+        if (relative && relative !== ".") absent.add(relative.replace(/\\/g, "/"));
+      }
     }
     if (!absent.size) return null;
     return `recorded verify references paths absent from this repo: ${[...absent].join(", ")}. This is allowed for greenfield work; confirm the executor creates them before verifying.`;

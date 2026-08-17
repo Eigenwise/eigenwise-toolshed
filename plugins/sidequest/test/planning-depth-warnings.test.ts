@@ -958,4 +958,47 @@ test('warning presentation deduplicates by ticket and session while preserving n
   ]);
 });
 
+// SQ-1962. Four dispatches in a row were told their existing test files were absent, because every
+// path-shaped token was resolved against the repository root no matter what base the command established.
+// A git revision range was reported as a missing file for the same reason. The point of these rows is that
+// the true positive survives: the scanner has to keep naming a genuinely missing path, or the cheap fix is
+// to stop scanning.
+function verifyPathWarningsFor(root: string, verify: string): string[] {
+  const { slug } = store.ensureProject(root, 'verify path base');
+  const ticket = store.createTicket(slug, { title: `verify path ${verify}`, executorVerify: verify });
+  return store.dispatchUncertaintyWarnings(ticket, slug)
+    .filter((warning: string) => warning.includes('references paths absent'));
+}
+
+test('SQ-1962: verify path arguments resolve against the base their command establishes', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-path-base-'));
+  spawnSync('git', ['init', '--quiet', '-b', 'main'], { cwd: root, windowsHide: true });
+  for (const [directory, testFile] of [['pkg', 'exists.test.ts'], ['other', 'only-here.test.ts']]) {
+    fs.mkdirSync(path.join(root, directory, 'test'), { recursive: true });
+    fs.writeFileSync(path.join(root, directory, 'package.json'), JSON.stringify({ name: directory, scripts: { 'test:files': 'node --test' } }));
+    fs.writeFileSync(path.join(root, directory, 'test', testFile), 'export {};\n');
+  }
+
+  assert.deepStrictEqual(verifyPathWarningsFor(root, 'npm --prefix pkg run test:files -- test/exists.test.ts'), []);
+  assert.deepStrictEqual(verifyPathWarningsFor(root, 'cd pkg && npm run test:files -- test/exists.test.ts'), []);
+  assert.deepStrictEqual(verifyPathWarningsFor(root, 'git diff 1af30b7f..fa999563 --name-only'), []);
+  assert.deepStrictEqual(
+    verifyPathWarningsFor(root, 'cd pkg && npm run test:files -- test/exists.test.ts && cd ../other && npm run test:files -- test/only-here.test.ts'),
+    [],
+    'a cd partway through moves the base for everything after it',
+  );
+
+  const missing = 'This is allowed for greenfield work; confirm the executor creates them before verifying.';
+  assert.deepStrictEqual(
+    verifyPathWarningsFor(root, 'npm --prefix pkg run test:files -- test/missing.test.ts'),
+    [`Dispatch warning: recorded verify references paths absent from this repo: pkg/test/missing.test.ts. ${missing}`],
+    'a genuinely missing path still warns, named where the command would look for it',
+  );
+  assert.deepStrictEqual(
+    verifyPathWarningsFor(root, 'cd pkg && npm run test:files -- test/exists.test.ts && cd ../other && npm run test:files -- test/exists.test.ts'),
+    [`Dispatch warning: recorded verify references paths absent from this repo: other/test/exists.test.ts. ${missing}`],
+    'the same relative path is absent or present depending on which package the command reached',
+  );
+});
+
 export {};
