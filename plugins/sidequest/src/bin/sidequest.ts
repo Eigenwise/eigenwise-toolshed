@@ -238,7 +238,7 @@ const HELP_COMMANDS: any = {
   ready: 'sidequest ready [--model <model>] [--category <id>] [--json] [--brief]',
   archive: 'sidequest archive [<id|SQ-n>] [--done]',
   unarchive: 'sidequest unarchive <id|SQ-n>',
-  dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport]',
+  dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>"]',
   briefing: 'sidequest briefing <SQ-n> (--token-file <path> | --token <token>) [--project <path-or-slug>]',
   'native-agent': 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]',
   temp: 'sidequest temp cleanup [--root <path>] [--json]',
@@ -348,7 +348,7 @@ Complexity is legacy input. Category routing chooses the concrete model and effo
   Ticket model and effort are resolved from its category. Use category add/edit to change routing policy.
 
 Native Agent dispatch (routed work stays in this conversation):
-  sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport]  prepare a token-gated dispatch: declared-file tickets use worktrees by default; shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout; executors with a live claim cannot dispatch child work
+  sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>"]  prepare a token-gated dispatch: declared-file tickets use worktrees by default; shared-tree dispatch requires the spawning runtime to already be rooted in the declared checkout; executors with a live claim cannot dispatch child work; --recovery-evidence retires a prepared or launched attempt that never bound a runtime, claim, or checkpoint, records that evidence on the failed attempt, and prepares one fresh identity
   sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]  print the current token-gated executor briefing
   sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]  return an already-registered native Agent spawn spec + bounded prompt; CLI transport refuses unless --unverified-transport
   sidequest native-agent cleanup --name <name>        clean up any legacy temporary native Agent definition

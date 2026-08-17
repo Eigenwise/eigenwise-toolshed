@@ -991,6 +991,52 @@ test('a launched unbound dispatch can be superseded with observed evidence, but 
   assert.throws(() => store.prepareDispatch(slug, claimed.ref, { sharedTree: true, recoveryEvidence: 'The executor reported a refusal.' }), /cannot be superseded/);
 });
 
+test('SQ-2136: a prepared dispatch that never launched is retirable on evidence, and the refusal names the real blocker', () => {
+  const ticket = addRouted('prepared unbound retirement');
+  const first = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-prepared-unbound' });
+  const prepared = store.getTicket(slug, ticket.ref).dispatch;
+  assert.equal(prepared.outcome, 'prepared');
+  assert.equal(prepared.launchedAt, null);
+  assert.equal(prepared.boundAt, null);
+
+  const evidence = 'Pulse showed prepared with no launch, runtime identity, claim, or checkpoint, and the spawn was cancelled before it ran.';
+  const replacement = store.prepareDispatch(slug, ticket.ref, {
+    sharedTree: true,
+    sessionId: 'session-prepared-unbound-replacement',
+    recoveryEvidence: evidence,
+  });
+  const retired = replacement.ticket.dispatch.attempts.at(-1);
+  assert.equal(replacement.ticket.dispatch.attempts.length, 1, 'evidence retires exactly one attempt');
+  assert.equal(retired.outcome, 'failed');
+  assert.equal(retired.failureShape, 'unclaimed_launch_superseded');
+  assert.equal(retired.recoveryEvidence, evidence);
+  assert.equal(retired.launchedAt, null, 'the retired attempt is preserved as the unlaunched one it was');
+  assert.notEqual(replacement.token, first.token);
+  assert.equal(replacement.ticket.dispatch.outcome, 'prepared');
+  assert.equal(replacement.ticket.dispatch.terminalAt, null);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'todo');
+
+  // The refusal used to assert four states that did not hold, which is how a prepared-unbound ticket read as
+  // permanently trapped: the orchestrator was told to wait for a runtime that had never existed.
+  const untouched = addRouted('never dispatched retirement');
+  assert.throws(
+    () => store.prepareDispatch(slug, untouched.ref, { sharedTree: true, recoveryEvidence: evidence }),
+    /cannot be superseded on recovery evidence because its dispatch is not an active attempt/,
+  );
+
+  const claimed = addRouted('claimed retirement stays protected');
+  const claimedPrepared = store.prepareDispatch(slug, claimed.ref, { sharedTree: true, sessionId: 'session-prepared-unbound-claimed' });
+  assert.equal(store.claimTicket(slug, claimed.ref, 'prepared-unbound-executor', {
+    token: claimedPrepared.token, executor: claimedPrepared.ticket.dispatchExecutor, sessionId: 'session-prepared-unbound-claimed',
+  }).ok, true);
+  assert.throws(
+    () => store.prepareDispatch(slug, claimed.ref, { sharedTree: true, recoveryEvidence: evidence }),
+    /cannot be superseded on recovery evidence because its dispatch is claimed by prepared-unbound-executor/,
+  );
+
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'foreign-executor', { status: 'todo', source: 'test' }).reason, 'unclaimed_active_dispatch');
+});
+
 test('an unbound claimed dispatch reports a binding fault and stays claimed without death evidence', () => {
   const ticket = addRouted('unbound dispatch claim');
   const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: 'session-unbound-dispatch' });

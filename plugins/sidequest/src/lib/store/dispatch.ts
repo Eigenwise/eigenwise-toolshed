@@ -391,11 +391,16 @@ function pulseDispatchState(state?: any) {
   return state.outcome || 'prepared';
 }
 
-function supersedableUnclaimedLaunch(ticket?: any, state?: any) {
+// A spawn that never started leaves the same empty record as one that started and never claimed: a token,
+// no runtime identity, no claim, no checkpoint. Both are retirable on evidence, so `prepared` belongs here
+// next to `launched`. Before SQ-2136 only `launched` did, and a prepared-unbound attempt was refused with a
+// message asserting it was bound, claimed, checkpointed, or terminal when it was none of those.
+const PRE_RUNTIME_DISPATCH_OUTCOMES = new Set(['prepared', 'launched']);
+
+function supersedableUnboundAttempt(ticket?: any, state?: any) {
   return Boolean(
     state
-    && state.outcome === 'launched'
-    && state.launchedAt
+    && PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)
     && !state.terminalAt
     && !state.boundAt
     && !state.agentId
@@ -406,15 +411,32 @@ function supersedableUnclaimedLaunch(ticket?: any, state?: any) {
   );
 }
 
-function supersedeUnclaimedLaunch(slug?: any, idOrRef?: any, opts?: any) {
+function unboundSupersessionBlocker(ticket?: any, state?: any) {
+  if (!state || !ticket?.dispatchNonce) return 'not an active attempt';
+  if (state.terminalAt) return `already terminal (${state.outcome || 'terminal'})`;
+  if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
+  if (state.claimedAt) return 'claimed';
+  if (ticket.checkpoint) return 'checkpointed';
+  if (state.boundAt || state.agentId) return 'bound to a runtime';
+  return `in unrecognized state ${pulseDispatchState(state)}`;
+}
+
+function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   const evidence = String(opts?.evidence || '').trim();
-  if (!evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'Superseding an unclaimed launch requires observed failure evidence.' };
+  if (!evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'Superseding an unbound dispatch attempt requires observed failure evidence.' };
   const found = getTicket(slug, idOrRef);
   if (!found) return { ok: false, reason: 'not_found' };
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     const state = dispatchState(ticket);
-    if (!supersedableUnclaimedLaunch(ticket, state)) return { ok: false, reason: 'unclaimed_launch_not_supersedable', ticket };
+    if (!supersedableUnboundAttempt(ticket, state)) {
+      return {
+        ok: false,
+        reason: 'unclaimed_launch_not_supersedable',
+        ticket,
+        message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${unboundSupersessionBlocker(ticket, state)}. Evidence retires an attempt that minted a token and never reached a runtime; anything past that waits for its own terminal record.`,
+      };
+    }
     setDispatchTerminal(ticket, 'failed', opts?.source || 'control-plane-unclaimed-launch-supersession', { slug, failureShape: 'unclaimed_launch_superseded' });
     const attempt = state.attempts?.at(-1);
     if (attempt) attempt.recoveryEvidence = evidence;
@@ -962,11 +984,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   const preparedPluginInstall = installCheck?.installPath || null;
   const preparedPluginIdentity = installCheck?.identity || null;
   if (opts.recoveryEvidence) {
-    const superseded = supersedeUnclaimedLaunch(slug, found.id, {
+    const superseded = supersedeUnboundAttempt(slug, found.id, {
       evidence: opts.recoveryEvidence,
       source: opts.source || opts.transport || 'dispatch',
     });
-    if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has a bound, claimed, checkpointed, or terminal dispatch that cannot be superseded.`}`);
+    if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
   }
   // Registry install proves a future session; it does not prove THIS
   // invocation's session has the board MCP connected (SQ-1017 correction).
@@ -990,7 +1012,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by)
       && Boolean(current.launchedAt || current.boundAt);
     if (activeRuntimeAttempt) {
-      const recovery = supersedableUnclaimedLaunch(t, current)
+      const recovery = supersedableUnboundAttempt(t, current)
         ? ` It is unbound and unclaimed, so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.`
         : ' Wait for that executor\'s terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.';
       throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery}`);
@@ -2064,8 +2086,8 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     rederiveUnlaunchedPreparedRoute,
     stampDispatchEvent,
     pulseDispatchState,
-    supersedableUnclaimedLaunch,
-    supersedeUnclaimedLaunch,
+    supersedableUnboundAttempt,
+    supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,
     terminalDispatchTarget,

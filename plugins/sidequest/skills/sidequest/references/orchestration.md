@@ -197,6 +197,14 @@ atomic: each subagent claims a different ticket, and any race just sends the los
   then release before replacing it. A dispatch failure needs verbatim ticket evidence and user-visible
   escalation; never pull substantial work inline by default. Other `SendMessage` calls
   carry new information such as a scope change or unblock, never a "wake up" poke.
+- **Retire an attempt that never reached a runtime.** When `pulse` reports the dispatch `prepared` or
+  `launched` with no bound runtime identity, no claim, and no checkpoint, there is nothing to wait for: the
+  spawn never started or never bound. Retire it in one call with `sidequest dispatch <ref> --recovery-evidence
+  "<observed failure evidence>"` (MCP `recoveryEvidence`). That records the evidence on the failed attempt,
+  keeps it in `dispatch.attempts` as history, and prepares exactly one fresh identity. It refuses once the
+  attempt is bound, claimed, checkpointed, or terminal, and the refusal names which of those it found. A bound
+  or claimed executor that is provably dead goes through claim release or `groomClose --recoveryEvidence`
+  instead; do not reach for recovery evidence to shortcut a live attempt.
 - **Recover partial reasoning from an infrastructure death.** When an executor dies mid-run on a transient
   infrastructure error, release its claim first. Then use the one diagnose-first respawn: pass the dead
   executor's last visible output to the replacement only as a lead to confirm or refute with its own evidence.

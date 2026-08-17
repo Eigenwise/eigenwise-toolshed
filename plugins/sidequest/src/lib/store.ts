@@ -373,7 +373,7 @@ const {
   expiredPreparedDispatch,
   worktreeIsolationWarning,
   prepareDispatch,
-  supersedeUnclaimedLaunch,
+  supersedeUnboundAttempt,
   readDispatchBriefing,
   recordDispatchLaunch,
   recordDispatchAgentFailure,

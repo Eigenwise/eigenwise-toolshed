@@ -334,20 +334,37 @@ function createDispatch(dependencies) {
     if (state.launchedAt) return "launched";
     return state.outcome || "prepared";
   }
-  function supersedableUnclaimedLaunch(ticket, state) {
+  const PRE_RUNTIME_DISPATCH_OUTCOMES = /* @__PURE__ */ new Set(["prepared", "launched"]);
+  function supersedableUnboundAttempt(ticket, state) {
     return Boolean(
-      state && state.outcome === "launched" && state.launchedAt && !state.terminalAt && !state.boundAt && !state.agentId && !state.claimedAt && !(ticket?.claim && ticket.claim.by) && !ticket?.checkpoint && ticket?.dispatchNonce
+      state && PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome) && !state.terminalAt && !state.boundAt && !state.agentId && !state.claimedAt && !(ticket?.claim && ticket.claim.by) && !ticket?.checkpoint && ticket?.dispatchNonce
     );
   }
-  function supersedeUnclaimedLaunch(slug, idOrRef, opts) {
+  function unboundSupersessionBlocker(ticket, state) {
+    if (!state || !ticket?.dispatchNonce) return "not an active attempt";
+    if (state.terminalAt) return `already terminal (${state.outcome || "terminal"})`;
+    if (ticket.claim?.by) return `claimed by ${ticket.claim.by}`;
+    if (state.claimedAt) return "claimed";
+    if (ticket.checkpoint) return "checkpointed";
+    if (state.boundAt || state.agentId) return "bound to a runtime";
+    return `in unrecognized state ${pulseDispatchState(state)}`;
+  }
+  function supersedeUnboundAttempt(slug, idOrRef, opts) {
     const evidence = String(opts?.evidence || "").trim();
-    if (!evidence) return { ok: false, reason: "recovery_evidence_required", message: "Superseding an unclaimed launch requires observed failure evidence." };
+    if (!evidence) return { ok: false, reason: "recovery_evidence_required", message: "Superseding an unbound dispatch attempt requires observed failure evidence." };
     const found = getTicket(slug, idOrRef);
     if (!found) return { ok: false, reason: "not_found" };
     return withTicketLock(slug, found.id, () => {
       const ticket = getTicket(slug, found.id);
       const state = dispatchState(ticket);
-      if (!supersedableUnclaimedLaunch(ticket, state)) return { ok: false, reason: "unclaimed_launch_not_supersedable", ticket };
+      if (!supersedableUnboundAttempt(ticket, state)) {
+        return {
+          ok: false,
+          reason: "unclaimed_launch_not_supersedable",
+          ticket,
+          message: `${ticket?.ref || idOrRef} cannot be superseded on recovery evidence because its dispatch is ${unboundSupersessionBlocker(ticket, state)}. Evidence retires an attempt that minted a token and never reached a runtime; anything past that waits for its own terminal record.`
+        };
+      }
       setDispatchTerminal(ticket, "failed", opts?.source || "control-plane-unclaimed-launch-supersession", { slug, failureShape: "unclaimed_launch_superseded" });
       const attempt = state.attempts?.at(-1);
       if (attempt) attempt.recoveryEvidence = evidence;
@@ -860,11 +877,11 @@ function createDispatch(dependencies) {
     const preparedPluginInstall = installCheck?.installPath || null;
     const preparedPluginIdentity = installCheck?.identity || null;
     if (opts.recoveryEvidence) {
-      const superseded = supersedeUnclaimedLaunch(slug, found.id, {
+      const superseded = supersedeUnboundAttempt(slug, found.id, {
         evidence: opts.recoveryEvidence,
         source: opts.source || opts.transport || "dispatch"
       });
-      if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has a bound, claimed, checkpointed, or terminal dispatch that cannot be superseded.`}`);
+      if (!superseded.ok) throw new Error(`prepare dispatch: ${superseded.message || `${found.ref} has no unbound dispatch attempt to supersede (${superseded.reason}).`}`);
     }
     assertDispatchTransport(opts.transport, { allowUnverifiedTransport: !!opts.allowUnverifiedTransport });
     const pythonIoEncoding = projectPath ? ensurePythonIoEncoding(projectPath) : { written: false };
@@ -882,7 +899,7 @@ function createDispatch(dependencies) {
       }
       const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by) && Boolean(current.launchedAt || current.boundAt);
       if (activeRuntimeAttempt) {
-        const recovery2 = supersedableUnclaimedLaunch(t, current) ? ` It is unbound and unclaimed, so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.` : " Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.";
+        const recovery2 = supersedableUnboundAttempt(t, current) ? ` It is unbound and unclaimed, so the orchestrator can supersede it in one call: \`sidequest dispatch ${t.ref} --recovery-evidence "<observed failed-claim evidence>"\`.` : " Wait for that executor's terminal hook, then dispatch once from the returned todo state; do not mint a replacement token while it is still winding down.";
         throw new Error(`prepare dispatch: ${t.ref} already has a live dispatch attempt (${pulseDispatchState(current)}).${recovery2}`);
       }
       const repeatFailure = repeatNoCommitDispatchError(t, current);
@@ -1816,8 +1833,8 @@ function createDispatch(dependencies) {
     rederiveUnlaunchedPreparedRoute,
     stampDispatchEvent,
     pulseDispatchState,
-    supersedableUnclaimedLaunch,
-    supersedeUnclaimedLaunch,
+    supersedableUnboundAttempt,
+    supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,
     terminalDispatchTarget,
