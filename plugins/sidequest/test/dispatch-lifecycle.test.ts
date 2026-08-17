@@ -314,6 +314,92 @@ test('claim-token binding accepts prepared and launched attempts', () => {
   assert.equal(store.getTicket(slug, fixture.ref).lifecycleAttempt.state, 'claimed');
 });
 
+test('tokened stale compatibility refusals retire their dispatch attempts', () => {
+  const claimTicket = createFixture('stale compatibility claim fixture');
+  const launchTicket = createFixture('stale compatibility launch fixture');
+  const claimPrepared = store.prepareDispatch(slug, claimTicket.ref, { sessionId: `stale-compatibility-claim-${Date.now()}` });
+  const launchPrepared = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-${Date.now()}` });
+  const registry = JSON.parse(fs.readFileSync(path.join(process.env.SIDEQUEST_CLAUDE_HOME!, 'plugins', 'installed_plugins.json'), 'utf8'));
+  const installed = registry.plugins['sidequest@eigenwise-toolshed'].find((entry: { scope?: string }) => entry.scope === 'user');
+  const manifestPath = path.join(installed.installPath, '.mcp.json');
+  const originalManifest = fs.readFileSync(manifestPath, 'utf8');
+
+  try {
+    fs.writeFileSync(manifestPath, `${originalManifest}\n`);
+
+    const claimRefusal = store.claimTicket(slug, claimTicket.ref, 'stale-compatibility-worker', {
+      token: claimPrepared.token,
+      executor: claimPrepared.ticket.dispatchExecutor,
+    });
+    assert.equal(claimRefusal.reason, 'prepared_compatibility_stale');
+    assert.match(claimRefusal.message, /attempt was retired.*Stop without claiming.*fresh token/);
+    assert.match(claimRefusalMessage('prepared_compatibility_stale', claimTicket.ref), /retired.*Stop without claiming.*fresh token/);
+    const retiredClaim = store.getTicket(slug, claimTicket.ref);
+    assert.equal(retiredClaim.dispatch.outcome, 'failed');
+    assert.equal(retiredClaim.dispatch.failureShape, 'prepared_compatibility_stale');
+    assert.equal(retiredClaim.dispatch.terminalSource, 'tokened-claim-refusal');
+    assert.ok(retiredClaim.dispatch.terminalAt);
+    assert.equal(retiredClaim.dispatchNonce, null);
+    assert.equal(retiredClaim.dispatchExecutor, null);
+    assert.equal(retiredClaim.status, 'todo');
+    const claimReplacement = store.prepareDispatch(slug, claimTicket.ref, { sessionId: `stale-compatibility-claim-replacement-${Date.now()}` });
+    assert.notEqual(claimReplacement.token, claimPrepared.token);
+    assert.equal(claimReplacement.ticket.dispatch.attempts.at(-1).failureShape, 'prepared_compatibility_stale');
+
+    const launchRefusal = store.recordDispatchLaunch(slug, launchTicket.ref, {
+      token: launchPrepared.token,
+      executor: launchPrepared.ticket.dispatchExecutor,
+      sessionId: `stale-compatibility-launch-${Date.now()}`,
+      agentName: 'stale-compatibility-launch-worker',
+    });
+    assert.equal(launchRefusal.reason, 'prepared_compatibility_stale');
+    const retiredLaunch = store.getTicket(slug, launchTicket.ref);
+    assert.equal(retiredLaunch.dispatch.failureShape, 'prepared_compatibility_stale');
+    assert.equal(retiredLaunch.dispatch.terminalSource, 'tokened-launch-refusal');
+    assert.equal(retiredLaunch.dispatchNonce, null);
+    const launchReplacement = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-replacement-${Date.now()}` });
+    assert.notEqual(launchReplacement.token, launchPrepared.token);
+  } finally {
+    fs.writeFileSync(manifestPath, originalManifest);
+    store.releaseTicket(slug, claimTicket.ref, 'stale-compatibility-claim-cleanup', { status: 'todo', source: 'test', force: true });
+    store.releaseTicket(slug, launchTicket.ref, 'stale-compatibility-launch-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
+test('a bound runtime without a claim keeps its recovery-evidence backstop', () => {
+  const ticket = createFixture('bound unclaimed recovery backstop fixture');
+  const sessionId = `bound-unclaimed-recovery-${Date.now()}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: true });
+  const agentName = `bound-unclaimed-recovery-worker-${ticket.id}`;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName,
+  }).ok, true);
+  assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
+
+  const recoveryEvidence = 'The bound runtime has not claimed and must remain protected during the configured backstop.';
+  assert.throws(
+    () => store.prepareDispatch(slug, ticket.ref, { recoveryEvidence }),
+    /bound to a runtime .* ago and still unclaimed, which becomes retirable on evidence in/,
+  );
+  const protectedAttempt = store.getTicket(slug, ticket.ref);
+  assert.equal(protectedAttempt.dispatchNonce, prepared.token);
+  assert.equal(protectedAttempt.dispatch.terminalAt, null);
+
+  const originalIdleMinutes = process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+  process.env.SIDEQUEST_CLAIM_IDLE_MIN = '0.000001';
+  try {
+    const replacement = store.prepareDispatch(slug, ticket.ref, { recoveryEvidence });
+    assert.equal(replacement.ticket.dispatch.attempts.at(-1).failureShape, 'stranded_bound_launch_superseded');
+  } finally {
+    if (originalIdleMinutes === undefined) delete process.env.SIDEQUEST_CLAIM_IDLE_MIN;
+    else process.env.SIDEQUEST_CLAIM_IDLE_MIN = originalIdleMinutes;
+    store.releaseTicket(slug, ticket.ref, 'bound-unclaimed-recovery-cleanup', { status: 'todo', source: 'test', force: true });
+  }
+});
+
 test('direct claim release records the terminal lifecycle state', () => {
   const ticket = createFixture('direct release lifecycle fixture');
   const owner = 'direct-release-lifecycle-worker';

@@ -374,6 +374,7 @@ const {
   expiredPreparedDispatch,
   worktreeIsolationWarning,
   prepareDispatch,
+  retirePreparedCompatibilityStaleAttempt,
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recordDispatchLaunch,
@@ -1672,16 +1673,17 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (opts.direct && t.dispatchNonce && !terminalDispatch) return { ok: false, reason: 'direct_conflict', ticket: t };
     if (opts.direct && t.dispatchNonce && terminalDispatch && !opts.force) return { ok: false, reason: 'terminal_claim_takeover_required', ticket: t };
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
-    if (currentDispatch?.preparedCompatibility?.pluginInstall) {
+    if (currentDispatch?.preparedCompatibility?.pluginInstall && t.dispatchNonce) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
       if (!currentInstall.ok
         || currentInstall.installPath !== currentDispatch.preparedCompatibility.pluginInstall
         || currentInstall.identity !== currentDispatch.preparedCompatibility.identity) {
+        const retired = retirePreparedCompatibilityStaleAttempt(slug, t);
         return {
           ok: false,
           reason: 'prepared_compatibility_stale',
-          ticket: t,
-          message: `claim: refused ${t.ref}; the prepared Sidequest install snapshot no longer matches the current project install. Prepare a fresh dispatch before claiming.`,
+          ticket: retired,
+          message: `claim: refused ${t.ref}; its prepared Sidequest install snapshot is stale, so this dispatch attempt was retired. Stop without claiming; the orchestrator can dispatch a fresh token.`,
         };
       }
     }
