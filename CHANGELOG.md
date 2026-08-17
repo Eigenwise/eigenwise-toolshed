@@ -8,6 +8,31 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.482.0 (2026-08-17)
+
+### model-gateway 0.48.11 → 0.48.12
+
+#### Fixes
+
+- Preserve unwired committed settings during gateway legacy migration (SQ-2225)
+- Clean up stale atomic-write temporary files (SQ-2228)
+
+### observability 0.7.10 → 0.7.11
+
+#### Fixes
+
+- Keep observability observer fixtures independent of retention time (SQ-2220)
+
+### sidequest 4.52.10 → 4.52.11
+
+#### Fixes
+
+- Retire duplicate GitHub Release workflow (SQ-2219)
+- Retire stale Sidequest compatibility dispatches (SQ-2222)
+- Cache Sidequest catalog discovery (SQ-2223)
+- Keep Sidequest SessionStart briefing ahead of maintenance (SQ-2224)
+- Preserve Sidequest dispatches through transient install reads (SQ-2226)
+
 ## v3.481.0 (2026-08-17)
 
 ### quartermaster 0.5.3 → 0.5.4
