@@ -19,11 +19,11 @@ The marketplace manifests on `main` are delivery. Bump the affected marketplace 
 with every ticket that changes a plugin, and never hold a bump for a GitHub Release. Claude Code
 caches plugins by version, so that manifest change is what users install.
 
-A GitHub Release is notification-only. `.github/workflows/release-cut.yml` reads the marketplace
-version from `main` once a day, does nothing when that version already has a Release, otherwise tags
-that exact `main` commit and creates one GitHub Release with generated notes. It also has a manual
-trigger. It never runs `cut.mjs`, changes a version, or pushes `main`; cuts stay local until a
-human runs them.
+A GitHub Release is notification-only. `.github/workflows/release.yml` is the sole GitHub Release
+publisher: it handles `v*` tag pushes, daily catch-up, and manual dispatch, while creating at most
+one Release per UTC day. A tag push after the cap exits successfully as deferred; the daily catch-up
+publishes the newest unreleased `v*` tag with generated notes. `cut.mjs --push` atomically pushes
+`main` and its tag, so the workflow never runs `cut.mjs`, changes a version, or pushes `main`.
 
 Preview the window with `--dry-run`. To publish it, use `--push`: it acquires the Sidequest publish
 lock before changing the local release window and releases it after the final push or any failure.
