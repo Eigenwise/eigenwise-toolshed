@@ -444,7 +444,17 @@ function ticketWorktreeSync(ticket, projectPath) {
   const root = String(projectPath || "").trim();
   const target = dispatch?.integrationTarget;
   const commit = String(dispatch?.baseCommit || "").trim();
-  if (dispatch?.sharedTree !== false || !root || !target || !commit) return null;
+  if (dispatch?.sharedTree !== false || !root) return null;
+  const reviewCandidate = dispatch?.reviewTarget?.candidate;
+  if (reviewCandidate?.source === "git" && commit) {
+    return [
+      `Candidate synchronization (run before any review work): the commit under review is ${commit}.`,
+      `Check \`git rev-parse HEAD\`; if it differs, run \`git checkout --detach ${commit}\` and check again.`,
+      "No fetch is needed: this worktree shares the project repository's object database.",
+      `If that checkout fails, stop and report that the candidate is not present in this worktree. Do not review what the worktree happens to hold: a baseline suite plus \`git show\` is not a review of ${commit}.`
+    ].join(" ");
+  }
+  if (!target || !commit) return null;
   const branch = String(target.mode === "remote" ? `refs/remotes/origin/${target.branch}` : target.branch || "").trim();
   if (!branch) return null;
   const continuation = dispatch?.continuation;

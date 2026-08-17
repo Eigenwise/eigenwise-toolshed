@@ -275,7 +275,10 @@ needs a fresh review ticket, and a category move away from `review-audit` is ref
 Binding freezes the candidate. Reclaim, amendment, `clearSubmission`, and supersede all fail closed on the
 source, including a legacy one-sided binding, so the implementer cannot resume or amend the revision under
 audit. Dispatch revalidates the binding and pins the review to that exact immutable commit in an isolated
-checkout; a shared-tree request and a native-agent spawn are both refused. Integration waits for the bound review to reach
+checkout: the baseline is the candidate rather than the integration branch, and the briefing tells the
+reviewer to detach onto it before any review work, then stop and report if it is unreachable rather than
+reviewing whatever commit its worktree happened to start on. A shared-tree request and a native-agent spawn
+are both refused. Integration waits for the bound review to reach
 a terminal `done`, and reads both identities from the immutable terminal dispatch attempts rather than the
 live dispatch record: the source's `submitted` attempt for that exact commit and the review's `done` attempt.
 A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration

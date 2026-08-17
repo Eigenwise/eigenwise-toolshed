@@ -618,7 +618,23 @@ function ticketWorktreeSync(ticket?: any, projectPath?: any) {
   const root = String(projectPath || '').trim();
   const target = dispatch?.integrationTarget;
   const commit = String(dispatch?.baseCommit || '').trim();
-  if (dispatch?.sharedTree !== false || !root || !target || !commit) return null;
+  if (dispatch?.sharedTree !== false || !root) return null;
+  // A review's baseline is its candidate, and it used to get no synchronization line at all: the only emitter
+  // required an integrationTarget, and a readonly dispatch never has one, because `readonly` alone makes
+  // isolatedRepositoryDispatch false where that target is chosen. So the reviewer kept whatever commit the
+  // harness gave its worktree, ran the wrong tree's suite, and rejected a candidate whose own suite passed
+  // (SQ-2124, SQ-2203). Preparation has already resolved this commit in the project checkout, and a linked
+  // worktree shares that object database, so the candidate is reachable without a fetch.
+  const reviewCandidate = dispatch?.reviewTarget?.candidate;
+  if (reviewCandidate?.source === 'git' && commit) {
+    return [
+      `Candidate synchronization (run before any review work): the commit under review is ${commit}.`,
+      `Check \`git rev-parse HEAD\`; if it differs, run \`git checkout --detach ${commit}\` and check again.`,
+      'No fetch is needed: this worktree shares the project repository\'s object database.',
+      `If that checkout fails, stop and report that the candidate is not present in this worktree. Do not review what the worktree happens to hold: a baseline suite plus \`git show\` is not a review of ${commit}.`,
+    ].join(' ');
+  }
+  if (!target || !commit) return null;
   const branch = String(target.mode === 'remote' ? `refs/remotes/origin/${target.branch}` : target.branch || '').trim();
   if (!branch) return null;
   const continuation = dispatch?.continuation;

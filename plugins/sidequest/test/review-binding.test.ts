@@ -13,6 +13,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-review-binding-
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
 const reviewBinding = require('../lib/kernel/review-binding.js');
@@ -134,6 +135,34 @@ test('public add binds the review target and the source mirror as one committed 
   assert.equal(mirror.ref, review.ref);
   assert.equal(mirror.candidate.value, commit);
   assert.equal(mirror.outcome, 'planned');
+});
+
+test('SQ-2203: a candidate review is told to synchronize its worktree to the exact candidate', async () => {
+  const { repository, slug, commit } = board('candidate-sync');
+  const source = submittedSource(slug, commit, 'candidate-sync');
+  // The checkout moves on after the candidate, which is the incident shape: a harness-created worktree starts
+  // at this HEAD, and reviewing it instead of the candidate is what produced a false rejection (SQ-2124).
+  fs.appendFileSync(path.join(repository, 'candidate.txt'), 'later work\n');
+  git(repository, ['add', 'candidate.txt']);
+  git(repository, ['commit', '-m', 'work after the candidate']);
+  assert.notEqual(git(repository, ['rev-parse', 'HEAD']), commit, 'the checkout HEAD must differ from the candidate');
+
+  const created = await tool('add').handler({
+    project: repository,
+    title: 'review the candidate sync',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+    reviewTarget: { ref: source.ref, commit },
+  });
+  const reviewAudit = store.getCategory('review-audit');
+  store.setCategory(Object.assign({}, reviewAudit, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
+  const prepared = store.prepareDispatch(slug, created.ref, { sessionId: `candidate-sync-${Date.now()}`, sharedTree: false });
+  assert.equal(prepared.ticket.dispatch.baseCommit, commit, 'the prepared baseline is the candidate');
+
+  const briefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token, slug, repository);
+  assert.ok(briefing.includes('Candidate synchronization (run before any review work)'), 'the reviewer is told to synchronize');
+  assert.ok(briefing.includes(`git checkout --detach ${commit}`), 'the instruction names the candidate commit');
+  assert.ok(briefing.includes('stop and report that the candidate is not present'), 'an unreachable candidate stops the review instead of reviewing the wrong tree');
 });
 
 test('public update binds through the same transition and reads back identically every time', async () => {
