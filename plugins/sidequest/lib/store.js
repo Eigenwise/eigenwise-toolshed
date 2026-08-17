@@ -567,7 +567,7 @@ const {
   getStory: (...args) => getStory(...args),
   homeRoot: () => process.env.SIDEQUEST_HOME || path.join(os.homedir(), ".claude", "sidequest"),
   integrationTarget,
-  preferredWorktreeIntegrationTarget,
+  hasOriginRemote,
   agentWorktreePath,
   agentWorktreeCandidates,
   resolvedAgentWorktree,

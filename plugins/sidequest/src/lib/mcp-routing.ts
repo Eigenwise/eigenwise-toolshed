@@ -427,7 +427,7 @@ const tools: ToolDefinition[] = [
         delivery: { type: 'string', description: 'Default submission delivery mode. Defaults to merge.' },
         integrationVerifyTimeoutMs: { type: 'integer' },
         worktreeIsolation: { type: 'boolean', description: 'false runs executors in the shared checkout (default true).' },
-        worktreeBase: { type: 'string', enum: ['origin-main', 'local-main'], description: 'Base for isolated worktrees. origin-main preserves the default remote baseline; local-main forks from the local integration branch.' },
+        worktreeBase: { type: 'string', enum: ['origin-main', 'local-main'], description: 'Base for isolated worktrees, always the configured integrationBranch. origin-main forks its remote ref and refuses if that ref is missing; local-main forks the local branch.' },
         notIntegratedSalvageAgeHours: { type: 'integer', minimum: 168, description: 'Age before an unintegrated inactive worktree is salvaged and removed (default 168 hours).' },
         autoApproveTestScope: { type: 'boolean', description: 'Auto-approve reachable test directories (default true).' },
         autoApproveScope: { type: 'array', items: { type: 'string' }, description: 'Repo-relative auto-approved globs.' },

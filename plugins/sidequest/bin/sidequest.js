@@ -471,6 +471,8 @@ Project selection:
     (even one that doesn't exist yet) from anywhere by passing its full path.
   sidequest board-config [--name <display-name>] [--always-in-scope <path>...] [--read-only-denied-tool <pattern>...] [--auto-approve-scope <glob>...] [--generated-pairs <json>] [--integration-mode <auto|local|remote>] [--integration-branch <branch>] [--delivery <merge|replay|apply>] [--worktree-isolation|--no-worktree-isolation] [--worktree-base <origin-main|local-main>] [--not-integrated-salvage-age-hours <hours>] [--auto-approve-test-scope|--no-auto-approve-test-scope] [--worktree-setup <command>] [--worktree-dependency-paths <json>]
     View or update board settings. --name changes only the display name; the slug, path, tickets, claims, and refs stay put.
+    --worktree-base picks which side of --integration-branch isolated dispatches fork: origin-main uses its
+    remote ref and refuses the dispatch when that ref does not exist, local-main uses the local branch.
   sidequest merge <src> <dst> [--dry-run]   fold one board entirely into another
     (renumbers refs above the destination's, remaps links, moves assets, then
     deletes the source). --dry-run prints the ref mapping without touching disk.

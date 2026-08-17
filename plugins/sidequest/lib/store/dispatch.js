@@ -6,7 +6,7 @@ function unscopedWriteCannotAutoApprove(ticket, options) {
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
 }
 function createDispatch(dependencies) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
   const DISPATCH_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
   const DISPATCH_TOKEN_CHARS = 32;
   const DISPATCH_TOKEN_GROUP_SIZE = 4;
@@ -847,12 +847,13 @@ function createDispatch(dependencies) {
       return { fallback: continuationFallback("released_worktree_git_state_is_unreadable", worktree, { cause: gitFailureEvidence(error) }) };
     }
   }
-  function worktreeBaseIntegrationTarget(slug, worktreeBase, repository, branch) {
+  function worktreeBaseIntegrationTarget(slug, worktreeBase, repository) {
     if (worktreeBase === "local-main") return integrationTarget(slug, { mode: "local" });
+    if (!hasOriginRemote(repository)) return null;
     try {
       return integrationTarget(slug, { mode: "remote" });
-    } catch (_) {
-      return preferredWorktreeIntegrationTarget(repository, branch);
+    } catch (error) {
+      throw new Error(`${String(error?.message || error).trim()} Board worktreeBase is "origin-main", so an isolated dispatch requires that remote ref; fetch or push the branch, or run \`sidequest board-config --worktree-base local-main\` to fork isolated worktrees from the local branch instead.`);
     }
   }
   function prepareDispatch(slug, idOrRef, opts) {
@@ -1019,10 +1020,9 @@ function createDispatch(dependencies) {
       const contractDrift = t.storyContractDrift || null;
       const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
       const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "origin-main";
-      const configuredIntegrationBranch = String(readMeta(slug)?.integrationBranch || "main");
       const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
       const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
-      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || "", configuredIntegrationBranch) : null;
+      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || "") : null;
       const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
       const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
         ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},

@@ -11,7 +11,7 @@ function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
 }
 
 function createDispatch(dependencies: any) {
-  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, preferredWorktreeIntegrationTarget, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
 
 const DISPATCH_TOKEN_ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789';
 const DISPATCH_TOKEN_CHARS = 32;
@@ -949,12 +949,18 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
   }
 }
 
-function worktreeBaseIntegrationTarget(slug?: any, worktreeBase?: any, repository?: any, branch?: any) {
+// A repository with no origin has no remote baseline to want, so `origin-main` means nothing there and the
+// caller falls through to its non-integration default. A repository that HAS an origin is different: the
+// remote ref is the whole point of `origin-main`, and swallowing its absence based the isolated checkout on
+// whatever main happened to be while the board named a different branch as the authority (SQ-2089: an
+// immutable candidate parented on a stale commit nobody configured). That case refuses and names both ways out.
+function worktreeBaseIntegrationTarget(slug?: any, worktreeBase?: any, repository?: any) {
   if (worktreeBase === 'local-main') return integrationTarget(slug, { mode: 'local' });
+  if (!hasOriginRemote(repository)) return null;
   try {
     return integrationTarget(slug, { mode: 'remote' });
-  } catch (_) {
-    return preferredWorktreeIntegrationTarget(repository, branch);
+  } catch (error: any) {
+    throw new Error(`${String(error?.message || error).trim()} Board worktreeBase is "origin-main", so an isolated dispatch requires that remote ref; fetch or push the branch, or run \`sidequest board-config --worktree-base local-main\` to fork isolated worktrees from the local branch instead.`);
   }
 }
 
@@ -1150,11 +1156,10 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const contractDrift = t.storyContractDrift || null;
     const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase();
     const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || 'origin-main';
-    const configuredIntegrationBranch = String(readMeta(slug)?.integrationBranch || 'main');
     const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
     const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
     const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
-      ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || '', configuredIntegrationBranch)
+      ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || '')
       : null;
     const useIntegrationTarget = explicitIntegrationTarget
       || (isolatedRepositoryDispatch && configuredIntegrationMode !== 'auto')
