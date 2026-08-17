@@ -559,14 +559,15 @@ function correctionMessage(corrections) {
 }
 function denyReason(result, type) {
   const retry = "Re-read the wave (`ready --brief`) and re-spawn with `model: exec.model`.";
+  const ticketRetry = "Include the dispatch briefing (with its SQ-n ref) in the prompt, or file a ticket and dispatch it via Board MCP first.";
   const base = `sidequest: ${type} was spawned without \`model\` and it couldn't be resolved`;
   switch (result.status) {
     case "no-refs":
-      return `${base} — no SQ-\\d+ ticket ref was found in the prompt. ${retry}`;
+      return `sidequest: ${type} is missing its dispatched ticket — no SQ-\\d+ ticket ref was found in the prompt. ${ticketRetry}`;
     case "no-project":
       return `${base} — the board for ${result.refs.join(", ")} couldn't be determined (no --project, cwd, or CLAUDE_PROJECT_DIR resolved to a registered board). ${retry}`;
     case "ticket-not-found":
-      return `${base} — ${result.missing} wasn't found on the resolved board. ${retry}`;
+      return `sidequest: ${type}'s dispatched ticket ${result.missing} isn't on the resolved board. Re-read the wave (\`ready --brief\`) rather than retyping refs. ${ticketRetry}`;
     case "ticket-not-builtin":
       return `${base} — ${result.ref} resolves to a Codex route, which spawns its own pinned executor, not a builtin. Re-read the wave (\`ready --brief\`) and spawn its \`exec.agent\` instead.`;
     case "conflicting":
@@ -967,6 +968,10 @@ function main() {
     return;
   }
   const result = resolveStampedModel(input);
+  if (admission.status === "routed" && (result.status === "no-refs" || result.status === "ticket-not-found")) {
+    writeDeny("PreToolUse", denyReason(result, type));
+    return;
+  }
   if (result.status === "ok" && result.model !== toolInput.model) {
     recordAuthoritativeLaunch(input, type, launchAgentName);
     writeToolUpdate(updatedInput, [

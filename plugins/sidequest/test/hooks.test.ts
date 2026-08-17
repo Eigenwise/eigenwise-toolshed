@@ -1458,8 +1458,40 @@ test('pre-tool hook: builtin exec without a model and no ticket ref in the promp
     tool_input: { subagent_type: 'sidequest-exec-high', name: 'w-norefs', prompt: 'go fix the reporter, no ticket named here' },
   });
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /ready --brief/);
-  assert.match(out.hookSpecificOutput.permissionDecisionReason, /model: exec\.model/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /missing its dispatched ticket/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /dispatch briefing/);
+  assert.doesNotMatch(out.hookSpecificOutput.permissionDecisionReason, /model: exec\.model/);
+});
+
+test('pre-tool hook: a modeled builtin executor without a ticket is denied on a routed board', () => {
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    cwd: BOARD_PATH,
+    tool_input: {
+      subagent_type: 'sidequest-exec-readonly-high',
+      model: 'opus',
+      prompt: 'Blind review of this diff. No ticket anywhere.',
+    },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /missing its dispatched ticket/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /dispatch briefing/);
+  assert.doesNotMatch(out.hookSpecificOutput.permissionDecisionReason, /model: exec\.model/);
+});
+
+test('pre-tool hook: a modeled builtin executor with a fabricated ticket is denied on a routed board', () => {
+  const out = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'Agent',
+    cwd: BOARD_PATH,
+    tool_input: {
+      subagent_type: 'sidequest-exec-readonly-high',
+      model: 'opus',
+      prompt: 'Blind review for SQ-99999.',
+    },
+  });
+  assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /SQ-99999.*isn't on the resolved board/);
+  assert.match(out.hookSpecificOutput.permissionDecisionReason, /rather than retyping refs/);
 });
 
 test('pre-tool hook: builtin exec without a model and conflicting concrete models across refs is denied', () => {
