@@ -1,6 +1,6 @@
 # Release and publishing
 
-Last Updated: 2026-08-15
+Last Updated: 2026-08-17
 
 The marketplace manifests on `main` are delivery. Verified integration lands on `main` and writes a release fragment in the same push with `node scripts/release/note.mjs`. Plugin version bumps ship with that integration; do not hold a bump for a later GitHub Release.
 
@@ -14,9 +14,10 @@ CI gates are split across:
 
 - `.github/workflows/test.yml`, including the manifest-derived plugin matrix and affected-plugin selection. It triggers on `main` pushes and pull requests.
 - `.github/workflows/release-guard.yml`, which validates the publish ref.
+- `.github/workflows/release.yml` (Publish GitHub Release), which triggers on `v*` tags, a daily schedule, and manual dispatch, and creates at most one GitHub Release per UTC day: a capped tag-push run exits successfully without publishing, and the daily catch-up publishes the newest unreleased `v*` tag with generated notes covering every intermediate version. `cut.mjs` reports a capped run as `githubRelease.status === 'deferred'` instead of failing.
 - `.github/workflows/release-cut.yml`, which runs daily or by manual dispatch and publishes the notification-only GitHub Release for the marketplace version on `main`.
 - `.github/workflows/docs.yml`, which builds and deploys the Astro docs site.
 
-The release cut workflow is notification-only: `.github/workflows/release-cut.yml` reads the marketplace version from `main`, tags that exact commit when the version has no GitHub Release, and publishes generated notes. It never runs `cut.mjs`, changes a version, or pushes `main`; local cuts remain the publishing path.
+The release cut workflow is notification-only: `.github/workflows/release-cut.yml` reads the marketplace version from `main`, tags that exact commit when the version has no GitHub Release, and publishes generated notes. It never runs `cut.mjs`, changes a version, or pushes `main`; local cuts remain the publishing path. It predates the daily cap in `release.yml` and carries no cap check of its own.
 
 Docs reference pages are generated from manifests, skill frontmatter, hooks, bin files, and marketplace metadata by `docs/scripts/generate-reference.mjs`. Prose docs under `docs/src/content/docs/` are maintained with the change. Screenshots come only from the synthetic `docs/screenshots/` pipeline.
