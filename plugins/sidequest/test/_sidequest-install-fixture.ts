@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -28,9 +29,16 @@ export function stubSidequestInstall(): void {
 
   const installPath = path.join(claudeHome, 'sidequest-test-install');
   fs.mkdirSync(installPath, { recursive: true });
-  fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({
-    mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } },
-  }));
+  const manifestPath = path.join(installPath, '.mcp.json');
+  const temporaryManifestPath = path.join(installPath, `.mcp.json.${process.pid}.${randomUUID()}.tmp`);
+  try {
+    fs.writeFileSync(temporaryManifestPath, JSON.stringify({
+      mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } },
+    }));
+    fs.renameSync(temporaryManifestPath, manifestPath);
+  } finally {
+    fs.rmSync(temporaryManifestPath, { force: true });
+  }
 
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   let registry: { plugins?: Record<string, unknown> } = { plugins: {} };
@@ -42,8 +50,10 @@ export function stubSidequestInstall(): void {
   if (!registry.plugins || typeof registry.plugins !== 'object') registry.plugins = {};
   const existing = Array.isArray(registry.plugins['sidequest@eigenwise-toolshed']) ? registry.plugins['sidequest@eigenwise-toolshed'] : [];
   const manifest = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')) as { version: string };
-  existing.push({ scope: 'user', installPath, version: manifest.version });
-  registry.plugins['sidequest@eigenwise-toolshed'] = existing;
+  registry.plugins['sidequest@eigenwise-toolshed'] = [
+    ...existing.filter((entry: unknown) => !(entry && typeof entry === 'object' && 'installPath' in entry && entry.installPath === installPath)),
+    { scope: 'user', installPath, version: manifest.version },
+  ];
 
   writeInstalledPluginsAtomically(registryPath, JSON.stringify(registry));
 }

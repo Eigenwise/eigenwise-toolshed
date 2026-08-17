@@ -466,6 +466,27 @@ function retirePreparedCompatibilityStaleAttempt(slug?: any, ticket?: any, sourc
   return ticket;
 }
 
+type PreparedPluginInstall = {
+  pluginInstall: unknown;
+  identity: unknown;
+};
+
+type PreparedCompatibilityState = {
+  preparedCompatibility: PreparedPluginInstall;
+};
+
+type CurrentPluginInstall = {
+  ok: boolean;
+  installPath?: unknown;
+  identity?: unknown;
+};
+
+function preparedCompatibilityHasProvenMismatch(state: PreparedCompatibilityState, currentInstall: CurrentPluginInstall) {
+  return currentInstall.ok === true
+    && (currentInstall.installPath !== state.preparedCompatibility.pluginInstall
+      || currentInstall.identity !== state.preparedCompatibility.identity);
+}
+
 function supersedeUnboundAttempt(slug?: any, idOrRef?: any, opts?: any) {
   const evidence = String(opts?.evidence || '').trim();
   if (!evidence) return { ok: false, reason: 'recovery_evidence_required', message: 'Superseding an unbound dispatch attempt requires observed failure evidence.' };
@@ -1384,9 +1405,7 @@ function recordDispatchLaunch(slug?: any, idOrRef?: any, opts?: any) {
     if (!state) return { ok: false, reason: 'missing_state' };
     if (state.preparedCompatibility?.pluginInstall) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
-      if (!currentInstall.ok
-        || currentInstall.installPath !== state.preparedCompatibility.pluginInstall
-        || currentInstall.identity !== state.preparedCompatibility.identity) {
+      if (preparedCompatibilityHasProvenMismatch(state, currentInstall)) {
         const retired = retirePreparedCompatibilityStaleAttempt(slug, t, 'tokened-launch-refusal');
         return {
           ok: false,
@@ -2258,6 +2277,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     pulseDispatchState,
     supersedableUnboundAttempt,
     retirePreparedCompatibilityStaleAttempt,
+    preparedCompatibilityHasProvenMismatch,
     supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,

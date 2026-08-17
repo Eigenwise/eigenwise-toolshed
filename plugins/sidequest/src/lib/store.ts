@@ -375,6 +375,7 @@ const {
   worktreeIsolationWarning,
   prepareDispatch,
   retirePreparedCompatibilityStaleAttempt,
+  preparedCompatibilityHasProvenMismatch,
   supersedeUnboundAttempt,
   readDispatchBriefing,
   recordDispatchLaunch,
@@ -1683,9 +1684,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     if (!opts.direct && isRoutedTicket(t) && !t.dispatchNonce) return { ok: false, reason: 'dispatch_required', ticket: t };
     if (currentDispatch?.preparedCompatibility?.pluginInstall && t.dispatchNonce) {
       const currentInstall = checkSidequestInstall(readMeta(slug)?.path || '');
-      if (!currentInstall.ok
-        || currentInstall.installPath !== currentDispatch.preparedCompatibility.pluginInstall
-        || currentInstall.identity !== currentDispatch.preparedCompatibility.identity) {
+      if (preparedCompatibilityHasProvenMismatch(currentDispatch, currentInstall)) {
         const retired = retirePreparedCompatibilityStaleAttempt(slug, t);
         return {
           ok: false,

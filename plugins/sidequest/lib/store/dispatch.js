@@ -384,6 +384,9 @@ function createDispatch(dependencies) {
     putTicket(slug, ticket);
     return ticket;
   }
+  function preparedCompatibilityHasProvenMismatch(state, currentInstall) {
+    return currentInstall.ok === true && (currentInstall.installPath !== state.preparedCompatibility.pluginInstall || currentInstall.identity !== state.preparedCompatibility.identity);
+  }
   function supersedeUnboundAttempt(slug, idOrRef, opts) {
     const evidence = String(opts?.evidence || "").trim();
     if (!evidence) return { ok: false, reason: "recovery_evidence_required", message: "Superseding an unbound dispatch attempt requires observed failure evidence." };
@@ -1208,7 +1211,7 @@ function createDispatch(dependencies) {
       if (!state) return { ok: false, reason: "missing_state" };
       if (state.preparedCompatibility?.pluginInstall) {
         const currentInstall = checkSidequestInstall(readMeta(slug)?.path || "");
-        if (!currentInstall.ok || currentInstall.installPath !== state.preparedCompatibility.pluginInstall || currentInstall.identity !== state.preparedCompatibility.identity) {
+        if (preparedCompatibilityHasProvenMismatch(state, currentInstall)) {
           const retired = retirePreparedCompatibilityStaleAttempt(slug, t, "tokened-launch-refusal");
           return {
             ok: false,
@@ -1962,6 +1965,7 @@ function createDispatch(dependencies) {
     pulseDispatchState,
     supersedableUnboundAttempt,
     retirePreparedCompatibilityStaleAttempt,
+    preparedCompatibilityHasProvenMismatch,
     supersedeUnboundAttempt,
     isolatedDispatchWorktreeMissing,
     isolatedDispatchWithMissingWorktree,

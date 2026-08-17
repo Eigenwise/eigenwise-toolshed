@@ -40,6 +40,7 @@ const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const agentsync = require('../lib/agentsync.js');
 const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
+const { checkSidequestInstall } = require('../lib/dispatch-preflight.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
 const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
@@ -314,17 +315,41 @@ test('claim-token binding accepts prepared and launched attempts', () => {
   assert.equal(store.getTicket(slug, fixture.ref).lifecycleAttempt.state, 'claimed');
 });
 
-test('tokened stale compatibility refusals retire their dispatch attempts', () => {
+test('tokened stale compatibility refusals retire only proven mismatches', () => {
   const claimTicket = createFixture('stale compatibility claim fixture');
   const launchTicket = createFixture('stale compatibility launch fixture');
+  const transientLaunchTicket = createFixture('unreadable compatibility launch fixture');
+  const transientClaimTicket = createFixture('unreadable compatibility claim fixture');
   const claimPrepared = store.prepareDispatch(slug, claimTicket.ref, { sessionId: `stale-compatibility-claim-${Date.now()}` });
   const launchPrepared = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-${Date.now()}` });
+  const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `unreadable-compatibility-launch-${Date.now()}` });
+  const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `unreadable-compatibility-claim-${Date.now()}` });
   const registry = JSON.parse(fs.readFileSync(path.join(process.env.SIDEQUEST_CLAUDE_HOME!, 'plugins', 'installed_plugins.json'), 'utf8'));
   const installed = registry.plugins['sidequest@eigenwise-toolshed'].find((entry: { scope?: string }) => entry.scope === 'user');
   const manifestPath = path.join(installed.installPath, '.mcp.json');
   const originalManifest = fs.readFileSync(manifestPath, 'utf8');
 
   try {
+    fs.writeFileSync(manifestPath, '');
+    assert.equal(checkSidequestInstall(PROJECT).ok, false);
+    assert.equal(store.recordDispatchLaunch(slug, transientLaunchTicket.ref, {
+      token: transientLaunchPrepared.token,
+      executor: transientLaunchPrepared.ticket.dispatchExecutor,
+      sessionId: `unreadable-compatibility-launch-${Date.now()}`,
+      agentName: 'unreadable-compatibility-launch-worker',
+    }).ok, true);
+    assert.equal(store.getTicket(slug, transientLaunchTicket.ref).dispatchNonce, transientLaunchPrepared.ticket.dispatchNonce);
+    assert.equal(store.claimTicket(slug, transientClaimTicket.ref, 'unreadable-compatibility-claim-worker', {
+      token: transientClaimPrepared.token,
+      executor: transientClaimPrepared.ticket.dispatchExecutor,
+    }).ok, true);
+
+    fs.writeFileSync(manifestPath, originalManifest);
+    assert.equal(store.claimTicket(slug, transientLaunchTicket.ref, 'unreadable-compatibility-launch-worker', {
+      token: transientLaunchPrepared.token,
+      executor: transientLaunchPrepared.ticket.dispatchExecutor,
+    }).ok, true);
+
     fs.writeFileSync(manifestPath, `${originalManifest}\n`);
 
     const claimRefusal = store.claimTicket(slug, claimTicket.ref, 'stale-compatibility-worker', {
@@ -361,8 +386,9 @@ test('tokened stale compatibility refusals retire their dispatch attempts', () =
     assert.notEqual(launchReplacement.token, launchPrepared.token);
   } finally {
     fs.writeFileSync(manifestPath, originalManifest);
-    store.releaseTicket(slug, claimTicket.ref, 'stale-compatibility-claim-cleanup', { status: 'todo', source: 'test', force: true });
-    store.releaseTicket(slug, launchTicket.ref, 'stale-compatibility-launch-cleanup', { status: 'todo', source: 'test', force: true });
+    for (const ticket of [claimTicket, launchTicket, transientLaunchTicket, transientClaimTicket]) {
+      store.releaseTicket(slug, ticket.ref, 'stale-compatibility-cleanup', { status: 'todo', source: 'test', force: true });
+    }
   }
 });
 
