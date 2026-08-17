@@ -37,6 +37,8 @@ Decide explicitly whether existing materialized profiles need a seed catch-up. P
 
 Descriptions are developer-to-developer specs, never PM summaries. Include anchors, behavior and edge cases, bounds, dependencies or decisions, and a runnable `cd <repo-relative-dir> && ...` verify command. Bugs include a reproduction. Front-load evidence for cheaper executors. Route by remaining uncertainty, not original difficulty: a settled one-or-two-file edit is `coding.easy`; use direct only for the INLINE-SAFE allowlist, with its recorded reason.
 
+Anchors are checked against the repo, so write prose freely and mark real symbols. A path is always verified. A token before `in <path>` or `is at <path>` is verified as a source symbol only when it is backticked or shaped like code (an underscore, a `$`, or a camelCase hump), which is why ordinary sentences such as "the check lives in `src/foo.ts`" no longer report `lives` as a missing symbol. Backtick an all-lowercase identifier when you do want that check.
+
 ## Establish the premise and acceptance behavior
 
 A quantitative or behavioral claim that a fix depends on needs evidence before it becomes a ticket premise. Include the measurement command, its output, and where it ran, or link the read-only measurement ticket that established the numbers. When the claim has not been measured, file measurement work first and create the fix ticket from that result.

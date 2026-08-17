@@ -181,7 +181,8 @@ ${description || ""}`.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase(
     return unknown.length ? [`Unknown ticket refs: ${unknown.join(", ")}.`] : [];
   }
   const ANCHOR_PATH_TOKEN = /(?:^|[\s`"'(])((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
-  const ANCHOR_SYMBOL_REFERENCE = /(?:^|[\s`"'(])([A-Za-z_$][\w$]*)`?\s+(?:is\s+at|in)\s+`?((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+  const ANCHOR_SYMBOL_REFERENCE = /(?:^|[\s"'(])(`?)([A-Za-z_$][\w$]*)(`?)\s+(?:is\s+at|in)\s+`?((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+  const CODE_SHAPED_SYMBOL = /[_$]|[a-z][A-Z]/;
   const KNOWN_ANCHOR_FILE_EXTENSIONS = /* @__PURE__ */ new Set([
     ".bash",
     ".c",
@@ -283,8 +284,10 @@ ${String(ticket?.description || "")}`;
     });
     const absentSymbols = /* @__PURE__ */ new Set();
     for (const match of anchors.matchAll(ANCHOR_SYMBOL_REFERENCE)) {
-      const symbol = match[1];
-      const candidate = anchorPath(ticket, projectPath, match[2]);
+      const symbol = match[2] || "";
+      const quoted = Boolean(match[1] && match[3]);
+      if (!symbol || !quoted && !CODE_SHAPED_SYMBOL.test(symbol)) continue;
+      const candidate = anchorPath(ticket, projectPath, match[4]);
       const existingCandidate = candidate && existing.get(candidate.relative.toLowerCase());
       if (!existingCandidate) continue;
       let contents = String(existingCandidate.contents || "");

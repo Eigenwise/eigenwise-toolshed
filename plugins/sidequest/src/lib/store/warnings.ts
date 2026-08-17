@@ -167,7 +167,14 @@ function ticketReferenceWarnings(slug?: any, title?: any, description?: any) {
 }
 
 const ANCHOR_PATH_TOKEN = /(?:^|[\s`"'(])((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
-const ANCHOR_SYMBOL_REFERENCE = /(?:^|[\s`"'(])([A-Za-z_$][\w$]*)`?\s+(?:is\s+at|in)\s+`?((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+const ANCHOR_SYMBOL_REFERENCE = /(?:^|[\s"'(])(`?)([A-Za-z_$][\w$]*)(`?)\s+(?:is\s+at|in)\s+`?((?:\.\/)?[A-Za-z0-9_@.-]+(?:\/[A-Za-z0-9_@.-]+)+)(?::\d+)?(?=$|[\s`"',).;:])/g;
+// Whatever word precedes "in <path>" used to become a symbol assertion, so ordinary anchor prose demanded
+// English words as source symbols: `lives`, `both`, and `each` were each reported missing from a real file,
+// and the author's only workaround was contorting the sentence until the parser stopped recognizing a claim
+// (SQ-1987). A claim now needs explicit evidence: backticks the author typed, or a token shaped like code.
+// Measured over the 46 recorded anchor claims on these boards, 35 were ordinary English, and every genuine
+// symbol among the rest carried an underscore, a `$`, or a camelCase hump.
+const CODE_SHAPED_SYMBOL = /[_$]|[a-z][A-Z]/;
 const KNOWN_ANCHOR_FILE_EXTENSIONS = new Set([
   '.bash', '.c', '.cc', '.cjs', '.cpp', '.cs', '.css', '.csv', '.go', '.h', '.hpp', '.html', '.java', '.js', '.json', '.jsx', '.kt', '.md', '.mjs', '.php', '.png', '.ps1', '.py', '.rb', '.rs', '.scss', '.sh', '.sql', '.svg', '.toml', '.ts', '.tsx', '.txt', '.vue', '.xml', '.yaml', '.yml',
 ]);
@@ -236,8 +243,10 @@ function executorAnchorWarnings(ticket?: any, projectPath?: any) {
   });
   const absentSymbols = new Set<string>();
   for (const match of anchors.matchAll(ANCHOR_SYMBOL_REFERENCE)) {
-    const symbol = match[1];
-    const candidate = anchorPath(ticket, projectPath, match[2]);
+    const symbol = match[2] || '';
+    const quoted = Boolean(match[1] && match[3]);
+    if (!symbol || (!quoted && !CODE_SHAPED_SYMBOL.test(symbol))) continue;
+    const candidate = anchorPath(ticket, projectPath, match[4]);
     const existingCandidate = candidate && existing.get(candidate.relative.toLowerCase());
     if (!existingCandidate) continue;
     let contents = String(existingCandidate.contents || '');

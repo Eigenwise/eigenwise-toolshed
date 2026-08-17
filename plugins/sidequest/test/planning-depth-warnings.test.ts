@@ -216,6 +216,54 @@ test('correct executor anchors stay quiet', () => {
   assert.deepStrictEqual(added.warnings, []);
 });
 
+test('SQ-1987: ordinary anchor prose before a path is not a symbol claim, but explicit ones still are', () => {
+  fs.mkdirSync(path.join(PROJ, 'anchor-prose'), { recursive: true });
+  fs.writeFileSync(path.join(PROJ, 'anchor-prose', 'policy.ts'), 'export const executorDrift = true;\n');
+
+  const proseForms = [
+    'Duplicated policy lives in anchor-prose/policy.ts executorDrift',
+    'Two independent sources of nondeterminism, both in anchor-prose/policy.ts.',
+    'Two independent sources of nondeterminism, each in anchor-prose/policy.ts.',
+    'The real check is in anchor-prose/policy.ts.',
+    'Everything relevant is at anchor-prose/policy.ts.',
+  ];
+  for (const anchors of proseForms) {
+    const added = cliJson([
+      'add', '-t', `prose anchor ${proseForms.indexOf(anchors)}`, '--complexity', '3',
+      '--why', 'ordinary English before a path must not become a source symbol assertion',
+      '--file', 'anchor-prose/policy.ts', '--anchors', anchors,
+    ]);
+    assert.deepStrictEqual(added.warnings, [], `expected silence for anchors: ${anchors}`);
+  }
+
+  // Backticks the author typed are an explicit claim even for an all-lowercase word, and a code-shaped token
+  // needs no backticks. Both still have to be true of the file.
+  const quoted = cliJson([
+    'add', '-t', 'quoted absent anchor', '--complexity', '3',
+    '--why', 'an explicitly quoted token keeps its missing-symbol diagnostic',
+    '--file', 'anchor-prose/policy.ts', '--anchors', 'Grep for `lives` in anchor-prose/policy.ts to find the marker.',
+  ]);
+  assert.deepStrictEqual(quoted.warnings, [
+    'Anchor-path warning: executor anchor says lives is in anchor-prose/policy.ts, but lives does not appear in that file.',
+  ]);
+
+  const codeShaped = cliJson([
+    'add', '-t', 'code shaped absent anchor', '--complexity', '3',
+    '--why', 'an unquoted camelCase token keeps its missing-symbol diagnostic',
+    '--file', 'anchor-prose/policy.ts', '--anchors', 'executorDriftMissing in anchor-prose/policy.ts',
+  ]);
+  assert.deepStrictEqual(codeShaped.warnings, [
+    'Anchor-path warning: executor anchor says executorDriftMissing is in anchor-prose/policy.ts, but executorDriftMissing does not appear in that file.',
+  ]);
+
+  const present = cliJson([
+    'add', '-t', 'code shaped present anchor', '--complexity', '3',
+    '--why', 'a code-shaped token that is really there stays quiet',
+    '--file', 'anchor-prose/policy.ts', '--anchors', 'executorDrift in anchor-prose/policy.ts',
+  ]);
+  assert.deepStrictEqual(present.warnings, []);
+});
+
 test('submission-review anchors resolve against their explicit pinned ref or commit', () => {
   const project = path.join(planningDepthWarningsFixtureParent, 'pinned-anchor');
   fs.rmSync(project, { recursive: true, force: true });
