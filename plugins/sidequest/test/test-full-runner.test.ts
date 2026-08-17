@@ -80,7 +80,11 @@ function delay(milliseconds: number) {
 }
 
 function requireProcessId(processId: number | null | undefined, what: string) {
-  if (typeof processId !== 'number') throw new Error(`${what} never reported a process id`);
+  // A `typeof` check alone lets 0 and NaN through, and 0 is the dangerous one: it probes as live forever
+  // on win32, so it reaches a termination assertion and gets reported as a leaked process (SQ-2195).
+  if (typeof processId !== 'number' || !Number.isInteger(processId) || processId <= 0) {
+    throw new Error(`${what} never reported a usable process id (got ${processId})`);
+  }
   return processId;
 }
 
@@ -94,10 +98,32 @@ async function waitUntilTerminal(processId: number, budgetMilliseconds: number) 
   return state;
 }
 
+// The settled budget every assertion in this file waits against. It separates "termination finished" from
+// "termination hung", and a hung path takes the whole phase timeout or never ends, so anything comfortably
+// short of that timeout draws the same line. Tighter values do not test anything extra, they just start
+// measuring how loaded the runner is, which is how SQ-2179, SQ-2191 and the verify-capture timeout each
+// failed the gate on unchanged code (SQ-2194). Prefer this constant over a fresh number.
+const SETTLED_BUDGET_MILLISECONDS = 5000;
+
+// The control probes shell out to a fresh node, so their ceiling has to cover interpreter startup on top of
+// the phase they drive. Startup is the part that stretches under load, and a probe that never finishes shows
+// up as a null status either way, so there is nothing to gain from a tight number here.
+const PROBE_BUDGET_MILLISECONDS = 20_000;
+
 async function assertTerminalWithin(processId: number, budgetMilliseconds: number, subject: string) {
   const state = await waitUntilTerminal(processId, budgetMilliseconds);
   assert.notEqual(state, 'live', `${subject} (process ${processId}) was still live after ${budgetMilliseconds}ms`);
   return state;
+}
+
+// A phase that settles at all settles well inside the budget; one that hangs blows past it. Keeping the
+// number and the failure message in one place also stops them drifting apart, which they had: two call
+// sites reported bounds of 900ms and 700ms while actually asserting 1600ms and 1200ms.
+function assertSettledPromptly(durationMilliseconds: number, subject: string) {
+  assert.ok(
+    durationMilliseconds < SETTLED_BUDGET_MILLISECONDS,
+    `${subject} settled after ${durationMilliseconds}ms, past its ${SETTLED_BUDGET_MILLISECONDS}ms budget`,
+  );
 }
 
 function isGroupProbeable(groupId: number) {
@@ -147,13 +173,21 @@ const descendantScript = writeScript(
     + "if (ignoreTerm === '1') process.on('SIGTERM', () => {});\n"
     + "setTimeout(() => { fs.writeFileSync(markerPath, 'descendant acted'); process.exit(0); }, Number(delayMilliseconds));\n",
 );
+// These scripts get killed at an arbitrary instant by the very tests that then read this file, and
+// `writeFileSync` creates the file before it fills it. A kill landing in that window leaves a zero-byte
+// file, which parses as pid 0, which probes as live forever on win32: race row 81 waited out its whole
+// budget and then reported a leaked descendant that never existed (SQ-2195). Rename is atomic, so a
+// reader sees either no file or the complete pid.
+const descendantPidWriteSource = 'fs.writeFileSync(descendantPidPath + ".partial", String(descendant.pid));\n'
+  + 'fs.renameSync(descendantPidPath + ".partial", descendantPidPath);\n';
+
 const rootWithDescendantScript = writeScript(
   'root-with-descendant.js',
   "const { spawn } = require('node:child_process');\n"
     + "const fs = require('node:fs');\n"
     + 'const [descendantPidPath, markerPath, descendantDelay, ignoreTerm, rootLifetime] = process.argv.slice(2);\n'
     + `const descendant = spawn(process.execPath, [${JSON.stringify(descendantScript)}, markerPath, descendantDelay, ignoreTerm], { stdio: 'ignore', windowsHide: true });\n`
-    + 'fs.writeFileSync(descendantPidPath, String(descendant.pid));\n'
+    + descendantPidWriteSource
     + 'descendant.unref();\n'
     + "process.stdout.write('ready\\n');\n"
     + "if (rootLifetime === 'spin') setInterval(() => {}, 1000);\n"
@@ -165,7 +199,7 @@ const rootWithSessionDetachedDescendantScript = writeScript(
     + "const fs = require('node:fs');\n"
     + 'const [descendantPidPath, markerPath] = process.argv.slice(2);\n'
     + `const descendant = spawn(process.execPath, [${JSON.stringify(descendantScript)}, markerPath, '500', '0'], { detached: true, stdio: 'ignore', windowsHide: true });\n`
-    + 'fs.writeFileSync(descendantPidPath, String(descendant.pid));\n'
+    + descendantPidWriteSource
     + 'descendant.unref();\n',
 );
 
@@ -230,7 +264,7 @@ function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boo
     rootLifetime,
     descendantPid: () => {
       assert.equal(fs.existsSync(descendantPidPath), true, 'the phase root never reported its descendant, so this row proves nothing');
-      return Number(fs.readFileSync(descendantPidPath, 'utf8'));
+      return requireProcessId(Number(fs.readFileSync(descendantPidPath, 'utf8').trim()), 'the phase root');
     },
     markerWritten: () => fs.existsSync(markerPath),
   };
@@ -324,7 +358,7 @@ test('the supervisor control protocol accepts only its finite transitions', { ..
       assert.match(result.cleanupError ?? '', new RegExp(protocolCase.cleanupError), protocolCase.name);
     }
     assert.equal(result.timedOut, false, protocolCase.name);
-    assert.ok(result.durationMilliseconds < 1500, `${protocolCase.name} settled after ${result.durationMilliseconds}ms`);
+    assertSettledPromptly(result.durationMilliseconds, protocolCase.name);
   }
 });
 
@@ -363,6 +397,11 @@ test('the node 22 protocol alphabet rejects every length-three sequence except p
       command: process.execPath,
       args: [helloScript],
       timeoutMilliseconds: 20_000,
+      // Left deliberately tight, unlike every other bound in this file. 1884 of these 1885 sequences end
+      // with a supervisor that never settles, so the grace is spent on nearly every row and widening it to
+      // the usual budget would multiply this test's wall clock past its own 180s timeout. It is safe to
+      // leave because the only assertion is on the green/not-green verdict, which does not depend on how
+      // long termination took (SQ-2194).
       terminationGraceMilliseconds: 25,
       cleanupDrainMilliseconds: 50,
       supervisorModulePath,
@@ -394,7 +433,7 @@ test('a pre-start terminal result is a protocol failure and terminates its owner
 
   assert.equal(result.error?.code, 'EPROTO');
   assert.equal(result.status, null);
-  await assertTerminalWithin(requireProcessId(result.ownerPid, 'protocol owner'), 1000, 'protocol owner');
+  await assertTerminalWithin(requireProcessId(result.ownerPid, 'protocol owner'), SETTLED_BUDGET_MILLISECONDS, 'protocol owner');
 });
 
 test('the node 22 control probe rejects a pre-start terminal frame', () => {
@@ -404,7 +443,7 @@ test('the node 22 control probe rejects a pre-start terminal frame', () => {
   );
   const forcePosixOwnership = runsOnWindows ? "Object.defineProperty(process, 'platform', { value: 'linux' });" : '';
   const probeSource = `${forcePosixOwnership}const { runOwnedPhase } = require(${JSON.stringify(runnerModulePath)}); runOwnedPhase({ command: process.execPath, args: [${JSON.stringify(helloScript)}], timeoutMilliseconds: 1000, terminationGraceMilliseconds: 50, cleanupDrainMilliseconds: 100, supervisorModulePath: ${JSON.stringify(supervisorModulePath)}, forwardStdout() {}, forwardStderr() {} }).then((result) => process.stdout.write(JSON.stringify({ error: result.error?.code ?? null, status: result.status, timedOut: result.timedOut })));`;
-  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: PROBE_BUDGET_MILLISECONDS, windowsHide: true });
 
   assert.equal(probe.status, 0, probe.stderr);
   assert.deepEqual(JSON.parse(probe.stdout), { error: 'EPROTO', status: null, timedOut: false });
@@ -417,7 +456,7 @@ test('the node 22 cleanup signal probe turns an otherwise zero exit into a clean
   );
   const forcePosixOwnership = runsOnWindows ? "Object.defineProperty(process, 'platform', { value: 'linux' });" : '';
   const probeSource = `${forcePosixOwnership}const { runOwnedPhase } = require(${JSON.stringify(runnerModulePath)}); runOwnedPhase({ command: process.execPath, args: [${JSON.stringify(helloScript)}], timeoutMilliseconds: 1000, terminationGraceMilliseconds: 50, cleanupDrainMilliseconds: 100, supervisorModulePath: ${JSON.stringify(supervisorModulePath)}, forwardStdout() {}, forwardStderr() {} }).then((result) => process.stdout.write(JSON.stringify({ error: result.error?.code ?? null, status: result.status, timedOut: result.timedOut, cleanupError: result.cleanupError })));`;
-  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: PROBE_BUDGET_MILLISECONDS, windowsHide: true });
 
   assert.equal(probe.status, 0, probe.stderr);
   assert.deepEqual(JSON.parse(probe.stdout), {
@@ -466,7 +505,7 @@ test('a node 22 exact-deadline control probe accepts the delayed exit of an alre
   );
   const forcePosixOwnership = runsOnWindows ? "Object.defineProperty(process, 'platform', { value: 'linux' });" : '';
   const probeSource = `${forcePosixOwnership}const { runOwnedPhase } = require(${JSON.stringify(runnerModulePath)}); runOwnedPhase({ command: process.execPath, args: [${JSON.stringify(helloScript)}], timeoutMilliseconds: 200, terminationGraceMilliseconds: 50, cleanupDrainMilliseconds: 100, supervisorModulePath: ${JSON.stringify(supervisorModulePath)}, forwardStdout() {}, forwardStderr() {} }).then((result) => process.stdout.write(JSON.stringify({ error: result.error?.code ?? null, status: result.status, signal: result.signal, timedOut: result.timedOut })));`;
-  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: 5_000, windowsHide: true });
+  const probe = spawnSync(process.execPath, ['-e', probeSource], { encoding: 'utf8', timeout: PROBE_BUDGET_MILLISECONDS, windowsHide: true });
 
   assert.equal(probe.status, 0, probe.stderr);
   assert.deepEqual(JSON.parse(probe.stdout), { error: null, status: null, signal: 'SIGTERM', timedOut: true });
@@ -510,8 +549,8 @@ test('a deadline fails the phase and ends its tree before a delayed descendant c
 
   assert.equal(result.timedOut, true);
   assert.equal(result.cleanupError, null);
-  assert.ok(result.durationMilliseconds < 1600, `phase settled after ${result.durationMilliseconds}ms, past its 900ms bound`);
-  await assertTerminalWithin(fixture.descendantPid(), 5000, 'the deadline-ended descendant');
+  assertSettledPromptly(result.durationMilliseconds, 'the deadline-ended phase');
+  await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the deadline-ended descendant');
   assert.equal(fixture.markerWritten(), false);
 });
 
@@ -527,7 +566,7 @@ test('a phase whose root exits cleanly still takes a delayed descendant with it'
   assert.equal(result.status, 0);
   assert.equal(result.timedOut, false);
   assert.equal(result.cleanupError, null);
-  await assertTerminalWithin(fixture.descendantPid(), 5000, 'the descendant of a successful phase');
+  await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the descendant of a successful phase');
   assert.equal(fixture.markerWritten(), false);
 });
 
@@ -597,7 +636,7 @@ test('an exact deadline starts after the owner reports its phase root', { ...pos
     assert.equal(result.error, null);
     assert.equal(result.timedOut, true);
     assert.equal(result.cleanupError, null);
-    await assertTerminalWithin(fixture.descendantPid(), 5000, 'the delayed-start descendant');
+    await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the delayed-start descendant');
     assert.equal(fixture.markerWritten(), false);
     assert.equal(classifyProcessState(sentinelPid), 'live');
   } finally {
@@ -645,7 +684,7 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
       // window in which the OS could recycle an exited descendant's pid onto an
       // unrelated live process, which then read as a leaked descendant and failed the
       // gate on unchanged code (SQ-2179).
-      await assertTerminalWithin(descendantPid, 5000, `the descendant of race row ${row}`);
+      await assertTerminalWithin(descendantPid, SETTLED_BUDGET_MILLISECONDS, `the descendant of race row ${row}`);
       rows.push({ timedOut: result.timedOut, descendantPid, markerWritten: fixture.markerWritten });
     }
 
@@ -704,7 +743,7 @@ test('a deadline fails the phase even when the root handles SIGTERM and exits 0'
   // clock ended never ran its tests, so the deadline has to be the verdict on its own.
   assert.equal(result.timedOut, true);
   assert.equal(result.cleanupError, null);
-  assert.ok(result.durationMilliseconds < 1600, `phase settled after ${result.durationMilliseconds}ms`);
+  assertSettledPromptly(result.durationMilliseconds, 'the phase');
 });
 
 test('a root that ignores SIGTERM is killed inside the phase bound', { ...posixOnly, timeout: 60_000 }, async () => {
@@ -718,8 +757,8 @@ test('a root that ignores SIGTERM is killed inside the phase bound', { ...posixO
 
   assert.equal(result.timedOut, true);
   assert.equal(result.cleanupError, null);
-  assert.ok(result.durationMilliseconds < 1200, `phase settled after ${result.durationMilliseconds}ms, past its 700ms bound`);
-  await assertTerminalWithin(requireProcessId(result.phasePid, 'the TERM-resistant root'), 5000, 'the TERM-resistant root');
+  assertSettledPromptly(result.durationMilliseconds, 'the TERM-resistant phase');
+  await assertTerminalWithin(requireProcessId(result.phasePid, 'the TERM-resistant root'), SETTLED_BUDGET_MILLISECONDS, 'the TERM-resistant root');
 });
 
 test('a descendant that ignores SIGTERM is killed with the group', { ...posixOnly, timeout: 60_000 }, async () => {
@@ -734,7 +773,7 @@ test('a descendant that ignores SIGTERM is killed with the group', { ...posixOnl
 
   assert.equal(result.status, 0);
   assert.equal(result.cleanupError, null);
-  await assertTerminalWithin(fixture.descendantPid(), 5000, 'the TERM-resistant descendant');
+  await assertTerminalWithin(fixture.descendantPid(), SETTLED_BUDGET_MILLISECONDS, 'the TERM-resistant descendant');
   assert.equal(fixture.markerWritten(), false);
 });
 
@@ -763,7 +802,7 @@ test('the owner keeps pinning its process group after the real root is gone', { 
   const identity = await identityReported;
   const ownedGroupId = requireProcessId(identity.ownedGroupId, 'the phase owner');
   assert.equal(ownedGroupId, identity.ownerPid);
-  await assertTerminalWithin(requireProcessId(identity.phasePid, 'the phase root'), 5000, 'the phase root');
+  await assertTerminalWithin(requireProcessId(identity.phasePid, 'the phase root'), SETTLED_BUDGET_MILLISECONDS, 'the phase root');
 
   // The root is already gone and the sweep has not finished. Nothing but a live leader
   // stops the kernel handing this exact number to somebody else's brand new group.
@@ -808,7 +847,7 @@ test('an unexpected owner exit ends the still-pinned live phase before settlemen
     assert.equal(result.timedOut, false);
     assert.notEqual(classifyProcessState(phasePid), 'live', 'the phase was still live after runOwnedPhase settled');
     assert.equal(classifyProcessState(sentinelPid), 'live', 'cleanup reached an unrelated process group');
-    assert.ok(result.durationMilliseconds < 5000, `settled after ${result.durationMilliseconds}ms`);
+    assertSettledPromptly(result.durationMilliseconds, 'the phase whose owner was killed');
   } finally {
     try {
       process.kill(sentinelPid, 'SIGKILL');
@@ -834,7 +873,8 @@ test('a descendant that deliberately starts a new POSIX session is outside porta
   assert.equal(fs.existsSync(descendantPidPath), true, 'the detached descendant never started');
   await delay(800);
   assert.equal(fs.existsSync(markerPath), true, 'the deliberately detached descendant did not outlive group cleanup');
-  await assertTerminalWithin(Number(fs.readFileSync(descendantPidPath, 'utf8')), 5000, 'the naturally exiting detached descendant');
+  const detachedDescendantPid = requireProcessId(Number(fs.readFileSync(descendantPidPath, 'utf8').trim()), 'the detached phase root');
+  await assertTerminalWithin(detachedDescendantPid, SETTLED_BUDGET_MILLISECONDS, 'the naturally exiting detached descendant');
 });
 
 test('an owner that cannot start is reported as a cleanup failure rather than a passing phase', posixOnly, async () => {
@@ -848,7 +888,7 @@ test('an owner that cannot start is reported as a cleanup failure rather than a 
   assert.match(result.cleanupError ?? '', /owner exited unexpectedly/);
   assert.equal(result.status, null);
   assert.equal(result.timedOut, false);
-  assert.ok(result.durationMilliseconds < 5000, `settled after ${result.durationMilliseconds}ms`);
+  assertSettledPromptly(result.durationMilliseconds, 'the phase with a missing supervisor');
 });
 
 test('a dead unreaped process reads as terminal while a runnable one reads as live', { ...posixOnly, timeout: 60_000 }, async () => {
@@ -865,7 +905,7 @@ test('a dead unreaped process reads as terminal while a runnable one reads as li
   const shellPid = requireProcessId(shell.pid, 'the zombie-making shell');
   try {
     await delay(800);
-    const zombiePid = Number(fs.readFileSync(zombiePidPath, 'utf8').trim());
+    const zombiePid = requireProcessId(Number(fs.readFileSync(zombiePidPath, 'utf8').trim()), 'the backgrounded job');
     assert.equal(classifyProcessState(zombiePid), 'zombie');
     assert.equal(isProcessTerminal(zombiePid), true);
     assert.equal(classifyProcessState(shellPid), 'live');
@@ -878,4 +918,15 @@ test('a dead unreaped process reads as terminal while a runnable one reads as li
   const reapedPid = requireProcessId(reaped.pid, 'the reaped control process');
   await new Promise((resolve) => reaped.once('exit', resolve));
   assert.equal(classifyProcessState(reapedPid), 'gone');
+});
+
+test('SQ-2195: a value that is not a process id is refused rather than answered as live', () => {
+  // 0 is the one that shipped a wrong diagnosis. `kill` reads it as a process group, so on win32 the
+  // probe just succeeds and every caller waiting for terminality waits forever, then blames whatever
+  // process it thought it was watching. An unparsed pid file is the realistic source of it.
+  for (const notAProcessId of [0, -1, 1.5, Number.NaN]) {
+    assert.throws(() => classifyProcessState(notAProcessId), /is not a process id/);
+    assert.throws(() => isProcessTerminal(notAProcessId), /is not a process id/);
+  }
+  assert.throws(() => requireProcessId(Number(''), 'an empty pid file'), /never reported a usable process id/);
 });

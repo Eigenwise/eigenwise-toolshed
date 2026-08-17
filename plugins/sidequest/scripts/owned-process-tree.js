@@ -42,6 +42,14 @@ function readPsStateCharacter(processId) {
  * because hiding a genuinely runnable orphan is the worse failure.
  */
 function classifyProcessState(processId) {
+  // 0 and negatives are not process ids: `kill` reads them as the current or a named process
+  // group, so probing one answers a different question than the caller asked and answers it
+  // affirmatively. On win32 `process.kill(0, 0)` simply succeeds, which made a caller holding an
+  // unparsed pid wait out its whole budget and then report a live process that never existed
+  // (SQ-2195). Refuse rather than guess.
+  if (!Number.isInteger(processId) || processId <= 0) {
+    throw new Error(`${processId} is not a process id, so its state cannot be classified.`);
+  }
   try {
     process.kill(processId, 0);
   } catch (error) {
