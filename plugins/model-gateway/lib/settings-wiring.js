@@ -179,10 +179,15 @@ function reconcileRegisteredProjectWirings(targetBaseUrl, { confirm = false } = 
   return { conflicting, reconciled };
 }
 
+function hasGatewayBaseUrl(settings) {
+  return ourBaseUrls().includes(settings.env?.ANTHROPIC_BASE_URL);
+}
+
 function migrateLegacyProjectSettings() {
   const legacyFile = settingsPath('legacy-project');
   if (!fs.existsSync(legacyFile)) return { migrated: false };
   const legacy = readSettingsForWrite(legacyFile);
+  if (!hasGatewayBaseUrl(legacy)) return { migrated: false };
   const entries = ownedGatewayEnvEntries(legacy.env);
   const legacyKeys = Object.entries(LEGACY_ENV_BLOCK)
     .filter(([key, value]) => String(legacy.env?.[key]) === String(value))
@@ -212,7 +217,7 @@ function cleanLegacyEnvSettings() {
     const file = settingsPath(scope);
     let settings;
     try { settings = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { continue; }
-    if (!settings.env) continue;
+    if (!settings.env || !hasGatewayBaseUrl(settings)) continue;
     let changed = false;
     for (const [k, v] of Object.entries(LEGACY_ENV_BLOCK)) {
       if (String(settings.env[k]) === String(v)) {
