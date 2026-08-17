@@ -640,6 +640,31 @@ test('SQ-2211: settings that enable codebase-mapper leave no registry row but do
   assert.match(output().systemMessage, /this project has a codebase map but no codebase-mapper install/);
 });
 
+test('SQ-2211: a marketplace the project declares with auto-update on is not reported as off', (t) => {
+  const project = mappedProject(t, { withMap: false });
+  const output = () => hookOutput({
+    ...hookFixture({
+      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+      'contractify-dev@contractify': [{ scope: 'project', projectPath: project, version: '1.0.0' }],
+    }, { workbench: '0.49.0' }),
+    marketplaces: { contractify: { lastUpdated: new Date().toISOString() } },
+    loadedVersion: '0.49.0',
+    input: { cwd: project },
+  });
+
+  assert.match(output().systemMessage, /contractify auto-update is off/);
+
+  fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
+  fs.writeFileSync(path.join(project, '.claude', 'settings.json'), JSON.stringify({
+    extraKnownMarketplaces: { contractify: { autoUpdate: true } },
+  }));
+  // A later layer that names the marketplace without a flag must not read as a disable.
+  fs.writeFileSync(path.join(project, '.claude', 'settings.local.json'), JSON.stringify({
+    extraKnownMarketplaces: { contractify: { source: { source: 'github', repo: 'contractify/claude-marketplace' } } },
+  }));
+  assert.doesNotMatch(output().systemMessage, /contractify auto-update is off/);
+});
+
 test('SQ-2211: a board whose settings enable Sidequest is not reported as missing an install', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-board-'));

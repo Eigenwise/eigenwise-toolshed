@@ -299,19 +299,42 @@ function requiredVersions(versions) {
 // the "nothing maintains it" finding fired against a maintained map (SQ-2211). Registry rows stay the
 // authority on which VERSION a project runs; they were never the authority on whether the plugin is there.
 // Later layers win, so an explicit false in a higher-precedence file disables what a lower one enabled.
+function settingsLayers(projectPath, home) {
+  const layers = [['user', path.join(home, '.claude', 'settings.json')]];
+  if (projectPath) {
+    layers.push(['project', path.join(projectPath, '.claude', 'settings.json')]);
+    layers.push(['project', path.join(projectPath, '.claude', 'settings.local.json')]);
+  }
+  return layers;
+}
+
 function settingsActivationScope(pluginId, projectPath, home) {
-  const layers = [
-    ['user', path.join(home, '.claude', 'settings.json')],
-    ['project', projectPath && path.join(projectPath, '.claude', 'settings.json')],
-    ['project', projectPath && path.join(projectPath, '.claude', 'settings.local.json')],
-  ];
   let scope = null;
-  for (const [layerScope, file] of layers) {
-    if (!file) continue;
+  for (const [layerScope, file] of settingsLayers(projectPath, home)) {
     const enabled = readJson(file)?.enabledPlugins?.[pluginId];
     if (typeof enabled === 'boolean') scope = enabled ? layerScope : null;
   }
   return scope;
+}
+
+// Marketplace registration lives in the same user registry, and a project declaring its own marketplace with
+// `autoUpdate: true` under extraKnownMarketplaces does not write that flag there either: contractify declares
+// it for two marketplaces the registry records with no flag at all, so both reported as off (SQ-2211). Only the
+// flag is overlaid, and only onto an entry that is registered, because installLocation and lastUpdated exist
+// nowhere else and an unregistered marketplace is still worth saying out loud.
+function withDeclaredAutoUpdate(marketplaces, projectPath, home) {
+  const declared = new Map();
+  for (const [, file] of settingsLayers(projectPath, home)) {
+    for (const [name, entry] of Object.entries(readJson(file)?.extraKnownMarketplaces || {})) {
+      if (typeof entry?.autoUpdate === 'boolean') declared.set(name, entry.autoUpdate);
+    }
+  }
+  if (!declared.size) return marketplaces;
+  const merged = { ...marketplaces };
+  for (const [name, autoUpdate] of declared) {
+    if (merged[name]) merged[name] = { ...merged[name], autoUpdate };
+  }
+  return merged;
 }
 
 function boardMappings(boards, instances, home) {
@@ -360,7 +383,8 @@ function currentProjectInstances(instances, currentProject) {
 function audit(options = {}) {
   const home = options.home || os.homedir();
   const registry = options.registry || readJson(path.join(home, '.claude', 'plugins', 'installed_plugins.json')) || {};
-  const marketplaces = options.marketplaces || readJson(path.join(home, '.claude', 'plugins', 'known_marketplaces.json')) || {};
+  const registeredMarketplaces = options.marketplaces || readJson(path.join(home, '.claude', 'plugins', 'known_marketplaces.json')) || {};
+  const marketplaces = withDeclaredAutoUpdate(registeredMarketplaces, options.currentProject, home);
   const now = options.now ?? Date.now();
   const instances = pluginInstances(registry);
   const manifestFor = options.manifestFor || ((_name, entry) => marketplaceManifest(entry));
