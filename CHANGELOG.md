@@ -8,6 +8,71 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.478.0 (2026-08-17)
+
+### model-gateway 0.48.9 → 0.48.10
+
+#### Fixes
+
+- The gateway tells you when it needs you, instead of telling only the model (SQ-1901)
+  The gateway's session-start hook has always noticed a half-configured state: not set up, not signed in, running
+  but not wired to this session, a proxy it could not start. It said so on stdout, which is model context and
+  nothing else, so the one person who could fix it never saw a word. A session sat unwired for hours and it took
+  asking the model which hooks had run to find out.
+
+  Now those states get one line in the session's system message, where you can actually see it, and each names its
+  own exact command. Routine output stays out of it, so a healthy session says nothing to you. The hook always
+  exits 0 for this reason: Claude Code reads a hook's message only from a clean exit, so failing loudly there
+  would trade the line you can read for a bare "hook failed" badge. Running `ensure` yourself still exits nonzero.
+
+  One new state is called out: wiring that exists only as an exported `ANTHROPIC_BASE_URL` with no settings file
+  behind it. That routes the terminal you exported it in and nothing else, and `setup` deliberately will not copy
+  an environment value into your settings, so it skipped the write on every run and said nothing useful about it.
+  Both messages now name `env --write-user`.
+
+### sidequest 4.52.6 → 4.52.7
+
+#### Fixes
+
+- A candidate review can only close from the tree it was asked to review (SQ-2207)
+  A review-audit ticket bound to an exact candidate is dispatched into an isolated checkout at that commit, and
+  its briefing tells it to detach onto it. Nothing checked that it was still standing there when it closed, so a
+  reviewer that walked off the candidate could record a verdict about different code. That is how a commit whose
+  own suite passed got rejected.
+
+  A review now ENDS on its candidate. At a terminal `done` the board reads the review checkout's own revision:
+  another commit is refused as `review_tree_mismatch`, which names the observed revision, the candidate, and the
+  exact `git -C <worktree> checkout --detach <candidate>` repair, and a checkout it cannot read at all is refused
+  as `review_tree_unobservable` and released as a technical blocker instead of closing unobserved. The reviewer
+  is told the rule in its briefing, including that comparing against the integration branch never needs HEAD to
+  move. A review that finds a defect is unaffected: it still releases with kind oracle.
+
+### workbench 0.88.2 → 0.88.3
+
+#### Fixes
+
+- Project health findings you have to fix now reach you, not only the model (SQ-1900)
+  The session-start health check emits its report as SessionStart additional context, which only the model reads.
+  So a finding you personally had to go fix reached nobody. On 2026-08-13 it correctly found a Sidequest board
+  whose install had been pruned away, auto-update off, and a stale marketplace cache, and none of that surfaced
+  until someone thought to ask the model what hooks had fired.
+
+  Findings that need YOUR action now get one line in the session's system message: the worst one, a count of the
+  rest, and a nudge to ask for the full health report. A session with nothing wrong still says nothing at all,
+  because this fires on every session start and noise is how a warning stops being read. Which findings those are
+  is recorded where each one is produced, not guessed from its wording: a missing install, an unregistered
+  marketplace, a gateway that is down or unauthenticated, and a Node or Claude Code below the floor block you;
+  auto-update off and a stale cache are drifting on you. An install merely behind its cached version stays quiet
+  here, because the update notice already names it with its remedy.
+- A codebase map with nothing maintaining it now says so (SQ-2209)
+  The session-start health check already tells you when a Sidequest board has lost its Sidequest install. A
+  codebase map had no equivalent: a project carrying `.claude/.codebase-info` with codebase-mapper uninstalled kept
+  injecting that map on every session start, which reads as maintained while it quietly goes out of date.
+
+  That state is now a finding, with the same distinction the board check makes: a user-scope install is called out
+  as having no project or local install rather than none at all. A project with no map is never asked to install a
+  mapper.
+
 ## v3.477.0 (2026-08-17)
 
 ### codebase-mapper 2.15.4 → 2.15.5
