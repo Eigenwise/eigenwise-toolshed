@@ -592,27 +592,6 @@ function withWorkforce(context) {
   return `${truncateUtf82(context, Math.max(0, contextBytes))}
 ${section}`;
 }
-function provisionExecAgents() {
-  try {
-    const store = require(runtimeModule("store"));
-    const sync = require(runtimeModule("agentsync"));
-    store.sweepStaleClaims({ source: "session-start" });
-    sync.cleanupNativeAgents({ staleBefore: Date.now() - 6 * 60 * 60 * 1e3 });
-    return sync.syncExecAgentsIfChanged();
-  } catch (_) {
-    return null;
-  }
-}
-function reconcileLostLaunches(data) {
-  try {
-    const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
-    const store = require(runtimeModule("store"));
-    const result = store.reconcileLaunchedDispatches(sessionId3, { source: "session-start" });
-    return result && Array.isArray(result.reconciled) ? result.reconciled : [];
-  } catch (_) {
-    return [];
-  }
-}
 function nudgeOff() {
   const value = String(process.env.SIDEQUEST_NUDGE || "").trim().toLowerCase();
   return value === "off" || value === "0" || value === "false" || value === "no";
@@ -645,10 +624,8 @@ async function main() {
     const sessionId3 = stringField(data, "session_id", "sessionId") || process.env.CLAUDE_CODE_SESSION_ID || "";
     initializeCompactionState(sessionId3, data.transcript_path || data.transcriptPath);
   }
-  const syncResult = provisionExecAgents();
   reportLoadedSidequestVersion(data, { pluginRoot: pluginRoot() });
   const freshnessNotice = sidequestReloadWarning(stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd(), { pluginRoot: pluginRoot() });
-  const lostLaunches = reconcileLostLaunches(data);
   registerSweepSession(data);
   let sweepNotices = [];
   try {
@@ -659,8 +636,6 @@ async function main() {
   const source = stringField(data, "source");
   const restartNotice = [
     freshnessNotice,
-    syncResult && syncResult.written > 0 ? require(runtimeModule("agentsync")).RESTART_NOTICE : "",
-    lostLaunches.length ? `sidequest: ${lostLaunches.join(", ")} launched but never claimed. Re-dispatch and spawn the returned spec.` : "",
     source === "compact" || source === "resume" ? "" : diagnosticWorktreeWarning(data),
     ...sweepNotices
   ].filter(Boolean).join("\n");
