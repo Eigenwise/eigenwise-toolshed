@@ -1,4 +1,5 @@
 import './_temp-cleanup.js';
+import './_sidequest-install-fixture.js';
 'use strict';
 
 const test = require('node:test');
@@ -10,6 +11,9 @@ const path = require('node:path');
 const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-story-log-'));
 const PROJECT_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-story-log-project-'));
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
+// Point discovery at an empty directory: this machine has a real model-gateway catalog, and the dispatch
+// preparation below would otherwise route against whatever models it happens to advertise today.
+process.env.SIDEQUEST_DISCOVERY_DIRS = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-story-log-nocatalog-'));
 
 const store = require('../lib/store.js');
 const { makeCliRunner } = require('./_helpers.js');
@@ -33,6 +37,22 @@ function claim(ref: string, by: string) {
 
 function append(storyRef: string, ref: string, by: string, entry: string) {
   return store.appendStoryLogEntry(slug, storyRef, { ref, by, entry });
+}
+
+function decide(storyRef: string, entry: string) {
+  return store.appendStoryLogEntry(slug, storyRef, { by: 'orchestrator', entry });
+}
+
+function storyWarnings(ref: string): string[] {
+  return store.pulsePayload(slug, ref).warnings || [];
+}
+
+function routableMember(storyRef: string, title: string) {
+  return store.createTicket(slug, { title, storyId: storyRef, source: 'test', category: 'general' });
+}
+
+function prepare(ref: string) {
+  return store.prepareDispatch(slug, ref, { allowUnscoped: true, sharedTree: true });
 }
 
 test('story execution contract errors report measured bytes and overage', () => {
@@ -266,4 +286,86 @@ test('derived warnings appear in pulse and changes without touching sibling upda
   assert.equal(store.pulsePayload(slug, sibling.ref).warnings, undefined);
   const changedAfterSeen = store.changesPayload(slug, beforeClaim).tickets.find((ticket: any) => ticket.ref === sibling.ref);
   assert.equal(changedAfterSeen.warnings, undefined);
+});
+
+// SQ-2079 reported a warning that named a decision predating its ticket, on a ticket that was still todo.
+// Four writers set the boundary the warning compares against (creation, story attach, dispatch preparation,
+// claim), so which one ran decides whether a given decision counts as unseen. One case passing proves
+// nothing about the others, and the whole matrix has to stay pinned: every order below except the last two
+// describes a decision the briefing already carried, and a warning there is the false one that teaches
+// orchestrators to ignore the check.
+test('SQ-2079: a decision that predates the ticket is not reported as gained', () => {
+  const createdStory = story('Decision before the ticket');
+  decide(createdStory.ref, 'DECISION: settled before any ticket existed');
+  const ticket = member(createdStory.ref, 'Filed after the decision');
+
+  assert.equal(store.getTicket(slug, ticket.ref).storyLogSeenSeq, 1, 'creation must record the decisions the story already had');
+  assert.deepEqual(storyWarnings(ticket.ref), []);
+});
+
+test('SQ-2079: claiming a ticket filed after a decision reports nothing', () => {
+  const createdStory = story('Decision before the claim');
+  decide(createdStory.ref, 'DECISION: settled before any ticket existed');
+  const ticket = member(createdStory.ref, 'Filed after the decision');
+  claim(ticket.ref, 'before-ticket-worker');
+
+  assert.deepEqual(storyWarnings(ticket.ref), []);
+});
+
+test('SQ-2079: an unclaimed todo ticket is never told a decision is missing from its briefing', () => {
+  const createdStory = story('Decision after the ticket');
+  const ticket = member(createdStory.ref, 'Filed before the decision');
+  decide(createdStory.ref, 'DECISION: landed while the ticket sat in todo');
+
+  assert.equal(store.getTicket(slug, ticket.ref).claim, null);
+  assert.deepEqual(storyWarnings(ticket.ref), [], 'nothing has frozen a briefing yet, so nothing can be missing from one');
+});
+
+test('SQ-2079: claiming after the decision moves the boundary to the claim', () => {
+  const createdStory = story('Decision before a later claim');
+  const ticket = member(createdStory.ref, 'Claimed after the decision');
+  decide(createdStory.ref, 'DECISION: landed while the ticket sat in todo');
+  const claimed = claim(ticket.ref, 'after-decision-worker');
+
+  assert.equal(claimed.storyLogSeenSeq, 1);
+  assert.deepEqual(storyWarnings(ticket.ref), [], 'the briefing this claim froze already carried the decision');
+});
+
+test('SQ-2079: preparing a dispatch after the decision moves the boundary to the preparation', () => {
+  const createdStory = story('Decision before preparation');
+  const ticket = routableMember(createdStory.ref, 'Prepared after the decision');
+  decide(createdStory.ref, 'DECISION: landed before the dispatch was prepared');
+  const prepared = prepare(ticket.ref);
+
+  assert.equal(prepared.ticket.dispatch.storyLogRevision, 1);
+  assert.deepEqual(storyWarnings(ticket.ref), []);
+});
+
+test('SQ-2079: a decision after the dispatch was prepared warns and names the preparation', () => {
+  const createdStory = story('Decision after preparation');
+  const ticket = routableMember(createdStory.ref, 'Prepared before the decision');
+  prepare(ticket.ref);
+  decide(createdStory.ref, 'DECISION: landed after the briefing was frozen');
+
+  assert.match(storyWarnings(ticket.ref).join('\n'), /decision log gained 1 entry \(#1\) since .* was prepared; it is not in its briefing/);
+});
+
+test('SQ-2079: attaching a claimed ticket to a story inherits the decisions it already has', () => {
+  const createdStory = story('Attached after a decision');
+  decide(createdStory.ref, 'DECISION: settled before this ticket joined the story');
+  const ticket = store.createTicket(slug, { title: 'Joined the story late', source: 'test' });
+  claim(ticket.ref, 'attached-worker');
+  store.updateTicket(slug, ticket.ref, { storyId: createdStory.ref });
+
+  assert.equal(store.getTicket(slug, ticket.ref).storyLogSeenSeq, 1, 'the attach boundary is what the briefing will carry');
+  assert.deepEqual(storyWarnings(ticket.ref), []);
+});
+
+test('SQ-2079: a decision after the claim warns and names the claim', () => {
+  const createdStory = story('Decision after the claim');
+  const ticket = member(createdStory.ref, 'Claimed before the decision');
+  claim(ticket.ref, 'after-claim-worker');
+  decide(createdStory.ref, 'DECISION: landed after the briefing was frozen');
+
+  assert.match(storyWarnings(ticket.ref).join('\n'), /decision log gained 1 entry \(#1\) since .* was claimed; it is not in its briefing/);
 });
