@@ -45,6 +45,7 @@ tag, then pushes the plugin tags separately.
 // is removed before the suite runs. The engine still re-verifies every ref afterwards, because
 // stripping credentials is a reduction in reach, not a proof.
 const GITHUB_RELEASE_WORKFLOW = 'Publish GitHub Release';
+const GITHUB_RELEASE_DEFERRED_MESSAGE = 'GitHub Release deferred by the daily cap; the scheduled publish will cover this tag.';
 const GITHUB_RELEASE_POLL_INTERVAL_MS = 2_000;
 const GITHUB_RELEASE_TIMEOUT_MS = 10 * 60 * 1_000;
 
@@ -266,7 +267,7 @@ export async function assertGitHubReleasePublished(
       windowsHide: true,
     });
     if (release.error) throw new Error(`cannot check GitHub Release ${tag}: ${release.error.message}`);
-    if (release.status === 0) return { tag };
+    if (release.status === 0) return { tag, status: 'published' };
 
     const workflow = runner('gh', [
       'run', 'list', '--workflow', GITHUB_RELEASE_WORKFLOW, '--commit', commit,
@@ -288,7 +289,17 @@ export async function assertGitHubReleasePublished(
       throw new Error(`cannot read ${GITHUB_RELEASE_WORKFLOW} status for ${tag}: gh returned invalid JSON`);
     }
     const run = Array.isArray(runs) && runs.find((candidate) => candidate?.headSha === commit);
-    if (run?.conclusion && run.conclusion !== 'success') {
+    if (run?.conclusion === 'success') {
+      const completedRelease = runner('gh', ['release', 'view', tag], {
+        cwd: repoRoot,
+        encoding: 'utf8',
+        windowsHide: true,
+      });
+      if (completedRelease.error) throw new Error(`cannot check GitHub Release ${tag}: ${completedRelease.error.message}`);
+      if (completedRelease.status === 0) return { tag, status: 'published' };
+      return { tag, status: 'deferred', message: GITHUB_RELEASE_DEFERRED_MESSAGE };
+    }
+    if (run?.conclusion) {
       throw new Error(`${GITHUB_RELEASE_WORKFLOW} for ${tag} concluded ${run.conclusion}; GitHub Release was not published`);
     }
     if (now() >= deadline) {
@@ -536,6 +547,7 @@ export async function cut(options = {}) {
       const pluginPush = pluginTagRefspecs(plan);
       const pushCommands = publishCommands(plan, { remote, commit });
       let pushed = false;
+      let githubRelease = null;
       if (push) {
         git.pushAtomic(remote, marketplacePush);
         marketplacePublished = true;
@@ -543,7 +555,8 @@ export async function cut(options = {}) {
         if (githubRemote) {
           const assertReleasePublished = options.assertGitHubReleasePublished
             ?? ((repoRoot, tag, releaseCommit) => assertGitHubReleasePublished(repoRoot, tag, releaseCommit));
-          await assertReleasePublished(repoRoot, plan.tag, commit);
+          githubRelease = await assertReleasePublished(repoRoot, plan.tag, commit);
+          if (githubRelease.status === 'deferred') log(githubRelease.message);
         }
         pushed = true;
         log(`published ${plan.tag} (${commit})`);
@@ -559,7 +572,7 @@ export async function cut(options = {}) {
 
       return {
         status: 'cut', plan, commit, message, pushed, refspecs, marketplacePush, pluginPush,
-        pushCommands, touched, consumed, ci,
+        pushCommands, touched, consumed, ci, githubRelease,
       };
     } catch (error) {
       throw new Error(`${error.message}\n${releaseRecoveryInstructions(plan, basePin, remote, marketplacePublished)}`, { cause: error });
@@ -629,6 +642,7 @@ export async function main(argv) {
       pushCommand: result.pushCommand ?? null,
       refspecs: result.refspecs ?? [],
       ci: result.ci ?? null,
+      githubRelease: result.githubRelease ?? null,
       touched: result.touched ?? [],
       consumed: result.consumed ?? [],
       plan: result.plan,

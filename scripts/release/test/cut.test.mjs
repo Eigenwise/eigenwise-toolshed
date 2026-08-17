@@ -6,6 +6,7 @@ import path from 'node:path';
 import test from 'node:test';
 
 import { assertGitHubReleasePublished, assertParentCiPassed, cut, defaultSuiteRunner } from '../cut.mjs';
+import { createGit } from '../lib/git.mjs';
 import { readValue } from '../lib/jsonedit.mjs';
 import { makeGitRepo } from './realrepo.mjs';
 
@@ -320,17 +321,11 @@ test('a failed Test workflow refuses before suites or release mutations', async 
   assert.deepEqual(context.remoteRefs(), before);
 });
 
-test('a published GitHub Release is checked after its workflow completes', async () => {
-  let releaseChecks = 0;
+test('a successful GitHub Release workflow defers to the daily cap', async () => {
   const calls = [];
   const runner = (command, args) => {
     calls.push([command, ...args]);
-    if (args[0] === 'release') {
-      releaseChecks += 1;
-      return releaseChecks === 1
-        ? { status: 1, stdout: '', stderr: 'release not found' }
-        : { status: 0, stdout: 'v3.208.0', stderr: '' };
-    }
+    if (args[0] === 'release') return { status: 1, stdout: '', stderr: 'release not found' };
     return {
       status: 0,
       stdout: JSON.stringify([{ headSha: 'release-commit', conclusion: 'success' }]),
@@ -344,12 +339,64 @@ test('a published GitHub Release is checked after its workflow completes', async
     now: () => 0,
   });
 
-  assert.deepEqual(release, { tag: 'v3.208.0' });
+  assert.deepEqual(release, {
+    tag: 'v3.208.0',
+    status: 'deferred',
+    message: 'GitHub Release deferred by the daily cap; the scheduled publish will cover this tag.',
+  });
   assert.deepEqual(calls, [
     ['gh', 'release', 'view', 'v3.208.0'],
     ['gh', 'run', 'list', '--workflow', 'Publish GitHub Release', '--commit', 'release-commit', '--status', 'completed', '--limit', '1', '--json', 'conclusion,headSha'],
     ['gh', 'release', 'view', 'v3.208.0'],
   ]);
+});
+
+test('a failed GitHub Release workflow still fails the cut', async () => {
+  const runner = (command, args) => {
+    if (args[0] === 'release') return { status: 1, stdout: '', stderr: 'release not found' };
+    return {
+      status: 0,
+      stdout: JSON.stringify([{ headSha: 'release-commit', conclusion: 'failure' }]),
+      stderr: '',
+    };
+  };
+
+  await assert.rejects(
+    () => assertGitHubReleasePublished('/repo', 'v3.208.0', 'release-commit', { runner, now: () => 0 }),
+    /Publish GitHub Release for v3\.208\.0 concluded failure; GitHub Release was not published/,
+  );
+});
+
+test('a cut succeeds and reports a deferred GitHub Release', async (t) => {
+  const context = setup(t);
+  context.writeFragment('SQ-1', { plugins: ['sidequest'], bump: 'patch' });
+  context.commit('integrate');
+  const logs = [];
+  const git = {
+    ...createGit({ cwd: context.root }),
+    remoteUrl: () => 'git@github.com:Eigenwise/eigenwise-toolshed.git',
+  };
+  const deferredRelease = {
+    tag: 'v3.208.0',
+    status: 'deferred',
+    message: 'GitHub Release deferred by the daily cap; the scheduled publish will cover this tag.',
+  };
+
+  const result = await cut({
+    repoRoot: context.root,
+    git,
+    push: true,
+    skipTests: true,
+    log: (message) => logs.push(message),
+    publishLock: { acquire: async () => ({ ok: true }), release: async () => ({ ok: true }) },
+    assertParentCiPassed: (repoRoot, commit) => ({ commit, conclusion: 'success' }),
+    assertGitHubReleasePublished: async (repoRoot, tag, commit) => ({ ...deferredRelease, tag }),
+  });
+
+  assert.equal(result.status, 'cut');
+  assert.equal(result.pushed, true);
+  assert.deepEqual(result.githubRelease, deferredRelease);
+  assert.ok(logs.includes(deferredRelease.message));
 });
 
 test('a local cut prints the passing remote CI verdict with its push command', async (t) => {
