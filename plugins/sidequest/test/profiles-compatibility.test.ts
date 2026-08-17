@@ -285,4 +285,30 @@ test('provider capability changes migrate only untouched seeds and preserve prep
   assert.ok(pinned.dispatch.policyChangedAt);
 });
 
+// SQ-2196. The routing-profile seed refresh runs from database(), which any code inside an open transaction
+// is free to call, and it began its own transaction with db.txn. SQLite has no nested transactions, so a
+// stale seed encountered at that moment threw `cannot start a transaction within a transaction` out of
+// whatever unrelated operation was running. It reddened main from a submission test on windows-latest while
+// the real trigger was a routing profile left mismatched by something that ran earlier in the process.
+//
+// This is a source-level assertion on purpose, and it is not a substitute for behavioral coverage. The
+// runtime half of the behavior belongs to SQLite, not to us: our half is the rule "everything that begins a
+// transaction goes through the one depth-guarded helper", which is structural, and neither `database` nor
+// `transaction` is on the store's public surface, so a test cannot drive the interleaving from outside. What
+// this catches is the actual regression risk, a third writer added with a direct db.txn call.
+test('SQ-2196: only the depth-guarded helper begins a transaction', () => {
+  const source = fs.readFileSync(path.join(ROOT, 'src', 'lib', 'store.ts'), 'utf8');
+  const openers = source.match(/db\.txn\(/g) ?? [];
+  assert.equal(
+    openers.length,
+    1,
+    `store.ts must begin transactions only inside withinTransaction, found ${openers.length} db.txn callers`,
+  );
+  assert.match(
+    source,
+    /function withinTransaction\([^)]*\)[^]*?db\.txn\(/,
+    'the single db.txn call must be the one inside withinTransaction',
+  );
+});
+
 export {};

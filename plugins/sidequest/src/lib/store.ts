@@ -521,6 +521,21 @@ const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorkt
 const dbByHome = new Map<string, any>();
 const transactionDepth = new WeakMap<object, number>();
 
+// SQLite has no nested transactions, so anything that begins one has to know whether one is already open on
+// that handle. Every writer must come through here rather than calling db.txn itself: the seed refreshers
+// did, and since they run from database(), which code inside an open transaction is free to call, a stale
+// seed turned into `cannot start a transaction within a transaction` from whichever unrelated test happened
+// to leave a routing profile entry mismatched (SQ-2196).
+function withinTransaction(handle: object, fn: () => any) {
+  if (transactionDepth.get(handle)) return fn();
+  transactionDepth.set(handle, 1);
+  try {
+    return db.txn(handle, fn);
+  } finally {
+    transactionDepth.delete(handle);
+  }
+}
+
 cacheLayer = createCache({ database, db, fs });
 
 const {
@@ -1111,7 +1126,7 @@ function refreshRoutingProfileSeeds(handle?: any) {
     pending.push({ seed, profileId: profile.id });
   }
   if (!pending.length) return;
-  db.txn(handle, () => {
+  withinTransaction(handle, () => {
     const now = new Date().toISOString();
     const affected = new Set<string>();
     for (const { seed, profileId } of pending) {
@@ -1142,7 +1157,7 @@ function refreshReadonlyCategorySeeds(handle?: any) {
   ]);
   const affected = new Set<string>();
   let changed = false;
-  db.txn(handle, () => {
+  withinTransaction(handle, () => {
     const updateProfileEntry = handle.prepare('UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?');
     const updateProjectEntry = handle.prepare('UPDATE project_categories SET data = ? WHERE project = ? AND id = ?');
     const now = new Date().toISOString();
@@ -1189,14 +1204,7 @@ function database() {
 }
 
 function transaction(fn?: any) {
-  const handle = database();
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
-  try {
-    return db.txn(handle, fn);
-  } finally {
-    transactionDepth.delete(handle);
-  }
+  return withinTransaction(database(), fn);
 }
 
 function putProject(slug?: any, meta?: any) {

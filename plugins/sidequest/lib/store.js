@@ -619,6 +619,15 @@ function nextDispatchLaunchSeq(state) {
 const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorktreeRoot, nearestRepoRoot, projectDir, ticketsDir, assetsDir } = createPaths({ fs, os, path, crypto });
 const dbByHome = /* @__PURE__ */ new Map();
 const transactionDepth = /* @__PURE__ */ new WeakMap();
+function withinTransaction(handle, fn) {
+  if (transactionDepth.get(handle)) return fn();
+  transactionDepth.set(handle, 1);
+  try {
+    return db.txn(handle, fn);
+  } finally {
+    transactionDepth.delete(handle);
+  }
+}
 cacheLayer = createCache({ database, db, fs });
 const {
   acquireLock,
@@ -1175,7 +1184,7 @@ function refreshRoutingProfileSeeds(handle) {
     pending.push({ seed, profileId: profile.id });
   }
   if (!pending.length) return;
-  db.txn(handle, () => {
+  withinTransaction(handle, () => {
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const affected = /* @__PURE__ */ new Set();
     for (const { seed, profileId } of pending) {
@@ -1205,7 +1214,7 @@ function refreshReadonlyCategorySeeds(handle) {
   ]);
   const affected = /* @__PURE__ */ new Set();
   let changed = false;
-  db.txn(handle, () => {
+  withinTransaction(handle, () => {
     const updateProfileEntry = handle.prepare("UPDATE routing_profile_entries SET data = ?, updated_at = ? WHERE profile_id = ? AND category_id = ?");
     const updateProjectEntry = handle.prepare("UPDATE project_categories SET data = ? WHERE project = ? AND id = ?");
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -1258,14 +1267,7 @@ function database() {
   return handle;
 }
 function transaction(fn) {
-  const handle = database();
-  if (transactionDepth.get(handle)) return fn();
-  transactionDepth.set(handle, 1);
-  try {
-    return db.txn(handle, fn);
-  } finally {
-    transactionDepth.delete(handle);
-  }
+  return withinTransaction(database(), fn);
 }
 function putProject(slug, meta) {
   putCachedRow(database(), "projects", { slug, data: meta });
