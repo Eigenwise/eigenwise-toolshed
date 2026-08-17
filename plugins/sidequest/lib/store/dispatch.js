@@ -1704,6 +1704,51 @@ function createDispatch(dependencies) {
     state.bindSource = "claim_token";
     return boundAttempt;
   }
+  function unclaimedCreationReservation(ticket, state, sessionId) {
+    return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt && !state.continuation?.sourceWorktree && state.worktreeBindingSource === "worktree-create" && state.worktree && !state.agentId && !state.claimedAt && !ticket?.claim?.by);
+  }
+  function applyExchangedCreationBinding(state, facts, otherRef, now) {
+    const from = canonicalPath(state.worktree);
+    state.worktree = facts.worktree;
+    state.worktreeGitDirectory = facts.gitDirectory;
+    state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+    state.worktreeCheckoutInstance = facts.checkoutInstance;
+    state.worktreeObservedRevision = facts.revision;
+    state.worktreeBoundAt = now;
+    state.worktreeBindingExchange = { at: now, from, with: otherRef, reason: "creation_order" };
+  }
+  function exchangeCrossedCreationBinding(slug, ticketId, sessionId, reportedWorktree) {
+    const reported = canonicalPath(String(reportedWorktree || "").trim());
+    const target = getTicket(slug, ticketId);
+    const targetState = dispatchState(target);
+    if (!reported || !unclaimedCreationReservation(target, targetState, sessionId)) return null;
+    const held = canonicalPath(targetState.worktree);
+    if (held === reported) return null;
+    const holder = listTickets(slug).find((candidate) => candidate.id !== target.id && unclaimedCreationReservation(candidate, dispatchState(candidate), sessionId) && canonicalPath(dispatchState(candidate).worktree) === reported);
+    if (!holder) return null;
+    const baseline = String(targetState.baseCommit || "").trim();
+    if (!baseline || baseline !== String(dispatchState(holder).baseCommit || "").trim()) return null;
+    const reportedFacts = immutableWorktreeFacts(slug, reported);
+    const heldFacts = immutableWorktreeFacts(slug, held);
+    if (!reportedFacts || !heldFacts || reportedFacts.revision !== baseline || heldFacts.revision !== baseline) return null;
+    const [firstId, secondId] = [target.id, holder.id].sort();
+    const factsFor = /* @__PURE__ */ new Map([[target.id, reportedFacts], [holder.id, heldFacts]]);
+    const refFor = /* @__PURE__ */ new Map([[target.id, holder.ref], [holder.id, target.ref]]);
+    return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
+      const now = (/* @__PURE__ */ new Date()).toISOString();
+      for (const id of [firstId, secondId]) {
+        const ticket = getTicket(slug, id);
+        const state = dispatchState(ticket);
+        if (!unclaimedCreationReservation(ticket, state, sessionId)) return null;
+        const facts = factsFor.get(id);
+        if (!facts || canonicalPath(state.worktree) === facts.worktree) return null;
+        applyExchangedCreationBinding(state, facts, refFor.get(id), now);
+        stampDispatchEvent(ticket, "worktree-create-exchange", now);
+        putTicket(slug, ticket);
+      }
+      return { ok: true, exchangedWith: holder.ref };
+    }));
+  }
   function bindDispatchAgent(sessionId, executor, agentId, agentName, worktree) {
     const normalizedSessionId = String(sessionId || "").trim();
     const normalizedExecutor = String(executor || "").trim();
@@ -1734,6 +1779,9 @@ function createDispatch(dependencies) {
     const tickets = [];
     for (const match of matches) {
       const reportsParentCheckout = match.sharedTree === false && normalizedWorktree && reportsRegisteredProjectCheckout(match.slug, normalizedWorktree);
+      if (match.sharedTree === false && normalizedWorktree && !reportsParentCheckout && !match.state.continuation?.sourceWorktree) {
+        exchangeCrossedCreationBinding(match.slug, match.id, normalizedSessionId, normalizedWorktree);
+      }
       const result = withTicketLock(match.slug, match.id, () => {
         const t = getTicket(match.slug, match.id);
         const state = dispatchState(t);

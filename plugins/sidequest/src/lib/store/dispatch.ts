@@ -1961,6 +1961,68 @@ function bindDispatchClaimToken(state?: any, attempt?: any, sessionId?: any, exe
   return boundAttempt;
 }
 
+function unclaimedCreationReservation(ticket?: any, state?: any, sessionId?: any) {
+  return Boolean(state && state.sessionId === sessionId && state.sharedTree === false && !state.terminalAt
+    && !state.continuation?.sourceWorktree && state.worktreeBindingSource === 'worktree-create' && state.worktree
+    && !state.agentId && !state.claimedAt && !ticket?.claim?.by);
+}
+
+function applyExchangedCreationBinding(state?: any, facts?: any, otherRef?: any, now?: any) {
+  const from = canonicalPath(state.worktree);
+  state.worktree = facts.worktree;
+  state.worktreeGitDirectory = facts.gitDirectory;
+  state.worktreeCommonGitDirectory = facts.commonGitDirectory;
+  state.worktreeCheckoutInstance = facts.checkoutInstance;
+  state.worktreeObservedRevision = facts.revision;
+  state.worktreeBoundAt = now;
+  state.worktreeBindingExchange = { at: now, from, with: otherRef, reason: 'creation_order' };
+}
+
+// Worktree creation cannot know which reservation a new checkout belongs to: its hook carries the session and the
+// path, and the harness agent id that names the path first reaches the board HERE. Under a fan-out every sibling
+// reservation is eligible, so creation attributes them in creation order, and any other creation order leaves each
+// reservation holding a sibling's checkout (SQ-2190). This bind is the first fact that can settle it, because the
+// agent reports the checkout it is actually running in, and an observation outranks a guess.
+//
+// Confined to two reservations of the same session that are both still unclaimed and identity-unbound, so a
+// checkout is never taken from an executor that has proven it owns one, and a path no reservation in this session
+// created still matches nothing and is still refused. Both records are rewritten under one transaction, with the
+// locks taken in id order so two siblings exchanging at once cannot deadlock and the loser finds nothing to do.
+function exchangeCrossedCreationBinding(slug?: any, ticketId?: any, sessionId?: any, reportedWorktree?: any) {
+  const reported = canonicalPath(String(reportedWorktree || '').trim());
+  const target = getTicket(slug, ticketId);
+  const targetState = dispatchState(target);
+  if (!reported || !unclaimedCreationReservation(target, targetState, sessionId)) return null;
+  const held = canonicalPath(targetState.worktree);
+  if (held === reported) return null;
+  const holder = listTickets(slug).find((candidate?: any) => candidate.id !== target.id
+    && unclaimedCreationReservation(candidate, dispatchState(candidate), sessionId)
+    && canonicalPath(dispatchState(candidate).worktree) === reported);
+  if (!holder) return null;
+  const baseline = String(targetState.baseCommit || '').trim();
+  if (!baseline || baseline !== String(dispatchState(holder).baseCommit || '').trim()) return null;
+  const reportedFacts = immutableWorktreeFacts(slug, reported);
+  const heldFacts = immutableWorktreeFacts(slug, held);
+  if (!reportedFacts || !heldFacts || reportedFacts.revision !== baseline || heldFacts.revision !== baseline) return null;
+  const [firstId, secondId] = [target.id, holder.id].sort();
+  const factsFor = new Map([[target.id, reportedFacts], [holder.id, heldFacts]]);
+  const refFor = new Map([[target.id, holder.ref], [holder.id, target.ref]]);
+  return withTicketLock(slug, firstId, () => withTicketLock(slug, secondId, () => {
+    const now = new Date().toISOString();
+    for (const id of [firstId, secondId]) {
+      const ticket = getTicket(slug, id);
+      const state = dispatchState(ticket);
+      if (!unclaimedCreationReservation(ticket, state, sessionId)) return null;
+      const facts = factsFor.get(id);
+      if (!facts || canonicalPath(state.worktree) === facts.worktree) return null;
+      applyExchangedCreationBinding(state, facts, refFor.get(id), now);
+      stampDispatchEvent(ticket, 'worktree-create-exchange', now);
+      putTicket(slug, ticket);
+    }
+    return { ok: true, exchangedWith: holder.ref };
+  }));
+}
+
 function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agentName?: any, worktree?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const normalizedExecutor = String(executor || '').trim();
@@ -1997,6 +2059,11 @@ function bindDispatchAgent(sessionId?: any, executor?: any, agentId?: any, agent
   for (const match of matches) {
     const reportsParentCheckout = match.sharedTree === false && normalizedWorktree
       && reportsRegisteredProjectCheckout(match.slug, normalizedWorktree);
+    // A parent-checkout report is not the agent's own checkout, so it proves nothing about which reservation owns
+    // which created target and must never move a binding.
+    if (match.sharedTree === false && normalizedWorktree && !reportsParentCheckout && !match.state.continuation?.sourceWorktree) {
+      exchangeCrossedCreationBinding(match.slug, match.id, normalizedSessionId, normalizedWorktree);
+    }
     const result = withTicketLock(match.slug, match.id, () => {
       const t = getTicket(match.slug, match.id);
       const state = dispatchState(t);

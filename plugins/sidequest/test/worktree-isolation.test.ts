@@ -709,6 +709,89 @@ test('SQ-2189: concurrent dispatches from one session each resolve to the worktr
   }
 });
 
+test('SQ-2190: a creation order that crossed two siblings is exchanged for the checkout each one reports', () => {
+  const created: Array<{ ref: string; worktree: string }> = [];
+  const sequence = `${process.pid}-${Date.now()}`;
+  const sessionId = `sq2190-session-${sequence}`;
+  const canonical = (worktree: string) => worktrees.canonicalPath(worktree);
+  const boundWorktree = (ref: string) => store.getTicket(slug, ref).dispatch.worktree;
+  const reserve = (label: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `crossed creation fixture ${label}`,
+      category: 'codebase-exploration',
+      description: 'One of several dispatches launched from a single orchestrator session.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId });
+    const agentName = `sq2190-${label}-${sequence}`;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName,
+    }).ok, true);
+    const worktree = path.join(SIDEQUEST_HOME, 'sq2190-targets', `${label}-${sequence}`);
+    fs.mkdirSync(path.dirname(worktree), { recursive: true });
+    created.push({ ref: ticket.ref, worktree });
+    return { ref: ticket.ref, executor: prepared.ticket.dispatchExecutor, agentName, worktree, agentId: `a2190${label}${sequence}`.replace(/[^a-z0-9]/g, '') };
+  };
+  const create = (worktree: string) => {
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '--detach', worktree], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(sessionId, worktree);
+  };
+
+  try {
+    const first = reserve('first');
+    const second = reserve('second');
+    assert.equal(first.executor, second.executor, 'the crossing only happens between siblings sharing an executor');
+
+    // Both reservations are unbound at the same time, which is the whole defect: creation has nothing to tell them
+    // apart, so it takes them in board order. Creating them against that order is what crosses the pair, and the
+    // assertion below is what proves this fixture still reproduces it.
+    create(first.worktree);
+    create(second.worktree);
+    assert.equal(boundWorktree(first.ref), canonical(second.worktree), `the fixture reproduces the crossing: ${boundWorktree(first.ref)} / ${boundWorktree(second.ref)} vs ${canonical(first.worktree)} / ${canonical(second.worktree)}`);
+    assert.equal(boundWorktree(second.ref), canonical(first.worktree));
+
+    // SubagentStart carries the one fact creation lacked: the checkout the agent is actually running in.
+    const bound = store.bindDispatchAgent(sessionId, first.executor, first.agentId, first.agentName, first.worktree);
+    assert.equal(bound.ok, true, `a reported checkout must outrank the creation-order guess: ${bound.reason}`);
+    assert.equal(boundWorktree(first.ref), canonical(first.worktree));
+    assert.equal(boundWorktree(second.ref), canonical(second.worktree), 'the exchange hands the sibling its own checkout');
+    assert.equal(store.getTicket(slug, first.ref).dispatch.worktreeBindingSource, 'worktree-create', 'downstream reads still require the creation source');
+
+    // The facts follow the path, or the guard refuses the write it just authorized.
+    const expectation = store.dispatchIsolationExpectation({
+      sessionId,
+      executor: first.executor,
+      agentId: first.agentId,
+      observedWorktree: first.worktree,
+    });
+    assert.equal(expectation?.ref, first.ref);
+    assert.equal(expectation.expectedWorktree, canonical(first.worktree));
+
+    // The sibling now finds its own record correct and binds without a second exchange.
+    const boundSibling = store.bindDispatchAgent(sessionId, second.executor, second.agentId, second.agentName, second.worktree);
+    assert.equal(boundSibling.ok, true, boundSibling.reason);
+    assert.equal(boundWorktree(second.ref), canonical(second.worktree));
+
+    // A checkout whose reservation already proved its identity is never handed to anyone else.
+    const third = reserve('third');
+    create(third.worktree);
+    const theft = store.bindDispatchAgent(sessionId, third.executor, third.agentId, third.agentName, first.worktree);
+    assert.equal(theft.ok, false, 'an owned checkout stays owned');
+    assert.equal(theft.reason, 'worktree_binding_mismatch');
+    assert.equal(boundWorktree(first.ref), canonical(first.worktree));
+    assert.equal(boundWorktree(third.ref), canonical(third.worktree));
+  } finally {
+    for (const target of created) {
+      store.releaseTicket(slug, target.ref, 'sq2190-cleanup', { status: 'todo', source: 'test', force: true });
+      if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
+    }
+  }
+});
+
 test('parent-checkout SubagentStart binds each completed isolated target to its reserved native agent', () => {
   const created: Array<{ ref: string; worktree: string }> = [];
   const sequence = `${process.pid}-${Date.now()}`;
