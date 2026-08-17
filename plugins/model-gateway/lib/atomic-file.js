@@ -8,6 +8,11 @@ const REPLACE_RETRY_DELAYS_MS = [20, 60, 140, 300];
 const RETRYABLE_REPLACE_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
 const STALE_TEMPORARY_FILE_MS = 60 * 60 * 1000;
 
+// Windows will not replace a file another process holds open without FILE_SHARE_DELETE, and these caches
+// are read on every SessionStart, so a losing writer has to wait out the reader instead of dropping the
+// write. Callers swallow failures, so a dropped rename is invisible except as an orphaned .tmp: 32 of them
+// piled up over eleven days before the retry existed (SQ-2212), then nine more from the writers that did
+// not use it (SQ-2228).
 function replaceFileWithRetry(temporaryPath, targetPath) {
   for (let attempt = 0; ; attempt++) {
     try {
