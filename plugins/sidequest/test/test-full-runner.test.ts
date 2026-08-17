@@ -242,8 +242,17 @@ process.on('disconnect', () => cleanup(300));
 interface DescendantFixture {
   args: string[];
   rootLifetime: number | 'spin' | `until:${number}`;
+  recordedDescendantPid: () => number | null;
   descendantPid: () => number;
   markerWritten: () => boolean;
+}
+
+// Null means the phase root was killed before it could record the pid. The root spawns its descendant and
+// only then writes the file, so null does NOT prove no descendant exists, and a caller that can tolerate the
+// missing pid still has to prove the descendant never acted (SQ-2197).
+function recordedDescendantPid(descendantPidPath: string): number | null {
+  if (!fs.existsSync(descendantPidPath)) return null;
+  return requireProcessId(Number(fs.readFileSync(descendantPidPath, 'utf8').trim()), 'the phase root');
 }
 
 let descendantFixtureCount = 0;
@@ -262,9 +271,11 @@ function descendantFixture(descendantDelayMilliseconds: number, ignoresTerm: boo
       String(rootLifetime),
     ],
     rootLifetime,
+    recordedDescendantPid: () => recordedDescendantPid(descendantPidPath),
     descendantPid: () => {
-      assert.equal(fs.existsSync(descendantPidPath), true, 'the phase root never reported its descendant, so this row proves nothing');
-      return requireProcessId(Number(fs.readFileSync(descendantPidPath, 'utf8').trim()), 'the phase root');
+      const recorded = recordedDescendantPid(descendantPidPath);
+      if (recorded === null) assert.fail('the phase root never reported its descendant, so this row proves nothing');
+      return recorded;
     },
     markerWritten: () => fs.existsSync(markerPath),
   };
@@ -657,7 +668,7 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
   sentinel.unref();
   const sentinelPid = requireProcessId(sentinel.pid, 'the unrelated sentinel');
 
-  const rows: Array<{ timedOut: boolean; descendantPid: number; markerWritten: () => boolean }> = [];
+  const rows: Array<{ timedOut: boolean; descendantPid: number | null; markerWritten: () => boolean }> = [];
   try {
     for (let row = 0; row < 100; row += 1) {
       const deadlineMilliseconds = 500;
@@ -678,13 +689,21 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
       assert.equal(result.error, null, `row ${row} reported ${result.error?.message}`);
       assert.equal(result.cleanupError, null, `row ${row} reported ${result.cleanupError}`);
       assert.equal(result.unexpectedSignalErrorCode, null, `row ${row} hit signal error ${result.unexpectedSignalErrorCode}`);
-      const descendantPid = fixture.descendantPid();
-      // Prove terminality now, while this pid still unambiguously names this row's
-      // descendant. Collecting all 100 pids and probing them afterwards left a ~50s
-      // window in which the OS could recycle an exited descendant's pid onto an
-      // unrelated live process, which then read as a leaked descendant and failed the
-      // gate on unchanged code (SQ-2179).
-      await assertTerminalWithin(descendantPid, SETTLED_BUDGET_MILLISECONDS, `the descendant of race row ${row}`);
+      const descendantPid = fixture.recordedDescendantPid();
+      // A 500ms deadline is racing this root's own interpreter startup, and on a loaded runner it sometimes
+      // wins: the root is killed after spawning its descendant but before recording the pid. That is not a
+      // failure of termination, so it must not fail the row, and it is not a free pass either, because the
+      // descendant does exist. The marker check below covers every row including this one, and it asserts
+      // the property that actually matters: nothing was left able to do work. The coverage floor after the
+      // loop is what stops this degrading into a test that proves nothing (SQ-2197).
+      if (descendantPid !== null) {
+        // Prove terminality now, while this pid still unambiguously names this row's
+        // descendant. Collecting all 100 pids and probing them afterwards left a ~50s
+        // window in which the OS could recycle an exited descendant's pid onto an
+        // unrelated live process, which then read as a leaked descendant and failed the
+        // gate on unchanged code (SQ-2179).
+        await assertTerminalWithin(descendantPid, SETTLED_BUDGET_MILLISECONDS, `the descendant of race row ${row}`);
+      }
       rows.push({ timedOut: result.timedOut, descendantPid, markerWritten: fixture.markerWritten });
     }
 
@@ -692,6 +711,14 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
       assert.equal(row.markerWritten(), false, `row ${index} let its descendant act after the phase ended`);
     }
     assert.equal(rows.length, 100);
+    // The strong per-row check needs a pid, and rows that lost the startup race do not have one. Requiring
+    // most of them to have one keeps this a termination test: if the runner is so loaded that the majority of
+    // roots never even record a descendant, this should say so rather than pass on the marker checks alone.
+    const provenTerminal = rows.filter((row) => row.descendantPid !== null).length;
+    assert.ok(
+      provenTerminal >= 60,
+      `only ${provenTerminal} of 100 roots recorded a descendant before the deadline, too few to call this a termination test`,
+    );
     assert.equal(classifyProcessState(sentinelPid), 'live');
   } finally {
     try {
