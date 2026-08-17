@@ -17,7 +17,7 @@ Kanban dashboard, one CLI (`bin/sidequest.js`), matching MCP tools. Detail lives
 - `references/publishing.md` — delivery modes, publish transaction.
 - `references/routing-details.md`, `references/routing-guide.md` — routes and wiring.
 - `references/high-stakes.md`
-- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`.
+- `references/external-trackers.md`, `references/board-features.md`, `references/category-links.md`, `references/ticket-authoring.md`, `references/invocation-contracts.md`.
 
 ## Plan substantial work on the board first
 

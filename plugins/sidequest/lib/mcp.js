@@ -10,7 +10,7 @@ const { tools: collaborationTools } = require("./mcp-collaboration");
 const { tools: routingTools } = require("./mcp-routing");
 const SERVER_NAME = "sidequest";
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MCP_TOOLS_LIST_MAX_BYTES = 23100;
+const MCP_TOOLS_LIST_MAX_BYTES = 23600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 function serverVersion() {
   try {
@@ -101,6 +101,7 @@ const ARGUMENT_ALIASES = {
   link: { type: "verb", target: "to", ref: "from" },
   story_log: { append: "entry" }
 };
+const COERCED_PRIORITY = { from: "medium", to: "normal" };
 function editDistance(left, right) {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
   for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
@@ -133,9 +134,9 @@ function validateToolArguments(tool, rawArgs) {
     delete args[from];
     aliases.push(`accepted ${from} as ${to}`);
   }
-  if (args.priority === "medium") {
-    args.priority = "normal";
-    aliases.push('accepted priority "medium" as "normal"');
+  if (args.priority === COERCED_PRIORITY.from) {
+    args.priority = COERCED_PRIORITY.to;
+    aliases.push(`accepted priority "${COERCED_PRIORITY.from}" as "${COERCED_PRIORITY.to}"`);
   }
   const allowed = new Set(Object.keys(tool.inputSchema.properties || {}));
   if (tool.name === "dispatch") allowed.add("session");
@@ -185,13 +186,16 @@ async function runTool(tool, rawArgs) {
   const board = mutationQueueKey(tool.name, args);
   return enqueueMutation(board, async () => acknowledgeAliases(await tool.handler(args), aliases));
 }
+const ATTESTATION_VERIFY_CONTRACT = "verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.";
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   context_page: {
     cursor: "Opaque.",
     limit: "UTF-8 bytes.",
     expectedRevision: "Required revision."
   },
-  add: { complexity: "Legacy score; why required." },
+  add: { complexity: "Legacy score; why required.", verify: ATTESTATION_VERIFY_CONTRACT },
+  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
     full: "Whole bodies; bypasses elision.",
     since: "Comment id or ISO timestamp."
@@ -281,6 +285,8 @@ module.exports = {
   DEFAULT_PROTOCOL_VERSION,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
+  ARGUMENT_ALIASES,
+  COERCED_PRIORITY,
   TOOLS,
   toolDescriptors,
   toolDescriptorByteReport,

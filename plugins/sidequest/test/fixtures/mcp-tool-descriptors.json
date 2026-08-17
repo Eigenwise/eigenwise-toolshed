@@ -309,7 +309,8 @@
         },
         "verify": {
           "type": "string",
-          "maxLength": 1000
+          "maxLength": 1000,
+          "description": "verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyKind": {
           "type": "string",
@@ -478,7 +479,8 @@
         },
         "verify": {
           "type": "string",
-          "maxLength": 1000
+          "maxLength": 1000,
+          "description": "verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`."
         },
         "verifyKind": {
           "type": "string",
@@ -833,7 +835,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Close integrated submission.",
+    "description": "Close a submission: deliveryCommit closes it as a delivery, integration:true as an integration, neither as grooming; each gate differs.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -875,7 +877,7 @@
   },
   {
     "name": "release",
-    "description": "Release claim. Oracle needs an ask, then exits awaiting-oracle; oracle handoff stays until verdict.",
+    "description": "Release claim; reason is required. Oracle needs an ask, then exits awaiting-oracle; oracle handoff stays until verdict.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1224,7 +1226,8 @@
           "type": "string"
         },
         "supersededBy": {
-          "type": "string"
+          "type": "string",
+          "description": "Repair ticket ref, not a commit."
         },
         "reason": {
           "type": "string"

@@ -11,6 +11,7 @@ const skill = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'SKILL.md')
 const userStory = fs.readFileSync(path.join(ROOT, 'skills', 'user-story', 'SKILL.md'), 'utf8');
 const ticketAuthoring = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'ticket-authoring.md'), 'utf8');
 const orchestration = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'orchestration.md'), 'utf8');
+const invocationContracts = fs.readFileSync(path.join(ROOT, 'skills', 'sidequest', 'references', 'invocation-contracts.md'), 'utf8');
 const executorTemplate = fs.readFileSync(path.join(ROOT, 'scripts', '_exec-template.md'), 'utf8');
 const activeGuidance = [skill, orchestration, executorTemplate];
 
@@ -60,6 +61,37 @@ test('published guidance pins surgical planning before substantial dispatch', ()
   assert.match(userStory, /use two\s+or three bounded proposals only when the approach is genuinely contested/);
   assert.match(ticketAuthoring, /Unrelated findings become separately prioritized tickets/);
   assert.match(ticketAuthoring, /After two independently rejected candidates in one defect chain/);
+});
+
+test('the invocation contracts reference is derived from the accepted synonyms and published enums', () => {
+  const mcp = require('../lib/mcp.js');
+  assert.match(skill, /references\/invocation-contracts\.md/);
+
+  for (const [tool, aliases] of Object.entries(mcp.ARGUMENT_ALIASES as Record<string, Record<string, string>>)) {
+    assert.match(invocationContracts, new RegExp(`\`${tool}\``), `${tool} is missing from the synonym list`);
+    for (const [from, to] of Object.entries(aliases)) {
+      assert.match(invocationContracts, new RegExp(`\`${from}\`[^\\n]*\`${to}\``), `${tool} accepts ${from} for ${to}, undocumented`);
+    }
+  }
+  assert.match(
+    invocationContracts,
+    new RegExp(`priority: "${mcp.COERCED_PRIORITY.from}"[^\\n]*"${mcp.COERCED_PRIORITY.to}"`),
+    'the priority coercion is undocumented',
+  );
+
+  const byName = new Map((mcp.toolDescriptors() as Array<{ name: string; inputSchema: any }>).map((tool) => [tool.name, tool]));
+  for (const [tool, property] of [['release', 'kind'], ['add', 'verifyKind']] as Array<[string, string]>) {
+    for (const value of byName.get(tool)!.inputSchema.properties[property].enum as string[]) {
+      assert.ok(invocationContracts.includes(value), `${tool}.${property} value "${value}" is not explained`);
+    }
+  }
+
+  // An agent reads the schema description on the way in and this file when it needs the reason, so the
+  // grammar has to be one string in both places: three tickets in a row were refused for guessing it.
+  const publishedVerify = byName.get('add')!.inputSchema.properties.verify.description as string;
+  const grammar = publishedVerify.slice(publishedVerify.indexOf('`'), publishedVerify.lastIndexOf('`') + 1);
+  assert.ok(grammar.length > 40, publishedVerify);
+  assert.ok(invocationContracts.includes(grammar), `the reference does not carry the published grammar: ${grammar}`);
 });
 
 test('every implementation executor leaves candidate reviews to the orchestrator', () => {

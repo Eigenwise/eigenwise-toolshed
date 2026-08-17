@@ -130,6 +130,13 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('release')?.description ?? '', /oracle handoff/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.sharedTree?.description ?? '', /Omit for an isolated checkout/);
   assert.match(byName.get('dispatch')?.inputSchema.properties?.recoveryEvidence?.description ?? '', /Recovery evidence/);
+  const addVerify = byName.get('add')?.inputSchema.properties?.verify?.description ?? '';
+  assert.ok(addVerify.includes('`attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`'), addVerify);
+  assert.equal(byName.get('update')?.inputSchema.properties?.verify?.description, addVerify);
+  assert.match(byName.get('add')?.inputSchema.properties?.complexity?.description ?? '', /why required/);
+  assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref, not a commit/);
+  assert.match(byName.get('release')?.description ?? '', /reason is required/);
+  assert.match(byName.get('groomClose')?.description ?? '', /deliveryCommit closes it as a delivery, integration:true as an integration, neither as grooming/);
 
   const payload = JSON.stringify(descriptors);
   const payloadBytes = Buffer.byteLength(payload, 'utf8');

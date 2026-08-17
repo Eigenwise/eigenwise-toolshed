@@ -48,7 +48,10 @@ const DEFAULT_PROTOCOL_VERSION = '2025-06-18';
 // Raised from 23000 for groomClose.abandonSubmission (SQ-2188): the old ceiling left 6 bytes of
 // slack, so any new property broke it. The alternative was deleting another tool's guidance to make
 // room, which costs an agent more than the ~25 tokens per session this adds.
-const MCP_TOOLS_LIST_MAX_BYTES = 23100;
+// Raised again from 23100 for the invocation contracts a caller cannot get right on the first call
+// (SQ-1955): +432 bytes, about 110 tokens per session, against three tickets in a row refused for the
+// attestation grammar alone. Everything that can wait for the second call went to the skill instead.
+const MCP_TOOLS_LIST_MAX_BYTES = 23600;
 const MCP_TOOLS_LIST_HEADROOM_BYTES = 2500;
 
 function serverVersion() {
@@ -121,6 +124,10 @@ const ARGUMENT_ALIASES: Record<string, Record<string, string>> = {
   story_log: { append: 'entry' },
 };
 
+// The skill's invocation-contracts reference is drift-tested against these two, so a caller never reads a
+// synonym list that the validator has since stopped accepting.
+const COERCED_PRIORITY: { from: string; to: string } = { from: 'medium', to: 'normal' };
+
 function editDistance(left: string, right: string) {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
   for (let leftIndex = 1; leftIndex <= left.length; leftIndex += 1) {
@@ -155,9 +162,9 @@ function validateToolArguments(tool: ToolDefinition, rawArgs: any) {
     delete args[from];
     aliases.push(`accepted ${from} as ${to}`);
   }
-  if (args.priority === 'medium') {
-    args.priority = 'normal';
-    aliases.push('accepted priority "medium" as "normal"');
+  if (args.priority === COERCED_PRIORITY.from) {
+    args.priority = COERCED_PRIORITY.to;
+    aliases.push(`accepted priority "${COERCED_PRIORITY.from}" as "${COERCED_PRIORITY.to}"`);
   }
   const allowed = new Set(Object.keys(tool.inputSchema.properties || {}));
   if (tool.name === 'dispatch') allowed.add('session');
@@ -215,13 +222,20 @@ async function runTool(tool: ToolDefinition, rawArgs: any) {
 }
 
 
+// compactSchema strips property descriptions, so an authored one that is not repeated here reaches nobody: the
+// full attestation grammar has been on `add.verify` in the source all along and three tickets in a row were still
+// refused for not knowing it (SQ-1955). Anything a caller cannot get right on the FIRST call belongs in this table.
+const ATTESTATION_VERIFY_CONTRACT = 'verifyKind attestation: `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`.';
+
 const MCP_SCHEMA_PROPERTY_DESCRIPTIONS: Record<string, Record<string, string>> = {
   context_page: {
     cursor: 'Opaque.',
     limit: 'UTF-8 bytes.',
     expectedRevision: 'Required revision.',
   },
-  add: { complexity: 'Legacy score; why required.' },
+  add: { complexity: 'Legacy score; why required.', verify: ATTESTATION_VERIFY_CONTRACT },
+  update: { verify: ATTESTATION_VERIFY_CONTRACT },
+  supersede_submission: { supersededBy: 'Repair ticket ref, not a commit.' },
   comments: {
     full: 'Whole bodies; bypasses elision.',
     since: 'Comment id or ISO timestamp.',
@@ -338,6 +352,8 @@ module.exports = {
   DEFAULT_PROTOCOL_VERSION,
   MCP_TOOLS_LIST_MAX_BYTES,
   MCP_TOOLS_LIST_HEADROOM_BYTES,
+  ARGUMENT_ALIASES,
+  COERCED_PRIORITY,
   TOOLS,
   toolDescriptors,
   toolDescriptorByteReport,
