@@ -1001,4 +1001,30 @@ test('SQ-1962: verify path arguments resolve against the base their command esta
   );
 });
 
+test('SQ-2200: verify preflight looks up each npm script in the package its own segment reached', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-preflight-base-'));
+  spawnSync('git', ['init', '--quiet', '-b', 'main'], { cwd: root, windowsHide: true });
+  fs.mkdirSync(path.join(root, 'first'), { recursive: true });
+  fs.mkdirSync(path.join(root, 'second'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'first', 'package.json'), JSON.stringify({ name: 'first', scripts: { build: 'node -e 0' } }));
+  fs.writeFileSync(path.join(root, 'second', 'package.json'), JSON.stringify({ name: 'second', scripts: { 'build:check': 'node -e 0' } }));
+  const { slug } = store.ensureProject(root, 'verify preflight base');
+  const file = (verify: string) => store.createTicket(slug, { title: `preflight ${verify}`, executorVerify: verify });
+
+  assert.ok(file('cd first && npm run build'), 'a single cd is unchanged');
+  assert.ok(
+    file('cd first && npm run build && cd ../second && npm run build:check'),
+    'the second package owns the script that follows the cd into it',
+  );
+  assert.throws(
+    () => file('cd first && npm run build && cd ../second && npm run build'),
+    /`npm run build` requires a `build` script in second\/package\.json/,
+    'a script missing from the package the command reached still refuses, and names that package',
+  );
+  assert.throws(
+    () => file('cd first && npm run missing-script'),
+    /`npm run missing-script` requires a `missing-script` script in first\/package\.json/,
+  );
+});
+
 export {};

@@ -649,18 +649,31 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
   const verify = String(ticket?.executorVerify || '').trim();
   if (!verify || manualVerify(verify)) return null;
   const match = /^cd\s+(?:["']([^"']+)["']|([^&;\s]+))\s*&&/.exec(verify);
-  const directory = match
+  let directory = match
     ? path.resolve(String(projectPath || ''), match[1] || match[2])
     : String(projectPath || '');
+  const outsideRepo = 'the recorded verify command changes to a directory outside this repo. Run the exact string you record before submitting.';
   if (!projectPath || !relativePathWithin(projectPath, directory)) {
     return match
-      ? 'the recorded verify command changes to a directory outside this repo. Run the exact string you record before submitting.'
+      ? outsideRepo
       : 'the recorded verify command must run from the repository root or change to a directory that exists in this repo. Run the exact string you record before submitting.';
   }
 
   const commands = splitVerifyCommands(match ? verify.slice(match[0].length) : verify).segments;
   let deferredWarning: string | null = null;
+  let changedDirectory = Boolean(match);
   for (const command of commands) {
+    // A `cd` is not always the leading segment: recorded commands walk between packages partway through with
+    // `cd ../workbench` and `cd ../..`, and everything after one belongs to the directory it moved to, not to
+    // the first one (SQ-2200).
+    const step = /^cd\s+(?:["']([^"']+)["']|([^&;|\s]+))\s*$/.exec(command);
+    if (step) {
+      const next = path.resolve(directory, step[1] || step[2]);
+      if (!relativePathWithin(projectPath, next)) return outsideRepo;
+      directory = next;
+      changedDirectory = true;
+      continue;
+    }
     const prefix = /^npm\s+--prefix(?:=|\s+)(?:["']([^"']+)["']|([^\s;&|]+))\s+/.exec(command);
     const npmCommand = prefix ? `npm ${command.slice(prefix[0].length)}` : command;
     const npmTest = /^npm\s+test(?:\s|$)/.test(npmCommand) ? 'test' : null;
@@ -693,7 +706,7 @@ function verifyCommandIssue(ticket?: any, projectPath?: any) {
       continue;
     }
 
-    if (!match) continue;
+    if (!changedDirectory) continue;
     if (!fs.existsSync(directory)) {
       return 'the recorded verify command changes to a directory that does not exist in this repo or this ticket\'s declared greenfield package scope. Run the exact string you record before submitting.';
     }
