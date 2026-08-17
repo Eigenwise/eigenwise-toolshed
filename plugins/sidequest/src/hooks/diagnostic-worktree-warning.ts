@@ -76,9 +76,18 @@ function checkoutLocation(start: string): CheckoutLocation | null {
   }
 }
 
+// The same directory has to compare equal however it was reached, or one worktree is counted twice and the advice
+// contradicts itself. The lease kernel is what the board canonicalizes with, and it resolves 8.3 short names and
+// true case through realpath: on a Windows runner the board stored the expanded form while a plain path.resolve of
+// the tmpdir kept `RUNNER~1`, so the pair read as two worktrees.
 function comparablePath(value: string): string {
-  const resolved = path.resolve(value);
-  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  try {
+    const lease = require(runtimeModule('kernel/worktree')) as { canonicalPath: (value: string) => string };
+    return lease.canonicalPath(value);
+  } catch (_) {
+    const resolved = path.resolve(value);
+    return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+  }
 }
 
 function agentWorktreeRoots(projectRoot: string): string[] {

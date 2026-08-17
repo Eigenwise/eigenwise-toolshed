@@ -119,6 +119,10 @@ test('the same worktree is expected noise while its claim is live and dead weigh
 
   const held = diagnosticWorktreeWarning({ cwd: repository });
   assert.match(held, /keyed per session, not per agent/);
+  // One directory is one worktree however it was reached. The board records a canonicalized path and the root scan
+  // finds the same place on disk, so a mismatch between those two forms counts it twice and the advice contradicts
+  // itself: it did, on a Windows runner whose tmpdir carried an 8.3 short name.
+  assert.match(held, /1 foreign agent worktree in play/);
   assert.match(held, new RegExp(`1 holds a live claim \\(${live.ref}\\)`), 'a live lease makes the errors expected');
   assert.match(held, /never outrank that executor's own verify/);
   assert.doesNotMatch(held, /Actionable exception/, 'nothing has been handed in yet');

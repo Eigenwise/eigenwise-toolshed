@@ -329,8 +329,13 @@ function checkoutLocation(start) {
   }
 }
 function comparablePath(value) {
-  const resolved = import_node_path5.default.resolve(value);
-  return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  try {
+    const lease = require(runtimeModule("kernel/worktree"));
+    return lease.canonicalPath(value);
+  } catch (_) {
+    const resolved = import_node_path5.default.resolve(value);
+    return process.platform === "win32" ? resolved.toLowerCase() : resolved;
+  }
 }
 function agentWorktreeRoots(projectRoot) {
   try {
