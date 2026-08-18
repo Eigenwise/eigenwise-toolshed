@@ -42,6 +42,29 @@ export function localAheadOfUpstreamWarning(projectPath: string, branch: string)
 
 const PLUGIN_ID = 'sidequest@eigenwise-toolshed';
 const REPAIR_COMMAND = 'claude plugin install sidequest@eigenwise-toolshed --scope project';
+const FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300] as const;
+const RETRYABLE_FILE_READ_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+function isRetryableFileReadError(error: unknown): boolean {
+  if (!error || typeof error !== 'object' || !('code' in error)) return false;
+  const code = error.code;
+  return typeof code === 'string' && RETRYABLE_FILE_READ_CODES.has(code);
+}
+
+function readFileSyncWithRetry(filePath: string): Buffer;
+function readFileSyncWithRetry(filePath: string, encoding: BufferEncoding): string;
+function readFileSyncWithRetry(filePath: string, encoding?: BufferEncoding): Buffer | string {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return encoding ? fs.readFileSync(filePath, encoding) : fs.readFileSync(filePath);
+    } catch (error: unknown) {
+      const delay = FILE_READ_RETRY_DELAYS_MS[attempt];
+      if (delay == null || !isRetryableFileReadError(error)) throw error;
+      Atomics.wait(waitBuffer, 0, 0, delay);
+    }
+  }
+}
 
 export interface InstallCheckOptions {
   claudeHome?: string;
@@ -124,7 +147,7 @@ function normalizeDir(value: unknown): string | null {
 // session in this project would actually get the board MCP tools.
 function installIdentity(installPath: string): string | null {
   try {
-    const manifest = fs.readFileSync(path.join(installPath, '.mcp.json'));
+    const manifest = readFileSyncWithRetry(path.join(installPath, '.mcp.json'));
     return createHash('sha256').update(manifest).digest('hex');
   } catch (_) {
     return null;
@@ -135,7 +158,7 @@ function installAdvertisesBoardMcp(installPath: unknown): boolean {
   if (typeof installPath !== 'string' || !installPath) return false;
   let manifest: any;
   try {
-    manifest = JSON.parse(fs.readFileSync(path.join(installPath, '.mcp.json'), 'utf8'));
+    manifest = JSON.parse(readFileSyncWithRetry(path.join(installPath, '.mcp.json'), 'utf8'));
   } catch (_) {
     return false;
   }
@@ -152,7 +175,7 @@ export function checkSidequestInstall(projectPath: string, opts: InstallCheckOpt
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   let registry: any;
   try {
-    registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+    registry = JSON.parse(readFileSyncWithRetry(registryPath, 'utf8'));
   } catch (err: any) {
     if (err && err.code === 'ENOENT') return { ok: false, reason: 'missing', registryPath };
     return { ok: false, reason: 'registry_unreadable', registryPath, detail: String((err && err.message) || err) };

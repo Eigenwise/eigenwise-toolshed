@@ -74,6 +74,25 @@ function localAheadOfUpstreamWarning(projectPath, branch) {
 }
 const PLUGIN_ID = "sidequest@eigenwise-toolshed";
 const REPAIR_COMMAND = "claude plugin install sidequest@eigenwise-toolshed --scope project";
+const FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300];
+const RETRYABLE_FILE_READ_CODES = /* @__PURE__ */ new Set(["EPERM", "EACCES", "EBUSY"]);
+function isRetryableFileReadError(error) {
+  if (!error || typeof error !== "object" || !("code" in error)) return false;
+  const code = error.code;
+  return typeof code === "string" && RETRYABLE_FILE_READ_CODES.has(code);
+}
+function readFileSyncWithRetry(filePath, encoding) {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      return encoding ? import_node_fs.default.readFileSync(filePath, encoding) : import_node_fs.default.readFileSync(filePath);
+    } catch (error) {
+      const delay = FILE_READ_RETRY_DELAYS_MS[attempt];
+      if (delay == null || !isRetryableFileReadError(error)) throw error;
+      Atomics.wait(waitBuffer, 0, 0, delay);
+    }
+  }
+}
 function claudeHomeDir(opts = {}) {
   return opts.claudeHome || process.env.SIDEQUEST_CLAUDE_HOME || import_node_path.default.join(import_node_os.default.homedir(), ".claude");
 }
@@ -123,7 +142,7 @@ function normalizeDir(value) {
 }
 function installIdentity(installPath) {
   try {
-    const manifest = import_node_fs.default.readFileSync(import_node_path.default.join(installPath, ".mcp.json"));
+    const manifest = readFileSyncWithRetry(import_node_path.default.join(installPath, ".mcp.json"));
     return (0, import_node_crypto.createHash)("sha256").update(manifest).digest("hex");
   } catch (_) {
     return null;
@@ -133,7 +152,7 @@ function installAdvertisesBoardMcp(installPath) {
   if (typeof installPath !== "string" || !installPath) return false;
   let manifest;
   try {
-    manifest = JSON.parse(import_node_fs.default.readFileSync(import_node_path.default.join(installPath, ".mcp.json"), "utf8"));
+    manifest = JSON.parse(readFileSyncWithRetry(import_node_path.default.join(installPath, ".mcp.json"), "utf8"));
   } catch (_) {
     return false;
   }
@@ -144,7 +163,7 @@ function checkSidequestInstall(projectPath, opts = {}) {
   const registryPath = import_node_path.default.join(claudeHome, "plugins", "installed_plugins.json");
   let registry;
   try {
-    registry = JSON.parse(import_node_fs.default.readFileSync(registryPath, "utf8"));
+    registry = JSON.parse(readFileSyncWithRetry(registryPath, "utf8"));
   } catch (err) {
     if (err && err.code === "ENOENT") return { ok: false, reason: "missing", registryPath };
     return { ok: false, reason: "registry_unreadable", registryPath, detail: String(err && err.message || err) };

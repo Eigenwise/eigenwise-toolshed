@@ -97,3 +97,67 @@ test('atomic registry fixture writes keep lockfile-overlap dispatch preflight re
   assert.ok(readerRuns > 0, 'concurrent writers left no interval for a dispatch preflight read');
   assert.ifError(readFailure);
 });
+
+test('dispatch preflight retries transient plugin registry read errors', () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-installed-plugins-retry-'));
+  const claudeHome = path.join(temporaryDirectory, 'claude');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const installPath = path.join(temporaryDirectory, 'install');
+  const projectPath = path.join(temporaryDirectory, 'project');
+  fs.mkdirSync(installPath, { recursive: true });
+  fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+  writeRegistry(registryPath, installPath);
+
+  const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync')!;
+  const originalReadFileSync = fs.readFileSync;
+  let registryReadAttempts = 0;
+  Object.defineProperty(fs, 'readFileSync', {
+    ...originalReadFileSyncDescriptor,
+    value: function (...arguments_: unknown[]) {
+      if (arguments_[0] === registryPath && registryReadAttempts < 2) {
+        registryReadAttempts += 1;
+        throw Object.assign(new Error('simulated transient registry read failure'), { code: 'EPERM' });
+      }
+      if (arguments_[0] === registryPath) registryReadAttempts += 1;
+      return Reflect.apply(originalReadFileSync, fs, arguments_);
+    },
+  });
+
+  try {
+    const check = checkSidequestInstall(projectPath, { claudeHome });
+    assert.equal(check.ok, true);
+    assert.equal(registryReadAttempts, 3);
+  } finally {
+    Object.defineProperty(fs, 'readFileSync', originalReadFileSyncDescriptor);
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('dispatch preflight does not retry non-retryable plugin registry read errors', () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-installed-plugins-no-retry-'));
+  const claudeHome = path.join(temporaryDirectory, 'claude');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync')!;
+  const originalReadFileSync = fs.readFileSync;
+  let registryReadAttempts = 0;
+  Object.defineProperty(fs, 'readFileSync', {
+    ...originalReadFileSyncDescriptor,
+    value: function (...arguments_: unknown[]) {
+      if (arguments_[0] === registryPath) {
+        registryReadAttempts += 1;
+        throw Object.assign(new Error('simulated directory read failure'), { code: 'EISDIR' });
+      }
+      return Reflect.apply(originalReadFileSync, fs, arguments_);
+    },
+  });
+
+  try {
+    const check = checkSidequestInstall('/project', { claudeHome });
+    assert.equal(check.ok, false);
+    assert.equal(check.reason, 'registry_unreadable');
+    assert.equal(registryReadAttempts, 1);
+  } finally {
+    Object.defineProperty(fs, 'readFileSync', originalReadFileSyncDescriptor);
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
