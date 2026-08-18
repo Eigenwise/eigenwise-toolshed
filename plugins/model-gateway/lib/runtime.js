@@ -70,6 +70,37 @@ const LEGACY_ENV_BLOCK = { CLAUDE_CODE_AUTO_COMPACT_WINDOW: '950000' };
 const GATEWAY_MODELS_CACHE = path.join(os.homedir(), '.claude', 'cache', 'gateway-models.json');
 const CLI_PATH = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 
+function parseVersionDirectory(version) {
+  const match = String(version).match(/^(\d+)\.(\d+)\.(\d+)$/);
+  return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+}
+
+function versionIsOlder(left, right) {
+  for (let index = 0; index < 3; index++) {
+    if (left[index] !== right[index]) return left[index] < right[index];
+  }
+  return false;
+}
+
+function resolveNewestInstalledCliPath({ cliPath = CLI_PATH, readDirectory = fs.readdirSync, pathExists = fs.existsSync } = {}) {
+  const pluginRoot = path.dirname(path.dirname(cliPath));
+  const pluginCacheRoot = path.dirname(pluginRoot);
+  const candidates = [{ cliPath, version: path.basename(pluginRoot) }];
+  try {
+    for (const entry of readDirectory(pluginCacheRoot, { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const siblingCliPath = path.join(pluginCacheRoot, entry.name, 'bin', 'model-gateway.js');
+      if (pathExists(siblingCliPath)) candidates.push({ cliPath: siblingCliPath, version: entry.name });
+    }
+  } catch {}
+
+  return candidates.reduce((newest, candidate) => {
+    const newestVersion = parseVersionDirectory(newest.version);
+    const candidateVersion = parseVersionDirectory(candidate.version);
+    return candidateVersion && (!newestVersion || versionIsOlder(newestVersion, candidateVersion)) ? candidate : newest;
+  }).cliPath;
+}
+
 function readPluginVersion() {
   try {
     const { version } = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8'));
@@ -93,4 +124,5 @@ module.exports = {
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH,
   PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, mkdirs,
+  resolveNewestInstalledCliPath,
 };

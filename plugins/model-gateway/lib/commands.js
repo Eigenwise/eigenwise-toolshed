@@ -40,7 +40,7 @@ const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
-const { CLI_PATH, SOCKET_PATH } = require('./runtime.js');
+const { CLI_PATH, SOCKET_PATH, resolveNewestInstalledCliPath } = require('./runtime.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
@@ -239,7 +239,7 @@ const CODEX_READINESS_MESSAGES = {
   'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${CLI_PATH}" login\`, finish browser OAuth, then run \`node "${CLI_PATH}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
   'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
   'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${CLI_PATH}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${resolveNewestInstalledCliPath()}" ensure\`, then retry. No Anthropic fallback was used.`,
   'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${CLI_PATH}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
 };
 
@@ -551,6 +551,18 @@ function servingVersionIsCurrentOrNewer(servingVersion, installedVersion) {
   return Boolean(serving && installed && !semverLt(serving, installed));
 }
 
+function servingVersionIsNewer(servingVersion, installedVersion) {
+  const serving = parseSemver(servingVersion);
+  const installed = parseSemver(installedVersion);
+  return Boolean(serving && installed && semverLt(installed, serving));
+}
+
+function staleSessionReloadNotice(installedVersion, health) {
+  const servingVersion = servingShimVersion(health);
+  if (!servingVersionIsNewer(servingVersion, installedVersion)) return null;
+  return `model-gateway: this session loaded ${installedVersion}, but the serving shim is newer (${servingVersion}). Reload plugins with /reload-plugins or restart Claude Code; the newer shim was left running.`;
+}
+
 // Fail-soft: read the running proxy's --version and, if it's below
 // MIN_PROXY_VERSION, print exactly one stderr nudge. Never throws and never
 // blocks the session; a version we can't read/parse is treated as "don't nag".
@@ -571,6 +583,8 @@ async function startAll({ quiet = false } = {}) {
   mkdirs();
   const started = [];
   const health = await fetchShimHealth();
+  const staleSessionNotice = staleSessionReloadNotice(PLUGIN_VERSION, health);
+  if (staleSessionNotice) noticeForUser(staleSessionNotice, { toStderr: true });
   if (health && shimNeedsRestart(PLUGIN_VERSION, health)) {
     const stopped = await stopRunningSupervisor({ quiet });
     if (!stopped.ok) return stopped;
@@ -584,7 +598,7 @@ async function startAll({ quiet = false } = {}) {
   }
   if (!(await shimHealthy())) {
     try { fs.rmSync(SHIM_FAILURE_PATH); } catch {}
-    spawnDetached('guardian', process.execPath, [CLI_PATH, 'serve-shim'], {});
+    spawnDetached('guardian', process.execPath, [resolveNewestInstalledCliPath(), 'serve-shim'], {});
     started.push('shim');
   }
   const deadline = Date.now() + Math.max(12000, (Number(process.env.CODEX_GATEWAY_DRAIN_TIMEOUT_MS) || 30000) + 12000);
@@ -615,11 +629,15 @@ function servingShimVersion(health) {
 }
 
 function shimNeedsRestart(installedVersion, health) {
-  const running = servingShimVersion(health);
-  return Boolean((installedVersion && running && installedVersion !== running) || health?.proxyRecovery !== true);
+  if (health?.proxyRecovery !== true) return true;
+  const running = parseSemver(servingShimVersion(health));
+  const installed = parseSemver(installedVersion);
+  return !running || !installed || semverLt(running, installed);
 }
 
-async function restartSupervisorForVersionMismatch({ quiet = false, start = startAll } = {}) {
+async function restartSupervisorForVersionMismatch({ quiet = false, health = null, fetchHealth = fetchShimHealth, start = startAll } = {}) {
+  const currentHealth = health || await fetchHealth().catch(() => null);
+  if (currentHealth && !shimNeedsRestart(PLUGIN_VERSION, currentHealth)) return null;
   const stopped = await stopRunningSupervisor({ quiet });
   if (!stopped.ok) return stopped;
   return start({ quiet });
@@ -839,7 +857,7 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
   log(`serving shim version: ${servingVersion || 'unavailable'}`);
   log('model fallback diagnostic: if dispatch and served models appear different, reproduce in a throwaway session with CLAUDE_CODE_NO_MODEL_FALLBACK=true; unset it afterwards. It turns silent fallback into a thrown error identifying the call site, while normal operation should keep graceful fallback for transient 5xx errors.');
   if (readiness.checks.shimRunning && !readiness.checks.servingVersionMatches) {
-    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${CLI_PATH}" ensure to replace the stale supervisor.`);
+    log(`model-gateway: VERSION MISMATCH: CLI ${PLUGIN_VERSION}, serving shim ${servingVersion}. Run node "${resolveNewestInstalledCliPath()}" ensure to replace the stale supervisor.`);
   }
   const catalog = readCatalog();
   log(catalog && Array.isArray(catalog.models)
@@ -1925,6 +1943,8 @@ module.exports = {
   WIRING_CONFIG_PATH,
   parseSemver,
   semverLt,
+  resolveNewestInstalledCliPath,
+  staleSessionReloadNotice,
   oldProxyPath,
   replaceProxyBinary,
   restartProxyForVersionChange,

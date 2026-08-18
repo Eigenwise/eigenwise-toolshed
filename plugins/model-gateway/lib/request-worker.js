@@ -22,7 +22,7 @@ const {
   COMPAT_PORT, DISPATCH_MODEL_ID, DISPATCH_ROUTE_CACHE_PATH, GROK_ENDPOINT, GROK_PREFIX, LIST_DISPATCH_MODEL,
   LOGS, PLUGIN_VERSION, PREFIX, PROXY_BIN, PROXY_PORT, REQUEST_ROUTE_LOG,
   REQUEST_ROUTE_LOG_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_PORT, SOCKET_PATH,
-  STATE, TRACE_HEADERS, mkdirs,
+  STATE, TRACE_HEADERS, mkdirs, resolveNewestInstalledCliPath,
 } = require('./runtime.js');
 
 function isAuthed() {
@@ -35,7 +35,7 @@ const CODEX_READINESS_MESSAGES = {
   'auth-missing': () => `Codex dispatch refused: ChatGPT sign-in is required. Run \`node "${__filename}" login\`, finish browser OAuth, then run \`node "${__filename}" setup\` and retry. Credentials live in \`~/.config/claude-code-proxy/\`.`,
   'proxy-down': () => `Codex dispatch refused: claude-code-proxy is not answering on /v1/models. The running shim supervisor retries recovery with bounded backoff; check ${path.join(LOGS, 'guardian.log')} if it does not recover. No Anthropic fallback was used.`,
   'shim-down': () => `Codex dispatch refused: the model-gateway shim is down. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
-  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${__filename}" ensure\`, then retry. No Anthropic fallback was used.`,
+  'serving-version-mismatch': () => `Codex dispatch refused: model-gateway is serving a stale shim version. Run \`node "${resolveNewestInstalledCliPath()}" ensure\`, then retry. No Anthropic fallback was used.`,
   'upstream-blocked': () => `Codex is blocked by an OpenAI rejection. Run \`node "${__filename}" setup\`; if it persists, wait for a claude-code-proxy update or explicitly re-route this ticket. Codex tickets remain blocked.`,
 };
 

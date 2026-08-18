@@ -217,16 +217,63 @@ test('a second supervisor exits when the singleton listener is already owned', a
   assert.equal((await request(shimPort, 'GET', '/healthz')).status, 200);
 });
 
-test('version mismatch replaces the supervisor instead of draining its worker', async () => {
+test('older serving supervisor is replaced instead of draining its worker', async () => {
   const calls = [];
   const result = await gateway.restartShimIfOutdated({
-    fetchHealth: async () => ({ version: '0.0.0', supervisorVersion: '0.0.0' }),
+    fetchHealth: async () => ({ version: '0.0.0', supervisorVersion: '0.0.0', proxyRecovery: true }),
     restartWorker: async () => { calls.push('worker'); return { ok: true }; },
     restartSupervisor: async () => { calls.push('supervisor'); return { ok: true }; },
   });
 
   assert.deepEqual(calls, ['supervisor']);
   assert.deepEqual(result, { ok: true });
+});
+
+test('newer serving supervisor stays up and tells stale sessions to reload plugins', async () => {
+  const calls = [];
+  const health = { version: '99.0.0', supervisorVersion: '99.0.0', proxyRecovery: true };
+  const result = await gateway.restartShimIfOutdated({
+    fetchHealth: async () => health,
+    restartWorker: async () => { calls.push('worker'); return { ok: true }; },
+    restartSupervisor: async () => { calls.push('supervisor'); return { ok: true }; },
+  });
+
+  assert.equal(result, null);
+  assert.deepEqual(calls, []);
+  assert.match(gateway.staleSessionReloadNotice(gateway.PLUGIN_VERSION, health), new RegExp(`loaded ${gateway.PLUGIN_VERSION.replaceAll('.', '\\.')}, but the serving shim is newer \\(99\\.0\\.0\\)`));
+  assert.match(gateway.staleSessionReloadNotice(gateway.PLUGIN_VERSION, health), /\/reload-plugins or restart Claude Code/);
+});
+
+test('missing version, unparseable version, and missing proxy recovery restart the supervisor', async () => {
+  for (const health of [
+    { proxyRecovery: true },
+    { supervisorVersion: 'not-a-version', proxyRecovery: true },
+    { supervisorVersion: gateway.PLUGIN_VERSION, proxyRecovery: false },
+  ]) {
+    const calls = [];
+    const result = await gateway.restartShimIfOutdated({
+      fetchHealth: async () => health,
+      restartSupervisor: async () => { calls.push('supervisor'); return { ok: true }; },
+    });
+
+    assert.deepEqual(calls, ['supervisor']);
+    assert.deepEqual(result, { ok: true });
+  }
+});
+
+test('newer installed sibling CLI is selected and missing cache layout keeps the invoker', (t) => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-install-cache-'));
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  const ownCliPath = path.join(cacheRoot, '0.48.8', 'bin', 'model-gateway.js');
+  const newestCliPath = path.join(cacheRoot, '0.48.12', 'bin', 'model-gateway.js');
+  for (const cliPath of [ownCliPath, path.join(cacheRoot, '0.48.10', 'bin', 'model-gateway.js'), newestCliPath]) {
+    fs.mkdirSync(path.dirname(cliPath), { recursive: true });
+    fs.writeFileSync(cliPath, '');
+  }
+
+  assert.equal(gateway.resolveNewestInstalledCliPath({ cliPath: ownCliPath }), newestCliPath);
+  const unavailableCliPath = path.join(cacheRoot, 'absent-cache', '0.48.8', 'bin', 'model-gateway.js');
+  assert.equal(gateway.resolveNewestInstalledCliPath({ cliPath: unavailableCliPath }), unavailableCliPath);
 });
 
 test('same-version health keeps the supervisor and worker running', async () => {
