@@ -44,7 +44,7 @@ async function cmdClaim(opts, positional) {
   if (!idOrRef) fail("claim: pass a ticket id or ref, e.g. sidequest claim SQ-3 --by me");
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
-  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, token: opts.token, tokenFile: opts["token-file"], executor: opts.executor, effort: opts.effort, source: opts.source || "cli", sessionId: sessionId(opts), requireBoundAgent: true });
+  const res = store.claimTicket(slug, idOrRef, by, { force: !!opts.force, direct: !!opts.direct, reason: opts.reason, tokenFile: opts["token-file"], executor: opts.executor, effort: opts.effort, source: opts.source || "cli", sessionId: sessionId(opts), requireBoundAgent: true });
   const warnings = res.ok ? store.presentWarnings(res.ticket, claimPlanningWarnings(res.ticket, meta.path), sessionId(opts)) : [];
   if (opts.json) {
     const payload = Object.assign({ project: slug }, res, { warnings });
@@ -214,7 +214,6 @@ async function cmdGroomClose(opts, positional) {
     by,
     reason,
     purpose,
-    overrideLegacyScope: opts["override-legacy-scope"] === true,
     abandonSubmission: opts["abandon-submission"] === true,
     deliveryCommit: opts["delivery-commit"]
   });

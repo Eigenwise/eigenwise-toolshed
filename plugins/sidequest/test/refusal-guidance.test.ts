@@ -17,7 +17,7 @@ const { CLAIM_REFUSAL_MESSAGES, claimRefusalMessage, routingDisabledMessage } = 
 
 test('claim refusal guidance always gives an actionable next step', () => {
   for (const [reason, message] of Object.entries(CLAIM_REFUSAL_MESSAGES)) {
-    assert.match(message('SQ-42', { by: 'other-worker', at: '2026-07-20T00:00:00.000Z' }), /sidequest [a-z]+|--[a-z]+|direct:true/i, reason);
+    assert.match(message('SQ-42', { by: 'other-worker', at: '2026-07-20T00:00:00.000Z' }), /sidequest [a-z]+|--[a-z]+|direct:true|token file/i, reason);
   }
 });
 
@@ -36,7 +36,7 @@ test('not-owner guidance does not tell callers to use the claim holder identity'
 
 test('unbound dispatch guidance tells an executor to present its prepared token', () => {
   const message = claimRefusalMessage('unbound_dispatch', 'SQ-42');
-  assert.match(message, /--token/i);
+  assert.match(message, /dispatched token file/i);
   assert.match(message, /binds the claiming runtime/i);
   assert.match(message, /comment the refusal evidence and release SQ-42 with kind `technical_blocker`/i);
   assert.match(message, /Do not hand a command to the user/i);

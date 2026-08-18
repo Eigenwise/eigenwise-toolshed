@@ -23,8 +23,7 @@ interface ExecutorClassification {
 }
 interface DispatchLaunch {
   ref: string;
-  token: string | null;
-  tokenFile: string | null;
+  tokenFile: string;
 }
 interface ResolveResult {
   status: 'no-refs' | 'error' | 'no-project' | 'ticket-not-found' | 'ticket-not-builtin' | 'conflicting' | 'ok';
@@ -334,13 +333,6 @@ function extractDispatchTokenFile(prompt: unknown): string | null {
   return match ? match[1] || match[2] || null : null;
 }
 
-function extractDispatchToken(prompt: unknown): string | null {
-  if (typeof prompt !== 'string' || !prompt) return null;
-  const matches = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)];
-  const match = matches.at(-1);
-  return match ? match[1] || null : null;
-}
-
 // The refs a spawn actually dispatches are the ones paired with a token in a
 // briefing command. Spawn prompts carry ticket title, description, and anchors,
 // and ticket prose routinely names other tickets, so scanning the whole prompt
@@ -350,7 +342,7 @@ function dispatchRefs(prompt: unknown): string[] {
   if (typeof prompt !== 'string' || !prompt) return [];
   const seen = new Set<string>();
   const out: string[] = [];
-  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+[^\s`"']+|--token-file\s+(?:"[^"]+"|\S+))/gi)) {
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"[^"]+"|\S+)/gi)) {
     const ref = (match[1] || '').toUpperCase();
     if (ref && !seen.has(ref)) {
       seen.add(ref);
@@ -366,24 +358,18 @@ function dispatchLaunches(prompt: unknown): DispatchLaunch[] {
   const launches = headings.map((match, index) => {
     const next = headings[index + 1];
     const section = prompt.slice(match.index, next ? next.index : prompt.length);
-    return { ref: (match[1] || '').toUpperCase(), token: extractDispatchToken(section), tokenFile: extractDispatchTokenFile(section) };
-  }).filter((launch): launch is DispatchLaunch => Boolean(launch.ref && (launch.token || launch.tokenFile)));
+    return { ref: (match[1] || '').toUpperCase(), tokenFile: extractDispatchTokenFile(section) };
+  }).filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.tokenFile));
   if (launches.length) return launches;
 
-  // The briefing command pairs its ref with its token, so read the pair from
+  // The briefing command pairs its ref with its token file, so read the pair from
   // there rather than counting refs across the whole prompt. Spawn prompts now
   // carry ticket title, description, and anchors, and any of those may mention
   // another ticket; counting prompt-wide silently recorded no launch at all,
   // which surfaced later as unbound_dispatch.
-  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+([^\s`"']+)|--token-file\s+(?:"([^"]+)"|(\S+)))/gi)]
-    .map((match) => ({ ref: (match[1] || '').toUpperCase(), token: match[2] || null, tokenFile: match[3] || match[4] || null }))
-    .filter((launch): launch is DispatchLaunch => Boolean(launch.ref && (launch.token || launch.tokenFile)));
-  if (briefings.length) return briefings;
-
-  const refs = extractRefs(prompt);
-  const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || '');
-  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || null, tokenFile: null }));
-  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || '', token: tokens[0] || null, tokenFile: null }] : [];
+  return [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"([^"]+)"|(\S+))/gi)]
+    .map((match) => ({ ref: (match[1] || '').toUpperCase(), tokenFile: match[2] || match[3] || '' }))
+    .filter((launch): launch is DispatchLaunch => Boolean(launch.ref && launch.tokenFile));
 }
 
 function toolInputOf(input: HookInput): Record<string, unknown> | null {
@@ -415,7 +401,6 @@ function recordAuthoritativeLaunch(input: HookInput, type: string, agentName: st
     if (!found.ok || !found.slug) return;
     for (const launch of launches) {
       store.recordDispatchLaunch(found.slug, launch.ref, {
-        token: launch.token,
         tokenFile: launch.tokenFile,
         executor: type,
         sessionId,
@@ -478,9 +463,9 @@ function dispatchRouteMarkers(input: HookInput): Array<{ model: string; effort: 
 function preparedBriefingCommand(ticket: Ticket, project: string): string | null {
   try {
     const agentsync = require(runtimeModule('agentsync')) as {
-      renderDispatchStub: (ticket: Ticket, nonce: string | undefined, project: string) => string;
+      renderDispatchStub: (ticket: Ticket, project: string) => string;
     };
-    const stub = agentsync.renderDispatchStub(ticket, ticket.dispatchNonce, project);
+    const stub = agentsync.renderDispatchStub(ticket, project);
     return /^FIRST action: run `([^`]+)` and execute exactly what it prints\.$/m.exec(stub)?.[1] || null;
   } catch (_) {
     return null;

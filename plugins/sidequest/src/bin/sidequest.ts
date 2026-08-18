@@ -14,7 +14,7 @@ const { cmdStory } = require('./sidequest-cmd-story');
 
 const ARRAY_FLAGS = new Set(['image', 'label', 'file', 'always-in-scope', 'read-only-denied-tool', 'auto-approve-scope', 'produces', 'changes', 'consumes', 'changed-surface']);
 const ARRAY_FLAG_ALIASES: Record<string, string> = { files: 'file', labels: 'label' };
-const BOOLEAN_FLAGS = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure', 'allow-unscoped', 'no-process', 'no-worktree', 'review', 'override-legacy-scope', 'abandon-submission']);
+const BOOLEAN_FLAGS = new Set(['json', 'brief', 'open', 'help', 'force', 'done', 'archived', 'all', 'dry-run', 'yolo', 'wave', 'unclassified', 'enabled', 'disabled', 'no-fallback', 'global', 'clear', 'steal', 'shared-tree', 'direct', 'sweep', 'yes', 'integration', 'skip-verify', 'contract-waiver', 'full', 'rotate', 'worktree-isolation', 'auto-approve-test-scope', 'high-stakes', 'unverified-transport', 'allow-repeat-failure', 'allow-unscoped', 'no-process', 'no-worktree', 'review', 'abandon-submission']);
 const COMMON_FLAGS = new Set(['help', 'json', 'project', 'source']);
 const COMMAND_FLAGS: Record<string, string[]> = {
   add: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'unclassified', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'review-ref', 'review-commit', 'review-source', 'review-revision', 'dry-run', 'name'],
@@ -27,7 +27,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   profile: ['retired', 'name', 'title', 'description', 'desc', 'from', 'project', 'profile', 'from-project', 'by', 'dry-run'],
   category: ['profile', 'route-model', 'route-effort', 'fallback-model', 'fallback-effort', 'no-fallback', 'name', 'title', 'description', 'desc', 'contract', 'artifact-roots', 'readonly', 'enabled', 'disabled'],
   'global-fallback': ['model', 'effort'],
-  claim: ['by', 'token-file', 'token', 'effort', 'executor', 'force', 'direct', 'reason', 'session'],
+  claim: ['by', 'token-file', 'effort', 'executor', 'force', 'direct', 'reason', 'session'],
   checkpoint: ['by', 'commit', 'worktree', 'verify', 'ttl-minutes'],
   claims: ['sweep'],
   worktrees: ['dry-run', 'yes', 'min-age-hours'],
@@ -36,7 +36,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   reconcile: ['session', 'reason', 'ref'],
   work: ['ref'],
   drain: ['ref'],
-  'groom-close': ['by', 'reason', 'integration', 'override-legacy-scope', 'abandon-submission', 'delivery-commit', 'recovery-evidence'],
+  'groom-close': ['by', 'reason', 'integration', 'abandon-submission', 'delivery-commit', 'recovery-evidence'],
   verdict: ['text', 'outcome', 'why', 'constraint'],
   release: ['by', 'reason', 'oracle', 'release-kind', 'command', 'exit-code', 'output-tail', 'candidate', 'deliverable', 'force', 'status'],
   'scope-request': ['by', 'file', 'force'],
@@ -58,7 +58,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   archive: ['done'],
   unarchive: [],
   dispatch: ['shared-tree', 'allow-repeat-failure', 'allow-unscoped', 'session', 'unverified-transport', 'recovery-evidence'],
-  briefing: ['token-file', 'token'],
+  briefing: ['token-file'],
   temp: ['root'],
   'cleanup-temp': ['root'],
   'native-agent': ['prompt', 'shared-tree', 'unverified-transport', 'session', 'dir', 'name'],
@@ -210,14 +210,14 @@ const HELP_COMMANDS: any = {
   profile: 'sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
   category: 'sidequest category <list|add|edit|rm|disable|enable|pin|reset> <id> [--profile <profile>|--project <path-or-slug>] [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort>|--no-fallback] [--readonly true|false] [--json]',
   'global-fallback': 'sidequest global-fallback [--model <model> --effort <effort>] [--json]',
-  claim: 'sidequest claim <id|SQ-n> [--by who] [--token-file path] [--token nonce] [--effort level] [--force] [--direct --reason "why"]',
+  claim: 'sidequest claim <id|SQ-n> [--by who] [--token-file path] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: 'sidequest claims sweep [--project <path-or-slug>]',
   worktrees: 'sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]',
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: 'sidequest work|drain',
-  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration [--override-legacy-scope] | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]',
+  'groom-close': 'sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"] | --abandon-submission]',
   done: 'sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]',
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',
@@ -239,7 +239,7 @@ const HELP_COMMANDS: any = {
   archive: 'sidequest archive [<id|SQ-n>] [--done]',
   unarchive: 'sidequest unarchive <id|SQ-n>',
   dispatch: 'sidequest dispatch <SQ-n> [--shared-tree] [--allow-repeat-failure] [--allow-unscoped] [--project <path-or-slug>] [--session id] [--unverified-transport] [--recovery-evidence "<observed failure evidence>"]',
-  briefing: 'sidequest briefing <SQ-n> (--token-file <path> | --token <token>) [--project <path-or-slug>]',
+  briefing: 'sidequest briefing <SQ-n> --token-file <path> [--project <path-or-slug>]',
   'native-agent': 'sidequest native-agent <SQ-n> [--prompt "task"] [--shared-tree] [--json] [--unverified-transport]',
   temp: 'sidequest temp cleanup [--root <path>] [--json]',
   'cleanup-temp': 'sidequest cleanup-temp [--root <path>] [--json]',
@@ -304,11 +304,11 @@ Usage:
 
 Working the board safely (multi-agent):
   sidequest ready [--model <model>] [--category <id>] [--json] [--brief]   the ready set (unclaimed, unblocked) — fan subagents over it
-  sidequest claim <id|SQ-n> [--by who] [--force] [--token-file path] [--token nonce] [--effort level] [--direct --reason "why this is inline-safe"]   atomically take a ticket (category-routed executor claims require a prepared token file and exact executor; direct is an inline-safe exception)
+  sidequest claim <id|SQ-n> [--by who] [--force] [--token-file path] [--effort level] [--direct --reason "why this is inline-safe"]   atomically take a ticket (category-routed executor claims require a prepared token file and exact executor; direct is an inline-safe exception)
   sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
-  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration [--override-legacy-scope] | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish, and --override-legacy-scope only closes a legacy empty or root scope when its exact submitted commit is already reachable from the integration target; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling

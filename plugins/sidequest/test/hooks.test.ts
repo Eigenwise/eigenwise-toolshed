@@ -309,7 +309,7 @@ function completeCheckoutCreation(project: string, sessionId: string, worktree: 
 }
 
 function preparedPrompt(prepared: any): string {
-  return agentsync.renderDispatchStub(prepared.ticket, prepared.token, BOARD_PATH);
+  return agentsync.renderDispatchStub(prepared.ticket, BOARD_PATH);
 }
 
 test('pre-tool hook: exact Sidequest executors remain allowed and forced to bypass', () => {
@@ -3882,7 +3882,7 @@ test('pre-tool hook: exact prepared briefing is the sole dispatch launch authori
     const ticket = fixtureTicket(`SQ-1494 ${dispatchCase.name}`, 'codex-gpt-5-6-terra', 'high');
     const sessionId = `exact-briefing-${++sqSeq}`;
     const prepared = dispatchCase.prepare === false ? null : store.prepareDispatch(slug, ticket.ref, { allowUnscoped: true, sessionId });
-    const prompt = preparedPrompt(prepared || { ticket, token: null });
+    const prompt = prepared ? preparedPrompt(prepared) : '';
     const dispatchedTicket = prepared?.ticket || ticket;
     if (dispatchCase.rotate) {
       const initialLaunch = runHookOutput(FORCE_BYPASS, {

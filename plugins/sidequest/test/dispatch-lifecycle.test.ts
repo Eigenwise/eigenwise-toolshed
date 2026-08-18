@@ -225,9 +225,9 @@ test('batch launch records every prepared ticket and binds the shared native age
 
   const prompt = [
     `Ref: ${first.ref}`,
-    `Claim this ticket with \`--token ${firstPrepared.token}\`.`,
+    `briefing ${first.ref} --token-file "${firstPrepared.ticket.dispatch.tokenFile}"`,
     `Ref: ${second.ref}`,
-    `Claim this ticket with \`--token ${secondPrepared.token}\`.`,
+    `briefing ${second.ref} --token-file "${secondPrepared.ticket.dispatch.tokenFile}"`,
     `--project "${PROJECT}"`,
   ].join('\n');
   runForceBypass({
@@ -1405,7 +1405,7 @@ test('released handbacks carry registered native worktrees into continuation dis
       agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
       null,
       continued.ticket.dispatchExecutor,
-      agentsync.renderDispatchStub(continued.ticket, continued.token, PROJECT),
+      agentsync.renderDispatchStub(continued.ticket, PROJECT),
       'retained continuation fixture',
     );
     assert.equal(Object.hasOwn(spawn, 'isolation'), false);
@@ -1553,7 +1553,7 @@ test('dirty released worktrees without commits resume in place for a continuatio
       agentsync.ticketIsolation(continued.ticket, continued.ticket.dispatch.sharedTree),
       null,
       continued.ticket.dispatchExecutor,
-      agentsync.renderDispatchStub(continued.ticket, continued.token, PROJECT),
+      agentsync.renderDispatchStub(continued.ticket, PROJECT),
       'dirty continuation fixture',
     );
     assert.equal(Object.hasOwn(spawn, 'isolation'), false);
@@ -1793,8 +1793,10 @@ test('re-dispatch supersedes stale tokens and terminal cleanup removes active cr
     token: first.token,
     executor: first.ticket.dispatchExecutor,
   }).reason, 'token');
+  const staleTokenFile = path.join(SIDEQUEST_HOME, `${ticket.ref}-stale.token`);
+  fs.writeFileSync(staleTokenFile, `${first.token}\n`);
   const staleClaim = spawnSync(process.execPath, [path.join(__dirname, '..', 'bin', 'sidequest.js'), 'claim', ticket.ref,
-    '--project', PROJECT, '--by', 'stale-worker', '--token', first.token, '--executor', first.ticket.dispatchExecutor], {
+    '--project', PROJECT, '--by', 'stale-worker', '--token-file', staleTokenFile, '--executor', first.ticket.dispatchExecutor], {
     encoding: 'utf8',
     env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJECT },
   });
@@ -1970,7 +1972,7 @@ test('ordinary, resumed, and reworked launches all carry a readable name and the
 
   // The hook only corrects a launch it can recognise, and recognition is the
   // exact prepared briefing line, so the prompt has to be the prepared stub.
-  const prompt = agentsync.renderDispatchStub(resumed.ticket, resumed.ticket.dispatchNonce, PROJECT);
+  const prompt = agentsync.renderDispatchStub(resumed.ticket, PROJECT);
   const launch = runForceBypass({
     session_id: sessionId,
     cwd: PROJECT,
@@ -1999,7 +2001,7 @@ test('ordinary, resumed, and reworked launches all carry a readable name and the
       model: 'sonnet',
       name: rework.ticket.dispatch.launchName,
       description: rework.ticket.dispatch.description,
-      prompt: `Ref: ${ticket.ref}\n--project "${PROJECT}" --token ${rework.token}`,
+      prompt: `Ref: ${ticket.ref}\nbriefing ${ticket.ref} --token-file "${rework.ticket.dispatch.tokenFile}" --project "${PROJECT}"`,
     },
   });
   assert.equal(reworkLaunch.hookSpecificOutput.permissionDecision, undefined);
@@ -2017,7 +2019,7 @@ test('a launch whose board record is unreachable still names itself after the re
       subagent_type: 'sidequest-exec-high',
       model: 'sonnet',
       description: 'orphan launch',
-      prompt: `Work SQ-999999 --project "${unregistered}" --token not-a-real-token`,
+      prompt: `Work SQ-999999 briefing SQ-999999 --token-file "${path.join(unregistered, 'missing.token')}" --project "${unregistered}"`,
     },
   });
   assert.equal(launch.hookSpecificOutput.updatedInput.name, 'sq-999999');
@@ -2314,9 +2316,9 @@ test('dispatch token files authenticate the briefing and claim without transcrib
   assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, tokenFile).ok, true);
 
   // The store seam above went green while the shipped CLI threw "dispatch
-  // briefing nonce is required" on every --token-file call: cmdBriefing rendered
-  // with its raw --token option instead of the token the store resolved from the
-  // file. Only running the executor's actual first command catches that wiring.
+  // briefing nonce is required" on every token-file call because cmdBriefing
+  // failed to pass the token resolved from the file into the renderer. Only
+  // running the executor's actual first command catches that wiring.
   const cliBriefing = spawnSync(process.execPath, [
     path.join(__dirname, '..', 'bin', 'sidequest.js'),
     'briefing', ticket.ref, '--token-file', tokenFile, '--project', PROJECT,
@@ -2330,23 +2332,24 @@ test('dispatch token files authenticate the briefing and claim without transcrib
   assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, `${tokenFile}.missing`).reason, 'token');
 });
 
-test('dispatch tokens accept case and separator normalization but reject transposition with recovery guidance', () => {
-  const ticket = createFixture('transcription-safe dispatch token');
-  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `token-normalization-${Date.now()}` });
-  const normalizedToken = prepared.token.replace(/-/g, '').toUpperCase();
+test('dispatch token files reject altered credentials with recovery guidance', () => {
+  const ticket = createFixture('dispatch token file validation');
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: `token-file-validation-${Date.now()}` });
+  const alteredTokenFile = path.join(SIDEQUEST_HOME, `${ticket.ref}-altered.token`);
   const firstTokenGroup = prepared.token.slice(0, 4);
   const swappedIndex = firstTokenGroup.split('').findIndex((character: string, index: number) => character !== firstTokenGroup[index + 1]);
   assert.notEqual(swappedIndex, -1);
-  const transposedToken = `${prepared.token.slice(0, swappedIndex)}${prepared.token[swappedIndex + 1]}${prepared.token[swappedIndex]}${prepared.token.slice(swappedIndex + 2)}`;
+  const alteredToken = `${prepared.token.slice(0, swappedIndex)}${prepared.token[swappedIndex + 1]}${prepared.token[swappedIndex]}${prepared.token.slice(swappedIndex + 2)}`;
+  fs.writeFileSync(alteredTokenFile, `${alteredToken}\n`);
 
   assert.match(prepared.token, /^[abcdefghjkmnpqrstuvwxyz23456789]{4}(?:-[abcdefghjkmnpqrstuvwxyz23456789]{4}){7}$/);
-  assert.equal(store.readDispatchBriefing(slug, ticket.ref, normalizedToken).ok, true);
-  assert.equal(store.claimTicket(slug, ticket.ref, 'transposed-token-worker', {
-    token: transposedToken,
+  assert.equal(store.readDispatchBriefing(slug, ticket.ref, undefined, prepared.ticket.dispatch.tokenFile).ok, true);
+  assert.equal(store.claimTicket(slug, ticket.ref, 'altered-token-file-worker', {
+    tokenFile: alteredTokenFile,
     executor: prepared.ticket.dispatchExecutor,
   }).reason, 'token');
-  assert.match(claimRefusalMessage('token', ticket.ref), /transcribed incorrectly/);
-  assert.match(claimRefusalMessage('token', ticket.ref), /Re-read the grouped lowercase token/);
+  assert.match(claimRefusalMessage('token', ticket.ref), /token file was missing, unreadable, or invalid/);
+  assert.match(claimRefusalMessage('token', ticket.ref), /do not transcribe the token/);
 });
 
 test('story membership records the current decision-log revision', () => {

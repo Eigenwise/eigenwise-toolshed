@@ -538,7 +538,9 @@ test('add warns for a write-scope ticket with no declared files, and dispatch re
   // falls back to CLAUDE_CODE_SESSION_ID when --session is absent. A developer
   // machine inside Claude Code exports one and CI does not, so leaving it
   // implicit passes locally and refuses `unbound_dispatch` on CI.
-  const policyClaim = cliJsonAt(policyProject, ['claim', policyTicket.ticket.ref, '--by', 'policy-worker', '--session', 'policy-executor-session', '--token', policyDispatchPayload.token, '--executor', policyDispatchPayload.agent]);
+  const policyTokenFileMatch = policyDispatchPayload.spawn.prompt.match(/--token-file "([^"]+)"/);
+  assert.ok(policyTokenFileMatch);
+  const policyClaim = cliJsonAt(policyProject, ['claim', policyTicket.ticket.ref, '--by', 'policy-worker', '--session', 'policy-executor-session', '--token-file', policyTokenFileMatch[1], '--executor', policyDispatchPayload.agent]);
   assert.equal(policyClaim.ok, true, policyClaim.reason);
   const policyScope = cliJsonAt(policyProject, ['scope-request', policyTicket.ticket.ref, '--by', 'policy-worker', '--file', 'generated/output.js']);
   assert.deepStrictEqual(policyScope.approved, ['generated/output.js']);

@@ -2375,18 +2375,11 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins),
     ticket
   };
-  let legacyScopeOverride = false;
-  let legacyDelivery = null;
   if (purpose === "integration") {
-    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+    const admitted = validateIntegrationSubmission(slug, idOrRef);
     if (!admitted.ok) return admitted;
-    legacyScopeOverride = !!admitted.legacyScopeOverride;
-    if (legacyScopeOverride) {
-      legacyDelivery = recordedDelivery(slug, ticket.submission?.commit, reason);
-      if (!legacyDelivery.ok) return Object.assign({ ticket }, legacyDelivery);
-    }
   }
-  const recorded = delivery || legacyDelivery;
+  const recorded = delivery;
   const advisory = purpose === "integration" && ticket.highStakes && !recordedReviewPass(ticket) && !linkedReviewPass(slug, ticket) ? HIGH_STAKES_REVIEW_WARNING : null;
   const result = completeTicket(slug, idOrRef, by, Object.assign({}, opts, {
     body: reason,
@@ -2402,8 +2395,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
           integrationRevision: recorded.integrationRevision,
           evidence: recorded.evidence
         }
-      } : {},
-      legacyScopeOverride ? { legacyScopeOverride: { reason } } : {}
+      } : {}
     ),
     ...recorded?.ok ? { recordedDelivery: recorded } : {}
   }));

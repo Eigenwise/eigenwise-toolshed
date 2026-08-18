@@ -101,6 +101,12 @@ function cliJson(args?: any) {
   return JSON.parse(result.stdout);
 }
 
+function writeDispatchTokenFile(token: string, label: string) {
+  const tokenFile = path.join(SIDEQUEST_HOME, `${label}.token`);
+  fs.writeFileSync(tokenFile, `${token}\n`);
+  return tokenFile;
+}
+
 function ticket(ref?: any) {
   const payload = cliJson(['list']);
   const tickets = Array.isArray(payload.tickets) ? payload.tickets : ([] as any[]).concat(...Object.values(payload).filter(Array.isArray) as any[]);
@@ -141,7 +147,7 @@ test('Codex category routes reject a generic executor even when effort matches',
   assert.match(rejected.stdout + rejected.stderr, new RegExp(expected));
   assert.equal(ticket(ref).status, 'todo');
   const prepared = prepareBoundDispatch(store.ensureProject(PROJ).slug, ref);
-  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected, '--token', prepared.token]).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'w2', '--effort', derived.effort, '--executor', expected, '--token-file', prepared.ticket.dispatch.tokenFile]).ok, true);
 });
 
 // SQ-2205, from SQ-2110: a readonly Codex dispatch was refused as executor_mismatch while prepare, pulse and
@@ -208,7 +214,7 @@ test('a category-routed claim requires a prepared token even with its resolved e
   assert.match(payload.message, /--direct/i);
   assert.equal(ticket(ref).status, 'todo');
   const prepared = prepareBoundDispatch(store.ensureProject(PROJ).slug, ref);
-  const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--token', prepared.token]);
+  const claim = cliJson(['claim', ref, '--by', 'w1', '--effort', derived.effort, '--executor', derived.exec.agent, '--token-file', prepared.ticket.dispatch.tokenFile]);
   assert.equal(claim.ticket.status, 'doing');
 });
 
@@ -382,10 +388,10 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   const missing = runCli(['claim', doneRef, '--by', 'missing-token', '--json']);
   assert.notEqual(missing.status, 0);
   assert.equal(JSON.parse(missing.stdout).reason, 'token');
-  const wrong = runCli(['claim', doneRef, '--by', 'wrong-executor', '--token', preparedDone.token, '--executor', 'sidequest-exec-high', '--json']);
+  const wrong = runCli(['claim', doneRef, '--by', 'wrong-executor', '--token-file', preparedDone.ticket.dispatch.tokenFile, '--executor', 'sidequest-exec-high', '--json']);
   assert.notEqual(wrong.status, 0);
   assert.equal(JSON.parse(wrong.stdout).reason, 'executor_mismatch');
-  assert.equal(cliJson(['claim', doneRef, '--by', 'right-token', '--token', preparedDone.token, '--executor', preparedDone.ticket.dispatchExecutor]).ok, true);
+  assert.equal(cliJson(['claim', doneRef, '--by', 'right-token', '--token-file', preparedDone.ticket.dispatch.tokenFile, '--executor', preparedDone.ticket.dispatchExecutor]).ok, true);
   const done = cliJson(['done', doneRef, '--by', 'right-token']);
   assert.equal(done.ticket.dispatchNonce, null);
   assert.equal(done.ticket.dispatchExecutor, null);
@@ -394,7 +400,7 @@ test('instant dispatch targets the stable executor, gates the claim, and clears 
   const releaseRef = seed('guard.codex');
   const preparedRelease = prepareBoundDispatch(slug, releaseRef);
   assert.equal(preparedRelease.ticket.dispatchExecutor, 'sidequest-exec-dispatch');
-  assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token', preparedRelease.token, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
+  assert.equal(cliJson(['claim', releaseRef, '--by', 'release-token', '--token-file', preparedRelease.ticket.dispatch.tokenFile, '--executor', preparedRelease.ticket.dispatchExecutor]).ok, true);
   const released = cliJson(['release', releaseRef, '--by', 'release-token', '--status', 'todo']);
   assert.equal(released.ticket.dispatchNonce, null);
   assert.equal(released.ticket.dispatchExecutor, null);
@@ -440,10 +446,11 @@ test('a re-dispatch rotates the token against a constant stable executor and rej
   assert.equal(first.ticket.dispatchExecutor, second.ticket.dispatchExecutor);
   assert.notEqual(first.token, second.token);
   assert.equal(store.getTicket(slug, ref).dispatchNonce, second.token);
-  const stale = runCli(['claim', ref, '--by', 'stale', '--token', first.token, '--executor', first.ticket.dispatchExecutor, '--json']);
+  const staleTokenFile = writeDispatchTokenFile(first.token, 'stale-redispatch');
+  const stale = runCli(['claim', ref, '--by', 'stale', '--token-file', staleTokenFile, '--executor', first.ticket.dispatchExecutor, '--json']);
   assert.notEqual(stale.status, 0);
   assert.equal(JSON.parse(stale.stdout).reason, 'token');
-  assert.equal(cliJson(['claim', ref, '--by', 'latest', '--token', second.token, '--executor', second.ticket.dispatchExecutor]).ok, true);
+  assert.equal(cliJson(['claim', ref, '--by', 'latest', '--token-file', second.ticket.dispatch.tokenFile, '--executor', second.ticket.dispatchExecutor]).ok, true);
   assert.equal(store.releaseTicket(slug, ref, 'latest', { status: 'todo' }).ok, true);
 });
 
@@ -456,21 +463,21 @@ test('fresh redispatch briefing includes every comment added after preparation a
   assert.equal(first.ok, true);
   assert.equal(second.ok, true);
   const redispatched = store.prepareDispatch(slug, ref, { allowUnscoped: true });
-  const briefing = runCli(['briefing', ref, '--token', redispatched.token]);
+  const briefing = runCli(['briefing', ref, '--token-file', redispatched.ticket.dispatch.tokenFile]);
   assert.equal(briefing.status, 0, briefing.stderr);
   assert.ok(briefing.stdout.includes(first.comment.body));
   assert.ok(briefing.stdout.includes(second.comment.body));
   assert.ok(briefing.stdout.indexOf(second.comment.body) < briefing.stdout.indexOf(first.comment.body));
 
   const foreignProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-briefing-foreign-'));
-  const foreign = runCli(['briefing', ref, '--token', redispatched.token, '--project', foreignProject]);
+  const foreign = runCli(['briefing', ref, '--token-file', redispatched.ticket.dispatch.tokenFile, '--project', foreignProject]);
   assert.notEqual(foreign.status, 0);
   assert.match(foreign.stdout + foreign.stderr, /no ticket/i);
 });
 test('briefing rejects invalid, terminal, and prior-dispatch tokens without leaking ticket content', () => {
   const slug = store.ensureProject(PROJ).slug;
-  const assertRefused = (ref: string, token: string, secret: string) => {
-    const result = runCli(['briefing', ref, '--token', token]);
+  const assertRefused = (ref: string, tokenFile: string, secret: string) => {
+    const result = runCli(['briefing', ref, '--token-file', tokenFile]);
     assert.equal(result.status, 1);
     assert.match(result.stdout + result.stderr, /dispatch token was refused/);
     assert.doesNotMatch(result.stdout + result.stderr, new RegExp(secret));
@@ -482,7 +489,7 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
     category: 'guard.codex',
   });
   const invalidDispatch = store.prepareDispatch(slug, invalid.ref, { allowUnscoped: true });
-  assertRefused(invalid.ref, 'definitely-invalid-token', 'invalid-token-secret-測試');
+  assertRefused(invalid.ref, writeDispatchTokenFile('definitely-invalid-token', 'invalid-briefing'), 'invalid-token-secret-測試');
 
   const terminal = store.createTicket(slug, {
     title: 'Terminal token packet',
@@ -495,7 +502,7 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
     executor: terminalDispatch.ticket.dispatchExecutor,
   }).ok, true);
   assert.equal(store.releaseTicket(slug, terminal.ref, 'terminal-worker', { status: 'todo' }).ok, true);
-  assertRefused(terminal.ref, terminalDispatch.token, 'terminal-token-secret-測試');
+  assertRefused(terminal.ref, terminalDispatch.ticket.dispatch.tokenFile, 'terminal-token-secret-測試');
 
   const prior = store.createTicket(slug, {
     title: 'Prior token packet',
@@ -505,8 +512,8 @@ test('briefing rejects invalid, terminal, and prior-dispatch tokens without leak
   const first = store.prepareDispatch(slug, prior.ref, { allowUnscoped: true });
   const second = store.prepareDispatch(slug, prior.ref, { allowUnscoped: true });
   assert.notEqual(first.token, second.token);
-  assertRefused(prior.ref, first.token, 'prior-token-secret-測試');
-  const current = runCli(['briefing', prior.ref, '--token', second.token]);
+  assertRefused(prior.ref, writeDispatchTokenFile(first.token, 'prior-briefing'), 'prior-token-secret-測試');
+  const current = runCli(['briefing', prior.ref, '--token-file', second.ticket.dispatch.tokenFile]);
   assert.equal(current.status, 0, current.stderr);
   assert.match(current.stdout, /prior-token-secret-測試/);
 });
@@ -623,7 +630,7 @@ test('serialized dispatch spawn and briefing preserve a huge packet', () => {
   assert.doesNotMatch(serializedSpawn, /Description excerpt capped/);
   assert.doesNotMatch(serializedSpawn, /First comment marker|asset-0-/);
 
-  const briefingOutput = runCli(['briefing', created.ref, '--token', dispatched.token]);
+  const briefingOutput = runCli(['briefing', created.ref, '--token-file', ticket(created.ref).dispatch.tokenFile]);
   assert.equal(briefingOutput.status, 0, briefingOutput.stderr);
   const briefingPath = /Before acting, Read "([^"]+)" in full/.exec(briefingOutput.stdout)?.[1];
   assert.ok(briefingPath, briefingOutput.stdout);

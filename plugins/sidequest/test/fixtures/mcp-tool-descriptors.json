@@ -87,9 +87,6 @@
         "ref": {
           "type": "string"
         },
-        "detail": {
-          "type": "boolean"
-        },
         "full": {
           "type": "boolean"
         }
@@ -660,9 +657,6 @@
         "executor": {
           "type": "string"
         },
-        "token": {
-          "type": "string"
-        },
         "tokenFile": {
           "type": "string"
         },
@@ -852,9 +846,6 @@
           "type": "string"
         },
         "integration": {
-          "type": "boolean"
-        },
-        "overrideLegacyScope": {
           "type": "boolean"
         },
         "deliveryCommit": {

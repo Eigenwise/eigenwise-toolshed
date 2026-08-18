@@ -1389,9 +1389,8 @@ function readDispatchBriefing(slug?: any, idOrRef?: any, token?: any, tokenFile?
   if (!dispatchTokenMatches(ticket.dispatchNonce, receivedToken)) {
     return { ok: false, reason: 'token' };
   }
-  // The caller renders the briefing with this token; returning only the ticket
-  // made cmdBriefing fall back to its raw --token option, which is empty in
-  // --token-file mode, so every token-file briefing threw (SQ-1866).
+  // The renderer still validates the resolved credential. Returning only the
+  // ticket made every token-file briefing fail after authentication (SQ-1866).
   return { ok: true, ticket, token: receivedToken };
 }
 
@@ -1544,6 +1543,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       at: now,
     };
 
+    removeDispatchTokenFile(t);
     t.dispatchNonce = mintDispatchToken();
     t.dispatchExecutor = fallback.exec.agent;
     // The recovery route replaces the failed one before the card labels are
@@ -1562,6 +1562,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       artifactScope: state.artifactScope || null,
       ...(Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {}),
       tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+      tokenFile: newDispatchTokenFile(),
       executor: t.dispatchExecutor,
       description: spawnDescription(t, fallback.exec),
       launchSeq,
@@ -1579,6 +1580,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       supersededTokens,
       recovery,
     };
+    writeDispatchTokenFile(t);
     stampDispatchEvent(t, opts.source || 'agent-launch-failure', now);
     putTicket(slug, t);
     return { ok: true, ticket: t, token: t.dispatchNonce, recovery };
