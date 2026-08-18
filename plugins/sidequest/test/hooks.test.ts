@@ -1264,19 +1264,45 @@ test('pre-tool repeated-command hook warns for PowerShell commands', () => {
   assert.match(runHook(REPEATED_COMMAND_WARN, payload), /polling burns ~14s and ~60k tokens per call/);
 });
 
-test('pre-tool inline-work hook tells solo work to surface the board choice once', () => {
+test('pre-tool inline-work hook makes board dispatch the default for solo work', () => {
   const session_id = `inline-solo-${Date.now()}`;
   const output = runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
   });
   assert.equal(output.hookSpecificOutput.hookEventName, 'PreToolUse');
   assert.equal(output.hookSpecificOutput.additionalContext, output.systemMessage, 'the nudge must reach the model, not only the terminal');
-  assert.match(output.systemMessage, /inline-safe boundary/i);
-  assert.match(output.systemMessage, /concrete reason for continuing inline/i);
-  assert.match(output.systemMessage, /offer Sidequest board dispatch/i);
+  assert.match(output.systemMessage, /^sidequest: 0 reads \/ 1 commands this session, no board interaction\./);
+  assert.match(output.systemMessage, /Multi-file work defaults to board dispatch\./);
+  assert.match(output.systemMessage, /offer dispatch, or name why inline serves the user better than an executor/i);
+  assert.ok(Buffer.byteLength(output.systemMessage, 'utf8') <= 768, 'the PreToolUse nudge must fit its context budget');
   assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
     session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
   }), null);
+});
+
+test('pre-tool inline-work hook nudges prolonged investigations with live counts', () => {
+  const session_id = `inline-investigation-${Date.now()}`;
+  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {} };
+  for (let readActions = 1; readActions < 8; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const firstInvestigationNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.match(firstInvestigationNudge.systemMessage, /^sidequest: 8 reads \/ 0 commands this session, no board interaction\./);
+  assert.ok(Buffer.byteLength(firstInvestigationNudge.systemMessage, 'utf8') <= 768, 'the PreToolUse investigation nudge must fit its context budget');
+  for (let readActions = 9; readActions < 24; readActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const escalation = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.match(escalation.systemMessage, /^sidequest: 24 reads \/ 0 commands this session, no board interaction\. You have continued after an earlier reminder\./);
+  assert.ok(Buffer.byteLength(escalation.systemMessage, 'utf8') <= 768, 'the repeated PreToolUse nudge must fit its context budget');
+});
+
+test('pre-tool inline-work hook escalates substantive work at widening intervals', () => {
+  const session_id = `inline-escalation-${Date.now()}`;
+  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {} };
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /1 commands this session/);
+  for (let substantiveActions = 2; substantiveActions < 4; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 4 commands this session/);
+  for (let substantiveActions = 5; substantiveActions < 12; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 12 commands this session/);
+  for (let substantiveActions = 13; substantiveActions < 36; substantiveActions += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands this session/);
 });
 
 test('pre-tool inline-work hook keeps bounded transcript lookups inline-safe', () => {

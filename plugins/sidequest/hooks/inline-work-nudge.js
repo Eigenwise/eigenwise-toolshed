@@ -141,6 +141,8 @@ function writeSessionState(file, state) {
 
 // src/hooks/inline-work-nudge.ts
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
+var INVESTIGATION_READ_THRESHOLD = 8;
+var SUBSTANTIVE_ESCALATION_START = 4;
 function boardFor(input) {
   const store = require(runtimeModule("store"));
   const start = stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -175,6 +177,15 @@ function isSubstantive(toolName, command, prompt) {
 function isReadClass(toolName, command) {
   return toolName === "Read" || toolName === "Grep" || toolName === "Glob" || toolName === "Bash" && Boolean(command) && isPureRead(command);
 }
+function isEscalationPoint(activityCount, firstEscalation) {
+  let escalation = firstEscalation;
+  while (escalation < activityCount) escalation *= 3;
+  return activityCount === escalation;
+}
+function nudgeMessage(readActions, substantiveActions, repeated) {
+  const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";
+  return `sidequest: ${readActions} reads / ${substantiveActions} commands this session, no board interaction.${earlierReminder} Multi-file work defaults to board dispatch. In your next reply offer dispatch, or name why inline serves the user better than an executor.`;
+}
 function main() {
   const input = readStdin();
   if (!input || isSubagent(input)) return;
@@ -188,15 +199,25 @@ function main() {
   if (isBoardInteraction(toolName, command)) {
     state.boardInteraction = true;
   } else if (isSubstantive(toolName, command, prompt)) {
-    state.substantiveActions = (Number(state.substantiveActions) || 0) + 1;
-    if (!state.boardInteraction && !state.soloChoiceSurfaced) {
+    const substantiveActions = (Number(state.substantiveActions) || 0) + 1;
+    state.substantiveActions = substantiveActions;
+    if (!state.boardInteraction && (!state.soloChoiceSurfaced || isEscalationPoint(substantiveActions, SUBSTANTIVE_ESCALATION_START))) {
+      const repeated = Boolean(state.soloChoiceSurfaced);
       state.soloChoiceSurfaced = true;
       writeSessionState(file, state);
-      writeSystemMessage("PreToolUse", "sidequest: This action crosses the inline-safe boundary. In your next user-visible reply, state the concrete reason for continuing inline or offer Sidequest board dispatch.");
+      writeSystemMessage("PreToolUse", nudgeMessage(Number(state.readActions) || 0, substantiveActions, repeated));
       return;
     }
   } else if (isReadClass(toolName, command)) {
-    state.readActions = (Number(state.readActions) || 0) + 1;
+    const readActions = (Number(state.readActions) || 0) + 1;
+    state.readActions = readActions;
+    if (!state.boardInteraction && (!state.investigationChoiceSurfaced ? readActions >= INVESTIGATION_READ_THRESHOLD : isEscalationPoint(readActions, INVESTIGATION_READ_THRESHOLD * 3))) {
+      const repeated = Boolean(state.investigationChoiceSurfaced);
+      state.investigationChoiceSurfaced = true;
+      writeSessionState(file, state);
+      writeSystemMessage("PreToolUse", nudgeMessage(readActions, Number(state.substantiveActions) || 0, repeated));
+      return;
+    }
   }
   writeSessionState(file, state);
 }
