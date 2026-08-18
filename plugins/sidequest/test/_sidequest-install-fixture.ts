@@ -20,6 +20,23 @@ import { writeInstalledPluginsAtomically } from '../src/lib/installed-plugins.js
 // the preflight (claim-effort-guard.test.ts) sets its own isolated
 // SIDEQUEST_CLAUDE_HOME instead of calling this.
 let installed = false;
+const RENAME_RETRY_DELAYS_MS = [20, 60, 140, 300] as const;
+const RETRYABLE_RENAME_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+
+function renameWithRetry(temporaryPath: string, targetPath: string): void {
+  const waitBuffer = new Int32Array(new SharedArrayBuffer(4));
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(temporaryPath, targetPath);
+      return;
+    } catch (error: unknown) {
+      const delay = RENAME_RETRY_DELAYS_MS[attempt];
+      const code = error && typeof error === 'object' && 'code' in error ? error.code : undefined;
+      if (delay == null || typeof code !== 'string' || !RETRYABLE_RENAME_CODES.has(code)) throw error;
+      Atomics.wait(waitBuffer, 0, 0, delay);
+    }
+  }
+}
 
 export function stubSidequestInstall(): void {
   if (installed) return;
@@ -35,7 +52,7 @@ export function stubSidequestInstall(): void {
     fs.writeFileSync(temporaryManifestPath, JSON.stringify({
       mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } },
     }));
-    fs.renameSync(temporaryManifestPath, manifestPath);
+    renameWithRetry(temporaryManifestPath, manifestPath);
   } finally {
     fs.rmSync(temporaryManifestPath, { force: true });
   }
