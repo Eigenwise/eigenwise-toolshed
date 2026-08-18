@@ -114,6 +114,17 @@ test('executor briefings require Board MCP reconnect and re-dispatch when unavai
   assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
 });
 
+test('executor briefings surface Sidequest defects instead of project workarounds', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-UPSTREAM-DEFECT', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
+  }, 'upstream-defect-token');
+  assert.match(briefing, /refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error/);
+  assert.match(briefing, /report it to the user with the reproducing evidence and treat it as an upstream defect/);
+  assert.match(briefing, /put that evidence in a ticket comment so the orchestrator sees it/);
+  assert.match(briefing, /Do not encode a workaround in project rules, hooks, or memory/);
+  assert.match(briefing, /marked temporary and name the defect it awaits/);
+});
+
 test('a bound review briefing sends a confirmed defect to the oracle, never to a rejection route', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-REVIEW-BOUND', model: 'opus', effort: 'xhigh', dispatchExecutor: 'sidequest-exec-readonly-xhigh', category: {},
