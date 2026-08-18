@@ -34,7 +34,7 @@ Sidequest can select these models automatically when both plugins are installed.
 
 ## Daily use
 
-There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and recovers an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
+There are no routine Model Gateway commands to remember. The shim supervisor checks the proxy's `/v1/models` endpoint while it runs and recovers an unavailable proxy with bounded backoff. It leaves a healthy proxy alone. If a session survives a plugin update, its older plugin copy leaves the newer shim running and asks you to reload plugins or restart Claude Code. Claude handles setup, updates, authentication checks, model discovery, and settings repair through the skill.
 
 If something breaks, describe the symptom:
 
