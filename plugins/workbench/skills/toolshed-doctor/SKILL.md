@@ -20,6 +20,11 @@ Then run the same read-only session health audit used at startup:
 node -e "const { audit } = require(process.env.CLAUDE_PLUGIN_ROOT + '/hooks/session-start-freshness.js'); const result = audit({ currentProject: process.cwd() }); console.log(JSON.stringify({ problems: result.problems, boards: result.mappings, staleProcesses: result.staleProcesses }, null, 2));"
 ```
 
+An `enabledPlugins` entry only selects an installed plugin. If the audit says a plugin's hooks are not running,
+that settings file enables a plugin with no matching install row. Offer to install it at the reported project or
+user scope, or remove the dead `enabledPlugins` entry from the named file. Do not call that plugin configured or
+healthy until one of those actions is complete.
+
 When `staleProcesses` has rows, report each PID, start time, and stale worktree path. They are read-only findings: do not kill any process from the doctor.
 
 ## Observability, when that plugin is installed

@@ -27,7 +27,7 @@ Tell Claude what you need:
 
 > Check whether this workspace and its Toolshed plugins are healthy.
 
-Workbench updates only Eigenwise Toolshed plugins and Model Gateway when installed. It leaves third-party plugins alone and tells you when an affected session needs `/reload-plugins` or a restart.
+Workbench updates only Eigenwise Toolshed plugins and Model Gateway when installed. It leaves third-party plugins alone and tells you when an affected session needs `/reload-plugins` or a restart. A health check also catches an `enabledPlugins` flag with no matching install, because that plugin's hooks do not run. Ask Claude to install it at the reported scope or remove the dead flag from the named settings file.
 
 ## Code intelligence
 

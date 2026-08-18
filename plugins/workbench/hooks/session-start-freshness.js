@@ -293,12 +293,9 @@ function requiredVersions(versions) {
   return problems;
 }
 
-// A plugin is also active because a project's settings say so, and that path leaves no registry row at all:
-// contractify enables codebase-mapper in a committed .claude/settings.json, and the registry holds rows for
-// three of the other four plugins in that same block but none for it, so the plugin was invisible here and
-// the "nothing maintains it" finding fired against a maintained map (SQ-2211). Registry rows stay the
-// authority on which VERSION a project runs; they were never the authority on whether the plugin is there.
-// Later layers win, so an explicit false in a higher-precedence file disables what a lower one enabled.
+// enabledPlugins selects among registry-backed installs. A true entry without a matching install row is a dead
+// flag, so its plugin hooks never load. Later layers win, so an explicit false in a higher-precedence file
+// disables what a lower one enabled.
 function settingsLayers(projectPath, home) {
   const layers = [['user', path.join(home, '.claude', 'settings.json')]];
   if (projectPath) {
@@ -308,13 +305,37 @@ function settingsLayers(projectPath, home) {
   return layers;
 }
 
-function settingsActivationScope(pluginId, projectPath, home) {
-  let scope = null;
-  for (const [layerScope, file] of settingsLayers(projectPath, home)) {
+function settingsActivation(pluginId, projectPath, home) {
+  let activation = null;
+  for (const [scope, file] of settingsLayers(projectPath, home)) {
     const enabled = readJson(file)?.enabledPlugins?.[pluginId];
-    if (typeof enabled === 'boolean') scope = enabled ? layerScope : null;
+    if (typeof enabled === 'boolean') activation = enabled ? { scope, file } : null;
   }
-  return scope;
+  return activation;
+}
+
+function settingsActivationScope(pluginId, projectPath, home) {
+  return settingsActivation(pluginId, projectPath, home)?.scope || null;
+}
+
+function settingsFileLabel(file, projectPath, home) {
+  if (normalizedPath(file) === normalizedPath(path.join(home, '.claude', 'settings.json'))) return '~/.claude/settings.json';
+  return path.relative(projectPath, file).split(path.sep).join('/');
+}
+
+function deadEnabledPluginFinding(subject, pluginName, activation, projectPath, home) {
+  const settingsFile = settingsFileLabel(activation.file, projectPath, home);
+  return finding(
+    `${subject} has ${pluginName} enabled in ${settingsFile} but no matching ${activation.scope} install, so its hooks are not running; install ${pluginName} at ${activation.scope} scope or remove the dead enabledPlugins entry from ${settingsFile}`,
+    BLOCKS_THE_USER,
+  );
+}
+
+function activationHasInstall(installs, activation, projectPath) {
+  if (!activation) return false;
+  return activation.scope === 'user'
+    ? installs.some((instance) => instance.scope === 'user')
+    : installs.some((instance) => isCurrentProjectPath(instance.projectPath, projectPath));
 }
 
 // Marketplace registration lives in the same user registry, and a project declaring its own marketplace with
@@ -340,20 +361,28 @@ function withDeclaredAutoUpdate(marketplaces, projectPath, home) {
 function boardMappings(boards, instances, home) {
   const sidequestInstalls = instances.filter((instance) => instance.id === 'sidequest@eigenwise-toolshed');
   const missing = [];
+  const deadFlags = [];
   const mappings = boards.map((board) => {
     const boardPath = normalizedPath(board.path);
     const matching = sidequestInstalls.filter((instance) => instance.projectPath && normalizedPath(instance.projectPath) === boardPath);
-    const settingsScope = settingsActivationScope('sidequest@eigenwise-toolshed', board.path, home);
-    const user = sidequestInstalls.some((instance) => instance.scope === 'user') || settingsScope === 'user';
-    const status = matching.length || settingsScope === 'project' ? 'installed' : user ? 'user-only' : 'missing';
-    if (status !== 'installed') missing.push({ board, status });
+    const activation = settingsActivation('sidequest@eigenwise-toolshed', board.path, home);
+    const user = sidequestInstalls.some((instance) => instance.scope === 'user');
+    const status = matching.length ? 'installed' : user ? 'user-only' : 'missing';
+    if (!matching.length && activation && !activationHasInstall(sidequestInstalls, activation, board.path)) {
+      deadFlags.push(deadEnabledPluginFinding(`Sidequest board ${board.name || board.path}`, 'Sidequest', activation, board.path, home));
+    } else if (status !== 'installed') {
+      missing.push({ board, status });
+    }
     return { name: board.name || board.path, path: board.path, status };
   });
-  const problems = missing.length === 1
-    ? [finding(`Sidequest board ${missing[0].board.name || missing[0].board.path} has ${missing[0].status === 'user-only' ? 'no project/local' : 'no'} Sidequest install`, BLOCKS_THE_USER)]
-    : missing.length > 1
-      ? [finding(`${missing.length} Sidequest boards lack a project/local Sidequest install`, BLOCKS_THE_USER)]
-      : [];
+  const problems = [
+    ...deadFlags,
+    ...(missing.length === 1
+      ? [finding(`Sidequest board ${missing[0].board.name || missing[0].board.path} has ${missing[0].status === 'user-only' ? 'no project/local' : 'no'} Sidequest install`, BLOCKS_THE_USER)]
+      : missing.length > 1
+        ? [finding(`${missing.length} Sidequest boards lack a project/local Sidequest install`, BLOCKS_THE_USER)]
+        : []),
+  ];
   return { mappings, problems };
 }
 
@@ -364,9 +393,12 @@ function boardMappings(boards, instances, home) {
 function mapMaintenance(currentProject, instances, home) {
   if (!currentProject || !fs.existsSync(path.join(currentProject, '.claude', '.codebase-info'))) return [];
   const installs = instances.filter((instance) => instance.id === 'codebase-mapper@eigenwise-toolshed');
-  const settingsScope = settingsActivationScope('codebase-mapper@eigenwise-toolshed', currentProject, home);
-  if (settingsScope === 'project' || installs.some((instance) => isCurrentProjectPath(instance.projectPath, currentProject))) return [];
-  const scope = settingsScope === 'user' || installs.some((instance) => instance.scope === 'user') ? 'no project/local' : 'no';
+  const activation = settingsActivation('codebase-mapper@eigenwise-toolshed', currentProject, home);
+  if (installs.some((instance) => isCurrentProjectPath(instance.projectPath, currentProject))) return [];
+  if (activation && !activationHasInstall(installs, activation, currentProject)) {
+    return [deadEnabledPluginFinding("this project's codebase map", 'codebase-mapper', activation, currentProject, home)];
+  }
+  const scope = activation?.scope === 'user' || installs.some((instance) => instance.scope === 'user') ? 'no project/local' : 'no';
   return [finding(`this project has a codebase map but ${scope} codebase-mapper install, so nothing maintains it`, BLOCKS_THE_USER)];
 }
 
