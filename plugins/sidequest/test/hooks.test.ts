@@ -2577,6 +2577,28 @@ test('session-start: keeps specific edits inline and proactive changes user-appr
   }
 });
 
+test('session-start: keeps quick known edits inline and dispatches routed discovery by default', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-routed-work-shape-'));
+  const project = path.join(home, 'project');
+  registerProject(home, project);
+  for (const source of ['', 'compact', 'resume']) {
+    const context = runHookForBudget(SESSION, { session_id: `routed-work-shape-${source || 'startup'}`, source }, {
+      SIDEQUEST_HOME: home,
+      CLAUDE_PROJECT_DIR: project,
+    });
+    const quickEdit = 'Quick edits at a location the user named or that is already known stay inline with no justification or board ceremony';
+    const dispatchDefault = 'A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request';
+    const middleGround = 'For middle-ground work kept inline, state in the reply why inline serves the user better than an executor';
+    assert.match(context, new RegExp(quickEdit, 'i'));
+    assert.match(context, new RegExp(dispatchDefault, 'i'));
+    assert.match(context, /multi-file change, at an unknown location that needs discovery, or an investigation/i);
+    assert.match(context, new RegExp(middleGround, 'i'));
+    assert.ok(context.indexOf(quickEdit) < context.indexOf(dispatchDefault));
+    assert.ok(context.indexOf(dispatchDefault) < context.indexOf(middleGround));
+    assert.doesNotMatch(context, /can ask to use it/i);
+  }
+});
+
 test('session-start adds model-specific checkpoint guidance only for eligible models', () => {
   const defaultContext = runHook(SESSION, { session_id: 'checkpoint-none' });
   const sonnet = runHook(SESSION, { session_id: 'checkpoint-sonnet', model: 'claude-sonnet-5' });
@@ -2622,15 +2644,27 @@ test('session-start: shows the live investigation workforce within its cap', () 
   }
 });
 
-test('session-start: bounds oversized workforces and reports omitted categories', () => {
+test('session-start: bounds oversized workforces and preserves each briefing tail', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-workforce-cap-'));
   const project = path.join(home, 'project');
   writeOversizedRoutingProfile(home);
   registerProject(home, project);
-  const output = JSON.parse(runSessionWithHomeForBudget(home, { CLAUDE_PROJECT_DIR: project }));
-  const workforce = output.hookSpecificOutput.additionalContext.slice(output.hookSpecificOutput.additionalContext.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
-  assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
-  assert.match(workforce, /… \d+ more enabled categories\./);
+  for (const source of ['', 'compact', 'resume']) {
+    const output = runHookOutputForBudget(SESSION, { session_id: `oversized-workforce-${source || 'startup'}`, source }, {
+      SIDEQUEST_HOME: home,
+      CLAUDE_PROJECT_DIR: project,
+    });
+    const context = output.hookSpecificOutput.additionalContext;
+    const workforce = context.slice(context.indexOf('YOUR EXECUTORS — delegate work AND investigation to them:'));
+    assert.ok(Buffer.byteLength(workforce) <= BUDGET.workforce, `oversized workforce is ${Buffer.byteLength(workforce)} bytes`);
+    assert.match(workforce, /… \d+ more enabled categories\./);
+    assert.match(
+      context,
+      source
+        ? /Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback\./
+        : /Workers own claimed work and report conflicts, verification, and cleanup\./,
+    );
+  }
 });
 
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
