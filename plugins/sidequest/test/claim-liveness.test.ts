@@ -856,7 +856,7 @@ test('the sweep refuses to release a shared-tree claim while the checkout is dir
   assert.equal(cleanSweep.released.some((entry?: any) => entry.ref === ticket.ref && entry.kind === 'observed_stop'), true);
 });
 
-test('a missing isolated worktree is death evidence without a terminal dispatch stamp', () => {
+test('a missing isolated worktree is death evidence without a terminal dispatch stamp, and a silent bound dispatch reaches the abandon backstop', () => {
   const missing = addRouted('missing worktree without observed stop');
   const missingSession = 'session-missing-worktree';
   const missingAgent = 'missing-worktree-agent';
@@ -893,12 +893,13 @@ test('a missing isolated worktree is death evidence without a terminal dispatch 
   fs.mkdirSync(liveDispatch.worktree, { recursive: true });
   backdateClaim(live.ref, 31 * 24 * HOUR);
   const livePulse = store.pulsePayload(slug, live.ref);
-  assert.equal(livePulse.liveness, 'unknown');
-  assert.equal(livePulse.claim.reclaimable, null);
+  assert.equal(livePulse.liveness, 'dead');
+  assert.equal(livePulse.claim.reclaimable, 'abandoned');
 
   const swept = store.sweepStaleClaims({ project: slug, source: 'test' });
   assert.equal(swept.released.some((entry?: any) => entry.ref === missing.ref && entry.kind === 'missing_worktree'), true);
-  assert.equal(store.getTicket(slug, live.ref).claim.by, 'quiet-isolated-executor');
+  assert.equal(swept.released.some((entry?: any) => entry.ref === live.ref && entry.kind === 'abandoned'), true);
+  assert.equal(store.getTicket(slug, live.ref).claim, null);
   fs.rmSync(liveDispatch.worktree, { recursive: true, force: true });
 });
 

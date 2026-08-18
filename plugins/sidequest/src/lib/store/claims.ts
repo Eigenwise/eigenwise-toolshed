@@ -234,7 +234,12 @@ function createClaims(dependencies: any) {
       }
       return null;
     }
-    if (dispatch) return null;
+    if (dispatch) {
+      if (idleMs > claimAbandonMs()) {
+        return { kind: 'abandoned', idleMs, reason: 'no board activity from the claim holder past the unobserved-death backstop' };
+      }
+      return null;
+    }
     if (idleMs > claimIdleMs()) {
       return { kind: 'idle', idleMs, reason: 'no board activity from the claim holder and no executor dispatch exists' };
     }
