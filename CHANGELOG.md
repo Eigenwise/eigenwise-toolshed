@@ -8,6 +8,29 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.483.0 (2026-08-18)
+
+### model-gateway 0.48.12 → 0.48.13
+
+#### Fixes
+
+- Keep stale model-gateway sessions from replacing newer serving shims (SQ-2233)
+  Old plugin copies now leave a newer serving shim running and direct remediation through the newest installed copy.
+- Refuse worker downgrades through the shim restart handler (SQ-2234)
+  Worker restarts now choose the newest installed CLI and keep a newer worker from being replaced by an older plugin copy.
+
+### sidequest 4.52.11 → 4.53.0
+
+#### Features
+
+- Ship complete Sidequest executor briefings (SQ-2229)
+
+#### Fixes
+
+- Raise Sidequest MCP read paging to Claude Code's result ceiling (SQ-2230)
+- Surface Sidequest defects in executor briefings (SQ-2231)
+- Keep executor routes visible in agent launch names (SQ-2232)
+
 ## v3.482.0 (2026-08-17)
 
 ### model-gateway 0.48.11 → 0.48.12
