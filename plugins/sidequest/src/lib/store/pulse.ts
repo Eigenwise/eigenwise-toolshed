@@ -370,12 +370,8 @@ function createBoardWatch(dependencies: any) {
 
   function routineOwnMutation(comment: any): boolean {
     const sessionId = String(watchingOrigin.sessionId || watchingSession || '');
-    const actor = String(watchingOrigin.actor || watchingAuthor || '');
-    const operation = String(watchingOrigin.operation || 'comment');
-    if (!comment || !sessionId || !actor) return false;
-    return String(comment.sourceSession || '') === sessionId
-      && String(comment.actor || '') === actor
-      && String(comment.operation || '') === operation;
+    if (!comment || !sessionId) return false;
+    return String(comment.sourceSession || '') === sessionId;
   }
 
   function actionableEvent(ticket: any): { type: string; author: string; excerpt: string; warningIdentity?: string } | null {
@@ -391,8 +387,8 @@ function createBoardWatch(dependencies: any) {
     const comment = ticket.lastComment;
     const body = String(comment?.body || '');
     if (!comment || markerPattern.test(body)) return null;
-    if (commentPattern.test(body)) return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
     if (routineOwnMutation(comment)) return null;
+    if (commentPattern.test(body)) return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
     return { type: 'comment', author: String(comment.by || ''), excerpt: excerpt(body) };
   }
 

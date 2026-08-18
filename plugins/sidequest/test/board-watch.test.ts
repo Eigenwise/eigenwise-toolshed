@@ -3,6 +3,10 @@ import assert from 'node:assert/strict';
 
 const { createBoardWatch, createGitHubCiRunsProvider } = require('../lib/store/pulse');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
+const store = require('../lib/store');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 
 function ticket(overrides: Record<string, unknown> = {}) {
   return {
@@ -147,8 +151,8 @@ test('watch ignores a benign same-session comment', () => {
   assert.deepEqual(lines, []);
 });
 
-test('watch emits self-originated blocker comments and unknown origins', () => {
-  const ownRoutine = ticket({ lastComment: { id: 'own', by: 'orchestrator', body: 'Blocked on a scope request.', sourceSession: 'session-1', actor: 'orchestrator', operation: 'comment' } });
+test('watch ignores self-originated blocker comments and unknown origins', () => {
+  const ownRoutine = ticket({ lastComment: { id: 'own', by: 'orchestrator-other', body: 'Blocked on a scope request.', sourceSession: 'session-1', actor: 'orchestrator-other', operation: 'comment' } });
   const unknownOrigin = ticket({ lastComment: { id: 'unknown', by: 'orchestrator', body: 'Blocked on a scope request.' } });
   const { boardWatch, lines } = watch([
     { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownRoutine] },
@@ -160,19 +164,60 @@ test('watch emits self-originated blocker comments and unknown origins', () => {
 
   assert.deepEqual(lines, [
     'SQ-1 doing comment orchestrator Blocked on a scope request.',
-    'SQ-1 doing comment orchestrator Blocked on a scope request.',
   ]);
 });
 
-test('watch emits actionable self-originated blocker comments', () => {
-  const ownBlocker = ticket({ lastComment: { id: 'blocker', by: 'orchestrator', body: 'Blocked on a scope request.', sourceSession: 'session-1', actor: 'orchestrator', operation: 'comment' } });
+test('watch emits blocker comments from another session', () => {
+  const otherBlocker = ticket({ lastComment: { id: 'other', by: 'orchestrator-other', body: 'Blocked on a scope request.', sourceSession: 'session-2', actor: 'orchestrator-other', operation: 'comment' } });
   const { boardWatch, lines } = watch([
-    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownBlocker] },
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [otherBlocker] },
   ], 'orchestrator', [], 'session-1');
 
   boardWatch.poll();
 
-  assert.deepEqual(lines, ['SQ-1 doing comment orchestrator Blocked on a scope request.']);
+  assert.deepEqual(lines, ['SQ-1 doing comment orchestrator-other Blocked on a scope request.']);
+});
+
+test('project watch suppresses its own MCP comment regardless of actor identity', () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-board-watch-')));
+  const createdTicket = store.createTicket(project.slug, { title: 'Watch attribution' });
+  const lines: string[] = [];
+  const changesPayload = (slug: string, since: string) => store.changesPayload(slug, since);
+  const watchingBoard = createProjectBoardWatch(project, {
+    CLAUDE_CODE_SESSION_ID: 'watch-session',
+  }, {
+    store: { changesPayload },
+    createBoardWatch: (dependencies: any) => createBoardWatch({
+      ...dependencies,
+      writeLine: (line: string) => lines.push(line),
+    }),
+    createGitHubCiRunsProvider: () => null,
+  });
+
+  store.addComment(project.slug, createdTicket.ref, {
+    by: 'orchestrator-remote-name',
+    body: 'Blocked on a scope request.',
+    kind: 'comment',
+    source: 'mcp',
+    sourceSession: 'watch-session',
+    actor: 'orchestrator-remote-name',
+    operation: 'comment',
+  });
+  watchingBoard.poll();
+  assert.deepEqual(lines, []);
+
+  store.addComment(project.slug, createdTicket.ref, {
+    by: 'executor',
+    body: 'Blocked on a scope request.',
+    kind: 'comment',
+    source: 'mcp',
+    sourceSession: 'other-session',
+    actor: 'executor',
+    operation: 'comment',
+  });
+  watchingBoard.poll();
+
+  assert.deepEqual(lines, [`${createdTicket.ref} ${createdTicket.status} comment executor Blocked on a scope request.`]);
 });
 
 test('watch emits actionable self-originated release events', () => {
