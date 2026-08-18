@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.484.0 (2026-08-18)
+
+### sidequest 4.53.0 → 5.0.0
+
+#### Breaking changes
+
+- Remove legacy scope, token, and pulse aliases (SQ-1916)
+
+#### Fixes
+
+- Avoid deadline race test load flakes (SQ-2235) [`eea3734`](https://github.com/Eigenwise/eigenwise-toolshed/commit/eea37347373e7be2bd43a587f273c321a9625998)
+- Escalate inline-work dispatch nudges (SQ-2236)
+- Dispatch routed board work by default (SQ-2238)
+
+### workbench 0.88.4 → 0.88.5
+
+#### Fixes
+
+- Report enabled-but-not-installed plugins as dead flags in the Toolshed health check (SQ-2237)
+
 ## v3.483.0 (2026-08-18)
 
 ### model-gateway 0.48.12 → 0.48.13
