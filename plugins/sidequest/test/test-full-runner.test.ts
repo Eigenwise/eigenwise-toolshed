@@ -669,6 +669,11 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
   const sentinelPid = requireProcessId(sentinel.pid, 'the unrelated sentinel');
 
   const rows: Array<{ timedOut: boolean; descendantPid: number | null; markerWritten: () => boolean }> = [];
+  const terminationGraceMilliseconds = 400;
+  // `runOwnedPhase` reports a live root after its grace and drain windows together. Align that
+  // combined bound with the file's settled-process assertion so scheduler contention cannot turn
+  // a reaped tree into a failure, while an unreaped root still fails within a finite deadline.
+  const cleanupDrainMilliseconds = SETTLED_BUDGET_MILLISECONDS - terminationGraceMilliseconds;
   try {
     for (let row = 0; row < 100; row += 1) {
       const deadlineMilliseconds = 500;
@@ -678,13 +683,8 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
         command: process.execPath,
         args: fixture.args,
         timeoutMilliseconds: deadlineMilliseconds,
-        // These are the windows in which a broken termination path fails to settle, not tuned numbers.
-        // Both are timeouts rather than sleeps, so widening them costs nothing when the tree dies
-        // promptly. At 60ms and 200ms one row in a hundred on windows-latest reported its phase root
-        // still alive after 260ms, which measured runner contention and failed the gate on unchanged
-        // code, the same way the pid probe below did (SQ-2179).
-        terminationGraceMilliseconds: 400,
-        cleanupDrainMilliseconds: 600,
+        terminationGraceMilliseconds,
+        cleanupDrainMilliseconds,
       }));
       assert.equal(result.error, null, `row ${row} reported ${result.error?.message}`);
       assert.equal(result.cleanupError, null, `row ${row} reported ${result.cleanupError}`);
