@@ -28,13 +28,13 @@ function waitForHealth(port) {
   });
 }
 
-function startGateway(t, command, environment) {
+function startGateway(t, command, environment, { cliPath = CLI } = {}) {
   const home = environment.HOME || fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-test-'));
   const ownsHome = !environment.HOME;
   const socketPath = environment.CODEX_GATEWAY_SOCKET_PATH || path.join(home, 'anthropic.sock');
   if (ownsHome) t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   return new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [CLI, command], {
+    const child = spawn(process.execPath, [cliPath, command], {
       env: {
         ...process.env,
         ...environment,

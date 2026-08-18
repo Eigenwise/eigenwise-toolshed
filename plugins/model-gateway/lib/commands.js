@@ -40,7 +40,7 @@ const zlib = require('node:zlib');
 const { writeFileAtomically } = require('./atomic-file.js');
 const { createGatewayUsageEmitter, recordRequestBodyHighWater } = require('./usage-observability.js');
 const grokBackend = require('./grok-backend.js');
-const { CLI_PATH, SOCKET_PATH, resolveNewestInstalledCliPath } = require('./runtime.js');
+const { canReplaceInstalledCliPath, CLI_PATH, SOCKET_PATH, resolveNewestInstalledCliPath } = require('./runtime.js');
 
 const WIN = process.platform === 'win32';
 const STATE = path.join(os.homedir(), '.claude', 'model-gateway');
@@ -1738,7 +1738,7 @@ function runShim() {
   }
 
   async function restartWorker(script) {
-    if (script && path.isAbsolute(script)) workerScript = script;
+    if (script && path.isAbsolute(script) && canReplaceInstalledCliPath(workerScript, script)) workerScript = script;
     restarting = true;
     const current = worker;
     if (!current) {
