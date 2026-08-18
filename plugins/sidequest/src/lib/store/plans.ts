@@ -352,28 +352,7 @@ function experimentPacket(slug?: any, idOrRef?: any) {
   if (!ticket) return null;
   const existing = readExperimentLog(slug, ticket);
   if (!existing) return null;
-  const sections = experimentSections(existing.log);
-  const entries = experimentEntries(existing.log);
-  const recent = entries.slice(-3);
-  let older = entries.slice(0, -3);
-  const build = () => [
-    `Experiment log: ${existing.file}`,
-    '## Ruled out',
-    sections.ruledOut || '(none)',
-    '## Standing constraints',
-    sections.constraints || '(none)',
-    ...(older.length ? ['## Earlier rounds', ...older.map((entry?: any) => `- ${entry.headline}`)] : []),
-    ...(recent.length ? ['## Recent rounds', ...recent.map((entry?: any) => entry.block)] : []),
-  ].join('\n\n').replace(/\n\n- /g, '\n- ');
-  let packet = build();
-  while (Buffer.byteLength(packet, 'utf8') > 12 * 1024 && older.length) {
-    older = older.slice(1);
-    packet = build();
-  }
-  if (Buffer.byteLength(packet, 'utf8') > 12 * 1024) {
-    packet = Buffer.from(packet, 'utf8').subarray(0, 12 * 1024).toString('utf8').replace(/[^\n]*$/, '').trimEnd();
-  }
-  return { asset: existing.asset, path: existing.file, packet };
+  return { asset: existing.asset, path: existing.file, packet: existing.log };
 }
 
 

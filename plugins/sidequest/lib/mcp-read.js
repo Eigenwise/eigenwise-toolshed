@@ -77,7 +77,7 @@ function readySummary(payload) {
 const tools = [
   {
     name: "context_page",
-    description: "Continue an omitted row set, nested body, or frozen dispatch-contract snapshot from a retrieval handle. Use each page's continuation verbatim for the next page: it keeps the opaque cursor bound to its handle and revision. Rerun mutable source reads when stale.",
+    description: "Continue a paged list row set or nested body from a retrieval handle. Use each page's continuation verbatim for the next page: it keeps the opaque cursor bound to its handle and revision. Briefing sections are never paged because each briefing includes its full text. Rerun mutable source reads when stale.",
     inputSchema: {
       type: "object",
       properties: {

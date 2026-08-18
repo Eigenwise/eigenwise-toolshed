@@ -10,10 +10,10 @@ const DEFAULT_CONTEXT_PAGE_BYTES = 12 * 1024;
 const MAX_CONTEXT_PAGE_BYTES = 16 * 1024;
 const MIN_CONTEXT_PAGE_BYTES = 4;
 const DEFAULT_RECIPIENT_PROFILES = Object.freeze({
-  executor: Object.freeze({ id: 'executor', budgetBytes: 64 * 1024 }),
-  orchestrator: Object.freeze({ id: 'orchestrator', budgetBytes: 128 * 1024 }),
-  hook: Object.freeze({ id: 'hook', budgetBytes: 8 * 1024 }),
-  mcp: Object.freeze({ id: 'mcp', budgetBytes: 16 * 1024 }),
+  executor: Object.freeze({ id: 'executor' }),
+  orchestrator: Object.freeze({ id: 'orchestrator' }),
+  hook: Object.freeze({ id: 'hook' }),
+  mcp: Object.freeze({ id: 'mcp' }),
 });
 const RECIPIENT_PROFILES = DEFAULT_RECIPIENT_PROFILES;
 
@@ -31,7 +31,6 @@ type ProjectionItem = {
   priority?: number;
   order?: number;
   watermark?: string | number | null;
-  retrieval?: RetrievalInstruction;
 };
 
 type ContextHandleSource = {
@@ -243,19 +242,6 @@ function normalizedWatermarks(value: any) {
   return Object.fromEntries(Object.keys(value).sort().map((key) => [key, String(value[key])])) as Record<string, string>;
 }
 
-function normalizedRetrieval(value: any, itemId: string): RetrievalInstruction {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new Error(`context projection item "${itemId}" needs a retrieval instruction before it can be omitted.`);
-  }
-  const tool = String(value.tool || '').trim();
-  if (!tool) throw new Error(`context projection item "${itemId}" retrieval instruction needs an MCP tool name.`);
-  const argumentsValue = value.arguments ?? value.args;
-  if (!argumentsValue || typeof argumentsValue !== 'object' || Array.isArray(argumentsValue)) {
-    throw new Error(`context projection item "${itemId}" retrieval instruction needs MCP tool arguments.`);
-  }
-  return { tool, arguments: canonicalValue(argumentsValue) };
-}
-
 function normalizedItem(value: ProjectionItem, index: number) {
   const id = String(value?.id ?? '').trim();
   if (!id) throw new Error('context projection items need stable ids.');
@@ -269,7 +255,6 @@ function normalizedItem(value: ProjectionItem, index: number) {
     priority,
     order,
     watermark: value.watermark == null ? null : String(value.watermark),
-    retrieval: normalizedRetrieval(value.retrieval, id),
     sourceIndex: index,
   };
 }
@@ -293,91 +278,23 @@ function recipientProfile(value: any) {
   const supplied = typeof value === 'string' ? DEFAULT_RECIPIENT_PROFILES[value as keyof typeof DEFAULT_RECIPIENT_PROFILES] : value;
   if (!supplied || typeof supplied !== 'object') throw new Error('context projection needs a known recipient profile or explicit profile.');
   const id = String(supplied.id || supplied.recipient || '').trim();
-  const budgetBytes = Number(supplied.budgetBytes ?? supplied.maxBytes);
   if (!id) throw new Error('context projection recipient profile needs an id.');
-  if (!Number.isInteger(budgetBytes) || budgetBytes < 0) throw new Error(`context projection recipient profile "${id}" needs a non-negative byte budget.`);
-  return { id, budgetBytes };
+  return { id };
 }
 
-function includedItem(item: any, body: string, truncated = false) {
+function includedItem(item: any, body: string) {
   return {
     id: item.id,
     kind: item.kind,
     body,
     bytes: utf8ByteLength(body),
     ...(item.watermark == null ? {} : { watermark: item.watermark }),
-    ...(truncated ? { truncated: true, retrieval: item.retrieval } : {}),
   };
-}
-
-function omission(item: any, reason: 'budget' | 'truncated', includedBytes = 0) {
-  return {
-    id: item.id,
-    kind: item.kind,
-    reason,
-    originalBytes: utf8ByteLength(item.body),
-    ...(reason === 'truncated' ? { includedBytes } : {}),
-    ...(item.watermark == null ? {} : { watermark: item.watermark }),
-    retrieval: item.retrieval,
-  };
-}
-
-function projectionHash(packet: any) {
-  const { hash: _hash, serializedBytes: _serializedBytes, ...hashed } = packet;
-  return sha256(hashed);
-}
-
-function finalizedPacket(packet: any) {
-  const withHash = Object.assign({}, packet, { hash: projectionHash(packet) });
-  let serializedBytes = 0;
-  for (;;) {
-    const next = utf8ByteLength(JSON.stringify(Object.assign({}, withHash, { serializedBytes })));
-    if (next === serializedBytes) break;
-    serializedBytes = next;
-  }
-  return Object.assign({}, withHash, { serializedBytes });
-}
-
-function packetFor(profile: any, revision: number, watermarks: Record<string, string>, selected: any[], omitted: any[]) {
-  return finalizedPacket({
-    version: CONTEXT_PROJECTION_VERSION,
-    recipient: profile.id,
-    revision,
-    budgetBytes: profile.budgetBytes,
-    watermarks,
-    items: selected,
-    omissions: omitted,
-  });
-}
-
-function fits(profile: any, revision: number, watermarks: Record<string, string>, selected: any[], omitted: any[]) {
-  const packet = packetFor(profile, revision, watermarks, selected, omitted);
-  return { packet, fits: packet.serializedBytes <= profile.budgetBytes };
-}
-
-function bestTruncatedItem(profile: any, revision: number, watermarks: Record<string, string>, item: any, selected: any[], omitted: any[]) {
-  const characters = Array.from(item.body);
-  let lower = 0;
-  let upper = characters.length;
-  let best: any = null;
-  while (lower <= upper) {
-    const count = Math.floor((lower + upper) / 2);
-    const body = characters.slice(0, count).join('');
-    const candidate = includedItem(item, body, true);
-    const result = fits(profile, revision, watermarks, [...selected, candidate], [omission(item, 'truncated', candidate.bytes), ...omitted]);
-    if (result.fits) {
-      best = result;
-      lower = count + 1;
-    } else {
-      upper = count - 1;
-    }
-  }
-  return best;
 }
 
 function compileContextProjection(input: {
-  recipient?: string | { id?: string; recipient?: string; budgetBytes?: number; maxBytes?: number };
-  profile?: string | { id?: string; recipient?: string; budgetBytes?: number; maxBytes?: number };
+  recipient?: string | { id?: string; recipient?: string };
+  profile?: string | { id?: string; recipient?: string };
   revision?: number;
   watermarks?: Record<string, string | number>;
   items?: ProjectionItem[];
@@ -386,30 +303,13 @@ function compileContextProjection(input: {
   const revision = Number.isInteger(Number(input?.revision)) && Number(input?.revision) >= 0 ? Number(input?.revision) : 0;
   const watermarks = normalizedWatermarks(input?.watermarks);
   const candidates = stableItems(Array.isArray(input?.items) ? input.items : []);
-  const selected = candidates.map((item) => includedItem(item, item.body));
-  const omitted: any[] = [];
-
-  while (selected.length) {
-    const result = fits(profile, revision, watermarks, selected, omitted);
-    if (result.fits) break;
-    const removed = candidates[selected.length - 1];
-    selected.pop();
-    omitted.unshift(omission(removed, 'budget'));
-  }
-
-  let result = fits(profile, revision, watermarks, selected, omitted);
-  if (!result.fits) {
-    throw new RangeError(`context projection metadata exceeds the ${profile.budgetBytes}-byte aggregate budget.`);
-  }
-
-  if (selected.length < candidates.length) {
-    const firstOmitted = candidates[selected.length];
-    const remaining = candidates.slice(selected.length + 1).map((item) => omission(item, 'budget'));
-    const truncated = bestTruncatedItem(profile, revision, watermarks, firstOmitted, selected, remaining);
-    if (truncated) result = truncated;
-  }
-
-  return result.packet;
+  return {
+    version: CONTEXT_PROJECTION_VERSION,
+    recipient: profile.id,
+    revision,
+    watermarks,
+    items: candidates.map((item) => includedItem(item, item.body)),
+  };
 }
 
 module.exports = {

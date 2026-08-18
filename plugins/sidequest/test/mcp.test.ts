@@ -410,7 +410,7 @@ test('context_page resumes Unicode bodies and rows with stable revision-safe cur
   assert.match(staleRows.content[0].text, /stale list handle/);
 });
 
-test('context_page reads the frozen dispatch story contract after the live contract changes', async () => {
+test('briefings retain complete frozen story contracts after the live contract changes', () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-frozen-contract-'))).slug;
   const story = store.createStory(project, { title: 'Frozen contract retrieval' });
   const frozenContract = `FROZEN-SNAPSHOT-${'測🧪'.repeat(5_000)}`;
@@ -422,37 +422,13 @@ test('context_page reads the frozen dispatch story contract after the live contr
   });
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'frozen-contract-session' });
   const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
-  const retrievalMatch = briefing.match(/mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
-  assert.ok(retrievalMatch, 'oversized frozen contracts include a context_page retrieval');
-  const initialContinuation = JSON.parse(retrievalMatch[1]);
-  let continuation = initialContinuation;
-  assert.equal(continuation.expectedRevision, contextPacket.contextRevision(frozenContract));
+  assert.ok(briefing.includes(frozenContract));
+  assert.doesNotMatch(briefing, /fetch the paged snapshot/);
 
   store.updateStory(project, story.ref, { executionContract: liveContract });
-  let reconstructed = '';
-  while (continuation !== null) {
-    const page = await callTool('context_page', { ...continuation, limit: 16 * 1024 });
-    reconstructed += page.body;
-    if (page.continuation === null) {
-      assert.equal(page.nextCursor, null);
-    } else {
-      assert.ok(page.continuation, 'incomplete pages return a bound continuation');
-      assert.equal(page.continuation.handle, continuation.handle);
-      assert.equal(page.continuation.expectedRevision, continuation.expectedRevision);
-    }
-    continuation = page.continuation;
-  }
-  assert.match(briefing, /call context_page with the returned continuation verbatim/);
-  assert.equal(reconstructed, frozenContract);
-  assert.equal(contextPacket.utf8ByteLength(reconstructed), contextPacket.utf8ByteLength(frozenContract));
-  assert.equal(require('crypto').createHash('sha256').update(reconstructed, 'utf8').digest('hex'), require('crypto').createHash('sha256').update(frozenContract, 'utf8').digest('hex'));
-
-  const mismatchedRevision = await callToolRaw('context_page', {
-    ...initialContinuation,
-    expectedRevision: contextPacket.contextRevision(liveContract),
-  });
-  assert.equal(mismatchedRevision.isError, true);
-  assert.match(mismatchedRevision.content[0].text, /expectedRevision does not match/);
+  const frozenBriefing = agentsync.renderTicketBriefing(prepared.ticket, prepared.token, project);
+  assert.ok(frozenBriefing.includes(frozenContract));
+  assert.doesNotMatch(frozenBriefing, new RegExp(liveContract.slice(0, 32)));
 });
 
 test('briefings preserve an explicit frozen absence when contracts appear after dispatch', () => {
@@ -476,35 +452,26 @@ test('briefings preserve an explicit frozen absence when contracts appear after 
   }
 });
 
-test('context_page recovers every omitted task-and-scope field from a briefing', async () => {
-  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-task-context-'))).slug;
-  store.setCategory({
-    id: 'task-context-category', name: 'Task context category',
-    description: 'Task context reproduction category.',
-    contract: 'Recover the complete category contract from the context page.',
-    route: { model: 'sonnet', effort: 'low' },
+test('context_page explains that old briefing handles are retired', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-retired-briefing-'))).slug;
+  const ticket = store.createTicket(project, { title: 'Retired briefing handle', source: 'test' });
+  const revision = contextPacket.contextRevision('old briefing body');
+  const handle = contextPacket.createContextHandle({
+    tool: 'briefing',
+    project,
+    kind: 'body',
+    field: 'task-and-scope',
+    position: 'task-and-scope',
+    revision,
+    reason: 'budget',
+    selector: { ref: ticket.ref },
   });
-  const description = `TASK-DESCRIPTION-${'測🧪'.repeat(8_000)}`;
-  const files = ['src/contract.ts', 'test/contract.test.ts'];
-  const ticket = store.createTicket(project, {
-    title: 'Recover oversized task context', description, files, category: 'task-context-category', source: 'test',
+  const page = await callTool('context_page', {
+    handle,
+    cursor: contextPacket.contextCursor(handle, 0),
+    expectedRevision: revision,
   });
-  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'task-context-session' });
-  const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'task-context-token', project, project);
-  const retrievalMatch = briefing.match(/task-and-scope (?:budget|truncated) [^\n]*mcp__plugin_sidequest_board__context_page\((\{[^\n]+\})\)/);
-  assert.ok(retrievalMatch, 'oversized task context includes a typed context_page retrieval');
-  const retrieval = JSON.parse(retrievalMatch[1]);
-  let reconstructed = '';
-  let cursor = retrieval.cursor;
-  while (cursor !== null) {
-    const page = await callTool('context_page', { ...retrieval, cursor, limit: 16 * 1024 });
-    reconstructed += page.body;
-    cursor = page.nextCursor;
-  }
-  assert.match(reconstructed, new RegExp(description.slice(0, 32)));
-  assert.match(reconstructed, /Recover the complete category contract from the context page/);
-  for (const file of files) assert.match(reconstructed, new RegExp(file.replace('.', '\\.')));
-  assert.match(reconstructed, /Scope check: request scope/);
+  assert.equal(page.message, 'context_page: briefing sections are no longer elided; the full text is in the briefing itself.');
 });
 
 test('context_page row continuations retain their revision when claim liveness changes', async () => {
@@ -1787,12 +1754,12 @@ test('comment reads stay chronological through the ten-comment threshold', async
   assert.deepEqual(cliComments.comments.map((comment: any) => comment.body), bodies);
 
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'complete-comment-briefing' });
-  const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
-  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(briefing, 'utf8')} bytes`);
-  assert.match(briefing, /Executor ContextProjection v1/);
-  assert.match(briefing, /Omitted context/);
-  assert.match(briefing, /newest-comments (?:budget|truncated)/);
-  assert.match(briefing, /mcp__plugin_sidequest_board__comments/);
+  const briefingOutput = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
+  const briefingPath = /Before acting, Read "([^"]+)" in full/.exec(briefingOutput)?.[1];
+  assert.ok(briefingPath, briefingOutput);
+  const briefing = fs.readFileSync(briefingPath, 'utf8');
+  assert.match(briefing, /## Executor briefing/);
+  for (const body of bodies) assert.ok(briefing.includes(body));
 
   for (const args of [{ cursor: 'bad' }, { cursor: '-1' }, { limit: 0 }, { limit: 101 }]) {
     const invalid = await callToolRaw('comments', { project, ref: ticket.ref, ...args });
