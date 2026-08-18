@@ -54,6 +54,7 @@ function isEffort(value) {
 const AGENT_NAME_MAX_LENGTH = 64;
 const LAUNCH_SLUG_MAX_WORDS = 3;
 const LAUNCH_SLUG_MAX_LENGTH = 24;
+const ROUTE_MODEL_TOKEN_MAX_LENGTH = 24;
 const LAUNCH_SLUG_FILLER = /* @__PURE__ */ new Set([
   "a",
   "an",
@@ -108,15 +109,26 @@ function titleSlug(title) {
   if (!slug && chosen.length) slug = String(chosen[0]).slice(0, LAUNCH_SLUG_MAX_LENGTH);
   return slug;
 }
-function dispatchLaunchName(ref, title, sequence) {
+function routeModelToken(resolvedExec) {
+  if (!resolvedExec || typeof resolvedExec !== "object") return "";
+  const exec = resolvedExec;
+  const isClaude = exec.backend === "claude";
+  const value = isClaude ? String(exec.runsModel || exec.dispatchModel || "") : String(exec.runsLabel || exec.dispatchModel || exec.runsModel || "");
+  const tokens = slugTokens(value).filter((token2) => !isClaude || token2 !== "claude");
+  const token = isClaude ? tokens.join("-") : tokens.at(-1) || "";
+  return token.slice(0, ROUTE_MODEL_TOKEN_MAX_LENGTH);
+}
+function dispatchLaunchName(ref, title, resolvedExec, effort, sequence) {
   const base = refSlug(ref) || "sidequest";
-  const slug = titleSlug(title);
+  const model = routeModelToken(resolvedExec);
+  const routeEffort = isEffort(effort) ? effort : "";
+  const route = [model, routeEffort].filter(Boolean);
   const seq = Number(sequence);
   const suffix = Number.isInteger(seq) && seq > 1 ? `-${seq}` : "";
-  let name = slug ? `${base}-${slug}` : base;
-  const budget = AGENT_NAME_MAX_LENGTH - suffix.length;
-  if (name.length > budget) name = name.slice(0, budget).replace(/-+$/, "");
-  return `${name}${suffix}`;
+  const fixedName = [base, ...route].join("-") + suffix;
+  const availableTitleLength = AGENT_NAME_MAX_LENGTH - fixedName.length - 1;
+  const slug = titleSlug(title).slice(0, Math.max(availableTitleLength, 0)).replace(/-+$/, "");
+  return slug ? [base, slug, ...route].join("-") + suffix : fixedName;
 }
 const DISPATCH_NAME = "sidequest-exec-dispatch";
 const READ_ONLY_DISPATCH_NAME = "sidequest-exec-dispatch-readonly";

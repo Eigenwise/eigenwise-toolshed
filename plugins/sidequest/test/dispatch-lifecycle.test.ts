@@ -1959,7 +1959,7 @@ test('ordinary, resumed, and reworked launches all carry a readable name and the
   const sessionId = `launch-name-${Date.now()}`;
   const ordinary = store.prepareDispatch(slug, ticket.ref, { sessionId });
   const executor = ordinary.ticket.dispatchExecutor;
-  assert.equal(ordinary.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine`);
+  assert.equal(ordinary.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine-sonnet-high`);
   assert.equal(ordinary.ticket.dispatch.description, `Claude Sonnet, high · ${ticket.title}`);
 
   // Re-preparing before anything launched keeps the name: no agent wears it yet.
@@ -1989,7 +1989,7 @@ test('ordinary, resumed, and reworked launches all carry a readable name and the
   // Rework redispatch: an agent already ran under sequence 1, so the name counts up.
   const rework = store.prepareDispatch(slug, ticket.ref, { sessionId });
   assert.equal(rework.ticket.dispatch.launchSeq, 2);
-  assert.equal(rework.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine-2`);
+  assert.equal(rework.ticket.dispatch.launchName, `${ticket.ref.toLowerCase()}-rebuild-release-engine-sonnet-high-2`);
   const reworkLaunch = runForceBypass({
     session_id: sessionId,
     cwd: PROJECT,

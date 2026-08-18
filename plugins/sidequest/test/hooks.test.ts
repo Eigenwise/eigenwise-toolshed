@@ -3926,7 +3926,7 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   const description = prepared.ticket.dispatch.description;
   assert.equal(description, `Claude Sonnet, high · ${ticket.title}`);
   const prompt = preparedPrompt(prepared);
-  const expectedName = `${ticket.ref.toLowerCase()}-correct-prepared`;
+  const expectedName = `${ticket.ref.toLowerCase()}-correct-prepared-sonnet-high`;
   assert.equal(prepared.ticket.dispatch.launchName, expectedName);
   const base = {
     subagent_type: prepared.ticket.dispatchExecutor,
@@ -3969,6 +3969,44 @@ test('pre-tool hook: prepared dispatches correct cosmetic spawn drift and reject
   });
   assert.equal(ordinary.hookSpecificOutput.permissionDecision, undefined);
   assert.equal(ordinary.hookSpecificOutput.updatedInput.description, 'ordinary executor launch');
+});
+
+test('pre-tool hook preserves old launch records and accepts route-bearing names', () => {
+  const oldTicket = addEffortTicket('old launch record', 'high');
+  const oldPrepared = store.prepareDispatch(slug, oldTicket.ref, { allowUnscoped: true, sessionId: `old-launch-${++sqSeq}` });
+  const oldName = `${oldTicket.ref.toLowerCase()}-old-launch-record`;
+  const oldRow = database.prepare('SELECT data FROM tickets WHERE id = ?').get(oldTicket.id);
+  const oldData = JSON.parse(oldRow.data);
+  oldData.dispatch.launchName = oldName;
+  database.prepare('UPDATE tickets SET data = ? WHERE id = ?').run(JSON.stringify(oldData), oldTicket.id);
+  const oldLaunch = runHookOutput(FORCE_BYPASS, {
+    session_id: oldPrepared.ticket.dispatch.sessionId,
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: oldPrepared.ticket.dispatchExecutor,
+      name: oldName,
+      description: oldPrepared.ticket.dispatch.description,
+      prompt: preparedPrompt(oldPrepared),
+    },
+  });
+  assert.equal(oldLaunch.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(oldLaunch.hookSpecificOutput.updatedInput.name, oldName);
+
+  const currentTicket = addEffortTicket('route-bearing launch record', 'high');
+  const currentPrepared = store.prepareDispatch(slug, currentTicket.ref, { allowUnscoped: true, sessionId: `route-launch-${++sqSeq}` });
+  assert.match(currentPrepared.ticket.dispatch.launchName, /-sonnet-high$/);
+  const currentLaunch = runHookOutput(FORCE_BYPASS, {
+    session_id: currentPrepared.ticket.dispatch.sessionId,
+    tool_name: 'Agent',
+    tool_input: {
+      subagent_type: currentPrepared.ticket.dispatchExecutor,
+      name: currentPrepared.ticket.dispatch.launchName,
+      description: currentPrepared.ticket.dispatch.description,
+      prompt: preparedPrompt(currentPrepared),
+    },
+  });
+  assert.equal(currentLaunch.hookSpecificOutput.permissionDecision, undefined);
+  assert.equal(currentLaunch.hookSpecificOutput.updatedInput.name, currentPrepared.ticket.dispatch.launchName);
 });
 
 test('dispatch ledger records an authoritative launch, agent bind, and claim acknowledgement', () => {
@@ -4100,8 +4138,8 @@ test('concurrent same-type dispatches isolate launch, bind, claim, and stop by t
   }));
   const names = launches.map((launch) => launch.hookSpecificOutput.updatedInput.name);
   assert.notEqual(names[0], names[1]);
-  assert.equal(names[0], `${first.ref.toLowerCase()}-first-same-type`);
-  assert.equal(names[1], `${second.ref.toLowerCase()}-second-same-type`);
+  assert.equal(names[0], `${first.ref.toLowerCase()}-first-same-type-sonnet-high`);
+  assert.equal(names[1], `${second.ref.toLowerCase()}-second-same-type-sonnet-high`);
   for (const name of names) assert.doesNotMatch(name, /[A-Z_]|-[a-z0-9]{8,}$/, `${name} still reads as an opaque id`);
 
   for (const [index, prepared] of [preparedFirst, preparedSecond].entries()) {

@@ -25,7 +25,7 @@ const {
   READ_ONLY_DISPATCH_PREFIX: string;
   EFFORTS: readonly string[];
   classify(name: unknown): { kind: string; effort: string | null };
-  dispatchLaunchName(ref: unknown, title?: unknown, sequence?: unknown): string;
+  dispatchLaunchName(ref: unknown, title?: unknown, resolvedExec?: unknown, effort?: unknown, sequence?: unknown): string;
   isEffort(value: unknown): boolean;
   stableClaudeName(effort: string): string;
   stableDispatchName(effort?: string): string;
@@ -36,6 +36,8 @@ const {
 
 // Claude Code's Agent `name` parameter schema.
 const NATIVE_AGENT_NAME_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$/;
+const TERRA_EXEC = { backend: 'codex', dispatchModel: 'gpt-5.6-terra', runsLabel: 'GPT-5.6 Terra' };
+const OPUS_EXEC = { backend: 'claude', runsModel: 'claude-opus-5', runsLabel: 'Claude Opus 5' };
 
 test('builders produce the current public stable names', () => {
   assert.strictEqual(stableClaudeName('high'), 'sidequest-exec-high');
@@ -89,31 +91,44 @@ test('non-sidequest and malformed names are unknown and never throw', () => {
   assert.deepStrictEqual(classify(42), { kind: 'unknown', effort: null });
 });
 
-test('launch names carry the ref and enough title to tell parallel work apart', () => {
-  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine'), 'sq-843-release-engine');
+test('launch names carry the ref, title, and resolved codex route', () => {
+  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', TERRA_EXEC, 'high'), 'sq-843-release-engine-terra-high');
   assert.strictEqual(
-    dispatchLaunchName('SQ-836', 'Make Sidequest agent names descriptive and restore model/effort tags'),
-    'sq-836-make-sidequest-agent',
+    dispatchLaunchName('SQ-836', 'Make Sidequest agent names descriptive and restore model/effort tags', TERRA_EXEC, 'high'),
+    'sq-836-make-sidequest-agent-terra-high',
   );
   // Filler words are dropped before the three-word budget is counted.
   assert.strictEqual(titleSlug('Fix the flake in the publish suite'), 'fix-flake-publish');
-  assert.strictEqual(dispatchLaunchName('SQ-9', 'Fix'), 'sq-9-fix');
+  assert.strictEqual(dispatchLaunchName('SQ-9', 'Fix', TERRA_EXEC, 'high'), 'sq-9-fix-terra-high');
+});
+
+test('launch names derive builtin routes from the resolved runtime', () => {
+  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', OPUS_EXEC, 'xhigh'), 'sq-843-release-engine-opus-5-xhigh');
 });
 
 test('launch names never fall back to an opaque id', () => {
   // Nothing sluggable left: the bare ref beats a random suffix.
-  assert.strictEqual(dispatchLaunchName('SQ-843', '日本語のチケット'), 'sq-843');
-  assert.strictEqual(dispatchLaunchName('SQ-843', ''), 'sq-843');
-  assert.strictEqual(dispatchLaunchName('SQ-843'), 'sq-843');
+  assert.strictEqual(dispatchLaunchName('SQ-843', '日本語のチケット', TERRA_EXEC, 'high'), 'sq-843-terra-high');
+  assert.strictEqual(dispatchLaunchName('SQ-843', '', TERRA_EXEC, 'high'), 'sq-843-terra-high');
+  assert.strictEqual(dispatchLaunchName('SQ-843', undefined, TERRA_EXEC, 'high'), 'sq-843-terra-high');
   assert.strictEqual(dispatchLaunchName(null, 'orphan launch'), 'sidequest-orphan-launch');
 });
 
-test('a relaunched ticket counts up instead of drawing a fresh id', () => {
-  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', 1), 'sq-843-release-engine');
-  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', 2), 'sq-843-release-engine-2');
-  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', 7), 'sq-843-release-engine-7');
+test('a relaunched ticket keeps its resolved route before the sequence suffix', () => {
+  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', TERRA_EXEC, 'high', 1), 'sq-843-release-engine-terra-high');
+  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', TERRA_EXEC, 'high', 2), 'sq-843-release-engine-terra-high-2');
+  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', TERRA_EXEC, 'high', 7), 'sq-843-release-engine-terra-high-7');
   // Same inputs, same name: the value is reproducible from board state alone.
-  assert.strictEqual(dispatchLaunchName('SQ-843', 'Release engine', 2), dispatchLaunchName('SQ-843', 'Release engine', 2));
+  assert.strictEqual(
+    dispatchLaunchName('SQ-843', 'Release engine', TERRA_EXEC, 'high', 2),
+    dispatchLaunchName('SQ-843', 'Release engine', TERRA_EXEC, 'high', 2),
+  );
+});
+
+test('title truncation preserves the route and sequence suffix', () => {
+  const route = { backend: 'codex', runsLabel: 'x'.repeat(24) };
+  const name = dispatchLaunchName('SQ-1234567', 'x'.repeat(400), route, 'high', 99);
+  assert.strictEqual(name, `sq-1234567-${'x'.repeat(20)}-${'x'.repeat(24)}-high-99`);
 });
 
 test('launch names stay inside the native Agent name constraints', () => {
@@ -126,12 +141,12 @@ test('launch names stay inside the native Agent name constraints', () => {
   ];
   for (const title of titles) {
     for (const sequence of [1, 2, 99]) {
-      const name = dispatchLaunchName('SQ-123456', title, sequence);
+      const name = dispatchLaunchName('SQ-123456', title, TERRA_EXEC, 'high', sequence);
       assert.ok(NATIVE_AGENT_NAME_RE.test(name), `${name} is not a legal Agent name`);
       assert.ok(name.length <= AGENT_NAME_MAX_LENGTH, `${name} exceeds ${AGENT_NAME_MAX_LENGTH}`);
     }
   }
-  assert.match(dispatchLaunchName('SQ-1', 'x'.repeat(400), 99), /-99$/);
+  assert.match(dispatchLaunchName('SQ-1', 'x'.repeat(400), TERRA_EXEC, 'high', 99), /-terra-high-99$/);
 });
 
 test('isEffort and the prefixes are exported for consumers', () => {

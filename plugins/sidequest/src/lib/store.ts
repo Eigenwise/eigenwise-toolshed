@@ -485,12 +485,9 @@ function descriptionField(...candidates: any[]) {
   return '';
 }
 
-// The agent list shows this string next to the launch name, and it is the only
-// place the route is visible while a run is in flight: the trailing model label
-// there is the Agent-call model resolved locally, so it always reads
-// `claude-codex-auto` for gateway routes and can never show the real backend
-// (SQ-1350). The route leads the description so it survives however far the list
-// truncates the title.
+// Claude Code replaces this description with live activity in the agent list, so
+// dispatchLaunchName carries the durable route identity. Keep the route prefix here
+// for launch notifications and stop lines, where this original description survives.
 function spawnDescription(ticket?: any, resolved?: any) {
   const title = String(ticket && ticket.title || 'Sidequest ticket')
     .replace(/\[sidequest-route model=[a-z0-9][a-z0-9.-]{0,63} effort=(?:low|medium|high|xhigh|max)\]/gi, ' ')

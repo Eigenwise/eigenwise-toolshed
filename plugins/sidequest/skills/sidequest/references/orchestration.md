@@ -142,11 +142,10 @@ all spawned in a **single message** (true parallel). This is safe precisely beca
 atomic: each subagent claims a different ticket, and any race just sends the loser onward.
 
 - **Never invent a worker name.** `dispatch` returns `spawn.name` already built from the board:
-  ticket ref plus a short title slug (`sq-843-release-engine`), counting up on a relaunch
-  (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That name is what shows
+  ticket ref, a short title slug, resolved route token, and effort (`sq-843-release-engine-terra-high`).
+  A relaunch keeps that route then counts up (`-2`, `-3`) so a reworked or resumed launch never shadows a live sibling. That name is what shows
   in the fleet view (filter `a:<name>`) and what `SendMessage {to: name}` resumes, and the PreToolUse
-  guard rewrites anything else back to it. Pass it through; the same goes for `spawn.description`,
-  which leads with `<model>, <effort> ·` so the route stays visible in the agent list mid-run. The trailing model label the harness prints there is always `claude-codex-auto` for gateway routes and cannot be changed, so this description is the only place the real route shows.
+  guard rewrites anything else back to it. Pass it through; the route remains visible in the stable name after Claude Code replaces the live activity description. `spawn.description` still leads with `<model>, <effort> ·` for notifications and stop lines.
   Every Agent launch must be a freshly dispatched Sidequest executor.
 - **The `--by` id is separate and must be genuinely random per session** (not the ticket ref, not a
   fixed label): a second session fanning out over the same board would derive the identical value

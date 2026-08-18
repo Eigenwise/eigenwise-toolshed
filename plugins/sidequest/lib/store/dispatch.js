@@ -999,7 +999,10 @@ function createDispatch(dependencies) {
       if (current && current.recovery && current.outcome === "prepared" && t.dispatchNonce && canonicalPreparedDispatchExecutor(t)) {
         if (opts.sessionId) current.sessionId = String(opts.sessionId);
         if (!current.launchSeq) current.launchSeq = 1;
-        if (!current.launchName) current.launchName = dispatchLaunchName(t.ref, t.title, current.launchSeq);
+        if (!current.launchName) {
+          const route = current.route || { model: t.model, effort: t.effort };
+          current.launchName = dispatchLaunchName(t.ref, t.title, resolveExec(route.model, route.effort), route.effort, current.launchSeq);
+        }
         putTicket(slug, t);
         return {
           ok: true,
@@ -1155,7 +1158,7 @@ function createDispatch(dependencies) {
         executor: t.dispatchExecutor,
         description: spawnDescription(t, preparedExec),
         launchSeq,
-        launchName: dispatchLaunchName(t.ref, t.title, launchSeq),
+        launchName: dispatchLaunchName(t.ref, t.title, preparedExec, t.effort, launchSeq),
         route: dispatchRouteState(t.model, t.effort, preparedExec),
         ...repeatFailure ? {
           repeatFailureOverride: {
@@ -1360,7 +1363,7 @@ function createDispatch(dependencies) {
         executor: t.dispatchExecutor,
         description: spawnDescription(t, fallback.exec),
         launchSeq,
-        launchName: dispatchLaunchName(t.ref, t.title, launchSeq),
+        launchName: dispatchLaunchName(t.ref, t.title, fallback.exec, fallback.effort, launchSeq),
         route: dispatchRouteState(fallback.model, fallback.effort, fallback.exec),
         storyContract: state.storyContract || storyExecutionContract(t.storyId ? getStory(slug, t.storyId) : null),
         ...state.storyContractDrift ? { storyContractDrift: state.storyContractDrift } : {},

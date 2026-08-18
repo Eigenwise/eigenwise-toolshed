@@ -139,7 +139,7 @@ async function cmdNativeAgent(opts: any, positional: any) {
     spawnModel: resolved.model,
     effort: route.effort,
     runtime: resolved.runsModel,
-    launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
+    launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title, resolved, route.effort),
     description: agentsync.spawnDescription(ticket, resolved),
     isolation: agentsync.ticketIsolation(ticket, sharedTree),
     sessionId,
