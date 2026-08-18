@@ -292,7 +292,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   }
   const contextPage = resp.result.tools.find((tool: any) => tool.name === 'context_page');
   assert.deepEqual(contextPage.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
-  assert.equal(contextPage.inputSchema.properties.limit.maximum, 16 * 1024);
+  assert.equal(contextPage.inputSchema.properties.limit.maximum, 70 * 1024);
   assert.match(contextPage.inputSchema.properties.cursor.description, /Opaque/);
   assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
@@ -392,7 +392,7 @@ test('context_page resumes Unicode bodies and rows with stable revision-safe cur
   for (let index = 0; index < 45; index += 1) {
     store.createTicket(rowProject, { title: `Context row ${index}`, source: 'test' });
   }
-  const listed = await callTool('list', { project: rowProject });
+  const listed = await callTool('list', { project: rowProject, limit: 40 });
   assert.equal(listed.returned, 40);
   assert.equal(listed.retrieval.tool, 'context_page');
   const rowArguments = listed.retrieval.arguments;
@@ -510,7 +510,7 @@ test('every oversized read carries a universal continuation handle', async () =>
   }
 
   const changes = await callTool('changes', { project, since: '2000-01-01T00:00:00.000Z' });
-  assert.ok(Buffer.byteLength(JSON.stringify(changes), 'utf8') <= 12 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(changes), 'utf8') <= 70 * 1024);
   assert.equal(changes.ticketsRetrieval.tool, 'context_page');
   assert.equal(changes.ticketsTotal, 750);
 
@@ -1229,7 +1229,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   }
 
   const categories = await callToolRaw('category_list', { project });
-  assert.ok(Buffer.byteLength(categories.content[0].text) <= 13000, `category_list is ${Buffer.byteLength(categories.content[0].text)} bytes`);
+  assert.ok(Buffer.byteLength(categories.content[0].text) <= 70 * 1024, `category_list is ${Buffer.byteLength(categories.content[0].text)} bytes`);
   const categoryPayload = JSON.parse(categories.content[0].text);
   assert.ok(categoryPayload.total >= 18);
   assert.equal(categoryPayload.returned, categoryPayload.categories.length);
@@ -1237,7 +1237,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(localCategory.localRow, undefined);
   assert.deepEqual(localCategory.route, { model: 'sonnet', effort: 'low' });
   const fullCategories = await callTool('category_list', { project, full: true });
-  assert.equal(fullCategories.retrieval.tool, 'context_page');
+  assert.equal(fullCategories.retrieval, undefined);
 
   const ticket = await callTool('add', { project, title: 'payload dispatch', description: DISPATCH_DESCRIPTION, category: 'payload-0' });
   const dispatched = await callToolRaw('dispatch', { allowUnscoped: true, project, ref: ticket.ref });
@@ -1261,8 +1261,8 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   assert.equal(pulsePayload.dispatch.tokenPrefix, undefined);
 
   for (const [name, args, maxBytes] of [
-    ['list', { project }, 13000],
-    ['comments', { project, ref: ticket.ref }, 13000],
+    ['list', { project }, 70 * 1024],
+    ['comments', { project, ref: ticket.ref }, 70 * 1024],
     ['changes', { project }, 1200],
     ['ready', { project }, 1200],
     ['integrate', { project, ref: 'SQ-999999', by: 'payload-tester' }, 1200],
@@ -1634,7 +1634,7 @@ test('compact category pages stay bounded and recover complete taxonomy rows', a
     const raw = await callToolRaw('category_list', { project, ...(cursor ? { cursor } : {}) });
     const bytes = Buffer.byteLength(raw.content[0].text);
     pageBytes.push(bytes);
-    assert.ok(bytes <= 13000, `compact category page is ${bytes} bytes`);
+    assert.ok(bytes <= 70 * 1024, `compact category page is ${bytes} bytes`);
     const page = JSON.parse(raw.content[0].text);
     assert.equal(page.returned, page.categories.length);
     for (const category of page.categories) {
@@ -1648,7 +1648,7 @@ test('compact category pages stay bounded and recover complete taxonomy rows', a
     cursor = page.nextCursor || undefined;
     compactPages += 1;
   } while (cursor);
-  assert.ok(compactPages > 1);
+  assert.equal(compactPages, 1);
   assert.equal(new Set(compactIds).size, compactIds.length);
   assert.deepEqual([...expectedDescriptions.keys()].filter((id) => !compactIds.includes(id)), []);
   t.diagnostic(`category_list: ${compactIds.length} rows across ${compactPages} pages, max ${Math.max(...pageBytes)} bytes`);
@@ -1746,7 +1746,7 @@ test('comment reads stay chronological through the ten-comment threshold', async
   assert.deepEqual(await recoverPageBodies(pagedFull), bodies.slice(0, 2));
 
   const legacyFull = await callTool('comments', { project, ref: ticket.ref, full: true });
-  assert.equal(legacyFull.commentsRetrieval.tool, 'context_page');
+  assert.equal(legacyFull.commentsRetrieval, undefined);
   assert.deepEqual(await recoverPageBodies(legacyFull), bodies);
   assert.equal(legacyFull.comments[0].source, 'mcp');
   const cliComments = runCli(['comments', ticket.ref, '--project', project, '--json']);
@@ -4273,13 +4273,13 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   const allRows = [...allRes.tickets];
   let allCursor = allRes.ticketsRetrieval.arguments.cursor;
   while (allCursor !== null) {
-    const page = await callTool('context_page', { ...allRes.ticketsRetrieval.arguments, cursor: allCursor, limit: 12 * 1024 });
+    const page = await callTool('context_page', { ...allRes.ticketsRetrieval.arguments, cursor: allCursor, limit: 70 * 1024 });
     allRows.push(...page.rows);
     allCursor = page.nextCursor;
   }
   assert.strictEqual(allRows.length, N, 'all 500 remain retrievable through the continuation');
   const allChars = await resultChars('list', { project: big.slug, all: true });
-  assert.ok(allChars <= 12 * 1024, `compact all:true stays under the result ceiling (${allChars} chars)`);
+  assert.ok(allChars <= 70 * 1024, `compact all:true stays under the result ceiling (${allChars} chars)`);
 
   // Page 1 (default): bounded well under the ceiling, reports the true total, and
   // hands back a cursor because there's more.
@@ -4290,7 +4290,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   assert.ok(p1.nextCursor, 'page 1 hands back a cursor');
   assert.match(p1.hint, /cursor/, 'the hint tells the caller to follow the cursor');
   const p1Chars = await resultChars('list', { project: big.slug });
-  assert.ok(p1Chars < 90000, `page 1 stays under the ceiling (${p1Chars} chars vs unbounded ${allChars})`);
+  assert.ok(p1Chars <= 70 * 1024, `page 1 stays under the ceiling (${p1Chars} chars vs unbounded ${allChars})`);
 
   // Iterate the cursor to exhaustion: collect every ref, assert we saw all 500
   // exactly once, every page fit under the ceiling, and paging terminates.
@@ -4308,7 +4308,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
     assert.ok(pages <= N + 5, 'paging terminates (no runaway loop)');
   } while (cursor);
 
-  assert.ok(maxPageChars < 90000, `every page stayed under the ceiling (max ${maxPageChars} chars)`);
+  assert.ok(maxPageChars <= 70 * 1024, `every page stayed under the ceiling (max ${maxPageChars} chars)`);
   assert.strictEqual(seen.length, N, 'iterating cursors yielded exactly N rows');
   assert.strictEqual(new Set(seen).size, N, 'every ticket appears exactly once (no dupes, no gaps)');
   assert.ok(pages >= 2, `a 500-ticket board takes several pages (took ${pages})`);
@@ -4326,6 +4326,19 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
   // The two limit-pages are disjoint and contiguous (no overlap, no gap).
   const p1Refs = new Set(capped.tickets.map((t: any) => t.ref));
   assert.ok(!capped2.tickets.some((t: any) => p1Refs.has(t.ref)), 'limit pages do not overlap');
+
+  // A page well below the external ceiling returns every row without a
+  // continuation, even though it is larger than the former 12 KiB cap.
+  const underCeiling = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-under-ceiling-2230'), 'SQ-2230 Under Ceiling');
+  for (let index = 0; index < 80; index += 1) {
+    store.createTicket(underCeiling.slug, { title: `under-ceiling row ${index} ${'x'.repeat(600)}` });
+  }
+  const underCeilingList = await callTool('list', { project: underCeiling.slug });
+  assert.equal(underCeilingList.returned, 80);
+  assert.equal(underCeilingList.nextCursor, null);
+  assert.equal(underCeilingList.retrieval, undefined);
+  assert.ok(await resultChars('list', { project: underCeiling.slug }) > 12 * 1024);
+  assert.ok(await resultChars('list', { project: underCeiling.slug }) <= 70 * 1024);
 
   // A small board is a single call: no cursor, everything returned (backward
   // compatible). Brief row shape is untouched (SQ-220 parity).

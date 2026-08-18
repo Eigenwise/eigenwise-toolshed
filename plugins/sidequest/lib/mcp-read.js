@@ -33,7 +33,7 @@ const {
   conciseDescription,
   validateStoryId,
   compactSchema,
-  LIST_CHAR_BUDGET,
+  LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
   mutationAck,
   integrationBranchAck,
@@ -118,7 +118,7 @@ const tools = [
       }
       const status = args.status == null && !args.all ? ["todo", "doing", "awaiting-oracle"] : args.status;
       const brief = args.detail ? false : args.brief !== false;
-      const maxChars = args.limit == null && !args.all ? LIST_CHAR_BUDGET : null;
+      const maxBytes = args.limit == null && !args.all ? LIST_RESULT_MAX_BYTES : null;
       const payload = store.listPayload(slug, {
         status,
         archived: args.archived,
@@ -126,7 +126,7 @@ const tools = [
         cursor: args.cursor,
         limit: args.limit,
         all: args.all,
-        maxChars
+        maxBytes
       });
       const shapedPayload = Object.assign({}, payload, {
         tickets: brief ? payload.tickets.map(compactListRow) : payload.tickets.map((ticket) => ticketWithContextHandles(slug, ticket))

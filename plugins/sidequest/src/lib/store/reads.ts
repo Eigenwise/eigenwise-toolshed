@@ -82,9 +82,9 @@ function decodeListCursor(cursor?: any) {
 // starts. Three page modes, in precedence order:
 //   - all: the whole set from the cursor, no cap (the escape hatch).
 //   - limit: an exact page size (start .. start+limit).
-//   - maxChars: a size-budgeted page — accumulate rows until the serialized
-//     cost would cross the budget (always keep at least one, so a lone fat row
-//     still advances the cursor and iteration can't stall).
+//   - maxBytes: a size-budgeted page — accumulate rows until the UTF-8
+//     serialization would cross the MCP-derived budget (always keep at least
+//     one, so a lone fat row still advances the cursor and iteration can't stall).
 //   - none of the above: the default page cap from the cursor.
 // nextCursor is the next offset as a string, or null when the page reaches the
 // end. Because each page is a contiguous slice and the next cursor is exactly
@@ -93,7 +93,7 @@ function pageTickets(tickets?: any, opts?: any) {
   const total = tickets.length;
   const start = Math.min(decodeListCursor(opts.cursor), total);
   const limit = opts.limit != null ? Math.max(0, Math.floor(Number(opts.limit)) || 0) : null;
-  const budget = opts.maxChars != null && Number(opts.maxChars) > 0 ? Number(opts.maxChars) : null;
+  const budget = opts.maxBytes != null && Number(opts.maxBytes) > 0 ? Number(opts.maxBytes) : null;
 
   let end: any;
   if (opts.all) {
@@ -104,10 +104,9 @@ function pageTickets(tickets?: any, opts?: any) {
     let size = 0;
     end = start;
     while (end < total) {
-      // Size against the SAME pretty serialization the transports emit
-      // (JSON.stringify(payload, null, 2)), so the budget is in real output
-      // chars. +8 covers the array indent / comma-newline overhead per row.
-      const cost = JSON.stringify(tickets[end], null, 2).length + 8;
+      // Size against the same pretty UTF-8 serialization that MCP emits.
+      // The row separator costs eight ASCII bytes.
+      const cost = Buffer.byteLength(JSON.stringify(tickets[end], null, 2), 'utf8') + 8;
       if (end > start && size + cost > budget) break;
       size += cost;
       end++;
@@ -123,7 +122,7 @@ function pageTickets(tickets?: any, opts?: any) {
 
 // The one board-read payload both transports (CLI --json and MCP) serve, so
 // their shapes cannot drift: filtering, the brief projection, the blocker
-// index, and paging (limit/cursor/maxChars -> total/returned/nextCursor) all
+// index, and paging (limit/cursor/maxBytes -> total/returned/nextCursor) all
 // live here and nowhere else.
 const DEFAULT_LIST_PAGE_LIMIT = 40;
 
@@ -139,7 +138,9 @@ function listPayload(slug?: any, opts?: any) {
     archived: !!opts.archived,
     status: opts.status == null && !opts.all ? ['todo', 'doing', 'awaiting-oracle'] : opts.status,
   };
-  const paging = !opts.all && opts.limit == null ? Object.assign({}, opts, { limit: DEFAULT_LIST_PAGE_LIMIT }) : opts;
+  const paging = !opts.all && opts.limit == null && opts.maxBytes == null
+    ? Object.assign({}, opts, { limit: DEFAULT_LIST_PAGE_LIMIT })
+    : opts;
   const total = countTickets(project, filter);
   let index: any;
   if (opts.brief) {
@@ -147,7 +148,7 @@ function listPayload(slug?: any, opts?: any) {
     index = new Map(rows.map((row?: any) => [String(row.ref).toUpperCase(), row]));
   }
 
-  if (!paging.all && paging.limit != null && paging.maxChars == null) {
+  if (!paging.all && paging.limit != null && paging.maxBytes == null) {
     const offset = Math.min(decodeListCursor(paging.cursor), total);
     let tickets = queryTickets(project, { ...filter, limit: paging.limit, offset });
     if (opts.brief) tickets = tickets.map((ticket?: any) => briefTicket(project, ticket, { index }));

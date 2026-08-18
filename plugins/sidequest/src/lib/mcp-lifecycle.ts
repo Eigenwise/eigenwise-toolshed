@@ -32,7 +32,6 @@ const {
   conciseDescription,
   validateStoryId,
   compactSchema,
-  LIST_CHAR_BUDGET,
   closeDispatchExecutor,
   mutationAck,
   integrationBranchAck,

@@ -13,6 +13,8 @@ const { claimRefusalMessage } = require("./refusal-guidance");
 const { assertSidequestInstall, assertDispatchTransport } = require("./dispatch-preflight");
 const {
   MAX_CONTEXT_PAGE_BYTES,
+  MCP_TOOL_RESULT_MAX_BYTES,
+  MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES,
   contextRevision,
   decodeContextHandle,
   contextCursor,
@@ -243,7 +245,7 @@ function compactSchema(schema, propertyMap = false) {
   }
   return compact;
 }
-const LIST_CHAR_BUDGET = 55e3;
+const LIST_RESULT_MAX_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 function closeDispatchExecutor(ticket) {
   const executor = store.canonicalPreparedDispatchExecutor(ticket);
   if (executor) agentsync.cleanupNativeAgents({ name: executor });
@@ -287,8 +289,8 @@ function outOfScopeComment(paths) {
   }
   return `${prefix}… +${paths.length} more (run git status in the worktree for the full list)`;
 }
-const COMPACT_RESULT_MAX_BYTES = 12 * 1024;
-const CONTEXT_PAGE_PAYLOAD_MAX_BYTES = MAX_CONTEXT_PAGE_BYTES - 2048;
+const COMPACT_RESULT_MAX_BYTES = MCP_TOOL_RESULT_MAX_BYTES;
+const CONTEXT_PAGE_PAYLOAD_MAX_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 const CONTEXT_ROW_EXCERPT_BYTES = 4 * 1024;
 const contextSnapshots = /* @__PURE__ */ new Map();
 const COMPACT_PULSE_BODY_MAX_CHARS = 280;
@@ -639,7 +641,7 @@ function mcpPayloadBytes(value) {
 function payloadFieldExcerptBudget(payload, field) {
   const remaining = Object.assign({}, payload);
   delete remaining[field];
-  return Math.max(256, COMPACT_RESULT_MAX_BYTES - 2048 - mcpPayloadBytes(remaining));
+  return Math.max(256, CONTEXT_PAGE_PAYLOAD_MAX_BYTES - mcpPayloadBytes(remaining));
 }
 function boundedReadPayload(tool, payload) {
   if (!payload || typeof payload !== "object" || mcpPayloadBytes(payload) <= COMPACT_RESULT_MAX_BYTES) return payload;
@@ -656,7 +658,7 @@ function boundedReadPayload(tool, payload) {
       const rows = value.map((row, index) => contextRowProjection(row, tool, project, field, String(index)));
       const retained = [];
       for (const row of rows) {
-        if (mcpPayloadBytes(Object.assign({}, visible, { [field]: [...retained, row] })) > COMPACT_RESULT_MAX_BYTES - 2048) break;
+        if (mcpPayloadBytes(Object.assign({}, visible, { [field]: [...retained, row] })) > CONTEXT_PAGE_PAYLOAD_MAX_BYTES) break;
         retained.push(row);
       }
       visible[field] = retained;
@@ -772,7 +774,7 @@ function pageRows(rows, args, action, buildPayload, maxBytes) {
   return buildPayload(page, rows.length, end < rows.length ? String(end) : null);
 }
 function pagedPayload(rows, args, action, buildPayload, full) {
-  return pageRows(rows, args, action, buildPayload, COMPACT_RESULT_MAX_BYTES - 1024);
+  return pageRows(rows, args, action, buildPayload, CONTEXT_PAGE_PAYLOAD_MAX_BYTES);
 }
 function compactPulse(pulse) {
   const lastComment = pulse.lastComment && Object.assign({}, pulse.lastComment, {
@@ -965,7 +967,7 @@ module.exports = {
   conciseDescription,
   validateStoryId,
   compactSchema,
-  LIST_CHAR_BUDGET,
+  LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
   mutationAck,
   integrationBranchAck,

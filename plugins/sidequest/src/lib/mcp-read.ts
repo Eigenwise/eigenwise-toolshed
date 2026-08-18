@@ -34,7 +34,7 @@ const {
   conciseDescription,
   validateStoryId,
   compactSchema,
-  LIST_CHAR_BUDGET,
+  LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
   mutationAck,
   integrationBranchAck,
@@ -130,13 +130,12 @@ const tools: ToolDefinition[] = [
       // and ticket bodies unless the caller explicitly asks for either.
       const status = args.status == null && !args.all ? ['todo', 'doing', 'awaiting-oracle'] : args.status;
       const brief = args.detail ? false : args.brief !== false;
-      // Bound the DEFAULT page so a few-hundred-ticket column can't overflow the
-      // tool-result token ceiling. A caller that passes limit or all opts out of
-      // the auto budget and takes responsibility for the page size.
-      const maxChars = (args.limit == null && !args.all) ? LIST_CHAR_BUDGET : null;
+      // Default paging starts only at the external tool-result ceiling. Callers
+      // that pass limit or all control row count themselves.
+      const maxBytes = (args.limit == null && !args.all) ? LIST_RESULT_MAX_BYTES : null;
       const payload = store.listPayload(slug, {
         status, archived: args.archived, brief,
-        cursor: args.cursor, limit: args.limit, all: args.all, maxChars,
+        cursor: args.cursor, limit: args.limit, all: args.all, maxBytes,
       });
       const shapedPayload = Object.assign({}, payload, {
         tickets: brief
