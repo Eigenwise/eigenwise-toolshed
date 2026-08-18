@@ -623,21 +623,43 @@ function enablePlugins(directory, file, enabledPlugins) {
   fs.writeFileSync(path.join(directory, '.claude', file), JSON.stringify({ enabledPlugins }));
 }
 
-test('SQ-2211: settings that enable codebase-mapper leave no registry row but do maintain the map', (t) => {
+test('SQ-2237: project settings without a codebase-mapper install report a dead flag', (t) => {
   const project = mappedProject(t);
   enablePlugins(project, 'settings.json', { 'codebase-mapper@eigenwise-toolshed': true });
-  const output = () => hookOutput({
+  const output = (mapperInstances = []) => hookOutput({
     ...hookFixture({
       'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
-    }, { workbench: '0.49.0' }),
+      'codebase-mapper@eigenwise-toolshed': mapperInstances,
+    }, { workbench: '0.49.0', 'codebase-mapper': '2.15.5' }),
     loadedVersion: '0.49.0',
     input: { cwd: project },
   });
 
-  assert.equal(output(), null);
+  assert.match(output().systemMessage, /codebase-mapper enabled in .claude\/settings.json but no matching project install/);
+  assert.match(output().hookSpecificOutput.additionalContext, /hooks are not running/);
+  assert.match(output().hookSpecificOutput.additionalContext, /install codebase-mapper at project scope or remove the dead enabledPlugins entry/);
+  assert.equal(output([{ scope: 'project', projectPath: project, version: '2.15.5' }]), null);
 
   enablePlugins(project, 'settings.local.json', { 'codebase-mapper@eigenwise-toolshed': false });
   assert.match(output().systemMessage, /this project has a codebase map but no codebase-mapper install/);
+  assert.doesNotMatch(output().systemMessage, /hooks are not running/);
+});
+
+test('SQ-2237: user settings without a user codebase-mapper install report a dead flag', (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-home-'));
+  const project = mappedProject(t);
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  enablePlugins(home, 'settings.json', { 'codebase-mapper@eigenwise-toolshed': true });
+  const result = (mapperInstances) => audit(fixture({
+    home,
+    currentProject: project,
+    registry: { plugins: { 'codebase-mapper@eigenwise-toolshed': mapperInstances } },
+  }));
+
+  assert.match(findingText(result([]).projectProblems).join('\n'), /enabled in ~\/\.claude\/settings.json but no matching user install/);
+  assert.match(findingText(result([]).projectProblems).join('\n'), /hooks are not running/);
+  assert.doesNotMatch(findingText(result([{ scope: 'user', version: '2.15.5' }]).projectProblems).join('\n'), /hooks are not running/);
+  assert.match(findingText(result([{ scope: 'user', version: '2.15.5' }]).projectProblems).join('\n'), /no project\/local codebase-mapper install/);
 });
 
 test('SQ-2211: a marketplace the project declares with auto-update on is not reported as off', (t) => {
@@ -665,22 +687,33 @@ test('SQ-2211: a marketplace the project declares with auto-update on is not rep
   assert.doesNotMatch(output().systemMessage, /contractify auto-update is off/);
 });
 
-test('SQ-2211: a board whose settings enable Sidequest is not reported as missing an install', (t) => {
+test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-home-'));
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-board-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   enablePlugins(project, 'settings.local.json', { 'sidequest@eigenwise-toolshed': true });
 
-  const enabledBoard = boardMappings([{ name: 'current', path: project }], [], home);
-  assert.deepEqual(enabledBoard.problems, []);
-  assert.equal(enabledBoard.mappings[0].status, 'installed');
+  const board = { name: 'current', path: project };
+  const enabledWithoutInstall = boardMappings([board], [], home);
+  assert.equal(enabledWithoutInstall.mappings[0].status, 'missing');
+  assert.match(findingText(enabledWithoutInstall.problems).join('\n'), /Sidequest enabled in .claude\/settings.local.json but no matching project install/);
+  assert.match(findingText(enabledWithoutInstall.problems).join('\n'), /hooks are not running/);
+  assert.match(findingText(enabledWithoutInstall.problems).join('\n'), /install Sidequest at project scope or remove the dead enabledPlugins entry/);
 
-  // Enabled for every project is still not an install on this board, so the wording has to keep saying so.
+  const enabledAndInstalled = boardMappings([board], [{ id: 'sidequest@eigenwise-toolshed', scope: 'project', projectPath: project }], home);
+  assert.deepEqual(enabledAndInstalled.problems, []);
+  assert.equal(enabledAndInstalled.mappings[0].status, 'installed');
+
   enablePlugins(home, 'settings.json', { 'sidequest@eigenwise-toolshed': true });
-  const otherBoard = boardMappings([{ name: 'other', path: path.join(home, 'board-without-settings') }], [], home);
-  assert.equal(otherBoard.mappings[0].status, 'user-only');
-  assert.deepEqual(findingText(otherBoard.problems), ['Sidequest board other has no project/local Sidequest install']);
+  const otherBoard = { name: 'other', path: path.join(home, 'board-without-settings') };
+  const userEnabledWithoutInstall = boardMappings([otherBoard], [], home);
+  assert.match(findingText(userEnabledWithoutInstall.problems).join('\n'), /enabled in ~\/\.claude\/settings.json but no matching user install/);
+  assert.match(findingText(userEnabledWithoutInstall.problems).join('\n'), /hooks are not running/);
+
+  const userEnabledAndInstalled = boardMappings([otherBoard], [{ id: 'sidequest@eigenwise-toolshed', scope: 'user' }], home);
+  assert.equal(userEnabledAndInstalled.mappings[0].status, 'user-only');
+  assert.deepEqual(findingText(userEnabledAndInstalled.problems), ['Sidequest board other has no project/local Sidequest install']);
 });
 
 test('SQ-2209: a project without a codebase map is not asked to install a mapper', (t) => {

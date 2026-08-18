@@ -36,7 +36,7 @@ Tell Claude what you want to do:
 
 > Why is this session using an older Workbench version?
 
-Claude uses the bundled update or doctor skill, tells you what it found, and asks you to reload or restart when the installed code is newer than the session. Updates cover the Eigenwise Toolshed marketplace and Model Gateway when it is installed. Third-party plugins are left alone.
+Claude uses the bundled update or doctor skill, tells you what it found, and asks you to reload or restart when the installed code is newer than the session. Updates cover the Eigenwise Toolshed marketplace and Model Gateway when it is installed. Third-party plugins are left alone. The health check also identifies an `enabledPlugins` entry that has no matching install, because its hooks are not running. Claude can install the plugin at the reported scope or remove the dead entry from the named settings file.
 
 ## Code intelligence
 
