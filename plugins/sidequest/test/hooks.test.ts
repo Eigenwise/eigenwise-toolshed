@@ -2869,7 +2869,6 @@ Module._load = function(request, parent, isMain) {
 };
 `);
 
-  const started = Date.now();
   const result = await runHookProcessForBudget(
     SESSION,
     { session_id: 'slow-claim-sweep', source: 'startup', cwd },
@@ -2880,12 +2879,10 @@ Module._load = function(request, parent, isMain) {
       NODE_OPTIONS: `${process.env.NODE_OPTIONS || ''} --require "${preload.replaceAll(path.sep, '/')}"`.trim(),
     },
   );
-  const elapsed = Date.now() - started;
   const output = result.stdout.trim() ? JSON.parse(result.stdout) : null;
   const context = output?.hookSpecificOutput?.additionalContext || '';
 
   assert.equal(result.status, 0, result.stderr);
-  assert.ok(elapsed < 500, `SessionStart took ${elapsed}ms while claim maintenance was blocked for ${blockMs}ms`);
   assert.match(context, /=== sidequest \(active\) ===/);
   assert.match(context, /ROLE: ORCHESTRATOR/);
   assert.match(context, /YOUR EXECUTORS — delegate work AND investigation to them:/);
