@@ -66,10 +66,10 @@ function createFixture(title?: any) {
   });
 }
 
-function dispatchPrompt(ticket?: any, token?: any) {
+function dispatchPrompt(ticket?: any, tokenFile?: any) {
   return [
     `Ref: ${ticket.ref}`,
-    `Claim this ticket with \`--token ${token}\`.`,
+    `FIRST action: run \`briefing ${ticket.ref} --token-file "${tokenFile}"\`.`,
     `--project "${PROJECT}"`,
   ].join('\n');
 }
@@ -95,7 +95,7 @@ function launch(ticket?: any, sessionId?: any) {
       model: 'fable',
       name: `quota-${ticket.ref.toLowerCase()}`,
       description: prepared.ticket.dispatch.description,
-      prompt: dispatchPrompt(ticket, prepared.token),
+      prompt: dispatchPrompt(ticket, prepared.ticket.dispatch.tokenFile),
     },
   });
   assert.equal(store.getTicket(slug, ticket.ref).dispatch.outcome, 'launched');
@@ -162,7 +162,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.deepEqual(store.getTicket(slug, ticket.ref).dispatch.preparedBy, { sessionId: 'quota-store-primary', surface: 'store' });
   assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
     sessionId: 'quota-store-adopted',
-    token: adopted.token,
+    tokenFile: adopted.ticket.dispatch.tokenFile,
     executor: adopted.ticket.dispatchExecutor,
     agentName: 'quota-store-worker',
   }).ok, true);
@@ -172,7 +172,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
     project: PROJECT,
     ref: ticket.ref,
     by: 'quota-store-worker',
-    token: adopted.token,
+    tokenFile: adopted.ticket.dispatch.tokenFile,
     executor: adopted.ticket.dispatchExecutor,
     effort: 'xhigh',
   });
@@ -182,7 +182,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
     project: PROJECT,
     ref: ticket.ref,
     by: 'quota-store-worker',
-    token: adopted.token,
+    tokenFile: adopted.ticket.dispatch.tokenFile,
     executor: adopted.ticket.dispatchExecutor,
     effort: 'max',
   });

@@ -42,7 +42,7 @@ async function cmdDispatch(opts, positional) {
     fail(`dispatch: ${err && err.message || err}`);
   }
   const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
-  const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
+  const prompt = agentsync.renderDispatchStub(prepared.ticket, meta.path);
   const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
   const agent = canonicalPreparedDispatchExecutor(prepared.ticket);
   const dispatchState = prepared.ticket.dispatch || {};
@@ -71,9 +71,9 @@ async function cmdDispatch(opts, positional) {
 async function cmdBriefing(opts, positional) {
   const idOrRef = positional[0];
   if (!idOrRef) fail("briefing: pass a ticket ref, e.g. sidequest briefing SQ-12 --token-file <path>.");
-  if (!opts.token && !opts["token-file"]) fail("briefing: pass the dispatch token file with --token-file.");
+  if (!opts["token-file"]) fail("briefing: pass the dispatch token file with --token-file.");
   const { slug, meta } = await resolveProject(opts);
-  const result = store.readDispatchBriefing(slug, idOrRef, opts.token, opts["token-file"]);
+  const result = store.readDispatchBriefing(slug, idOrRef, void 0, opts["token-file"]);
   if (!result.ok) {
     const message = result.reason === "not_found" ? `no ticket "${idOrRef}".` : result.reason === "stale" ? "dispatch is no longer current; re-run dispatch for a current spawn." : "dispatch token was refused or its token file was unavailable. Re-run the exact briefing command from this executor prompt; do not re-run dispatch.";
     fail(`briefing: ${message}`);

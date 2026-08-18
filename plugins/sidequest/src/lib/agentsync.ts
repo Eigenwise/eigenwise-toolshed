@@ -1092,17 +1092,19 @@ function dispatchTicketContext(ticket?: any, projectPath?: any) {
   ].join('\n\n');
 }
 
-function renderDispatchStub(ticket?: any, nonce?: any, projectPath?: any) {
+function renderDispatchStub(ticket?: any, projectPath?: any) {
   const project = String(projectPath || '').trim();
   const tokenFile = String(ticket?.dispatch?.tokenFile || '').trim();
   if (!project) throw new Error('Dispatch board project path is required.');
+  if (!tokenFile) throw new Error('Dispatch token file path is required.');
   const marker = ticketRouteMarker(ticket);
   const command = [
     'node',
     quotedShellArgument(ensureDispatchLauncher()),
     'briefing',
     String(ticket.ref),
-    ...(tokenFile ? ['--token-file', quotedShellArgument(tokenFile)] : ['--token', String(nonce).trim()]),
+    '--token-file',
+    quotedShellArgument(tokenFile),
     '--project',
     quotedShellArgument(project),
   ].join(' ');

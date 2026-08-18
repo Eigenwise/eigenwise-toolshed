@@ -377,7 +377,7 @@ test('SQ-1607: story logs stay out of executor briefings and spawn orientation',
   const created = store.createTicket(slug, { title: 'Log member', storyId: story.id });
   const ticket = Object.assign({}, store.getTicket(slug, created.ref), {
     model: 'opus', effort: 'high', category: {},
-    dispatch: { storyContract: { revision: 3, body: 'Frozen contract snapshot.' } },
+    dispatch: { tokenFile: path.join(root, 'story-log.token'), storyContract: { revision: 3, body: 'Frozen contract snapshot.' } },
   });
 
   assert.equal(store.claimTicket(slug, created.ref, 'exec-a').ok, true);
@@ -386,7 +386,7 @@ test('SQ-1607: story logs stay out of executor briefings and spawn orientation',
   });
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'story-log-token', slug, root);
-  const stub = agentsync.renderDispatchStub(ticket, 'story-log-token', root);
+  const stub = agentsync.renderDispatchStub(ticket, root);
   assert.match(briefing, /Frozen contract snapshot\./);
   assert.doesNotMatch(briefing, /Story decision log|Unrelated investigation result/);
   assert.doesNotMatch(stub, /Story handoff|Unrelated investigation result/);
@@ -794,7 +794,7 @@ test('renderDispatchStub keeps its briefing command alive after the dispatched c
   const stub = agentsync.renderDispatchStub({
     ref: 'SQ-586', title: 'Stable briefing launcher', model: 'opus', effort: 'high',
     dispatchExecutor: 'sidequest-exec-high', category: {}, dispatch: { tokenFile },
-  }, 'briefing-token', 'C:\\dev\\fixture');
+  }, 'C:\\dev\\fixture');
   const launcher = stub.match(/FIRST action: run `node "([^"]+)"/)[1];
   assert.match(launcher, /sidequest-launcher\.js$/);
   assert.doesNotMatch(stub, new RegExp(staleInstall.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
@@ -839,7 +839,7 @@ test('SQ-677: fetched briefings and dispatch orientation retain their supplied t
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug, 'C:\\dev\\fixture');
   const stubDescription = 'y'.repeat(100000);
-  const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: stubDescription, comments: [{ body: 'z'.repeat(100000) }] }), 'instant-token-334', 'C:\\dev\\fixture');
+  const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: stubDescription, comments: [{ body: 'z'.repeat(100000) }] }), 'C:\\dev\\fixture');
   assert.match(briefing, /## Executor briefing/);
   assert.ok(briefing.includes(ticket.description));
   assert.ok(briefing.includes(ticket.comments[0]!.body));

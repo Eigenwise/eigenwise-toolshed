@@ -156,10 +156,11 @@ test('orchestrator appends without a member ticket ref through the CLI', () => {
     ref: 'SQ-briefing', title: 'Briefing member', description: 'Consume the prior story finding.',
     model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {},
     storyId: createdStory.id, files: ['plugins/sidequest/src/lib/agentsync.ts'], executorAnchors: 'agentsync.ts renderDispatchStub',
+    dispatch: { tokenFile: path.join(PROJECT_DIR, 'story-log.token') },
   };
   const briefing = agentsync.renderTicketBriefing(briefingTicket, 'story-log-token', slug);
   assert.doesNotMatch(briefing, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
-  const spawn = agentsync.renderDispatchStub(briefingTicket, 'story-log-token', PROJECT_DIR);
+  const spawn = agentsync.renderDispatchStub(briefingTicket, PROJECT_DIR);
   assert.doesNotMatch(spawn, /#1 CONSTRAINT \(orchestrator, story-planner\): preserve the public contract/);
   assert.match(spawn, /Description:\nConsume the prior story finding\./);
   assert.match(spawn, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts/);
@@ -225,11 +226,12 @@ test('executor contexts exclude the story decision-log briefing window', () => {
   const agentsync = require('../lib/agentsync.js');
   const briefingTicket = {
     ref: ticket.ref, title: ticket.title, model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {}, storyId: createdStory.id,
+    dispatch: { tokenFile: path.join(PROJECT_DIR, 'story-log-window.token') },
   };
   const briefing = agentsync.renderTicketBriefing(briefingTicket, 'story-log-token', slug);
   assert.doesNotMatch(briefing, /Story decision log|#60 DISCOVERY/);
 
-  const spawn = agentsync.renderDispatchStub(briefingTicket, 'story-log-token', PROJECT_DIR);
+  const spawn = agentsync.renderDispatchStub(briefingTicket, PROJECT_DIR);
   assert.ok(Buffer.byteLength(spawn, 'utf8') < 1600, `spawn context is ${Buffer.byteLength(spawn, 'utf8')} bytes`);
   assert.doesNotMatch(spawn, /Story handoff|#60 DISCOVERY/);
 });

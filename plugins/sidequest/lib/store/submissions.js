@@ -580,13 +580,7 @@ ${verify.outputTail}` : null
     if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
     return integrationGit(repo, ["diff", "--name-only", submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
   }
-  function overridesLegacyScope(submission, opts) {
-    if (opts?.overrideLegacyScope !== true) return false;
-    const admittedScope = commitScope.scopedPaths(submission?.admittedScope);
-    return !admittedScope.length || admittedScope.length === 1 && admittedScope[0] === ".";
-  }
-  function validateIntegrationSubmission(slug, idOrRef, opts) {
-    opts = opts || {};
+  function validateIntegrationSubmission(slug, idOrRef) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
     if (!pendingSubmission(ticket)) {
@@ -636,20 +630,20 @@ ${verify.outputTail}` : null
     } catch {
       integrationBranch = void 0;
     }
-    const legacyScopeOverride = overridesLegacyScope(ticket.submission, opts);
     const scopeValidation = isArtifactSubmission(ticket.submission) ? { ok: true, changedPaths: ticket.submission.changedPaths || [] } : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationBranch);
-    if (!scopeValidation.ok && !legacyScopeOverride) {
+    if (!scopeValidation.ok) {
       const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
+      const scopeFailure = scopeValidation.message || (scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot.` : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.`);
       return {
         ok: false,
         reason: scopeValidation.reason,
         outside,
         ticket,
         scopeValidation,
-        message: scopeValidation.message || (scopeValidation.reason === "missing_scope_snapshot" ? `${ticket.ref} submission has no admitted scope snapshot. Re-submit it before integration.` : `${ticket.ref} integration refused; submitted range changes paths outside its admitted scope: ${outside.join(", ")}.`)
+        message: `${scopeFailure} Preserve this candidate with rework and submit a fresh candidate against the admitted scope, or close it with supersede_submission after an integrated reviewed replacement.`
       };
     }
-    return { ok: true, ticket, scopeValidation, legacyScopeOverride };
+    return { ok: true, ticket, scopeValidation };
   }
   function updateSubmissionIntegration(slug, id, patch) {
     return withTicketLock(slug, id, () => {
@@ -791,7 +785,7 @@ ${verify.outputTail}` : null
   }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
-    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+    const admitted = validateIntegrationSubmission(slug, idOrRef);
     if (!admitted.ok) return admitted;
     const ticket = admitted.ticket;
     if (!submissionUsesGit(ticket)) return { ok: false, reason: "git_delivery_required", ticket, message: `${ticket.ref} has no Git candidate to reconcile.` };
@@ -909,7 +903,7 @@ ${verify.outputTail}` : null
   }
   function integrateSubmission(slug, idOrRef, opts) {
     opts = opts || {};
-    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+    const admitted = validateIntegrationSubmission(slug, idOrRef);
     if (!admitted.ok) return admitted;
     const ticket = admitted.ticket;
     if (!submissionUsesGit(ticket)) return integrateArtifactSubmission(slug, ticket, opts);
@@ -935,7 +929,7 @@ ${verify.outputTail}` : null
   }
   function integrateSubmissionUnlocked(slug, idOrRef, opts) {
     opts = opts || {};
-    const admitted = validateIntegrationSubmission(slug, idOrRef, opts);
+    const admitted = validateIntegrationSubmission(slug, idOrRef);
     if (!admitted.ok) return admitted;
     const ticket = admitted.ticket;
     const project = readMeta(slug);

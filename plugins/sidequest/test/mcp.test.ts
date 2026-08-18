@@ -421,7 +421,7 @@ test('briefings retain complete frozen story contracts after the live contract c
     title: 'Retrieve frozen dispatch contract', storyId: story.id, category: 'frozen-snapshot-context', source: 'test',
   });
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'frozen-contract-session' });
-  const briefing = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
+  const briefing = runCli(['briefing', ticket.ref, '--token-file', prepared.ticket.dispatch.tokenFile, '--project', project]);
   assert.ok(briefing.includes(frozenContract));
   assert.doesNotMatch(briefing, /fetch the paged snapshot/);
 
@@ -1206,8 +1206,10 @@ test('write acks and pulse stay lean: no body echoes, no lifecycle noise by defa
   for (const noisy of ['sessionId', 'preparedAt', 'launchedAt', 'boundAt', 'claimedAt', 'terminalAt', 'terminalSource', 'agentId']) {
     assert.ok(!(noisy in pulse.dispatch), `slim pulse omits ${noisy}`);
   }
-  const detailed = await callTool('pulse', { project, ref: ticket.ref, detail: true });
-  assert.ok('preparedAt' in detailed.dispatch, 'detail:true restores the full dispatch lifecycle');
+  const full = await callTool('pulse', { project, ref: ticket.ref, full: true });
+  assert.ok('preparedAt' in full.dispatch, 'full:true restores the full dispatch lifecycle');
+  const pulseDescriptor = mcp.toolDescriptors().find((descriptor: any) => descriptor.name === 'pulse');
+  assert.equal('detail' in pulseDescriptor.inputSchema.properties, false);
 });
 
 test('MCP defaults cap category, dispatch, and pulse result payloads', async () => {
@@ -1272,7 +1274,7 @@ test('MCP defaults cap category, dispatch, and pulse result payloads', async () 
   }
 });
 
-test('MCP integrate preflight keeps malformed legacy submissions structured when options are omitted', async () => {
+test('MCP integrate preflight routes malformed legacy submissions without a scope bypass', async () => {
   const repo = committedRepo('sq-mcp-legacy-preflight-');
   const project = store.ensureProject(repo).slug;
   const ticket = store.createTicket(project, {
@@ -1308,8 +1310,10 @@ test('MCP integrate preflight keeps malformed legacy submissions structured when
   const result = await callHandler('integrate', { project, ref: ticket.ref, by: 'payload-tester' });
   assert.equal(result.ok, false);
   assert.equal(result.reason, 'missing_scope_snapshot');
+  assert.match(result.message, /rework/);
+  assert.match(result.message, /supersede_submission/);
   const groomClose = mcp.toolDescriptors().find((descriptor: any) => descriptor.name === 'groomClose');
-  assert.equal(groomClose.inputSchema.properties.overrideLegacyScope.type, 'boolean');
+  assert.equal('overrideLegacyScope' in groomClose.inputSchema.properties, false);
 });
 
 test('integrate returns actionable post-merge verification failures', async () => {
@@ -1754,7 +1758,7 @@ test('comment reads stay chronological through the ten-comment threshold', async
   assert.deepEqual(cliComments.comments.map((comment: any) => comment.body), bodies);
 
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId: 'complete-comment-briefing' });
-  const briefingOutput = runCli(['briefing', ticket.ref, '--token', prepared.token, '--project', project]);
+  const briefingOutput = runCli(['briefing', ticket.ref, '--token-file', prepared.ticket.dispatch.tokenFile, '--project', project]);
   const briefingPath = /Before acting, Read "([^"]+)" in full/.exec(briefingOutput)?.[1];
   assert.ok(briefingPath, briefingOutput);
   const briefing = fs.readFileSync(briefingPath, 'utf8');
@@ -2950,7 +2954,7 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
     store.getTicket(slug, addedInstant.ref), instant.token, slug, PROJ,
   ), PROJ);
   const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
-  const printedBriefing = execFileSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token', instant.token, '--project', PROJ], {
+  const printedBriefing = execFileSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token-file', store.getTicket(slug, addedInstant.ref).dispatch.tokenFile, '--project', PROJ], {
     encoding: 'utf8', windowsHide: true,
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
@@ -2964,13 +2968,15 @@ test('dispatch returns a stable executor, one spawn prompt, and a token', async 
   assert.equal(markerDispatch.spawn.description, 'Terra, high · FleetView title injection');
   assert.doesNotMatch(markerDispatch.spawn.description, /\[sidequest-route/);
 
+  const staleInstantTokenFile = path.join(SIDEQUEST_HOME, 'stale-instant.token');
+  fs.writeFileSync(staleInstantTokenFile, `${instant.token}\n`);
   const adopted = await callTool('dispatch', { allowUnscoped: true, ref: addedInstant.ref, session: 'adopting-session', full: true });
   assert.equal(adopted.mode, 'instant');
   assert.equal(adopted.agent, instant.agent);
   assert.notEqual(adopted.token, instant.token);
   assert.equal(Object.hasOwn(adopted, 'briefing'), false);
   assert.ok(adopted.spawn.prompt.includes(`briefing ${addedInstant.ref} --token-file "${store.getTicket(slug, addedInstant.ref).dispatch.tokenFile}"`));
-  const staleBriefing = spawnSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token', instant.token, '--project', PROJ], {
+  const staleBriefing = spawnSync(process.execPath, [cli, 'briefing', addedInstant.ref, '--token-file', staleInstantTokenFile, '--project', PROJ], {
     encoding: 'utf8', windowsHide: true,
     env: Object.assign({}, process.env, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ }),
   });
@@ -3862,7 +3868,7 @@ test('MCP claim binds an unlaunched isolated dispatch with its prepared token', 
   const accepted = await callTool('claim', {
     ref: added.ref,
     by: 'mcp-token-bound-agent',
-    token: prepared.token,
+    tokenFile: prepared.ticket.dispatch.tokenFile,
     executor: prepared.ticket.dispatchExecutor,
   });
   assert.strictEqual(accepted.ok, true);
@@ -3920,13 +3926,13 @@ test('MCP claim rejects a generic executor for a Codex route', async () => {
     const added = await callTool('add', { title: 'Codex executor guard', category: 'claim-codex' });
     const ticket = store.getTicket(store.ensureProject(PROJ).slug, added.ref);
     const prepared = store.prepareDispatch(store.ensureProject(PROJ).slug, added.ref, { allowUnscoped: true });
-    const rejected = await callTool('claim', { ref: added.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}`, token: prepared.token });
+    const rejected = await callTool('claim', { ref: added.ref, by: 'mcp-generic', effort: ticket.effort, executor: `sidequest-exec-${ticket.effort}`, tokenFile: prepared.ticket.dispatch.tokenFile });
     assert.strictEqual(rejected.ok, false);
     assert.strictEqual(rejected.reason, 'executor_mismatch');
     assert.strictEqual(rejected.expectedExecutor, prepared.ticket.dispatchExecutor);
     assert.ok(rejected.message.includes('Expected executor: `' + prepared.ticket.dispatchExecutor + '`'));
     assert.ok(rejected.message.includes(`executor: ${JSON.stringify(prepared.ticket.dispatchExecutor)}`));
-    assert.ok(rejected.message.includes(`token: ${JSON.stringify(prepared.token)}`));
+    assert.ok(rejected.message.includes(`tokenFile: ${JSON.stringify(prepared.ticket.dispatch.tokenFile)}`));
     assert.ok(rejected.message.includes(`project: ${JSON.stringify(PROJ)}`));
   } finally {
     clearCatalog();
@@ -4177,7 +4183,7 @@ test('reporting aliases resolve to catalog slugs and dispatched done defaults pr
       });
       const prepared = await callTool('dispatch', { allowUnscoped: true, ref: added.ref, full: true });
       const by = `mcp-alias-${added.ref}`;
-      await callTool('claim', { ref: added.ref, by, executor: prepared.agent, effort: 'high', token: prepared.token });
+      await callTool('claim', { ref: added.ref, by, executor: prepared.agent, effort: 'high', tokenFile: store.getTicket(added.project, added.ref).dispatch.tokenFile });
       await callTool('done', { ref: added.ref, by, body: 'Alias completion evidence', ...(model == null ? {} : { model, effort: 'high' }) });
       return store.getTicket(added.project, added.ref);
     };

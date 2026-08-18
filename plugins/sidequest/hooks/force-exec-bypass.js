@@ -409,17 +409,11 @@ function extractDispatchTokenFile(prompt) {
   const match = matches.at(-1);
   return match ? match[1] || match[2] || null : null;
 }
-function extractDispatchToken(prompt) {
-  if (typeof prompt !== "string" || !prompt) return null;
-  const matches = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)];
-  const match = matches.at(-1);
-  return match ? match[1] || null : null;
-}
 function dispatchRefs(prompt) {
   if (typeof prompt !== "string" || !prompt) return [];
   const seen = /* @__PURE__ */ new Set();
   const out = [];
-  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+[^\s`"']+|--token-file\s+(?:"[^"]+"|\S+))/gi)) {
+  for (const match of prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"[^"]+"|\S+)/gi)) {
     const ref = (match[1] || "").toUpperCase();
     if (ref && !seen.has(ref)) {
       seen.add(ref);
@@ -434,15 +428,10 @@ function dispatchLaunches(prompt) {
   const launches = headings.map((match, index) => {
     const next = headings[index + 1];
     const section = prompt.slice(match.index, next ? next.index : prompt.length);
-    return { ref: (match[1] || "").toUpperCase(), token: extractDispatchToken(section), tokenFile: extractDispatchTokenFile(section) };
-  }).filter((launch) => Boolean(launch.ref && (launch.token || launch.tokenFile)));
+    return { ref: (match[1] || "").toUpperCase(), tokenFile: extractDispatchTokenFile(section) };
+  }).filter((launch) => Boolean(launch.ref && launch.tokenFile));
   if (launches.length) return launches;
-  const briefings = [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+(?:--token\s+([^\s`"']+)|--token-file\s+(?:"([^"]+)"|(\S+)))/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), token: match[2] || null, tokenFile: match[3] || match[4] || null })).filter((launch) => Boolean(launch.ref && (launch.token || launch.tokenFile)));
-  if (briefings.length) return briefings;
-  const refs = extractRefs(prompt);
-  const tokens = [...prompt.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || "");
-  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || null, tokenFile: null }));
-  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || "", token: tokens[0] || null, tokenFile: null }] : [];
+  return [...prompt.matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"([^"]+)"|(\S+))/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), tokenFile: match[2] || match[3] || "" })).filter((launch) => Boolean(launch.ref && launch.tokenFile));
 }
 function toolInputOf(input) {
   return isRecord(input.tool_input) ? input.tool_input : null;
@@ -468,7 +457,6 @@ function recordAuthoritativeLaunch(input, type, agentName) {
     if (!found.ok || !found.slug) return;
     for (const launch of launches) {
       store.recordDispatchLaunch(found.slug, launch.ref, {
-        token: launch.token,
         tokenFile: launch.tokenFile,
         executor: type,
         sessionId,
@@ -524,7 +512,7 @@ function dispatchRouteMarkers(input) {
 function preparedBriefingCommand(ticket, project) {
   try {
     const agentsync = require(runtimeModule("agentsync"));
-    const stub = agentsync.renderDispatchStub(ticket, ticket.dispatchNonce, project);
+    const stub = agentsync.renderDispatchStub(ticket, project);
     return /^FIRST action: run `([^`]+)` and execute exactly what it prints\.$/m.exec(stub)?.[1] || null;
   } catch (_) {
     return null;

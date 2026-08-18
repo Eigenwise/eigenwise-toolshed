@@ -1344,6 +1344,7 @@ function createDispatch(dependencies) {
         signature: failure.signature,
         at: now
       };
+      removeDispatchTokenFile(t);
       t.dispatchNonce = mintDispatchToken();
       t.dispatchExecutor = fallback.exec.agent;
       t.model = fallback.model;
@@ -1360,6 +1361,7 @@ function createDispatch(dependencies) {
         artifactScope: state.artifactScope || null,
         ...Array.isArray(state.artifactDirtyBaseline) ? { artifactDirtyBaseline: state.artifactDirtyBaseline.slice() } : {},
         tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
+        tokenFile: newDispatchTokenFile(),
         executor: t.dispatchExecutor,
         description: spawnDescription(t, fallback.exec),
         launchSeq,
@@ -1377,6 +1379,7 @@ function createDispatch(dependencies) {
         supersededTokens,
         recovery
       };
+      writeDispatchTokenFile(t);
       stampDispatchEvent(t, opts.source || "agent-launch-failure", now);
       putTicket(slug, t);
       return { ok: true, ticket: t, token: t.dispatchNonce, recovery };

@@ -147,7 +147,6 @@ const tools = [
       properties: {
         project: PROJECT_PROP,
         ref: { type: "string", description: "Ticket ref or id." },
-        detail: { type: "boolean", description: "Legacy alias for full." },
         full: { type: "boolean", description: "Include submission, git, and full dispatch lifecycle." }
       },
       required: ["ref"]
@@ -156,7 +155,7 @@ const tools = [
       const { slug, meta } = resolveProject(args.project);
       const pulse = store.pulsePayload(slug, args.ref);
       if (!pulse) throw new Error(`pulse: no ticket "${args.ref}" in ${meta.name}`);
-      const payload = args.full || args.detail ? withoutCategories(pulse) : compactPulse(pulse);
+      const payload = args.full ? withoutCategories(pulse) : compactPulse(pulse);
       return Object.assign({ project: slug }, payload);
     }
   },

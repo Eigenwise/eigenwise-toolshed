@@ -302,7 +302,7 @@ const tools: ToolDefinition[] = [
         transport: 'mcp',
       });
       const isolation = agentsync.ticketIsolation(prepared.ticket, prepared.ticket.dispatch && prepared.ticket.dispatch.sharedTree);
-      const prompt = agentsync.renderDispatchStub(prepared.ticket, prepared.token, meta.path);
+      const prompt = agentsync.renderDispatchStub(prepared.ticket, meta.path);
       const resolved = store.resolveExec(prepared.ticket.model, prepared.ticket.effort);
       const agent = store.canonicalPreparedDispatchExecutor(prepared.ticket);
       const dispatchState = prepared.ticket.dispatch || {};

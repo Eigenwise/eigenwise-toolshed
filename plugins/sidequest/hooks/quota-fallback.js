@@ -118,24 +118,8 @@ function projectFromPrompt(prompt) {
   const match = matches.at(-1);
   return match ? match[1] || match[2] || null : null;
 }
-function tokenFromPrompt(prompt) {
-  const matches = [...String(prompt || "").matchAll(/--token\s+([^\s`"']+)/g)];
-  const match = matches.at(-1);
-  return match ? match[1] || null : null;
-}
 function dispatchLaunches(prompt) {
-  const text = String(prompt || "");
-  const headings = [...text.matchAll(/^Ref:\s*(SQ-\d+)\s*$/gim)];
-  const sectioned = headings.map((match, index) => {
-    const next = headings[index + 1];
-    const section = text.slice(match.index, next ? next.index : text.length);
-    return { ref: (match[1] || "").toUpperCase(), token: tokenFromPrompt(section) };
-  }).filter((launch) => Boolean(launch.ref && launch.token));
-  if (sectioned.length) return sectioned;
-  const refs = [...new Set((text.match(/\bSQ-\d+\b/gi) || []).map((ref) => ref.toUpperCase()))];
-  const tokens = [...text.matchAll(/--token\s+([^\s`"']+)/g)].map((match) => match[1] || "");
-  if (refs.length === tokens.length) return refs.map((ref, index) => ({ ref, token: tokens[index] || "" }));
-  return refs.length === 1 && tokens.length === 1 ? [{ ref: refs[0] || "", token: tokens[0] || "" }] : [];
+  return [...String(prompt || "").matchAll(/briefing\s+(SQ-\d+)\s+--token-file\s+(?:"([^"]+)"|(\S+))/gi)].map((match) => ({ ref: (match[1] || "").toUpperCase(), tokenFile: match[2] || match[3] || "" })).filter((launch) => Boolean(launch.ref && launch.tokenFile));
 }
 function main() {
   const input = readStdin();
@@ -153,7 +137,7 @@ function main() {
     const recovered = [];
     for (const launch of launches) {
       const result = store.recoverDispatchQuotaFailure(project.slug, launch.ref, {
-        token: launch.token,
+        tokenFile: launch.tokenFile,
         executor,
         sessionId: stringField(input, "session_id", "sessionId") || null,
         error,
@@ -171,7 +155,7 @@ function main() {
   const failed = [];
   for (const launch of launches) {
     const result = store.recordDispatchAgentFailure(project.slug, launch.ref, {
-      token: launch.token,
+      tokenFile: launch.tokenFile,
       executor,
       sessionId: stringField(input, "session_id", "sessionId") || null,
       taskName: stringField(toolInput, "name") || null,
