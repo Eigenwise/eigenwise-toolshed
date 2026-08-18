@@ -104,7 +104,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.has('await'), false);
   assert.equal(byName.has('native_agent'), false);
   assert.deepEqual(byName.get('context_page')?.inputSchema.required, ['handle', 'cursor', 'expectedRevision']);
-  assert.equal(byName.get('context_page')?.inputSchema.properties?.limit?.maximum, 16384);
+  assert.equal(byName.get('context_page')?.inputSchema.properties?.limit?.maximum, 70 * 1024);
   assert.match(byName.get('list')?.description ?? '', /changes\/pulse/);
   assert.equal(byName.get('changes')?.description, 'Poll ticket changes.');
   assert.match(byName.get('claim')?.description ?? '', /Claim before work/);

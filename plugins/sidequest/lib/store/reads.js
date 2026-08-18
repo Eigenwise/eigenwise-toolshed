@@ -61,7 +61,7 @@ function createReads(dependencies) {
     const total = tickets.length;
     const start = Math.min(decodeListCursor(opts.cursor), total);
     const limit = opts.limit != null ? Math.max(0, Math.floor(Number(opts.limit)) || 0) : null;
-    const budget = opts.maxChars != null && Number(opts.maxChars) > 0 ? Number(opts.maxChars) : null;
+    const budget = opts.maxBytes != null && Number(opts.maxBytes) > 0 ? Number(opts.maxBytes) : null;
     let end;
     if (opts.all) {
       end = total;
@@ -71,7 +71,7 @@ function createReads(dependencies) {
       let size = 0;
       end = start;
       while (end < total) {
-        const cost = JSON.stringify(tickets[end], null, 2).length + 8;
+        const cost = Buffer.byteLength(JSON.stringify(tickets[end], null, 2), "utf8") + 8;
         if (end > start && size + cost > budget) break;
         size += cost;
         end++;
@@ -95,14 +95,14 @@ function createReads(dependencies) {
       archived: !!opts.archived,
       status: opts.status == null && !opts.all ? ["todo", "doing", "awaiting-oracle"] : opts.status
     };
-    const paging = !opts.all && opts.limit == null ? Object.assign({}, opts, { limit: DEFAULT_LIST_PAGE_LIMIT }) : opts;
+    const paging = !opts.all && opts.limit == null && opts.maxBytes == null ? Object.assign({}, opts, { limit: DEFAULT_LIST_PAGE_LIMIT }) : opts;
     const total = countTickets(project, filter);
     let index;
     if (opts.brief) {
       const rows = db.selectRows(database(), "SELECT ref, status FROM tickets WHERE project = ?", [project]);
       index = new Map(rows.map((row) => [String(row.ref).toUpperCase(), row]));
     }
-    if (!paging.all && paging.limit != null && paging.maxChars == null) {
+    if (!paging.all && paging.limit != null && paging.maxBytes == null) {
       const offset = Math.min(decodeListCursor(paging.cursor), total);
       let tickets2 = queryTickets(project, { ...filter, limit: paging.limit, offset });
       if (opts.brief) tickets2 = tickets2.map((ticket) => briefTicket(project, ticket, { index }));

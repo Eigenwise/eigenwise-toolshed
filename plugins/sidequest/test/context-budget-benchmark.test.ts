@@ -92,14 +92,14 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
   const listText = listRaw.content[0].text;
   const listPayload = JSON.parse(listText);
   const modelBytes = Buffer.byteLength(listText, 'utf8');
-  assert.ok(modelBytes <= 13 * 1024, `bounded MCP list is ${modelBytes} bytes`);
+  assert.ok(modelBytes <= 70 * 1024, `bounded MCP list is ${modelBytes} bytes`);
   assert.ok(listPayload.retrieval || listPayload.ticketRetrieval || listPayload.ticketsRetrieval, 'bounded list emits continuation');
 
   const detail = await callTool('list', { project, ref: tickets[0].ref });
   assert.equal(detail.ticket.descriptionTruncated, true);
   assert.equal(await recoverBody(detail.ticket.descriptionRetrieval), `${description} ticket=0`);
   const comments = await callTool('comments', { project, ref: tickets[0].ref });
-  assert.ok(Buffer.byteLength(JSON.stringify(comments), 'utf8') <= 13 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(comments), 'utf8') <= 70 * 1024);
 
   const unchanged = await callTool('list', { project, ref: tickets[0].ref });
   assert.equal(unchanged.ticket.descriptionRetrieval.arguments.cursor, detail.ticket.descriptionRetrieval.arguments.cursor);
@@ -138,7 +138,7 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
 
   const ceilingTicket = store.createTicket(project, {
     title: 'Context page ceiling control',
-    description: 'x'.repeat(16000),
+    description: 'x'.repeat(90 * 1024),
     category: 'benchmark', files: ['fixture.ts'], source: 'context-budget-benchmark',
   });
   const ceilingDetail = await callTool('list', { project, ref: ceilingTicket.ref });
@@ -146,13 +146,13 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
   assert.ok(ceilingRetrieval, 'oversized body exposes a context_page retrieval');
   const overBudgetPage = await callToolRaw('context_page', {
     ...ceilingRetrieval.arguments,
-    limit: 16 * 1024,
+    limit: 70 * 1024,
   });
   assert.ok(!overBudgetPage.isError, overBudgetPage.content?.[0]?.text);
   const overBudgetText = overBudgetPage.content[0].text;
-  assert.ok(Buffer.byteLength(overBudgetText, 'utf8') <= 16 * 1024, `context_page response is ${Buffer.byteLength(overBudgetText, 'utf8')} bytes`);
+  assert.ok(Buffer.byteLength(overBudgetText, 'utf8') <= 70 * 1024, `context_page response is ${Buffer.byteLength(overBudgetText, 'utf8')} bytes`);
   const overBudgetPayload = JSON.parse(overBudgetText);
-  assert.ok(overBudgetPayload.pageBytes <= 14 * 1024, `context_page payload is ${overBudgetPayload.pageBytes} bytes`);
+  assert.ok(overBudgetPayload.pageBytes <= 68 * 1024, `context_page payload is ${overBudgetPayload.pageBytes} bytes`);
   assert.ok(overBudgetPayload.nextCursor, 'over-limit context_page request remains paged');
 
   const approximateTokens = Math.ceil(durableBytes / 4);

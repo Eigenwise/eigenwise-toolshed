@@ -90,8 +90,8 @@ test('MCP category tools stamp tickets and reject unknown categories', async () 
   assert.match(added.ref, /^SQ-\d+$/);
 
   const listed = await call(mcp, 'category_list', { full: true });
-  assert.ok(Buffer.byteLength(JSON.stringify(listed), 'utf8') <= 12 * 1024);
-  assert.equal(listed.retrieval?.tool, 'context_page');
+  assert.ok(Buffer.byteLength(JSON.stringify(listed), 'utf8') <= 70 * 1024);
+  assert.equal(listed.retrieval, undefined);
   assert.ok(listed.categories.some((category?: any) => category.id === 'coding.easy' && category.ticketCount === 1));
 
   const raw = await mcp.handleRequest({ jsonrpc: '2.0', id: Date.now() + 1, method: 'tools/call', params: { name: 'update', arguments: { ref: added.ref, category: 'missing' } } });

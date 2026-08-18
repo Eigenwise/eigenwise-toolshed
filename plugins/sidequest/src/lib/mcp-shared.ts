@@ -12,6 +12,8 @@ const { claimRefusalMessage } = require('./refusal-guidance');
 const { assertSidequestInstall, assertDispatchTransport } = require('./dispatch-preflight');
 const {
   MAX_CONTEXT_PAGE_BYTES,
+  MCP_TOOL_RESULT_MAX_BYTES,
+  MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES,
   contextRevision,
   decodeContextHandle,
   contextCursor,
@@ -322,18 +324,14 @@ function compactSchema(schema?: any, propertyMap = false): any {
  *  The paging mechanics (offset/limit/size-budget slice, cursor encode/decode)
  *  live in store.listPayload so the CLI (--limit/--cursor) and MCP serve the
  *  exact same shape — that's the parity. What differs is only the DEFAULT: over
- *  MCP we pass a char budget so the first page is auto-bounded to fit the
- *  tool-result cap; the CLI, writing to a terminal or file with no such ceiling,
- *  keeps returning everything in one call unless --limit/--cursor is given
- *  (backward compatible). --brief row shape is untouched — this is row COUNT.
+ *  MCP we pass the byte budget derived from the external tool-result cap; the
+ *  CLI, writing to a terminal or file with no such ceiling, keeps returning
+ *  everything in one call unless --limit/--cursor is given (backward compatible). --brief row shape is untouched — this is row COUNT.
  * ------------------------------------------------------------------ */
 
-// The per-page char budget for the DEFAULT (un-limited) MCP list. The store
-// sizes a page against the same pretty JSON.stringify the transports emit, so
-// this is in real output chars: ~55k leaves a comfortable margin under the
-// tool-result ceiling (the live overflow was ~98k / 100k) once the response
-// envelope and array indentation are added.
-const LIST_CHAR_BUDGET = 55000;
+// Default MCP list pages use the external MCP result ceiling converted in
+// context-packet.ts, including its measured response framing allowance.
+const LIST_RESULT_MAX_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 
 function closeDispatchExecutor(ticket?: any) {
   const executor = store.canonicalPreparedDispatchExecutor(ticket);
@@ -386,8 +384,8 @@ function outOfScopeComment(paths: any[]) {
   return `${prefix}… +${paths.length} more (run git status in the worktree for the full list)`;
 }
 
-const COMPACT_RESULT_MAX_BYTES = 12 * 1024;
-const CONTEXT_PAGE_PAYLOAD_MAX_BYTES = MAX_CONTEXT_PAGE_BYTES - 2048;
+const COMPACT_RESULT_MAX_BYTES = MCP_TOOL_RESULT_MAX_BYTES;
+const CONTEXT_PAGE_PAYLOAD_MAX_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 const CONTEXT_ROW_EXCERPT_BYTES = 4 * 1024;
 const contextSnapshots = new Map<string, { revision: string; value: any; kind: string }>();
 const COMPACT_PULSE_BODY_MAX_CHARS = 280;
@@ -747,7 +745,7 @@ function mcpPayloadBytes(value: any) {
 function payloadFieldExcerptBudget(payload: any, field: string) {
   const remaining = Object.assign({}, payload);
   delete remaining[field];
-  return Math.max(256, COMPACT_RESULT_MAX_BYTES - 2048 - mcpPayloadBytes(remaining));
+  return Math.max(256, CONTEXT_PAGE_PAYLOAD_MAX_BYTES - mcpPayloadBytes(remaining));
 }
 
 function boundedReadPayload(tool: string, payload: any) {
@@ -765,7 +763,7 @@ function boundedReadPayload(tool: string, payload: any) {
       const rows = value.map((row, index) => contextRowProjection(row, tool, project, field, String(index)));
       const retained: any[] = [];
       for (const row of rows) {
-        if (mcpPayloadBytes(Object.assign({}, visible, { [field]: [...retained, row] })) > COMPACT_RESULT_MAX_BYTES - 2048) break;
+        if (mcpPayloadBytes(Object.assign({}, visible, { [field]: [...retained, row] })) > CONTEXT_PAGE_PAYLOAD_MAX_BYTES) break;
         retained.push(row);
       }
       visible[field] = retained;
@@ -879,7 +877,7 @@ function pageRows(rows: any[], args: any, action: string, buildPayload: any, max
 }
 
 function pagedPayload(rows: any[], args: any, action: string, buildPayload: any, full: boolean) {
-  return pageRows(rows, args, action, buildPayload, COMPACT_RESULT_MAX_BYTES - 1024);
+  return pageRows(rows, args, action, buildPayload, CONTEXT_PAGE_PAYLOAD_MAX_BYTES);
 }
 
 function compactPulse(pulse?: any) {
@@ -1081,7 +1079,7 @@ module.exports = {
   conciseDescription,
   validateStoryId,
   compactSchema,
-  LIST_CHAR_BUDGET,
+  LIST_RESULT_MAX_BYTES,
   closeDispatchExecutor,
   mutationAck,
   integrationBranchAck,

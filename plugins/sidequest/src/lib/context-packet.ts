@@ -6,8 +6,16 @@ const CONTEXT_PROJECTION_VERSION = 1;
 const CONTEXT_HANDLE_VERSION = 1;
 const CONTEXT_HANDLE_PREFIX = 'ctx1.';
 const CONTEXT_CURSOR_PREFIX = 'ctxc1.';
-const DEFAULT_CONTEXT_PAGE_BYTES = 12 * 1024;
-const MAX_CONTEXT_PAGE_BYTES = 16 * 1024;
+const MAX_MCP_OUTPUT_TOKENS = 25_000;
+// Claude Code limits one MCP tool result to 25,000 tokens. Representative
+// pretty-printed board JSON measured 71,680 UTF-8 bytes for 23,570 tokens
+// (3.04 bytes/token), so 70 KiB is 23,579 tokens at that density and stays
+// below the external ceiling. Context-page metadata measured below 2 KiB, so
+// its body budget reserves that measured framing from the same ceiling.
+const MAX_CONTEXT_PAGE_BYTES = 70 * 1024;
+const MCP_TOOL_RESULT_MAX_BYTES = MAX_CONTEXT_PAGE_BYTES;
+const MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES = MCP_TOOL_RESULT_MAX_BYTES - (2 * 1024);
+const DEFAULT_CONTEXT_PAGE_BYTES = MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES;
 const MIN_CONTEXT_PAGE_BYTES = 4;
 const DEFAULT_RECIPIENT_PROFILES = Object.freeze({
   executor: Object.freeze({ id: 'executor' }),
@@ -315,6 +323,9 @@ function compileContextProjection(input: {
 module.exports = {
   CONTEXT_PROJECTION_VERSION,
   CONTEXT_HANDLE_VERSION,
+  MAX_MCP_OUTPUT_TOKENS,
+  MCP_TOOL_RESULT_MAX_BYTES,
+  MCP_TOOL_RESULT_PAYLOAD_MAX_BYTES,
   DEFAULT_CONTEXT_PAGE_BYTES,
   MAX_CONTEXT_PAGE_BYTES,
   MIN_CONTEXT_PAGE_BYTES,

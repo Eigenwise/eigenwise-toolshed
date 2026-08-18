@@ -15,7 +15,7 @@
         "limit": {
           "type": "integer",
           "minimum": 4,
-          "maximum": 16384,
+          "maximum": 71680,
           "description": "UTF-8 bytes."
         },
         "expectedRevision": {
