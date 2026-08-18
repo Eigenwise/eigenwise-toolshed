@@ -108,10 +108,11 @@ test('end-to-end context budgets preserve real storage, retrieval, and model sea
   assert.equal(stale.isError, true);
   assert.match(stale.content[0].text, /stale list handle/);
 
-  const prepared = store.prepareDispatch(project, tickets[1].ref, { sessionId: 'benchmark-dispatch' });
+  const prepared = store.prepareDispatch(project, tickets[0].ref, { sessionId: 'benchmark-dispatch' });
   const briefing = agentsync.renderTicketBriefing(prepared.ticket, 'benchmark-token', project, projectPath);
-  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024);
-  assert.match(briefing, /Aggregate budget: 24576 bytes/);
+  assert.ok(Buffer.byteLength(briefing, 'utf8') > 24 * 1024);
+  assert.match(briefing, /Executor briefing/);
+  assert.ok(briefing.includes(`${description} mutated`));
   const orientationTicket = store.createTicket(project, {
     title: 'Bounded orientation', description: 'Where: fixture.ts. Contract: preserve the board and keep the bounded executor orientation stable. Verify: run the benchmark command and inspect the byte count.',
     category: 'benchmark', files: ['fixture.ts'], executorVerify: 'node --test fixture.ts', source: 'context-budget-benchmark',

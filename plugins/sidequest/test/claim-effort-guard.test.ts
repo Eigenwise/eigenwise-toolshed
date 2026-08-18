@@ -583,7 +583,7 @@ test('visibility preserves quoted newline paths from NUL-delimited Git output', 
   assert.deepEqual(JSON.parse(worker.stdout), [ignoredPath]);
   assert.notDeepEqual(nonNulLineParser, [ignoredPath]);
 });
-test('serialized dispatch spawn stays below the launch ceiling while briefing keeps a huge packet', () => {
+test('serialized dispatch spawn and briefing preserve a huge packet', () => {
   const slug = store.ensureProject(PROJ).slug;
   const hugeDescription = [
     '# Durable packet fixture',
@@ -618,18 +618,19 @@ test('serialized dispatch spawn stays below the launch ceiling while briefing ke
   const spawnBytes = Buffer.byteLength(serializedSpawn, 'utf8');
   const launchPayloadCeiling = 32 * 1024 * 1024;
   assert.ok(spawnBytes < launchPayloadCeiling, `serialized dispatched.spawn is ${spawnBytes} bytes`);
-  assert.ok(spawnBytes < 2000, `bounded orientation keeps dispatched.spawn at ${spawnBytes} bytes`);
   assert.match(serializedSpawn, /description-marker-/);
-  assert.match(serializedSpawn, /Description excerpt capped/);
-  assert.doesNotMatch(serializedSpawn, /d{1000}|First comment marker|asset-0-/);
+  assert.match(serializedSpawn, /d{500000}/);
+  assert.doesNotMatch(serializedSpawn, /Description excerpt capped/);
+  assert.doesNotMatch(serializedSpawn, /First comment marker|asset-0-/);
 
-  const briefing = runCli(['briefing', created.ref, '--token', dispatched.token]);
-  assert.equal(briefing.status, 0, briefing.stderr);
-  assert.match(briefing.stdout, /description-marker-/);
-  assert.match(briefing.stdout, /Aggregate budget: 24576 bytes/);
-  assert.doesNotMatch(briefing.stdout, new RegExp(`d{${hugeDescription.length - 1000}}`));
-  assert.match(briefing.stdout, /Omitted context/);
-  assert.match(briefing.stdout, /mcp__plugin_sidequest_board__comments/);
+  const briefingOutput = runCli(['briefing', created.ref, '--token', dispatched.token]);
+  assert.equal(briefingOutput.status, 0, briefingOutput.stderr);
+  const briefingPath = /Before acting, Read "([^"]+)" in full/.exec(briefingOutput.stdout)?.[1];
+  assert.ok(briefingPath, briefingOutput.stdout);
+  const briefing = fs.readFileSync(briefingPath, 'utf8');
+  assert.ok(briefing.includes(hugeDescription));
+  for (const body of comments) assert.ok(briefing.includes(body));
+  assert.doesNotMatch(briefing, /Aggregate budget|Omitted context|Description excerpt capped/);
 });
 
 test('instant dispatch returns a stable executor, fetch stub, and token', () => {

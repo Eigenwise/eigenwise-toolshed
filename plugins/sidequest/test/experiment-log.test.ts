@@ -172,7 +172,7 @@ test('applyExperimentVerdict creates a missing oracle round and preserves existi
   assert.match(log, /## R2 — 2026-07-02 — round 2/);
 });
 
-test('experimentPacket keeps pinned sections, recent full rounds, and caps old headlines first', () => {
+test('experimentPacket retains every pinned section and round', () => {
   const created = ticket();
   for (let index = 1; index <= 7; index++) {
     assert.equal(store.appendExperimentEntry(slug, created.ref, round(index, {
@@ -184,11 +184,8 @@ test('experimentPacket keeps pinned sections, recent full rounds, and caps old h
 
   const projection = store.experimentPacket(slug, created.ref);
   assert.equal(projection.path, store.assetPath(slug, created.id, projection.asset));
-  assert.ok(Buffer.byteLength(projection.packet, 'utf8') <= 12 * 1024);
+  assert.ok(Buffer.byteLength(projection.packet, 'utf8') > 12 * 1024);
   assert.match(projection.packet, /## Ruled out\n- old metric — it never ranked the ear result/);
   assert.match(projection.packet, /## Standing constraints\n- \[R1\] blind ranking only/);
-  assert.match(projection.packet, /## R5 — 2026-07-05/);
-  assert.match(projection.packet, /## R6 — 2026-07-06/);
-  assert.match(projection.packet, /## R7 — 2026-07-07/);
-  assert.doesNotMatch(projection.packet, /R1 — 2026-07-01/);
+  for (let index = 1; index <= 7; index++) assert.match(projection.packet, new RegExp(`## R${index} — 2026-07-0${index}`));
 });

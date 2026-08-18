@@ -78,7 +78,8 @@ async function cmdBriefing(opts, positional) {
     const message = result.reason === "not_found" ? `no ticket "${idOrRef}".` : result.reason === "stale" ? "dispatch is no longer current; re-run dispatch for a current spawn." : "dispatch token was refused or its token file was unavailable. Re-run the exact briefing command from this executor prompt; do not re-run dispatch.";
     fail(`briefing: ${message}`);
   }
-  process.stdout.write(agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, result.token, slug, meta.path), meta.path));
+  const briefing = agentsync.withProjectIdentity(agentsync.renderTicketBriefing(result.ticket, result.token, slug, meta.path), meta.path);
+  process.stdout.write(agentsync.transportExecutorBriefing(briefing, result.ticket, slug, meta.path));
 }
 async function cmdTempCleanup(opts, positional) {
   if (positional[0] && positional[0] !== "cleanup") fail("temp: expected `sidequest temp cleanup`");

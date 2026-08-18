@@ -9,7 +9,7 @@ const crypto = require("crypto");
 const store = require("./store.js");
 const { worktreeRoot } = require("./worktrees.js");
 const { spawnDescription } = store;
-const { compileContextProjection, contextRetrieval, contextRevision } = require("./context-packet.js");
+const { compileContextProjection } = require("./context-packet.js");
 const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const TEMPLATE_PATH = path.join(__dirname, "..", "scripts", "_exec-template.md");
 const LEGACY_MARKER = "<!-- generated-by: sidequest-agentsync -->";
@@ -229,101 +229,25 @@ function waitForNativeAgentReload(waitMs) {
   const ms = Number.isFinite(Number(waitMs)) ? Math.max(0, Number(waitMs)) : 175;
   if (ms > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
-const TICKET_DESCRIPTION_MAX_BYTES = 8 * 1024;
-const TICKET_COMMENTS_MAX_BYTES = 6 * 1024;
-const TICKET_COMMENT_BODY_MAX_BYTES = 768;
-const TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES = 4 * 1024;
-const TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES = 384;
-const EXPERIMENT_LOG_PACKET_MAX_BYTES = 12 * 1024;
-const DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES = 1024;
-const DISPATCH_TICKET_CONTEXT_MAX_BYTES = 1200;
-const DISPATCH_TITLE_MAX_BYTES = 96;
-const DISPATCH_DESCRIPTION_MAX_BYTES = 360;
-const DISPATCH_FILES_MAX_BYTES = 180;
-const DISPATCH_ANCHORS_MAX_BYTES = 120;
-function byteLength(value) {
-  return Buffer.byteLength(String(value || ""), "utf8");
-}
-function utf8Excerpt(value, maxBytes) {
-  const source = String(value || "");
-  const limit = Math.max(0, Number(maxBytes) || 0);
-  if (byteLength(source) <= limit) return { text: source, truncated: false };
-  let text = "";
-  let used = 0;
-  for (const character of source) {
-    const size = byteLength(character);
-    if (used + size > limit) break;
-    text += character;
-    used += size;
-  }
-  return { text, truncated: true };
-}
-function boundedPacket(value, maxBytes, marker) {
-  const source = String(value || "");
-  const limit = Math.max(0, Number(maxBytes) || 0);
-  if (byteLength(source) <= limit) return source;
-  const suffix = String(marker || "");
-  return `${utf8Excerpt(source, Math.max(0, limit - byteLength(suffix))).text}${suffix}`;
-}
 function commentBody(comment) {
   return comment && Object.hasOwn(comment, "body") ? String(comment.body) : String(comment || "");
 }
-function isPriorityComment(comment) {
-  const kind = String(comment && comment.kind || "");
-  const body = commentBody(comment);
-  return /\b(?:decision|constraint)\b/i.test(kind) || /(?:^|\n)\s*(?:decision|constraint)\s*:/i.test(body);
-}
-function commentPacketEntry(comment, index, bodyLimit) {
-  const body = commentBody(comment);
-  const marker = "\n\n[Comment body excerpt truncated. Fetch specifics with compact comments reads.]";
-  const excerpt = boundedPacket(body, bodyLimit, marker);
+function commentPacketEntry(comment, index) {
   return [
     `### Comment ${Number(index) + 1}`,
     `Author: ${comment && comment.by ? comment.by : "unknown"}`,
     `Kind: ${comment && comment.kind ? comment.kind : "comment"}`,
     `Recorded: ${comment && comment.at ? comment.at : "(timestamp unavailable)"}`,
     "Body:",
-    excerpt
+    commentBody(comment)
   ].join("\n");
 }
-function commentPacketMarker(omitted, excerpts, decisionInHistory) {
-  const omittedText = omitted ? ` ${omitted} earlier comment(s) were omitted.` : "";
-  const excerptText = excerpts ? ` ${excerpts} included comment body excerpt(s) were truncated.` : "";
-  const historyText = decisionInHistory ? " A decision or constraint is in omitted history: fetch the full thread." : " Read the full thread only when this packet flags a decision or constraint in omitted history.";
-  return `[Comment packet truncated.${omittedText}${excerptText} Fetch specifics with compact comments reads (latest-first).${historyText}]`;
-}
 function ticketDescriptionPacket(description) {
-  return boundedPacket(
-    description || "(No additional description was recorded.)",
-    TICKET_DESCRIPTION_MAX_BYTES,
-    "\n\n[Description truncated at 8 KB. Fetch ticket specifics before acting.]"
-  );
+  return String(description || "(No additional description was recorded.)");
 }
 function ticketCommentsPacket(comments) {
   if (!Array.isArray(comments) || !comments.length) return "(No ticket comments were recorded.)";
-  const complete = comments.map((comment, index) => commentPacketEntry(comment, index, Number.MAX_SAFE_INTEGER)).join("\n\n");
-  if (byteLength(complete) <= TICKET_COMMENTS_MAX_BYTES) return complete;
-  const selected = [];
-  let bytes = 0;
-  for (let index = comments.length - 1; index >= 0; index--) {
-    const comment = comments[index];
-    const priority = isPriorityComment(comment);
-    const entry = commentPacketEntry(
-      comment,
-      index,
-      priority ? TICKET_PRIORITY_COMMENT_BODY_MAX_BYTES : TICKET_COMMENT_BODY_MAX_BYTES
-    );
-    const separatorBytes = selected.length ? byteLength("\n\n") : 0;
-    if (bytes + separatorBytes + byteLength(entry) > TICKET_COMMENTS_MAX_BYTES - TICKET_COMMENT_PACKET_MARKER_RESERVE_BYTES) break;
-    selected.push({ entry, priority, truncated: entry.includes("[Comment body excerpt truncated.") });
-    bytes += separatorBytes + byteLength(entry);
-  }
-  const omitted = comments.length - selected.length;
-  const excerpts = selected.filter((entry) => entry.truncated).length;
-  const decisionInHistory = comments.slice(0, omitted).some(isPriorityComment);
-  const marker = commentPacketMarker(omitted, excerpts, decisionInHistory);
-  const entries = selected.map((entry) => entry.entry).join("\n\n");
-  return `${entries}${entries ? "\n\n" : ""}${marker}`;
+  return comments.map((comment, index) => commentPacketEntry(comment, index)).join("\n\n");
 }
 function ticketAssetsPacket(ticket, slug) {
   const assets = Array.isArray(ticket && ticket.assets) ? ticket.assets : [];
@@ -360,11 +284,11 @@ function experimentLogPacket(ticket, slug) {
   const storedPath = String(experiment.path || "").trim();
   if (!storedPath) return null;
   const logPath = path.resolve(storedPath);
-  return boundedPacket([
-    `Read the full log at \`${logPath}\` before the first edit.`,
-    `Round checkout target: ${experimentCheckoutTarget(ticket)}.`,
+  return [
+    "Read the full log at " + logPath + " before the first edit.",
+    "Round checkout target: " + experimentCheckoutTarget(ticket) + ".",
     String(experiment.packet || "")
-  ].join("\n\n"), EXPERIMENT_LOG_PACKET_MAX_BYTES, "\n\n[Experiment log packet truncated at 12 KB. Read the full log before the first edit.]");
+  ].join("\n\n");
 }
 function ticketRouteMarker(ticket) {
   const resolved = store.resolveExec(ticket.model, ticket.effort);
@@ -574,26 +498,8 @@ function capturedVerifyCommand(verify) {
 function dispatchUncertaintyPacket(ticket, slug) {
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
   if (!warnings.length) return null;
-  return boundedPacket(
-    `Flagged uncertainty:
-${warnings.map((warning) => `- ${warning}`).join("\n")}`,
-    DISPATCH_UNCERTAINTY_PACKET_MAX_BYTES,
-    "\n[Additional dispatch uncertainty warnings truncated.]"
-  );
-}
-const EXECUTOR_BRIEFING_MAX_BYTES = 24 * 1024;
-const EXECUTOR_CONTRACT_MAX_BYTES = 12 * 1024;
-function sha256Text(value) {
-  return crypto.createHash("sha256").update(String(value || ""), "utf8").digest("hex");
-}
-function projectionRetrieval(tool, argumentsValue) {
-  return { tool: String(tool), arguments: argumentsValue || {} };
-}
-function projectionCall(retrieval) {
-  return `${retrieval.tool}(${JSON.stringify(retrieval.arguments)})`;
-}
-function briefingProjectArguments(project) {
-  return project ? { project } : {};
+  return `Flagged uncertainty:
+${warnings.map((warning) => `- ${warning}`).join("\n")}`;
 }
 function storySnapshot(ticket, slug) {
   const dispatch = ticket?.dispatch;
@@ -624,45 +530,9 @@ function storyDecisionLogProjectionBody(snapshot) {
     ...entries.map((entry) => `- #${entry.seq} ${entry.kind} (${entry.ref || "orchestrator"}, ${entry.by}): ${entry.text}`)
   ].join("\n");
 }
-function storyContractRetrieval(ticket, snapshot, project, forceHandle = false) {
-  const body = String(snapshot?.body || "");
-  if (!forceHandle && !snapshot?.frozenAbsent && byteLength(body) <= EXECUTOR_CONTRACT_MAX_BYTES) {
-    return projectionRetrieval("mcp__plugin_sidequest_board__story_contract", Object.assign(
-      briefingProjectArguments(project),
-      { story: snapshot.story, cursor: 0, limit: 16384, full: true }
-    ));
-  }
-  const hash = sha256Text(body);
-  return projectionRetrieval("mcp__plugin_sidequest_board__context_page", contextRetrieval({
-    tool: "dispatch",
-    project: String(project || ticket?.project || "unbound"),
-    kind: "body",
-    field: "dispatch.storyContract",
-    position: "storyContract",
-    revision: contextRevision(body),
-    reason: "frozen-snapshot",
-    selector: {
-      ref: String(ticket?.ref || ""),
-      snapshotRevision: Number(snapshot?.revision) || 1,
-      sha256: hash,
-      totalBytes: byteLength(body),
-      ...snapshot?.frozenAbsent ? { frozenAbsent: true } : {}
-    }
-  }).arguments);
-}
-function storyContractProjectionBody(snapshot, retrieval, forceHandle = false) {
+function storyContractProjectionBody(snapshot) {
   if (snapshot.frozenAbsent) return "## Story execution contract\nFrozen dispatch snapshot contains no contract.";
-  const totalBytes = byteLength(snapshot.body);
-  const hash = sha256Text(snapshot.body);
-  const metadata = `snapshot revision ${snapshot.revision}; sha256 ${hash}; totalBytes ${totalBytes}`;
-  if (forceHandle || totalBytes > EXECUTOR_CONTRACT_MAX_BYTES) {
-    return [
-      `## Story execution contract (revision ${snapshot.revision}; ${metadata})`,
-      "Required before editing: fetch the paged snapshot with " + projectionCall(retrieval) + ". For every later page, call context_page with the returned continuation verbatim. Do not combine a nextCursor with another handle or replace this frozen snapshot with a live contract."
-    ].join("\n");
-  }
   return `## Story execution contract (revision ${snapshot.revision})
-Snapshot ${metadata}.
 ${snapshot.body}`;
 }
 function briefingCommentBody(comments) {
@@ -711,7 +581,7 @@ function executorSafetyBody(ticket, nonce, tokenFile, project, executor, closeou
     ...highStakes.length ? [highStakes.join("\n")] : [],
     boundReview || "",
     closeout || "",
-    "Stay within declared scope. If required context is omitted below, fetch it once with its listed retrieval call before editing. Do not guess or silently skip it."
+    "Stay within declared scope. This briefing includes the complete task, scope, comments, and contract. Do not use context_page for briefing sections."
   ].filter(Boolean).join("\n\n");
 }
 function boundReviewGuidance(ticket) {
@@ -733,40 +603,29 @@ function rejectedSubmissionRows(ticket) {
     quarantineRef: rejected.quarantineRef || `refs/sidequest/${ticket.ref}-rejected`,
     rejectedAt: rejected.rejectedAt || null,
     rejectedBy: rejected.rejectedBy || null,
-    reason: boundedPacket(rejected.reason, 4096, "\n[Reason excerpt truncated.]"),
-    review: boundedPacket(rejected.review, 2048, "\n[Review evidence excerpt truncated.]"),
+    reason: String(rejected.reason || ""),
+    review: String(rejected.review || ""),
     preservationState: rejected.preservationState || "preserved",
     ...rejected.preservationError ? { preservationError: rejected.preservationError } : {},
     ...rejected.supersededAt ? { supersededAt: rejected.supersededAt, supersededBy: rejected.supersededBy || null } : {}
   }));
 }
-function rejectedSubmissionHistoryRetrieval(ticket, slug) {
-  const rows = rejectedSubmissionRows(ticket);
-  return projectionRetrieval("mcp__plugin_sidequest_board__context_page", contextRetrieval({
-    tool: "briefing",
-    project: String(slug || ticket?.project || "unbound"),
-    kind: "rows",
-    field: "rejected-submissions",
-    position: "rejected-submissions",
-    revision: contextRevision(rows),
-    reason: "mandatory-rejection-history",
-    selector: { ref: String(ticket?.ref || "") }
-  }).arguments);
-}
-function rejectedSubmissionHistoryBody(ticket, retrieval) {
+function rejectedSubmissionHistoryBody(ticket) {
   const rows = rejectedSubmissionRows(ticket);
   if (!rows.length) return null;
-  const latest = rows[rows.length - 1];
   return [
     "## Rejected submission history",
     `${rows.length} prior candidate${rows.length === 1 ? " was" : "s were"} rejected. Do not resubmit any rejected commit or include one in an admitted range.`,
-    `Latest rejected candidate (${latest.position}/${rows.length}): ${latest.commit || "(unknown commit)"}`,
-    `Latest rejection reason:
-${latest.reason || "(No reason recorded.)"}`,
-    `Latest review evidence:
-${latest.review || "(No review evidence recorded.)"}`,
-    "Required before editing: fetch the complete oldest-first history with " + projectionCall(retrieval) + ". For every later page, call context_page with the returned continuation verbatim."
-  ].join("\n");
+    ...rows.map((rejected) => [
+      `### Rejected candidate ${rejected.position}/${rows.length}`,
+      `Commit: ${rejected.commit || "(unknown commit)"}`,
+      `Quarantine ref: ${rejected.quarantineRef}`,
+      `Rejection reason:
+${rejected.reason || "(No reason recorded.)"}`,
+      `Review evidence:
+${rejected.review || "(No review evidence recorded.)"}`
+    ].join("\n"))
+  ].join("\n\n");
 }
 function oracleHandoffPacket(ticket) {
   const oracle = ticket?.oracle;
@@ -824,19 +683,6 @@ Auto-paired tracked generated files (regenerate before verifying):
 ${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
   return executorTaskBody(ticket, category, scopedFiles, dispatchUncertaintyPacket(ticket, slug), planDocumentPacket(ticket, slug), experimentLogPacket(ticket, slug), findingCheckpointPacket(ticket), ticketContinuationPacket(ticket));
 }
-function taskAndScopeRetrieval(ticket, slug) {
-  const body = taskAndScopeBody(ticket, slug);
-  return projectionRetrieval("mcp__plugin_sidequest_board__context_page", contextRetrieval({
-    tool: "briefing",
-    project: String(slug || ticket?.project || "unbound"),
-    kind: "body",
-    field: "task-and-scope",
-    position: "task-and-scope",
-    revision: contextRevision(body),
-    reason: "budget",
-    selector: { ref: String(ticket?.ref || "") }
-  }).arguments);
-}
 function executorHandlesBody(ticket, slug) {
   const links = Array.isArray(ticket.links) && ticket.links.length ? ticket.links.map((link) => `- ${link.type || "related"}: ${link.ref || "(unknown ticket)"}${linkedPlanSuffix(link, slug)}`).join("\n") : "(No ticket dependencies were recorded.)";
   return [
@@ -853,19 +699,9 @@ ${ticketAssetsPacket(ticket, slug)}`
 }
 function renderExecutorProjection(packet) {
   const items = packet.items.map((item) => item.body).filter(Boolean);
-  const omissions = packet.omissions.length ? [
-    "## Omitted context",
-    ...packet.omissions.map((item) => {
-      const required = item.id === "execution-contract" ? " Required before editing." : "";
-      return "- " + item.id + " " + item.reason + " (originalBytes " + item.originalBytes + "). Retrieve with " + projectionCall(item.retrieval) + "." + required;
-    })
-  ].join("\n") : "";
   return [
-    "## Executor ContextProjection v1",
-    `Aggregate budget: ${EXECUTOR_BRIEFING_MAX_BYTES} bytes. Projection revision: ${packet.revision}. Projection hash: ${packet.hash}. Serialized bytes: ${packet.serializedBytes}.`,
-    `Watermarks: ${Object.entries(packet.watermarks).map(([key, value]) => `${key}=${value}`).join(", ") || "(none)"}.`,
-    ...items,
-    ...omissions ? [omissions] : []
+    "## Executor briefing",
+    ...items
   ].join("\n\n");
 }
 function ticketBrief(ticket, nonce, marker, slug, projectPath) {
@@ -873,22 +709,8 @@ function ticketBrief(ticket, nonce, marker, slug, projectPath) {
     const reconciled = store.reconcileSubmissionRejections(slug, ticket.ref);
     if (reconciled.ok) ticket = reconciled.ticket;
   }
-  const category = ticket.category || {};
   const project = String(projectPath || slug && store.readMeta(slug)?.path || "").trim();
   const executor = canonicalPreparedDispatchExecutor(ticket) || "";
-  const declared = Array.isArray(ticket.files) ? ticket.files : [];
-  const declaredFiles = declared.length ? declared.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
-  const effectiveFiles = store.effectiveScope(slug, declared);
-  const declaredKeys = new Set(declared.map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file) => process.platform === "win32" ? String(file).toLowerCase() : String(file)));
-  const generatedFiles = effectiveFiles.filter((file) => {
-    const key = process.platform === "win32" ? String(file).toLowerCase() : String(file);
-    return !declaredKeys.has(key) && !alwaysKeys.has(key);
-  });
-  const scopedFiles = generatedFiles.length ? `${declaredFiles}
-
-Auto-paired tracked generated files (regenerate before verifying):
-${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
   const closeout = ticketCloseout(ticket);
   const worktreeSync = ticketWorktreeSync(ticket, project);
   const worktreeIdentity = ticketWorktreeIdentity(ticket, project);
@@ -899,13 +721,9 @@ ${generatedFiles.map((file) => `- ${file}`).join("\n")}` : declaredFiles;
   const findingCheckpoints = findingCheckpointPacket(ticket);
   const continuation = ticketContinuationPacket(ticket);
   const taskAndScope = taskAndScopeBody(ticket, slug);
-  const taskRetrieval = taskAndScopeRetrieval(ticket, slug);
-  const rejectionRetrieval = rejectedSubmissionHistoryRetrieval(ticket, slug || project);
-  const rejectionHistory = rejectedSubmissionHistoryBody(ticket, rejectionRetrieval);
+  const rejectionHistory = rejectedSubmissionHistoryBody(ticket);
   const snapshot = storySnapshot(ticket, slug);
   const storyLog = storyDecisionLogSnapshot(ticket, slug);
-  const commentsRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__comments", Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
-  const ticketRetrieval = projectionRetrieval("mcp__plugin_sidequest_board__comments", Object.assign(briefingProjectArguments(project), { ref: ticket.ref }));
   const suffix = marker ? `
 
 ${marker}` : "";
@@ -914,44 +732,20 @@ ${marker}` : "";
 Artifact lifecycle exception:
 ${ARTIFACT_LIFECYCLE_MARKER}
 This dispatch deliberately runs in the shared checkout. Write only within the declared artifact scope. Do not apply the linked-worktree self-check, commit, or submit. Close with done after verification.` : "";
-  const profileBudget = EXECUTOR_BRIEFING_MAX_BYTES - byteLength(suffix);
-  const buildItems = (forceContractHandle = false) => {
-    const contractRetrieval = storyContractRetrieval(ticket, snapshot, slug || project, forceContractHandle);
-    return [
-      { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, ticket?.dispatch?.tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety, retrieval: ticketRetrieval },
-      { id: "execution-contract", kind: "contract", priority: 500, order: 2, watermark: `${snapshot.revision}:${sha256Text(snapshot.body)}`, body: storyContractProjectionBody(snapshot, contractRetrieval, forceContractHandle), retrieval: contractRetrieval },
-      ...storyLog ? [{ id: "story-decision-log", kind: "evidence", priority: 475, order: 3, watermark: `${storyLog.revision}:${sha256Text(JSON.stringify(storyLog.entries))}`, body: storyDecisionLogProjectionBody(storyLog), retrieval: ticketRetrieval }] : [],
-      ...rejectionHistory ? [{ id: "rejection-history", kind: "evidence", priority: 450, order: 4, body: rejectionHistory, retrieval: rejectionRetrieval }] : [],
-      { id: "task-and-scope", kind: "task", priority: 300, order: 5, body: taskAndScope, retrieval: taskRetrieval },
-      { id: "newest-comments", kind: "evidence", priority: 200, order: 6, body: briefingCommentBody(ticket.comments), retrieval: commentsRetrieval },
-      { id: "handles", kind: "handle", priority: 100, order: 7, body: executorHandlesBody(ticket, slug), retrieval: ticketRetrieval }
-    ];
-  };
-  const watermarks = {
-    storyContractSnapshot: `${snapshot.revision}:${sha256Text(snapshot.body)}`,
-    ...storyLog ? { storyDecisionLogSnapshot: `${storyLog.revision}:${sha256Text(JSON.stringify(storyLog.entries))}` } : {}
-  };
-  const compile = (forceContractHandle = false) => compileContextProjection({
-    profile: { id: "executor-briefing", budgetBytes: profileBudget },
+  const packet = compileContextProjection({
+    profile: { id: "executor-briefing" },
     revision: Number(ticket?.dispatch?.launchSeq) || 1,
-    watermarks,
-    items: buildItems(forceContractHandle)
+    items: [
+      { id: "safety", kind: "safety", priority: 600, order: 1, body: executorSafetyBody(ticket, nonce, ticket?.dispatch?.tokenFile, project, executor, closeout, worktreeIdentity, readOnlyScratchSpace, worktreeSync) + artifactSafety },
+      { id: "execution-contract", kind: "contract", priority: 500, order: 2, body: storyContractProjectionBody(snapshot) },
+      ...storyLog ? [{ id: "story-decision-log", kind: "evidence", priority: 475, order: 3, body: storyDecisionLogProjectionBody(storyLog) }] : [],
+      ...rejectionHistory ? [{ id: "rejection-history", kind: "evidence", priority: 450, order: 4, body: rejectionHistory }] : [],
+      { id: "task-and-scope", kind: "task", priority: 300, order: 5, body: taskAndScope },
+      { id: "newest-comments", kind: "evidence", priority: 200, order: 6, body: briefingCommentBody(ticket.comments) },
+      { id: "handles", kind: "handle", priority: 100, order: 7, body: executorHandlesBody(ticket, slug) }
+    ]
   });
-  let packet = compile();
-  const contract = packet.items.find((item) => item.id === "execution-contract");
-  if (!contract || contract.truncated || packet.omissions.some((item) => item.id === "execution-contract")) packet = compile(true);
-  if (rejectionHistory) {
-    const historyItem = packet.items.find((item) => item.id === "rejection-history");
-    if (!historyItem || historyItem.truncated || packet.omissions.some((item) => item.id === "rejection-history")) {
-      throw new RangeError("executor ContextProjection could not carry mandatory rejection-history retrieval");
-    }
-  }
-  const rendered = renderExecutorProjection(packet);
-  const result = `${rendered}${suffix}`;
-  if (byteLength(result) > EXECUTOR_BRIEFING_MAX_BYTES) {
-    throw new RangeError(`executor ContextProjection exceeded its ${EXECUTOR_BRIEFING_MAX_BYTES}-byte aggregate budget`);
-  }
-  return result;
+  return `${renderExecutorProjection(packet)}${suffix}`;
 }
 function renderTicketBriefing(ticket, nonce, slug, projectPath) {
   if (typeof nonce !== "string" || !nonce.trim() || /[\r\n]/.test(nonce)) {
@@ -1032,28 +826,32 @@ function ensureDispatchLauncher() {
   }
   return filePath;
 }
+const BRIEFING_FILE_TRANSPORT_THRESHOLD_CHARS = 28e3;
+function briefingTransportFilePath(ticket, slug) {
+  const dispatch = ticket?.dispatch || {};
+  const identity = [slug, ticket?.ref, dispatch.launchSeq, ticket?.dispatchNonce].map((value) => String(value || "")).join("\n");
+  const directory = crypto.createHash("sha256").update(identity, "utf8").digest("hex");
+  return path.join(store.homeRoot(), "briefings", directory, "briefing.txt");
+}
+function transportExecutorBriefing(briefing, ticket, slug, projectPath) {
+  const fullBriefing = String(briefing || "");
+  if (fullBriefing.length <= BRIEFING_FILE_TRANSPORT_THRESHOLD_CHARS) return fullBriefing;
+  const briefingPath = briefingTransportFilePath(ticket, slug);
+  fs.mkdirSync(path.dirname(briefingPath), { recursive: true, mode: 448 });
+  fs.writeFileSync(briefingPath, fullBriefing, { encoding: "utf8", mode: 384 });
+  const tokenFile = String(ticket?.dispatch?.tokenFile || "").trim() || "(supplied to this briefing command)";
+  return [
+    `Token-gated executor briefing for ${ticket?.ref || "(unknown ticket)"}.`,
+    `Project: ${String(projectPath || "").trim() || "(unavailable)"}. Token file: ${tokenFile}.`,
+    `Before acting, Read "${briefingPath}" in full. It contains the exact claim call, worktree contract, complete task and scope, comments, and verification instructions.`
+  ].join("\n");
+}
 function dispatchTicketContext(ticket, projectPath) {
-  const title = boundedPacket(
-    ticket?.title || "(Untitled ticket)",
-    DISPATCH_TITLE_MAX_BYTES,
-    "[Title excerpt capped.]"
-  );
-  const description = boundedPacket(
-    ticket?.description || "(No additional description was recorded.)",
-    DISPATCH_DESCRIPTION_MAX_BYTES,
-    "\n[Description excerpt capped. Full body is in briefing.]"
-  );
-  const declaredFiles = boundedPacket(
-    Array.isArray(ticket?.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)",
-    DISPATCH_FILES_MAX_BYTES,
-    "\n[Declared files excerpt capped. Full scope is in briefing.]"
-  );
-  const anchors = boundedPacket(
-    ticket?.executorAnchors || "(No anchors were recorded.)",
-    DISPATCH_ANCHORS_MAX_BYTES,
-    "\n[Anchors excerpt capped. Full anchors are in briefing.]"
-  );
-  return boundedPacket([
+  const title = String(ticket?.title || "(Untitled ticket)");
+  const description = String(ticket?.description || "(No additional description was recorded.)");
+  const declaredFiles = Array.isArray(ticket?.files) && ticket.files.length ? ticket.files.map((file) => `- ${file}`).join("\n") : "(No files were declared.)";
+  const anchors = String(ticket?.executorAnchors || "(No anchors were recorded.)");
+  return [
     `Title: ${title}`,
     `Description:
 ${description}`,
@@ -1061,7 +859,7 @@ ${description}`,
 ${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     `Anchors:
 ${anchors}`
-  ].join("\n\n"), DISPATCH_TICKET_CONTEXT_MAX_BYTES, "\n\n[Spawn orientation capped. Full implementation context is in briefing.]");
+  ].join("\n\n");
 }
 function renderDispatchStub(ticket, nonce, projectPath) {
   const project = String(projectPath || "").trim();
@@ -1306,6 +1104,8 @@ module.exports = {
   renderDiagnosticProbe,
   renderExecAgent,
   renderTicketBriefing,
+  briefingTransportFilePath,
+  transportExecutorBriefing,
   rejectedSubmissionRows,
   taskAndScopeBody,
   createNativeAgent,

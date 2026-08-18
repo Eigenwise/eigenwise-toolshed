@@ -73,7 +73,7 @@ function configure(store?: any, id?: any, route?: any, fallback?: any) {
   store.setCategory({ id, name: id, route, fallback: fallback || null, enabled: true });
 }
 
-test('repair briefings require bounded retrieval of the complete rejection history (SQ-1667)', () => {
+test('repair briefings include the complete rejection history', () => {
   const ticket = {
     ref: 'SQ-1642',
     title: 'Repair rejected candidate',
@@ -96,8 +96,9 @@ test('repair briefings require bounded retrieval of the complete rejection histo
   };
   const briefing = agentsync.renderTicketBriefing(ticket, 'repair-briefing-token');
   assert.match(briefing, /## Rejected submission history/);
-  assert.match(briefing, /Required before editing: fetch the complete oldest-first history with mcp__plugin_sidequest_board__context_page/);
-  assert.doesNotMatch(briefing, /SQ-1646: the audit reproduced/);
+  assert.match(briefing, /SQ-1646: the audit reproduced the rejected-commit bypass\./);
+  assert.match(briefing, /SQ-1659: the audit found the repeated-rework gap\./);
+  assert.doesNotMatch(briefing, /fetch the complete oldest-first history|context_page retrieval/);
   assert.deepStrictEqual(agentsync.rejectedSubmissionRows(ticket).map((entry: any) => entry.commit), [
     'abcdef1234567',
     'fedcba7654321',
@@ -247,74 +248,49 @@ test('SQ-677: briefing comments preserve the full chronological durable thread b
   assert.strictEqual(agentsync.ticketCommentsPacket(comments), expected);
 });
 
-test('SQ-760: oversized briefing packets stay bounded and direct compact comment reads', () => {
-  const description = `Start with this scope.\n\n${'測試 '.repeat(5000)}`;
-  const comments = Array.from({ length: 20 }, (_, index) => ({
-    by: `worker-${index + 1}`,
-    kind: index === 0 ? 'decision' : 'comment',
-    at: `2026-07-22T00:${String(index).padStart(2, '0')}:00.000Z`,
-    body: index === 19
-      ? 'Decision:\nKeep this latest decision verbatim in the packet.'
-      : `Comment ${index + 1}: ${'x'.repeat(1000)}`,
-  }));
-  const ticket = {
-    id: 'bounded-briefing', ref: 'SQ-760', title: 'Bound briefing packets', description,
-    model: 'opus', effort: 'high', dispatchExecutor: 'sidequest-exec-high', category: {},
-    executorVerify: 'node --test plugins/sidequest/test/agentsync.test.ts',
-    files: ['plugins/sidequest/src/lib/agentsync.ts'],
-    assets: ['briefing.png'], comments,
-  };
-
-  const packet = agentsync.ticketCommentsPacket(comments);
-  assert.ok(Buffer.byteLength(packet) <= 6 * 1024, `comment packet is ${Buffer.byteLength(packet)} bytes`);
-  assert.match(packet, /### Comment 20/);
-  assert.match(packet, /Keep this latest decision verbatim in the packet\./);
-  assert.ok(packet.indexOf('### Comment 20') < packet.indexOf('### Comment 19'));
-  assert.doesNotMatch(packet, /Comment 2: x/);
-  assert.match(packet, /Comment packet truncated/);
-  assert.match(packet, /compact comments reads \(latest-first\)/);
-  assert.match(packet, /decision or constraint is in omitted history: fetch the full thread/);
-
-  const briefing = agentsync.renderTicketBriefing(ticket, 'bounded-briefing-token');
-  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(briefing, 'utf8')} bytes`);
-  assert.match(briefing, /Executor ContextProjection v1/);
-  assert.match(briefing, /Aggregate budget: 24576 bytes/);
-  assert.match(briefing, /Budget tool calls and run the declared verify command early/);
-  assert.match(briefing, /commit and submit the verified portion with evidence and plainly name what remains/);
-  assert.match(briefing, /Omitted context/);
-  assert.match(briefing, /Retrieve with mcp__plugin_sidequest_board__/);
-});
-
-test('SQ-929: experiment log briefings carry the bounded packet and the continuation target', () => {
+test('briefings include every byte of large descriptions, comments, and experiment logs', () => {
   const store = require('../lib/store.js');
-  const slug = store.ensureProject(tmpDir(), 'experiment briefing').slug;
-  const created = store.createTicket(slug, {
-    title: 'Experiment briefing fixture',
-    description: 'Run one hypothesis.',
-    category: 'coding.normal',
-    files: ['fixture.ts'],
-  });
-  for (let round = 1; round <= 4; round++) {
-    assert.equal(store.appendExperimentEntry(slug, created.ref, {
-      round,
-      headline: `round ${round}`,
-      measured: '測'.repeat(6_000),
-    }).ok, true);
-  }
-
+  const slug = store.ensureProject(tmpDir(), 'whole briefing fixture').slug;
+  const created = store.createTicket(slug, { title: 'Whole briefing fixture', files: ['fixture.ts'] });
+  const description = `DESCRIPTION-START-${'d'.repeat(40 * 1024)}-DESCRIPTION-END`;
+  const comments = Array.from({ length: 30 }, (_, index) => ({
+    by: `worker-${index + 1}`,
+    kind: 'comment',
+    at: `2026-08-17T00:${String(index).padStart(2, '0')}:00.000Z`,
+    body: `COMMENT-${index + 1}-START-${'c'.repeat(1024)}-COMMENT-${index + 1}-END`,
+  }));
+  const experimentBody = `EXPERIMENT-START-${'e'.repeat(20 * 1024)}-EXPERIMENT-END`;
+  assert.equal(store.appendExperimentEntry(slug, created.ref, {
+    round: 1,
+    headline: 'large experiment',
+    measured: experimentBody,
+  }).ok, true);
   const ticket = Object.assign({}, store.getTicket(slug, created.ref), {
-    dispatch: { launchSeq: 5 },
+    description,
+    comments,
+    model: 'sonnet',
+    effort: 'high',
+    dispatchExecutor: 'sidequest-exec-high',
+    category: {},
   });
-  const briefing = agentsync.renderTicketBriefing(ticket, 'experiment-token', slug);
-  const section = briefing.match(/Experiment log:\n([\s\S]*?)\n\nDeclared files:/);
+  const experiment = store.experimentPacket(slug, created.ref);
+  const briefing = agentsync.renderTicketBriefing(ticket, 'whole-briefing-token', slug);
 
-  assert.ok(section);
-  assert.ok(Buffer.byteLength(section![1], 'utf8') <= 12 * 1024, `experiment packet is ${Buffer.byteLength(section![1], 'utf8')} bytes`);
-  assert.ok(section![1].includes(`Read the full log at \`${store.assetPath(slug, created.id, `experiment-${created.ref}.md`)}\` before the first edit.`));
-  assert.match(section![1], new RegExp(`Round checkout target: refs/sidequest/${created.ref}/r4 \\(continue from the prior round\\)\\.`));
+  assert.ok(Buffer.byteLength(description, 'utf8') > 40 * 1024);
+  assert.equal(comments.length, 30);
+  assert.ok(Buffer.byteLength(experiment.packet, 'utf8') > 20 * 1024);
+  assert.ok(briefing.includes(description));
+  for (const comment of comments) assert.ok(briefing.includes(comment.body));
+  assert.ok(briefing.includes(experiment.packet));
+  assert.doesNotMatch(briefing, /Aggregate budget|Omitted context|Comment packet truncated|Experiment log packet truncated|\[.*truncated.*\]/i);
 
-  const withoutLog = agentsync.renderTicketBriefing(Object.assign({}, ticket, { id: 'no-log', ref: 'SQ-no-log' }), 'experiment-token', slug);
-  assert.doesNotMatch(withoutLog, /Experiment log:/);
+  const transport = agentsync.transportExecutorBriefing(briefing, ticket, slug, 'C:\\fixture');
+  const briefingPath = agentsync.briefingTransportFilePath(ticket, slug);
+  assert.ok(transport.includes(briefingPath));
+  assert.match(transport, /Token-gated executor briefing/);
+  assert.match(transport, /Before acting, Read/);
+  assert.equal(fs.readFileSync(briefingPath, 'utf8'), briefing);
+  assert.doesNotMatch(transport, /DESCRIPTION-START/);
 });
 
 test('SQ-1015: a plan document briefing carries only the path, never the body, and grows by roughly one line', () => {
@@ -826,7 +802,7 @@ test('renderDispatchStub keeps its briefing command alive after the dispatched c
   assert.equal(recovered.stdout, `briefing SQ-586 --token-file ${tokenFile} --project C:\\dev\\fixture`);
 });
 
-test('SQ-677: fetched briefing carries the complete durable packet while the spawn carries bounded implementation context', () => {
+test('SQ-677: fetched briefings and dispatch orientation retain their supplied text', () => {
   seedCatalog([TERRA]);
   const slug = 'briefing-測試';
   const ticket = {
@@ -851,9 +827,9 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   fs.writeFileSync(path.join(assetDir, ticket.assets[1]!), 'second');
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'instant-token-334', slug, 'C:\\dev\\fixture');
-  const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: 'y'.repeat(100000), comments: [{ body: 'z'.repeat(100000) }] }), 'instant-token-334', 'C:\\dev\\fixture');
-  assert.ok(Buffer.byteLength(briefing, 'utf8') <= 24 * 1024);
-  assert.match(briefing, /Executor ContextProjection v1/);
+  const stubDescription = 'y'.repeat(100000);
+  const stub = agentsync.renderDispatchStub(Object.assign({}, ticket, { description: stubDescription, comments: [{ body: 'z'.repeat(100000) }] }), 'instant-token-334', 'C:\\dev\\fixture');
+  assert.match(briefing, /## Executor briefing/);
   assert.ok(briefing.includes(ticket.description));
   assert.ok(briefing.includes(ticket.comments[0]!.body));
   assert.ok(briefing.includes(ticket.comments[1]!.body));
@@ -870,14 +846,12 @@ test('SQ-677: fetched briefing carries the complete durable packet while the spa
   assert.doesNotMatch(stub.split('\n', 1)[0]!, /\[sidequest-route/);
   assert.ok(stub.trimEnd().endsWith('[sidequest-route model=gpt-5.6-terra effort=high]'));
   assert.equal(stub.match(/\[sidequest-route /g)!.length, 1);
-  assert.ok(Buffer.byteLength(stub) < 1600, `spawn context is ${Buffer.byteLength(stub)} bytes`);
+  assert.ok(stub.includes(stubDescription));
+  assert.doesNotMatch(stub, /excerpt capped|orientation capped/);
   assert.match(stub, /Title: Instant dispatch/);
-  assert.match(stub, /Description:\ny{128}/);
-  assert.match(stub, /Description excerpt capped\. Full body is in briefing\./);
   assert.match(stub, /Declared files:\n- plugins\/sidequest\/src\/lib\/agentsync\.ts\n- docs\/briefing notes\.md/);
   assert.match(stub, /Anchors:\nlib\/store\.js prepareDispatch/);
   assert.doesNotMatch(stub, /z{1000}/);
-  assert.doesNotMatch(stub, /Complete comment thread/);
   assert.match(stub, /FIRST action: run `node .*sidequest-launcher\.js" briefing SQ-334 --token-file "C:\\dispatch\\instant-token-334\.token" --project "C:\\dev\\fixture"`/);
 });
 
@@ -1302,7 +1276,7 @@ test('every executor name syncExecAgents writes classifies to a stable kind', ()
   }
 });
 
-test('SQ-1562: executor briefings use one deterministic Unicode-safe aggregate projection budget', () => {
+test('executor briefings render complete deterministic sections', () => {
   const oversizedContract = '契約🧪'.repeat(5_000);
   const ticket = {
     ref: 'SQ-1562', title: 'Projected executor context', model: 'opus', effort: 'high', category: {},
@@ -1317,24 +1291,20 @@ test('SQ-1562: executor briefings use one deterministic Unicode-safe aggregate p
 
   const first = agentsync.renderTicketBriefing(ticket, 'projection-token');
   const second = agentsync.renderTicketBriefing(ticket, 'projection-token');
-  assert.equal(first, second, 'stable input must produce byte-identical projection order');
-  assert.ok(Buffer.byteLength(first, 'utf8') <= 24 * 1024, `briefing is ${Buffer.byteLength(first, 'utf8')} bytes`);
-  assert.match(first, /Executor ContextProjection v1/);
-  assert.match(first, /Aggregate budget: 24576 bytes/);
-  assert.match(first, /Story execution contract \(revision 9; snapshot revision 9; sha256 [a-f0-9]{64}; totalBytes \d+\)/);
-  assert.match(first, /Required before editing: fetch the paged snapshot with mcp__plugin_sidequest_board__context_page\(/);
-  assert.match(first, /"handle":"ctx1\.[^"]+"/);
-  assert.match(first, /"expectedRevision":"ctxr1\.[a-f0-9]{64}"/);
-  assert.match(first, /Omitted context/);
-  assert.match(first, /Retrieve with mcp__plugin_sidequest_board__/);
-  assert.doesNotMatch(first, /契約🧪契約🧪契約🧪契約🧪/);
+  assert.equal(first, second, 'stable input must produce byte-identical section order');
+  assert.match(first, /## Executor briefing/);
+  assert.match(first, /## Story execution contract \(revision 9\)/);
+  assert.ok(first.includes(oversizedContract));
+  assert.ok(first.includes(ticket.description));
+  for (const comment of ticket.comments) assert.ok(first.includes(comment.body));
+  assert.doesNotMatch(first, /Aggregate budget|Omitted context|fetch the paged snapshot|"handle":"ctx1\./);
 
   const revised = agentsync.renderTicketBriefing({
     ...ticket,
     dispatch: { launchSeq: 8, storyContract: { revision: 10, body: oversizedContract } },
   }, 'projection-token');
-  assert.match(revised, /storyContractSnapshot=10:/);
-  assert.notEqual(first, revised, 'a stale snapshot revision must not share the old projection');
+  assert.match(revised, /Story execution contract \(revision 10\)/);
+  assert.notEqual(first, revised, 'a revised snapshot must produce a revised briefing');
 });
 
 export {};

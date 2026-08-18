@@ -1101,7 +1101,7 @@ test('pending rejection transactions recover the quarantine ref and store transi
   assert.strictEqual(store.getTicket(slug, ticket.ref).rejectedSubmissions[0].preservationState, 'preserved');
 });
 
-test('rejection history retrieval returns every bounded row oldest first (SQ-1667)', async () => {
+test('rejection history renders every row inline oldest first (SQ-1667)', async () => {
   const ticket = addTicket('retrieve complete rejection history', { category: 'submission.fixture' });
   const stored = store.getTicket(slug, ticket.ref);
   stored.rejectedSubmissions = Array.from({ length: 6 }, (_, index) => ({
@@ -1115,23 +1115,14 @@ test('rejection history retrieval returns every bounded row oldest first (SQ-166
   }));
   persist(stored);
   const briefing = agentsync.renderTicketBriefing(store.getTicket(slug, ticket.ref), 'history-token', slug, PROJECT_DIR);
-  const latest = stored.rejectedSubmissions[stored.rejectedSubmissions.length - 1];
-  assert.ok(briefing.includes(`Latest rejected candidate (6/6): ${latest.commit}`));
-  assert.ok(briefing.includes(`Latest rejection reason:\n${latest.reason}`));
-  assert.ok(briefing.includes(`Latest review evidence:\n${latest.review}`));
-  const retrievalMatch = briefing.match(/context_page\((\{[^\n]+\})\)\. For every later page/);
-  assert.ok(retrievalMatch, 'briefing carries the mandatory history retrieval');
-  let argumentsValue: any = JSON.parse(retrievalMatch[1]);
-  const rows: any[] = [];
-  while (argumentsValue) {
-    const page = await callMcp('context_page', argumentsValue);
-    rows.push(...page.rows);
-    argumentsValue = page.continuation;
+  assert.match(briefing, /## Rejected submission history/);
+  for (const [index, rejected] of stored.rejectedSubmissions.entries()) {
+    assert.ok(briefing.includes(`### Rejected candidate ${index + 1}/6`));
+    assert.ok(briefing.includes(rejected.commit));
+    assert.ok(briefing.includes(rejected.reason));
+    assert.ok(briefing.includes(rejected.review));
   }
-  assert.deepStrictEqual(rows.map((entry: any) => entry.position), [1, 2, 3, 4, 5, 6]);
-  assert.deepStrictEqual(rows.map((entry: any) => entry.commit), stored.rejectedSubmissions.map((entry: any) => entry.commit));
-  assert.strictEqual(rows[0].reason, stored.rejectedSubmissions[0].reason);
-  assert.strictEqual(rows[5].review, stored.rejectedSubmissions[5].review);
+  assert.doesNotMatch(briefing, /context_page\(/);
 });
 
 test('rework leaves a pending submission intact when quarantine preservation fails (SQ-1642)', async () => {

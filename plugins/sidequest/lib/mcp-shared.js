@@ -439,47 +439,15 @@ function snapshotRowsContextRetrieval(tool, project, field, rows, position) {
     cursor: position
   });
 }
-function frozenSnapshotEvidence(selector, snapshot) {
-  const body = String(snapshot?.body || "");
-  return {
-    snapshotRevision: snapshot == null ? null : Number(snapshot.revision) || 1,
-    sha256: snapshot == null ? null : crypto.createHash("sha256").update(body, "utf8").digest("hex"),
-    totalBytes: snapshot == null ? null : utf8ByteLength(body),
-    expectedSnapshotRevision: Number(selector.snapshotRevision) || 1,
-    expectedSha256: String(selector.sha256 || ""),
-    expectedTotalBytes: Number(selector.totalBytes) || 0
-  };
+function retiredBriefingHandle(source) {
+  return source.tool === "briefing" || source.tool === "dispatch" && source.field === "dispatch.storyContract" && source.position === "storyContract";
 }
-function staleFrozenSnapshotError(selector, snapshot) {
-  return `context_page: stale dispatch snapshot handle; frozen contract changed. Evidence: ${JSON.stringify(frozenSnapshotEvidence(selector, snapshot))}. Rerun the token-gated briefing and use its returned continuation verbatim.`;
-}
-function frozenStoryContractBody(source, ticket) {
-  const snapshot = ticket?.dispatch?.storyContract;
-  if (source.selector.frozenAbsent === true) {
-    if (snapshot != null) throw new Error(staleFrozenSnapshotError(source.selector, snapshot));
-    return "";
-  }
-  if (!snapshot || typeof snapshot !== "object") {
-    throw new Error(staleFrozenSnapshotError(source.selector, null));
-  }
-  const body = String(snapshot.body || "");
-  const revision = Number(snapshot.revision) || 1;
-  const hash = crypto.createHash("sha256").update(body, "utf8").digest("hex");
-  const totalBytes = utf8ByteLength(body);
-  if (Number(source.selector.snapshotRevision) !== revision || String(source.selector.sha256 || "") !== hash || Number(source.selector.totalBytes) !== totalBytes) {
-    throw new Error(staleFrozenSnapshotError(source.selector, snapshot));
-  }
-  return body;
+function retiredBriefingHandleMessage() {
+  return "context_page: briefing sections are no longer elided; the full text is in the briefing itself.";
 }
 function resolvedContextBody(source) {
   const ticket = store.getTicket(source.project, source.selector.ref);
   if (!ticket) throw new Error(`context_page: source ticket "${source.selector.ref}" no longer exists.`);
-  if (source.tool === "dispatch" && source.field === "dispatch.storyContract" && source.position === "storyContract") {
-    return frozenStoryContractBody(source, ticket);
-  }
-  if (source.tool === "briefing" && source.field === "task-and-scope" && source.position === "task-and-scope") {
-    return agentsync.taskAndScopeBody(ticket, source.project);
-  }
   if (source.field === "description" && source.position === "description") return String(ticket.description || "");
   if (source.field === "comments.body") {
     const comment = (Array.isArray(ticket.comments) ? ticket.comments : []).find((entry) => entry.id === source.selector.comment && entry.id === source.position);
@@ -487,14 +455,6 @@ function resolvedContextBody(source) {
     return String(comment.body || "");
   }
   throw new Error(`context_page: unsupported ${source.tool} field "${source.field}".`);
-}
-function resolvedContextRows(source) {
-  const ticket = store.getTicket(source.project, source.selector.ref);
-  if (!ticket) throw new Error(`context_page: source ticket "${source.selector.ref}" no longer exists.`);
-  if (source.tool === "briefing" && source.field === "rejected-submissions" && source.position === "rejected-submissions") {
-    return agentsync.rejectedSubmissionRows(ticket);
-  }
-  throw new Error(`context_page: unsupported ${source.tool} rows field "${source.field}".`);
 }
 function assertCurrentContextRevision(source, currentRevision, expectedRevision) {
   if (String(expectedRevision || "") !== source.revision) {
@@ -537,6 +497,14 @@ function contextPageContinuation(source, handle, cursor) {
 }
 function resolveContextPage(args) {
   const source = decodeContextHandle(args.handle);
+  if (retiredBriefingHandle(source)) {
+    return {
+      source: source.tool,
+      field: source.field,
+      position: source.position,
+      message: retiredBriefingHandleMessage()
+    };
+  }
   if (source.selector.contextSnapshot) {
     const value = contextSnapshot(source);
     assertCurrentContextRevision(source, contextRevision(value), args.expectedRevision);
@@ -576,7 +544,7 @@ function resolveContextPage(args) {
       complete: page2.nextPosition == null
     };
   }
-  if (!["list", "comments", "dispatch", "briefing"].includes(source.tool)) {
+  if (!["list", "comments"].includes(source.tool)) {
     throw new Error(`context_page: handle belongs to unsupported source tool "${source.tool}".`);
   }
   const position = decodeContextCursor(String(args.handle), args.cursor);
@@ -595,26 +563,6 @@ function resolveContextPage(args) {
       cursor: args.cursor,
       pageBytes: page2.pageBytes,
       totalBytes: page2.totalBytes,
-      nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
-      continuation: contextPageContinuation(source, args.handle, page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition)),
-      complete: page2.nextPosition == null
-    };
-  }
-  if (source.kind === "rows" && source.tool === "briefing" && source.field === "rejected-submissions") {
-    const rows2 = resolvedContextRows(source);
-    assertCurrentContextRevision(source, contextRevision(rows2), args.expectedRevision);
-    const page2 = rowsWithinByteLimit(rows2, position, limit);
-    return {
-      source: source.tool,
-      field: source.field,
-      position: source.position,
-      reason: source.reason,
-      revision: source.revision,
-      rows: page2.rows,
-      cursor: args.cursor,
-      pageBytes: page2.pageBytes,
-      totalRows: page2.totalRows,
-      returned: page2.rows.length,
       nextCursor: page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition),
       continuation: contextPageContinuation(source, args.handle, page2.nextPosition == null ? null : contextCursor(String(args.handle), page2.nextPosition)),
       complete: page2.nextPosition == null
