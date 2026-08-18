@@ -26,6 +26,7 @@ export function isEffort(value: unknown): value is Effort {
 export const AGENT_NAME_MAX_LENGTH = 64;
 const LAUNCH_SLUG_MAX_WORDS = 3;
 const LAUNCH_SLUG_MAX_LENGTH = 24;
+const ROUTE_MODEL_TOKEN_MAX_LENGTH = 24;
 
 // Filler words spend the slug budget without distinguishing one ticket from
 // another, so they are dropped before the budget is counted.
@@ -63,22 +64,35 @@ export function titleSlug(title: unknown): string {
   return slug;
 }
 
+function routeModelToken(resolvedExec: unknown): string {
+  if (!resolvedExec || typeof resolvedExec !== 'object') return '';
+  const exec = resolvedExec as Record<string, unknown>;
+  const isClaude = exec.backend === 'claude';
+  const value = isClaude
+    ? String(exec.runsModel || exec.dispatchModel || '')
+    : String(exec.runsLabel || exec.dispatchModel || exec.runsModel || '');
+  const tokens = slugTokens(value).filter((token) => !isClaude || token !== 'claude');
+  const token = isClaude ? tokens.join('-') : tokens.at(-1) || '';
+  return token.slice(0, ROUTE_MODEL_TOKEN_MAX_LENGTH);
+}
+
 /**
  * The name a Sidequest launch carries in Claude Code's native agent list.
- * Deterministic from board state alone: ticket ref, ticket title, and the
- * dispatch's launch sequence. Sequence 1 is unsuffixed; a redispatch of the same
- * ticket counts up (`sq-843-release-engine-2`) so a resumed or reworked launch
- * never shadows a live sibling, and no random id is ever appended.
+ * Deterministic from board state alone: ticket ref, title, resolved execution
+ * route, and dispatch sequence. Sequence 1 is unsuffixed; a redispatch counts up
+ * (`sq-843-release-engine-terra-high-2`) so it never shadows a live sibling.
  */
-export function dispatchLaunchName(ref: unknown, title?: unknown, sequence?: unknown): string {
+export function dispatchLaunchName(ref: unknown, title?: unknown, resolvedExec?: unknown, effort?: unknown, sequence?: unknown): string {
   const base = refSlug(ref) || 'sidequest';
-  const slug = titleSlug(title);
+  const model = routeModelToken(resolvedExec);
+  const routeEffort = isEffort(effort) ? effort : '';
+  const route = [model, routeEffort].filter(Boolean);
   const seq = Number(sequence);
   const suffix = Number.isInteger(seq) && seq > 1 ? `-${seq}` : '';
-  let name = slug ? `${base}-${slug}` : base;
-  const budget = AGENT_NAME_MAX_LENGTH - suffix.length;
-  if (name.length > budget) name = name.slice(0, budget).replace(/-+$/, '');
-  return `${name}${suffix}`;
+  const fixedName = [base, ...route].join('-') + suffix;
+  const availableTitleLength = AGENT_NAME_MAX_LENGTH - fixedName.length - 1;
+  const slug = titleSlug(title).slice(0, Math.max(availableTitleLength, 0)).replace(/-+$/, '');
+  return slug ? [base, slug, ...route].join('-') + suffix : fixedName;
 }
 
 // Codex dispatch executors are effort-collapsed: the gateway resolves BOTH model and

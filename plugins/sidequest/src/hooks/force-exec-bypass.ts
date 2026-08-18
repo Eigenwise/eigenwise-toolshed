@@ -43,7 +43,13 @@ interface Ticket {
   claim?: { by?: string };
   completion?: { by?: string; purpose?: string; supersededBy?: { ref?: string } };
   submission?: { supersededBy?: { ref?: string } };
-  exec?: { model?: string };
+  exec?: {
+    model?: string;
+    backend?: string;
+    dispatchModel?: string;
+    runsLabel?: string;
+    runsModel?: string;
+  };
   dispatchNonce?: string;
   dispatchExecutor?: string;
   dispatch?: {
@@ -90,6 +96,7 @@ interface Store {
   listTickets: (slug: string) => Ticket[];
   readMeta: (slug: string) => { path?: string } | null;
   effectiveScope: (slug: string, files: unknown) => string[];
+  resolveExec: (model: string, effort: string) => unknown;
   terminalDispatchTarget: (agentName: string) => { slug: string; ref: string; outcome: string } | null;
   addComment: (slug: string, ref: string, fields: { by: string; body: string }) => { ok: boolean } | null;
 }
@@ -480,6 +487,11 @@ function preparedBriefingCommand(ticket: Ticket, project: string): string | null
   }
 }
 
+function preparedLaunchExec(store: Store, ticket: Ticket): unknown {
+  const route = ticket.dispatch?.route;
+  return route?.model && route.effort ? store.resolveExec(route.model, route.effort) : null;
+}
+
 function preparedDispatchValidation(input: HookInput): PreparedDispatchValidation {
   const prompt = toolInputOf(input)?.prompt;
   if (typeof prompt !== 'string') return { status: 'none' };
@@ -500,6 +512,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
     if (command !== briefingCommand) return { status: 'stale' };
     const description = ticket.dispatch.description;
     const route = ticket.dispatch.route;
+    const resolvedExec = preparedLaunchExec(store, ticket);
     return {
       status: 'valid',
       spawn: {
@@ -507,7 +520,7 @@ function preparedDispatchValidation(input: HookInput): PreparedDispatchValidatio
         description: typeof description === 'string' && description ? description : null,
         executor: typeof ticket.dispatchExecutor === 'string' ? ticket.dispatchExecutor : '',
         name: ticket.dispatch.launchName
-          || dispatchLaunchName(ticket.ref || ref, ticket.title, ticket.dispatch.launchSeq),
+          || dispatchLaunchName(ticket.ref || ref, ticket.title, resolvedExec, route?.effort, ticket.dispatch.launchSeq),
         ref,
         project,
         route: typeof route?.model === 'string' && typeof route.effort === 'string'

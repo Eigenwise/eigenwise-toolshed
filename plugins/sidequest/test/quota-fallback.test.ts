@@ -140,7 +140,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   // The replacement launch advertises the model that will actually run, and its
   // name counts past the attempt that burned the quota.
   assert.equal(current.dispatch.description, `GPT-5.6 Sol, max · ${ticket.title}`);
-  assert.equal(current.dispatch.launchName, `${ticket.ref.toLowerCase()}-store-quota-recovery-2`);
+  assert.equal(current.dispatch.launchName, `${ticket.ref.toLowerCase()}-store-quota-recovery-sol-max-2`);
   assert.deepEqual(current.category.route, { model: 'fable', effort: 'xhigh' });
   assert.deepEqual(current.category.fallback, { model: 'codex-gpt-5-6-sol', effort: 'max' });
   const pulse = store.pulsePayload(slug, ticket.ref);

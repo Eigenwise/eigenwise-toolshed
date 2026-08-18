@@ -344,7 +344,7 @@ const tools: ToolDefinition[] = [
         // The agent list's own model label always reads claude-codex-auto for gateway
         // routes and cannot be changed (SQ-1350), so a paraphrased description is the
         // only thing standing between the reader and an unidentifiable running agent.
-        spawnDescriptionNote: `Copy spawn.description byte-for-byte into the Agent call. It leads with "${description.split(' · ')[0]}", which is the only place the real route is visible while this runs.`,
+        spawnDescriptionNote: `Copy spawn.description byte-for-byte into the Agent call. It leads with "${description.split(' · ')[0]}" for notifications, while the stable spawn.name ends with the resolved route token and effort.`,
       };
     },
   },
@@ -392,7 +392,7 @@ const tools: ToolDefinition[] = [
         spawnModel: resolved.model,
         effort: route.effort,
         runtime: resolved.runsModel,
-        launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title),
+        launchName: execNames.dispatchLaunchName(ticket.ref, ticket.title, resolved, route.effort),
         description: agentsync.spawnDescription(ticket, resolved),
         isolation: agentsync.ticketIsolation(ticket, sharedTree),
         sessionId,
