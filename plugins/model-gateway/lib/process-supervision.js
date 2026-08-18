@@ -6,7 +6,7 @@ const http = require('node:http');
 const https = require('node:https');
 const net = require('node:net');
 const path = require('node:path');
-const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, SHIM_PORT, STATE, WIN } = require('./runtime.js');
+const { CLI_PATH, LOGS, PROXY_BIN, PROXY_PORT, PUBLIC_SHIM_PORT, resolveNewestInstalledCliPath, SHIM_PORT, STATE, WIN } = require('./runtime.js');
 
 function fetchUrl(url, { timeout = 15000, headers = {} } = {}) {
   return new Promise((resolve, reject) => {
@@ -167,7 +167,7 @@ async function restartWorkerWithDrain({ quiet = false, timeout = Number(process.
   if (!(await portListening(PUBLIC_SHIM_PORT))) return { ok: true, running: false };
   if (!quiet) report(`model-gateway: restarting shim without dropping its listener; waiting up to ${Math.ceil(timeout / 1000)}s for in-flight requests.`);
   try {
-    const response = await postJson(`http://127.0.0.1:${PUBLIC_SHIM_PORT}/restart`, { script: CLI_PATH }, 2000);
+    const response = await postJson(`http://127.0.0.1:${PUBLIC_SHIM_PORT}/restart`, { script: resolveNewestInstalledCliPath() }, 2000);
     if (response.status === 202) return { ok: true, draining: true };
     if (response.status === 404) {
       if (!quiet) report('model-gateway: upgrading the legacy shim to a supervised listener; this one transition reconnects live sessions.');

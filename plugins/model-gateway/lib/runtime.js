@@ -82,23 +82,33 @@ function versionIsOlder(left, right) {
   return false;
 }
 
+function parseInstalledCliVersion(cliPath) {
+  const pluginRoot = path.dirname(path.dirname(cliPath));
+  return parseVersionDirectory(path.basename(pluginRoot));
+}
+
+function canReplaceInstalledCliPath(currentCliPath, candidateCliPath) {
+  const currentVersion = parseInstalledCliVersion(currentCliPath);
+  const candidateVersion = parseInstalledCliVersion(candidateCliPath);
+  if (!candidateVersion) return !currentVersion;
+  return !currentVersion || !versionIsOlder(candidateVersion, currentVersion);
+}
+
 function resolveNewestInstalledCliPath({ cliPath = CLI_PATH, readDirectory = fs.readdirSync, pathExists = fs.existsSync } = {}) {
   const pluginRoot = path.dirname(path.dirname(cliPath));
   const pluginCacheRoot = path.dirname(pluginRoot);
-  const candidates = [{ cliPath, version: path.basename(pluginRoot) }];
+  const candidates = [cliPath];
   try {
     for (const entry of readDirectory(pluginCacheRoot, { withFileTypes: true })) {
       if (!entry.isDirectory()) continue;
       const siblingCliPath = path.join(pluginCacheRoot, entry.name, 'bin', 'model-gateway.js');
-      if (pathExists(siblingCliPath)) candidates.push({ cliPath: siblingCliPath, version: entry.name });
+      if (pathExists(siblingCliPath)) candidates.push(siblingCliPath);
     }
   } catch {}
 
-  return candidates.reduce((newest, candidate) => {
-    const newestVersion = parseVersionDirectory(newest.version);
-    const candidateVersion = parseVersionDirectory(candidate.version);
-    return candidateVersion && (!newestVersion || versionIsOlder(newestVersion, candidateVersion)) ? candidate : newest;
-  }).cliPath;
+  return candidates.reduce((newestCliPath, candidateCliPath) => (
+    canReplaceInstalledCliPath(newestCliPath, candidateCliPath) ? candidateCliPath : newestCliPath
+  ));
 }
 
 function readPluginVersion() {
@@ -124,5 +134,5 @@ module.exports = {
   PROXY_PORT, PUBLIC_SHIM_PORT, REPO, REQUEST_ROUTE_LOG, REQUEST_ROUTE_LOG_PATH,
   PROJECT_WIRING_REGISTRY_PATH, ROUTE_TELEMETRY_ENABLED, ROUTE_TELEMETRY_TIMEOUT_MS, SHIM_FAILURE_PATH, SHIM_PORT, SOCKET_PATH, STATE,
   STATIC_ENV_BLOCK, TRACE_HEADERS, WIRING_CONFIG_PATH, WIN, CLI_PATH, mkdirs,
-  resolveNewestInstalledCliPath,
+  canReplaceInstalledCliPath, resolveNewestInstalledCliPath,
 };

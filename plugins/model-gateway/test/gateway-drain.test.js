@@ -50,6 +50,73 @@ async function waitFor(port, expected) {
   throw new Error(`port ${port} did not become ${expected}`);
 }
 
+function createCachedCli(cacheRoot, version) {
+  const pluginDirectory = path.join(cacheRoot, version);
+  fs.cpSync(path.join(__dirname, '..'), pluginDirectory, { recursive: true });
+  const manifestPath = path.join(pluginDirectory, '.claude-plugin', 'plugin.json');
+  const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+  manifest.version = version;
+  fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2) + '\n');
+  return path.join(pluginDirectory, 'bin', 'model-gateway.js');
+}
+
+async function waitForChangedWorkerPid(pidFile, previousPid) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const workerPid = Number(fs.readFileSync(pidFile, 'utf8'));
+      if (workerPid && workerPid !== previousPid) return workerPid;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`worker PID did not change from ${previousPid}`);
+}
+
+async function waitForWorkerVersion(port, version) {
+  const deadline = Date.now() + 5000;
+  while (Date.now() < deadline) {
+    try {
+      const health = JSON.parse((await request(port, 'GET', '/healthz')).body);
+      if (health.version === version) return;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(`worker did not report version ${version}`);
+}
+
+test('restart with drain submits the newest installed CLI path', async (t) => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  const olderCliPath = createCachedCli(cacheRoot, '0.48.12');
+  const newerCliPath = createCachedCli(cacheRoot, '0.48.13');
+  let resolveRestart;
+  const restarted = new Promise((resolve) => { resolveRestart = resolve; });
+  const shim = http.createServer((req, res) => {
+    const chunks = [];
+    req.on('data', (chunk) => chunks.push(chunk));
+    req.on('end', () => {
+      resolveRestart(JSON.parse(Buffer.concat(chunks).toString()));
+      res.writeHead(202);
+      res.end();
+    });
+  });
+  const shimPort = await listen(shim);
+  t.after(() => shim.close());
+
+  const script = `require(${JSON.stringify(path.join(path.dirname(olderCliPath), '..', 'lib', 'process-supervision.js'))}).restartWorkerWithDrain({ quiet: true }).then((result) => process.exit(result.ok ? 0 : 1))`;
+  const child = spawn(process.execPath, ['-e', script], {
+    env: { ...process.env, CODEX_GATEWAY_PORT: String(shimPort) },
+    stdio: 'ignore',
+  });
+  const exitCode = await new Promise((resolve, reject) => {
+    child.once('error', reject);
+    child.once('exit', resolve);
+  });
+
+  assert.equal(exitCode, 0);
+  assert.deepEqual(await restarted, { script: newerCliPath });
+});
+
 test('drain timeout says that the shim was force-stopped', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-drain-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
@@ -187,6 +254,65 @@ test('supervisor drains a planned worker restart without refusing connections', 
   release();
   assert.equal((await inFlight).status, 200);
   assert.equal((await health).status, 200);
+});
+
+test('restart keeps a newer installed worker script when supplied an older one', async (t) => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const currentCliPath = createCachedCli(cacheRoot, '0.48.12');
+  const olderCliPath = createCachedCli(cacheRoot, '0.48.11');
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+  }, { cliPath: currentCliPath });
+  const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
+  const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
+
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: olderCliPath })).status, 202);
+  await waitForChangedWorkerPid(pidFile, previousPid);
+  await waitForWorkerVersion(shimPort, '0.48.12');
+});
+
+test('restart adopts a newer installed worker script', async (t) => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const currentCliPath = createCachedCli(cacheRoot, '0.48.12');
+  const newerCliPath = createCachedCli(cacheRoot, '0.48.13');
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+  }, { cliPath: currentCliPath });
+  const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
+  const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
+
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: newerCliPath })).status, 202);
+  await waitForChangedWorkerPid(pidFile, previousPid);
+  await waitForWorkerVersion(shimPort, '0.48.13');
+});
+
+test('restart does not treat a dev-checkout worker script as newer than an installed script', async (t) => {
+  const cacheRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-worker-cache-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-supervisor-'));
+  t.after(() => fs.rmSync(cacheRoot, { recursive: true, force: true }));
+  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
+  const installedCliPath = createCachedCli(cacheRoot, '0.48.12');
+  const { port: shimPort } = await startGateway(t, 'serve-shim', {
+    HOME: home,
+    USERPROFILE: home,
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+  });
+  const pidFile = path.join(home, '.claude', 'model-gateway', 'shim.pid');
+  const previousPid = Number(fs.readFileSync(pidFile, 'utf8'));
+
+  assert.equal((await request(shimPort, 'POST', '/restart', { script: installedCliPath })).status, 202);
+  await waitForChangedWorkerPid(pidFile, previousPid);
+  await waitForWorkerVersion(shimPort, '0.48.12');
 });
 
 test('a second supervisor exits when the singleton listener is already owned', async (t) => {
