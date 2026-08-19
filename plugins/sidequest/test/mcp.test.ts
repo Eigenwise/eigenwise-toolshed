@@ -819,8 +819,26 @@ test('MCP accepts curated natural aliases and names each accepted mapping', asyn
   assert.equal(store.getTicket(project, first.ref).comments.at(-1).body, 'Accepted through m.');
 
   const link = await callTool('link', { project, ref: first.ref, type: 'related', target: second.ref });
+  assert.equal(link.ok, true);
   assert.deepEqual(link.acceptedAliases, ['accepted type as verb', 'accepted target as to', 'accepted ref as from']);
   assert.equal(link.type, 'related');
+
+  const addedToStory = await callTool('add', { project, title: 'Added with story alias', story: story.ref, unclassified: true });
+  assert.equal(addedToStory.ok, true);
+  assert.deepEqual(addedToStory.acceptedAliases, ['accepted story as storyId']);
+  assert.equal(store.getTicket(project, addedToStory.ref).storyId, story.id);
+
+  const unlinked = await callTool('unlink', { project, from: first.ref, to: second.ref });
+  assert.equal(unlinked.ok, true);
+  assert.deepEqual(unlinked.acceptedAliases, ['accepted from as a', 'accepted to as b']);
+
+  const missingReview = await callToolRaw('rework', { project, ref: first.ref, by: 'alias-worker', reason: 'Review found a defect.' });
+  assert.equal(missingReview.isError, true);
+  assert.match(missingReview.content[0].text, /rework: "review" is required\./);
+
+  const documentedReadForm = await callToolRaw('board_config', { project, action: 'get' });
+  assert.equal(documentedReadForm.isError, true);
+  assert.match(documentedReadForm.content[0].text, /call with no arguments to read board settings/);
 
   const log = await callTool('story_log', {
     project, story: story.ref, ref: first.ref, by: 'alias-worker', append: 'DISCOVERY: aliases shorten failed calls.',
