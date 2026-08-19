@@ -2185,7 +2185,7 @@ test('stop reminder: a live executor claim is in progress, not unfinished busine
   assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-orchestrator', { status: 'todo', source: 'test' }).ok, true);
 });
 
-test('stop reminder: holds a pending submission until concurrent live claims become terminal', () => {
+test('stop reminder: holds a pending submission only while a live claim may submit', () => {
   const sessionId = `reconcile-wave-hold-${++sqSeq}`;
   const story = store.createStory(slug, { title: 'integration wave hold' });
   const submitted = addStopTicket('submission waits for the wave', { storyId: story.ref });
@@ -2194,20 +2194,48 @@ test('stop reminder: holds a pending submission until concurrent live claims bec
     commit: 'abc1234',
     sessionId,
   }).ok, true);
-  const firstLive = addStopTicket('first live wave executor', { storyId: story.ref });
-  const secondLive = addStopTicket('second live wave executor', { storyId: story.ref });
-  const firstStop = claimStopTicket(firstLive, `reconcile-wave-first-${++sqSeq}`, 'reconcile-wave-first');
-  const secondStop = claimStopTicket(secondLive, `reconcile-wave-second-${++sqSeq}`, 'reconcile-wave-second');
+  const live = addStopTicket('live wave executor', { storyId: story.ref });
+  const stopped = claimStopTicket(live, `reconcile-wave-live-${++sqSeq}`, 'reconcile-wave-live');
 
   try {
-    const output = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
-    assert.match(output.hookSpecificOutput.additionalContext, /1 submission pending integration/);
-    assert.match(output.hookSpecificOutput.additionalContext, /2 live claims in progress/);
-    assert.match(output.hookSpecificOutput.additionalContext, /Hold integration until 2 live claims become terminal\./);
-    assert.doesNotMatch(output.hookSpecificOutput.additionalContext, /Integrate pending submissions now\./);
+    const ready = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+    assert.match(ready.hookSpecificOutput.additionalContext, /1 submission pending integration/);
+    assert.doesNotMatch(ready.hookSpecificOutput.additionalContext, /live claim in progress/);
+    assert.match(ready.hookSpecificOutput.additionalContext, /Integrate pending submissions now\./);
+
+    assert.equal(store.addComment(slug, live.ref, {
+      by: 'reconcile-wave-live',
+      body: '[sidequest:verify-start] node --test plugins/sidequest/test/hooks.test.ts',
+      source: 'test',
+    }).ok, true);
+    const verifying = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+    assert.match(verifying.hookSpecificOutput.additionalContext, /1 live claim in progress/);
+    assert.match(verifying.hookSpecificOutput.additionalContext, /Hold integration until 1 live claim becomes terminal\./);
+
+    assert.equal(store.addComment(slug, live.ref, {
+      by: 'reconcile-wave-live',
+      body: '[sidequest:verify-complete] passed: hooks test passed',
+      source: 'test',
+    }).ok, true);
+    const stateFile = path.join(SIDEQUEST_HOME, 'hook-state', `stop-reminder-${crypto.createHash('sha256').update(sessionId).digest('hex')}.json`);
+    fs.rmSync(stateFile, { force: true });
+    const submittedAfterPassingVerification = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+    assert.match(submittedAfterPassingVerification.hookSpecificOutput.additionalContext, /Hold integration until 1 live claim becomes terminal\./);
+
+    assert.equal(store.addComment(slug, live.ref, {
+      by: 'reconcile-wave-live',
+      body: '[sidequest:verify-start] node --test plugins/sidequest/test/hooks.test.ts',
+      source: 'test',
+    }).ok, true);
+    assert.equal(store.addComment(slug, live.ref, {
+      by: 'reconcile-wave-live',
+      body: '[sidequest:verify-complete] failed-suite: hooks test failed',
+      source: 'test',
+    }).ok, true);
+    const readyAfterFailedVerification = runHookOutput(BOARD_RECONCILIATION_REMINDER, { session_id: sessionId, cwd: BOARD_PATH });
+    assert.match(readyAfterFailedVerification.hookSpecificOutput.additionalContext, /Integrate pending submissions now\./);
   } finally {
-    assert.equal(recordTerminalAgentFailure(firstLive, firstStop).ok, true);
-    assert.equal(recordTerminalAgentFailure(secondLive, secondStop).ok, true);
+    assert.equal(recordTerminalAgentFailure(live, stopped).ok, true);
   }
 });
 
@@ -2439,7 +2467,7 @@ test('stop reminder: reviewed submissions stay held until integration', () => {
   assert.equal(runHookOutputForBudget(BOARD_RECONCILIATION_REMINDER, input), null);
 });
 
-test('stop reminder: holds a submitted integration while a linked repair is live', () => {
+test('stop reminder: holds a submitted integration while a linked repair verifies', () => {
   const sessionId = `reconcile-held-repair-${++sqSeq}`;
   const by = 'reconcile-held-repair-worker';
   const submitted = addTicket('audited submission awaiting repair');
@@ -2467,6 +2495,12 @@ test('stop reminder: holds a submitted integration while a linked repair is live
   const repair = addTicket('repair audited submission');
   assert.equal(store.linkTickets(slug, repair.ref, 'related', submitted.ref).ok, true);
   claimStopTicket(repair, sessionId, 'reconcile-linked-repair');
+  assert.equal(store.addComment(slug, repair.ref, {
+    by: 'reconcile-linked-repair',
+    kind: 'comment',
+    body: '[sidequest:verify-start] node --test plugins/sidequest/test/hooks.test.ts',
+    source: 'mcp',
+  }).ok, true);
 
   const input = { session_id: sessionId, cwd: BOARD_PATH, stop_hook_active: false };
   const first = runHookOutput(BOARD_RECONCILIATION_REMINDER, input);

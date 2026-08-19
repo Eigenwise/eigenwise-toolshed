@@ -31,6 +31,7 @@ interface Store {
   findProject: (start: string) => { ok: boolean; slug?: string };
   sessionClaims: (sessionId: string) => Array<{ ref?: string | null; held?: boolean }>;
   worktreeGcTickets: () => LifecycleTicket[];
+  claimMaySubmit: (ticket: Ticket) => boolean;
 }
 
 interface Reminder {
@@ -248,6 +249,7 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     const submissions = open.filter(pendingSubmission);
     const submissionStoryIds = new Set(submissions.map((ticket) => ticket.storyId).filter(Boolean));
     const liveClaimCount = projectTickets.filter((ticket) => ticket.claimLive
+      && store.claimMaySubmit(ticket)
       && (submissionStoryIds.size ? submissionStoryIds.has(ticket.storyId) : dispatchedBySession(ticket, sessionId))).length;
     const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
