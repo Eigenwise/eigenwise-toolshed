@@ -20,14 +20,19 @@ var kernel_exports = {};
 __export(kernel_exports, {
   ATTEMPT_TRANSITIONS: () => ATTEMPT_TRANSITIONS,
   VERIFICATION_KINDS: () => import_verification.VERIFICATION_KINDS,
+  assembleWave: () => import_wave.assembleWave,
   attemptDiagnostic: () => attemptDiagnostic,
   canonicalPath: () => import_worktree.canonicalPath,
   captureVerificationResult: () => import_verification.captureVerificationResult,
   createWorktreeLease: () => import_worktree.createWorktreeLease,
+  dependentReleaseDecision: () => import_wave.dependentReleaseDecision,
   inlineEligibility: () => inlineEligibility,
   isCanonicalRegisteredWorktree: () => import_worktree.isCanonicalRegisteredWorktree,
+  openWave: () => import_wave.openWave,
   prepareAttempt: () => prepareAttempt,
   prepareDirectAttempt: () => prepareDirectAttempt,
+  recordAssembledWaveGate: () => import_wave.recordAssembledWaveGate,
+  recordWaveDelivery: () => import_wave.recordWaveDelivery,
   reduceAttempt: () => reduceAttempt,
   sameCanonicalPath: () => import_worktree.sameCanonicalPath,
   transitionAttempt: () => transitionAttempt,
@@ -45,6 +50,7 @@ __export(kernel_exports, {
 module.exports = __toCommonJS(kernel_exports);
 var import_worktree = require("./worktree.js");
 var import_verification = require("./verification.js");
+var import_wave = require("./wave.js");
 const ATTEMPT_TRANSITIONS = {
   prepared: { launch: "launched", bind_claim_token: "bound", claim_direct: "claimed", release: "released" },
   launched: { bind: "bound", bind_claim_token: "bound", release: "released" },
@@ -52,11 +58,12 @@ const ATTEMPT_TRANSITIONS = {
   claimed: { start_work: "working", release: "released" },
   working: { verify: "verified", release: "released" },
   verified: { submit: "submitted", release: "released" },
-  submitted: { assemble: "assembled", release: "released" },
-  assembled: { integrate: "integrated", release: "released" },
+  submitted: { assemble: "assembled", invalidate: "invalidated", release: "released" },
+  assembled: { integrate: "integrated", invalidate: "invalidated", release: "released" },
   integrated: { close: "closed", release: "released" },
   closed: {},
-  released: {}
+  released: {},
+  invalidated: { refresh: "working", release: "released" }
 };
 function prepareAttempt(baseline, authority, preparedCompatibility, verificationRequirement2) {
   return Object.freeze({
@@ -105,14 +112,19 @@ function inlineEligibility(input) {
 0 && (module.exports = {
   ATTEMPT_TRANSITIONS,
   VERIFICATION_KINDS,
+  assembleWave,
   attemptDiagnostic,
   canonicalPath,
   captureVerificationResult,
   createWorktreeLease,
+  dependentReleaseDecision,
   inlineEligibility,
   isCanonicalRegisteredWorktree,
+  openWave,
   prepareAttempt,
   prepareDirectAttempt,
+  recordAssembledWaveGate,
+  recordWaveDelivery,
   reduceAttempt,
   sameCanonicalPath,
   transitionAttempt,

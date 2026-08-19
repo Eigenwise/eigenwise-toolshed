@@ -607,9 +607,38 @@ function verificationWaiverFromOptions(opts: any) {
   };
 }
 
+async function cmdAssembleWave(opts: any, positional: any) {
+  if (!positional.length) fail('assemble-wave: pass one or more submitted ticket refs.');
+  const { slug, meta } = await resolveProject(opts);
+  const dependencies: Record<string, string[]> = {};
+  for (const entry of Array.isArray(opts.dependency) ? opts.dependency : opts.dependency ? [opts.dependency] : []) {
+    const dependency = String(entry).split('=', 2);
+    const after = dependency[0]?.trim() || '';
+    const before = dependency[1]?.trim() || '';
+    if (!after || !before) fail('assemble-wave: dependencies use AFTER=BEFORE, for example SQ-12=SQ-11.');
+    (dependencies[after] ||= []).push(before);
+  }
+  const verificationKind = String(opts['verify-kind'] || 'custom');
+  const verification = opts.verify == null ? null : {
+    kind: verificationKind,
+    status: verificationKind === 'manual' ? 'manual' : verificationKind === 'attestation' ? 'attestation' : 'passed',
+    evidence: String(opts.verify),
+  };
+  const result = store.assembleSubmissionWave(slug, positional, { dependencies, verification, waveId: opts['wave-id'] });
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(Object.assign({ project: slug }, result), null, 2) + '\n');
+    if (!result.ok) process.exitCode = 1;
+    return;
+  }
+  if (!result.ok) fail(`assemble-wave: ${result.message || result.reason}.`);
+  console.log(`✓ assembled ${result.wave.id} for ${result.wave.participants.join(', ')} — ${meta.name}`);
+  console.log(`  gate: ${result.gate?.state || 'not recorded'}${result.gate?.verification?.command ? ` (${result.gate.verification.command})` : ''}`);
+}
+
 async function cmdIntegrate(opts: any, positional: any) {
-  const idOrRef = positional[0];
-  if (!idOrRef) fail('integrate: pass a ticket id or ref, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.');
+  const refs = positional.map((value: any) => String(value || '').trim()).filter(Boolean);
+  const idOrRef = refs[0];
+  if (!idOrRef) fail('integrate: pass one or more ticket ids or refs, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
   const verificationWaiver = verificationWaiverFromOptions(opts);
@@ -633,6 +662,7 @@ async function cmdIntegrate(opts: any, positional: any) {
     }
   }
   if (opts['delivery-commit'] != null) {
+    if (refs.length > 1) fail('integrate: recorded delivery accepts one candidate; deliver an assembled wave through its exact participant set.');
     const recorded = store.recordDeliveredSubmission(slug, idOrRef, {
       target,
       deliveryCommit: opts['delivery-commit'],
@@ -656,12 +686,19 @@ async function cmdIntegrate(opts: any, positional: any) {
     return;
   }
   const mode = opts.mode == null ? store.boardConfig(slug).delivery : opts.mode;
-  const delivery = store.integrateSubmission(slug, idOrRef, {
-    mode,
-    target,
-    skipVerify: !!opts['skip-verify'],
-    verificationWaiver,
-  });
+  const delivery = refs.length > 1
+    ? store.integrateSubmissionWave(slug, refs, {
+      mode,
+      target,
+      skipVerify: !!opts['skip-verify'],
+      verificationWaiver,
+    })
+    : store.integrateSubmission(slug, idOrRef, {
+      mode,
+      target,
+      skipVerify: !!opts['skip-verify'],
+      verificationWaiver,
+    });
   if (!delivery.ok) {
     if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) {
       const payload = { project: slug, delivery: null, verifyFailed: delivery.verify };
@@ -673,14 +710,21 @@ async function cmdIntegrate(opts: any, positional: any) {
       fail(`integrate: ${delivery.message || 'verification failed after delivery and rollback'}`);
     }
     if (delivery.outside?.length) fail(`integrate: refused ${idOrRef}; submitted range changes paths outside its admitted scope: ${delivery.outside.join(', ')}.`);
+    if (opts.json) {
+      process.stdout.write(JSON.stringify({ project: slug, delivery: null, ...delivery }, null, 2) + '\n');
+      process.exitCode = 1;
+      return;
+    }
     fail(`integrate: ${(delivery.message || delivery.reason)}.`);
   }
   const integration = delivery.integration;
-  const verification = store.verifyIntegration(slug, idOrRef, {
-    by,
-    skipVerify: !!opts['skip-verify'],
-    verificationWaiver,
-  });
+  const verification = refs.length > 1
+    ? { ok: true, verify: integration.verify }
+    : store.verifyIntegration(slug, idOrRef, {
+      by,
+      skipVerify: !!opts['skip-verify'],
+      verificationWaiver,
+    });
   if (!verification.ok) {
     const payload = { project: slug, delivery: integration, verifyFailed: verification.verify };
     if (opts.json) {
@@ -699,20 +743,26 @@ async function cmdIntegrate(opts: any, positional: any) {
         : verification.verify.status === 'none'
           ? 'Verify: none.'
           : `Verify passed: ${verification.verify.command || verification.verify.evidence}.`;
-  const reason = usesGit
-    ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`
-    : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
-  const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
+  const reason = refs.length > 1
+    ? `Delivered assembled wave ${refs.join(', ')} via ${integration.mode}. ${verifyReason}`
+    : usesGit
+      ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`
+      : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
+  const closures = refs.map((ref: string) => store.completeTicketAsControlPlane(slug, ref, {
     by,
     reason,
     purpose: 'integration',
-  });
+  }));
+  const failedClosure = closures.find((closure: any) => !closure.ok);
   if (opts.json) {
-    process.stdout.write(JSON.stringify(Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closed), null, 2) + '\n');
-    if (!closed.ok) process.exitCode = 1;
+    const payload = refs.length > 1
+      ? { project: slug, delivery: integration, verify: verification.verify, tickets: closures.map((closure: any) => closure.ticket || null), ok: !failedClosure }
+      : Object.assign({ project: slug, delivery: integration, verify: verification.verify }, closures[0]);
+    process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
+    if (failedClosure) process.exitCode = 1;
     return;
   }
-  if (!closed.ok) fail(`integrate: delivered ${idOrRef}, but could not close it: ${closed.message || closed.reason}.`);
+  if (failedClosure) fail(`integrate: delivered ${refs.join(', ')}, but could not close ${failedClosure.ticket?.ref || idOrRef}: ${failedClosure.message || failedClosure.reason}.`);
   if (!opts.json && integration.ignoredDirtyPaths?.length) {
     console.log(`info: left unrelated dirty paths untouched: ${integration.ignoredDirtyPaths.join(', ')}`);
   }
@@ -722,7 +772,7 @@ async function cmdIntegrate(opts: any, positional: any) {
       ? `working tree changed: ${(integration.dirtyFiles || []).join(', ') || '(no files)'}`
       : `HEAD ${String(integration.resultingHead).slice(0, 12)}`;
   const destination = integration.mode === 'source-revision' ? 'the project source' : integration.targetBranch;
-  console.log(`✓ ${closed.ticket.ref} delivered by ${integration.mode} onto ${destination} (${result}) — ${meta.name}`);
+  console.log(`✓ ${refs.join(', ')} delivered by ${integration.mode} onto ${destination} (${result}) — ${meta.name}`);
 }
 
 // Orchestrator control-plane surface: the cross-process publish lock plus the
@@ -846,4 +896,4 @@ async function cmdPublish(opts: any, positional: any) {
 }
 
 
-module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdIntegrate, cmdPublish };
+module.exports = { validateModelFilter, cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish };

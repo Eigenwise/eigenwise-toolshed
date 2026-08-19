@@ -49,7 +49,13 @@ function submitIntegrationFixture(title: string, reviewed = false) {
   git(['commit', '-m', 'base'], repo);
   git(['branch', '-M', 'main'], repo);
   const slug = store.ensureProject(repo).slug;
-  const ticket = store.createTicket(slug, { title, highStakes: true, files: ['feature.txt'] });
+  const ticket = store.createTicket(slug, {
+    title,
+    highStakes: true,
+    files: ['feature.txt'],
+    executorVerifyKind: 'manual',
+    executorVerify: 'manual: fixture gate recorded',
+  });
   if (reviewed) assert.equal(store.addComment(slug, ticket.ref, { by: 'reviewer', body: 'reviewed-by: reviewer', source: 'test' }).ok, true);
   fs.writeFileSync(path.join(repo, 'feature.txt'), 'fixture\n');
   git(['add', 'feature.txt'], repo);
@@ -66,7 +72,21 @@ function submitIntegrationFixture(title: string, reviewed = false) {
   });
   assert.equal(range.ok, true, JSON.stringify(range));
   assert.equal(store.claimTicket(slug, ticket.ref, 'worker', { direct: true }).ok, true);
-  assert.equal(store.submitTicket(slug, ticket.ref, 'worker', { commit, gitRef, range, source: 'test' }).ok, true);
+  assert.equal(store.submitTicket(slug, ticket.ref, 'worker', {
+    commit,
+    gitRef,
+    range,
+    verify: 'manual: fixture gate recorded',
+    source: 'test',
+  }).ok, true);
+  const wave = store.assembleSubmissionWave(slug, [ticket.ref], {
+    verification: store.getTicket(slug, ticket.ref).submission.verificationResult,
+  });
+  assert.equal(wave.ok, true, wave.message || wave.reason);
+  assert.equal(store.integrateSubmission(slug, ticket.ref, {
+    mode: 'replay',
+    target,
+  }).ok, true);
   return { slug, ticket };
 }
 
@@ -124,8 +144,8 @@ test('high-stakes integration warns until a review is recorded', async () => {
   const linked = submitIntegrationFixture('Linked review');
   const review = store.createTicket(linked.slug, { title: 'Review', category: 'review-audit', status: 'done' });
   assert.equal(store.linkTickets(linked.slug, review.ref, 'related', linked.ticket.ref).ok, true);
-  const linkedClosed = store.completeTicketAsControlPlane(linked.slug, linked.ticket.ref, {
-    purpose: 'integration', by: 'integrator', reason: 'Integrated test fixture.',
+  const linkedClosed = await callTool('groomClose', {
+    project: linked.slug, ref: linked.ticket.ref, by: 'integrator', reason: 'Integrated test fixture.', integration: true,
   });
   assert.equal(linkedClosed.ok, true);
   assert.equal(linkedClosed.advisory, undefined);

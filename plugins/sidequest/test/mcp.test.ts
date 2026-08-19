@@ -2390,6 +2390,8 @@ test('MCP submits and integrates project-neutral source revisions through one re
       files: [revision.surface],
       complexity: 2,
       complexityWhy: 'publish one pinned immutable source revision',
+      executorVerifyKind: 'attestation',
+      executorAttestationArtifact: revision.value,
       labels: ['direct-ok'],
     });
     const by = `mcp-${revision.source}-worker`;
@@ -2415,6 +2417,13 @@ test('MCP submits and integrates project-neutral source revisions through one re
     });
     assert.equal(submitted.ok, true, submitted.message || submitted.reason);
     assert.equal(store.getTicket(project, ticket.ref).submission.sourceRevision.source, revision.source);
+    const assembled = await callTool('integrate', {
+      project,
+      ref: ticket.ref,
+      by: 'mcp-source-publisher',
+      wave: { verification: store.getTicket(project, ticket.ref).submission.verificationResult },
+    });
+    assert.equal(assembled.ok, true, assembled.message || assembled.reason);
 
     const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'mcp-source-publisher' });
     assert.equal(integrated.ok, true, integrated.message || integrated.reason);
@@ -4525,6 +4534,12 @@ test('SQ-1339: submit records and integrates an explicit no-op range', async () 
     mode: 'replay',
     target: store.integrationTarget(fixture.project),
     skipVerify: true,
+    verificationWaiver: {
+      authority: 'fixture release manager',
+      reason: 'the explicit no-op verification is already recorded',
+      affectedGate: 'npm run test:full',
+      scope: fixture.ref,
+    },
   });
   assert.equal(delivered.ok, true, `no-op integration was refused: ${delivered.message}`);
   assert.equal(delivered.integration.resultingHead, commit);

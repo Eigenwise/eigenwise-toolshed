@@ -144,7 +144,6 @@ function submissionRangeRemedy(ticket: any, range: any, gitRef: string): string 
     expected_upstream_diverged: `preserve the submission for orchestrator reconciliation; do not replace it by syncing to a branch tip.`,
     unrelated_history: `rebuild only this ticket's work from ${pinnedBase}, update ${gitRef}, and resubmit.`,
     missing_base: `restore the recorded base commit, or rebuild only this ticket's work from ${pinnedBase}, then resubmit.`,
-    merge_commit: `the submitted range includes merge commit ${range.commit || 'unknown'}. Do not use \`git pull\`: it creates the refused shape. Submit the pre-merge work commit, or rebuild the work range from ${pinnedBase} without a merge commit.`,
     empty_range: `the submitted commit has no work beyond its base. Submit the commit that contains this ticket's work, or use the explicit no-op closeout when no work was produced.`,
     base_not_reachable: `the supplied base no longer reaches the submitted commit. Recreate the ticket work from ${pinnedBase}, preserve only this ticket's commits, update ${gitRef}, and resubmit.`,
     unrecognized_base: `use the recorded ${pinnedBase} or an approved submitted-ticket boundary, then resubmit only this ticket's commits.`,
@@ -202,10 +201,8 @@ function collectGitSubmissionFacts(options: any) {
     targetFailure = { code: 'integration_target_unavailable', message: `submit: refused ${ticket.ref}; ${boundedSubmissionText((error && error.message) || String(error))}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true };
   }
   const dispatchBase = String(ticket.dispatch?.baseCommit || '').trim() || null;
-  const allowedBases = store.submissionBaseCandidates(slug, ticket.ref);
-  if (dispatchBase) allowedBases.push(dispatchBase);
   const range = target
-    ? commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream, integrationBranch: target.branch, base, dispatchBase, allowedBases, baseCandidates: base ? [] : store.submissionBaseCandidates(slug, ticket.ref, { integratedOnly: true }) })
+    ? commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream, integrationBranch: target.branch, base, dispatchBase, allowedBases: dispatchBase ? [dispatchBase] : [] })
     : null;
   const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
   const requirements: any[] = targetFailure ? [targetFailure] : [];
@@ -802,11 +799,12 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'integrate',
-    description: 'Deliver and verify a submitted Git range or immutable source revision. Successful responses list changedPaths and deliveredFiles; they can differ for apply mode.',
+    description: 'Deliver a ref or exact comma group; wave:{dependencies,verification,waveId} assembles it.',
     inputSchema: {
       type: 'object',
       properties: {
         ref: { type: 'string' },
+        wave: { type: 'object' },
         project: PROJECT_PROP,
         by: { type: 'string' },
         mode: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Defaults to the board delivery setting.' },
@@ -821,8 +819,42 @@ const tools: ToolDefinition[] = [
     async handler(args) {
       const { slug, meta } = resolveProject(args.project);
       const by = requireBy(args, 'integrate');
+      const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
+      if (!refs.length) throw new Error('integrate: pass one or more ticket refs.');
+      if (args.wave != null) {
+        return mutationAck(slug, store.assembleSubmissionWave(slug, refs, args.wave));
+      }
       const failures: Array<{ reason: string; message: string }> = [];
-      const ticket = store.getTicket(slug, args.ref);
+      const ticket = store.getTicket(slug, refs[0]!);
+      if (refs.length > 1) {
+        const groupUsesGit = store.submissionUsesGit(ticket);
+        if (groupUsesGit) {
+          const lock = await publish.publishLockStatus(meta.path);
+          if (lock.locked && !publish.publishLockOwnedBySession(meta.path, sessionOf(args))) {
+            return mutationAck(slug, combinedRefusal(ticket, [{
+              reason: 'publish_lock_required',
+              message: `integrate: publish lock is held by ${lock.holder?.by || lock.holder?.sessionId || 'another session'}; acquire or re-acquire it before delivery.`,
+            }]));
+          }
+        }
+        const target = groupUsesGit ? store.integrationTarget(slug) : undefined;
+        const mode = args.mode == null ? store.boardConfig(slug).delivery : args.mode;
+        const delivery = store.integrateSubmissionWave(slug, refs, {
+          mode,
+          target,
+          skipVerify: args.skipVerify === true,
+          verificationWaiver: args.verificationWaiver,
+        });
+        if (!delivery.ok) return mutationAck(slug, delivery);
+        const reason = `Delivered assembled wave ${refs.join(', ')} via ${delivery.integration.mode}.`;
+        const closures = refs.map((ref: string) => store.completeTicketAsControlPlane(slug, ref, { by, reason, purpose: 'integration' }));
+        const failedClosure = closures.find((closure: any) => !closure.ok);
+        return mutationAck(slug, failedClosure || closures[0], {
+          delivery: compactIntegrationDelivery(delivery.integration),
+          verify: delivery.integration.verify,
+          tickets: closures.map((closure: any) => closure.ticket || null),
+        });
+      }
       if (!ticket) {
         const delivery = store.integrateSubmission(slug, args.ref, {
           mode: args.mode == null ? store.boardConfig(slug).delivery : args.mode,

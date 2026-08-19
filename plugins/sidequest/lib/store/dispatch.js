@@ -19,13 +19,15 @@ function namedSuiteForTicket(ticket, projectPath) {
 function preparedVerificationRequirement(ticket, projectPath) {
   const recorded = String(ticket?.executorVerify || "").trim();
   const declaredKind = String(ticket?.executorVerifyKind || "command").trim().toLowerCase();
+  const artifact = String(ticket?.executorAttestationArtifact || "").trim();
   const manual = /^manual:\s+/i.test(recorded);
   const suite = !recorded || declaredKind === "suite" ? namedSuiteForTicket(ticket, projectPath) : null;
-  const legacyWithoutVerifier = !recorded && !suite;
+  const attestation = declaredKind === "attestation" && Boolean(artifact);
+  const legacyWithoutVerifier = !recorded && !suite && !attestation;
   const kind = manual ? "manual" : legacyWithoutVerifier ? "custom" : declaredKind;
   return verificationRequirement({
     kind,
-    evidence: legacyWithoutVerifier ? "legacy project verifier was not recorded" : recorded || void 0,
+    evidence: legacyWithoutVerifier ? "legacy project verifier was not recorded" : recorded || artifact || void 0,
     command: ["suite", "command"].includes(kind) ? recorded || void 0 : void 0,
     artifact: ticket?.executorAttestationArtifact,
     suite
@@ -942,15 +944,6 @@ function createDispatch(dependencies) {
       return { fallback: continuationFallback("released_worktree_git_state_is_unreadable", worktree, { cause: gitFailureEvidence(error) }) };
     }
   }
-  function worktreeBaseIntegrationTarget(slug, worktreeBase, repository) {
-    if (worktreeBase === "local-main") return integrationTarget(slug, { mode: "local" });
-    if (!hasOriginRemote(repository)) return null;
-    try {
-      return integrationTarget(slug, { mode: "remote" });
-    } catch (error) {
-      throw new Error(`${String(error?.message || error).trim()} Board worktreeBase is "origin-main", so an isolated dispatch requires that remote ref; fetch or push the branch, or run \`sidequest board-config --worktree-base local-main\` to fork isolated worktrees from the local branch instead.`);
-    }
-  }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -1127,7 +1120,14 @@ function createDispatch(dependencies) {
       const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "origin-main";
       const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
       const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
-      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || "") : null;
+      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : hasOriginRemote(readMeta(slug)?.path || "") ? (() => {
+        try {
+          return integrationTarget(slug, { mode: "remote" });
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          throw new Error(`${message} The configured worktreeBase is "origin-main"; use --worktree-base local-main to dispatch from the local integration branch.`);
+        }
+      })() : null : null;
       const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
       const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
         ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
@@ -1136,9 +1136,18 @@ function createDispatch(dependencies) {
       const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(readMeta(slug)?.path || "", integrationTargetState.branch) : null;
       delete t.storyContractDrift;
       const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
+      const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
+      const dispatchBaseline = Object.freeze({
+        revision: Object.freeze({
+          source: nonRepoOutput ? "project-snapshot" : "git",
+          value: String(baseCommit || t.id || t.ref),
+          observedAt: now
+        }),
+        purpose: "dispatch"
+      });
       t.dispatch = {
         lifecycleAttempt: prepareAttempt(
-          Object.freeze({ revision: Object.freeze({ source: "board", value: String(t.id || t.ref), observedAt: now }), purpose: "dispatch" }),
+          dispatchBaseline,
           Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: "prepare", sessionId: opts.sessionId ? String(opts.sessionId) : null }),
           preparedPluginInstall && preparedPluginIdentity ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity }) : void 0,
           verificationRequirement2
@@ -1165,7 +1174,7 @@ function createDispatch(dependencies) {
         ...sharedTree && releasedContinuation?.continuation ? { continuationFallback: continuationFallback("continuation_checkpoint_requires_isolated_worktree", releasedContinuation.continuation.sourceWorktree) } : {},
         // Record the integration target commit so an isolated executor can bring
         // its harness-created worktree forward before changing it.
-        baseCommit: reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || ""),
+        baseCommit,
         ...reviewTargetState ? { reviewTarget: t.reviewTarget } : {},
         ...integrationTargetState ? { integrationTarget: integrationTargetState } : {},
         ...localAheadWarning ? { localAheadWarning } : {},

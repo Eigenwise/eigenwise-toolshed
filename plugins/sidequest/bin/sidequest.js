@@ -8,11 +8,11 @@ const { fail, resolveProject, resolveWatchProject } = require("./sidequest-cmd-s
 const { PLUGIN_VERSION, cmdDashboard, cmdServe, cmdStop } = require("./sidequest-cmd-server");
 const { cmdAdd, cmdList, cmdPulse, cmdChanges, cmdUpdate, cmdRm } = require("./sidequest-cmd-tickets");
 const { cmdProfile, cmdCategory, cmdGlobalFallback } = require("./sidequest-cmd-configuration");
-const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
+const { cmdClaim, cmdCheckpoint, cmdVerdict, cmdRelease, cmdDone, cmdGroomClose, cmdScopeRequest, cmdCommit, cmdRework, cmdSubmit, cmdAssembleWave, cmdIntegrate, cmdPublish } = require("./sidequest-cmd-execution");
 const { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive } = require("./sidequest-cmd-collaboration");
 const { cmdDispatch, cmdBriefing, cmdTempCleanup, cmdNativeAgent, cmdModels, cmdRoute, cmdBoardConfig, cmdProjects, cmdRouting, cmdArchiveBoard, cmdUnarchiveBoard, cmdMerge } = require("./sidequest-cmd-dispatch");
 const { cmdStory } = require("./sidequest-cmd-story");
-const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface"]);
+const ARRAY_FLAGS = /* @__PURE__ */ new Set(["image", "label", "file", "always-in-scope", "read-only-denied-tool", "auto-approve-scope", "produces", "changes", "consumes", "changed-surface", "dependency"]);
 const ARRAY_FLAG_ALIASES = { files: "file", labels: "label" };
 const BOOLEAN_FLAGS = /* @__PURE__ */ new Set(["json", "brief", "open", "help", "force", "done", "archived", "all", "dry-run", "yolo", "wave", "unclassified", "enabled", "disabled", "no-fallback", "global", "clear", "steal", "shared-tree", "direct", "sweep", "yes", "integration", "skip-verify", "contract-waiver", "full", "rotate", "worktree-isolation", "auto-approve-test-scope", "high-stakes", "unverified-transport", "allow-repeat-failure", "allow-unscoped", "no-process", "no-worktree", "review", "abandon-submission"]);
 const COMMON_FLAGS = /* @__PURE__ */ new Set(["help", "json", "project", "source"]);
@@ -42,6 +42,7 @@ const COMMAND_FLAGS = {
   "scope-request": ["by", "file", "force"],
   commit: ["by", "message"],
   rework: ["by", "review", "review-ref", "reason"],
+  "assemble-wave": ["wave-id", "dependency", "verify-kind", "verify"],
   integrate: ["by", "mode", "delivery-commit", "reason", "skip-verify", "waiver-authority", "waiver-reason", "waiver-gate", "waiver-scope", "waiver-expires-at"],
   publish: ["repo", "steal", "force"],
   assign: ["to", "by"],
@@ -106,6 +107,7 @@ const MUTATING_COMMANDS = /* @__PURE__ */ new Set([
   "commit",
   "rework",
   "submit",
+  "assemble-wave",
   "integrate",
   "publish",
   "release",
@@ -258,7 +260,8 @@ const HELP_COMMANDS = {
   commit: 'sidequest commit <id|SQ-n> --by who --message "message"',
   rework: 'sidequest rework <id|SQ-n> --by candidate-owner --review <review-ticket-or-evidence> --reason "what needs repair" (unbound candidates only)',
   submit: 'sidequest submit <id|SQ-n> --by who (--commit <hash> [--base <hash>] [--gitref refs/sidequest/SQ-n] [--verify "command"] [--worktree path] | --source-revision-source <kind> --source-revision-value <revision> --source-revision-observed-at <ISO-time> --changed-surface <path> [--no-process] [--no-worktree] [--review] --verify "attestation: ..." | --clear [-s todo]) [--body-file path] [--force]. Source revision existence and dispatch-baseline membership come only from the registered project capability.',
-  integrate: 'sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply | --delivery-commit <sha> --reason "evidence"] [--skip-verify --waiver-authority <human> --waiver-reason <why> --waiver-gate <gate> (--waiver-scope <bounded-scope> | --waiver-expires-at <future-ISO-time>)] [--json]',
+  "assemble-wave": 'sidequest assemble-wave <SQ-n> [SQ-n...] [--dependency AFTER=BEFORE] [--verify-kind command|document|link|schema|review|attestation --verify "gate evidence"] [--wave-id <immutable-id>] [--json]. A failed or incompatible assembly invalidates candidates with the refresh_and_reverify route.',
+  integrate: 'sidequest integrate <id|SQ-n> [id|SQ-n...] --by who [--mode merge|replay|apply | --delivery-commit <sha> --reason "evidence"] [--skip-verify --waiver-authority <human> --waiver-reason <why> --waiver-gate <gate> (--waiver-scope <bounded-scope> | --waiver-expires-at <future-ISO-time>)] [--json]',
   publish: "sidequest publish <lock|unlock|status|queue> [--repo path] [--steal] [--force] [--json]",
   release: 'sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>]',
   verdict: 'sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"]',
@@ -377,7 +380,9 @@ Working the board safely (multi-agent):
     (releases the claim, status stays doing; no push, no version bumps — the orchestrator publishes).
     --force only lets the existing submitted candidate owner replace their own pending candidate; it never authorizes a foreign submit or rejection.
   sidequest submit <id|SQ-n> --clear [-s todo]     orchestrator reset: drop a submission after a bounced integration
-  sidequest integrate <id|SQ-n> --by who [--mode merge|replay|apply]   deliver a ready Git range or immutable source revision, verify it, and close it
+  sidequest assemble-wave <SQ-n> [SQ-n...] [--dependency AFTER=BEFORE] [--verify-kind <kind> --verify "gate evidence"]
+    pin compatible candidates to one immutable baseline, declared surfaces, and dependencies; incompatible candidates become invalidated and must refresh_and_reverify before a new wave
+  sidequest integrate <id|SQ-n> [id|SQ-n...] --by who [--mode merge|replay|apply]   deliver one ready candidate or the exact assembled wave, verify the resulting revision, and close every participant
     --delivery-commit <sha> --reason "evidence" records a reviewed candidate already delivered by external conflict resolution; the commit must be reachable on the integration branch, preserve the candidate content, and pass the merged-tree gate
   sidequest publish lock|unlock|status [--repo path] [--steal] [--force]   cross-process publish lock (owner pid +
     session metadata in the repo's common git dir; stale/dead holders reclaimable, --steal takes over explicitly)
@@ -590,6 +595,9 @@ async function main() {
       break;
     case "submit":
       await cmdSubmit(opts, positional);
+      break;
+    case "assemble-wave":
+      await cmdAssembleWave(opts, positional);
       break;
     case "integrate":
       await cmdIntegrate(opts, positional);

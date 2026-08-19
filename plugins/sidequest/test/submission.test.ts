@@ -344,18 +344,15 @@ test('integration keeps a recorded verifier instead of re-deriving a plugin gate
   assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
-test('SQ-1875: every submission range reason gives a pinned-base remedy', () => {
+test('SQ-1875: every rejected submission range reason gives a pinned-base remedy', () => {
   const ticket = { ref: 'SQ-1875', dispatch: { baseCommit: '1234567890abcdef1234567890abcdef12345678' } };
-  const reasons = ['merge_commit', 'empty_range', 'base_not_reachable', 'range_changed', 'no_op_changed', 'reconciled_path_diverged'];
+  const reasons = ['empty_range', 'base_not_reachable', 'range_changed', 'no_op_changed', 'reconciled_path_diverged'];
   for (const reason of reasons) {
     const message = submissionRangeFailureMessage(ticket, { reason, commit: 'abcdef1' }, 'refs/sidequest/SQ-1875');
     assert.match(message, new RegExp(`submit: refused SQ-1875; ${reason}`));
     assert.match(message, /behind the integration tip is expected/);
     assert.doesNotMatch(message, /rebase onto|current integration target|origin\/main|\bmain\b/);
   }
-  const mergeMessage = submissionRangeFailureMessage(ticket, { reason: 'merge_commit', commit: 'abcdef1' }, 'refs/sidequest/SQ-1875');
-  assert.match(mergeMessage, /1234567890abcdef1234567890abcdef12345678/);
-  assert.match(mergeMessage, /Do not use `git pull`/);
 });
 
 test('SQ-971: rejected range submission keeps the candidate and claim for repair', async () => {
@@ -1205,7 +1202,7 @@ test('existing tickets with prose verify fields remain readable', () => {
   assert.strictEqual(store.getTicket(slug, t.ref).executorVerify, t.executorVerify);
 });
 
-test('integration rolls back when post-merge verification fails', () => {
+test('integration refuses delivery when the assembled-wave gate fails', () => {
   cleanBranch();
   const t = addTicket('post-merge verification', { files: ['lib/preflight.js'] });
   assert.strictEqual(runCli(['claim', t.ref, '--by', 'post-merge-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
@@ -1221,11 +1218,11 @@ test('integration rolls back when post-merge verification fails', () => {
   const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
   const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
   assert.strictEqual(rejected.ok, false);
-  assert.strictEqual(rejected.reason, 'verification_failed_suite_post_merge');
-  assert.strictEqual(rejected.verify.command, 'node -e "process.exit(1)"');
-  assert.ok(fs.existsSync(rejected.verify.logPath));
+  assert.strictEqual(rejected.reason, 'assembled_wave_gate_failed');
+  assert.strictEqual(rejected.gate.verification.command, 'node -e "process.exit(1)"');
+  assert.ok(fs.existsSync(rejected.gate.verification.logPath));
   assert.strictEqual(git(['rev-parse', 'HEAD']), before);
-  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verification_failed_suite_post_merge');
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
 });
 
 test('SQ-1743: a held delivery lock refuses another integration before it changes the checkout', () => {
@@ -1355,6 +1352,9 @@ test('integration closure consumes an in-scope submission with control-plane pro
   const submitted = store.getTicket(slug, t.ref);
   assert.strictEqual(submitted.lifecycleAttempt.state, 'submitted');
   assert.strictEqual(submitted.dispatch.lifecycleAttempt.state, 'submitted');
+  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+  const delivered = store.integrateSubmission(slug, t.ref, { target });
+  assert.strictEqual(delivered.ok, true, delivered.message);
 
   const completed = runCli(['groom-close', t.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${commit} into main.`]);
   assert.strictEqual(completed.status, 0, completed.stderr + completed.stdout);
@@ -1824,7 +1824,7 @@ test('CLI: unrelated durable-ref history is refused', () => {
   assert.strictEqual(runCli(['release', t.ref, '--by', 'unrelated-worker']).status, 0);
 });
 
-test('CLI: an integrated ancestor is excluded from dependent submission duplicate checks', () => {
+test('CLI: a dependent submission retains its pinned dispatch baseline after an ancestor closes', () => {
   cleanBranch();
   const first = addTicket('integrated ancestor', { files: ['lib/first.js'] });
   assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-integrated-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
@@ -1835,6 +1835,9 @@ test('CLI: an integrated ancestor is excluded from dependent submission duplicat
   const firstTip = git(['rev-parse', 'HEAD']);
   pin(first, firstTip);
   assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-integrated-worker', '--commit', firstTip]).status, 0);
+  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+  const delivered = store.integrateSubmission(slug, first.ref, { target });
+  assert.strictEqual(delivered.ok, true, delivered.message);
   const integrated = runCli(['groom-close', first.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${firstTip} into main.`]);
   assert.strictEqual(integrated.status, 0, integrated.stderr + integrated.stdout);
 
@@ -1849,12 +1852,12 @@ test('CLI: an integrated ancestor is excluded from dependent submission duplicat
   const submitted = runCli(['submit', second.ref, '--by', 'dependent-duplicate-worker', '--commit', secondTip]);
   assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
   const submission = store.getTicket(slug, second.ref).submission;
-  assert.strictEqual(submission.base, firstTip);
-  assert.deepStrictEqual(submission.commits, [secondTip]);
-  assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
+  assert.strictEqual(submission.base, git(['rev-parse', 'origin/main']));
+  assert.deepStrictEqual(submission.commits, [firstTip, secondTip]);
+  assert.deepStrictEqual(submission.changedPaths, ['lib/first.js', 'lib/second.js']);
 });
 
-test('CLI: integrated ancestor paths are excluded from dependent submission scope checks', () => {
+test('CLI: a dependent submission cannot hide an ancestor path outside its pinned scope', () => {
   cleanBranch();
   const first = addTicket('integrated out-of-scope ancestor', { files: ['foreign.js'] });
   assert.strictEqual(runCli(['claim', first.ref, '--by', 'first-scope-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
@@ -1864,6 +1867,9 @@ test('CLI: integrated ancestor paths are excluded from dependent submission scop
   const firstTip = git(['rev-parse', 'HEAD']);
   pin(first, firstTip);
   assert.strictEqual(runCli(['submit', first.ref, '--by', 'first-scope-worker', '--commit', firstTip]).status, 0);
+  const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
+  const delivered = store.integrateSubmission(slug, first.ref, { target });
+  assert.strictEqual(delivered.ok, true, delivered.message);
   const integrated = runCli(['groom-close', first.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${firstTip} into main.`]);
   assert.strictEqual(integrated.status, 0, integrated.stderr + integrated.stdout);
 
@@ -1877,14 +1883,11 @@ test('CLI: integrated ancestor paths are excluded from dependent submission scop
   pin(second, secondTip);
 
   const submitted = runCli(['submit', second.ref, '--by', 'dependent-scope-worker', '--commit', secondTip]);
-  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
-  const submission = store.getTicket(slug, second.ref).submission;
-  assert.strictEqual(submission.base, firstTip);
-  assert.deepStrictEqual(submission.commits, [secondTip]);
-  assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
+  assert.strictEqual(submitted.status, 1);
+  assert.match(submitted.stderr + submitted.stdout, /foreign\.js/);
 });
 
-test('CLI: an explicit submitted base isolates a dependent queued range', () => {
+test('CLI: an explicit base cannot replace a submitted ticket baseline', () => {
   cleanBranch();
   const first = addTicket('explicit base ancestor', { files: ['lib/first.js'] });
   assert.strictEqual(runCli(['claim', first.ref, '--by', 'explicit-base-worker', '--direct', '--reason', 'The submission fixture requires a local direct claim.']).status, 0);
@@ -1905,11 +1908,8 @@ test('CLI: an explicit submitted base isolates a dependent queued range', () => 
   pin(second, secondTip);
 
   const submitted = runCli(['submit', second.ref, '--by', 'explicit-dependent-worker', '--commit', secondTip, '--base', firstTip]);
-  assert.strictEqual(submitted.status, 0, submitted.stderr + submitted.stdout);
-  const submission = store.getTicket(slug, second.ref).submission;
-  assert.strictEqual(submission.base, firstTip);
-  assert.deepStrictEqual(submission.commits, [secondTip]);
-  assert.deepStrictEqual(submission.changedPaths, ['lib/second.js']);
+  assert.strictEqual(submitted.status, 1);
+  assert.match(submitted.stderr + submitted.stdout, /unrecognized_base/);
 });
 
 test('CLI: a control-plane-integrated local main commit is accepted as an explicit base', (t?: any) => {
@@ -2976,6 +2976,13 @@ test('SQ-2184: control-plane closure recognizes released submissions and consume
     git(['commit', '-m', 'released integration delivery']);
     pin(integrationTicket, git(['rev-parse', 'HEAD']));
 
+    const recordedDeliveryCommit = git(['rev-parse', 'HEAD']);
+    const recordedDelivery = store.recordDeliveredSubmission(slug, integrationTicket.ref, {
+      target: { branch: integrationBranch, upstream: `refs/heads/${integrationBranch}` },
+      deliveryCommit: recordedDeliveryCommit,
+      reason: 'The submitted candidate is already an ancestor of the integration branch.',
+    });
+    assert.strictEqual(recordedDelivery.ok, true, recordedDelivery.message);
     const integrated = store.completeTicketAsControlPlane(slug, integrationTicket.ref, {
       by: 'orchestrator',
       purpose: 'integration',

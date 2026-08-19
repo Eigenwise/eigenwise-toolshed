@@ -1175,12 +1175,15 @@
   },
   {
     "name": "integrate",
-    "description": "Integrate.",
+    "description": "Deliver one ref or exact comma-separated wave; wave carries assembly evidence.",
     "inputSchema": {
       "type": "object",
       "properties": {
         "ref": {
           "type": "string"
+        },
+        "wave": {
+          "type": "object"
         },
         "project": {
           "type": "string"

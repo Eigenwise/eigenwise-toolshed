@@ -251,7 +251,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   rework: 'repair unbound; bound needs oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'Submit verified work; clear needs owner; force only lets owner replace candidate.',
-  integrate: 'Integrate.',
+  integrate: 'Deliver one ref or exact comma-separated wave; wave carries assembly evidence.',
   comment: 'Add a handoff comment.',
   comments: 'Read comments before work.',
   plan: 'Set ticket plan.',

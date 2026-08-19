@@ -7,6 +7,8 @@ export { canonicalPath, createWorktreeLease, isCanonicalRegisteredWorktree, same
 export type { LeaseDecision, LeaseIdentity, LeaseLiveness, LeasePhase, WorktreeLease, WorktreeLeaseFacts, WorktreeProvisioning } from './worktree.js';
 export { captureVerificationResult, validateVerificationWaiver, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, verificationWaiverDiagnostic, VERIFICATION_KINDS } from './verification.js';
 export type { VerificationKind, VerificationRequirement, VerificationResult, VerificationStatus, VerificationWaiver } from './verification.js';
+export { assembleWave, dependentReleaseDecision, openWave, recordAssembledWaveGate, recordWaveDelivery } from './wave.js';
+export type { AssembledWave, CandidateInvalidation, DeliveryResult, Wave, WaveAssemblyDecision, WaveCandidate, WaveGateResult, WaveParticipant } from './wave.js';
 
 export type SourceRevision = Readonly<{ source: string; value: string; observedAt: string }>;
 export type Baseline = Readonly<{ revision: SourceRevision; purpose: 'dispatch' | 'wave' | 'submission' }>;
@@ -14,13 +16,13 @@ export type Authority = Readonly<{ actor: string; operation: string; sessionId?:
 export type Diagnostic = Readonly<{ code: string; message: string; actionable: boolean }>;
 export type InlineEligibility = Readonly<{ eligible: boolean; reasons: readonly string[] }>;
 export type PreparedCompatibility = Readonly<{ pluginInstall: string; identity: string }>;
-export type AttemptState = 'prepared' | 'launched' | 'bound' | 'claimed' | 'working' | 'verified' | 'submitted' | 'assembled' | 'integrated' | 'closed' | 'released';
-export type AttemptEvent = 'launch' | 'bind' | 'bind_claim_token' | 'claim' | 'claim_direct' | 'start_work' | 'verify' | 'submit' | 'assemble' | 'integrate' | 'close' | 'release';
+export type AttemptState = 'prepared' | 'launched' | 'bound' | 'claimed' | 'working' | 'verified' | 'submitted' | 'assembled' | 'integrated' | 'closed' | 'released' | 'invalidated';
+export type AttemptEvent = 'launch' | 'bind' | 'bind_claim_token' | 'claim' | 'claim_direct' | 'start_work' | 'verify' | 'submit' | 'assemble' | 'integrate' | 'close' | 'release' | 'invalidate' | 'refresh';
 export type Attempt = Readonly<{ state: AttemptState; execution: 'dispatched' | 'direct'; baseline: Baseline; authority: Authority; verification?: VerificationResult; verificationRequirement?: VerificationRequirement; worktree?: WorktreeLease; preparedCompatibility?: PreparedCompatibility }>;
 
 type AttemptTransitions = { readonly [State in AttemptState]: Readonly<Partial<Record<AttemptEvent, AttemptState>>> };
 export const ATTEMPT_TRANSITIONS: AttemptTransitions = {
-  prepared: { launch: 'launched', bind_claim_token: 'bound', claim_direct: 'claimed', release: 'released' }, launched: { bind: 'bound', bind_claim_token: 'bound', release: 'released' }, bound: { claim: 'claimed', release: 'released' }, claimed: { start_work: 'working', release: 'released' }, working: { verify: 'verified', release: 'released' }, verified: { submit: 'submitted', release: 'released' }, submitted: { assemble: 'assembled', release: 'released' }, assembled: { integrate: 'integrated', release: 'released' }, integrated: { close: 'closed', release: 'released' }, closed: {}, released: {},
+  prepared: { launch: 'launched', bind_claim_token: 'bound', claim_direct: 'claimed', release: 'released' }, launched: { bind: 'bound', bind_claim_token: 'bound', release: 'released' }, bound: { claim: 'claimed', release: 'released' }, claimed: { start_work: 'working', release: 'released' }, working: { verify: 'verified', release: 'released' }, verified: { submit: 'submitted', release: 'released' }, submitted: { assemble: 'assembled', invalidate: 'invalidated', release: 'released' }, assembled: { integrate: 'integrated', invalidate: 'invalidated', release: 'released' }, integrated: { close: 'closed', release: 'released' }, closed: {}, released: {}, invalidated: { refresh: 'working', release: 'released' },
 };
 export function prepareAttempt(baseline: Baseline, authority: Authority, preparedCompatibility?: PreparedCompatibility, verificationRequirement?: VerificationRequirement): Attempt {
   return Object.freeze({
