@@ -620,6 +620,68 @@ test('submitted tickets leave the ready pool and refuse claims until cleared', (
   assert.strictEqual(store.clearSubmission(slug, t.ref, {}).reason, 'no_submission');
 });
 
+test('CLI commit admits a related review-rejected fragment transfer and refuses unrelated deletion', () => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-cli-release-fragment-'));
+  const runAtRoot = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: root }, { cwd: root }).runCli;
+  const gitAtRoot = (args: string[]) => execFileSync('git', args, { cwd: root, encoding: 'utf8', windowsHide: true }).trim();
+  gitAtRoot(['init', '-b', 'main']);
+  gitAtRoot(['config', 'user.name', 'Sidequest Test']);
+  gitAtRoot(['config', 'user.email', 'sidequest-test@example.invalid']);
+  const project = store.ensureProject(root).slug;
+  const source = store.createTicket(project, {
+    title: 'rejected release candidate', files: ['plugins/fixture-plugin'], complexity: 3,
+    complexityWhy: 'The CLI commit fixture needs a rejected source release fragment.', labels: ['direct-ok'],
+  });
+  const sourceFragment = `.release/unreleased/${source.ref}.md`;
+  fs.mkdirSync(path.join(root, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(root, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(root, 'plugins', 'fixture-plugin', 'index.js'), 'rejected candidate\n');
+  fs.writeFileSync(path.join(root, sourceFragment), 'rejected release fragment\n');
+  gitAtRoot(['add', '.']);
+  gitAtRoot(['commit', '-m', 'rejected release candidate']);
+  const rejectedSource = store.getTicket(project, source.ref);
+  rejectedSource.submission = { review: { outcome: 'rejected' } };
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: rejectedSource.id, project, ref: rejectedSource.ref, status: rejectedSource.status,
+    archived: rejectedSource.archived ? 1 : 0, ord: rejectedSource.order,
+    claim_by: rejectedSource.claim?.by || null, data: rejectedSource,
+  });
+
+  const repair = store.createTicket(project, {
+    title: 'repair rejected release candidate', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    complexityWhy: 'The CLI commit fixture transfers a rejected source release fragment.', labels: ['direct-ok'],
+  });
+  assert.equal(store.linkTickets(project, repair.ref, 'related', source.ref).ok, true);
+  const repairBy = 'cli-repair-worker';
+  assert.equal(store.claimTicket(project, repair.ref, repairBy, { direct: true, reason: 'The CLI fixture requires a local direct claim.' }).ok, true);
+  const repairFragment = `.release/unreleased/${repair.ref}.md`;
+  fs.renameSync(path.join(root, sourceFragment), path.join(root, repairFragment));
+  const admitted = runAtRoot(['commit', repair.ref, '--by', repairBy, '--message', 'transfer rejected release fragment']);
+  assert.equal(admitted.status, 0, admitted.stderr + admitted.stdout);
+  assert.equal(fs.existsSync(path.join(root, repairFragment)), true, 'the related rejected fragment transfer was committed');
+
+  const unrelated = store.createTicket(project, {
+    title: 'unrelated release candidate', files: ['plugins/fixture-plugin'], complexity: 3,
+    complexityWhy: 'The CLI commit fixture needs an unrelated release fragment.', labels: ['direct-ok'],
+  });
+  const unrelatedFragment = `.release/unreleased/${unrelated.ref}.md`;
+  fs.writeFileSync(path.join(root, unrelatedFragment), 'unrelated release fragment\n');
+  gitAtRoot(['add', unrelatedFragment]);
+  gitAtRoot(['commit', '-m', 'unrelated release candidate']);
+  const blocked = store.createTicket(project, {
+    title: 'unrelated fragment removal', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    complexityWhy: 'The CLI commit fixture confirms unrelated release fragments stay protected.', labels: ['direct-ok'],
+  });
+  const blockedBy = 'cli-foreign-fragment-worker';
+  assert.equal(store.claimTicket(project, blocked.ref, blockedBy, { direct: true, reason: 'The CLI fixture requires a local direct claim.' }).ok, true);
+  fs.writeFileSync(path.join(root, 'plugins', 'fixture-plugin', 'index.js'), 'unrelated deletion attempt\n');
+  fs.unlinkSync(path.join(root, unrelatedFragment));
+  const refused = runAtRoot(['commit', blocked.ref, '--by', blockedBy, '--message', 'remove unrelated release fragment']);
+  assert.equal(refused.status, 1);
+  assert.match(refused.stderr + refused.stdout, /except a deleted fragment from a related review-rejected candidate/);
+  assert.match(refused.stderr + refused.stdout, new RegExp(`Other release fragments: \\.release/unreleased/${unrelated.ref}\\.md`));
+});
+
 // SQ-1010: release --force + update --status todo both used to report ok while
 // leaving the submission in place, so the next claim kept refusing the ticket
 // as already-submitted even though it looked reopened. release/update must
