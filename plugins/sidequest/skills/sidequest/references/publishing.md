@@ -7,14 +7,15 @@ ready-for-integration with `sidequest submit` (claim released, status stays `doi
 pushing main, marking done — is ONE serialized transaction owned by the orchestrator. This file is that
 transaction.
 
-`submit` trims the range through the newest integrated submission commit reachable from the submitted
-tip, so a dependent commit on a shared linear history does not reclaim its integrated ancestor. Pass
-`--base <commit>` (or MCP `base`) when an existing submitted or integrated ticket marks the intended
-boundary but automatic selection cannot identify it. Arbitrary commits are rejected as bases, so the
-remaining range still has to satisfy the current ticket's declared scope and ownership checks. For an
+`submit` derives the admitted range from the base recorded on the ticket's dispatch. Pass `--base <commit>`
+(or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must always lie on the
+submitted tip's history, and it must additionally either sit at or after the current merge base or already be
+reachable from the integration branch. A base that is not reachable from the integration branch must match the
+dispatch-recorded boundary; otherwise admission refuses it as `unrecognized_base` and preserves the candidate
+for retry. The range still has to satisfy the current ticket's declared scope and ownership checks. For an
 executor based on a feature branch, pass that branch as MCP dispatch `integrationBranch`. The dispatch
-records that target and its starting commit. Merge commits before the starting commit stay in parent history; the submitted range itself
-remains linear.
+records that target and its starting commit. A submitted range may contain merge commits; validate its
+reachable range and scope instead of treating a merge commit as an automatic refusal.
 
 A retryable admission refusal preserves the claim plus the immutable candidate, changed surfaces, Git ref, optional worktree, verifier evidence, diagnostics, and foreign working paths. A retry may send only corrected verifier evidence; the checkpoint supplies omitted candidate fields and the original verifier. For non-Git candidates, the server integration registers `store.registerSourceRevisionCapability(project, resolver)`. Sidequest restores a checkpointed candidate before calling the current project resolver exactly once with that candidate and dispatch-pinned baseline. The result, including null or an exception, stays bound to both and is never re-probed by the store. A replacement registration invalidates the earlier resolver; either unregister callback only removes its own current generation and never restores a stale resolver. CLI and MCP callers cannot supply existence or baseline-membership facts or replace a checkpointed candidate. A missing or unavailable capability returns `baseline_membership_unavailable` and keeps the checkpoint for retry. Update `refs/sidequest/<SQ-n>` only when an explicit rework transition creates a different candidate. Do not sync onto a moving integration tip to work around an admission refusal.
 
@@ -33,10 +34,16 @@ push — instead of one transaction per ticket. Don't wait on work that isn't in
 
 ## Delivery modes
 
-The orchestrator is the integrator. A submitted range stays pinned at `refs/sidequest/<SQ-n>` and
-`sidequest integrate <ref> --by <who> --mode <merge|replay|apply>` records that recoverable hash before
-it touches the checkout. It validates the submitted range and admitted scope again, names any stray
-paths, and never deletes the pinned ref.
+The orchestrator is the integrator. A submitted range stays pinned at `refs/sidequest/<SQ-n>` until
+its exact assembled wave has delivered. A singleton can be assembled and gated during `integrate`; for
+a group, first run `sidequest assemble-wave <SQ-n> [SQ-n...] --verify "<gate evidence>"`, then pass
+that exact same participant set to `sidequest integrate`. The engine refuses delivery when the group
+has no passing assembled-wave gate, includes a participant from another wave, omits a participant, or
+tries to deliver one participant from a multi-ticket wave. It records delivery only after one passing
+wave delivers its exact Git participant set and the resulting revision passes its delivery verification.
+`integrate <ref> --by <who> --mode <merge|replay|apply>` performs that delivery and closes every
+participant only after the record exists. It validates each submitted range and admitted scope again,
+names stray paths, and never deletes a pinned ref.
 
 - `merge` is the default for release-pipeline repos such as Toolshed. It merges the submitted tip into
   the configured integration branch.
@@ -48,8 +55,6 @@ paths, and never deletes the pinned ref.
 
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.
-If a publish lock is active, acquire it before delivery. `integrate` closes the delivered ticket with the
-same control-plane integration bookkeeping as `groom-close --integration`.
 
 If a repair ticket deliberately delivers an earlier parked submission, do not replay the obsolete range. Use MCP `supersede_submission` with the earlier ref, the later integrated repair ref, concise closure evidence, and `reviewedReplacements` for every original path whose delivered content intentionally differs. The control plane requires the repair's recorded delivery to include every original changed path, preserves the earlier submission and its lineage under `supersededBy`, marks it done, and removes its pending-submission warning. A missing path, an unintegrated repair, or unreviewed divergent content leaves the original submission parked.
 
@@ -57,10 +62,10 @@ If a repair ticket deliberately delivers an earlier parked submission, do not re
 
 `board-config --integration-mode local` records ranges against local `main`; `auto` chooses that mode when
 `origin` is absent. Integrate in a clean worktree from `main`, run the same reachability checks against
-`main`, then skip fetch and push. `groom-close --integration` fast-forwards local `main` onto the integrated
-commit itself, so you no longer have to make it reachable first. It only ever fast-forwards, only onto a commit
-that provably carries the closed ticket's work, and only while the main checkout sits on that branch with clean
-tracked files. Anything else refuses and prints the `git merge --ff-only` to run by hand. Remote mode keeps the
+`main`, then skip fetch and push. Local delivery uses the same assembled-wave gate: assemble the exact
+participant set, record a passing gate, and deliver it through `integrate` before any participant can
+be recorded as delivered or closed. The configured delivery mode runs only from a clean checkout on
+the target branch; any other checkout state refuses and names the condition. Remote mode keeps the
 transaction below unchanged; an existing but broken upstream still rejects the submission.
 
 ## The publish transaction
@@ -84,32 +89,32 @@ board (submissions stay parked — fail closed).
    Install the touched plugin's dependencies before reverifying, for this repo:
    `cd <worktree>/plugins/<name> && npm ci`. Never integrate in the shared session tree — pre-staged
    or dirty files there are exactly the contamination this flow exists to prevent.
-5. **Reconstruct each admitted submission before integration**. Resolve its durable ref and require
-   it still points to the submitted tip. Require the recorded upstream commit to remain reachable from
-   the current recorded integration target, then require the stored base to lie on the tip's history and
-   either follow their merge-base or already be reachable from that integration target. A prior
-   submission's original commit can be a valid base even when integration cherry-picked it to a new
-   hash. Compare `git rev-list --reverse <base>..<tip>` to the queue's ordered `commits` array exactly.
-   Reject an empty range, a merge commit inside that submitted range, divergent or unrelated history,
-   or a range containing a commit from another queued ticket. Merge commits before `<base>` are parent
-   history and do not belong to the submitted range. Scope admission is already mechanical at queue
-   read and again at integration closure, against the immutable submit-time snapshot. Leave rejected
-   submissions parked.
-6. **Integrate each admitted range**, oldest first: `git cherry-pick <commit-1> ... <commit-n>`. The
-   durable tip ref keeps every ancestor in that range reachable. Save `git diff --binary <base> <tip>`
-   before cherry-picking, then run `git apply --check --reverse <saved-patch>` in the integration worktree
-   after the range lands. That confirms the integrated tree contains the complete submitted diff. A
-   conflict or reverse-check failure means abort or rebuild the integration worktree, skip the ticket,
-   and file a narrowly scoped integration ticket; keep integrating the rest.
+5. **Reconstruct each admitted submission before assembly**. Resolve its durable ref and require it
+   still points to the submitted tip. Require the recorded upstream commit to remain reachable from
+   the current recorded integration target, then require the stored dispatch base to lie on the tip's
+   history and either follow their merge-base or already be reachable from that integration target.
+   Compare `git rev-list --reverse <base>..<tip>` to the queue's ordered `commits` array exactly.
+   Reject an empty range, divergent or unrelated history, or a range containing a commit from another
+   queued ticket. A merge commit inside the submitted range is admissible when this reconstruction and
+   scope admission pass. Scope admission is mechanical at queue read and again at delivery closure,
+   against the immutable submit-time snapshot. Leave rejected submissions parked.
+6. **Assemble and deliver exact waves**, oldest compatible waves first. For every group, call
+   `sidequest assemble-wave` with every intended participant and its project-defined gate evidence.
+   It invalidates candidates with a moved baseline, missing verifier, out-of-scope surfaces, or an
+   overlapping participant surface. Pass only the exact participant set from the passing assembly to
+   `sidequest integrate`; a partial set, a mixed wave, or a failed/missing gate refuses before a
+   delivery record exists. `integrate` delivers all Git participants as one unit, verifies the
+   resulting revision, then records delivery for every participant. A conflict or failed delivery
+   verification rolls back the delivery, leaves the wave parked, and requires a repair or refreshed
+   assembly.
 7. **Assign versions centrally**: for each plugin touched by the integrated set, take origin's next
    free version ONCE for the batch and bump BOTH `plugins/<name>/.claude-plugin/plugin.json` and the
    root `.claude-plugin/marketplace.json` (they must match) in one commit. Executors no longer bump
    anything, so versioning has exactly one writer: this step.
-8. **Reverify per ticket, post-integration**: run each integrated ticket's exact verify command
-   (from the queue entry / ticket `--verify`) from the integration worktree root. Submission commands
-   must use repo-relative paths, so this is the same command the executor ran. A red here means the
-   commit does not survive integration: drop that ticket's range (rebuild the worktree or
-   `git revert` its commits), file the integration ticket, continue with the green rest.
+8. **Require delivery verification**: `integrate` runs the pinned project verifier against the
+   resulting revision before it records delivery for an assembled wave. A red result rolls back the
+   delivery and leaves every participant parked. Do not record or close a participant through an
+   administrative closure to bypass this gate.
 9. **Seam check the batch**: with 2+ integrated commits, run the shared suite the tickets sit in
    (for this repo: `node --test plugins/sidequest/test/*.test.js`, or the suites of the touched
    plugins) so per-ticket-green but jointly-red seams are caught before the push.
@@ -133,15 +138,15 @@ board (submissions stay parked — fail closed).
 11. **Push and confirm**: `git push origin HEAD:main` from the integration worktree — never a new
    branch. A non-fast-forward → `git pull --rebase origin main`, rerun steps 8-10, push again. Then
    fetch fresh and confirm the integrated commits (the cherry-picked equivalents, not the submitted
-   range hashes) are covered by `git log origin/main`; step 6's reverse-diff check already proved
-   content completeness.
-12. **Mark done + clean up**, only after every integrated commit is reachable: for each shipped ticket
-   `sidequest groom-close <ref> --by <session-worker-id> --integration --reason "Integrated <commit> into origin/main."`
-   (the control-plane integration closure consumes the submission, records the pushed commit as
-   evidence, and removes the ticket from the integration queue). Then delete its durable ref (`git
-   update-ref -d refs/sidequest/<SQ-n>`), remove the integration worktree (`git worktree remove
-   <scratch>/sq-integrate`), and `sidequest publish unlock --by <session-worker-id>`. Unlock happens
-   LAST, in a step that runs even when earlier cleanup partially fails.
+   range hashes) are covered by `git log origin/main`; the assembled-wave record identifies the exact
+   participant set whose delivered content passed verification.
+12. **Confirm delivery, then clean up**: `integrate` records delivery and closes every exact wave
+    participant only after the full participant set landed and its delivery verification passed. Do
+    not use `groom-close --integration` as a publish step or to close a wave participant individually.
+    After every delivered commit is reachable, remove its durable ref (`git update-ref -d
+    refs/sidequest/<SQ-n>`), remove the integration worktree (`git worktree remove
+    <scratch>/sq-integrate`), and `sidequest publish unlock --by <session-worker-id>`. Unlock happens
+    LAST, in a step that runs even when earlier cleanup partially fails.
 
 ## Integration failures fail closed
 

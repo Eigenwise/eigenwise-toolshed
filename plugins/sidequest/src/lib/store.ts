@@ -1036,6 +1036,7 @@ const {
   recordDeliveredSubmission,
   recordAbandonedSubmission,
   integrateSubmission,
+  integrateSubmissionWave,
   closeSubmissionAsSuperseded,
   submissionOwnershipFailure,
   submitTicket,
@@ -1043,7 +1044,8 @@ const {
   reconcileSubmissionRejections,
   reworkSubmission,
   clearSubmission,
-  submissionBaseCandidates,
+  assembleSubmissionWave,
+  recordSubmissionWaveDelivery,
   submissionsPayload,
 } = createSubmissions({
   EXECUTOR_VERIFY_MAX,
@@ -1534,9 +1536,14 @@ function directReasonAllowed(reason?: any) {
   return !INVALID_DIRECT_REASON_PATTERNS.some((pattern) => pattern.test(String(reason || '')));
 }
 
-function lifecycleBaseline(ticket: any, purpose: 'dispatch' | 'wave' | 'submission') {
+function lifecycleBaseline(slug: any, ticket: any, purpose: 'dispatch' | 'wave' | 'submission') {
   const preparedAt = String(ticket.dispatch?.preparedAt || ticket.updatedAt || new Date().toISOString());
-  return Object.freeze({ revision: Object.freeze({ source: 'board', value: String(ticket.id || ticket.ref), observedAt: preparedAt }), purpose });
+  const projectPath = String(readMeta(slug)?.path || '').trim();
+  const commit = projectPath ? commitScope.headCommit(projectPath) : null;
+  return Object.freeze({
+    revision: Object.freeze({ source: commit ? 'git' : 'board', value: String(commit || ticket.id || ticket.ref), observedAt: preparedAt }),
+    purpose,
+  });
 }
 
 function recordLifecycleAttempt(ticket: any, attempt: any) {
@@ -1544,9 +1551,9 @@ function recordLifecycleAttempt(ticket: any, attempt: any) {
   if (ticket.dispatch) ticket.dispatch.lifecycleAttempt = attempt;
 }
 
-function lifecycleAttemptFromFacts(ticket: any, authority: any, purpose: 'dispatch' | 'wave' | 'submission', direct: boolean) {
+function lifecycleAttemptFromFacts(slug: any, ticket: any, authority: any, purpose: 'dispatch' | 'wave' | 'submission', direct: boolean) {
   const persistedAttempt = ticket.lifecycleAttempt || ticket.dispatch?.lifecycleAttempt;
-  const baseline = persistedAttempt?.baseline || lifecycleBaseline(ticket, purpose);
+  const baseline = persistedAttempt?.baseline || lifecycleBaseline(slug, ticket, purpose);
   const preparedCompatibility = persistedAttempt?.preparedCompatibility || ticket.dispatch?.preparedCompatibility;
   let current: any = direct
     ? prepareDirectAttempt(baseline, persistedAttempt?.authority || authority)
@@ -1697,8 +1704,8 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     const lifecycleAuthority = { actor: by, operation: 'claim', sessionId: opts.sessionId || null };
     const directExecution = opts.direct || !currentDispatch;
     let activeAttempt = directExecution
-      ? lifecycleAttemptFromFacts(t, lifecycleAuthority, 'dispatch', true)
-      : lifecycleAttemptFromFacts(t, lifecycleAuthority, 'dispatch', false);
+      ? lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, 'dispatch', true)
+      : lifecycleAttemptFromFacts(slug, t, lifecycleAuthority, 'dispatch', false);
     if (!directExecution && opts.requireBoundAgent && currentDispatch && activeAttempt.state === 'prepared') {
       const boundAttempt = bindDispatchClaimToken(currentDispatch, activeAttempt, opts.sessionId, opts.executor, now);
       if (boundAttempt) activeAttempt = boundAttempt;
@@ -2494,7 +2501,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     ticket,
   };
   if (purpose === 'integration') {
-    const admitted = validateIntegrationSubmission(slug, idOrRef);
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireDeliveredWave: true });
     if (!admitted.ok) return admitted;
   }
   const recorded = delivery;
@@ -2872,6 +2879,7 @@ module.exports = {
   recordDeliveredSubmission,
   recordAbandonedSubmission,
   integrateSubmission,
+  integrateSubmissionWave,
   submissionUsesGit,
   closeSubmissionAsSuperseded,
   verifyIntegration,
@@ -2963,9 +2971,10 @@ module.exports = {
   reconcileSubmissionRejections,
   reworkSubmission,
   clearSubmission,
+  assembleSubmissionWave,
+  recordSubmissionWaveDelivery,
   pendingSubmission,
   submissionReadiness,
-  submissionBaseCandidates,
   submissionsPayload,
   claimNext,
   assignTicket,

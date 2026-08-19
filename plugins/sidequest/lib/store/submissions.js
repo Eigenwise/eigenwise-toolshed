@@ -4,6 +4,8 @@ const { runProcessVerification } = require("../ports/process.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
+const { assembleWave, openWave, recordAssembledWaveGate, recordWaveDelivery } = require("../kernel/wave");
+const { isInScope, scopedPaths } = require("../scope-match");
 function createSubmissions(dependencies) {
   const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
@@ -438,7 +440,8 @@ Expires: ${checkpoint.expiresAt}`;
     );
   }
   function pendingSubmission(t) {
-    return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt);
+    const invalidated = t?.submission?.wave?.state === "invalidated";
+    return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt && !invalidated);
   }
   function submissionGitRef(ticket) {
     return `refs/sidequest/${ticket.ref}`;
@@ -577,7 +580,7 @@ ${verify.outputTail}` : null
     if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
     return integrationGit(repo, ["diff", "--name-only", submission.base, submission.commit]).split(/\r?\n/).filter(Boolean);
   }
-  function validateIntegrationSubmission(slug, idOrRef) {
+  function validateIntegrationSubmission(slug, idOrRef, opts) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
     if (!pendingSubmission(ticket)) {
@@ -639,6 +642,18 @@ ${verify.outputTail}` : null
         ticket,
         scopeValidation,
         message: `${scopeFailure} Preserve this candidate with rework and submit a fresh candidate against the admitted scope, or close it with supersede_submission after an integrated reviewed replacement.`
+      };
+    }
+    if (opts?.requireAssembledWave) {
+      const waveGate = assembledWaveForDelivery(slug, ticket);
+      if (!waveGate.ok) return Object.assign({ ticket }, waveGate);
+    }
+    if (opts?.requireDeliveredWave && ticket.submission?.wave?.delivery?.state !== "delivered") {
+      return {
+        ok: false,
+        reason: "assembled_wave_delivery_required",
+        ticket,
+        message: `${ticket.ref} requires recorded delivery from its passing assembled wave before integration closure.`
       };
     }
     return { ok: true, ticket, scopeValidation };
@@ -731,6 +746,15 @@ ${verify.outputTail}` : null
         message: `${ticket.ref} requires attestation or review evidence for integration without process capability.`
       });
     }
+    if (!verificationAccepted(verify)) {
+      return integrationFailure(slug, ticket, {
+        reason: `${verificationOutcome(verify)}_delivery`,
+        verify,
+        message: `${ticket.ref} delivery verification returned ${verify.status}.`
+      });
+    }
+    const delivery = recordTicketWaveDelivery(slug, ticket, submission.sourceRevision, verify);
+    if (!delivery.ok) return integrationFailure(slug, ticket, { reason: delivery.reason, verify, message: delivery.message });
     const integratedAt = (/* @__PURE__ */ new Date()).toISOString();
     const integration = {
       mode: "source-revision",
@@ -783,7 +807,11 @@ ${verify.outputTail}` : null
   }
   function recordDeliveredSubmission(slug, idOrRef, opts) {
     opts = opts || {};
-    const admitted = validateIntegrationSubmission(slug, idOrRef);
+    const preflight = validateIntegrationSubmission(slug, idOrRef);
+    if (!preflight.ok) return preflight;
+    const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
+    if (!assembled.ok) return assembled;
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
     if (!admitted.ok) return admitted;
     const ticket = admitted.ticket;
     if (!submissionUsesGit(ticket)) return { ok: false, reason: "git_delivery_required", ticket, message: `${ticket.ref} has no Git candidate to reconcile.` };
@@ -822,6 +850,8 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`
         });
       }
+      const waveDelivery = recordTicketWaveDelivery(slug, ticket, { source: "git", value: resultingHead, observedAt: (/* @__PURE__ */ new Date()).toISOString() }, verify);
+      if (!waveDelivery.ok) return integrationFailure(slug, ticket, { reason: waveDelivery.reason, verify, message: waveDelivery.message });
       const recorded = updateSubmissionIntegration(slug, ticket.id, {
         mode: "recorded",
         pinnedRef: submissionGitRef(ticket),
@@ -901,10 +931,15 @@ ${verify.outputTail}` : null
   }
   function integrateSubmission(slug, idOrRef, opts) {
     opts = opts || {};
-    const admitted = validateIntegrationSubmission(slug, idOrRef);
-    if (!admitted.ok) return admitted;
-    const ticket = admitted.ticket;
-    if (!submissionUsesGit(ticket)) return integrateArtifactSubmission(slug, ticket, opts);
+    const preflight = validateIntegrationSubmission(slug, idOrRef);
+    if (!preflight.ok) return preflight;
+    const ticket = preflight.ticket;
+    if (!submissionUsesGit(ticket)) {
+      const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
+      if (!assembled.ok) return assembled;
+      const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
+      return admitted.ok ? integrateArtifactSubmission(slug, admitted.ticket, opts) : admitted;
+    }
     const project = readMeta(slug);
     const repo = project?.path;
     const target = opts.target;
@@ -925,18 +960,194 @@ ${verify.outputTail}` : null
       releaseLock(lock, lockLease);
     }
   }
+  function exactAssembledWave(slug, refs) {
+    const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
+    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Delivery requires one or more assembled participant refs." };
+    for (const ref of participantRefs) {
+      const admission = validateIntegrationSubmission(slug, ref);
+      if (!admission.ok) {
+        return {
+          ok: false,
+          reason: String(admission.reason || "submission_required"),
+          ...admission.message ? { message: admission.message } : {}
+        };
+      }
+    }
+    const tickets = participantRefs.map((ref) => getTicket(slug, ref));
+    const wave = tickets[0]?.submission.wave;
+    const expectedParticipants = Array.isArray(wave?.participants) ? wave.participants.slice().sort() : [];
+    const requestedParticipants = participantRefs.slice().sort();
+    if (!wave || wave.gate?.state !== "gate_passed" || expectedParticipants.length !== requestedParticipants.length || expectedParticipants.some((ref, index) => ref !== requestedParticipants[index]) || tickets.some((ticket) => ticket.submission.wave?.id !== wave.id || ticket.submission.wave?.gate?.state !== "gate_passed")) {
+      return {
+        ok: false,
+        reason: "assembled_wave_gate_required",
+        tickets,
+        message: "Delivery requires the exact participant set from one passing assembled wave."
+      };
+    }
+    return { ok: true, tickets, wave, participantRefs };
+  }
+  function integrateSubmissionWave(slug, refs, opts) {
+    opts = opts || {};
+    const assembled = exactAssembledWave(slug, refs);
+    if (!assembled.ok) return assembled;
+    const firstTicket = assembled.tickets[0];
+    if (!firstTicket) return { ok: false, reason: "wave_participants_required", message: "Delivery requires one or more assembled participant refs." };
+    if (assembled.tickets.length === 1) return integrateSubmission(slug, firstTicket.ref, opts);
+    if (assembled.tickets.some((ticket) => !submissionUsesGit(ticket))) {
+      if (assembled.tickets.some(submissionUsesGit)) {
+        return { ok: false, reason: "wave_project_kind_mismatch", tickets: assembled.tickets, message: "A wave cannot deliver Git and non-Git candidates through one adapter." };
+      }
+      const revision = sourceRevisionMetadata(opts.deliveryRevision);
+      if (!revision) {
+        return { ok: false, reason: "wave_delivery_revision_required", tickets: assembled.tickets, message: `Wave ${assembled.wave.id} delivery requires the immutable resulting source revision.` };
+      }
+      const verification = opts.deliveryVerification;
+      if (!verificationAccepted(verification)) {
+        return { ok: false, reason: "wave_delivery_verification_required", tickets: assembled.tickets, message: `Wave ${assembled.wave.id} delivery requires accepted immutable verification evidence for ${revision.source}:${revision.value}.` };
+      }
+      const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, revision, verification);
+      if (!delivered.ok) return delivered;
+      const deliveredAt = (/* @__PURE__ */ new Date()).toISOString();
+      const integrations = assembled.tickets.map((ticket) => updateSubmissionIntegration(slug, ticket.id, {
+        mode: "source-revision",
+        outcome: "verified",
+        sourceRevision: revision,
+        deliveredAt,
+        verifiedAt: deliveredAt,
+        deliveredFiles: ticket.submission.changedPaths || [],
+        verify: verification
+      }));
+      const failedIntegration = integrations.find((integration) => !integration.ok);
+      if (failedIntegration) return failedIntegration;
+      return {
+        ok: true,
+        tickets: integrations.map((integration) => integration.ticket),
+        wave: delivered.delivery,
+        integration: { mode: "source-revision", sourceRevision: revision, verify: verification, participants: assembled.participantRefs }
+      };
+    }
+    const project = readMeta(slug);
+    const repo = project?.path;
+    const target = opts.target;
+    if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets };
+    let lock;
+    try {
+      lock = deliveryLockPath(repo);
+    } catch (error) {
+      return { ok: false, reason: "integration_target_unavailable", tickets: assembled.tickets, message: integrationGitError(error) };
+    }
+    const lockLease = acquireLock(lock, { wait: false });
+    if (!lockLease) return deliveryInProgress(assembled.tickets[0]);
+    try {
+      lockLease.refresh();
+      const checkoutState = integrationTargetCheckoutState(repo);
+      if (checkoutState.length) {
+        return {
+          ok: false,
+          reason: "integration_target_dirty",
+          tickets: assembled.tickets,
+          checkoutState,
+          message: `${normalizeDeliveryMode(opts.mode)} refused; integration target has pending checkout state.`
+        };
+      }
+      const mode = normalizeDeliveryMode(opts.mode);
+      const currentBranch = integrationGit(repo, ["branch", "--show-current"]);
+      if (currentBranch !== target.branch) {
+        return { ok: false, reason: "branch_not_checked_out", tickets: assembled.tickets, message: `${target.branch} must be checked out before wave delivery; currently on ${currentBranch || "detached HEAD"}.` };
+      }
+      const candidates = [];
+      for (const ticket of assembled.tickets) {
+        const submission = ticket.submission;
+        const gitRef = String(submission.gitRef || submissionGitRef(ticket));
+        const pinnedCommit = integrationGit(repo, ["rev-parse", "--verify", `${gitRef}^{commit}`]).toLowerCase();
+        if (pinnedCommit !== String(submission.commit).toLowerCase()) {
+          return { ok: false, reason: "pinned_ref_mismatch", ticket, tickets: assembled.tickets, message: `${gitRef} points to ${pinnedCommit}, not submitted ${submission.commit}.` };
+        }
+        candidates.push({ ticket, submission, gitRef, pinnedCommit, changedPaths: changedIntegrationPaths(repo, submission) });
+      }
+      const before = integrationGit(repo, ["rev-parse", "HEAD"]);
+      try {
+        for (const candidate of candidates) {
+          if (candidate.submission.noOp) continue;
+          if (mode === "merge") {
+            integrationGit(repo, ["merge", "--no-ff", "--no-edit", candidate.pinnedCommit]);
+            continue;
+          }
+          const commits = Array.isArray(candidate.submission.commits) && candidate.submission.commits.length ? candidate.submission.commits : [candidate.submission.commit];
+          for (const commit of commits) integrationGit(repo, ["cherry-pick", ...mode === "apply" ? ["--no-commit"] : [], commit]);
+        }
+      } catch (error) {
+        const conflictedPaths = unmergedIntegrationPaths(repo);
+        const message = integrationConflictMessage(error, conflictedPaths);
+        try {
+          restoreCleanIntegrationCheckout(repo, before);
+        } catch (rollbackError) {
+          return { ok: false, reason: "wave_delivery_rollback_failed", tickets: assembled.tickets, before, conflictedPaths, message: `${message} Rollback failed: ${integrationGitError(rollbackError)}` };
+        }
+        return { ok: false, reason: "wave_delivery_failed", tickets: assembled.tickets, before, conflictedPaths, message };
+      }
+      const resultingHead = integrationGit(repo, ["rev-parse", "HEAD"]);
+      const verification = verifyDeliveredSubmission(slug, assembled.tickets[0], opts);
+      if (!verificationAccepted(verification)) {
+        try {
+          restoreCleanIntegrationCheckout(repo, before);
+        } catch (rollbackError) {
+          return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery_rollback_failed`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} verification failed and rollback failed: ${integrationGitError(rollbackError)}` };
+        }
+        return { ok: false, reason: `${verificationOutcome(verification)}_wave_delivery`, tickets: assembled.tickets, before, verify: verification, message: `Wave ${assembled.wave.id} delivery verification returned ${verification.status}.` };
+      }
+      const delivered = recordSubmissionWaveDelivery(slug, assembled.participantRefs, { source: "git", value: resultingHead, observedAt: (/* @__PURE__ */ new Date()).toISOString() }, verification);
+      if (!delivered.ok) return delivered;
+      const deliveredAt = (/* @__PURE__ */ new Date()).toISOString();
+      const integrations = candidates.map((candidate) => updateSubmissionIntegration(slug, candidate.ticket.id, {
+        mode,
+        targetBranch: target.branch,
+        targetUpstream: target.upstream,
+        pinnedRef: candidate.gitRef,
+        pinnedCommit: candidate.pinnedCommit,
+        changedPaths: candidate.changedPaths,
+        outcome: "verified",
+        deliveredAt,
+        verifiedAt: deliveredAt,
+        resultingHead,
+        deliveredFiles: candidate.changedPaths,
+        dirtyFiles: mode === "apply" ? candidate.changedPaths : [],
+        verify: verification
+      }));
+      const failedIntegration = integrations.find((integration) => !integration.ok);
+      if (failedIntegration) return failedIntegration;
+      return {
+        ok: true,
+        tickets: integrations.map((integration) => integration.ticket),
+        wave: delivered.delivery,
+        integration: {
+          mode,
+          targetBranch: target.branch,
+          targetUpstream: target.upstream,
+          resultingHead,
+          pinnedCommits: candidates.map((candidate) => candidate.pinnedCommit),
+          participants: assembled.participantRefs,
+          verify: verification
+        }
+      };
+    } catch (error) {
+      return { ok: false, reason: "wave_delivery_error", tickets: assembled.tickets, message: integrationGitError(error) };
+    } finally {
+      lockLease.refresh();
+      releaseLock(lock, lockLease);
+    }
+  }
   function integrateSubmissionUnlocked(slug, idOrRef, opts) {
     opts = opts || {};
-    const admitted = validateIntegrationSubmission(slug, idOrRef);
-    if (!admitted.ok) return admitted;
-    const ticket = admitted.ticket;
+    const preflight = validateIntegrationSubmission(slug, idOrRef);
+    if (!preflight.ok) return preflight;
+    let ticket = preflight.ticket;
     const project = readMeta(slug);
     const repo = project?.path;
     const mode = normalizeDeliveryMode(opts.mode);
     const target = opts.target;
     if (!repo || !target || !target.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
-    const submission = ticket.submission;
-    const gitRef = String(submission.gitRef || submissionGitRef(ticket));
     let checkoutState;
     try {
       checkoutState = integrationTargetCheckoutState(repo);
@@ -952,6 +1163,13 @@ ${verify.outputTail}` : null
         message: `${mode} refused; integration target has pending checkout state.`
       };
     }
+    const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
+    if (!assembled.ok) return assembled;
+    const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
+    if (!admitted.ok) return admitted;
+    ticket = admitted.ticket;
+    const submission = ticket.submission;
+    const gitRef = String(submission.gitRef || submissionGitRef(ticket));
     let pinnedCommit;
     let changedPaths;
     let delivered = null;
@@ -980,7 +1198,7 @@ ${verify.outputTail}` : null
       if (currentBranch !== target.branch) {
         return integrationFailure(slug, ticket, { reason: "branch_not_checked_out", message: `${target.branch} must be checked out before integration; currently on ${currentBranch || "detached HEAD"}.` });
       }
-      if (admitted.scopeValidation.reconciled) {
+      if ("scopeValidation" in admitted && admitted.scopeValidation?.reconciled) {
         const resultingHead2 = integrationGit(repo, ["rev-parse", "HEAD"]);
         const verify2 = verifyDeliveredSubmission(slug, ticket, opts);
         const acceptedVerify2 = verificationAccepted(verify2);
@@ -992,6 +1210,8 @@ ${verify.outputTail}` : null
           });
         }
         delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead: resultingHead2 };
+        const waveDelivery2 = recordTicketWaveDelivery(slug, ticket, { source: "git", value: resultingHead2, observedAt: (/* @__PURE__ */ new Date()).toISOString() }, verify2);
+        if (!waveDelivery2.ok) return integrationFailure(slug, ticket, { reason: waveDelivery2.reason, verify: verify2, message: waveDelivery2.message });
         const result2 = updateSubmissionIntegration(slug, ticket.id, {
           outcome: "delivered",
           deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -1060,6 +1280,8 @@ ${verify.outputTail}` : null
       const acceptedVerify = verificationAccepted(verify);
       if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
       delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
+      const waveDelivery = recordTicketWaveDelivery(slug, ticket, { source: "git", value: resultingHead, observedAt: (/* @__PURE__ */ new Date()).toISOString() }, verify);
+      if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
       const result = updateSubmissionIntegration(slug, ticket.id, {
         outcome: "delivered",
         deliveredAt: (/* @__PURE__ */ new Date()).toISOString(),
@@ -1248,7 +1470,7 @@ ${verify.outputTail}` : null
       const verify = submissionOptions.verify != null && String(submissionOptions.verify).trim() ? String(submissionOptions.verify).trim().slice(0, EXECUTOR_VERIFY_MAX) : null;
       const worktree = submissionOptions.worktree != null && String(submissionOptions.worktree).trim() ? String(submissionOptions.worktree).trim().slice(0, SUBMISSION_WORKTREE_MAX) : null;
       const range = sourceRevision ? null : submissionRangeMetadata(submissionOptions.range, commit);
-      const pinnedBaseline = sourceRevision ? sourceRevisionBaseline(t) : null;
+      const pinnedBaseline = sourceRevisionBaseline(t);
       const resolvedSourceRevisionFacts = sourceRevision ? isSourceRevisionAdapterFacts(submissionOptions.admissionFacts) ? submissionOptions.admissionFacts : null : submissionOptions.admissionFacts;
       const admissionOptions = sourceRevision ? { ...submissionOptions, admissionFacts: resolvedSourceRevisionFacts } : submissionOptions;
       const admission = submissionAdmissionDecision(slug, t, by, admissionOptions, sourceRevision, pinnedBaseline, range, verify, changedSurfaces);
@@ -1266,7 +1488,7 @@ ${verify.outputTail}` : null
           range,
           unscopedPaths: submissionOptions.unscopedPaths || [],
           projectCapabilities,
-          ...sourceRevision && pinnedBaseline ? { baseline: pinnedBaseline } : {},
+          ...pinnedBaseline ? { baseline: pinnedBaseline } : {},
           admissionFacts: sourceRevision ? null : admissionOptions.admissionFacts || null,
           diagnostics: admission.decision.diagnostics,
           foreignWorkingPaths: decisionForeignWorkingPaths
@@ -1312,6 +1534,7 @@ ${verify.outputTail}` : null
         verificationResult: submissionVerification.result,
         worktree,
         admittedScope,
+        ...pinnedBaseline ? { baseline: pinnedBaseline } : {},
         unscopedPaths: gatedPaths,
         ...rejectedSubmission ? { supersedesRejectedSubmission: rejectedSubmission.commit } : {},
         ...inheritedPaths.length ? { inheritedPaths } : {},
@@ -1777,20 +2000,260 @@ ${verify.outputTail}` : null
       return { ok: true, ticket, cleared };
     });
   }
-  function submissionBaseCandidates(slug, idOrRef, opts) {
-    const excluded = idOrRef == null ? null : getTicket(slug, idOrRef);
-    const integratedOnly = !!(opts && opts.integratedOnly);
-    const commits = /* @__PURE__ */ new Set();
-    for (const ticket of listTickets(slug)) {
-      if (excluded && ticket.id === excluded.id) continue;
-      const submission = ticket.submission;
-      const commit = String(submission && submission.commit || "").trim().toLowerCase();
-      const rangeCommits = submission && Array.isArray(submission.commits) ? submission.commits : [];
-      if (!submission || !SUBMISSION_COMMIT_RE.test(commit) || !SUBMISSION_COMMIT_RE.test(String(submission.base || "")) || !rangeCommits.length || String(rangeCommits[rangeCommits.length - 1]).trim().toLowerCase() !== commit) continue;
-      if (integratedOnly && !submission.integratedAt) continue;
-      commits.add(commit);
+  function hasLiveClaim(ticket) {
+    return Boolean(ticket?.claim?.by) && !claimReclaimable(ticket);
+  }
+  function waveScopeConflicts(slug, tickets) {
+    const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
+    const conflicts = [];
+    for (const participant of tickets) {
+      const participantScope = scopedPaths(executionScope(slug, participant));
+      for (const sibling of listTickets(slug)) {
+        if (sibling.archived || sibling.status === "done" || participantRefs.has(sibling.ref) || !hasLiveClaim(sibling)) continue;
+        const siblingScope = scopedPaths(executionScope(slug, sibling));
+        const surfaces = participantScope.filter((surface) => isInScope(surface, siblingScope) || siblingScope.some((siblingSurface) => isInScope(siblingSurface, [surface])));
+        if (surfaces.length) conflicts.push({ participant: participant.ref, sibling: sibling.ref, surfaces });
+      }
     }
-    return Array.from(commits);
+    return conflicts;
+  }
+  function waveVerificationRequirement(tickets) {
+    const requirements = tickets.map(pinnedVerificationRequirement);
+    const first = requirements[0];
+    if (!first) return { ok: false, reason: "wave_verification_required", message: "Wave assembly requires a pinned project verification requirement." };
+    const identity = JSON.stringify({ kind: first.kind, command: first.command || null, evidenceContract: first.evidenceContract, artifact: first.artifact || null });
+    if (requirements.some((requirement) => JSON.stringify({ kind: requirement.kind, command: requirement.command || null, evidenceContract: requirement.evidenceContract, artifact: requirement.artifact || null }) !== identity)) {
+      return {
+        ok: false,
+        reason: "wave_verifier_mismatch",
+        message: "Wave assembly requires one project-defined verification gate. Its participants pin different verifier requirements, so split the wave or refresh and reverify them against the same gate."
+      };
+    }
+    return { ok: true, requirement: first };
+  }
+  function authoritativeWaveVerification(slug, tickets, waveId, supplied, opts) {
+    const requirement = waveVerificationRequirement(tickets);
+    if (!requirement.ok) return requirement;
+    if (opts?.skipVerify === true) return { ok: true, verification: skippedVerification(requirement.requirement, opts.verificationWaiver) };
+    if (requirement.requirement.command) {
+      const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
+      const candidateWorktree = tickets.length === 1 ? String(tickets[0]?.submission?.worktree || "").trim() : "";
+      return {
+        ok: true,
+        verification: runProcessVerification(requirement.requirement, {
+          cwd: candidateWorktree || readMeta(slug)?.path,
+          timeoutMilliseconds,
+          logPath: integrationVerifyLogPath(slug, { ref: waveId }),
+          outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+        })
+      };
+    }
+    if (!supplied || typeof supplied !== "object" || String(supplied.kind || "") !== requirement.requirement.kind) {
+      return {
+        ok: false,
+        reason: "wave_verification_required",
+        message: `Wave ${waveId} requires recorded ${requirement.requirement.kind} gate evidence from the project-defined verifier before delivery.`
+      };
+    }
+    return { ok: true, verification: supplied };
+  }
+  function assembledWaveForDelivery(slug, ticket) {
+    const wave = ticket?.submission?.wave;
+    if (!wave?.gate || wave.gate.state !== "gate_passed") {
+      return {
+        ok: false,
+        reason: "assembled_wave_gate_required",
+        message: `${ticket?.ref || "Submission"} requires a passing assembled-wave gate before delivery. Assemble its submitted candidate and run the project-defined gate first.`
+      };
+    }
+    const participants = Array.isArray(wave.participants) ? wave.participants : [];
+    if (participants.length !== 1 || participants[0] !== ticket.ref) {
+      return {
+        ok: false,
+        reason: "assembled_wave_delivery_required",
+        message: `${ticket.ref} belongs to wave ${wave.id}; delivery must consume that exact assembled participant set rather than integrate one candidate separately.`
+      };
+    }
+    return { ok: true, wave };
+  }
+  function ensureSingletonAssembledWave(slug, idOrRef, opts) {
+    const ticket = getTicket(slug, idOrRef);
+    if (!ticket) return { ok: false, reason: "not_found" };
+    const existing = ticket.submission?.wave;
+    if (existing?.state === "invalidated") {
+      return {
+        ok: false,
+        reason: "refresh_and_reverify",
+        message: `${ticket.ref} was invalidated from wave ${existing.id}. Redispatch it through refresh_and_reverify before assembling a new wave.`
+      };
+    }
+    const retryWithWaiver = existing?.gate?.state === "gate_failed" && opts?.skipVerify === true;
+    if (retryWithWaiver) {
+      const assembled2 = assembleSubmissionWave(slug, [ticket.ref], {
+        waveId: `delivery-${ticket.ref}-${crypto.randomBytes(6).toString("hex")}`,
+        verification: ticket.submission?.verificationResult,
+        skipVerify: true,
+        verificationWaiver: opts.verificationWaiver
+      });
+      if (!assembled2.ok) return assembled2;
+      return assembledWaveForDelivery(slug, getTicket(slug, ticket.id));
+    }
+    const admitted = assembledWaveForDelivery(slug, ticket);
+    if (admitted.ok) return admitted;
+    if (existing) return admitted;
+    const assembled = assembleSubmissionWave(slug, [ticket.ref], {
+      waveId: `delivery-${ticket.ref}-${crypto.randomBytes(6).toString("hex")}`,
+      verification: ticket.submission?.verificationResult,
+      skipVerify: opts?.skipVerify === true,
+      verificationWaiver: opts?.verificationWaiver
+    });
+    if (!assembled.ok) return assembled;
+    return assembledWaveForDelivery(slug, getTicket(slug, ticket.id));
+  }
+  function recordTicketWaveDelivery(slug, ticket, revision, verification) {
+    const delivery = recordSubmissionWaveDelivery(slug, [ticket.ref], revision, verification);
+    if (!delivery.ok) return delivery;
+    return { ok: true, delivery: delivery.delivery };
+  }
+  function submissionWaveCandidate(ticket) {
+    const submission = ticket?.submission;
+    if (!submission) return null;
+    const revision = submission.sourceRevision || (submission.commit ? { source: "git", value: String(submission.commit).trim().toLowerCase(), observedAt: String(submission.at || (/* @__PURE__ */ new Date()).toISOString()) } : null);
+    const baseline = submission.baseline || sourceRevisionBaseline(ticket);
+    if (!revision || !baseline || !submission.verificationResult) return null;
+    return {
+      ref: ticket.ref,
+      baseline,
+      surfaces: Array.isArray(submission.changedPaths) ? submission.changedPaths : [],
+      verification: submission.verificationResult
+    };
+  }
+  function invalidateWaveCandidates(slug, invalidated, waveId, baseline) {
+    for (const invalidation of invalidated) {
+      const ticket = getTicket(slug, invalidation.ref);
+      if (!ticket?.submission) continue;
+      ticket.submission.wave = { id: waveId, baseline, state: "invalidated", invalidation };
+      const invalidatedAttempt = transitionAttempt(ticket.lifecycleAttempt, "invalidate");
+      if (!attemptDiagnostic(invalidatedAttempt)) recordLifecycleAttempt(ticket, invalidatedAttempt);
+      ticket.status = "todo";
+      ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      putTicket(slug, ticket);
+      queueEventNotification(slug, ticket, "status", "wave");
+    }
+  }
+  function assembleSubmissionWave(slug, refs, opts) {
+    const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
+    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Wave assembly requires one or more submitted participant refs." };
+    const tickets = participantRefs.map((ref) => getTicket(slug, ref));
+    if (tickets.some((ticket) => !ticket)) return { ok: false, reason: "not_found" };
+    if (tickets.some((ticket) => !pendingSubmission(ticket))) {
+      return { ok: false, reason: "submitted_candidates_required", message: "Wave assembly requires every participant to have a submitted candidate." };
+    }
+    const waveId = String(opts?.waveId || `wave-${crypto.randomBytes(8).toString("hex")}`);
+    const dependencies2 = opts?.dependencies && typeof opts.dependencies === "object" ? opts.dependencies : {};
+    const candidates = tickets.map(submissionWaveCandidate);
+    if (candidates.some((candidate) => !candidate)) {
+      return { ok: false, reason: "wave_baseline_required", message: "Every submitted candidate must retain its dispatch baseline, changed surfaces, and verifier evidence before wave assembly." };
+    }
+    const waveCandidates = candidates.filter((candidate) => candidate !== null);
+    const scopeConflicts = waveScopeConflicts(slug, tickets);
+    if (scopeConflicts.length) {
+      return {
+        ok: false,
+        reason: "wave_scope_overlap",
+        conflicts: scopeConflicts,
+        message: `Wave assembly refused because its effective scope overlaps live sibling work: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(", ")})`).join("; ")}. Add every conflicting candidate to one explicitly resolved wave or narrow its granted scope before assembly.`
+      };
+    }
+    const firstCandidate = waveCandidates[0];
+    if (!firstCandidate) return { ok: false, reason: "wave_baseline_required", message: "Wave assembly requires a candidate baseline." };
+    const opened = openWave({
+      baseline: firstCandidate.baseline,
+      participants: tickets.map((ticket) => ({
+        ref: ticket.ref,
+        dependencies: Array.isArray(dependencies2[ticket.ref]) ? dependencies2[ticket.ref] : [],
+        declaredSurfaces: executionScope(slug, ticket)
+      }))
+    });
+    if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };
+    const decision = assembleWave(opened, waveCandidates);
+    if (!decision.ok) {
+      transaction(() => invalidateWaveCandidates(slug, decision.invalidated, waveId, opened.baseline));
+      return { ok: false, reason: "wave_invalidated", invalidated: decision.invalidated, wave: { id: waveId, baseline: opened.baseline } };
+    }
+    const verification = authoritativeWaveVerification(slug, tickets, waveId, opts?.verification, opts);
+    if (!verification.ok || !("verification" in verification)) return verification;
+    const gate = recordAssembledWaveGate(decision.assembly, verification.verification);
+    transaction(() => {
+      for (const ticket of tickets) {
+        const current = getTicket(slug, ticket.id);
+        if (!current?.submission) continue;
+        current.submission.wave = {
+          id: waveId,
+          baseline: opened.baseline,
+          participants: participantRefs,
+          dependencies: dependencies2,
+          declaredSurfaces: opened.declaredSurfaces,
+          state: gate?.state || "assembled",
+          ...gate ? { gate: { verification: gate.verification, state: gate.state } } : {}
+        };
+        const assembledAttempt = transitionAttempt(current.lifecycleAttempt, "assemble");
+        if (!attemptDiagnostic(assembledAttempt)) recordLifecycleAttempt(current, assembledAttempt);
+        current.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        putTicket(slug, current);
+        queueEventNotification(slug, current, "status", "wave");
+      }
+    });
+    if (gate.state === "gate_failed") {
+      return {
+        ok: false,
+        reason: "assembled_wave_gate_failed",
+        message: `Wave ${waveId} gate returned ${gate.verification.status}. Refresh and reverify its candidates before delivery.`,
+        wave: { id: waveId, baseline: opened.baseline, participants: participantRefs },
+        assembly: decision.assembly,
+        gate
+      };
+    }
+    return { ok: true, wave: { id: waveId, baseline: opened.baseline, participants: participantRefs }, assembly: decision.assembly, gate };
+  }
+  function recordSubmissionWaveDelivery(slug, refs, revision, verification) {
+    const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));
+    if (!participantRefs.length) return { ok: false, reason: "wave_participants_required", message: "Delivery requires the exact assembled participant refs." };
+    const tickets = participantRefs.map((ref) => getTicket(slug, ref));
+    if (tickets.some((ticket) => !ticket?.submission?.wave)) {
+      return { ok: false, reason: "assembled_wave_gate_required", message: "Delivery requires every exact participant to retain a passing assembled-wave gate." };
+    }
+    const waveState = tickets[0].submission.wave;
+    const expectedParticipants = Array.isArray(waveState.participants) ? waveState.participants.slice().sort() : [];
+    if (expectedParticipants.length !== participantRefs.length || expectedParticipants.some((ref, index) => ref !== participantRefs.slice().sort()[index]) || tickets.some((ticket) => ticket.submission.wave.id !== waveState.id || ticket.submission.wave.gate?.state !== "gate_passed")) {
+      return { ok: false, reason: "assembled_wave_gate_required", message: "Delivery requires the exact participant set from one passing assembled wave." };
+    }
+    const opened = openWave({
+      baseline: waveState.baseline,
+      participants: tickets.map((ticket) => ({
+        ref: ticket.ref,
+        dependencies: Array.isArray(waveState.dependencies?.[ticket.ref]) ? waveState.dependencies[ticket.ref] : [],
+        declaredSurfaces: executionScope(slug, ticket)
+      }))
+    });
+    if ("code" in opened) return { ok: false, reason: opened.code, message: opened.message };
+    const candidates = tickets.map(submissionWaveCandidate);
+    if (candidates.some((candidate) => !candidate)) return { ok: false, reason: "wave_candidate_required", message: "Delivery requires the immutable candidates that passed assembly." };
+    const assembly = { wave: opened, candidates, state: "assembled" };
+    const delivery = recordWaveDelivery({ assembly, verification: waveState.gate.verification, state: "gate_passed" }, revision, verification);
+    if ("code" in delivery) return { ok: false, reason: delivery.code, message: delivery.message };
+    transaction(() => {
+      for (const ticket of tickets) {
+        const current = getTicket(slug, ticket.id);
+        if (!current?.submission?.wave) continue;
+        current.submission.wave.delivery = delivery;
+        current.submission.wave.state = delivery.state;
+        current.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+        putTicket(slug, current);
+        queueEventNotification(slug, current, "status", "wave");
+      }
+    });
+    return { ok: delivery.state === "delivered", delivery };
   }
   function submissionsPayload(slug) {
     const tickets = listTickets(slug).filter((t) => !t.archived && t.status !== "done" && pendingSubmission(t)).sort((a, b) => String(a.submission.at).localeCompare(String(b.submission.at))).map((t) => ({
@@ -1803,6 +2266,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, submissionBaseCandidates, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

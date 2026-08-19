@@ -715,6 +715,58 @@ test('a rejected no-Git source revision reopens without Git quarantine', (contex
   );
 });
 
+test('wave assembly refuses an automatic scope grant overlapping a live sibling', (context: any) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-wave-scope-project-'));
+  const board = store.ensureProject(project).slug;
+  const unregister = store.registerSourceRevisionCapability(board, () => ({ candidateExists: true, containsCandidate: true }));
+  context.after(unregister);
+  assert.strictEqual(store.setBoardConfig(board, { alwaysInScope: ['docs/'] }).ok, true);
+  const participant = store.createTicket(board, {
+    title: 'publish guide revision',
+    description: 'Publish one immutable guide revision.',
+    category: 'repository-write',
+    files: ['guides/overview.md'],
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'guide-revision-7',
+    source: 'test',
+  });
+  const sibling = store.createTicket(board, {
+    title: 'edit access tiers',
+    description: 'Keep the sibling docs work live.',
+    category: 'repository-write',
+    files: ['docs/access-tiers.md'],
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'access-tier-revision-3',
+    source: 'test',
+  });
+  const siblingDispatch = store.prepareDispatch(board, sibling.ref, { sharedTree: false });
+  assert.strictEqual(store.claimTicket(board, sibling.ref, 'access-tiers-worker', {
+    token: siblingDispatch.token,
+    executor: siblingDispatch.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  const prepared = store.prepareDispatch(board, participant.ref, { sharedTree: false });
+  assert.strictEqual(store.claimTicket(board, participant.ref, 'guide-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.strictEqual(submitSourceRevision(board, participant.ref, 'guide-worker', {
+    sourceRevision: { source: 'wiki', value: 'guide-revision-7', observedAt: '2026-08-19T00:00:00.000Z' },
+    changedSurfaces: ['guides/overview.md'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: guide-revision-7 | review-7 | editor approved the immutable revision',
+    source: 'test',
+  }).ok, true);
+
+  const refused = store.assembleSubmissionWave(board, [participant.ref]);
+
+  assert.strictEqual(refused.ok, false);
+  assert.strictEqual(refused.reason, 'wave_scope_overlap');
+  assert.deepStrictEqual(refused.conflicts, [{ participant: participant.ref, sibling: sibling.ref, surfaces: ['docs'] }]);
+  assert.strictEqual(store.getTicket(board, participant.ref).submission.wave, undefined);
+});
+
 test('a no-Git document submission uses source revision through submit and integration closure', (context: any) => {
   const noGitProject = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-document-lifecycle-project-'));
   const noGitBoard = store.ensureProject(noGitProject).slug;

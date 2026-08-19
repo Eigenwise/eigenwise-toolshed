@@ -318,7 +318,7 @@ test('a submitted commit missing from the repo refuses instead of guessing a tar
   assert.equal(head(fixture.repo, 'refs/heads/main'), before);
 });
 
-test('groom-close --integration advances local main and reports it', async () => {
+test('integrate advances local main and reports it', async () => {
   const fixture = makeRepo('closure');
   const { slug } = store.ensureProject(fixture.repo);
   const ticket = store.createTicket(slug, {
@@ -330,15 +330,17 @@ test('groom-close --integration advances local main and reports it', async () =>
   submitFixture(slug, ticket, fixture);
 
   const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
-  const result = runCli(['groom-close', ticket.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${fixture.integrated}.`]);
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
   assert.equal(result.status, 0, result.stderr + result.stdout);
-  assert.match(result.stdout, /advanced main/);
-  assert.equal(head(fixture.repo, 'refs/heads/main'), fixture.integrated);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.equal(payload.delivery.resultingHead, head(fixture.repo, 'refs/heads/main'));
+  assert.equal(payload.delivery.targetBranch, 'main');
   assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
 });
 
-test('groom-close --integration prints the refusal loudly when the checkout is not ready', async () => {
+test('integrate refuses loudly when the checkout is not ready', async () => {
   const fixture = makeRepo('closure-refused');
   fs.writeFileSync(path.join(fixture.repo, 'feature.txt'), 'uncommitted edit\n');
   const { slug } = store.ensureProject(fixture.repo);
@@ -351,15 +353,12 @@ test('groom-close --integration prints the refusal loudly when the checkout is n
   submitFixture(slug, ticket, fixture);
 
   const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
-  const result = runCli(['groom-close', ticket.ref, '--by', 'orchestrator', '--integration', '--reason', `Integrated ${fixture.integrated}.`, '--json']);
+  const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
-  assert.equal(result.status, 0, result.stderr);
+  assert.equal(result.status, 1, result.stderr);
   const payload = JSON.parse(result.stdout);
-  assert.equal(payload.ok, true, 'the closure itself still succeeds');
-  assert.equal(payload.integrationBranch.advanced, false);
-  assert.equal(payload.integrationBranch.reason, 'checkout_dirty');
-  assert.equal(payload.integrationBranch.branch, 'main');
-  assert.match(payload.integrationBranch.command, /merge --ff-only/);
+  assert.equal(payload.ok, false);
+  assert.equal(payload.reason, 'integration_target_dirty');
   assert.equal(head(fixture.repo, 'refs/heads/main'), git(['rev-parse', 'main'], fixture.repo));
 });
 
@@ -378,6 +377,71 @@ function deliveryTicket(label: string, opts: any = {}) {
   const runner = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
   return { fixture, slug, ticket, runCli: runner.runCli };
 }
+
+test('one passing wave delivers its exact Git participant set before recording delivery', () => {
+  const fixture = makeRepo('wave-delivery');
+  const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-second');
+  git(['worktree', 'add', '-b', 'worktree-agent-second', secondWorktree, 'main'], fixture.repo);
+  const secondCommit = commitFile(secondWorktree, 'second.txt', 'second executor work\n');
+  const { slug } = store.ensureProject(fixture.repo);
+  const first = store.createTicket(slug, {
+    title: 'deliver first wave candidate',
+    category: 'codebase-exploration',
+    description: 'Deliver the first independent candidate.',
+    files: ['feature.txt'],
+  });
+  const second = store.createTicket(slug, {
+    title: 'deliver second wave candidate',
+    category: 'codebase-exploration',
+    description: 'Deliver the second independent candidate.',
+    files: ['second.txt'],
+  });
+  submitFixture(slug, first, fixture);
+  const secondRef = `refs/sidequest/${second.ref}`;
+  git(['update-ref', secondRef, secondCommit], secondWorktree);
+  const target = store.integrationTarget(slug);
+  const secondRange = commitScope.submissionRange(secondWorktree, {
+    commit: secondCommit,
+    gitRef: secondRef,
+    upstream: target.upstream,
+    integrationBranch: target.branch,
+  });
+  assert.equal(secondRange.ok, true, JSON.stringify(secondRange));
+  assert.equal(store.claimTicket(slug, second.ref, 'second-fixture-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
+  assert.equal(store.submitTicket(slug, second.ref, 'second-fixture-worker', {
+    commit: secondCommit,
+    gitRef: secondRef,
+    range: secondRange,
+    worktree: secondWorktree,
+  }).ok, true);
+
+  const wave = store.assembleSubmissionWave(slug, [first.ref, second.ref], {
+    verification: store.getTicket(slug, first.ref).submission.verificationResult,
+  });
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+  const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
+  assert.equal(individual.ok, false);
+  assert.equal(individual.reason, 'assembled_wave_delivery_required');
+
+  const { runCli } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: fixture.repo }, { cwd: fixture.repo });
+  const result = runCli(['integrate', first.ref, second.ref, '--by', 'orchestrator', '--mode', 'merge', '--json']);
+
+  assert.equal(result.status, 0, result.stderr + result.stdout);
+  const payload = JSON.parse(result.stdout);
+  assert.equal(payload.ok, true);
+  assert.deepEqual(payload.delivery.participants, [first.ref, second.ref]);
+  assert.equal(head(fixture.repo), payload.delivery.resultingHead);
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'feature.txt'), 'utf8'), 'executor work\n');
+  assert.equal(fs.readFileSync(path.join(fixture.repo, 'second.txt'), 'utf8'), 'second executor work\n');
+  for (const ticketRef of [first.ref, second.ref]) {
+    const stored = store.getTicket(slug, ticketRef);
+    assert.equal(stored.status, 'done');
+    assert.equal(stored.submission.wave.state, 'delivered');
+    assert.equal(stored.submission.integration.outcome, 'verified');
+    assert.equal(stored.submission.integration.resultingHead, payload.delivery.resultingHead);
+  }
+});
 
 for (const mode of ['merge', 'replay', 'apply']) {
   test(`integrate ${mode} delivers a ready submission and preserves its pinned ref`, () => {
@@ -429,7 +493,7 @@ for (const mode of ['merge', 'replay', 'apply']) {
 }
 
 for (const mode of ['merge', 'replay', 'apply']) {
-  test(`integrate ${mode} rolls back a post-merge verification failure`, () => {
+  test(`integrate ${mode} refuses delivery when the assembled-wave gate fails`, () => {
     const { fixture, slug, ticket, runCli } = deliveryTicket(`verify-fail-${mode}`, {
       verify: nodeVerify("console.error('integration verify failure'); process.exit(7)"),
     });
@@ -440,13 +504,14 @@ for (const mode of ['merge', 'replay', 'apply']) {
     assert.ok(result.stdout, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.delivery, null);
-    assert.equal(payload.verifyFailed.status, 'failed_suite');
-    assert.equal(payload.verifyFailed.exitCode, 7);
-    assert.match(payload.verifyFailed.outputTail, /integration verify failure/);
-    assert.ok(fs.existsSync(payload.verifyFailed.logPath));
+    assert.equal(payload.reason, 'assembled_wave_gate_failed');
+    assert.equal(payload.gate.verification.status, 'failed_suite');
+    assert.equal(payload.gate.verification.exitCode, 7);
+    assert.match(payload.gate.verification.outputTail, /integration verify failure/);
+    assert.ok(fs.existsSync(payload.gate.verification.logPath));
     const stored = store.getTicket(slug, ticket.ref);
     assert.equal(stored.status, 'doing');
-    assert.equal(stored.submission.integration.reason, 'verification_failed_suite_post_merge');
+    assert.equal(stored.submission.integration, undefined);
     assert.equal(head(fixture.repo), before);
     assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), '');
     assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
@@ -513,8 +578,9 @@ test('integrate refuses delivery when recorded verification times out', () => {
   assert.equal(result.status, 1, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.delivery, null);
-  assert.equal(payload.verifyFailed.status, 'timeout');
-  assert.equal(payload.verifyFailed.timeoutMilliseconds, 25);
+  assert.equal(payload.reason, 'assembled_wave_gate_failed');
+  assert.equal(payload.gate.verification.status, 'timeout');
+  assert.equal(payload.gate.verification.timeoutMilliseconds, 25);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
 });
 
@@ -526,8 +592,9 @@ test('integrate public surfaces honor a bounded verification waiver and refuse a
 
   assert.equal(refused.status, 1, refused.stderr + refused.stdout);
   const refusedPayload = JSON.parse(refused.stdout);
-  assert.equal(refusedPayload.verifyFailed.status, 'skipped');
-  assert.deepEqual(refusedPayload.verifyFailed.failureIdentities, ['verification_waiver_required']);
+  assert.equal(refusedPayload.reason, 'assembled_wave_gate_failed');
+  assert.equal(refusedPayload.gate.verification.status, 'skipped');
+  assert.deepEqual(refusedPayload.gate.verification.failureIdentities, ['verification_waiver_required']);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
 
   const accepted = runCli([

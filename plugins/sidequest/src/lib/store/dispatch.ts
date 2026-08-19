@@ -29,13 +29,15 @@ function namedSuiteForTicket(ticket: any, projectPath: string) {
 function preparedVerificationRequirement(ticket: any, projectPath: string) {
   const recorded = String(ticket?.executorVerify || '').trim();
   const declaredKind = String(ticket?.executorVerifyKind || 'command').trim().toLowerCase();
+  const artifact = String(ticket?.executorAttestationArtifact || '').trim();
   const manual = /^manual:\s+/i.test(recorded);
   const suite = !recorded || declaredKind === 'suite' ? namedSuiteForTicket(ticket, projectPath) : null;
-  const legacyWithoutVerifier = !recorded && !suite;
+  const attestation = declaredKind === 'attestation' && Boolean(artifact);
+  const legacyWithoutVerifier = !recorded && !suite && !attestation;
   const kind = manual ? 'manual' : legacyWithoutVerifier ? 'custom' : declaredKind;
   return verificationRequirement({
     kind,
-    evidence: legacyWithoutVerifier ? 'legacy project verifier was not recorded' : recorded || undefined,
+    evidence: legacyWithoutVerifier ? 'legacy project verifier was not recorded' : recorded || artifact || undefined,
     command: ['suite', 'command'].includes(kind) ? recorded || undefined : undefined,
     artifact: ticket?.executorAttestationArtifact,
     suite,
@@ -1085,21 +1087,6 @@ function releasedContinuationState(slug?: any, ticket?: any, state?: any) {
   }
 }
 
-// A repository with no origin has no remote baseline to want, so `origin-main` means nothing there and the
-// caller falls through to its non-integration default. A repository that HAS an origin is different: the
-// remote ref is the whole point of `origin-main`, and swallowing its absence based the isolated checkout on
-// whatever main happened to be while the board named a different branch as the authority (SQ-2089: an
-// immutable candidate parented on a stale commit nobody configured). That case refuses and names both ways out.
-function worktreeBaseIntegrationTarget(slug?: any, worktreeBase?: any, repository?: any) {
-  if (worktreeBase === 'local-main') return integrationTarget(slug, { mode: 'local' });
-  if (!hasOriginRemote(repository)) return null;
-  try {
-    return integrationTarget(slug, { mode: 'remote' });
-  } catch (error: any) {
-    throw new Error(`${String(error?.message || error).trim()} Board worktreeBase is "origin-main", so an isolated dispatch requires that remote ref; fetch or push the branch, or run \`sidequest board-config --worktree-base local-main\` to fork isolated worktrees from the local branch instead.`);
-  }
-}
-
 function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -1307,7 +1294,18 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
     const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
     const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
-      ? worktreeBaseIntegrationTarget(slug, configuredWorktreeBase, readMeta(slug)?.path || '')
+      ? configuredWorktreeBase === 'local-main'
+        ? integrationTarget(slug, { mode: 'local' })
+        : hasOriginRemote(readMeta(slug)?.path || '')
+          ? (() => {
+            try {
+              return integrationTarget(slug, { mode: 'remote' });
+            } catch (error: unknown) {
+              const message = error instanceof Error ? error.message : String(error);
+              throw new Error(`${message} The configured worktreeBase is "origin-main"; use --worktree-base local-main to dispatch from the local integration branch.`);
+            }
+          })()
+          : null
       : null;
     const useIntegrationTarget = explicitIntegrationTarget
       || (isolatedRepositoryDispatch && configuredIntegrationMode !== 'auto')
@@ -1323,9 +1321,22 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       : null;
     delete t.storyContractDrift;
     const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
+    const baseCommit = reviewTargetState?.candidate.source === 'git'
+      ? reviewTargetState.candidate.value
+      : integrationTargetState
+        ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
+        : commitScope.headCommit(readMeta(slug)?.path || '');
+    const dispatchBaseline = Object.freeze({
+      revision: Object.freeze({
+        source: nonRepoOutput ? 'project-snapshot' : 'git',
+        value: String(baseCommit || t.id || t.ref),
+        observedAt: now,
+      }),
+      purpose: 'dispatch' as const,
+    });
     t.dispatch = {
       lifecycleAttempt: prepareAttempt(
-        Object.freeze({ revision: Object.freeze({ source: 'board', value: String(t.id || t.ref), observedAt: now }), purpose: 'dispatch' }),
+        dispatchBaseline,
         Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: 'prepare', sessionId: opts.sessionId ? String(opts.sessionId) : null }),
         preparedPluginInstall && preparedPluginIdentity
           ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity })
@@ -1356,11 +1367,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         : {}),
       // Record the integration target commit so an isolated executor can bring
       // its harness-created worktree forward before changing it.
-      baseCommit: reviewTargetState?.candidate.source === 'git'
-        ? reviewTargetState.candidate.value
-        : integrationTargetState
-          ? integrationTargetCommit(readMeta(slug)?.path || '', integrationTargetState)
-          : commitScope.headCommit(readMeta(slug)?.path || ''),
+      baseCommit,
       ...(reviewTargetState ? { reviewTarget: t.reviewTarget } : {}),
       ...(integrationTargetState ? { integrationTarget: integrationTargetState } : {}),
       ...(localAheadWarning ? { localAheadWarning } : {}),

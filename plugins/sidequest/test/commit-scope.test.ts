@@ -605,7 +605,7 @@ test('SQ-923: a scoped commit that advanced the integration branch submits again
   assert.deepEqual(range.changedPaths, ['plugins/sidequest/engine.js']);
 });
 
-test('SQ-1339: an explicit base equal to the tip records a no-op without weakening merge-tip refusal', () => {
+test('SQ-1339: an explicit base equal to the tip records a no-op and a merge tip remains a candidate revision', () => {
   const root = repo();
   const main = branchOf(root);
   const tip = git(root, ['rev-parse', 'HEAD']);
@@ -640,8 +640,8 @@ test('SQ-1339: an explicit base equal to the tip records a no-op without weakeni
   pin(root, 'refs/sidequest/SQ-4', mergeTip);
 
   const merged = commitScope.submissionRange(root, { commit: mergeTip, gitRef: 'refs/sidequest/SQ-4', upstream: main });
-  assert.equal(merged.ok, false, 'a merge tip is never rewritten into a one-commit range');
-  assert.equal(merged.reason, 'merge_commit');
+  assert.equal(merged.ok, true, `merge candidate was refused: ${merged.reason}`);
+  assert.deepEqual(merged.commits, [mergeTip]);
 });
 
 test('SQ-971: a dispatch baseline excludes merge commits from parent history', () => {
@@ -683,8 +683,7 @@ test('SQ-971: a dispatch baseline excludes merge commits from parent history', (
     upstream: 'feature-integration',
     integrationBranch: 'feature-integration',
   });
-  assert.equal(withoutDispatchBase.ok, false, 'the rewritten target must expose the parent merge without the recorded baseline');
-  assert.equal(withoutDispatchBase.reason, 'merge_commit');
+  assert.equal(withoutDispatchBase.ok, true, `rewritten target candidate was refused: ${withoutDispatchBase.reason}`);
 
   const range = commitScope.submissionRange(root, {
     commit: tip,
@@ -737,7 +736,7 @@ test('SQ-1875: an integrated merge below ticket work is not a submitted merge', 
   assert.equal(range.changedPaths?.includes('plugins/sidequest/later.js'), true);
 });
 
-test('SQ-1875: a merge introduced by the submitted work remains refused', () => {
+test('SQ-1875: a merge introduced by submitted work is retained as an immutable candidate', () => {
   const root = repo();
   const main = branchOf(root);
   git(root, ['checkout', '-q', '-b', 'ticket-parent']);
@@ -761,8 +760,8 @@ test('SQ-1875: a merge introduced by the submitted work remains refused', () => 
     integrationBranch: main,
   });
 
-  assert.equal(range.ok, false);
-  assert.equal(range.reason, 'merge_commit');
+  assert.equal(range.ok, true, `merge candidate was refused: ${range.reason}`);
+  assert.equal(range.commits?.at(-1), tip);
 });
 
 // SQ-923. `done` on a write-routed dispatch that produced nothing used to be a

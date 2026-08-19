@@ -555,26 +555,11 @@ export function submissionRange(cwd: string, options: unknown) {
     }
     if (!commits.length && !noOp && !requestedBase && effectiveBase === tip.value) {
       const tipParents = parentCommits(cwd, tip.value);
-      if (tipParents.length > 1) return { ok: false, reason: 'merge_commit', commit: tip.value };
       rootCommit = tipParents.length === 0;
       effectiveBase = rootCommit ? EMPTY_TREE : tipParents[0]!;
       commits = [tip.value];
     }
     if (!commits.length && !noOp) return { ok: false, reason: 'empty_range', base: effectiveBase, tip: tip.value };
-  }
-
-  if (!rootCommit && !noOp) {
-    const parents = gitResult(cwd, ['rev-list', '--parents', `${effectiveBase}..${tip.value}`]);
-    if (!parents.ok) return { ok: false, reason: 'git_error', message: parents.message };
-    // A merge already reachable from the integration branch is the integrator's,
-    // not this submission's, so refusing it would strand every executor whose base
-    // predates an integration (SQ-1875).
-    const mergeCommit = parents.value
-      .split(/\r?\n/)
-      .map((line) => line.trim().split(/\s+/))
-      .find(([commit, ...parentCommits]) => parentCommits.length > 1
-        && (!integrationBranch.ok || !isAncestor(cwd, commit!, integrationBranch.value)));
-    if (mergeCommit) return { ok: false, reason: 'merge_commit', commit: mergeCommit[0] };
   }
 
   try {
