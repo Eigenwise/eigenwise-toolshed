@@ -121,7 +121,7 @@ test('reports freshness problems for the current project', () => {
 
   assert.deepEqual(result.projectProblems, [finding('sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0')]);
 });
-test('finds stale versions and marks absent manifest entries as unknown', () => {
+test('reports Toolshed freshness while ignoring foreign installs', () => {
   const input = fixture({
     registry: {
       plugins: {
@@ -138,27 +138,26 @@ test('finds stale versions and marks absent manifest entries as unknown', () => 
 
   const result = audit(input);
   assert.match(findingText(result.problems).join('\n'), /sidequest@eigenwise-toolshed 1.0.0 is behind cached 1.1.0/);
-  assert.match(findingText(result.problems).join('\n'), /missing@other-marketplace freshness is unknown/);
-  assert.doesNotMatch(findingText(result.problems).join('\n'), /absent from/);
+  assert.doesNotMatch(findingText(result.problems).join('\n'), /other-marketplace/);
 });
 
-test('honors the official marketplace default and third-party explicit settings', () => {
+test('ignores stale foreign marketplaces while reporting stale Toolshed freshness', () => {
   const result = audit(fixture({
     registry: {
       plugins: {
-        'official@claude-plugins-official': [{ scope: 'user', version: '1.0.0' }],
-        'third-party@other-marketplace': [{ scope: 'user', version: '1.0.0' }],
+        'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '1.0.0' }],
+        'foo@contractify': [{ scope: 'user', version: '1.0.0' }],
       },
     },
     marketplaces: {
-      'claude-plugins-official': { lastUpdated: new Date(now).toISOString() },
-      'other-marketplace': { autoUpdate: false, lastUpdated: new Date(now).toISOString() },
+      'eigenwise-toolshed': { autoUpdate: true, lastUpdated: new Date(now - CACHE_MAX_AGE_MS - 1).toISOString() },
+      contractify: { autoUpdate: false, lastUpdated: new Date(now - CACHE_MAX_AGE_MS - 1).toISOString() },
     },
-    manifestFor: (name) => ({ plugins: [{ name: name === 'claude-plugins-official' ? 'official' : 'third-party', version: '1.0.0' }] }),
   }));
 
-  assert.doesNotMatch(findingText(result.problems).join('\n'), /claude-plugins-official auto-update is off/);
-  assert.match(findingText(result.problems).join('\n'), /other-marketplace auto-update is off/);
+  const problems = findingText(result.problems).join('\n');
+  assert.match(problems, /eigenwise-toolshed marketplace cache is stale, installed freshness is unknown/);
+  assert.doesNotMatch(problems, /contractify/);
 });
 
 test('compares rolling plugins against only their cached source path', () => {
@@ -191,11 +190,11 @@ test('does not call an unrelated cached git history stale', () => {
   assert.equal(freshness, 'unknown');
 });
 
-test('does not flag rolling plugins that match their cached source', () => {
+test('does not flag rolling Toolshed plugins that match their cached source', () => {
   const result = audit(fixture({
     registry: {
       plugins: {
-        'rolling@other-marketplace': [{ scope: 'user', gitCommitSha: 'installed-sha' }],
+        'rolling@eigenwise-toolshed': [{ scope: 'user', gitCommitSha: 'installed-sha' }],
       },
     },
     manifestFor: () => ({ plugins: [{ name: 'rolling', source: './plugins/rolling' }] }),
@@ -209,14 +208,14 @@ test('reports rolling plugin freshness as unknown when local git cannot prove it
   const result = audit(fixture({
     registry: {
       plugins: {
-        'rolling@other-marketplace': [{ scope: 'user', gitCommitSha: 'installed-sha' }],
+        'rolling@eigenwise-toolshed': [{ scope: 'user', gitCommitSha: 'installed-sha' }],
       },
     },
     manifestFor: () => ({ plugins: [{ name: 'rolling', source: './plugins/rolling' }] }),
     gitFreshness: () => 'unknown',
   }));
 
-  assert.match(findingText(result.problems).join('\n'), /rolling@other-marketplace freshness is unknown/);
+  assert.match(findingText(result.problems).join('\n'), /rolling@eigenwise-toolshed freshness is unknown/);
 });
 
 test('reports stale marketplace caches without claiming remote freshness', () => {
@@ -662,29 +661,28 @@ test('SQ-2237: user settings without a user codebase-mapper install report a dea
   assert.match(findingText(result([{ scope: 'user', version: '2.15.5' }]).projectProblems).join('\n'), /no project\/local codebase-mapper install/);
 });
 
-test('SQ-2211: a marketplace the project declares with auto-update on is not reported as off', (t) => {
+test('SQ-2211: a Toolshed marketplace declaration with auto-update on is not reported as off', (t) => {
   const project = mappedProject(t, { withMap: false });
   const output = () => hookOutput({
     ...hookFixture({
       'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
-      'contractify-dev@contractify': [{ scope: 'project', projectPath: project, version: '1.0.0' }],
     }, { workbench: '0.49.0' }),
-    marketplaces: { contractify: { lastUpdated: new Date().toISOString() } },
+    marketplaces: { 'eigenwise-toolshed': { lastUpdated: new Date().toISOString() } },
     loadedVersion: '0.49.0',
     input: { cwd: project },
   });
 
-  assert.match(output().systemMessage, /contractify auto-update is off/);
+  assert.match(output().systemMessage, /eigenwise-toolshed auto-update is off/);
 
   fs.mkdirSync(path.join(project, '.claude'), { recursive: true });
   fs.writeFileSync(path.join(project, '.claude', 'settings.json'), JSON.stringify({
-    extraKnownMarketplaces: { contractify: { autoUpdate: true } },
+    extraKnownMarketplaces: { 'eigenwise-toolshed': { autoUpdate: true } },
   }));
   // A later layer that names the marketplace without a flag must not read as a disable.
   fs.writeFileSync(path.join(project, '.claude', 'settings.local.json'), JSON.stringify({
-    extraKnownMarketplaces: { contractify: { source: { source: 'github', repo: 'contractify/claude-marketplace' } } },
+    extraKnownMarketplaces: { 'eigenwise-toolshed': { source: { source: 'github', repo: 'eigenwise/eigenwise-toolshed' } } },
   }));
-  assert.doesNotMatch(output().systemMessage, /contractify auto-update is off/);
+  assert.doesNotMatch(output().systemMessage, /eigenwise-toolshed auto-update is off/);
 });
 
 test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t) => {
