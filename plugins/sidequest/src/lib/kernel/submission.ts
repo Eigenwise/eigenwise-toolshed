@@ -1,6 +1,7 @@
 'use strict';
 
 import type { Authority, Baseline, Diagnostic, SourceRevision, VerificationResult } from './index';
+import { isInScope } from '../scope-match.js';
 import { verificationAccepted } from './verification.js';
 
 export type SubmissionTicket = Readonly<{ ref: string }>;
@@ -57,10 +58,7 @@ function supplied(failure: SubmissionFailure | undefined, fallback: SubmissionFa
 }
 
 function outsideAdmittedSurfaces(surfaces: SubmissionSurfaces): string[] {
-  return surfaces.changed.filter((surface) => !surfaces.admitted.some((admitted) => {
-    const normalized = admitted.replace(/\\/g, '/').replace(/\/+$/, '');
-    return surface === normalized || surface.startsWith(`${normalized}/`);
-  }));
+  return surfaces.changed.filter((surface) => !isInScope(surface, surfaces.admitted));
 }
 
 function sameSourceRevision(left: SourceRevision | undefined, right: SourceRevision | undefined): boolean {

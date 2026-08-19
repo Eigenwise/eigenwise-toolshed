@@ -32,12 +32,12 @@ __export(commit_scope_exports, {
   commitScoped: () => commitScoped,
   foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
   headCommit: () => headCommit,
-  isInScope: () => isInScope,
+  isInScope: () => import_scope_match2.isInScope,
   linkedWorktree: () => linkedWorktree,
   preserveCommitRef: () => preserveCommitRef,
   rangePaths: () => rangePaths,
   repoRoot: () => repoRoot,
-  scopedPaths: () => scopedPaths,
+  scopedPaths: () => import_scope_match2.scopedPaths,
   scopedWorkPending: () => scopedWorkPending,
   submissionCommitReachedIntegrationBranch: () => submissionCommitReachedIntegrationBranch,
   submissionRange: () => submissionRange,
@@ -55,38 +55,13 @@ module.exports = __toCommonJS(commit_scope_exports);
 var import_node_child_process = require("node:child_process");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_path = __toESM(require("node:path"));
+var import_scope_match = require("./scope-match.js");
+var import_scope_match2 = require("./scope-match.js");
 function isRecord(value) {
   return value !== null && typeof value === "object";
 }
 function errorMessage(error) {
   return error instanceof Error ? error.message : String(error);
-}
-function normalizeScope(scope) {
-  return String(scope || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/\*\*$/, "").replace(/\/+$/, "");
-}
-function scopeKey(scope) {
-  const normalized = normalizeScope(scope);
-  return process.platform === "win32" ? normalized.toLowerCase() : normalized;
-}
-function scopedPaths(files) {
-  const paths = [];
-  const seen = /* @__PURE__ */ new Set();
-  for (const file of Array.isArray(files) ? files : []) {
-    const scope = normalizeScope(file);
-    const key = scopeKey(scope);
-    if (scope && !seen.has(key)) {
-      seen.add(key);
-      paths.push(scope);
-    }
-  }
-  return paths;
-}
-function isInScope(file, files) {
-  const filePath = scopeKey(file);
-  return scopedPaths(files).some((scope) => {
-    const key = scopeKey(scope);
-    return filePath === key || filePath.startsWith(`${key}/`);
-  });
 }
 function git(cwd, args) {
   return (0, import_node_child_process.execFileSync)("git", args, { cwd, encoding: "utf8", windowsHide: true });
@@ -167,31 +142,31 @@ function trackedPaths(cwd) {
   const paths = indexedPaths(cwd);
   const head = gitResult(cwd, ["ls-tree", "-r", "--name-only", "-z", "HEAD"]);
   if (!head.ok) return paths;
-  const seen = new Set(paths.map(scopeKey));
+  const seen = new Set(paths.map(import_scope_match.scopeKey));
   for (const file of head.value.split("\0").filter(Boolean).map((entry) => entry.replace(/\\/g, "/"))) {
-    if (!seen.has(scopeKey(file))) {
-      seen.add(scopeKey(file));
+    if (!seen.has((0, import_scope_match.scopeKey)(file))) {
+      seen.add((0, import_scope_match.scopeKey)(file));
       paths.push(file);
     }
   }
   return paths;
 }
 function canonicalScope(scope, paths) {
-  const normalized = normalizeScope(scope);
-  const key = scopeKey(normalized);
+  const normalized = (0, import_scope_match.normalizeScope)(scope);
+  const key = (0, import_scope_match.scopeKey)(normalized);
   const matchingPath = paths.find((file) => {
-    const fileKey = scopeKey(file);
+    const fileKey = (0, import_scope_match.scopeKey)(file);
     return fileKey === key || fileKey.startsWith(`${key}/`);
   });
   return matchingPath ? matchingPath.slice(0, normalized.length) : normalized;
 }
 function canonicalScopedPaths(cwd, files) {
   const paths = trackedPaths(cwd);
-  return scopedPaths(files).map((scope) => canonicalScope(scope, paths));
+  return (0, import_scope_match.scopedPaths)(files).map((scope) => canonicalScope(scope, paths));
 }
 function commitScopedPaths(root, scopes) {
   const tracked = trackedPaths(root);
-  return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => isInScope(file, [scope])));
+  return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => (0, import_scope_match.isInScope)(file, [scope])));
 }
 function ignoredUntrackedScope(root, scope) {
   const target = import_node_path.default.resolve(root, scope);
@@ -205,7 +180,7 @@ function ignoredUntrackedScope(root, scope) {
 }
 function stageableScopedPaths(root, scopes) {
   const indexed = indexedPaths(root);
-  return scopes.filter((scope) => !ignoredUntrackedScope(root, scope) && (import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => isInScope(file, [scope]))));
+  return scopes.filter((scope) => !ignoredUntrackedScope(root, scope) && (import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => (0, import_scope_match.isInScope)(file, [scope]))));
 }
 function workingPaths(cwd) {
   const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
@@ -231,14 +206,14 @@ function ticketReleaseFragment(ticketRef) {
 function ticketCommitScope(effectiveFiles, declaredFiles, ticketRef) {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
-  return fragment && !isInScope(fragment, scope) ? [...scope, fragment] : scope;
+  return fragment && !(0, import_scope_match.isInScope)(fragment, scope) ? [...scope, fragment] : scope;
 }
 function foreignReleaseFragmentPaths(cwd, ticketRef) {
   const ownFragment = ticketReleaseFragment(ticketRef);
   return workingPaths(cwd).filter((file) => file.startsWith(".release/unreleased/") && file.endsWith(".md") && file !== ownFragment);
 }
 function unscopedWorkingPaths(cwd, files) {
-  return workingPaths(cwd).filter((file) => !isInScope(file, files));
+  return workingPaths(cwd).filter((file) => !(0, import_scope_match.isInScope)(file, files));
 }
 function pathKey(value) {
   const normalized = import_node_path.default.normalize(value);
@@ -298,14 +273,14 @@ function inspectExistingPath(root, realRoot, target, inspectDescendants) {
   return { ok: true, indirect: [] };
 }
 function validateRelativeScopes(files) {
-  const scopes = scopedPaths(files);
+  const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope", outside: [] };
   const outside = scopes.filter(relativeScopeOutside);
   return { ok: outside.length === 0, reason: outside.length ? "outside_scope" : null, outside };
 }
 function validateScopeResolution(root, files, opts) {
   const relativeValidation = validateRelativeScopes(files);
-  const scopes = scopedPaths(files);
+  const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!relativeValidation.ok) {
     return { ...relativeValidation, indirect: [] };
   }
@@ -338,7 +313,7 @@ function rangePaths(cwd, commits) {
   const seen = /* @__PURE__ */ new Set();
   for (const commit of commits) {
     for (const file of commitPaths(cwd, commit)) {
-      const key = scopeKey(file);
+      const key = (0, import_scope_match.scopeKey)(file);
       if (!seen.has(key)) {
         seen.add(key);
         paths.push(file);
@@ -348,9 +323,9 @@ function rangePaths(cwd, commits) {
   return paths;
 }
 function validatePaths(files, paths) {
-  const scopes = scopedPaths(files);
+  const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope", paths: [], outside: [] };
-  const outside = paths.filter((file) => !isInScope(file, scopes));
+  const outside = paths.filter((file) => !(0, import_scope_match.isInScope)(file, scopes));
   return { ok: outside.length === 0, reason: outside.length ? "outside_scope" : null, paths, outside };
 }
 function validateCommitScope(cwd, commit, files) {
@@ -424,13 +399,13 @@ function preserveCommitRef(cwd, commit, gitRef, options) {
 }
 function scopedWorkPending(cwd, files, options) {
   const opts = isRecord(options) ? options : {};
-  const scopes = scopedPaths(files);
+  const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope" };
   const baseName = String(opts.base || "").trim();
   if (!baseName) return { ok: false, reason: "missing_base" };
   try {
     const root = repoRoot(cwd);
-    const working = workingPaths(root).filter((file) => isInScope(file, scopes));
+    const working = workingPaths(root).filter((file) => (0, import_scope_match.isInScope)(file, scopes));
     const base = resolvedCommit(root, baseName);
     if (!base.ok) return { ok: false, reason: "missing_base", message: base.message };
     const tip = resolvedCommit(root, "HEAD");
@@ -440,7 +415,7 @@ function scopedWorkPending(cwd, files, options) {
       const list = gitResult(root, ["rev-list", `${base.value}..${tip.value}`]);
       if (!list.ok) return { ok: false, reason: "git_error", message: list.message };
       const commits = list.value ? list.value.split(/\r?\n/).filter(Boolean) : [];
-      if (commits.length) committed = rangePaths(root, commits).filter((file) => isInScope(file, scopes));
+      if (commits.length) committed = rangePaths(root, commits).filter((file) => (0, import_scope_match.isInScope)(file, scopes));
     }
     return { ok: true, root, working, committed, pending: working.length > 0 || committed.length > 0 };
   } catch (error) {
@@ -604,7 +579,7 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
   if (storedPaths.length && JSON.stringify(storedPaths) !== JSON.stringify(rangeChangedPaths)) {
     return Object.assign({}, range, { ok: false, reason: "changed_paths_changed", storedPaths });
   }
-  const admittedScope = scopedPaths(submission.admittedScope);
+  const admittedScope = (0, import_scope_match.scopedPaths)(submission.admittedScope);
   if (!admittedScope.length) {
     return Object.assign({}, range, {
       ok: false,
@@ -624,7 +599,7 @@ function validateStoredSubmissionRange(cwd, submissionValue, ticketRef, integrat
   });
 }
 function commitScoped(cwd, message, files) {
-  const scopes = scopedPaths(files);
+  const scopes = (0, import_scope_match.scopedPaths)(files);
   if (!scopes.length) return { ok: false, reason: "missing_scope" };
   try {
     const root = repoRoot(cwd);

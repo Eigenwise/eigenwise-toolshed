@@ -2612,6 +2612,58 @@ test('MCP submit refuses out-of-scope committed ranges', async () => {
   assert.ok(store.getTicket(project, ticket.ref).claim, 'scope refusal keeps the claim');
 });
 
+test('MCP scopeRequest and submit agree on declared descendant globs', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = await callTool('add', {
+    project,
+    title: 'glob scope agreement',
+    files: ['src/**'],
+    unclassified: true,
+  });
+  const by = 'mcp-glob-scope-worker';
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['src/**'], 'add preserves a declared descendant glob');
+  assert.equal((await callTool('claim', {
+    project,
+    ref: ticket.ref,
+    by,
+    direct: true,
+    reason: 'The public MCP scope agreement fixture requires a local direct claim.',
+  })).ok, true);
+
+  fs.mkdirSync(path.join(worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'src', 'covered.js'), 'covered\n');
+  const requested = await callTool('scopeRequest', {
+    project,
+    ref: ticket.ref,
+    by,
+    files: ['src/covered.js'],
+  });
+  assert.equal(requested.state, 'granted');
+  assert.deepEqual(requested.covered, ['src/covered.js']);
+  assert.deepEqual(requested.resolution.effectiveScope, ['src/**']);
+
+  const committed = await callTool('commit', {
+    project,
+    ref: ticket.ref,
+    by,
+    message: 'MCP declared descendant glob',
+    worktree,
+  });
+  assert.ok(committed.commit, 'commit accepts the path scopeRequest covered');
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+  const submitted = await callTool('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    commit: committed.commit,
+    worktree,
+    body: 'MCP declared descendant glob evidence.',
+  });
+  assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+  assert.deepEqual(store.getTicket(project, ticket.ref).submission.changedPaths, ['src/covered.js']);
+});
+
 function repoWithDirectories(prefix: string, directories: string[]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   for (const directory of directories) fs.mkdirSync(path.join(root, directory), { recursive: true });
