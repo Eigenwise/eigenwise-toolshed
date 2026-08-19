@@ -50,8 +50,14 @@ export function writeJson(value: unknown): void {
   process.stdout.write(JSON.stringify(value));
 }
 
-export function writeContext(hookEventName: string, additionalContext: string): void {
-  writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
+export function writeContext(hookEventName: string, additionalContext: string, initialUserMessage = ''): void {
+  writeJson({
+    hookSpecificOutput: {
+      hookEventName,
+      additionalContext: projectedText(hookEventName, additionalContext),
+      ...(initialUserMessage ? { initialUserMessage } : {}),
+    },
+  });
 }
 
 export function writeDeny(hookEventName: string, permissionDecisionReason: string): void {

@@ -98,8 +98,14 @@ function projectedText(hookEventName, value) {
 function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
-function writeContext(hookEventName, additionalContext) {
-  writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
+function writeContext(hookEventName, additionalContext, initialUserMessage = "") {
+  writeJson({
+    hookSpecificOutput: {
+      hookEventName,
+      additionalContext: projectedText(hookEventName, additionalContext),
+      ...initialUserMessage ? { initialUserMessage } : {}
+    }
+  });
 }
 
 // src/hooks/shared/paths.ts
@@ -612,10 +618,24 @@ function dispatchAdmissionStatus(data) {
     return "no-project";
   }
 }
-function emit(context, notice) {
+function hasMidWaveBoard(data) {
+  if (process.env.SIDEQUEST_AGENT) return false;
+  const source = stringField(data, "source");
+  if (source !== "startup" && source !== "resume") return false;
+  try {
+    const store = require(runtimeModule("store"));
+    const start = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+    const found = store.findProject(store.nearestRepoRoot(start));
+    if (!found.ok || !found.slug) return false;
+    return store.worktreeGcTickets().some((ticket) => ticket.project === found.slug && !ticket.archived && ticket.status !== "done" && (Boolean(ticket.submission?.commit && !ticket.submission.integratedAt) || Boolean(ticket.claimLive && ticket.dispatch && !ticket.dispatch.terminalAt)));
+  } catch (_) {
+    return false;
+  }
+}
+function emit(context, notice, initialUserMessage = "") {
   const output = notice ? `${notice}
 ${context}` : context;
-  writeContext("SessionStart", withWorkforce(output));
+  writeContext("SessionStart", withWorkforce(output), initialUserMessage);
 }
 async function main() {
   const data = readStdin();
@@ -649,12 +669,14 @@ async function main() {
   const upstreamDefects = "If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits.";
   const checkpoint = checkpointingGuidance(data);
   const recovery = "Context is UTF-8 bounded. Omitted details name a typed board retrieval call.";
+  const initialUserMessage = hasMidWaveBoard(data) ? "/sidequest:sidequest" : "";
   if (source === "compact" || source === "resume") {
     emit(
       `=== sidequest (active — context restored) ===
 ${recovery}
 ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Dispatch executors with the returned spawn unchanged. Ticket and dispatch before multi-file investigation. never TaskOutput. Reconnect Board MCP, re-dispatch, and spawn the exact returned executor before recovering lifecycle work. Use pulse/changes for liveness; a restored window replays background-task reminders that can name already-finished agents, so believe the board over them and do not investigate. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }); TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. If a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Board MCP is the lifecycle authority; no Sidequest CLI or raw Agent fallback.`,
-      restartNotice
+      restartNotice,
+      initialUserMessage
     );
     return;
   }
@@ -662,7 +684,8 @@ ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} $
     `=== sidequest (active) ===
 ${recovery}
 ROLE: ORCHESTRATOR. ${checkpoint}${checkpoint ? " " : ""}${boardAuthorization} ${watch} ${inlineBoundary} ${fanoutGuidance} ${upstreamDefects} Substantive multi-file changes and investigations need tickets, then dispatch and the returned executor. Operational requests can run inline. Use board MCP tools first. Tiny lookups use Read, Glob, Grep, or WebFetch. Do not use TaskOutput. One diagnose-first retry; two failures need evidence and user escalation. After terminal board evidence is consumed and its handoff is preserved, retire the exact native teammate once with TaskStop({ task_id: "<agent name>" }); TaskStop is Claude Code host cleanup, not a Sidequest tool. Keep live claims, retained continuations, and integration candidates steerable. When a board path refuses verified work, deliver it yourself through groomClose with deliveryCommit and record the refusal evidence. Workers own claimed work and report conflicts, verification, and cleanup.`,
-    restartNotice
+    restartNotice,
+    initialUserMessage
   );
 }
 main().catch((error) => {

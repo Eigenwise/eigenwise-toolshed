@@ -251,15 +251,19 @@ function writeCategory(home?: any, category?: any) {
   database.close();
 }
 
-function registerProject(home: string, project: string): void {
+function withSidequestHome<Result>(home: string, action: () => Result): Result {
   const previousHome = process.env.SIDEQUEST_HOME;
   process.env.SIDEQUEST_HOME = home;
   try {
-    store.ensureProject(project);
+    return action();
   } finally {
     if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
     else process.env.SIDEQUEST_HOME = previousHome;
   }
+}
+
+function registerProject(home: string, project: string): void {
+  withSidequestHome(home, () => store.ensureProject(project));
 }
 
 function writeModelPrefs(home?: any, prefs?: any) {
@@ -2593,6 +2597,60 @@ test('session-start excludes the retired generic-agent bypass', () => {
   for (const surface of [forceBypass, skill, ctx]) {
     assert.doesNotMatch(surface, new RegExp(RETIRED_SCOUT), 'published guidance must not carry the retired bypass');
   }
+});
+
+test('session-start force-loads the Sidequest skill only for orchestrator mid-wave recovery', () => {
+  const midWaveHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-mid-wave-skill-'));
+  const midWaveProject = path.join(midWaveHome, 'project');
+  const category = 'session-start-mid-wave-skill';
+  registerProject(midWaveHome, midWaveProject);
+  writeCategory(midWaveHome, {
+    id: category,
+    name: category,
+    route: { model: 'sonnet', effort: 'high' },
+    fallback: null,
+    enabled: true,
+  });
+  withSidequestHome(midWaveHome, () => {
+    const projectSlug = store.ensureProject(midWaveProject).slug;
+    const ticket = store.createTicket(projectSlug, { title: 'pending mid-wave submission', category, source: 'test' });
+    assert.equal(store.claimTicket(projectSlug, ticket.ref, 'mid-wave-skill-worker', {
+      direct: true,
+      reason: 'Fixture creates a pending submission for SessionStart recovery.',
+    }).ok, true);
+    assert.equal(store.submitTicket(projectSlug, ticket.ref, 'mid-wave-skill-worker', { commit: '1234567' }).ok, true);
+  });
+
+  const midWaveStartup = runHookOutput(SESSION, {
+    session_id: 'mid-wave-skill-startup',
+    source: 'startup',
+    cwd: midWaveProject,
+  }, { SIDEQUEST_HOME: midWaveHome, CLAUDE_PROJECT_DIR: midWaveProject });
+  assert.equal(midWaveStartup.hookSpecificOutput.initialUserMessage, '/sidequest:sidequest');
+
+  const midWaveExecutor = runHookOutput(SESSION, {
+    session_id: 'mid-wave-skill-executor',
+    source: 'startup',
+    cwd: midWaveProject,
+  }, { SIDEQUEST_HOME: midWaveHome, CLAUDE_PROJECT_DIR: midWaveProject, SIDEQUEST_AGENT: 'fixture-executor' });
+  assert.equal(midWaveExecutor.hookSpecificOutput.initialUserMessage, undefined);
+
+  const midWaveCompact = runHookOutput(SESSION, {
+    session_id: 'mid-wave-skill-compact',
+    source: 'compact',
+    cwd: midWaveProject,
+  }, { SIDEQUEST_HOME: midWaveHome, CLAUDE_PROJECT_DIR: midWaveProject });
+  assert.equal(midWaveCompact.hookSpecificOutput.initialUserMessage, undefined);
+
+  const quietHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-quiet-skill-'));
+  const quietProject = path.join(quietHome, 'project');
+  registerProject(quietHome, quietProject);
+  const quietStartup = runHookOutput(SESSION, {
+    session_id: 'quiet-skill-startup',
+    source: 'startup',
+    cwd: quietProject,
+  }, { SIDEQUEST_HOME: quietHome, CLAUDE_PROJECT_DIR: quietProject });
+  assert.equal(quietStartup.hookSpecificOutput.initialUserMessage, undefined);
 });
 
 test('session-start: tells orchestrators when to fan out independent work', () => {

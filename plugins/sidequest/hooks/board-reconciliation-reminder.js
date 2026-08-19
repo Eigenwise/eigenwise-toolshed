@@ -108,8 +108,14 @@ function projectedText(hookEventName, value) {
 function writeJson(value) {
   process.stdout.write(JSON.stringify(value));
 }
-function writeContext(hookEventName, additionalContext) {
-  writeJson({ hookSpecificOutput: { hookEventName, additionalContext: projectedText(hookEventName, additionalContext) } });
+function writeContext(hookEventName, additionalContext, initialUserMessage = "") {
+  writeJson({
+    hookSpecificOutput: {
+      hookEventName,
+      additionalContext: projectedText(hookEventName, additionalContext),
+      ...initialUserMessage ? { initialUserMessage } : {}
+    }
+  });
 }
 
 // src/hooks/shared/paths.ts
