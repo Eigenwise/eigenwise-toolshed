@@ -126,16 +126,7 @@ dispatch. Only the continuation flow releases during a healthy handoff.
 
 ### Scope expansion without a bounce
 
-When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>`. A concrete path
-inside the same declared package or plugin is added immediately and recorded as an audited auto-approval.
-Test roots and mechanically derived build outputs use the same no-pause path. Another package or plugin,
-wildcards, read-only work, CI and Claude control files, credentials, and release machinery stay pending for
-a ruling with the claim intact. A pending request records only the uncovered additions and prints the
-authoritative `sidequest update <ref> --files ...` approval command. Run that exact update to approve the
-full request, then resume the same executor. A plain `update --files` is also authoritative only when its
-resulting scope covers every pending requested path; otherwise Sidequest reports the request is still pending
-and prints the full command. Scope lint still rejects out-of-scope commits and submissions. Do not release
-and redispatch a healthy executor just to add a path.
+When an executor needs an undeclared path, it calls `scope-request <ref> --file <path>`. A concrete path in the same declared package surface, such as `src` or `lib`, is added immediately and recorded as an audited auto-approval. Test roots and mechanically derived build outputs use the same no-pause path. A sibling package surface, another package or plugin, wildcards, read-only work, CI and Claude control files, credentials, and release machinery stay pending for a ruling with the claim intact. Verification evidence never needs repository scope: the dispatch briefing names its board-owned evidence directory for screenshots, HTML dumps, and probe output. Reference that directory from the ticket record instead of writing evidence into a worktree or integration target. A pending request records only the uncovered additions and prints the authoritative `sidequest update <ref> --files ...` approval command. Run that exact update to approve the full request, then resume the same executor. A plain `update --files` is also authoritative only when its resulting scope covers every pending requested path; otherwise Sidequest reports the request is still pending and prints the full command. Scope lint still rejects out-of-scope commits and submissions. Do not release and redispatch a healthy executor just to add a path.
 
 ## Fan-out mechanics
 

@@ -2914,13 +2914,82 @@ test('MCP scopeRequest auto-approves a concrete path inside the declared plugin 
   assert.equal(ticket.scopeResolution.state, 'granted');
   assert.deepEqual(ticket.scopeResolution.requested, [requestedFile]);
   assert.deepEqual(ticket.scopeResolution.granted, [requestedFile]);
-  assert.match(ticket.comments.at(-1).body, /same-package scope derived from the ticket’s declared files/);
+  assert.match(ticket.comments.at(-1).body, /matching package surface derived from the ticket’s declared files/);
   assert.equal(ticket.dispatch.outcome, 'claimed');
   assert.equal(ticket.dispatch.terminalAt, null);
   assert.equal(ticket.dispatch.scopeRequest, undefined);
   assert.equal(ticket.dispatch.attempts, undefined);
 });
 
+
+test('MCP scopeRequest refuses evidence files outside the declared package surface', async () => {
+  const fixture = isolatedDispatch('sq-mcp-evidence-scope-', 'evidence-scope-worker', ['plugins/sidequest/src/lib/store/tickets.ts']);
+  const requestedFile = `plugins/sidequest/artifacts/${fixture.ref}-probe.png`;
+
+  const result = await callTool('scopeRequest', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    files: [requestedFile],
+  });
+
+  assert.equal(result.autoApproved, false);
+  assert.equal(result.state, 'refused');
+  assert.deepEqual(result.refused, [requestedFile]);
+  const ticket = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(ticket.files.includes(requestedFile), false);
+  assert.match(ticket.comments.at(-1).body, /Verification evidence belongs in/);
+  assert.match(ticket.comments.at(-1).body, /do not request or commit it inside the repository/);
+});
+
+test('MCP submit keeps board-owned evidence out of delivered paths', async () => {
+  const fixture = isolatedDispatch('sq-mcp-evidence-submit-', 'evidence-submit-worker', ['src']);
+  const ticket = store.getTicket(fixture.project, fixture.ref);
+  const evidenceDirectory = ticket.dispatch.evidenceDirectory;
+  assert.equal(path.relative(fixture.worktree, evidenceDirectory).startsWith('..'), true);
+  fs.writeFileSync(path.join(evidenceDirectory, 'browser.html'), '<main>verification evidence</main>\n');
+  fs.mkdirSync(path.join(fixture.worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(fixture.worktree, 'src', 'delivered.js'), 'export const delivered = true;\n');
+  gitAt(fixture.worktree, ['config', 'user.name', 'Sidequest Test']);
+  gitAt(fixture.worktree, ['config', 'user.email', 'sidequest-test@example.invalid']);
+
+  const committed = await callTool('commit', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    message: 'Keep verification evidence outside the candidate',
+    worktree: fixture.worktree,
+  });
+  assert.ok(committed.commit, committed.message || committed.reason);
+  const gitRef = `refs/sidequest/${fixture.ref}`;
+  gitAt(fixture.worktree, ['update-ref', gitRef, committed.commit]);
+  const submitted = await callTool('submit', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    commit: committed.commit,
+    gitRef,
+    worktree: fixture.worktree,
+    verify: 'node --test test/evidence.test.js',
+    body: `Verification evidence: ${evidenceDirectory}`,
+  });
+  assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+  assert.deepEqual(store.getTicket(fixture.project, fixture.ref).submission.changedPaths, ['src/delivered.js']);
+
+  const delivered = store.integrateSubmission(fixture.project, fixture.ref, {
+    mode: 'merge',
+    target: store.integrationTarget(fixture.project),
+    skipVerify: true,
+    verificationWaiver: {
+      authority: 'fixture release manager',
+      reason: 'this test covers evidence-path delivery only',
+      affectedGate: 'node --test test/evidence.test.js',
+      scope: fixture.ref,
+    },
+  });
+  assert.equal(delivered.ok, true, delivered.message || delivered.reason);
+  assert.deepEqual(store.getTicket(fixture.project, fixture.ref).submission.integration.deliveredFiles, ['src/delivered.js']);
+});
 
 test('MCP scopeRequest keeps declared bundled hook output one-way: the source needs approval, the source grants its output', async () => {
   const worktree = createGitWorktree();

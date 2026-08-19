@@ -689,6 +689,7 @@ for (const [state, dirtyTarget] of dirtyIntegrationTargetStates) {
 
     assert.equal(result.ok, false);
     assert.equal(result.reason, 'integration_target_dirty');
+    if (state === 'untracked') assert.match(result.message, /target-scratch\.log/);
     assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), checkoutBefore);
     assert.equal(head(fixture.repo), headBefore);
     assert.deepEqual(store.getTicket(slug, ticket.ref).submission, submissionBefore);

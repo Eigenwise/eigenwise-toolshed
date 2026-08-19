@@ -585,31 +585,36 @@ function packageRelativeSegments(file?: any, packageRoot?: any) {
   return segments.slice(rootSegments.length);
 }
 
-function ticketDeclaresSourceDirectory(ticket?: any, packageRoot?: any, slug?: any) {
-  return normalizeFiles(ticket?.files).some((file?: any) => {
-    const declaredRoot = packageSurfaceRoot(file, slug);
-    return declaredRoot != null
-      && declaredRoot.toLowerCase() === String(packageRoot).toLowerCase()
-      && packageRelativeSegments(file, declaredRoot)[0]?.toLowerCase() === 'src';
-  });
+function packageSurfaceName(file?: any, packageRoot?: any) {
+  return packageRelativeSegments(file, packageRoot)[0]?.toLowerCase() || null;
+}
+
+function declaredPackageSurfaces(ticket?: any, slug?: any) {
+  const surfaces = new Map<string, Set<string>>();
+  for (const file of normalizeFiles(ticket?.files)) {
+    if (containsScopePattern(file) || protectedAutoApprovalPath(file)) continue;
+    const root = packageSurfaceRoot(file, slug);
+    const surface = root == null ? null : packageSurfaceName(file, root);
+    if (!root || !surface) continue;
+    const rootKey = root.toLowerCase();
+    const rootSurfaces = surfaces.get(rootKey) || new Set<string>();
+    rootSurfaces.add(surface);
+    surfaces.set(rootKey, rootSurfaces);
+  }
+  return surfaces;
 }
 
 function autoApprovedPackageScope(ticket?: any, additions?: any, slug?: any) {
   if (dispatchReadOnly(ticket) || dispatchState(ticket)?.readonly === true) return [];
   const testScopeDisabled = boardConfig(slug)?.autoApproveTestScope === false;
   const testRoots = testScopeDisabled ? reachableTestRoots(ticket, slug) : [];
-  const declaredRoots = new Set(normalizeFiles(ticket?.files)
-    .filter((file?: any) => !containsScopePattern(file) && !protectedAutoApprovalPath(file))
-    .map((file?: any) => packageSurfaceRoot(file, slug))
-    .filter((root: string | null): root is string => root != null)
-    .map((root: string) => root.toLowerCase()));
-  if (!declaredRoots.size) return [];
+  const declaredSurfaces = declaredPackageSurfaces(ticket, slug);
+  if (!declaredSurfaces.size) return [];
   return normalizeFiles(additions).filter((file?: any) => {
     if (containsScopePattern(file) || protectedAutoApprovalPath(file) || enclosingTestRoot(file, testRoots)) return false;
     const root = packageSurfaceRoot(file, slug);
-    if (root == null || !declaredRoots.has(root.toLowerCase())) return false;
-    const requestsSource = packageRelativeSegments(file, root)[0]?.toLowerCase() === 'src';
-    return !requestsSource || ticketDeclaresSourceDirectory(ticket, root, slug);
+    const surface = root == null ? null : packageSurfaceName(file, root);
+    return root != null && surface != null && declaredSurfaces.get(root.toLowerCase())?.has(surface) === true;
   });
 }
 
@@ -666,7 +671,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
         ? 'build-registration scope derived from the in-scope source layout'
         : configuredScope.length && !packageScope.length
           ? 'scope under board policy'
-          : 'same-package scope derived from the ticket’s declared files';
+          : 'matching package surface derived from the ticket’s declared files';
     // A ticket that declares nothing gives the package-scope derivation no root to
     // work from, so anything the board's own policy does not already cover refuses.
     // Telling this executor to hand back names the symptom; the fix belongs to
@@ -674,8 +679,12 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const undeclared = !normalizeFiles(t.files).length
       ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.`
       : '';
+    const evidenceDirectory = String(t.dispatch?.evidenceDirectory || '').trim();
+    const evidenceGuidance = evidenceDirectory
+      ? ` Verification evidence belongs in ${evidenceDirectory}; do not request or commit it inside the repository.`
+      : '';
     const body = refused.length
-      ? `Scope expansion refused: ${refused.join(', ')}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
+      ? `Scope expansion refused: ${refused.join(', ')}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
       : `Auto-approved ${policy}: ${approved.join(', ')}.`;
     const comment = createComment({ by: refused.length ? 'board' : 'board', body, kind: 'comment', source: refused.length ? (opts.source || 'cli') : 'policy' }, now);
     t.comments.push(comment);
