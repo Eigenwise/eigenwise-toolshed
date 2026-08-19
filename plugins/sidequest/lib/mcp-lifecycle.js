@@ -72,6 +72,20 @@ function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
 }
+async function cleanupDeliveredWorktree(slug, projectPath, ticket, claimWasLive = false) {
+  try {
+    const dispatch = ticket?.dispatch;
+    if (!dispatch?.worktree || dispatch.sharedTree !== false || dispatch.continuation || store.boardConfig(slug)?.worktreeIsolation === false) return;
+    const tickets = store.worktreeGcTickets().map((candidate) => candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate);
+    await worktrees.sweep(projectPath, tickets, {
+      execute: true,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget: store.integrationTarget(slug),
+      ticketRef: ticket.ref
+    });
+  } catch (_) {
+  }
+}
 function objectProperties(value) {
   return value && typeof value === "object" ? Object.fromEntries(Object.entries(value)) : {};
 }
@@ -749,7 +763,7 @@ const tools = [
   },
   {
     name: "integrate",
-    description: "Deliver a ref or exact comma group; wave:{dependencies,verification,waveId} assembles it.",
+    description: "Deliver a ref or exact comma group; wave:{dependencies,verification,waveId} assembles it. After the delivery record is durable, terminal isolated worktrees are reclaimed best-effort; busy or locked worktrees defer to SessionStart.",
     inputSchema: {
       type: "object",
       properties: {
@@ -798,8 +812,14 @@ const tools = [
         });
         if (!delivery2.ok) return mutationAck(slug, delivery2);
         const reason2 = `Delivered assembled wave ${refs.join(", ")} via ${delivery2.integration.mode}.`;
+        const ticketsBeforeClosure = refs.map((ref) => store.getTicket(slug, ref));
         const closures = refs.map((ref) => store.completeTicketAsControlPlane(slug, ref, { by, reason: reason2, purpose: "integration" }));
         const failedClosure = closures.find((closure) => !closure.ok);
+        for (const [index, closure] of closures.entries()) {
+          if (!closure.ok) continue;
+          closeDispatchExecutor(closure.ticket);
+          await cleanupDeliveredWorktree(slug, meta.path, closure.ticket, Boolean(ticketsBeforeClosure[index]?.claim?.by));
+        }
         return mutationAck(slug, failedClosure || closures[0], {
           delivery: compactIntegrationDelivery(delivery2.integration),
           verify: delivery2.integration.verify,
@@ -853,12 +873,16 @@ const tools = [
           verificationWaiver: args.verificationWaiver
         });
         if (!recorded.ok) return mutationAck(slug, recorded);
+        const deliveryTicket2 = recorded.ticket;
         const closed2 = store.completeTicketAsControlPlane(slug, args.ref, {
           by,
           reason: args.reason,
           purpose: "integration"
         });
-        if (closed2.ok) closeDispatchExecutor(recorded.ticket);
+        if (closed2.ok) {
+          closeDispatchExecutor(recorded.ticket);
+          await cleanupDeliveredWorktree(slug, meta.path, closed2.ticket, Boolean(deliveryTicket2?.claim?.by));
+        }
         return mutationAck(slug, closed2, {
           delivery: compactIntegrationDelivery(recorded.integration),
           verify: recorded.integration.verify,
@@ -888,12 +912,16 @@ const tools = [
       }
       const verifyReason = verification.verify.status === "attestation" ? `Attestation accepted for ${verification.verify.artifact || "the source revision"}.` : verification.verify.status === "skipped" ? `Verification waived by ${verification.verify.waiver?.authority || "an authorized human"}: ${verification.verify.waiver?.reason || verification.verify.evidence}.` : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.evidence}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command || verification.verify.evidence}.`;
       const reason = usesGit ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}` : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
+      const deliveryTicket = delivery.ticket;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
         purpose: "integration"
       });
-      if (closed.ok) closeDispatchExecutor(delivery.ticket);
+      if (closed.ok) {
+        closeDispatchExecutor(delivery.ticket);
+        await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
+      }
       return mutationAck(slug, closed, {
         delivery: compactIntegrationDelivery(integration),
         verify: verification.verify,

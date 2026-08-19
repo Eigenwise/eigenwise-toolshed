@@ -48,6 +48,7 @@ const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
+const worktrees = require('../lib/worktrees.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
@@ -267,6 +268,64 @@ function claimDispatchedTicket(project?: any, ticket?: any, by?: any, sharedTree
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
+}
+
+function prepareIsolatedWorktreeDispatch(project: string, primary: string, ticket: any, by: string) {
+  const sessionId = `mcp-delivery-${ticket.id}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, {
+    allowUnscoped: true,
+    sharedTree: false,
+    sessionId,
+  });
+  assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  const worktree = worktrees.agentWorktreePath(primary, `delivery-${ticket.id}`);
+  assert.equal(store.bindDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  gitAt(primary, ['worktree', 'add', '-b', `worktree-agent-delivery-${ticket.id}`, worktree, 'HEAD']);
+  const gitDirectoryValue = gitAt(worktree, ['rev-parse', '--git-dir']);
+  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+  createCheckoutInstanceMarker(gitDirectory);
+  assert.equal(store.completeDispatchWorktreeCreation(project, sessionId, worktree).ok, true);
+  assert.equal(store.claimTicket(project, ticket.ref, by, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+  }).ok, true);
+  return worktree;
+}
+
+async function submitIsolatedDeliveryCandidate(project: string, ticket: any, by: string, worktree: string) {
+  fs.writeFileSync(path.join(worktree, 'feature.js'), `${ticket.ref}\n`);
+  const committed = await callTool('commit', {
+    project,
+    ref: ticket.ref,
+    by,
+    message: `delivery candidate ${ticket.ref}`,
+    worktree,
+  });
+  gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+  const submitted = await callTool('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    commit: committed.commit,
+    worktree,
+    verify: 'manual: the delivery cleanup fixture was checked',
+    body: `Delivery cleanup fixture for ${ticket.ref}.`,
+  });
+  assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+}
+
+function removeTestWorktree(primary: string, worktree: string) {
+  if (fs.existsSync(worktree)) {
+    try { gitAt(primary, ['worktree', 'unlock', worktree]); } catch {}
+    try { gitAt(primary, ['worktree', 'remove', '--force', worktree]); } catch {}
+  }
+  fs.rmSync(primary, { recursive: true, force: true });
 }
 
 function stageLongOutOfScopeChangeSet(worktree?: any) {
@@ -1967,6 +2026,67 @@ test('MCP commit and submit finish an isolated worktree without a PATH command',
   const bad = await callToolRaw('submit', { project, ref: malformed.ref, by: 'mcp-bad-worker', commit: 'not-a-hash', worktree, body: 'Malformed submission evidence' });
   assert.ok(bad.isError, 'malformed hashes fail before a board write');
   assert.ok(store.getTicket(project, malformed.ref).claim, 'malformed submission keeps the claim');
+});
+
+test('MCP delivery reclaims a terminal isolated worktree immediately', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'reclaim delivered worktree', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'exercise delivery-time cleanup through the public integration tool',
+  });
+  const by = 'delivery-cleanup-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+
+  const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'delivery-cleanup-integrator' });
+  assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), false);
+});
+
+test('MCP delivery preserves a retained continuation worktree', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'preserve retained continuation', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'preserve the continuation checkout after a delivery record',
+  });
+  const by = 'delivery-continuation-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+  const retained = store.getTicket(project, ticket.ref);
+  retained.dispatch.continuation = { mode: 'retained_worktree_resume', sourceWorktree: worktree };
+  persistTicket(project, retained);
+
+  const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'delivery-continuation-integrator' });
+  assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), true);
+});
+
+test('MCP delivery records completion when its isolated worktree is locked', async (context: any) => {
+  const primary = createGitWorktree();
+  const project = store.ensureProject(primary).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main', worktreeBase: 'local-main' });
+  const ticket = store.createTicket(project, {
+    title: 'defer locked delivery worktree', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm cleanup failure cannot roll back delivery recording',
+  });
+  const by = 'delivery-locked-worker';
+  const worktree = prepareIsolatedWorktreeDispatch(project, primary, ticket, by);
+  context.after(() => removeTestWorktree(primary, worktree));
+  await submitIsolatedDeliveryCandidate(project, ticket, by, worktree);
+  gitAt(primary, ['worktree', 'lock', '--reason', 'delivery cleanup fixture lock', worktree]);
+
+  const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'delivery-locked-integrator' });
+  assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+  assert.equal(store.getTicket(project, ticket.ref).status, 'done');
+  assert.equal(fs.existsSync(worktree), true);
 });
 
 test('MCP delivery closure points live claims at the owning release command', async () => {
