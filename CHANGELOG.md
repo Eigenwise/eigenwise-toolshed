@@ -8,6 +8,29 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.486.0 (2026-08-19)
+
+### sidequest 5.0.1 → 5.0.2
+
+#### Fixes
+
+- Unify verification results (SQ-1918)
+  Pins verification requirements at dispatch, preserves canonical evidence through delivery, and keeps full process-verification logs for failures.
+- Scope integration holds to active submission races (SQ-2244)
+- Keep executor verification in the foreground (SQ-2245)
+- Repair verification evidence and waivers (SQ-2247)
+  Keeps evidence-only verification out of the process runner, accepts bounded waivers through CLI and MCP integrations, and preserves manual evidence in completion records.
+- Boot mid-wave Sidequest skill recovery (SQ-2248)
+- Clarify when to use the Sidequest skill (SQ-2249)
+- Persist oracle review outcomes (SQ-2251)
+  Records oracle-confirmed review defects on both sides of a bound candidate and lets an integrated repair supersede that rejected submission.
+
+### workbench 0.88.5 → 0.88.6
+
+#### Fixes
+
+- Ignore third-party marketplaces in Workbench freshness hooks (SQ-2250)
+
 ## v3.485.0 (2026-08-19)
 
 ### sidequest 5.0.0 → 5.0.1
