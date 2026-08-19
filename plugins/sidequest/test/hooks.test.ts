@@ -3061,7 +3061,10 @@ test('session-start skips an unavailable integration target without failing the 
   const board = store.ensureProject(repo);
   store.setBoardConfig(board.slug, { integrationBranch: 'missing-target' });
 
-  const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
+  // A slow CI runner can push the sweep child past the default 2500ms budget,
+  // turning the expected skip notice into a deferral notice; pin the deadline
+  // so the sweep always finishes inside this test.
+  const context = runHook(SESSION, { session_id: 'session-target', source: 'startup', cwd: repo }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000', CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
   assert.match(context, /skipped worktree sweep/);
   assert.match(context, /configured integration branch is unavailable locally/);
   assert.doesNotMatch(context, /worktree sweep failed/);
