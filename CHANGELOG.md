@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.487.0 (2026-08-19)
+
+### sidequest 5.0.2 → 5.0.3
+
+#### Fixes
+
+- Keep glob scopes consistent (SQ-2252)
+  Uses one matcher for declared descendant glob scopes during requests and submission.
+- Keep submission tests on generated runtime code (SQ-2253)
+  Avoids a late TypeScript transform in the grooming-abandonment test so full-suite esbuild load cannot strand its test worker.
+
 ## v3.486.0 (2026-08-19)
 
 ### sidequest 5.0.1 → 5.0.2
