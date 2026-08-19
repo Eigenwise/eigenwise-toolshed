@@ -93,8 +93,7 @@ test('kernel returns every retryable submission diagnostic without mutating fact
   assert.deepEqual(originalFacts.surfaces.pending, []);
 });
 
-test('inline eligibility only permits a narrow pre-attempt request', () => {
-  assert.equal(kernel.inlineEligibility({ namedFiles: ['notes/plan.md'], requestedResult: 'Fix the heading.' }).eligible, true);
-  assert.deepEqual(kernel.inlineEligibility({ namedFiles: ['notes/plan.md'], requestedResult: 'Fix it.', attempt: { state: 'working' } }).reasons, ['attempt_exists']);
+test('kernel export surface does not claim inline eligibility authority', () => {
+  assert.equal('inlineEligibility' in kernel, false);
   assert.match(kernel.transitionAttempt({ state: 'closed' }, 'claim').code, /invalid_transition/);
 });
