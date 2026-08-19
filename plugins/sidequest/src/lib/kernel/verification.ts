@@ -69,6 +69,11 @@ function requiredKind(value: string): VerificationKind {
   return (VERIFICATION_KINDS as readonly string[]).includes(value) ? value as VerificationKind : 'custom';
 }
 
+export function classifyVerificationKind(verify: unknown, declaredKind?: unknown): VerificationKind {
+  if (/^manual:\s+/i.test(nonEmpty(verify))) return 'manual';
+  return requiredKind(nonEmpty(declaredKind || 'command').toLowerCase());
+}
+
 function suiteFrom(input: RequirementInput): VerificationSuite | undefined {
   if (!input.suite) return undefined;
   const name = nonEmpty(input.suite.name);
@@ -88,7 +93,7 @@ export function validationDiagnostic(code: string, message: string): Diagnostic 
 }
 
 export function verificationRequirement(input: RequirementInput): VerificationRequirement {
-  const kind = requiredKind(nonEmpty(input.kind || 'command').toLowerCase());
+  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
   const evidence = nonEmpty(input.evidence);
   const command = nonEmpty(input.command || (kind === 'command' ? evidence : ''));
   const suite = suiteFrom(input);
@@ -99,7 +104,7 @@ export function verificationRequirement(input: RequirementInput): VerificationRe
   if (kind === 'review') return Object.freeze({ kind, evidenceContract: evidence || 'independent review findings' });
   if (kind === 'manual') return Object.freeze({ kind, evidenceContract: evidence.replace(/^manual:\s*/i, '') || 'manual verification evidence' });
   if (kind === 'suite' || (!command && suite)) {
-    if (!suite) return Object.freeze({ kind: 'suite', evidenceContract: evidence || 'named suite output' });
+    if (!suite) return Object.freeze({ kind: 'suite', ...(command ? { command } : {}), evidenceContract: evidence || 'named suite output' });
     return Object.freeze({ kind: 'suite', suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
   }
   if (['document', 'link', 'schema', 'custom'].includes(kind)) {

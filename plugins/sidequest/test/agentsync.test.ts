@@ -114,6 +114,21 @@ test('executor briefings require Board MCP reconnect and re-dispatch when unavai
   assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
 });
 
+test('legacy manual verifier prefixes cannot reach verify capture', () => {
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-LEGACY-MANUAL',
+    model: 'sonnet',
+    effort: 'medium',
+    dispatchExecutor: 'sidequest-exec-medium',
+    category: {},
+    executorVerify: 'manual: checked the rendered page',
+    executorVerifyKind: 'command',
+  }, 'legacy-manual-token');
+
+  assert.match(briefing, /Legacy verifier: manual\. Record evidence matching: checked the rendered page\./);
+  assert.doesNotMatch(briefing, /verify-capture\.js/);
+});
+
 test('executor briefings surface Sidequest defects instead of project workarounds', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-UPSTREAM-DEFECT', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},

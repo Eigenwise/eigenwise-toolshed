@@ -1,6 +1,6 @@
 'use strict';
 
-const { verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
+const { classifyVerificationKind, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require('../kernel/verification.js');
 const { runProcessVerification } = require('../ports/process.js');
 const { decideSubmissionAdmission } = require('../kernel/submission');
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require('../source-revision-capability.js');
@@ -601,7 +601,7 @@ function pinnedVerificationRequirement(ticket: any) {
     return verificationRequirement({ kind: 'custom', evidence: 'legacy project verifier was not recorded' });
   }
   return verificationRequirement({
-    kind: ticket.executorVerifyKind || 'command',
+    kind: classifyVerificationKind(legacyCommand, ticket.executorVerifyKind),
     command: legacyCommand,
     evidence: legacyCommand,
     artifact: ticket.executorAttestationArtifact,

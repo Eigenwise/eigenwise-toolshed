@@ -5,7 +5,7 @@ import type { VerificationRequirement, VerificationResult } from './verification
 
 export { canonicalPath, createWorktreeLease, isCanonicalRegisteredWorktree, sameCanonicalPath, worktreeCleanupDecision, worktreeCreateDecision, worktreeResumeDecision, worktreeWriteDecision } from './worktree.js';
 export type { LeaseDecision, LeaseIdentity, LeaseLiveness, LeasePhase, WorktreeLease, WorktreeLeaseFacts, WorktreeProvisioning } from './worktree.js';
-export { captureVerificationResult, validateVerificationWaiver, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, verificationWaiverDiagnostic, VERIFICATION_KINDS } from './verification.js';
+export { captureVerificationResult, classifyVerificationKind, validateVerificationWaiver, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, verificationWaiverDiagnostic, VERIFICATION_KINDS } from './verification.js';
 export type { VerificationKind, VerificationRequirement, VerificationResult, VerificationStatus, VerificationWaiver } from './verification.js';
 export { assembleWave, dependentReleaseDecision, openWave, recordAssembledWaveGate, recordWaveDelivery } from './wave.js';
 export type { AssembledWave, CandidateInvalidation, DeliveryResult, Wave, WaveAssemblyDecision, WaveCandidate, WaveGateResult, WaveParticipant } from './wave.js';

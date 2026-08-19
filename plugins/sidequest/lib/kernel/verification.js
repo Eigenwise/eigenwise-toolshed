@@ -21,6 +21,7 @@ __export(verification_exports, {
   VERIFICATION_KINDS: () => VERIFICATION_KINDS,
   VERIFICATION_STATUSES: () => VERIFICATION_STATUSES,
   captureVerificationResult: () => captureVerificationResult,
+  classifyVerificationKind: () => classifyVerificationKind,
   validateVerificationWaiver: () => validateVerificationWaiver,
   validationDiagnostic: () => validationDiagnostic,
   verificationAccepted: () => verificationAccepted,
@@ -38,6 +39,10 @@ function nonEmpty(value) {
 function requiredKind(value) {
   return VERIFICATION_KINDS.includes(value) ? value : "custom";
 }
+function classifyVerificationKind(verify, declaredKind) {
+  if (/^manual:\s+/i.test(nonEmpty(verify))) return "manual";
+  return requiredKind(nonEmpty(declaredKind || "command").toLowerCase());
+}
 function suiteFrom(input) {
   if (!input.suite) return void 0;
   const name = nonEmpty(input.suite.name);
@@ -52,7 +57,7 @@ function validationDiagnostic(code, message) {
   return Object.freeze({ code, message, actionable: true });
 }
 function verificationRequirement(input) {
-  const kind = requiredKind(nonEmpty(input.kind || "command").toLowerCase());
+  const kind = classifyVerificationKind(input.evidence || input.command, input.kind);
   const evidence = nonEmpty(input.evidence);
   const command = nonEmpty(input.command || (kind === "command" ? evidence : ""));
   const suite = suiteFrom(input);
@@ -63,7 +68,7 @@ function verificationRequirement(input) {
   if (kind === "review") return Object.freeze({ kind, evidenceContract: evidence || "independent review findings" });
   if (kind === "manual") return Object.freeze({ kind, evidenceContract: evidence.replace(/^manual:\s*/i, "") || "manual verification evidence" });
   if (kind === "suite" || !command && suite) {
-    if (!suite) return Object.freeze({ kind: "suite", evidenceContract: evidence || "named suite output" });
+    if (!suite) return Object.freeze({ kind: "suite", ...command ? { command } : {}, evidenceContract: evidence || "named suite output" });
     return Object.freeze({ kind: "suite", suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
   }
   if (["document", "link", "schema", "custom"].includes(kind)) {
@@ -116,6 +121,7 @@ function captureVerificationResult(requirement, capture) {
   VERIFICATION_KINDS,
   VERIFICATION_STATUSES,
   captureVerificationResult,
+  classifyVerificationKind,
   validateVerificationWaiver,
   validationDiagnostic,
   verificationAccepted,

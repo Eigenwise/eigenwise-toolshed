@@ -46,6 +46,7 @@ const { worktreeRoot } = require('./worktrees.js');
 const { spawnDescription } = store;
 const { compileContextProjection } = require('./context-packet.js');
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js');
+const { verificationRequirement } = require('./kernel/verification.js');
 
 type SyncOptions = { dir?: string; readOnlyDeniedTools?: any };
 type SyncResult = { written: number; removed: number; unchanged: number };
@@ -770,19 +771,27 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     `  tokenFile: ${JSON.stringify(tokenFile)}`,
     '})',
   ].join('\n');
-  const requirement = ticket.dispatch?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement || null;
-  const verifierPrefix = requirement ? 'Pinned verifier' : 'Legacy verifier';
-  const verifierKind = requirement?.kind || ticket.executorVerifyKind || 'command';
-  const verifierArtifact = requirement?.artifact || ticket.executorAttestationArtifact;
-  const verifierEvidence = requirement?.evidenceContract || ticket.executorVerify || 'No exact verifier was recorded.';
+  const pinnedRequirement = ticket.dispatch?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement || null;
+  const recordedVerifier = String(ticket.executorVerify || '').trim();
+  const hasLegacyRequirement = Boolean(recordedVerifier || String(ticket.executorAttestationArtifact || '').trim());
+  const requirement = pinnedRequirement || verificationRequirement({
+    kind: hasLegacyRequirement ? ticket.executorVerifyKind : 'custom',
+    evidence: recordedVerifier || 'No exact verifier was recorded.',
+    command: recordedVerifier,
+    artifact: ticket.executorAttestationArtifact,
+  });
+  const verifierPrefix = pinnedRequirement ? 'Pinned verifier' : 'Legacy verifier';
+  const verifierKind = requirement.kind;
+  const verifierArtifact = requirement.artifact || ticket.executorAttestationArtifact;
+  const verifierEvidence = requirement.evidenceContract;
   const verify = verifierKind === 'attestation'
     ? `${verifierPrefix}: attestation. Record actual evidence for ${verifierArtifact || 'the declared artifact'}.`
     : verifierKind === 'manual'
       ? `${verifierPrefix}: manual. Record evidence matching: ${verifierEvidence}.`
-      : requirement?.command
+      : requirement.command
         ? `${verifierPrefix}: ${verifierKind}. Command: ${requirement.command}`
         : `${verifierPrefix}: ${verifierKind}. Evidence contract: ${verifierEvidence}`;
-  const verifierCommand = requirement?.command || (!requirement && ['suite', 'command'].includes(verifierKind) ? ticket.executorVerify : '');
+  const verifierCommand = requirement.command || '';
   const highStakes = ticket?.highStakes
     ? [
       'High-stakes verification:',

@@ -9,13 +9,14 @@
  */
 
 const store = require('./store');
+const { verificationRequirement } = require('./kernel/verification.js');
 
 // Native Agent prompts travel through Claude Code's Windows command surface.
 // Leave room below the 8191-character argv ceiling for the Agent wrapper and
 // preserve every supplied anchor/verify character rather than truncating it.
 const NATIVE_PROMPT_MAX = 7600;
 const EXECUTOR_RUN_GUIDANCE = 'Run verify and gate commands in the foreground with a bounded timeout. Never sleep on a monitor for your own work. If a run must be backgrounded, confirm it started, then use a bounded poll that fails loud when the process is gone. A parked executor holds its claim while the board looks healthy, so fail loud and release instead.';
-const EXECUTOR_VERIFY_GUIDANCE = 'Submission verify must be exactly one of: a runnable cmd.exe command, for example `cd plugins/sidequest && npm run test:full`; or a manual check, for example `manual: checked the rendered page`. Windows runs commands through cmd.exe, so chain dependent commands with `&&`, never `;`. Put acceptance prose in the final report, not after a command.';
+const EXECUTOR_VERIFY_GUIDANCE = 'A verify string beginning `manual: ` is a manual evidence contract, even if an older ticket declares command. Other submission verifies must be one runnable cmd.exe command, for example `cd plugins/sidequest && npm run test:full`. Windows runs commands through cmd.exe, so chain dependent commands with `&&`, never `;`. Put acceptance prose in the final report, not after a command.';
 
 function executorPrompt(ticket?: any, taskPrompt?: any) {
   const base = String(taskPrompt || '').trim();
@@ -27,8 +28,15 @@ function executorPrompt(ticket?: any, taskPrompt?: any) {
   ].join('\n');
   const parts = [base, EXECUTOR_RUN_GUIDANCE, EXECUTOR_VERIFY_GUIDANCE, contract];
   if (ticket.executorAnchors) parts.push(`Anchors:\n${ticket.executorAnchors}`);
-  if (ticket.executorVerifyKind === 'attestation') {
+  const verification = verificationRequirement({
+    kind: ticket.executorVerifyKind,
+    evidence: ticket.executorVerify,
+    artifact: ticket.executorAttestationArtifact,
+  });
+  if (verification.kind === 'attestation') {
     parts.push(`Verify oracle: attestation\nObserved artifact: ${ticket.executorAttestationArtifact}\nRecord evidence as \`attestation: ${ticket.executorAttestationArtifact} | <evidence produced> | <what it showed>\`.`);
+  } else if (verification.kind === 'manual') {
+    parts.push(`Verify oracle: manual\nRecord evidence matching: ${verification.evidenceContract}.`);
   } else if (ticket.executorVerify) parts.push(`Verify command:\n${ticket.executorVerify}`);
   const prompt = parts.join('\n\n');
   if (prompt.length > NATIVE_PROMPT_MAX) {
