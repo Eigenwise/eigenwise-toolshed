@@ -3,7 +3,7 @@ title: Sidequest
 description: Plan, track, and deliver Claude Code work from a local board.
 ---
 
-Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow. That flow works for Git codebases and immutable revisions from wikis, documentation vaults, document sets, and research collections.
+Sidequest gives Claude Code a local board for planned work. It groups tickets into stories, keeps the backlog visible, and runs delegated work through a repeatable review and delivery flow. That flow works for Git codebases and filesystem snapshots of non-Git documentation trees, vaults, and research collections.
 
 ## Install
 
@@ -36,7 +36,7 @@ Claude asks one batched question round for consequential choices. If the approac
 
 Review stays tied to the pinned contract. If two candidate fixes are rejected in the same defect chain, stop patching and replan before trying another candidate.
 
-The board keeps the work visible while Claude and its executors handle the ticket lifecycle. Once a terminal result and its handoff are recorded, Claude retires that executor's native teammate while leaving live claims, retained continuations, and pending integration candidates available for follow-up. Codebase work submits a verified Git range. Projects without Git submit their native immutable revision, changed surfaces, and review or attestation evidence. Their server integration registers a source-revision resolver. On a retry, Sidequest restores the checkpointed candidate before calling that project's current resolver once with the candidate and dispatch-pinned baseline; the result, including an unavailable result, stays bound to both. Replacing a resolver registration invalidates the earlier resolver. CLI and MCP callers cannot provide existence or membership facts. Sidequest records unavailable Git, process, and worktree capabilities instead of probing those adapters.
+The board keeps the work visible while Claude and its executors handle the ticket lifecycle. Once a terminal result and its handoff are recorded, Claude retires that executor's native teammate while leaving live claims, retained continuations, and pending integration candidates available for follow-up. Codebase work submits a verified Git range. When Sidequest registers a project outside Git, it persists the `filesystem-snapshot` adapter for that board. A source-revision submission must use that source and the SHA-256 snapshot of the current project tree, plus changed surfaces and review or attestation evidence. The server checks the candidate against the current tree and the persisted dispatch snapshot, then binds those facts to the candidate and its dispatch baseline. CLI and MCP callers cannot provide existence or membership facts. Sidequest records unavailable Git, process, and worktree capabilities instead of probing those adapters.
 
 ## Use the dashboard
 

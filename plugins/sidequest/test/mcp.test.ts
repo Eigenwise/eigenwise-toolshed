@@ -47,6 +47,7 @@ const contextPacket = require('../lib/context-packet.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
+const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
@@ -2516,6 +2517,58 @@ test('MCP submits and integrates project-neutral source revisions through one re
   assert.equal(capabilityInvocations.length, revisions.length);
   assert.deepEqual(capabilityInvocations.map((invocation) => invocation.candidate.source), revisions.map((revision) => revision.source));
   assert.ok(capabilityInvocations.every((invocation) => invocation.baseline.purpose === 'dispatch'));
+});
+
+test('MCP resolves a persisted filesystem-snapshot adapter without runtime registration', async () => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-persisted-source-revision-'));
+  const project = store.ensureProject(projectPath).slug;
+  assert.equal(store.readMeta(project).sourceRevisionAdapter, 'filesystem-snapshot');
+  const ticket = store.createTicket(project, {
+    title: 'publish a persisted filesystem snapshot',
+    files: ['wiki/page.md'],
+    complexity: 2,
+    complexityWhy: 'exercise the persisted non-Git adapter through the MCP lifecycle',
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'filesystem snapshot reviewed',
+    labels: ['direct-ok'],
+  });
+  const by = 'mcp-persisted-filesystem-worker';
+  claimDispatchedTicket(project, ticket, by, true);
+  const dispatchBaseline = store.getTicket(project, ticket.ref).lifecycleAttempt.baseline;
+  assert.equal(dispatchBaseline.revision.source, 'filesystem-snapshot');
+  assert.ok(store.readMeta(project).sourceRevisionSnapshots.some((snapshot: any) => snapshot.value === dispatchBaseline.revision.value));
+  fs.mkdirSync(path.join(projectPath, 'wiki'), { recursive: true });
+  fs.writeFileSync(path.join(projectPath, 'wiki', 'page.md'), 'persisted adapter revision\n');
+  const revision = sourceRevisionCapability.filesystemSnapshotRevision(projectPath);
+  assert.ok(revision, 'the production adapter can derive an immutable candidate from the project tree');
+
+  const submitted = await callTool('submit', {
+    project,
+    ref: ticket.ref,
+    by,
+    sourceRevision: revision,
+    changedSurfaces: ['wiki/page.md'],
+    projectCapabilities: {
+      process: false,
+      worktree: false,
+      review: true,
+    },
+    verify: `attestation: ${revision.value} | reviewer approved the immutable filesystem snapshot | source and snapshot value matched`,
+    body: 'Reviewed the persisted filesystem snapshot.',
+  });
+  assert.equal(submitted.ok, true, submitted.message || submitted.reason);
+  assert.deepEqual(store.getTicket(project, ticket.ref).submission.sourceRevision, revision);
+
+  const assembled = await callTool('integrate', {
+    project,
+    ref: ticket.ref,
+    by: 'mcp-persisted-source-publisher',
+    wave: { verification: store.getTicket(project, ticket.ref).submission.verificationResult },
+  });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'mcp-persisted-source-publisher' });
+  assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+  assert.equal(integrated.delivery.mode, 'source-revision');
 });
 
 test('MCP submit requires exactly one revision identity', async () => {

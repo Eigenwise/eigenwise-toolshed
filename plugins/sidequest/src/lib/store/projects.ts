@@ -1,6 +1,6 @@
 'use strict';
 
-function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction }: any) {
+function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
   // A directory can be spelled several ways on Windows — an 8.3 alias, a junction —
   // and each spelling hashes to its own slug. Callers hold whichever spelling they
   // were handed, so lookups compare canonically rather than by the stored spelling.
@@ -12,6 +12,7 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
   function ensureProject(absPath?: any, name?: any) {
     const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
+    const sourceRevisionAdapter = sourceRevisionAdapterForPath(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));
     let meta: any;
@@ -27,6 +28,7 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
           seq: 0,
           storySeq: 0,
           alwaysInScope: defaultAlwaysInScope(resolved),
+          sourceRevisionAdapter,
           worktreeIsolation: true,
         };
         db.putRow(handle, 'projects', { slug, data: meta });
@@ -35,6 +37,7 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
         if (meta.path !== resolved) { meta.path = resolved; changed = true; }
         if (name && meta.name !== name) { meta.name = name; changed = true; }
         if (!meta.name) { meta.name = defaultProjectName(resolved); changed = true; }
+        if (!['git', 'filesystem-snapshot'].includes(meta.sourceRevisionAdapter)) { meta.sourceRevisionAdapter = sourceRevisionAdapter; changed = true; }
         if (typeof meta.seq !== 'number') { meta.seq = 0; changed = true; }
         if (typeof meta.storySeq !== 'number') { meta.storySeq = 0; changed = true; }
         if (changed) db.putRow(handle, 'projects', { slug, data: meta });
