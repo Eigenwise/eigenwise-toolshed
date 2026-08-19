@@ -47,6 +47,8 @@ the contract, then clears the log. If the contract changes after a member is cla
 about revision drift. This keeps context completeness cheap without the orchestrator rediscovering the
 codebase inline.
 
+Before dispatching a wave, ask: “What will every ticket in this wave need to change that none of them owns?” For each shared file or seam, pin its shape in the story execution contract before dispatch, or file one prerequisite ticket that the wave depends on. Do not reformat regions you did not functionally change in shared files; a prettier pass over a file three peers are editing can turn five-line changes into unmergeable successors.
+
 When a package commits build output, the source ticket scopes its generated output too. For content-hashed output, assign exactly one rebuild ticket per wave: parallel rebuilds choose different filenames and collide at merge.
 
 **The planning pass is for concrete scope, not ceremony.** Before filing a complexity-4+ ticket:
