@@ -8,6 +8,25 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.490.0 (2026-08-19)
+
+### sidequest 5.0.5 → 5.0.6
+
+#### Fixes
+
+- Require completed command verification captures (SQ-2263)
+  Declared command verification now requires a completed capture tied to the submitted candidate.
+- Let CLI repair commits take over rejected release fragments (SQ-2268)
+  CLI repair commits can replace a related review-rejected candidate's release fragment.
+- Keep verification evidence outside delivered work (SQ-2269)
+  Dispatches now name a board-owned verification evidence directory, keep it out of ticket scope and delivery, and name dirty integration-target paths.
+- Reclaim delivered isolated worktrees promptly (SQ-2270)
+  Delivered isolated worktrees now clean up at integration time, while retained continuations and busy or locked trees stay protected for the next SessionStart sweep.
+- Accept documented MCP argument aliases (SQ-2271)
+  MCP tools now accept the documented story and link argument names, and board settings explain their read form.
+- Pin shared-file shapes before wave dispatch (SQ-2272)
+  Wave planning guidance now requires shared-file shapes to be pinned in the story contract or owned by a prerequisite ticket before dispatch.
+
 ## v3.489.0 (2026-08-19)
 
 ### sidequest 5.0.4 → 5.0.5
