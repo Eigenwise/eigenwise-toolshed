@@ -1066,7 +1066,11 @@ test('small-ticket lifecycle retires three optional board round trips', () => {
   assert.equal(retiredRoundTrips.length, 0, 'stale-worktree, foreground verify-start, and duplicate closeout comments stay retired');
   assert.match(briefing, /git merge-base --is-ancestor/);
   assert.match(briefing, /git reset --hard/);
-  assert.match(briefing, /verify-start\] before it only for background verification or an expected no-op/);
+  assert.match(briefing, /in the FOREGROUND with an explicit generous timeout of up to 600000 ms/);
+  assert.match(briefing, /A backgrounded verify's completion does not wake you, so going idle on it parks the claim indefinitely/);
+  assert.match(briefing, /use bounded foreground until-loops instead of backgrounding or going idle/);
+  assert.doesNotMatch(briefing, /only for background verification/);
+  assert.match(briefing, /verify-start\] before it only for an expected no-op/);
   assert.match(briefing, /always post \[sidequest:verify-complete\]/);
   assert.match(generatedExecutor, /Use focused tests while editing/);
   assert.match(generatedExecutor, /Run one final broad gate after all edits and generated output are current/);
