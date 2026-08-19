@@ -210,7 +210,7 @@ function sourceRevisionAdapterFacts(slug: any, candidate: any, baseline: any) {
   if (meta?.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) {
     return resolveSourceRevisionAdapterFacts(slug, candidate, baseline);
   }
-  const persistedCapability = filesystemSnapshotCapability(String(meta.path), (pinnedBaseline) => (
+  const persistedCapability = filesystemSnapshotCapability(String(meta.path), (pinnedBaseline: any) => (
     sourceRevisionSnapshots(readMeta(slug)).some((snapshot: any) => (
       snapshot.source === pinnedBaseline.revision.source && snapshot.value === pinnedBaseline.revision.value
     ))
