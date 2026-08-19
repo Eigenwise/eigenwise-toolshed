@@ -52,6 +52,11 @@ names stray paths, and never deletes a pinned ref.
 - `apply` materializes the range without a commit so the user can review it in their changes view. It
   refuses overlapping uncommitted paths and names them. Its delivery record plus pinned ref is enough
   to close the ticket, no user-side commit is required.
+- An external reset, manual, or working-tree integration can record the pinned candidate even when it
+  is not an ancestor of the integration branch. Pass that candidate as `--delivery-commit` with
+  `--delivery-method reset|working-tree|manual` and evidence naming the mechanism. Sidequest compares
+  every submitted path against the integration working tree, reruns the delivery gate, then records
+  the pinned candidate with the observed integration revision. A missing or different path refuses.
 
 Set the board default with `sidequest board-config --delivery merge|replay|apply`. Consumer boards
 usually want `apply` or `replay`; use `merge` where the repository's release flow owns integration.

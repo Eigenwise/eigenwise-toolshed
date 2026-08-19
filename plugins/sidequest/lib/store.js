@@ -2087,7 +2087,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       t.submission = Object.assign({}, t.submission, {
         integratedAt,
         ...recordedDelivery2 ? {
-          integration: {
+          integration: Object.assign({
             outcome: "verified",
             mode: "recorded",
             pinnedCommit: t.submission.commit,
@@ -2097,7 +2097,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
             deliveredAt: integratedAt,
             verifiedAt: integratedAt,
             evidence: recordedDelivery2.evidence
-          }
+          }, recordedDelivery2.integration || {})
         } : {}
       });
     }
@@ -2272,7 +2272,7 @@ function recordedDelivery(slug, commit, evidence) {
     return {
       ok: false,
       reason: "delivery_not_reachable",
-      message: `The recorded delivery commit is not reachable from the configured integration branch: ${String(error?.message || error).trim()}`
+      message: `The recorded delivery commit is not reachable from the configured integration branch: ${String(error?.message || error).trim()}. For a submitted reset or working-tree delivery, record the pinned candidate with deliveryMethod reset, working-tree, or manual after its content is present in the integration working tree.`
     };
   }
 }
@@ -2374,7 +2374,33 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       }
     }
   }
-  const delivery = purpose === "delivery" ? recordedDelivery(slug, opts.deliveryCommit, reason) : null;
+  let reconciledDelivery = null;
+  if (purpose === "delivery" && pendingSubmission(ticket) && opts.deliveryMethod != null) {
+    let target;
+    try {
+      target = integrationTarget(slug);
+    } catch (error) {
+      return { ok: false, reason: "integration_target_unavailable", ticket, message: String(error?.message || error) };
+    }
+    const recordedSubmission = recordDeliveredSubmission(slug, idOrRef, {
+      target,
+      deliveryCommit: opts.deliveryCommit,
+      deliveryMethod: opts.deliveryMethod,
+      reason
+    });
+    if (!recordedSubmission.ok) return recordedSubmission;
+    const integration = recordedSubmission.integration;
+    reconciledDelivery = {
+      ok: true,
+      commit: integration.deliveryCommit,
+      target,
+      integrationRevision: integration.deliveryRevision,
+      integration,
+      evidence: reason,
+      identity: integration.deliveryIdentity
+    };
+  }
+  const delivery = purpose === "delivery" ? reconciledDelivery || recordedDelivery(slug, opts.deliveryCommit, reason) : null;
   if (delivery && !delivery.ok) return Object.assign({ ticket }, delivery);
   const missingFragment = delivery ? missingDeliveredReleaseFragment(readMeta(slug)?.path, ticket.ref, commitPaths(readMeta(slug)?.path || "", delivery.commit)) : null;
   if (missingFragment) return {
@@ -2401,7 +2427,8 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
           targetBranch: recorded.target.branch,
           targetRef: recorded.target.upstream,
           integrationRevision: recorded.integrationRevision,
-          evidence: recorded.evidence
+          evidence: recorded.evidence,
+          ...recorded.identity ? { identity: recorded.identity } : {}
         }
       } : {}
     ),

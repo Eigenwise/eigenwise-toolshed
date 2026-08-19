@@ -93,7 +93,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   const descriptors = mcp.toolDescriptors() as Array<{
     name: string;
     description: string;
-    inputSchema: { properties?: Record<string, { description?: string; type?: string | string[]; maximum?: number }>; required?: string[] };
+    inputSchema: { properties?: Record<string, { description?: string; type?: string | string[]; maximum?: number; enum?: string[] }>; required?: string[] };
   }>;
   const byName = new Map(descriptors.map((descriptor) => [descriptor.name, descriptor]));
   const categoryEdit = byName.get('category_edit');
@@ -136,8 +136,11 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.equal(byName.get('update')?.inputSchema.properties?.verify?.description, addVerify);
   assert.match(byName.get('add')?.inputSchema.properties?.complexity?.description ?? '', /why required/);
   assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref, not a commit/);
-  assert.match(byName.get('release')?.description ?? '', /reason is required/);
-  assert.match(byName.get('groomClose')?.description ?? '', /deliveryCommit closes it as a delivery, integration:true as an integration, neither as grooming/);
+  assert.match(byName.get('release')?.description ?? '', /reason required/);
+  assert.match(byName.get('groomClose')?.description ?? '', /pinned reset\/working-tree\/manual deliveryMethod/);
+  assert.match(byName.get('integrate')?.description ?? '', /pinned deliveryMethod/);
+  assert.deepEqual(byName.get('groomClose')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
+  assert.deepEqual(byName.get('integrate')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
 
   const payload = JSON.stringify(descriptors);
   const payloadBytes = Buffer.byteLength(payload, 'utf8');
