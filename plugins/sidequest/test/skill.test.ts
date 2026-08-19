@@ -29,7 +29,11 @@ const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 
 // and it only works on the surface that loads at the moment of temptation, so
 // moving it into references/ would delete its reason for existing. Trimming
 // wording to reclaim 21 bytes is the failure mode the previous note describes.
+//
+// SQ-2249 expands the session-load description with the board-versus-inline
+// calibration needed in every listing, so keep the budget binding with modest
+// headroom rather than trimming that contract.
 test('SKILL.md stays inside its session-load byte budget', () => {
-  assert.ok(Buffer.byteLength(skill, 'utf8') <= 18400,
-    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 18400 — move detail into references/`);
+  assert.ok(Buffer.byteLength(skill, 'utf8') <= 18500,
+    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 18500 — move detail into references/`);
 });
