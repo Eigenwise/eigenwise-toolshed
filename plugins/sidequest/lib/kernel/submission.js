@@ -21,6 +21,7 @@ __export(submission_exports, {
   decideSubmissionAdmission: () => decideSubmissionAdmission
 });
 module.exports = __toCommonJS(submission_exports);
+var import_scope_match = require("../scope-match.js");
 var import_verification = require("./verification.js");
 function diagnostic(failure) {
   return Object.freeze({ code: failure.code, message: failure.message, actionable: failure.actionable !== false });
@@ -29,10 +30,7 @@ function supplied(failure, fallback) {
   return failure || fallback;
 }
 function outsideAdmittedSurfaces(surfaces) {
-  return surfaces.changed.filter((surface) => !surfaces.admitted.some((admitted) => {
-    const normalized = admitted.replace(/\\/g, "/").replace(/\/+$/, "");
-    return surface === normalized || surface.startsWith(`${normalized}/`);
-  }));
+  return surfaces.changed.filter((surface) => !(0, import_scope_match.isInScope)(surface, surfaces.admitted));
 }
 function sameSourceRevision(left, right) {
   return Boolean(

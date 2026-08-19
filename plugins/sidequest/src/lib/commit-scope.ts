@@ -1,6 +1,9 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
+
+export { isInScope, scopedPaths } from './scope-match.js';
 
 type UnknownRecord = Record<string, unknown>;
 type GitResult = { ok: true; value: string } | { ok: false; message: string };
@@ -11,42 +14,6 @@ function isRecord(value: unknown): value is UnknownRecord {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
-}
-
-function normalizeScope(scope: unknown): string {
-  return String(scope || '')
-    .trim()
-    .replace(/\\/g, '/')
-    .replace(/^\.\//, '')
-    .replace(/\/\*\*$/, '')
-    .replace(/\/+$/, '');
-}
-
-function scopeKey(scope: unknown): string {
-  const normalized = normalizeScope(scope);
-  return process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-}
-
-export function scopedPaths(files: unknown): string[] {
-  const paths: string[] = [];
-  const seen = new Set<string>();
-  for (const file of Array.isArray(files) ? files : []) {
-    const scope = normalizeScope(file);
-    const key = scopeKey(scope);
-    if (scope && !seen.has(key)) {
-      seen.add(key);
-      paths.push(scope);
-    }
-  }
-  return paths;
-}
-
-export function isInScope(file: unknown, files: unknown): boolean {
-  const filePath = scopeKey(file);
-  return scopedPaths(files).some((scope) => {
-    const key = scopeKey(scope);
-    return filePath === key || filePath.startsWith(`${key}/`);
-  });
 }
 
 function git(cwd: string, args: readonly string[]): string {
