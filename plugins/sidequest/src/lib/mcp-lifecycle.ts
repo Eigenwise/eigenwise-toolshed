@@ -418,7 +418,8 @@ const tools: ToolDefinition[] = [
         by: { type: 'string' },
         reason: { type: 'string' },
         integration: { type: 'boolean' },
-        deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Commit already on the integration branch.' },
+        deliveryCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'Reachable commit or pinned working-tree candidate.' },
+        deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate.' },
         abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from the integration branch.' },
         recoveryEvidence: { type: 'string', description: 'Observed terminal-agent evidence for an unclaimed dispatch.' },
       },
@@ -441,6 +442,7 @@ const tools: ToolDefinition[] = [
         purpose,
         abandonSubmission: args.abandonSubmission === true,
         deliveryCommit: args.deliveryCommit,
+        deliveryMethod: args.deliveryMethod,
       });
       if (res.ok) closeDispatchExecutor(ticket);
       if (res.ok && args.integration) {
@@ -824,7 +826,8 @@ const tools: ToolDefinition[] = [
         project: PROJECT_PROP,
         by: { type: 'string' },
         mode: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Defaults to the board delivery setting.' },
-        deliveryCommit: { type: 'string', description: 'Delivery commit.' },
+        deliveryCommit: { type: 'string', description: 'Reachable commit or pinned working-tree candidate.' },
+        deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate.' },
         reason: { type: 'string' },
         skipVerify: { type: 'boolean', description: 'Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver.' },
         verificationWaiver: VERIFICATION_WAIVER_PROP,
@@ -912,6 +915,7 @@ const tools: ToolDefinition[] = [
         const recorded = store.recordDeliveredSubmission(slug, args.ref, {
           target,
           deliveryCommit: args.deliveryCommit,
+          deliveryMethod: args.deliveryMethod,
           reason: args.reason,
           skipVerify: args.skipVerify === true,
           verificationWaiver: args.verificationWaiver,

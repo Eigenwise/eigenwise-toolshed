@@ -22,6 +22,7 @@ const CHECKPOINT_VERIFY_MAX = 4000;
 const CHECKPOINT_VERIFY_EXCERPT_MAX = 500;
 const REJECTION_REVIEW_MAX = 1000;
 const REJECTION_REASON_MAX = 4000;
+const WORKING_TREE_DELIVERY_METHODS = new Set(['reset', 'working-tree', 'manual']);
 
 type WaveGate = {
   state?: string;
@@ -947,6 +948,50 @@ function deliveryContainsSubmittedContent(repo: string, submission: any, deliver
     : { ok: true, evidence: 'equivalent_patches' };
 }
 
+function pinnedCandidateMatches(repo: string, ticket: any, candidate: string) {
+  try {
+    const pinnedCommit = integrationGit(repo, ['rev-parse', '--verify', `${submissionGitRef(ticket)}^{commit}`]).toLowerCase();
+    return pinnedCommit === candidate;
+  } catch (_) {
+    return false;
+  }
+}
+
+function workingTreeContainsSubmittedContent(repo: string, submission: any, candidate: string) {
+  const missing: string[] = [];
+  for (const file of changedIntegrationPaths(repo, submission)) {
+    let candidateContents: Buffer | null;
+    try {
+      candidateContents = execFileSync('git', ['show', `${candidate}:${file}`], {
+        cwd: repo,
+        encoding: 'buffer',
+        windowsHide: true,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (error: any) {
+      if (error?.status !== 128) throw error;
+      candidateContents = null;
+    }
+    const workingPath = path.join(repo, file);
+    const workingContents = fs.existsSync(workingPath) ? fs.readFileSync(workingPath) : null;
+    if (candidateContents === null ? workingContents !== null : workingContents === null || !candidateContents.equals(workingContents)) {
+      missing.push(file);
+    }
+  }
+  return missing.length ? { ok: false, missing } : { ok: true, evidence: 'working_tree_matches_candidate' };
+}
+
+function workingTreeDeliveryPaths(repo: string) {
+  const tracked = integrationGit(repo, ['diff', '--name-only', 'HEAD']).split(/\r?\n/).filter(Boolean);
+  const untracked = integrationGit(repo, ['ls-files', '--others', '--exclude-standard']).split(/\r?\n/).filter(Boolean);
+  return Array.from(new Set([...tracked, ...untracked]));
+}
+
+function workingTreeDeliveryMethod(value: any) {
+  const method = String(value || '').trim();
+  return WORKING_TREE_DELIVERY_METHODS.has(method) ? method : null;
+}
+
 function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
   const preflight = validateIntegrationSubmission(slug, idOrRef);
@@ -972,17 +1017,56 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     }
     const deliveryCommit = integrationGit(repo, ['rev-parse', '--verify', `${requestedCommit}^{commit}`]).toLowerCase();
     const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']).toLowerCase();
+    const deliveryRevision = {
+      source: `git:${target.upstream}`,
+      value: resultingHead,
+      observedAt: new Date().toISOString(),
+    };
+    let reachable = true;
     try {
       integrationGit(repo, ['merge-base', '--is-ancestor', deliveryCommit, resultingHead]);
     } catch (error: any) {
-      if (error?.status === 1) {
-        return { ok: false, reason: 'delivery_not_reachable', ticket, message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}.` };
-      }
-      throw error;
+      if (error?.status === 1) reachable = false;
+      else throw error;
     }
-    const content = deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
+    const deliveryMethod = workingTreeDeliveryMethod(opts.deliveryMethod);
+    const requestedDeliveryMethod = String(opts.deliveryMethod || '').trim();
+    if (requestedDeliveryMethod && !deliveryMethod) {
+      return {
+        ok: false,
+        reason: 'invalid_delivery_method',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: deliveryMethod must be reset, working-tree, or manual.`,
+      };
+    }
+    const workingTreeDelivery = deliveryMethod !== null;
+    if (!reachable && !workingTreeDelivery) {
+      return {
+        ok: false,
+        reason: 'delivery_not_reachable',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: delivery commit ${deliveryCommit} is not reachable from ${target.branch}. Record a reset, working-tree, or manual delivery with this pinned candidate, deliveryMethod, and the candidate content present in the integration working tree.`,
+      };
+    }
+    if (workingTreeDelivery && !pinnedCandidateMatches(repo, ticket, deliveryCommit)) {
+      return {
+        ok: false,
+        reason: 'delivery_not_pinned',
+        ticket,
+        message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`,
+      };
+    }
+    const content = workingTreeDelivery
+      ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit)
+      : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
     if (!content.ok) {
-      return { ok: false, reason: 'delivery_content_missing', ticket, missingCommits: content.missing, message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(', ')}.` };
+      return {
+        ok: false,
+        reason: 'delivery_content_missing',
+        ticket,
+        missingCommits: content.missing,
+        message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(', ')}.`,
+      };
     }
     const verify = verifyDeliveredSubmission(slug, ticket);
     if (!verificationAccepted(verify)) {
@@ -992,18 +1076,31 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`,
       });
     }
-    const waveDelivery = recordTicketWaveDelivery(slug, ticket, { source: 'git', value: resultingHead, observedAt: new Date().toISOString() }, verify);
+    const waveDelivery = recordTicketWaveDelivery(slug, ticket, deliveryRevision, verify);
     if (!waveDelivery.ok) return integrationFailure(slug, ticket, { reason: waveDelivery.reason, verify, message: waveDelivery.message });
+    const deliveredFiles = workingTreeDelivery
+      ? workingTreeDeliveryPaths(repo)
+      : deliveredCommitPaths(repo, deliveryCommit);
+    const deliveryIdentity = {
+      kind: workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
+      pinnedRef: submissionGitRef(ticket),
+      candidate: ticket.submission.commit,
+      sourceRevision: deliveryRevision,
+      ...(deliveryMethod ? { method: deliveryMethod } : {}),
+    };
     const recorded = updateSubmissionIntegration(slug, ticket.id, {
-      mode: 'recorded',
+      mode: workingTreeDelivery ? 'recorded-working-tree' : 'recorded',
       pinnedRef: submissionGitRef(ticket),
       pinnedCommit: ticket.submission.commit,
       deliveryCommit,
       resultingHead,
+      contentCommit: workingTreeDelivery ? deliveryCommit : resultingHead,
+      deliveryRevision,
+      deliveryIdentity,
       targetBranch: target.branch,
       targetUpstream: target.upstream,
       changedPaths: changedIntegrationPaths(repo, ticket.submission),
-      deliveredFiles: changedIntegrationPaths(repo, ticket.submission),
+      deliveredFiles,
       verify,
       evidence: reason,
       contentEvidence: content.evidence,
@@ -1915,9 +2012,10 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
     const repo = readMeta(slug)?.path;
     if (!repo) return { ok: false, reason: 'project_unavailable', ticket: source };
     let changedPaths: string[];
+    const contentCommit = String(repaired.integration.contentCommit || repaired.integration.resultingHead || '').trim();
     try {
       integrationGit(repo, ['rev-parse', '--verify', `${source.submission.commit}^{commit}`]);
-      integrationGit(repo, ['rev-parse', '--verify', `${repaired.integration.resultingHead}^{commit}`]);
+      integrationGit(repo, ['rev-parse', '--verify', `${contentCommit}^{commit}`]);
       changedPaths = submissionChangedPaths(repo, source.submission);
     } catch (error: any) {
       return {
@@ -1944,7 +2042,7 @@ function closeSubmissionAsSuperseded(slug?: any, idOrRef?: any, opts?: any) {
     }
     let divergentPaths: string[];
     try {
-      divergentPaths = pathsWithDifferentContent(repo, source.submission.commit, repaired.integration.resultingHead, changedPaths);
+      divergentPaths = pathsWithDifferentContent(repo, source.submission.commit, contentCommit, changedPaths);
     } catch (error: any) {
       return {
         ok: false,

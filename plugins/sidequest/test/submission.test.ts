@@ -2802,6 +2802,116 @@ test('SQ-2169: integrate records an already delivered reviewed candidate or a re
   }
 });
 
+test('SQ-2254: MCP records a reset delivery from its pinned candidate and refuses absent working-tree content', async () => {
+  const originalConfig = store.boardConfig(slug);
+  try {
+  cleanBranch();
+  const deliveredTicket = addTicket('reset-delivered submission', { files: ['lib/reset-delivery.js'] });
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reset-delivery.js'), 'reset-delivered\n');
+  git(['add', 'lib/reset-delivery.js']);
+  git(['commit', '-m', 'reset delivery candidate']);
+  const deliveredCandidate = git(['rev-parse', 'HEAD']);
+  pin(deliveredTicket, deliveredCandidate);
+  assert.strictEqual(store.claimTicket(slug, deliveredTicket.ref, 'reset-delivery-source', {
+    direct: true,
+    reason: 'The reset delivery fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, deliveredTicket.ref, 'reset-delivery-source', {
+    commit: deliveredCandidate,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const deliveredSubmission = store.getTicket(slug, deliveredTicket.ref);
+  const base = git(['rev-parse', `${deliveredCandidate}^`]);
+  Object.assign(deliveredSubmission.submission, {
+    base,
+    upstream: 'origin/main',
+    upstreamCommit: base,
+    commits: [deliveredCandidate],
+    changedPaths: ['lib/reset-delivery.js'],
+  });
+  deliveredSubmission.dispatch = {
+    outcome: 'submitted',
+    terminalAt: new Date(Date.now() - 60_000).toISOString(),
+    attempts: [{ outcome: 'submitted', commit: deliveredCandidate, agentId: 'reset-delivery-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+  };
+  persist(deliveredSubmission);
+  const targetBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+  git(['reset', '--mixed', 'origin/main']);
+  assert.notStrictEqual(git(['merge-base', deliveredCandidate, 'HEAD']), deliveredCandidate, 'the reset delivery candidate is not reachable from the integration branch');
+
+  const delivered = await callMcp('groomClose', {
+    project: PROJECT_DIR,
+    ref: deliveredTicket.ref,
+    by: 'reset-delivery-integrator',
+    deliveryCommit: deliveredCandidate,
+    deliveryMethod: 'reset',
+    reason: 'The integration branch was reset for editor review and retains the pinned candidate in its working tree.',
+  });
+  assert.strictEqual(delivered.ok, true, delivered.message);
+  const recordedDelivery = store.getTicket(slug, deliveredTicket.ref);
+  assert.strictEqual(recordedDelivery.submission.integration.mode, 'recorded-working-tree');
+  assert.strictEqual(recordedDelivery.submission.integration.contentCommit, deliveredCandidate);
+  assert.deepStrictEqual(recordedDelivery.submission.integration.deliveryIdentity, {
+    kind: 'pinned-working-tree',
+    pinnedRef: `refs/sidequest/${deliveredTicket.ref}`,
+    candidate: deliveredCandidate,
+    sourceRevision: recordedDelivery.submission.integration.deliveryRevision,
+    method: 'reset',
+  }, 'the supersession-facing delivery identity retains the immutable candidate and observed integration revision');
+  assert.deepStrictEqual(recordedDelivery.submission.integration.deliveredFiles, ['lib/reset-delivery.js']);
+
+  cleanBranch();
+  const absentTicket = addTicket('reset delivery without content', { files: ['lib/reset-absent.js'] });
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reset-absent.js'), 'missing after reset\n');
+  git(['add', 'lib/reset-absent.js']);
+  git(['commit', '-m', 'reset absent candidate']);
+  const absentCandidate = git(['rev-parse', 'HEAD']);
+  pin(absentTicket, absentCandidate);
+  assert.strictEqual(store.claimTicket(slug, absentTicket.ref, 'reset-absent-source', {
+    direct: true,
+    reason: 'The absent reset delivery fixture requires a local direct claim.',
+  }).ok, true);
+  assert.strictEqual(store.submitTicket(slug, absentTicket.ref, 'reset-absent-source', {
+    commit: absentCandidate,
+    verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const absentSubmission = store.getTicket(slug, absentTicket.ref);
+  const absentBase = git(['rev-parse', `${absentCandidate}^`]);
+  Object.assign(absentSubmission.submission, {
+    base: absentBase,
+    upstream: 'origin/main',
+    upstreamCommit: absentBase,
+    commits: [absentCandidate],
+    changedPaths: ['lib/reset-absent.js'],
+  });
+  absentSubmission.dispatch = {
+    outcome: 'submitted',
+    terminalAt: new Date(Date.now() - 60_000).toISOString(),
+    attempts: [{ outcome: 'submitted', commit: absentCandidate, agentId: 'reset-absent-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+  };
+  persist(absentSubmission);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+  git(['reset', '--hard', 'origin/main']);
+
+  const absent = await callMcp('groomClose', {
+    project: PROJECT_DIR,
+    ref: absentTicket.ref,
+    by: 'reset-absent-integrator',
+    deliveryCommit: absentCandidate,
+    deliveryMethod: 'reset',
+    reason: 'The candidate was reset away before delivery.',
+  });
+  assert.strictEqual(absent.ok, false);
+  assert.strictEqual(absent.reason, 'delivery_content_missing');
+  assert.strictEqual(store.getTicket(slug, absentTicket.ref).status, 'doing');
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
 test('SQ-2152: shared-tree retries replace stale candidates while disjoint descendants remain admissible', async () => {
   git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
   cleanBranch();
