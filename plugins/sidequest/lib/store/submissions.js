@@ -1,5 +1,5 @@
 "use strict";
-const { classifyVerificationKind, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
+const { classifyVerificationKind, commandVerificationResult, verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
@@ -16,6 +16,7 @@ function createSubmissions(dependencies) {
   const MAX_CHECKPOINT_TTL_MIN = 24 * 60;
   const CHECKPOINT_VERIFY_MAX = 4e3;
   const CHECKPOINT_VERIFY_EXCERPT_MAX = 500;
+  const VERIFICATION_CAPTURE_MAX = 32;
   const REJECTION_REVIEW_MAX = 1e3;
   const REJECTION_REASON_MAX = 4e3;
   const WORKING_TREE_DELIVERY_METHODS = /* @__PURE__ */ new Set(["reset", "working-tree", "manual"]);
@@ -490,6 +491,50 @@ Expires: ${checkpoint.expiresAt}`;
       command: legacyCommand,
       evidence: legacyCommand,
       artifact: ticket.executorAttestationArtifact
+    });
+  }
+  function recordedVerificationCaptures(ticket) {
+    return Array.isArray(ticket?.verificationCaptures) ? ticket.verificationCaptures : [];
+  }
+  function recordVerificationCapture(slug, idOrRef, capture) {
+    const found = getTicket(slug, idOrRef);
+    if (!found) return { ok: false, reason: "not_found" };
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      if (!ticket) return { ok: false, reason: "not_found" };
+      const requirement = pinnedVerificationRequirement(ticket);
+      const command = String(capture?.command || "").trim();
+      const status = String(capture?.status || "").trim();
+      const candidateSource = String(capture?.candidate?.source || "").trim();
+      const candidateValue = String(capture?.candidate?.value || "").trim().toLowerCase();
+      if (!requirement.command || command !== requirement.command) {
+        return { ok: false, reason: "verification_capture_command_mismatch", ticket, message: `Verification capture for ${ticket.ref} must use its declared command.` };
+      }
+      if (!["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check"].includes(status)) {
+        return { ok: false, reason: "invalid_verification_capture_status", ticket, message: `Verification capture for ${ticket.ref} has an invalid status.` };
+      }
+      if (!candidateSource || !candidateValue) {
+        return { ok: false, reason: "verification_capture_candidate_required", ticket, message: `Verification capture for ${ticket.ref} requires the candidate revision it checked.` };
+      }
+      const completedAt = String(capture?.completedAt || "").trim();
+      if (!Number.isFinite(Date.parse(completedAt))) {
+        return { ok: false, reason: "verification_capture_completion_required", ticket, message: `Verification capture for ${ticket.ref} requires a completion timestamp.` };
+      }
+      const verified = {
+        id: String(capture?.id || crypto.randomUUID()),
+        ticket: ticket.ref,
+        command,
+        status,
+        candidate: { source: candidateSource, value: candidateValue },
+        completedAt: new Date(completedAt).toISOString(),
+        ...capture?.worktree ? { worktree: String(capture.worktree) } : {},
+        ...capture?.logPath ? { logPath: String(capture.logPath) } : {},
+        ...Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {}
+      };
+      ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
+      ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();
+      putTicket(slug, ticket);
+      return { ok: true, ticket, capture: verified };
     });
   }
   function skippedVerification(requirement, waiver) {
@@ -1421,7 +1466,7 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
-  function submissionVerificationResult(ticket, sourceRevision, verify) {
+  function submissionVerificationResult(ticket, sourceRevision, verify, candidateCommit) {
     const requirement = pinnedVerificationRequirement(ticket);
     const evidence = String(verify || "").trim();
     if (requirement.kind === "attestation" || sourceRevision != null) {
@@ -1447,17 +1492,24 @@ ${verify.outputTail}` : null
       if (manualVerify(evidence)) return { result: { kind: "custom", status: "manual", evidence }, expectedEvidence: null };
     }
     if (requirement.command && evidence !== requirement.command) {
-      const error2 = `verification must match the declared executor verify command and the prepared ${requirement.kind} verifier; executors cannot replace the required command.`;
-      return {
-        result: { kind: requirement.kind, status: "failed_check", evidence: error2, command: requirement.command, failureIdentities: ["verification:evidence-mismatch"] },
-        expectedEvidence: requirement.command,
-        diagnostic: { code: "executor_verify_mismatch", message: error2, retryable: true }
-      };
+      return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
+        source: "git",
+        value: String(candidateCommit || "").trim().toLowerCase()
+      });
     }
     if (requirement.command) {
       const error2 = verifyCommandError(requirement.command);
-      const result2 = error2 ? { kind: requirement.kind, status: "could_not_run", evidence: error2, command: requirement.command, failureIdentities: ["could_not_run:invalid-command"] } : { kind: requirement.kind, status: "passed", evidence, command: requirement.command };
-      return { result: result2, expectedEvidence: requirement.command, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
+      if (error2) {
+        return {
+          result: { kind: requirement.kind, status: "could_not_run", evidence: error2, command: requirement.command, failureIdentities: ["could_not_run:invalid-command"] },
+          expectedEvidence: requirement.command,
+          diagnostic: { code: "invalid_verify", message: error2, retryable: true }
+        };
+      }
+      return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
+        source: "git",
+        value: String(candidateCommit || "").trim().toLowerCase()
+      });
     }
     if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
       return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -1470,7 +1522,7 @@ ${verify.outputTail}` : null
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
     const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-    const verification = submissionVerificationResult(ticket, sourceRevision, verify);
+    const verification = submissionVerificationResult(ticket, sourceRevision, verify, opts.commit);
     const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
     const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
     const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
@@ -2367,6 +2419,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };

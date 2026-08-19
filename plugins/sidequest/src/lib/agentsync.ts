@@ -689,12 +689,15 @@ function linkedPlanSuffix(link?: any, slug?: any) {
   return plan ? ` (plan: ${path.resolve(plan.path)})` : '';
 }
 
-function capturedVerifyCommand(verify?: any) {
+function capturedVerifyCommand(verify?: any, ticketRef?: any, project?: any) {
   const command = String(verify || '').trim();
   if (!command) return '';
   const encoded = Buffer.from(command, 'utf8').toString('base64');
   const captureScript = path.join(__dirname, 'verify-capture.js');
-  return `node "${captureScript}" --base64 ${encoded}`;
+  const target = String(ticketRef || '').trim() && String(project || '').trim()
+    ? ` --project ${JSON.stringify(String(project))} --ticket ${JSON.stringify(String(ticketRef))}`
+    : '';
+  return `node "${captureScript}" --base64 ${encoded}${target}`;
 }
 
 function ticketEvidenceGuidance(ticket?: any) {
@@ -816,7 +819,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     ...(ticketIsolationContract(ticket, project) || []),
     verify,
     verifierCommand
-      ? 'Run it through ' + capturedVerifyCommand(verifierCommand) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
+      ? 'Run it through ' + capturedVerifyCommand(verifierCommand, ticket?.ref, project) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. A successful wrapper run records its completed capture identity against this ticket and the checked Git revision, and submit refuses prose or a retyped command without that matching record. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
       : 'Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.',
     evidenceGuidance || '',
     'Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If its transport is unavailable, do not use the Sidequest CLI or raw Agent as a fallback: reload or reconnect Sidequest, then re-dispatch.',

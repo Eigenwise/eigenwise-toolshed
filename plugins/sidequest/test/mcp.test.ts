@@ -2338,6 +2338,12 @@ test('MCP carries a derived release scope through a released continuation and in
   });
   assert.ok(committed.commit, 'the continuation admits its ticket-bound release fragment');
   gitAt(worktree, ['update-ref', `refs/sidequest/${ticket.ref}`, committed.commit]);
+  assert.equal(store.recordVerificationCapture(project, ticket.ref, {
+    command: ticket.executorVerify,
+    status: 'passed',
+    candidate: { source: 'git', value: committed.commit },
+    completedAt: new Date().toISOString(),
+  }).ok, true);
   assert.equal((await callTool('submit', {
     project, ref: ticket.ref, by, commit: committed.commit, worktree,
     verify: 'node --test plugins/fixture-plugin/test/declared.test.js',

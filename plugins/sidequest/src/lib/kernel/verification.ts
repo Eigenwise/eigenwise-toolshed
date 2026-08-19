@@ -45,6 +45,20 @@ export type VerificationResult = Readonly<{
   diagnostics?: readonly Diagnostic[];
 }>;
 
+export type CompletedVerificationCapture = Readonly<{
+  id: string;
+  ticket: string;
+  command: string;
+  status: VerificationStatus;
+  candidate: Readonly<{ source: string; value: string }>;
+  completedAt: string;
+  worktree?: string;
+  logPath?: string | null;
+  exitCode?: number | null;
+}>;
+
+type VerificationCandidate = Readonly<{ source: string; value: string }>;
+
 type RequirementInput = Readonly<{
   kind?: string;
   evidence?: string;
@@ -148,6 +162,42 @@ export function verificationFailureDiagnostic(result: VerificationResult): Diagn
   if (verificationAccepted(result)) return null;
   const identities = result.failureIdentities?.length ? ` Failures: ${result.failureIdentities.join(', ')}.` : '';
   return validationDiagnostic(`verification_${String(result.status).replace(/[^a-z0-9]+/gi, '_').toLowerCase()}`, `Required ${result.kind} verification returned ${result.status}.${identities}`);
+}
+
+export function commandVerificationResult(requirement: VerificationRequirement, evidence: string, captures: readonly CompletedVerificationCapture[], ticket: string, candidate: VerificationCandidate) {
+  const command = requirement.command || '';
+  if (evidence !== command) {
+    const message = 'verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.';
+    return Object.freeze({
+      result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze(['verification:evidence-mismatch']) }),
+      expectedEvidence: command,
+      diagnostic: Object.freeze({ code: 'executor_verify_mismatch', message, retryable: true }),
+    });
+  }
+  const completedCapture = captures.find((capture) => capture.ticket === ticket
+    && capture.command === command
+    && capture.status === 'passed'
+    && capture.candidate.source === candidate.source
+    && capture.candidate.value === candidate.value);
+  if (!completedCapture) {
+    const message = `No completed passed verification capture exists for ${ticket}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+    return Object.freeze({
+      result: Object.freeze({ kind: requirement.kind, status: 'failed_check' as const, evidence: message, command, failureIdentities: Object.freeze(['verification:capture-required']) }),
+      expectedEvidence: null,
+      diagnostic: Object.freeze({ code: 'verification_capture_required', message, retryable: true }),
+    });
+  }
+  return Object.freeze({
+    result: Object.freeze({
+      kind: requirement.kind,
+      status: 'passed' as const,
+      evidence: command,
+      command,
+      logPath: completedCapture.logPath || null,
+      exitCode: completedCapture.exitCode ?? null,
+    }),
+    expectedEvidence: command,
+  });
 }
 
 export function captureVerificationResult(requirement: VerificationRequirement, capture: Capture): VerificationResult {
