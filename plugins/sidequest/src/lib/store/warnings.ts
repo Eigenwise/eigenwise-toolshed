@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveSuite } = require('../suite-resolver.js');
+const { VERIFICATION_KINDS } = require('../kernel/verification.js');
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require('../worktrees.js');
 const { unscopedWriteCannotAutoApprove } = require('./dispatch.js');
 
@@ -32,7 +33,7 @@ function manualVerify(value?: any) {
   return /^manual:\s+\S/i.test(String(value || '').trim());
 }
 
-const VERIFY_ORACLE_KINDS = ['suite', 'command', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'];
+const VERIFY_ORACLE_KINDS = VERIFICATION_KINDS;
 
 function normalizeVerifyOracleKind(value?: any) {
   const kind = String(value || 'command').trim().toLowerCase();

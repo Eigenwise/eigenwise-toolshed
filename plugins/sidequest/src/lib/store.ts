@@ -46,7 +46,7 @@ const telemetry = require('./telemetry.js');
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./refusal-guidance.js');
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
 const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
-const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic } = require('./kernel/index.js');
+const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
 const { sourceRevision } = require('./source-revision-capability.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
@@ -146,7 +146,7 @@ let warningsLayer: any;
 let DISPATCH_DESCRIPTION_MIN: any;
 function executorText(...args: any[]) { return warningsLayer.executorText(...args); }
 function manualVerify(...args: any[]) { return warningsLayer.manualVerify(...args); }
-const VERIFY_ORACLE_KINDS = ['suite', 'command', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'];
+const VERIFY_ORACLE_KINDS = VERIFICATION_KINDS;
 function normalizeVerifyOracleKind(...args: any[]) { return warningsLayer.normalizeVerifyOracleKind(...args); }
 function attestationErrors(...args: any[]) { return warningsLayer.attestationErrors(...args); }
 function verifyOracleErrors(...args: any[]) { return warningsLayer.verifyOracleErrors(...args); }

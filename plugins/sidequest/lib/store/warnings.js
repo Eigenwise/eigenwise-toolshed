@@ -1,5 +1,6 @@
 "use strict";
 const { resolveSuite } = require("../suite-resolver.js");
+const { VERIFICATION_KINDS } = require("../kernel/verification.js");
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require("../worktrees.js");
 const { unscopedWriteCannotAutoApprove } = require("./dispatch.js");
 function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerceEffort, commitScope, contractCollisionReasons, dispatchReadOnly, dispatchState, execFileSync, fs, getTicket, integrationTarget, listTickets, normalizeContracts, normalizeFiles, normalizeRouteModel, overlappingScopePaths, path, pulseDispatchState, readMeta, readOnlyOverrideActive, spawnSync, ticketCategory }) {
@@ -61,7 +62,7 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
   function manualVerify(value) {
     return /^manual:\s+\S/i.test(String(value || "").trim());
   }
-  const VERIFY_ORACLE_KINDS = ["suite", "command", "document", "link", "schema", "manual", "attestation", "review", "custom"];
+  const VERIFY_ORACLE_KINDS = VERIFICATION_KINDS;
   function normalizeVerifyOracleKind(value) {
     const kind = String(value || "command").trim().toLowerCase();
     if (!VERIFY_ORACLE_KINDS.includes(kind)) throw new Error(`Verify oracle kind must be one of: ${VERIFY_ORACLE_KINDS.join(", ")}.`);

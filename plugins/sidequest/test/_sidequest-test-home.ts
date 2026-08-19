@@ -4,6 +4,12 @@ import os from 'node:os';
 import path from 'node:path';
 
 const sidequestTestHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-test-home-'));
+Object.assign(process.env, {
+  GIT_TERMINAL_PROMPT: '0',
+  GIT_CONFIG_NOSYSTEM: '1',
+  GIT_CONFIG_GLOBAL: process.platform === 'win32' ? 'NUL' : '/dev/null',
+  GIT_CONFIG_SYSTEM: process.platform === 'win32' ? 'NUL' : '/dev/null',
+});
 process.env.SIDEQUEST_HOME = sidequestTestHome;
 
 process.once('exit', () => {

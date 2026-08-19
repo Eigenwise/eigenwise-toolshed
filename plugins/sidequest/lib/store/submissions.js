@@ -1111,8 +1111,19 @@ ${verify.outputTail}` : null
       const result2 = error2 ? { kind: "manual", status: "failed_check", evidence: error2, failureIdentities: ["manual:evidence-required"] } : { kind: "manual", status: "manual", evidence, command: requirement.command || null };
       return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
     }
+    if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && evidence) {
+      const error2 = verifyCommandError(evidence);
+      if (error2) {
+        return {
+          result: { kind: "custom", status: "failed_check", evidence: error2, failureIdentities: ["custom:invalid-fallback"] },
+          expectedEvidence: null,
+          diagnostic: { code: "invalid_verify", message: error2, retryable: true }
+        };
+      }
+      if (manualVerify(evidence)) return { result: { kind: "custom", status: "manual", evidence }, expectedEvidence: null };
+    }
     if (requirement.command && evidence !== requirement.command) {
-      const error2 = `verification evidence must match the prepared ${requirement.kind} verifier; executors cannot replace the required command.`;
+      const error2 = `verification must match the declared executor verify command and the prepared ${requirement.kind} verifier; executors cannot replace the required command.`;
       return {
         result: { kind: requirement.kind, status: "failed_check", evidence: error2, command: requirement.command, failureIdentities: ["verification:evidence-mismatch"] },
         expectedEvidence: requirement.command,

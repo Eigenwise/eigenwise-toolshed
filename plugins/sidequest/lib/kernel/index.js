@@ -19,6 +19,7 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var kernel_exports = {};
 __export(kernel_exports, {
   ATTEMPT_TRANSITIONS: () => ATTEMPT_TRANSITIONS,
+  VERIFICATION_KINDS: () => import_verification.VERIFICATION_KINDS,
   attemptDiagnostic: () => attemptDiagnostic,
   canonicalPath: () => import_worktree.canonicalPath,
   captureVerificationResult: () => import_verification.captureVerificationResult,
@@ -103,6 +104,7 @@ function inlineEligibility(input) {
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   ATTEMPT_TRANSITIONS,
+  VERIFICATION_KINDS,
   attemptDiagnostic,
   canonicalPath,
   captureVerificationResult,

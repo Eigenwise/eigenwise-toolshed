@@ -1235,8 +1235,19 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
       : { kind: 'manual', status: 'manual', evidence, command: requirement.command || null };
     return { result, expectedEvidence: null, ...(error ? { diagnostic: { code: 'invalid_verify', message: error, retryable: true } } : {}) };
   }
+  if (requirement.kind === 'custom' && requirement.evidenceContract === 'legacy project verifier was not recorded' && evidence) {
+    const error = verifyCommandError(evidence);
+    if (error) {
+      return {
+        result: { kind: 'custom', status: 'failed_check', evidence: error, failureIdentities: ['custom:invalid-fallback'] },
+        expectedEvidence: null,
+        diagnostic: { code: 'invalid_verify', message: error, retryable: true },
+      };
+    }
+    if (manualVerify(evidence)) return { result: { kind: 'custom', status: 'manual', evidence }, expectedEvidence: null };
+  }
   if (requirement.command && evidence !== requirement.command) {
-    const error = `verification evidence must match the prepared ${requirement.kind} verifier; executors cannot replace the required command.`;
+    const error = `verification must match the declared executor verify command and the prepared ${requirement.kind} verifier; executors cannot replace the required command.`;
     return {
       result: { kind: requirement.kind, status: 'failed_check', evidence: error, command: requirement.command, failureIdentities: ['verification:evidence-mismatch'] },
       expectedEvidence: requirement.command,

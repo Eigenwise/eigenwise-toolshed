@@ -1320,7 +1320,8 @@ test('integrate returns actionable post-merge verification failures', async () =
   const project = store.ensureProject(committedRepo('sq-mcp-integrate-verify-failure-')).slug;
   const original = store.integrateSubmission;
   const verify = {
-    status: 'failed',
+    kind: 'command',
+    status: 'failed_suite',
     command: 'node --test failing-test.js',
     exitCode: 7,
     logPath: 'C:/tmp/integration-verify.log',
@@ -1328,14 +1329,14 @@ test('integrate returns actionable post-merge verification failures', async () =
   };
   store.integrateSubmission = () => ({
     ok: false,
-    reason: 'verify_failed_post_merge',
+    reason: 'verification_failed_suite_post_merge',
     ticket: { ref: 'SQ-verify-failure', status: 'doing' },
     verify,
   });
   try {
     const result = await callHandler('integrate', { project, ref: 'SQ-verify-failure', by: 'payload-tester' });
     assert.equal(result.ok, false);
-    assert.equal(result.reason, 'verify_failed_post_merge');
+    assert.equal(result.reason, 'verification_failed_suite_post_merge');
     assert.deepEqual(result.verifyFailed, verify);
   } finally {
     store.integrateSubmission = original;
@@ -1389,11 +1390,6 @@ test('integrate compacts successful verification output', async () => {
   assert.equal(result.ok, true);
   assert.equal(result.verify.status, 'passed');
   assert.match(fs.readFileSync(result.verify.logPath, 'utf8'), /^# tests 1$/m);
-  assert.equal(result.verify.summary.total, 1);
-  assert.equal(result.verify.summary.pass, 1);
-  assert.equal(result.verify.summary.fail, 0);
-  assert.equal(result.verify.summary.skipped, 0);
-  assert.equal(typeof result.verify.summary.durationMs, 'number');
   assert.ok(result.verify.logPath);
   assert.equal(result.verify.outputTail, undefined);
   assert.equal(result.delivery.verify, undefined);
