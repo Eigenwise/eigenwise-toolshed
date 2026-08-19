@@ -206,6 +206,8 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   }
 
   requireVerifyOracle(fields.executorVerifyKind, fields.executorVerify, fields.executorAttestationArtifact);
+  const executorVerify = executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
+  const executorVerifyKind = normalizeVerifyOracleKind(fields.executorVerifyKind, executorVerify);
   const storyId = coerceStoryId(slug, fields.storyId);
   const ticket = {
     id,
@@ -231,9 +233,9 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
     contractWaiver: !!fields.contractWaiver,
     readonlyOverride: requestedReadonlyOverride(fields),
     executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors'),
-    executorVerifyKind: normalizeVerifyOracleKind(fields.executorVerifyKind),
+    executorVerifyKind,
     executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact'),
-    executorVerify: executorText(fields.executorVerify, EXECUTOR_VERIFY_MAX, 'executor verify command'),
+    executorVerify,
     assets,
     comments: [],              // [{ id, by, body, kind: 'comment', at }]
     links: [],                 // [{ type: 'blocks'|'blocked-by'|'related', ref }]
@@ -1013,9 +1015,9 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     const nextVerify = patch.executorVerify === undefined ? t.executorVerify : patch.executorVerify;
     if (patch.executorVerify !== undefined || patch.executorVerifyKind !== undefined || patch.executorAttestationArtifact !== undefined) {
       requireVerifyOracle(nextVerifyKind, nextVerify, nextAttestationArtifact);
-      const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind);
-      const executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact');
       const executorVerify = executorText(nextVerify, EXECUTOR_VERIFY_MAX, 'executor verify command');
+      const executorVerifyKind = normalizeVerifyOracleKind(nextVerifyKind, executorVerify);
+      const executorAttestationArtifact = executorText(nextAttestationArtifact, EXECUTOR_VERIFY_MAX, 'executor attestation artifact');
       const verifyTicket = Object.assign({}, t, { executorVerifyKind, executorAttestationArtifact, executorVerify });
       const verifyError = authoringVerifyError(verifyTicket, readMeta(slug)?.path);
       if (verifyError) throw new Error(`${verifyError} Keep acceptance criteria in a comment, not the verify field.`);

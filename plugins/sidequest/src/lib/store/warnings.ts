@@ -1,7 +1,7 @@
 'use strict';
 
 const { resolveSuite } = require('../suite-resolver.js');
-const { VERIFICATION_KINDS } = require('../kernel/verification.js');
+const { VERIFICATION_KINDS, classifyVerificationKind } = require('../kernel/verification.js');
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require('../worktrees.js');
 const { unscopedWriteCannotAutoApprove } = require('./dispatch.js');
 
@@ -30,15 +30,15 @@ const VERIFY_BUILTINS = new Set([
 ]);
 
 function manualVerify(value?: any) {
-  return /^manual:\s+\S/i.test(String(value || '').trim());
+  return classifyVerificationKind(value, 'command') === 'manual';
 }
 
 const VERIFY_ORACLE_KINDS = VERIFICATION_KINDS;
 
-function normalizeVerifyOracleKind(value?: any) {
+function normalizeVerifyOracleKind(value?: any, verify?: any) {
   const kind = String(value || 'command').trim().toLowerCase();
   if (!VERIFY_ORACLE_KINDS.includes(kind)) throw new Error(`Verify oracle kind must be one of: ${VERIFY_ORACLE_KINDS.join(', ')}.`);
-  return kind;
+  return classifyVerificationKind(verify, kind);
 }
 
 const ATTESTATION_FORMAT = '`attestation: <artifact> | <evidence produced> | <what it showed>`';
@@ -58,9 +58,10 @@ function attestationErrors(value?: any, artifact?: any) {
 }
 
 function verifyOracleErrors(kind?: any, value?: any, artifact?: any) {
-  const verifyKind = normalizeVerifyOracleKind(kind);
+  const verifyKind = normalizeVerifyOracleKind(kind, value);
   if (verifyKind === 'attestation') return attestationErrors(value, artifact);
   if (String(artifact || '').trim()) return ['attestationArtifact requires verifyKind: attestation.'];
+  if (verifyKind === 'manual' && /^manual:/i.test(String(value || '').trim())) return verifyCommandErrors(value);
   if (verifyKind === 'command' || verifyKind === 'suite') return verifyCommandErrors(value);
   return [];
 }
@@ -109,7 +110,12 @@ function splitVerifyCommands(command?: any) {
 
 function verifyCommandErrors(value?: any) {
   const command = String(value || '').trim();
-  if (!command || manualVerify(command)) return [];
+  if (!command) return [];
+  if (manualVerify(command)) {
+    return /^manual:\s+\S/i.test(command)
+      ? []
+      : ['Manual verification must use the exact prefix `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.'];
+  }
   if (/^manual\b/i.test(command)) {
     return ['Manual verification must use the exact prefix `manual: <what you checked>`. Otherwise provide a runnable command such as `npm run test` or `cd <repo-relative-dir> && <command>`.'];
   }

@@ -53,6 +53,31 @@ test('attestation oracle requires an observed artifact and structured evidence',
   assert.doesNotMatch(briefing, /Verify output discipline/);
 });
 
+test('manual verifier prefixes normalize stored kinds and requirements', () => {
+  const slug = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-manual-kind-project-')), 'manual kind').slug;
+  const created = store.createTicket(slug, {
+    title: 'Normalize a legacy manual verifier',
+    executorVerifyKind: 'command',
+    executorVerify: 'manual: checked the rendered page',
+  });
+  assert.equal(created.executorVerifyKind, 'manual');
+
+  const updated = store.updateTicket(slug, created.ref, {
+    executorVerifyKind: 'command',
+    executorVerify: 'manual: checked the regenerated page',
+  });
+  assert.equal(updated.executorVerifyKind, 'manual');
+
+  assert.deepStrictEqual(verification.verificationRequirement({
+    kind: 'command',
+    evidence: 'manual: checked the legacy page',
+    command: 'manual: checked the legacy page',
+  }), {
+    kind: 'manual',
+    evidenceContract: 'checked the legacy page',
+  });
+});
+
 test('verification failures retain domain-specific actionable identities', () => {
   for (const kind of ['document', 'link', 'schema', 'review']) {
     const failure = verification.verificationFailureDiagnostic({

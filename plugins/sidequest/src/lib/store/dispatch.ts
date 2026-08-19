@@ -1,7 +1,7 @@
 'use strict';
 
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
-const { verificationRequirement } = require('../kernel/verification.js');
+const { classifyVerificationKind, verificationRequirement } = require('../kernel/verification.js');
 const { resolveSuite } = require('../suite-resolver.js');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require('../kernel/review-binding');
 
@@ -30,11 +30,10 @@ function preparedVerificationRequirement(ticket: any, projectPath: string) {
   const recorded = String(ticket?.executorVerify || '').trim();
   const declaredKind = String(ticket?.executorVerifyKind || 'command').trim().toLowerCase();
   const artifact = String(ticket?.executorAttestationArtifact || '').trim();
-  const manual = /^manual:\s+/i.test(recorded);
   const suite = !recorded || declaredKind === 'suite' ? namedSuiteForTicket(ticket, projectPath) : null;
   const attestation = declaredKind === 'attestation' && Boolean(artifact);
   const legacyWithoutVerifier = !recorded && !suite && !attestation;
-  const kind = manual ? 'manual' : legacyWithoutVerifier ? 'custom' : declaredKind;
+  const kind = legacyWithoutVerifier ? 'custom' : classifyVerificationKind(recorded, declaredKind);
   return verificationRequirement({
     kind,
     evidence: legacyWithoutVerifier ? 'legacy project verifier was not recorded' : recorded || artifact || undefined,
