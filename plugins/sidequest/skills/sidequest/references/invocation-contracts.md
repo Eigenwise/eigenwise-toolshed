@@ -16,6 +16,7 @@ this file only covers what the schema has no way to say.
   command. The other kinds retain the submitted evidence contract. `verifyKind: attestation` also requires
   `verify` in the form `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`;
   any other shape is refused.
+- **`submit` command verification**: run the dispatched `verify-capture` wrapper after the final candidate commit. It records a completed capture bound to the ticket, exact declared command, and candidate revision. `verify` still has to equal the declared command, but that string is only a reference to the capture, never proof that it ran. A stale or missing capture is retryable: rerun the exact declared command through the wrapper and submit again. `manual` and `attestation` stay evidence-based.
 - **`integrate` verification waiver**: `skipVerify: true` also requires `verificationWaiver` with `authority`,
   `reason`, `affectedGate`, and either a bounded `scope` or future `expiresAt`. Sidequest validates and stores
   the waiver Diagnostic with the integration result; a bare `skipVerify` is refused.

@@ -22,6 +22,7 @@ __export(verification_exports, {
   VERIFICATION_STATUSES: () => VERIFICATION_STATUSES,
   captureVerificationResult: () => captureVerificationResult,
   classifyVerificationKind: () => classifyVerificationKind,
+  commandVerificationResult: () => commandVerificationResult,
   validateVerificationWaiver: () => validateVerificationWaiver,
   validationDiagnostic: () => validationDiagnostic,
   verificationAccepted: () => verificationAccepted,
@@ -108,6 +109,37 @@ function verificationFailureDiagnostic(result) {
   const identities = result.failureIdentities?.length ? ` Failures: ${result.failureIdentities.join(", ")}.` : "";
   return validationDiagnostic(`verification_${String(result.status).replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`, `Required ${result.kind} verification returned ${result.status}.${identities}`);
 }
+function commandVerificationResult(requirement, evidence, captures, ticket, candidate) {
+  const command = requirement.command || "";
+  if (evidence !== command) {
+    const message = "verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.";
+    return Object.freeze({
+      result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze(["verification:evidence-mismatch"]) }),
+      expectedEvidence: command,
+      diagnostic: Object.freeze({ code: "executor_verify_mismatch", message, retryable: true })
+    });
+  }
+  const completedCapture = captures.find((capture) => capture.ticket === ticket && capture.command === command && capture.status === "passed" && capture.candidate.source === candidate.source && capture.candidate.value === candidate.value);
+  if (!completedCapture) {
+    const message = `No completed passed verification capture exists for ${ticket}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+    return Object.freeze({
+      result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze(["verification:capture-required"]) }),
+      expectedEvidence: null,
+      diagnostic: Object.freeze({ code: "verification_capture_required", message, retryable: true })
+    });
+  }
+  return Object.freeze({
+    result: Object.freeze({
+      kind: requirement.kind,
+      status: "passed",
+      evidence: command,
+      command,
+      logPath: completedCapture.logPath || null,
+      exitCode: completedCapture.exitCode ?? null
+    }),
+    expectedEvidence: command
+  });
+}
 function captureVerificationResult(requirement, capture) {
   if (capture.status === "passed") {
     return Object.freeze({ kind: requirement.kind, status: "passed", evidence: requirement.evidenceContract, command: capture.command || requirement.command || null, logPath: capture.logPath || null });
@@ -122,6 +154,7 @@ function captureVerificationResult(requirement, capture) {
   VERIFICATION_STATUSES,
   captureVerificationResult,
   classifyVerificationKind,
+  commandVerificationResult,
   validateVerificationWaiver,
   validationDiagnostic,
   verificationAccepted,

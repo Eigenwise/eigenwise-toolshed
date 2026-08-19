@@ -24,6 +24,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-submission-test
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const { recordCapture, runVerifyCapture } = require('../lib/verify-capture.js');
 const agentsync = require('../lib/agentsync.js');
 const mcp = require('../lib/mcp.js');
 const db = require('../lib/db.js');
@@ -277,37 +278,103 @@ test('integration rejects legacy invalid submission verify before delivery', () 
   assert.match(refused.message, /submission\.verify, not ticket\.executorVerify/);
 });
 
-test('submit requires the declared executor verify command', () => {
+test('MCP submit requires a completed capture for the declared executor verifier', async () => {
   fs.mkdirSync(path.join(PROJECT_DIR, 'test'), { recursive: true });
   fs.writeFileSync(path.join(PROJECT_DIR, 'test', 'scoped-surface.test.js'), '');
-  const t = addTicket('declared scoped verify', { executorVerify: 'node --test test/scoped-surface.test.js' });
+  const command = 'node --test test/scoped-surface.test.js';
+  const t = addTicket('declared scoped verify', { executorVerify: command, files: ['README.md'] });
   const by = 'scoped-verify-worker';
   const pinnedCommit = git(['rev-parse', 'origin/main']);
   pin(t, pinnedCommit);
   assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
 
-  const refused = store.submitTicket(slug, t.ref, by, {
+  const missingCapture = await callMcp('submit', {
+    project: PROJECT_DIR,
+    ref: t.ref,
+    by,
     commit: pinnedCommit,
-    verify: 'node --test test/unrelated.test.js',
+    base: pinnedCommit,
+    worktree: PROJECT_DIR,
+    verify: command,
+    body: 'Retyped verifier string without a completed capture.',
   });
 
-  assert.strictEqual(refused.ok, false);
-  assert.strictEqual(refused.reason, 'executor_verify_mismatch');
-  assert.match(refused.message, /must match the declared executor verify command/);
+  assert.strictEqual(missingCapture.ok, false);
+  assert.strictEqual(missingCapture.reason, 'verification_capture_required');
+  assert.match(missingCapture.message, /No completed passed verification capture exists/);
+  assert.match(missingCapture.message, /node --test test\/scoped-surface\.test\.js/);
   assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
 
-  const accepted = store.submitTicket(slug, t.ref, by, {
-    commit: pinnedCommit,
-    verify: t.executorVerify,
-  });
-  assert.strictEqual(accepted.ok, true);
+  const capture = await runVerifyCapture(command, PROJECT_DIR);
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: t.ref }, capture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true, recorded.message);
+    assert.strictEqual(recorded.capture.candidate.value, pinnedCommit);
+
+    const accepted = await callMcp('submit', {
+      project: PROJECT_DIR,
+      ref: t.ref,
+      by,
+      commit: pinnedCommit,
+      base: pinnedCommit,
+      worktree: PROJECT_DIR,
+      verify: command,
+      body: 'Completed capture verified the submitted candidate.',
+    });
+    assert.strictEqual(accepted.ok, true, accepted.message);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
 });
 
-test('submit accepts runnable and manual verify commands', () => {
+test('MCP submit refuses a completed capture from before the submitted candidate', async () => {
+  const command = 'node --version';
+  const t = addTicket('stale declared capture', { executorVerify: command, files: ['lib'] });
+  const by = 'stale-capture-worker';
+  const captureBase = git(['rev-parse', 'origin/main']);
+  assert.strictEqual(store.claimTicket(slug, t.ref, by, { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  const capture = await runVerifyCapture(command, PROJECT_DIR);
+  try {
+    assert.strictEqual(capture.status, 'passed');
+    assert.strictEqual(recordCapture({ project: PROJECT_DIR, ticket: t.ref }, capture, PROJECT_DIR).ok, true);
+    const candidate = createCandidateCommit('stale-capture.js', 'candidate after capture\n');
+    pin(t, candidate);
+
+    const refused = await callMcp('submit', {
+      project: PROJECT_DIR,
+      ref: t.ref,
+      by,
+      commit: candidate,
+      base: captureBase,
+      worktree: PROJECT_DIR,
+      verify: command,
+      body: 'Capture belongs to the prior candidate.',
+    });
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_required');
+    assert.match(refused.message, /Run "node --version" through the dispatched verify-capture wrapper again/);
+    assert.strictEqual(store.getTicket(slug, t.ref).claim.by, by);
+    assert.strictEqual(store.releaseTicket(slug, t.ref, by, {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'The stale capture fixture leaves no candidate for later tests.',
+    }).ok, true);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+});
+
+test('submit accepts runnable, manual, and attestation verifier kinds', () => {
   const runnable = addTicket('runnable submit verify');
-  const manual = addTicket('manual submit verify');
+  const manual = addTicket('manual submit verify', { executorVerifyKind: 'manual', executorVerify: 'manual: inspect the candidate' });
+  const artifact = 'grafana://dashboards/submission-fixture';
+  const attestationEvidence = `attestation: ${artifact} | captured dashboard render | all panels showed fixture data`;
+  const attestation = addTicket('attestation submit verify', { executorVerifyKind: 'attestation', executorAttestationArtifact: artifact, executorVerify: attestationEvidence });
   assert.strictEqual(store.claimTicket(slug, runnable.ref, 'worker-a', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
   assert.strictEqual(store.claimTicket(slug, manual.ref, 'worker-b', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+  assert.strictEqual(store.claimTicket(slug, attestation.ref, 'worker-c', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
 
   const runnableResult = store.submitTicket(slug, runnable.ref, 'worker-a', {
     commit: COMMIT,
@@ -317,11 +384,17 @@ test('submit accepts runnable and manual verify commands', () => {
     commit: COMMIT,
     verify: 'manual: submission tests passed',
   });
+  const attestationResult = store.submitTicket(slug, attestation.ref, 'worker-c', {
+    commit: COMMIT,
+    verify: attestationEvidence,
+  });
 
   assert.strictEqual(runnableResult.ok, true);
   assert.strictEqual(manualResult.ok, true);
+  assert.strictEqual(attestationResult.ok, true, attestationResult.message);
   assert.strictEqual(store.getTicket(slug, runnable.ref).submission.verify, 'cd plugins/sidequest && npm run test:full');
   assert.strictEqual(store.getTicket(slug, manual.ref).submission.verify, 'manual: submission tests passed');
+  assert.match(store.getTicket(slug, attestation.ref).submission.verify, /^attestation: grafana:\/\/dashboards\/submission-fixture \|/);
 });
 
 test('integration keeps a recorded verifier instead of re-deriving a plugin gate', () => {
