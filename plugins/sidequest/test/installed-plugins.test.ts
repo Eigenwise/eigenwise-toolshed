@@ -4,7 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import test from 'node:test';
-import { checkSidequestInstall } from '../src/lib/dispatch-preflight.js';
+import { checkSidequestInstall, installRefusalMessage } from '../src/lib/dispatch-preflight.js';
 import { writeInstalledPluginsAtomically } from '../src/lib/installed-plugins.js';
 
 const pluginRegistryModulePath = path.join(__dirname, '..', 'src', 'lib', 'installed-plugins.ts');
@@ -16,6 +16,12 @@ function writeRegistry(registryPath: string, installPath: string): void {
       [pluginId]: [{ scope: 'user', installPath, version: 'test' }],
     },
   }));
+}
+
+function writeInstallRuntimeConfig(installPath: string): void {
+  fs.mkdirSync(path.join(installPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+  fs.writeFileSync(path.join(installPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
 }
 
 function runRegistryWriter(registryPath: string, installPath: string, injectWindowsLockContention = false): Promise<void> {
@@ -75,8 +81,7 @@ test('atomic registry fixture writes keep lockfile-overlap dispatch preflight re
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   const installPath = path.join(temporaryDirectory, 'install');
   const projectPath = path.join(temporaryDirectory, 'project');
-  fs.mkdirSync(installPath, { recursive: true });
-  fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+  writeInstallRuntimeConfig(installPath);
   writeRegistry(registryPath, installPath);
 
   let readerRuns = 0;
@@ -104,8 +109,7 @@ test('dispatch preflight retries transient plugin registry read errors', () => {
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   const installPath = path.join(temporaryDirectory, 'install');
   const projectPath = path.join(temporaryDirectory, 'project');
-  fs.mkdirSync(installPath, { recursive: true });
-  fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+  writeInstallRuntimeConfig(installPath);
   writeRegistry(registryPath, installPath);
 
   const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync')!;
@@ -158,6 +162,39 @@ test('dispatch preflight does not retry non-retryable plugin registry read error
     assert.equal(registryReadAttempts, 1);
   } finally {
     Object.defineProperty(fs, 'readFileSync', originalReadFileSyncDescriptor);
+    fs.rmSync(temporaryDirectory, { recursive: true, force: true });
+  }
+});
+
+test('dispatch preflight identity includes canonical hooks and refuses a missing runtime file', () => {
+  const temporaryDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-installed-runtime-identity-'));
+  const claudeHome = path.join(temporaryDirectory, 'claude');
+  const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
+  const installPath = path.join(temporaryDirectory, 'install');
+  const hooksPath = path.join(installPath, 'hooks', 'hooks.json');
+  writeInstallRuntimeConfig(installPath);
+  writeRegistry(registryPath, installPath);
+
+  try {
+    const initial = checkSidequestInstall('/project', { claudeHome });
+    assert.equal(initial.ok, true);
+    fs.writeFileSync(hooksPath, JSON.stringify({ hooks: { Stop: [], PreToolUse: [] } }));
+    const changed = checkSidequestInstall('/project', { claudeHome });
+    assert.equal(changed.ok, true);
+    assert.notEqual(changed.identity, initial.identity);
+
+    fs.writeFileSync(hooksPath, JSON.stringify({ hooks: { PreToolUse: [], Stop: [] } }));
+    const reordered = checkSidequestInstall('/project', { claudeHome });
+    assert.equal(reordered.ok, true);
+    assert.equal(reordered.identity, changed.identity);
+
+    fs.rmSync(hooksPath);
+    const unreadable = checkSidequestInstall('/project', { claudeHome });
+    assert.equal(unreadable.ok, false);
+    assert.equal(unreadable.reason, 'runtime_unreadable');
+    assert.match(unreadable.detail || '', /hooks[\\/]hooks\.json/);
+    assert.match(installRefusalMessage(unreadable, '/project'), /lifecycle-compatible Sidequest install identity.*hooks\/hooks\.json/);
+  } finally {
     fs.rmSync(temporaryDirectory, { recursive: true, force: true });
   }
 });

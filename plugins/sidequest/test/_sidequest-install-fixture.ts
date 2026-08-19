@@ -56,6 +56,8 @@ export function stubSidequestInstall(): void {
   } finally {
     fs.rmSync(temporaryManifestPath, { force: true });
   }
+  fs.mkdirSync(path.join(installPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(installPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
 
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   let registry: { plugins?: Record<string, unknown> } = { plugins: {} };

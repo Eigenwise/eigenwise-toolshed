@@ -375,7 +375,8 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
   const manifestPath = path.join(isolatedInstallPath, '.mcp.json');
   const originalManifest = JSON.stringify({ mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } } });
   fs.mkdirSync(path.join(isolatedClaudeHome, 'plugins'), { recursive: true });
-  fs.mkdirSync(isolatedInstallPath, { recursive: true });
+  fs.mkdirSync(path.join(isolatedInstallPath, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(isolatedInstallPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
   fs.writeFileSync(manifestPath, originalManifest);
   const loadedVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
   fs.writeFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify({
@@ -392,6 +393,7 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
   const launchPrepared = store.prepareDispatch(slug, launchTicket.ref, { sessionId: `stale-compatibility-launch-${Date.now()}` });
   const transientLaunchPrepared = store.prepareDispatch(slug, transientLaunchTicket.ref, { sessionId: `unreadable-compatibility-launch-${Date.now()}` });
   const transientClaimPrepared = store.prepareDispatch(slug, transientClaimTicket.ref, { sessionId: `unreadable-compatibility-claim-${Date.now()}` });
+  const preparedIdentity = claimPrepared.ticket.dispatch.preparedCompatibility.identity;
 
   try {
     fs.writeFileSync(manifestPath, '');
@@ -414,7 +416,14 @@ test('tokened stale compatibility refusals retire only proven mismatches', () =>
       executor: transientLaunchPrepared.ticket.dispatchExecutor,
     }).ok, true);
 
-    fs.writeFileSync(manifestPath, `${originalManifest}\n`);
+    const mcpBeforeVersionChange = fs.readFileSync(manifestPath, 'utf8');
+    const registry = JSON.parse(fs.readFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), 'utf8'));
+    registry.plugins['sidequest@eigenwise-toolshed'][0].version = `${loadedVersion}-runtime-identity-test`;
+    fs.writeFileSync(path.join(isolatedClaudeHome, 'plugins', 'installed_plugins.json'), JSON.stringify(registry));
+    const versionChangedInstall = checkSidequestInstall(PROJECT);
+    assert.equal(fs.readFileSync(manifestPath, 'utf8'), mcpBeforeVersionChange);
+    assert.equal(versionChangedInstall.ok, true);
+    assert.notEqual(versionChangedInstall.identity, preparedIdentity);
 
     const claimRefusal = store.claimTicket(slug, claimTicket.ref, 'stale-compatibility-worker', {
       token: claimPrepared.token,

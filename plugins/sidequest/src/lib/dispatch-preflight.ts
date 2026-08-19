@@ -79,7 +79,7 @@ export interface PythonIoEncodingCheckResult {
   settingsPath?: string;
 }
 
-export type InstallCheckReason = 'missing' | 'stale' | 'registry_unreadable';
+export type InstallCheckReason = 'missing' | 'stale' | 'registry_unreadable' | 'runtime_unreadable';
 
 export interface InstallCheckResult {
   ok: boolean;
@@ -141,28 +141,59 @@ function normalizeDir(value: unknown): string | null {
 }
 
 // A registry entry proves the project has a *runnable, board-MCP-capable*
-// install, not just a directory. A missing installPath (uninstalled since
-// registration) or an install whose .mcp.json no longer declares the board
-// server both count as unusable — the caller only cares whether a fresh
-// session in this project would actually get the board MCP tools.
-function installIdentity(installPath: string): string | null {
+// install, not just a directory. The snapshot includes every configuration
+// surface Claude Code resolves before an executor can act: the registry's
+// selected plugin version, the MCP entry, and the hook set. File timestamps do
+// not enter the snapshot, and JSON object ordering cannot change it.
+type InstallRuntimeSnapshot =
+  | { identity: string; advertisesBoardMcp: boolean }
+  | { detail: string };
+
+function jsonRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null;
+}
+
+function canonicalJson(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  const record = jsonRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalJson(record[key])]));
+}
+
+function canonicalJsonFile(filePath: string): unknown {
+  let content: string;
   try {
-    const manifest = readFileSyncWithRetry(path.join(installPath, '.mcp.json'));
-    return createHash('sha256').update(manifest).digest('hex');
-  } catch (_) {
-    return null;
+    content = readFileSyncWithRetry(filePath, 'utf8');
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not read ${filePath}: ${detail}`);
+  }
+  try {
+    return canonicalJson(JSON.parse(content));
+  } catch (error: unknown) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not parse ${filePath}: ${detail}`);
   }
 }
 
-function installAdvertisesBoardMcp(installPath: unknown): boolean {
-  if (typeof installPath !== 'string' || !installPath) return false;
-  let manifest: any;
+function installRuntimeSnapshot(installPath: unknown, version: unknown): InstallRuntimeSnapshot {
+  if (typeof installPath !== 'string' || !installPath.trim()) return { detail: 'the registry entry has no installPath' };
+  if (typeof version !== 'string' || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
   try {
-    manifest = JSON.parse(readFileSyncWithRetry(path.join(installPath, '.mcp.json'), 'utf8'));
-  } catch (_) {
-    return false;
+    const mcpManifest = canonicalJsonFile(path.join(installPath, '.mcp.json'));
+    const hooks = canonicalJsonFile(path.join(installPath, 'hooks', 'hooks.json'));
+    const manifest = jsonRecord(mcpManifest);
+    const mcpServers = jsonRecord(manifest?.mcpServers);
+    const identity = createHash('sha256').update(JSON.stringify({
+      schemaVersion: 2,
+      plugin: { id: PLUGIN_ID, version: version.trim() },
+      mcpManifest,
+      hooks,
+    })).digest('hex');
+    return { identity, advertisesBoardMcp: Boolean(mcpServers && Object.keys(mcpServers).length) };
+  } catch (error: unknown) {
+    return { detail: error instanceof Error ? error.message : String(error) };
   }
-  return Boolean(manifest && manifest.mcpServers && typeof manifest.mcpServers === 'object' && Object.keys(manifest.mcpServers).length > 0);
 }
 
 // Preflight for the one fact dispatch actually depends on: a fresh native
@@ -195,12 +226,21 @@ export function checkSidequestInstall(projectPath: string, opts: InstallCheckOpt
   if (!matching.length) return { ok: false, reason: 'missing', registryPath };
 
   for (const install of matching) {
-    const identity = typeof install.installPath === 'string' ? installIdentity(install.installPath) : null;
-    if (identity && installAdvertisesBoardMcp(install.installPath)) {
-      return { ok: true, registryPath, installPath: install.installPath, identity };
+    const snapshot = installRuntimeSnapshot(install.installPath, install.version);
+    if ('detail' in snapshot) {
+      return {
+        ok: false,
+        reason: 'runtime_unreadable',
+        registryPath,
+        ...(typeof install.installPath === 'string' ? { installPath: install.installPath } : {}),
+        detail: snapshot.detail,
+      };
+    }
+    if (snapshot.advertisesBoardMcp) {
+      return { ok: true, registryPath, installPath: install.installPath, identity: snapshot.identity };
     }
   }
-  return { ok: false, reason: 'stale', registryPath };
+  return { ok: false, reason: 'stale', registryPath, detail: 'the .mcp.json snapshot declares no MCP server' };
 }
 
 function repairGuidance(): string {
@@ -211,10 +251,13 @@ export function installRefusalMessage(check: InstallCheckResult, projectPath: st
   if (check.reason === 'registry_unreadable') {
     return `Dispatch refused: could not read Claude Code's plugin registry at ${check.registryPath} (${check.detail}). Fix or remove the corrupt registry, confirm sidequest@eigenwise-toolshed is installed for ${projectPath}, then dispatch again.`;
   }
-  if (check.reason === 'stale') {
-    return `Dispatch refused: the sidequest@eigenwise-toolshed install registered for ${projectPath} (checked ${check.registryPath}) is missing or no longer declares the board MCP server. ${repairGuidance()}`;
+  if (check.reason === 'runtime_unreadable') {
+    return `Dispatch refused: could not compute the lifecycle-compatible Sidequest install identity for ${check.installPath || projectPath} (${check.detail}). Prepared dispatch compatibility requires the registry plugin version, .mcp.json, and hooks/hooks.json. ${repairGuidance()}`;
   }
-  return `Dispatch refused: sidequest@eigenwise-toolshed has no install registered for ${projectPath} in ${check.registryPath}. A \`.claude/settings.json\` enabledPlugins entry is not proof of an install. ${repairGuidance()}`;
+  if (check.reason === 'stale') {
+    return `Dispatch refused: the sidequest@eigenwise-toolshed install registered for ${projectPath} (checked ${check.registryPath}) does not declare a board MCP server, so prepared dispatch compatibility cannot be proven. ${repairGuidance()}`;
+  }
+  return `Dispatch refused: sidequest@eigenwise-toolshed has no install with a lifecycle-compatible runtime registered for ${projectPath} in ${check.registryPath}. A \`.claude/settings.json\` enabledPlugins entry is not proof of an install. ${repairGuidance()}`;
 }
 
 // Single preflight owner for every path that hands a fresh session a claim-first

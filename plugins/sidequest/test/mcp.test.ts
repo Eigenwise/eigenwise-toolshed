@@ -1418,9 +1418,10 @@ test('dispatch records a heal-capable loaded-version skew and returns its warnin
   const originalPluginRoot = process.env.CLAUDE_PLUGIN_ROOT;
   const loadedPluginRoot = path.join(__dirname, '..');
   try {
-    fs.mkdirSync(installPath, { recursive: true });
+    fs.mkdirSync(path.join(installPath, 'hooks'), { recursive: true });
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
     fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+    fs.writeFileSync(path.join(installPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
     fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
       'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath, installPath, version: '99.99.99' }],
     } }));
@@ -1462,10 +1463,11 @@ test('dispatch keeps freshness silent with an isolated matching install', async 
   const loadedVersion = JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version;
   try {
     fs.mkdirSync(path.join(stalePluginRoot, '.claude-plugin'), { recursive: true });
-    fs.mkdirSync(installPath, { recursive: true });
+    fs.mkdirSync(path.join(installPath, 'hooks'), { recursive: true });
     fs.mkdirSync(path.dirname(registryPath), { recursive: true });
     fs.writeFileSync(path.join(stalePluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '1.0.0' }));
     fs.writeFileSync(path.join(installPath, '.mcp.json'), JSON.stringify({ mcpServers: { board: {} } }));
+    fs.writeFileSync(path.join(installPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
     fs.writeFileSync(registryPath, JSON.stringify({ plugins: {
       'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath, installPath, version: loadedVersion }],
     } }));
