@@ -46,6 +46,7 @@ const mcp = require('../lib/mcp.js');
 const contextPacket = require('../lib/context-packet.js');
 const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
+const db = require('../lib/db.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
 const NO_SCOPE_WARNING = 'Planning-depth warning: no file scope declared for a write-scope ticket, and this board has no autoApproveScope policy that can grant the first request. Dispatch will refuse unless you declare files or explicitly allow an unscoped run.';
@@ -179,6 +180,19 @@ async function callHandler(name?: any, args?: any) {
 
 function gitAt(cwd?: any, args?: any) {
   return execFileSync('git', args, { cwd, encoding: 'utf8', windowsHide: true }).trim();
+}
+
+function persistTicket(project: string, ticket: any) {
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id,
+    project,
+    ref: ticket.ref,
+    status: ticket.status,
+    archived: ticket.archived ? 1 : 0,
+    ord: ticket.order,
+    claim_by: ticket.claim?.by || null,
+    data: ticket,
+  });
 }
 
 function runCli(args?: any, cwd?: any) {
@@ -2052,24 +2066,92 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
 
   const foreignWorktree = createGitWorktree();
   addMarketplaceFixture(foreignWorktree);
+  fs.mkdirSync(path.join(foreignWorktree, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(foreignWorktree, '.release', 'unreleased', 'SQ-other.md'), 'foreign\n');
+  gitAt(foreignWorktree, ['add', '.release/unreleased/SQ-other.md']);
+  gitAt(foreignWorktree, ['commit', '-m', 'foreign release fragment']);
   const foreignProject = store.ensureProject(foreignWorktree).slug;
   const foreign = store.createTicket(foreignProject, {
-    title: 'other release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
-    labels: ['direct-ok'], complexityWhy: 'confirm a ticket cannot write another ticket release fragment',
+    title: 'other release fragment', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm a ticket cannot remove an unrelated ticket release fragment',
   });
   const foreignBy = 'mcp-foreign-fragment-worker';
   assert.equal((await callTool('claim', { project: foreignProject, ref: foreign.ref, by: foreignBy, direct: true, reason: 'The foreign release fragment fixture requires a local direct claim.' })).ok, true);
   fs.mkdirSync(path.join(foreignWorktree, 'plugins', 'fixture-plugin'), { recursive: true });
-  fs.mkdirSync(path.join(foreignWorktree, '.release', 'unreleased'), { recursive: true });
   fs.writeFileSync(path.join(foreignWorktree, 'plugins', 'fixture-plugin', 'index.js'), 'changed\n');
-  fs.writeFileSync(path.join(foreignWorktree, '.release', 'unreleased', 'SQ-other.md'), 'foreign\n');
-  gitAt(foreignWorktree, ['add', 'plugins/fixture-plugin/index.js', '.release/unreleased/SQ-other.md']);
+  fs.unlinkSync(path.join(foreignWorktree, '.release', 'unreleased', 'SQ-other.md'));
   const foreignCommit = await callTool('commit', {
-    project: foreignProject, ref: foreign.ref, by: foreignBy, message: 'foreign release fragment', worktree: foreignWorktree,
+    project: foreignProject, ref: foreign.ref, by: foreignBy, message: 'remove foreign release fragment', worktree: foreignWorktree,
   });
   assert.equal(foreignCommit.ok, false);
   assert.equal(foreignCommit.reason, 'outside_scope');
   assert.match(foreignCommit.message, new RegExp(`only \\.release/unreleased/${foreign.ref}\\.md is implicitly writable`));
+});
+
+test('MCP repair submission transfers a related rejected candidate fragment to its shipping ticket', async () => {
+  const worktree = createGitWorktree();
+  addMarketplaceFixture(worktree);
+  const project = store.ensureProject(worktree).slug;
+  const source = store.createTicket(project, {
+    title: 'rejected plugin candidate', files: ['plugins/fixture-plugin'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'fixture for a review-rejected candidate release fragment',
+  });
+  const sourceFragment = `.release/unreleased/${source.ref}.md`;
+  fs.mkdirSync(path.join(worktree, 'plugins', 'fixture-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(worktree, '.release', 'unreleased'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'plugins', 'fixture-plugin', 'index.js'), 'rejected candidate\n');
+  fs.writeFileSync(path.join(worktree, sourceFragment), `---\nref: ${source.ref}\ntitle: Rejected fixture change\nbump: patch\nplugins:\n  - fixture-plugin\n---\n\nRejected fixture change.\n`);
+  gitAt(worktree, ['add', 'plugins/fixture-plugin/index.js', sourceFragment]);
+  gitAt(worktree, ['commit', '-m', 'rejected plugin candidate']);
+  const sourceCommit = gitAt(worktree, ['rev-parse', 'HEAD']);
+  const sourceTicket = store.getTicket(project, source.ref);
+  const terminalAt = new Date().toISOString();
+  sourceTicket.status = 'doing';
+  sourceTicket.dispatch = { terminalAt, outcome: 'submitted', attempts: [{ outcome: 'submitted', commit: sourceCommit, terminalAt }] };
+  sourceTicket.submission = {
+    by: 'rejected-candidate-worker', at: terminalAt, commit: sourceCommit,
+    verify: 'manual: rejected fixture', changedPaths: ['plugins/fixture-plugin/index.js', sourceFragment], integratedAt: null,
+  };
+  persistTicket(project, sourceTicket);
+  const review = store.createTicket(project, {
+    title: 'review rejected fixture candidate', category: 'review-audit', files: ['plugins/fixture-plugin'],
+  }, { ref: source.ref, commit: sourceCommit });
+  const rejectedSource = store.getTicket(project, source.ref);
+  rejectedSource.submission.review.outcome = 'rejected';
+  persistTicket(project, rejectedSource);
+  const rejectedReview = store.getTicket(project, review.ref);
+  rejectedReview.reviewTarget.outcome = 'rejected';
+  persistTicket(project, rejectedReview);
+
+  const repair = store.createTicket(project, {
+    title: 'repair rejected plugin candidate', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'fixture for a repair that ships the rejected candidate correction',
+  });
+  assert.equal(store.linkTickets(project, repair.ref, 'related', source.ref).ok, true);
+  const repairTicket = store.getTicket(project, repair.ref);
+  repairTicket.dispatch = { baseCommit: sourceCommit };
+  persistTicket(project, repairTicket);
+  const repairBy = 'repair-release-fragment-worker';
+  assert.equal((await callTool('claim', {
+    project, ref: repair.ref, by: repairBy, direct: true,
+    reason: 'The repair fixture validates the release fragment takeover wire.',
+  })).ok, true);
+
+  const repairFragment = `.release/unreleased/${repair.ref}.md`;
+  fs.renameSync(path.join(worktree, sourceFragment), path.join(worktree, repairFragment));
+  fs.writeFileSync(path.join(worktree, repairFragment), fs.readFileSync(path.join(worktree, repairFragment), 'utf8').replace(source.ref, repair.ref));
+  const committed = await callTool('commit', {
+    project, ref: repair.ref, by: repairBy, message: 'transfer rejected candidate release fragment', worktree,
+  });
+  assert.ok(committed.commit, 'the repair can rename the related rejected source fragment');
+  gitAt(worktree, ['update-ref', `refs/sidequest/${repair.ref}`, committed.commit]);
+  const submitted = await callTool('submit', {
+    project, ref: repair.ref, by: repairBy, commit: committed.commit, worktree,
+    verify: 'manual: repair fragment takeover fixture',
+    body: 'Repair candidate renamed the rejected source release fragment to its shipping ticket.',
+  });
+  assert.equal(submitted.ok, true, submitted.message);
+  assert.deepEqual(store.getTicket(project, repair.ref).submission.changedPaths.sort(), [sourceFragment, repairFragment].sort());
 });
 
 test('MCP carries a derived release scope through a released continuation and integration admission', async () => {
