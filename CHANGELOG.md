@@ -8,6 +8,22 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.485.0 (2026-08-19)
+
+### sidequest 5.0.0 → 5.0.1
+
+#### Fixes
+
+- Retry Windows fixture renames (SQ-2239)
+  Retries transient Windows rename failures in the Sidequest test-install fixture.
+- Suppress self-authored board watch comments (SQ-2240)
+- Retry transient plugin registry reads (SQ-2241)
+  Retries transient Windows file-read failures while dispatch preflight checks the installed plugin registry and install manifest.
+- Make the slow claim sweep test load-immune (SQ-2242)
+  Removes a load-sensitive wall-clock assertion from the SessionStart sweep test while retaining its deadline and briefing checks.
+- Recover abandoned executor claims (SQ-2243)
+  Releases dispatch-bound claims after the 24-hour unobserved-death backstop when no terminal outcome was recorded.
+
 ## v3.484.0 (2026-08-18)
 
 ### sidequest 4.53.0 → 5.0.0
