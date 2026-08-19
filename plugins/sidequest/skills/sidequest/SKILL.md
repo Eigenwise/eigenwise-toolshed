@@ -1,8 +1,8 @@
 ---
 name: sidequest
 description: >-
-  Open or manage Sidequest tickets and board workflow. Use to show the dashboard, file, update, close,
-  prioritize, link, or claim tickets, or plan substantial work.
+  Open or manage Sidequest tickets and board workflow. Use for board lifecycle work, planning substantial or ambiguous work, and
+  dispatch/integration/recovery. Stay inline for quick edits at a known location, direct questions, or operational requests.
 ---
 
 # sidequest

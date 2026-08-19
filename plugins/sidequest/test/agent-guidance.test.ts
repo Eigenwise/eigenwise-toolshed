@@ -49,6 +49,24 @@ test('published guidance excludes retired instructions', () => {
   }
 });
 
+test('sidequest listing description covers board use and inline exceptions', () => {
+  const frontmatter = skill.match(/^---\r?\n([\s\S]*?)\r?\n---/);
+  assert.ok(frontmatter, 'skill frontmatter must be present');
+  const frontmatterLines = frontmatter[1].split(/\r?\n/);
+  const descriptionStart = frontmatterLines.findIndex((line: string) => /^description:\s*>-?\s*$/.test(line));
+  assert.notEqual(descriptionStart, -1, 'skill description must use a folded frontmatter value');
+  const descriptionLines: string[] = [];
+  for (const line of frontmatterLines.slice(descriptionStart + 1)) {
+    if (!/^\s+/.test(line)) break;
+    descriptionLines.push(line.trim());
+  }
+  const description = descriptionLines.join(' ');
+  assert.ok(description.length > 0, 'skill description must not be empty');
+  assert.ok(description.length <= 1536, `skill description is ${description.length} characters`);
+  assert.match(description, /\bUse for\b/);
+  assert.match(description, /\bStay inline for\b/);
+});
+
 test('published guidance pins surgical planning before substantial dispatch', () => {
   assert.match(skill, /Before dispatching substantial or ambiguous work, pin a contract/);
   assert.match(userStory, /Outcome and explicit non-goals/);
