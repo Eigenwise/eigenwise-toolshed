@@ -297,9 +297,8 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.match(contextPage.inputSchema.properties.limit.description, /UTF-8 bytes/);
   const rework = resp.result.tools.find((tool: any) => tool.name === 'rework');
   assert.deepEqual(rework.inputSchema.required, ['ref', 'by', 'review', 'reason']);
-  assert.match(rework.description, /repair/);
-  assert.match(rework.description, /unbound candidate/, 'rework advertises that it only repairs an unbound candidate');
-  assert.match(rework.description, /review-bound candidate is locked/, 'rework advertises the bound-candidate lock');
+  assert.match(rework.description, /repair unbound/);
+  assert.match(rework.description, /bound needs oracle/, 'rework advertises the bound-candidate oracle route');
   assert.ok(rework.inputSchema.properties.reviewRef, 'reviewRef stays accepted for compatibility');
   for (const tool of resp.result.tools) {
     assert.doesNotMatch(String(tool.description || ''), /permanent/i, `${tool.name} must not promise a permanent candidate rejection`);

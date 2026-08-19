@@ -74,7 +74,7 @@ type ToolDefinition = {
 const tools: ToolDefinition[] = [
   {
     name: 'supersede_submission',
-    description: 'Close a pending submission with an integrated repair and reviewed retirements.',
+    description: 'Close a pending submission with an integrated repair and reviewed retirements. A review-rejected candidate becomes eligible only after its oracle conclusion is recorded on the binding.',
     inputSchema: {
       type: 'object',
       properties: {

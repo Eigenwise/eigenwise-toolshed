@@ -1,4 +1,5 @@
 "use strict";
+const { reviewCandidateFromSubmission, reviewOutcomeFromOracleVerdict, sameReviewCandidate } = require("../kernel/review-binding");
 function createPlans(dependencies) {
   const {
     assetPath,
@@ -235,10 +236,10 @@ ${block}
   }
   function verdictOutcome(value) {
     const outcome = String(value == null ? "" : value).trim().toLowerCase();
-    if (!["accepted", "rejected", "inconclusive"].includes(outcome)) {
-      throw new Error("Verdict outcome must be accepted, rejected, or inconclusive.");
-    }
-    return outcome;
+    if (outcome === "accepted") return "accepted";
+    if (outcome === "rejected") return "rejected";
+    if (outcome === "inconclusive") return "inconclusive";
+    throw new Error("Verdict outcome must be accepted, rejected, or inconclusive.");
   }
   function verdictStatus(outcome, candidate) {
     const suffix = nullableText(candidate) ? ` ${nullableText(candidate)}` : "";
@@ -261,6 +262,33 @@ ${block}
 
 `
     );
+  }
+  function recordBoundReviewOutcome(slug, reviewTicket, outcome) {
+    const target = reviewTicket?.reviewTarget;
+    if (!target?.ticketId || !target?.candidate) return null;
+    const sourceTicket = getTicket(slug, target.ticketId);
+    const sourceCandidate = reviewCandidateFromSubmission(sourceTicket?.submission);
+    if (!sourceTicket?.submission || target.ref && String(target.ref).toUpperCase() !== String(sourceTicket.ref || "").toUpperCase() || !sameReviewCandidate(sourceCandidate, target.candidate)) {
+      throw new Error(`review outcome could not verify the bound source for ${reviewTicket.ref}`);
+    }
+    const mirror = sourceTicket.submission.review;
+    if (mirror && (mirror.ticketId && String(mirror.ticketId) !== String(reviewTicket.id) || mirror.ref && String(mirror.ref).toUpperCase() !== String(reviewTicket.ref || "").toUpperCase() || mirror.candidate && !sameReviewCandidate(mirror.candidate, target.candidate))) {
+      throw new Error(`review outcome could not verify the bound mirror for ${reviewTicket.ref}`);
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    reviewTicket.reviewTarget = Object.assign({}, target, { outcome });
+    sourceTicket.submission = Object.assign({}, sourceTicket.submission, {
+      review: {
+        ticketId: reviewTicket.id,
+        ref: reviewTicket.ref,
+        candidate: target.candidate,
+        createdAt: mirror?.createdAt || now,
+        outcome
+      }
+    });
+    sourceTicket.updatedAt = now;
+    putTicket(slug, sourceTicket);
+    return { sourceRef: sourceTicket.ref, outcome };
   }
   function applyExperimentVerdict(slug, idOrRef, input) {
     const text = String(input?.text == null ? "" : input.text);
@@ -301,12 +329,13 @@ ${block2}
 ${String(log).slice(entry.end).trimStart()}`;
       log = appendStandingConstraint(log, oracle.round, constraint);
       ticket.oracle = Object.assign({}, oracle, { verdict: { text, outcome, why, constraint, at: (/* @__PURE__ */ new Date()).toISOString() } });
+      const reviewOutcome = recordBoundReviewOutcome(slug, ticket, reviewOutcomeFromOracleVerdict(outcome));
       const previousStatus = ticket.status;
       ticket.status = "todo";
       if (previousStatus !== ticket.status) ticket.statusTransition = { from: previousStatus, to: ticket.status, at: (/* @__PURE__ */ new Date()).toISOString() };
       const location = writeExperimentLog(slug, ticket, log);
       putTicket(slug, ticket);
-      return Object.assign({ ok: true, round: oracle.round, outcome }, location);
+      return Object.assign({ ok: true, round: oracle.round, outcome }, location, reviewOutcome ? { reviewOutcome } : {});
     });
   }
   function appendOverturnLine(slug, idOrRef, priorRound, overturningRound, line) {

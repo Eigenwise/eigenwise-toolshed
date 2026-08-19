@@ -353,7 +353,7 @@ test('no direct store call can permanently reject a bound candidate under any ca
     });
     assert.equal(direct.ok, false, `${by} cannot reject directly`);
     assert.equal(direct.reason, 'candidate_review_locked', `${by} gets the lock, not an ownership answer`);
-    assert.match(direct.message, /no route permanently rejects a bound candidate/);
+    assert.match(direct.message, /only an integrated repair may supersede it/);
 
     const reworked = store.reworkSubmission(slug, source.ref, {
       by,
@@ -540,6 +540,81 @@ test('a historical rejected review outcome stays readable and keeps integration 
   assert.equal(blocked.reason, 'candidate_rejected');
   assert.match(blocked.message, /repair needs fresh ticket, attempt, candidate, and review identities/);
   assert.equal(store.getTicket(slug, source.ref).rejectedSubmissions.length, 1, 'the historical record is still readable');
+});
+
+test('an oracle-confirmed review defect marks both binding halves rejected', async () => {
+  const { repository, slug, commit: candidate } = board('oracle-rejection');
+  const source = submittedSource(slug, candidate, 'oracle-rejection');
+  const review = store.createTicket(slug, {
+    title: 'oracle-confirmed review',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+  }, { ref: source.ref, commit: candidate });
+  const claimedReview = store.getTicket(slug, review.ref);
+  claimedReview.status = 'doing';
+  claimedReview.claim = { by: 'reviewer', at: new Date().toISOString() };
+  claimedReview.dispatch = { launchSeq: 1 };
+  persist(slug, claimedReview);
+
+  const released = await tool('release').handler({
+    project: repository,
+    ref: review.ref,
+    by: 'reviewer',
+    kind: 'oracle',
+    oracle: 'Does the recorded defect reject this candidate?',
+  });
+  assert.equal(released.ok, true, released.message);
+  const verdict = await tool('verdict').handler({
+    project: repository,
+    ref: review.ref,
+    text: 'The recorded defect is confirmed.',
+    outcome: 'accepted',
+    why: 'The review found a reproducible defect in the pinned candidate.',
+    constraint: 'Replace the candidate before integration.',
+  });
+  assert.equal(verdict.ok, true, verdict.message);
+
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'rejected');
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'rejected');
+
+  fs.writeFileSync(path.join(repository, 'candidate.txt'), 'repaired candidate\n');
+  git(repository, ['add', 'candidate.txt']);
+  git(repository, ['commit', '-m', 'repair rejected candidate']);
+  const repairCommit = git(repository, ['rev-parse', 'HEAD']);
+  const repair = store.createTicket(slug, { title: 'repair rejected candidate', files: ['candidate.txt'] });
+  repair.status = 'done';
+  repair.submission = {
+    commit: repairCommit,
+    integratedAt: new Date().toISOString(),
+    integration: {
+      outcome: 'verified',
+      resultingHead: repairCommit,
+      deliveredFiles: ['candidate.txt'],
+    },
+  };
+  persist(slug, repair);
+
+  const superseded = await tool('supersede_submission').handler({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: repair.ref,
+    reason: 'The integrated repair replaces the oracle-rejected candidate.',
+    reviewedReplacements: [{
+      path: 'candidate.txt',
+      reviewedBy: review.ref,
+      reason: 'The review confirmed the original candidate must be replaced.',
+    }],
+  });
+  assert.equal(superseded.ok, true, superseded.message);
+  const closed = store.getTicket(slug, source.ref);
+  assert.equal(closed.status, 'done');
+  assert.equal(closed.submission.integration.outcome, 'superseded');
+});
+
+test('a rejected oracle defect conclusion marks the bound candidate accepted', () => {
+  assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('rejected'), 'accepted');
+  assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('inconclusive'), 'inconclusive');
 });
 
 test('unbound owner rework still parks the candidate and reopens the ticket', () => {
