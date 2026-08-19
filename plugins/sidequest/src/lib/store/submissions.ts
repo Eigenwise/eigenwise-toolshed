@@ -2209,7 +2209,7 @@ function reworkSubmission(slug?: any, idOrRef?: any, opts?: any) {
   const review = String(opts.review || '').trim();
   const reason = String(opts.reason || '').trim();
   if (!by) throw new Error('rework requires the reviewer or orchestrator identity in by');
-  if (!review) throw new Error('rework requires review evidence');
+  if (!review) throw new Error('rework: "review" is required.');
   if (!reason) throw new Error('rework requires the review rejection reason');
   if (review.length > REJECTION_REVIEW_MAX || reason.length > REJECTION_REASON_MAX) throw new Error('rework review evidence or reason exceeds its maximum length');
   const found = getTicket(slug, idOrRef);

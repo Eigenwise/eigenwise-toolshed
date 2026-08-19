@@ -97,9 +97,11 @@ async function enqueueMutation(board, operation) {
   }
 }
 const ARGUMENT_ALIASES = {
+  add: { story: "storyId" },
   comment: { message: "body", m: "body" },
   link: { type: "verb", target: "to", ref: "from" },
-  story_log: { append: "entry" }
+  story_log: { append: "entry" },
+  unlink: { from: "a", to: "b" }
 };
 const COERCED_PRIORITY = { from: "medium", to: "normal" };
 function editDistance(left, right) {
@@ -142,6 +144,9 @@ function validateToolArguments(tool, rawArgs) {
   if (tool.name === "dispatch") allowed.add("session");
   const properties = tool.inputSchema.properties || {};
   const unknown = Object.keys(args).filter((key) => !allowed.has(key));
+  if (tool.name === "board_config" && unknown.length === 1 && unknown[0] === "action" && args.action === "get") {
+    throw new Error('board_config: "action" is unsupported; call with no arguments to read board settings.');
+  }
   if (unknown.length) {
     const quoted = unknown.map((key) => `"${key}"`).join(", ");
     const accepted = Object.keys(properties).join(", ");
