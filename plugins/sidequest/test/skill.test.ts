@@ -33,7 +33,14 @@ const skill = fs.readFileSync(path.join(__dirname, '..', 'skills', 'sidequest', 
 // SQ-2249 expands the session-load description with the board-versus-inline
 // calibration needed in every listing, so keep the budget binding with modest
 // headroom rather than trimming that contract.
+//
+// Raised 18500 -> 18900 on 2026-08-19, deliberately. SQ-2263 added the
+// capture-identity rule (run the verify-capture wrapper after the final
+// commit; a retyped command is not execution evidence) and landed 266 bytes
+// over a budget that had 15 bytes of headroom. Like SQ-1391's rule, it only
+// works on the surface loaded at the moment of temptation, so it cannot move
+// to references/. 18900 keeps the budget binding.
 test('SKILL.md stays inside its session-load byte budget', () => {
-  assert.ok(Buffer.byteLength(skill, 'utf8') <= 18500,
-    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 18500 — move detail into references/`);
+  assert.ok(Buffer.byteLength(skill, 'utf8') <= 18900,
+    `SKILL.md is ${Buffer.byteLength(skill, 'utf8')} bytes; budget is 18900 — move detail into references/`);
 });
