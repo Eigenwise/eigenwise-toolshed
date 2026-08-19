@@ -88,6 +88,24 @@ function compactIntegrationDelivery(integration: any) {
   return delivery;
 }
 
+async function cleanupDeliveredWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean = false): Promise<void> {
+  try {
+    const dispatch = ticket?.dispatch;
+    if (!dispatch?.worktree || dispatch.sharedTree !== false || dispatch.continuation || store.boardConfig(slug)?.worktreeIsolation === false) return;
+    const tickets = store.worktreeGcTickets().map((candidate: any) => (
+      candidate.ref === ticket.ref && claimWasLive ? { ...candidate, claimLive: true } : candidate
+    ));
+    await worktrees.sweep(projectPath, tickets, {
+      execute: true,
+      currentPath: store.nearestRepoRoot(process.cwd()),
+      integrationTarget: store.integrationTarget(slug),
+      ticketRef: ticket.ref,
+    });
+  } catch (_) {
+    // Delivery has already been durably recorded. SessionStart remains the backstop.
+  }
+}
+
 function objectProperties(value: unknown): Record<string, unknown> {
   return value && typeof value === 'object' ? Object.fromEntries(Object.entries(value)) : {};
 }
@@ -817,7 +835,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'integrate',
-    description: 'Deliver a ref or exact comma group; wave:{dependencies,verification,waveId} assembles it.',
+    description: 'Deliver a ref or exact comma group; wave:{dependencies,verification,waveId} assembles it. After the delivery record is durable, terminal isolated worktrees are reclaimed best-effort; busy or locked worktrees defer to SessionStart.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -866,8 +884,14 @@ const tools: ToolDefinition[] = [
         });
         if (!delivery.ok) return mutationAck(slug, delivery);
         const reason = `Delivered assembled wave ${refs.join(', ')} via ${delivery.integration.mode}.`;
+        const ticketsBeforeClosure = refs.map((ref: string) => store.getTicket(slug, ref));
         const closures = refs.map((ref: string) => store.completeTicketAsControlPlane(slug, ref, { by, reason, purpose: 'integration' }));
         const failedClosure = closures.find((closure: any) => !closure.ok);
+        for (const [index, closure] of closures.entries()) {
+          if (!closure.ok) continue;
+          closeDispatchExecutor(closure.ticket);
+          await cleanupDeliveredWorktree(slug, meta.path, closure.ticket, Boolean(ticketsBeforeClosure[index]?.claim?.by));
+        }
         return mutationAck(slug, failedClosure || closures[0], {
           delivery: compactIntegrationDelivery(delivery.integration),
           verify: delivery.integration.verify,
@@ -921,12 +945,16 @@ const tools: ToolDefinition[] = [
           verificationWaiver: args.verificationWaiver,
         });
         if (!recorded.ok) return mutationAck(slug, recorded);
+        const deliveryTicket = recorded.ticket;
         const closed = store.completeTicketAsControlPlane(slug, args.ref, {
           by,
           reason: args.reason,
           purpose: 'integration',
         });
-        if (closed.ok) closeDispatchExecutor(recorded.ticket);
+        if (closed.ok) {
+          closeDispatchExecutor(recorded.ticket);
+          await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
+        }
         return mutationAck(slug, closed, {
           delivery: compactIntegrationDelivery(recorded.integration),
           verify: recorded.integration.verify,
@@ -966,12 +994,16 @@ const tools: ToolDefinition[] = [
       const reason = usesGit
         ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`
         : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
+      const deliveryTicket = delivery.ticket;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
         purpose: 'integration',
       });
-      if (closed.ok) closeDispatchExecutor(delivery.ticket);
+      if (closed.ok) {
+        closeDispatchExecutor(delivery.ticket);
+        await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
+      }
       return mutationAck(slug, closed, {
         delivery: compactIntegrationDelivery(integration),
         verify: verification.verify,
