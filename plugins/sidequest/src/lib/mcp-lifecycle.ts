@@ -113,6 +113,18 @@ function missingReleaseFragmentMessage(ref: string, fragmentPath: string, plugin
   return store.missingReleaseFragmentMessage(ref, fragmentPath, plugins);
 }
 
+function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
+  const relatedRefs = Array.isArray(ticket.links)
+    ? ticket.links.filter((link: any) => link?.type === 'related').map((link: any) => link.ref)
+    : [];
+  return relatedRefs.flatMap((relatedRef: unknown) => {
+    const source = store.getTicket(slug, relatedRef);
+    if (source?.submission?.review?.outcome !== 'rejected') return [];
+    const fragment = commitScope.ticketReleaseFragment(source.ref);
+    return fragment ? [fragment] : [];
+  });
+}
+
 function combinedRefusal(ticket: any, failures: Array<{ reason: string; message: string }>) {
   const primary = failures[0];
   if (!primary) throw new Error('combined refusal requires at least one failure');
@@ -615,13 +627,17 @@ const tools: ToolDefinition[] = [
           message: `commit: refused ${ticket.ref}; declared paths are outside the repo worktree: ${outsideWorktree.join(', ')}. A different control-plane identity must run \`sidequest update ${ticket.ref} --files <in-repo-paths>\` to drop the stale path. For genuine non-repo output, release and reclassify as non-repo/artifact work; otherwise declare in-repo paths and dispatch again.`,
         });
       }
-      const foreignFragments = commitScope.foreignReleaseFragmentPaths(root, ticket.ref);
+      const foreignFragments = commitScope.foreignReleaseFragmentPaths(
+        root,
+        ticket.ref,
+        rejectedRelatedReleaseFragments(slug, ticket),
+      );
       if (foreignFragments.length) {
         return mutationAck(slug, {
           ok: false,
           ticket,
           reason: 'outside_scope',
-          message: `commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable. Other release fragments: ${foreignFragments.join(', ')}.`,
+          message: `commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${foreignFragments.join(', ')}.`,
         });
       }
       const result = commitScope.commitScoped(root, message, scope);

@@ -208,9 +208,12 @@ function ticketCommitScope(effectiveFiles, declaredFiles, ticketRef) {
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
   return fragment && !(0, import_scope_match.isInScope)(fragment, scope) ? [...scope, fragment] : scope;
 }
-function foreignReleaseFragmentPaths(cwd, ticketRef) {
+function foreignReleaseFragmentPaths(cwd, ticketRef, removableFragments = []) {
   const ownFragment = ticketReleaseFragment(ticketRef);
-  return workingPaths(cwd).filter((file) => file.startsWith(".release/unreleased/") && file.endsWith(".md") && file !== ownFragment);
+  const removable = new Set(
+    Array.isArray(removableFragments) ? removableFragments.filter((fragment) => typeof fragment === "string") : []
+  );
+  return workingPaths(cwd).filter((file) => file.startsWith(".release/unreleased/") && file.endsWith(".md") && file !== ownFragment && !(removable.has(file) && !import_node_fs.default.existsSync(import_node_path.default.join(cwd, file))));
 }
 function unscopedWorkingPaths(cwd, files) {
   return workingPaths(cwd).filter((file) => !(0, import_scope_match.isInScope)(file, files));

@@ -189,12 +189,18 @@ export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknow
   return fragment && !isInScope(fragment, scope) ? [...scope, fragment] : scope;
 }
 
-export function foreignReleaseFragmentPaths(cwd: string, ticketRef: unknown): string[] {
+export function foreignReleaseFragmentPaths(cwd: string, ticketRef: unknown, removableFragments: unknown = []): string[] {
   const ownFragment = ticketReleaseFragment(ticketRef);
+  const removable = new Set(
+    Array.isArray(removableFragments)
+      ? removableFragments.filter((fragment): fragment is string => typeof fragment === 'string')
+      : [],
+  );
   return workingPaths(cwd).filter((file) => (
     file.startsWith('.release/unreleased/')
     && file.endsWith('.md')
     && file !== ownFragment
+    && !(removable.has(file) && !fs.existsSync(path.join(cwd, file)))
   ));
 }
 
