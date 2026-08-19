@@ -3110,7 +3110,7 @@ test('SQ-2188: grooming abandons a candidate that never landed and refuses to ab
     // stranded candidate is refused for divergence before reachability is ever checked, and a
     // candidate that did land can be refused for reasons abandonment would not fix. SQ-2153 was
     // refused for a pending candidate review and got told to abandon a submission that had shipped.
-    const commitScope = require('../src/lib/commit-scope.js');
+    const commitScope = require('../lib/commit-scope.js');
     assert.strictEqual(
       commitScope.submissionCommitReachedIntegrationBranch(PROJECT_DIR, store.getTicket(slug, landedTicket.ref).submission, integrationBranch),
       true,
