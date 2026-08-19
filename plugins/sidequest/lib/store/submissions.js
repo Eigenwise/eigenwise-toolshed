@@ -19,6 +19,7 @@ function createSubmissions(dependencies) {
   const REJECTION_REVIEW_MAX = 1e3;
   const REJECTION_REASON_MAX = 4e3;
   const WORKING_TREE_DELIVERY_METHODS = /* @__PURE__ */ new Set(["reset", "working-tree", "manual"]);
+  const INTEGRATION_TARGET_DIRTY_PATH_LIMIT = 8;
   function sourceRevisionMetadata(revision) {
     if (!revision || typeof revision !== "object") return null;
     const source = String(revision.source || "").trim();
@@ -473,7 +474,7 @@ Expires: ${checkpoint.expiresAt}`;
   }
   function integrationVerifyLogPath(slug, ticket) {
     const safeRef = String(ticket.ref || ticket.id || "submission").replace(/[^a-zA-Z0-9._-]/g, "_");
-    const dir = path.join(projectDir(slug), "verification", safeRef);
+    const dir = String(dispatchState(ticket)?.evidenceDirectory || "").trim() || path.join(projectDir(slug), "verification", safeRef);
     ensureDir(dir);
     return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}.log`);
   }
@@ -686,6 +687,16 @@ ${verify.outputTail}` : null
   }
   function integrationTargetCheckoutState(repo) {
     return integrationGit(repo, ["status", "--porcelain=v2", "--untracked-files=all"]).split(/\r?\n/).filter(Boolean);
+  }
+  function integrationTargetCheckoutPath(entry) {
+    if (/^[?!] /.test(entry)) return entry.slice(2);
+    const fieldsBeforePath = entry.startsWith("1 ") ? 8 : entry.startsWith("2 ") ? 9 : entry.startsWith("u ") ? 10 : 0;
+    return fieldsBeforePath ? entry.split(" ", fieldsBeforePath + 1)[fieldsBeforePath]?.split("	")[0] || entry : entry;
+  }
+  function integrationTargetDirtyMessage(mode, checkoutState) {
+    const paths = checkoutState.slice(0, INTEGRATION_TARGET_DIRTY_PATH_LIMIT).map(integrationTargetCheckoutPath);
+    const remaining = checkoutState.length - paths.length;
+    return `${mode} refused; integration target has pending checkout state: ${paths.join(", ")}${remaining > 0 ? `, and ${remaining} more` : ""}.`;
   }
   function integrationOperationResidue(repo) {
     return ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD"].filter((reference) => {
@@ -1137,7 +1148,7 @@ ${verify.outputTail}` : null
           reason: "integration_target_dirty",
           tickets: assembled.tickets,
           checkoutState,
-          message: `${normalizeDeliveryMode(opts.mode)} refused; integration target has pending checkout state.`
+          message: integrationTargetDirtyMessage(normalizeDeliveryMode(opts.mode), checkoutState)
         };
       }
       const mode = normalizeDeliveryMode(opts.mode);
@@ -1249,7 +1260,7 @@ ${verify.outputTail}` : null
         reason: "integration_target_dirty",
         ticket,
         checkoutState,
-        message: `${mode} refused; integration target has pending checkout state.`
+        message: integrationTargetDirtyMessage(mode, checkoutState)
       };
     }
     const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);

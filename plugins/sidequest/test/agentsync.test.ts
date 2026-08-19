@@ -114,6 +114,18 @@ test('executor briefings require Board MCP reconnect and re-dispatch when unavai
   assert.doesNotMatch(briefing, /version-pinned CLI fallback/);
 });
 
+test('executor briefings name the board-owned verification evidence directory', () => {
+  const directory = path.join(process.env.SIDEQUEST_HOME!, 'projects', 'briefing-fixture', 'verification', 'SQ-EVIDENCE');
+  const briefing = agentsync.renderTicketBriefing({
+    ref: 'SQ-EVIDENCE', model: 'sonnet', effort: 'medium', dispatchExecutor: 'sidequest-exec-medium', category: {},
+    dispatch: { evidenceDirectory: directory },
+  }, 'evidence-directory-token');
+
+  assert.ok(briefing.includes(directory));
+  assert.match(briefing, /excluded from ticket scope and delivery/);
+  assert.match(briefing, /Do not write verification evidence anywhere in the repository worktree or integration target/);
+});
+
 test('legacy manual verifier prefixes cannot reach verify capture', () => {
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-LEGACY-MANUAL',

@@ -697,6 +697,12 @@ function capturedVerifyCommand(verify?: any) {
   return `node "${captureScript}" --base64 ${encoded}`;
 }
 
+function ticketEvidenceGuidance(ticket?: any) {
+  const directory = String(ticket?.dispatch?.evidenceDirectory || '').trim();
+  if (!directory) return null;
+  return `Verification evidence: write screenshots, HTML dumps, and probe output to ${directory}. It is board-owned and excluded from ticket scope and delivery. Reference it from the ticket thread or submission report. Do not write verification evidence anywhere in the repository worktree or integration target.`;
+}
+
 function dispatchUncertaintyPacket(ticket?: any, slug?: any) {
   const warnings = store.dispatchUncertaintyWarnings(ticket, slug);
   if (!warnings.length) return null;
@@ -792,6 +798,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
         ? `${verifierPrefix}: ${verifierKind}. Command: ${requirement.command}`
         : `${verifierPrefix}: ${verifierKind}. Evidence contract: ${verifierEvidence}`;
   const verifierCommand = requirement.command || '';
+  const evidenceGuidance = ticketEvidenceGuidance(ticket);
   const highStakes = ticket?.highStakes
     ? [
       'High-stakes verification:',
@@ -811,6 +818,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
     verifierCommand
       ? 'Run it through ' + capturedVerifyCommand(verifierCommand) + ' in the FOREGROUND with an explicit generous timeout of up to 600000 ms; this is the pinned verifier. A backgrounded verify\'s completion does not wake you, so going idle on it parks the claim indefinitely. If it genuinely exceeds the 10-minute Bash ceiling, use bounded foreground until-loops instead of backgrounding or going idle; post [sidequest:verify-start] before it only for an expected no-op, and always post [sidequest:verify-complete] with status first after it exits. Executors may report evidence only; they cannot replace, skip, or weaken this verifier.'
       : 'Record evidence for the pinned verifier. Executors may not replace, skip, or weaken it; skipping requires an authorized bounded waiver recorded as a Diagnostic.',
+    evidenceGuidance || '',
     'Execution survival: Budget tool calls and run the declared verify command early, rather than only at the end. If the budget nears exhaustion after partly completing the contract, commit and submit the verified portion with evidence and plainly name what remains: a partial submission with proof beats a dead run. Never leave verified work uncommitted. Board MCP is the executor lifecycle authority. If its transport is unavailable, do not use the Sidequest CLI or raw Agent as a fallback: reload or reconnect Sidequest, then re-dispatch.',
     'If Sidequest itself misbehaves, such as a refusal that contradicts observed state, a dead retrieval handle, a guard loop, or a reproducible tool error, report it to the user with the reproducing evidence and treat it as an upstream defect. Executors also put that evidence in a ticket comment so the orchestrator sees it. Do not encode a workaround in project rules, hooks, or memory; any unavoidable stopgap must be marked temporary and name the defect it awaits.',
     ...(highStakes.length ? [highStakes.join('\n')] : []),

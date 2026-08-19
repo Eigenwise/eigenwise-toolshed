@@ -66,6 +66,16 @@ function createDispatch(dependencies) {
   function newDispatchTokenFile() {
     return path.join(homeRoot(), "dispatch-tokens", `${crypto.randomUUID()}.token`);
   }
+  function ticketEvidenceDirectory(slug, ref, projectPath) {
+    const safeSlug = String(slug || "project").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const safeRef = String(ref || "ticket").replace(/[^a-zA-Z0-9._-]/g, "_");
+    const directory = path.resolve(homeRoot(), "projects", safeSlug, "verification", safeRef);
+    const repository = String(projectPath || "").trim();
+    if (!repository) return directory;
+    const relative = path.relative(path.resolve(repository), directory);
+    const insideRepository = relative === "" || !relative.startsWith(`..${path.sep}`) && relative !== ".." && !path.isAbsolute(relative);
+    return insideRepository ? path.join(path.dirname(path.resolve(repository)), ".sidequest-verification", safeSlug, safeRef) : directory;
+  }
   function writeDispatchTokenFile(ticket) {
     const file = dispatchTokenFile(ticket);
     if (!file) throw new Error("dispatch token file is unavailable");
@@ -1135,6 +1145,8 @@ function createDispatch(dependencies) {
       const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(readMeta(slug)?.path || "", integrationTargetState.branch) : null;
       delete t.storyContractDrift;
       const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
+      const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);
+      fs.mkdirSync(evidenceDirectory, { recursive: true, mode: 448 });
       const baseCommit = reviewTargetState?.candidate.source === "git" ? reviewTargetState.candidate.value : integrationTargetState ? integrationTargetCommit(readMeta(slug)?.path || "", integrationTargetState) : commitScope.headCommit(readMeta(slug)?.path || "");
       const dispatchBaseline = dispatchBaselineForProject(slug, t, now, baseCommit, nonRepoOutput);
       t.dispatch = {
@@ -1145,6 +1157,7 @@ function createDispatch(dependencies) {
           verificationRequirement2
         ),
         verificationRequirement: verificationRequirement2,
+        evidenceDirectory,
         sessionId: opts.sessionId ? String(opts.sessionId) : null,
         preparedBy: dispatchPreparationAttribution(opts),
         ...preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {},

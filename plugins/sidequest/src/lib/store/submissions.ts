@@ -23,6 +23,7 @@ const CHECKPOINT_VERIFY_EXCERPT_MAX = 500;
 const REJECTION_REVIEW_MAX = 1000;
 const REJECTION_REASON_MAX = 4000;
 const WORKING_TREE_DELIVERY_METHODS = new Set(['reset', 'working-tree', 'manual']);
+const INTEGRATION_TARGET_DIRTY_PATH_LIMIT = 8;
 
 type WaveGate = {
   state?: string;
@@ -589,7 +590,7 @@ function integrationConflictMessage(error: any, conflictedPaths: string[]) {
 
 function integrationVerifyLogPath(slug: any, ticket: any) {
   const safeRef = String(ticket.ref || ticket.id || 'submission').replace(/[^a-zA-Z0-9._-]/g, '_');
-  const dir = path.join(projectDir(slug), 'verification', safeRef);
+  const dir = String(dispatchState(ticket)?.evidenceDirectory || '').trim() || path.join(projectDir(slug), 'verification', safeRef);
   ensureDir(dir);
   return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString('hex')}.log`);
 }
@@ -816,6 +817,18 @@ function deliveryRecordFailure(ticket: any, delivery: any, error: any) {
 
 function integrationTargetCheckoutState(repo: string) {
   return integrationGit(repo, ['status', '--porcelain=v2', '--untracked-files=all']).split(/\r?\n/).filter(Boolean);
+}
+
+function integrationTargetCheckoutPath(entry: string) {
+  if (/^[?!] /.test(entry)) return entry.slice(2);
+  const fieldsBeforePath = entry.startsWith('1 ') ? 8 : entry.startsWith('2 ') ? 9 : entry.startsWith('u ') ? 10 : 0;
+  return fieldsBeforePath ? entry.split(' ', fieldsBeforePath + 1)[fieldsBeforePath]?.split('\t')[0] || entry : entry;
+}
+
+function integrationTargetDirtyMessage(mode: string, checkoutState: string[]) {
+  const paths = checkoutState.slice(0, INTEGRATION_TARGET_DIRTY_PATH_LIMIT).map(integrationTargetCheckoutPath);
+  const remaining = checkoutState.length - paths.length;
+  return `${mode} refused; integration target has pending checkout state: ${paths.join(', ')}${remaining > 0 ? `, and ${remaining} more` : ''}.`;
 }
 
 function integrationOperationResidue(repo: string) {
@@ -1307,7 +1320,7 @@ function integrateSubmissionWave(slug?: string, refs?: string | readonly string[
         reason: 'integration_target_dirty',
         tickets: assembled.tickets,
         checkoutState,
-        message: `${normalizeDeliveryMode(opts.mode)} refused; integration target has pending checkout state.`,
+        message: integrationTargetDirtyMessage(normalizeDeliveryMode(opts.mode), checkoutState),
       };
     }
     const mode = normalizeDeliveryMode(opts.mode);
@@ -1420,7 +1433,7 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
       reason: 'integration_target_dirty',
       ticket,
       checkoutState,
-      message: `${mode} refused; integration target has pending checkout state.`,
+      message: integrationTargetDirtyMessage(mode, checkoutState),
     };
   }
   const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
