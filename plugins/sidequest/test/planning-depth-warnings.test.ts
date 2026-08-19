@@ -20,7 +20,11 @@ const CLAUDE_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-planning-warnings-
 fs.mkdirSync(path.join(CLAUDE_HOME, 'plugins'), { recursive: true });
 fs.writeFileSync(path.join(CLAUDE_HOME, 'plugins', 'installed_plugins.json'), JSON.stringify({
   plugins: {
-    'sidequest@eigenwise-toolshed': [{ scope: 'user', installPath: path.join(__dirname, '..') }],
+    'sidequest@eigenwise-toolshed': [{
+      scope: 'user',
+      installPath: path.join(__dirname, '..'),
+      version: JSON.parse(fs.readFileSync(path.join(__dirname, '..', '.claude-plugin', 'plugin.json'), 'utf8')).version,
+    }],
   },
 }));
 process.env.SIDEQUEST_CLAUDE_HOME = CLAUDE_HOME;

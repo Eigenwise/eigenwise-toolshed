@@ -140,23 +140,48 @@ function normalizeDir(value) {
   if (typeof value !== "string" || !value.trim()) return null;
   return import_node_path.default.resolve(value).replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
-function installIdentity(installPath) {
+function jsonRecord(value) {
+  return value && typeof value === "object" && !Array.isArray(value) ? value : null;
+}
+function canonicalJson(value) {
+  if (Array.isArray(value)) return value.map(canonicalJson);
+  const record = jsonRecord(value);
+  if (!record) return value;
+  return Object.fromEntries(Object.keys(record).sort().map((key) => [key, canonicalJson(record[key])]));
+}
+function canonicalJsonFile(filePath) {
+  let content;
   try {
-    const manifest = readFileSyncWithRetry(import_node_path.default.join(installPath, ".mcp.json"));
-    return (0, import_node_crypto.createHash)("sha256").update(manifest).digest("hex");
-  } catch (_) {
-    return null;
+    content = readFileSyncWithRetry(filePath, "utf8");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not read ${filePath}: ${detail}`);
+  }
+  try {
+    return canonicalJson(JSON.parse(content));
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(`could not parse ${filePath}: ${detail}`);
   }
 }
-function installAdvertisesBoardMcp(installPath) {
-  if (typeof installPath !== "string" || !installPath) return false;
-  let manifest;
+function installRuntimeSnapshot(installPath, version) {
+  if (typeof installPath !== "string" || !installPath.trim()) return { detail: "the registry entry has no installPath" };
+  if (typeof version !== "string" || !version.trim()) return { detail: `the registry entry for ${installPath} has no plugin version` };
   try {
-    manifest = JSON.parse(readFileSyncWithRetry(import_node_path.default.join(installPath, ".mcp.json"), "utf8"));
-  } catch (_) {
-    return false;
+    const mcpManifest = canonicalJsonFile(import_node_path.default.join(installPath, ".mcp.json"));
+    const hooks = canonicalJsonFile(import_node_path.default.join(installPath, "hooks", "hooks.json"));
+    const manifest = jsonRecord(mcpManifest);
+    const mcpServers = jsonRecord(manifest?.mcpServers);
+    const identity = (0, import_node_crypto.createHash)("sha256").update(JSON.stringify({
+      schemaVersion: 2,
+      plugin: { id: PLUGIN_ID, version: version.trim() },
+      mcpManifest,
+      hooks
+    })).digest("hex");
+    return { identity, advertisesBoardMcp: Boolean(mcpServers && Object.keys(mcpServers).length) };
+  } catch (error) {
+    return { detail: error instanceof Error ? error.message : String(error) };
   }
-  return Boolean(manifest && manifest.mcpServers && typeof manifest.mcpServers === "object" && Object.keys(manifest.mcpServers).length > 0);
 }
 function checkSidequestInstall(projectPath, opts = {}) {
   const claudeHome = claudeHomeDir(opts);
@@ -179,12 +204,21 @@ function checkSidequestInstall(projectPath, opts = {}) {
   });
   if (!matching.length) return { ok: false, reason: "missing", registryPath };
   for (const install of matching) {
-    const identity = typeof install.installPath === "string" ? installIdentity(install.installPath) : null;
-    if (identity && installAdvertisesBoardMcp(install.installPath)) {
-      return { ok: true, registryPath, installPath: install.installPath, identity };
+    const snapshot = installRuntimeSnapshot(install.installPath, install.version);
+    if ("detail" in snapshot) {
+      return {
+        ok: false,
+        reason: "runtime_unreadable",
+        registryPath,
+        ...typeof install.installPath === "string" ? { installPath: install.installPath } : {},
+        detail: snapshot.detail
+      };
+    }
+    if (snapshot.advertisesBoardMcp) {
+      return { ok: true, registryPath, installPath: install.installPath, identity: snapshot.identity };
     }
   }
-  return { ok: false, reason: "stale", registryPath };
+  return { ok: false, reason: "stale", registryPath, detail: "the .mcp.json snapshot declares no MCP server" };
 }
 function repairGuidance() {
   return `Run \`${REPAIR_COMMAND}\` from / for the target project, then start a new session or run \`/reload-plugins\` before dispatching again.`;
@@ -193,10 +227,13 @@ function installRefusalMessage(check, projectPath) {
   if (check.reason === "registry_unreadable") {
     return `Dispatch refused: could not read Claude Code's plugin registry at ${check.registryPath} (${check.detail}). Fix or remove the corrupt registry, confirm sidequest@eigenwise-toolshed is installed for ${projectPath}, then dispatch again.`;
   }
-  if (check.reason === "stale") {
-    return `Dispatch refused: the sidequest@eigenwise-toolshed install registered for ${projectPath} (checked ${check.registryPath}) is missing or no longer declares the board MCP server. ${repairGuidance()}`;
+  if (check.reason === "runtime_unreadable") {
+    return `Dispatch refused: could not compute the lifecycle-compatible Sidequest install identity for ${check.installPath || projectPath} (${check.detail}). Prepared dispatch compatibility requires the registry plugin version, .mcp.json, and hooks/hooks.json. ${repairGuidance()}`;
   }
-  return `Dispatch refused: sidequest@eigenwise-toolshed has no install registered for ${projectPath} in ${check.registryPath}. A \`.claude/settings.json\` enabledPlugins entry is not proof of an install. ${repairGuidance()}`;
+  if (check.reason === "stale") {
+    return `Dispatch refused: the sidequest@eigenwise-toolshed install registered for ${projectPath} (checked ${check.registryPath}) does not declare a board MCP server, so prepared dispatch compatibility cannot be proven. ${repairGuidance()}`;
+  }
+  return `Dispatch refused: sidequest@eigenwise-toolshed has no install with a lifecycle-compatible runtime registered for ${projectPath} in ${check.registryPath}. A \`.claude/settings.json\` enabledPlugins entry is not proof of an install. ${repairGuidance()}`;
 }
 function assertSidequestInstall(projectPath, opts = {}) {
   const check = checkSidequestInstall(projectPath, opts);

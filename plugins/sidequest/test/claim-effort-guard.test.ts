@@ -51,9 +51,11 @@ function writeRegistry(installs?: any) {
 
 function fakeInstall(withBoardMcp = true) {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-claim-effort-install-'));
-  if (withBoardMcp) {
-    fs.writeFileSync(path.join(dir, '.mcp.json'), JSON.stringify({ mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } } }));
-  }
+  fs.mkdirSync(path.join(dir, 'hooks'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
+  fs.writeFileSync(path.join(dir, '.mcp.json'), JSON.stringify({
+    mcpServers: withBoardMcp ? { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } } : {},
+  }));
   return dir;
 }
 
