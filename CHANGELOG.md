@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.489.0 (2026-08-19)
+
+### sidequest 5.0.4 → 5.0.5
+
+#### Fixes
+
+- Record reset and working-tree deliveries (SQ-2254)
+  Record pinned candidate delivery when integration leaves verified content in the working tree.
+- Repair chains can take over superseded release fragments (SQ-2257)
+  Repair tickets can replace a rejected candidate's release fragment without shipping duplicates.
+- Persist Sidequest non-Git revision adapters (SQ-2264)
+- Detect prepared runtime drift (SQ-2265)
+  Prepared dispatches now refuse reuse when the installed Sidequest version, MCP configuration, or hook configuration changed.
+- Remove unused inline eligibility decision (SQ-2266)
+  Remove the unused kernel inline-eligibility export so the orchestrator briefing remains the single authority for inline work.
+- Keep manual verification contracts out of shells (SQ-2267)
+  Manual verification prefixes now stay evidence contracts in legacy ticket briefings and submission checks.
+
 ## v3.488.0 (2026-08-19)
 
 ### sidequest 5.0.3 → 5.0.4
