@@ -26,7 +26,6 @@ __export(kernel_exports, {
   captureVerificationResult: () => import_verification.captureVerificationResult,
   createWorktreeLease: () => import_worktree.createWorktreeLease,
   dependentReleaseDecision: () => import_wave.dependentReleaseDecision,
-  inlineEligibility: () => inlineEligibility,
   isCanonicalRegisteredWorktree: () => import_worktree.isCanonicalRegisteredWorktree,
   openWave: () => import_wave.openWave,
   prepareAttempt: () => prepareAttempt,
@@ -96,18 +95,6 @@ function reduceAttempt(attempt, events) {
 function attemptDiagnostic(result) {
   return "code" in result ? result : null;
 }
-function inlineEligibility(input) {
-  const reasons = [];
-  if (input.attempt) reasons.push("attempt_exists");
-  if ((input.namedFiles || []).length !== 1 && !String(input.prompt || "").trim()) reasons.push("single_named_target_required");
-  if (!String(input.requestedResult || "").trim()) reasons.push("explicit_result_required");
-  if (input.unresolvedDesign) reasons.push("unresolved_design");
-  if (input.dependencySequencing) reasons.push("dependency_sequence");
-  if (input.destructive) reasons.push("destructive_operation");
-  if (input.highStakes) reasons.push("high_stakes_operation");
-  if (input.scopeExpanded) reasons.push("scope_expansion");
-  return Object.freeze({ eligible: reasons.length === 0, reasons: Object.freeze(reasons) });
-}
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   ATTEMPT_TRANSITIONS,
@@ -118,7 +105,6 @@ function inlineEligibility(input) {
   captureVerificationResult,
   createWorktreeLease,
   dependentReleaseDecision,
-  inlineEligibility,
   isCanonicalRegisteredWorktree,
   openWave,
   prepareAttempt,

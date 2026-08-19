@@ -14,7 +14,6 @@ export type SourceRevision = Readonly<{ source: string; value: string; observedA
 export type Baseline = Readonly<{ revision: SourceRevision; purpose: 'dispatch' | 'wave' | 'submission' }>;
 export type Authority = Readonly<{ actor: string; operation: string; sessionId?: string | null }>;
 export type Diagnostic = Readonly<{ code: string; message: string; actionable: boolean }>;
-export type InlineEligibility = Readonly<{ eligible: boolean; reasons: readonly string[] }>;
 export type PreparedCompatibility = Readonly<{ pluginInstall: string; identity: string }>;
 export type AttemptState = 'prepared' | 'launched' | 'bound' | 'claimed' | 'working' | 'verified' | 'submitted' | 'assembled' | 'integrated' | 'closed' | 'released' | 'invalidated';
 export type AttemptEvent = 'launch' | 'bind' | 'bind_claim_token' | 'claim' | 'claim_direct' | 'start_work' | 'verify' | 'submit' | 'assemble' | 'integrate' | 'close' | 'release' | 'invalidate' | 'refresh';
@@ -58,18 +57,6 @@ export function reduceAttempt(attempt: Attempt, events: readonly AttemptEvent[])
 
 export function attemptDiagnostic(result: Attempt | Diagnostic): Diagnostic | null {
   return 'code' in result ? result : null;
-}
-export function inlineEligibility(input: Readonly<{ namedFiles?: readonly string[]; prompt?: string; requestedResult?: string; unresolvedDesign?: boolean; dependencySequencing?: boolean; destructive?: boolean; highStakes?: boolean; scopeExpanded?: boolean; attempt?: Attempt | null }>): InlineEligibility {
-  const reasons: string[] = [];
-  if (input.attempt) reasons.push('attempt_exists');
-  if ((input.namedFiles || []).length !== 1 && !String(input.prompt || '').trim()) reasons.push('single_named_target_required');
-  if (!String(input.requestedResult || '').trim()) reasons.push('explicit_result_required');
-  if (input.unresolvedDesign) reasons.push('unresolved_design');
-  if (input.dependencySequencing) reasons.push('dependency_sequence');
-  if (input.destructive) reasons.push('destructive_operation');
-  if (input.highStakes) reasons.push('high_stakes_operation');
-  if (input.scopeExpanded) reasons.push('scope_expansion');
-  return Object.freeze({ eligible: reasons.length === 0, reasons: Object.freeze(reasons) });
 }
 export type RevisionPort = Readonly<{ observe(source: string): SourceRevision | null }>;
 export type GitPort = Readonly<{ revision(ref: string): SourceRevision | null; isAncestor(older: SourceRevision, newer: SourceRevision): boolean }>;
