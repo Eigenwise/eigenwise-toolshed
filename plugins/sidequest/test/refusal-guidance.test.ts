@@ -54,7 +54,8 @@ test('bound-candidate guidance sends a failed review to the oracle instead of a 
   const message = claimRefusalMessage('candidate_review_locked', 'SQ-42');
   assert.match(message, /bound to a review-audit ticket/i);
   assert.match(message, /--kind oracle/);
-  assert.match(message, /no route permanently rejects a bound candidate/i);
+  assert.match(message, /oracle accepts that defect conclusion/i);
+  assert.match(message, /integrated repair can supersede/i);
   assert.doesNotMatch(message, /sidequest rework/i);
 });
 

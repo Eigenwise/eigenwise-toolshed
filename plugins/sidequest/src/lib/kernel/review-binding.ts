@@ -1,13 +1,15 @@
 'use strict';
 
 export type ReviewCandidate = Readonly<{ source: string; value: string; observedAt?: string }>;
+export type ReviewOutcome = 'planned' | 'accepted' | 'rejected' | 'inconclusive';
+export type OracleVerdictOutcome = 'accepted' | 'rejected' | 'inconclusive';
 
 export type ReviewMirror = Readonly<{
   ticketId?: string;
   ref?: string;
   candidate?: ReviewCandidate;
   createdAt?: string;
-  outcome?: string;
+  outcome?: ReviewOutcome;
 }>;
 
 // Which half of the binding survived. A candidate written before this store
@@ -166,6 +168,12 @@ export function reviewRelationRef(relation?: ReviewRelation | null): string {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || 'a candidate review';
 }
 
+export function reviewOutcomeFromOracleVerdict(outcome: OracleVerdictOutcome): ReviewOutcome {
+  if (outcome === 'accepted') return 'rejected';
+  if (outcome === 'rejected') return 'accepted';
+  return 'inconclusive';
+}
+
 export function reviewRelationOutcome(relation?: ReviewRelation | null): string {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || 'planned');
 }
@@ -175,5 +183,5 @@ export function reviewLockMessage(operation: string, ticket: any, relation: Revi
   return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)}`
     + ' and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity.'
     + ' A failed review records its evidence on the review ticket and releases it for an external oracle;'
-    + ' no route permanently rejects a bound candidate.';
+    + ' an oracle-confirmed defect records the candidate rejection, and only an integrated repair may supersede it.';
 }

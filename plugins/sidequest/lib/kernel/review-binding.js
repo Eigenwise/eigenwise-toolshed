@@ -22,6 +22,7 @@ __export(review_binding_exports, {
   isReviewCommit: () => isReviewCommit,
   reviewCandidateFromSubmission: () => reviewCandidateFromSubmission,
   reviewLockMessage: () => reviewLockMessage,
+  reviewOutcomeFromOracleVerdict: () => reviewOutcomeFromOracleVerdict,
   reviewProvenance: () => reviewProvenance,
   reviewRelationFor: () => reviewRelationFor,
   reviewRelationOutcome: () => reviewRelationOutcome,
@@ -122,12 +123,17 @@ function reviewProvenance(sourceTicket, reviewTicket) {
 function reviewRelationRef(relation) {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || "a candidate review";
 }
+function reviewOutcomeFromOracleVerdict(outcome) {
+  if (outcome === "accepted") return "rejected";
+  if (outcome === "rejected") return "accepted";
+  return "inconclusive";
+}
 function reviewRelationOutcome(relation) {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || "planned");
 }
 function reviewLockMessage(operation, ticket, relation) {
   const candidate = relation.candidate?.value || "its candidate";
-  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A failed review records its evidence on the review ticket and releases it for an external oracle; no route permanently rejects a bound candidate.`;
+  return `${operation}: refused ${ticket?.ref}; candidate ${candidate} is bound to ${reviewRelationRef(relation)} and cannot be changed. Repair requires a fresh ticket, attempt, candidate, and review identity. A failed review records its evidence on the review ticket and releases it for an external oracle; an oracle-confirmed defect records the candidate rejection, and only an integrated repair may supersede it.`;
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
@@ -135,6 +141,7 @@ function reviewLockMessage(operation, ticket, relation) {
   isReviewCommit,
   reviewCandidateFromSubmission,
   reviewLockMessage,
+  reviewOutcomeFromOracleVerdict,
   reviewProvenance,
   reviewRelationFor,
   reviewRelationOutcome,

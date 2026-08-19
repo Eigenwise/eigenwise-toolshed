@@ -24,7 +24,7 @@ this file only covers what the schema has no way to say.
 - **`groomClose`**: one tool, three purposes, each with a different gate. `deliveryCommit` closes it as a
   delivery and the commit must already be reachable from the integration branch. `integration: true` closes
   it as an integration. Neither of those closes it as grooming. `reason` is required in all three.
-- **`supersede_submission`**: `supersededBy` is the repair ticket's ref, not a commit.
+- **`supersede_submission`**: `supersededBy` is the repair ticket's ref, not a commit. A bound candidate stays locked until its review ticket has an oracle verdict. When that verdict accepts the recorded defect conclusion, Sidequest marks the candidate rejected on both binding halves; after a fresh repair integrates, `supersede_submission` can close the rejected source submission.
 
 ## Synonyms the validator accepts
 

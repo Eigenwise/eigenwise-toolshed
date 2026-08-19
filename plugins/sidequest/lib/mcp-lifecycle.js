@@ -592,7 +592,7 @@ const tools = [
   },
   {
     name: "rework",
-    description: "Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Report a failed review as evidence on the review ticket and release it with kind oracle; repair is a fresh ticket, dispatch, commit, review, and candidate.",
+    description: "Reject an unbound submission for repair; preserve its candidate and evidence until a replacement submits. Only the submitted candidate owner can reject it. A candidate bound to a review is locked: this call refuses without writing, whatever by or reviewRef says. Record a failed review as evidence on the review ticket and release it with kind oracle. When that oracle accepts the defect conclusion, Sidequest records the bound candidate as rejected; only an integrated repair can then supersede it.",
     inputSchema: {
       type: "object",
       properties: {

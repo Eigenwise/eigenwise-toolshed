@@ -293,13 +293,15 @@ live dispatch record: the source's `submitted` attempt for that exact commit and
 A missing identity on either side, the same agent id on both, or a later prepared dispatch leaves integration
 blocked with `candidate_review_required`.
 
-No route rejects a bound candidate. `rework`, `recordSubmissionRejection`, raw MCP `rework`, CLI `rework`, and
+No caller-controlled route rejects a bound candidate. `rework`, `recordSubmissionRejection`, raw MCP `rework`, CLI `rework`, and
 reconciliation of a matching pending rejection all return one pre-write `candidate_review_locked` refusal,
 whatever `by` or `reviewRef` claims, because MCP hands a handler nothing but caller-supplied JSON and no
 argument can prove an external release principal. A review that finds a defect records its evidence on the
-review ticket and releases that review with `kind=oracle`; the source submission and both halves of the
-binding stay byte-identical, integration stays blocked, and repair is a fresh ticket, dispatch, claim,
-commit, review, and candidate. `rework` still bounces an UNBOUND candidate back to `todo` for its owner.
+review ticket and releases that review with `kind=oracle`. When the oracle accepts the defect conclusion,
+Sidequest records `rejected` on both binding halves; if it rejects that conclusion, it records `accepted`.
+The source stays pending until a fresh repair is dispatched, reviewed, and integrated, then
+`supersede_submission` closes the oracle-rejected source against that repair. `rework` still bounces an
+UNBOUND candidate back to `todo` for its owner.
 
 ## Natural orchestrator checkpoints
 
