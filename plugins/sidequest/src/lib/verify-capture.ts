@@ -1,207 +1,31 @@
 'use strict';
 
-const fs = require('node:fs');
-const os = require('node:os');
-const path = require('node:path');
-const { randomUUID } = require('node:crypto');
-const { spawn } = require('node:child_process');
-import type { WriteStream } from 'node:fs';
+import type { VerificationResult } from './kernel/verification.js';
 
-type VerifyStatus = 'passed' | 'failed-suite' | 'could-not-run';
+const { runProcessVerification, shellCommand } = require('./ports/process.js') as typeof import('./ports/process.js');
 
-type VerifyCapture = {
-  status: VerifyStatus;
-  exitCode: number;
-  logPath: string;
-  reason?: string;
-};
+type VerifyCapture = VerificationResult & Readonly<{ exitCode: number | null; reason?: string }>;
 
-type ChildOutcome =
-  | { kind: 'closed'; code: number | null }
-  | { kind: 'error'; error: Error };
-
-type TimeoutOutcome = ChildOutcome | { kind: 'timed-out' };
-
-const DEFAULT_VERIFY_TIMEOUT_MS = 10 * 60 * 1_000;
-const TERMINATION_GRACE_MS = 1_000;
-const COMMAND_NOT_FOUND_EXIT_CODES = new Set([127, 9009]);
-
-function shellCommand(scriptPath: string, platform = process.platform) {
-  if (platform === 'win32') {
-    return {
-      executable: process.env.ComSpec || 'cmd.exe',
-      arguments: ['/d', '/s', '/c', scriptPath],
-    };
-  }
-  return {
-    executable: process.env.SHELL || '/bin/sh',
-    arguments: [scriptPath],
-  };
+function captureRequirement(command: string) {
+  return Object.freeze({ kind: 'command' as const, command, evidenceContract: 'command output' });
 }
 
-function shellScript(command: string, platform = process.platform) {
-  if (platform === 'win32') {
-    return [
-      '@echo off',
-      `"%ComSpec%" /d /s /c "${command}"`,
-      'set "sidequestExitCode=%ERRORLEVEL%"',
-      'echo __SIDEQUEST_VERIFY_EXIT__=%sidequestExitCode%',
-      'exit /b %sidequestExitCode%',
-      '',
-    ].join('\r\n');
-  }
-  return `(
-${command}
-)
-sidequest_exit_code=$?
-printf '\\n__SIDEQUEST_VERIFY_EXIT__=%s\\n' "$sidequest_exit_code"
-exit "$sidequest_exit_code"
-`;
-}
-
-function createShellScript(command: string) {
-  const extension = process.platform === 'win32' ? '.cmd' : '.sh';
-  const scriptPath = path.join(os.tmpdir(), `sidequest-verify-${process.pid}-${randomUUID()}${extension}`);
-  fs.writeFileSync(scriptPath, shellScript(command), { encoding: 'utf8', flag: 'wx', mode: 0o700 });
-  return scriptPath;
-}
-
-function markerExitCode(logPath: string) {
-  const output = fs.readFileSync(logPath, 'utf8');
-  const matches = [...output.matchAll(/^__SIDEQUEST_VERIFY_EXIT__=(\d+)$/gm)];
-  const match = matches.at(-1);
-  return match ? Number(match[1]) : null;
-}
-
-function commandNotFound(logPath: string, exitCode: number) {
-  if (COMMAND_NOT_FOUND_EXIT_CODES.has(exitCode)) return true;
-  if (process.platform !== 'win32' || exitCode !== 1) return false;
-  // Batch wrappers reduce cmd.exe's usual 9009 to 1, but retain its shell diagnostic.
-  const output = fs.readFileSync(logPath, 'utf8');
-  return /^'[^']+' is not recognized as an internal or external command,$/m.test(output);
-}
-
-function closeLog(stream: WriteStream) {
-  return new Promise<void>((resolve, reject) => {
-    stream.once('error', reject);
-    stream.end(resolve);
+async function runVerifyCapture(command: string, cwd = process.cwd(), timeoutMilliseconds?: number): Promise<VerifyCapture> {
+  const result = runProcessVerification(captureRequirement(command), {
+    cwd,
+    ...(timeoutMilliseconds === undefined ? {} : { timeoutMilliseconds }),
   });
-}
-
-function waitForChild(child: ReturnType<typeof spawn>) {
-  return new Promise<ChildOutcome>((resolve) => {
-    child.once('error', (error: Error) => resolve({ kind: 'error', error }));
-    child.once('close', (code: number | null) => resolve({ kind: 'closed', code }));
+  return Object.freeze({
+    ...result,
+    exitCode: result.exitCode ?? null,
+    ...(result.status === 'passed' ? {} : { reason: result.evidence }),
   });
-}
-
-function waitForChildOrTimeout(childCompletion: Promise<ChildOutcome>, timeoutMilliseconds: number) {
-  return new Promise<TimeoutOutcome>((resolve) => {
-    const timeout = setTimeout(() => resolve({ kind: 'timed-out' }), timeoutMilliseconds);
-    childCompletion.then((outcome) => {
-      clearTimeout(timeout);
-      resolve(outcome);
-    });
-  });
-}
-
-async function terminateChildProcessTree(child: ReturnType<typeof spawn>) {
-  if (process.platform === 'win32' && child.pid !== undefined) {
-    const terminator = spawn('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true });
-    await waitForChildOrTimeout(waitForChild(terminator), TERMINATION_GRACE_MS);
-    return;
-  }
-  try {
-    child.kill('SIGTERM');
-  } catch {
-  }
-}
-
-async function runVerifyCapture(
-  command: string,
-  cwd = process.cwd(),
-  timeoutMilliseconds = DEFAULT_VERIFY_TIMEOUT_MS,
-): Promise<VerifyCapture> {
-  const logPath = path.join(os.tmpdir(), `sidequest-verify-${process.pid}-${randomUUID()}.log`);
-  const log = fs.createWriteStream(logPath, { flags: 'wx' });
-  let scriptPath: string | null = null;
-  let startError: Error | null = null;
-  let processExitCode: number | null = null;
-  let timedOut = false;
-
-  try {
-    const generatedScriptPath = createShellScript(command);
-    scriptPath = generatedScriptPath;
-    const shell = shellCommand(generatedScriptPath);
-    const child = spawn(shell.executable, shell.arguments, { cwd, windowsHide: true });
-    child.stdout.pipe(log, { end: false });
-    child.stderr.pipe(log, { end: false });
-
-    const childCompletion = waitForChild(child);
-    const outcome = await waitForChildOrTimeout(childCompletion, timeoutMilliseconds);
-    if (outcome.kind === 'timed-out') {
-      timedOut = true;
-      await terminateChildProcessTree(child);
-      const terminalOutcome = await waitForChildOrTimeout(childCompletion, TERMINATION_GRACE_MS);
-      if (terminalOutcome.kind === 'timed-out') {
-        child.stdout.unpipe(log);
-        child.stderr.unpipe(log);
-      } else if (terminalOutcome.kind === 'error') {
-        startError = terminalOutcome.error;
-      } else {
-        processExitCode = terminalOutcome.code;
-      }
-    } else if (outcome.kind === 'error') {
-      startError = outcome.error;
-    } else {
-      processExitCode = outcome.code;
-    }
-  } catch (error: unknown) {
-    startError = error instanceof Error ? error : new Error(String(error));
-  }
-
-  try {
-    await closeLog(log);
-  } finally {
-    if (scriptPath) fs.rmSync(scriptPath, { force: true });
-  }
-
-  if (timedOut) {
-    return {
-      status: 'could-not-run',
-      exitCode: 2,
-      logPath,
-      reason: `Verification timed out after ${timeoutMilliseconds}ms; partial output captured.`,
-    };
-  }
-  if (startError) return { status: 'could-not-run', exitCode: 2, logPath, reason: startError.message };
-
-  const exitCode = markerExitCode(logPath);
-  if (exitCode === null) {
-    return {
-      status: 'could-not-run',
-      exitCode: 2,
-      logPath,
-      reason: `The command shell exited ${processExitCode ?? 'without a code'} before reporting the suite exit code.`,
-    };
-  }
-  if (commandNotFound(logPath, exitCode)) {
-    return {
-      status: 'could-not-run',
-      exitCode,
-      logPath,
-      reason: `The command shell could not find a command for ${JSON.stringify(command)} (exit code ${exitCode}).`,
-    };
-  }
-  return exitCode === 0
-    ? { status: 'passed', exitCode, logPath }
-    : { status: 'failed-suite', exitCode, logPath };
 }
 
 function report(capture: VerifyCapture) {
   const reason = capture.reason ? ` reason=${JSON.stringify(capture.reason)}` : '';
-  process.stdout.write(`verify=${capture.status} exit=${capture.exitCode}${reason}\n`);
-  process.stdout.write(`details=${capture.logPath}\n`);
+  process.stdout.write(`verify=${capture.status} exit=${capture.exitCode ?? 2}${reason}\n`);
+  process.stdout.write(`details=${capture.logPath || ''}\n`);
 }
 
 async function main() {
@@ -214,7 +38,7 @@ async function main() {
   }
   const capture = await runVerifyCapture(command);
   report(capture);
-  process.exitCode = capture.exitCode;
+  process.exitCode = capture.exitCode === 0 ? 0 : 2;
 }
 
 module.exports = { runVerifyCapture, shellCommand };

@@ -1,5 +1,6 @@
 "use strict";
-const { resolveSuite } = require("../suite-resolver.js");
+const { verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver } = require("../kernel/verification.js");
+const { runProcessVerification } = require("../ports/process.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
 const { reviewCandidateFromSubmission, reviewRelationFor, reviewRelationRef, reviewRelationOutcome, reviewLockMessage, reviewProvenance } = require("../kernel/review-binding");
@@ -472,93 +473,88 @@ Expires: ${checkpoint.expiresAt}`;
     ensureDir(dir);
     return path.join(dir, `${Date.now()}-${crypto.randomBytes(4).toString("hex")}.log`);
   }
-  function integrationVerifyOutputTail(logPath) {
-    const size = fs.statSync(logPath).size;
-    const length = Math.min(size, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES);
-    if (!length) return "";
-    const fd = fs.openSync(logPath, "r");
-    try {
-      const buffer = Buffer.alloc(length);
-      fs.readSync(fd, buffer, 0, length, size - length);
-      return `${size > length ? "[output truncated]\n" : ""}${buffer.toString("utf8")}`.trim();
-    } finally {
-      fs.closeSync(fd);
+  function pinnedVerificationRequirement(ticket) {
+    const pinned = ticket.lifecycleAttempt?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.dispatch?.verificationRequirement;
+    if (pinned && typeof pinned === "object") return pinned;
+    const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || "").trim();
+    if (!legacyCommand) {
+      return verificationRequirement({ kind: "custom", evidence: "legacy project verifier was not recorded" });
     }
+    return verificationRequirement({
+      kind: ticket.executorVerifyKind || "command",
+      command: legacyCommand,
+      evidence: legacyCommand,
+      artifact: ticket.executorAttestationArtifact
+    });
   }
-  function integrationVerifySummary(logPath) {
-    const output = fs.readFileSync(logPath, "utf8");
-    const count = (label) => {
-      const match = new RegExp(`^# ${label}[\\t ]+(\\d+)[\\t ]*\\r?$`, "m").exec(output);
-      return match ? Number(match[1]) : null;
-    };
-    const duration = /^# duration_ms[\t ]+(\d+(?:\.\d+)?)[\t ]*\r?$/m.exec(output);
+  function skippedVerification(requirement, waiver) {
+    const validated = validateVerificationWaiver(waiver);
+    if ("code" in validated) {
+      return {
+        kind: requirement.kind,
+        status: "skipped",
+        evidence: validated.message,
+        command: requirement.command || null,
+        failureIdentities: [validated.code]
+      };
+    }
     return {
-      total: count("tests"),
-      pass: count("pass"),
-      fail: count("fail"),
-      skipped: count("skipped"),
-      durationMs: duration ? Number(duration[1]) : null
+      kind: requirement.kind,
+      status: "skipped",
+      evidence: validated.reason,
+      command: requirement.command || null,
+      waiver: validated
     };
-  }
-  function integrationVerifyCommand(slug, ticket) {
-    const recorded = String(ticket.submission?.verify || "").trim();
-    const projectPath = String(readMeta(slug)?.path || "").trim();
-    const pluginDirectories = new Set(
-      (Array.isArray(ticket.files) ? ticket.files : []).map((file) => /^plugins\/([^/]+)(?:\/|$)/.exec(String(file || "").replace(/\\/g, "/"))?.[1]).filter(Boolean)
-    );
-    if (!projectPath || pluginDirectories.size !== 1) return recorded;
-    const directoryName = [...pluginDirectories][0];
-    const suite = resolveSuite(projectPath, { name: directoryName, dir: `plugins/${directoryName}` });
-    return suite ? `cd ${suite.cwd} && ${[suite.setup, suite.command].filter(Boolean).join(" && ")}` : recorded;
   }
   function verifyDeliveredSubmission(slug, ticket, opts) {
-    const command = integrationVerifyCommand(slug, ticket);
-    if (ticket.executorVerifyKind === "attestation" || isArtifactSubmission(ticket.submission)) {
+    const requirement = pinnedVerificationRequirement(ticket);
+    const submitted = ticket.submission?.verificationResult;
+    if (submitted && typeof submitted === "object" && !requirement.command) return submitted;
+    if (opts?.skipVerify === true) return skippedVerification(requirement, opts.verificationWaiver);
+    if (requirement.kind === "attestation" || isArtifactSubmission(ticket.submission)) {
       return {
+        kind: "attestation",
         status: "attestation",
-        artifact: ticket.submission?.sourceRevision?.value || ticket.executorAttestationArtifact || null,
+        artifact: ticket.submission?.sourceRevision?.value || requirement.artifact || null,
         evidence: String(ticket.submission?.verify || "").trim()
       };
     }
-    if (opts?.skipVerify === true) return { status: "skipped", skippedByChoice: true, command: command || null };
-    if (!command) return { status: "none", command: null };
-    const validationError = verifyCommandError(command);
-    if (validationError) return { status: "invalid", command, error: validationError };
-    if (manualVerify(command)) return { status: "manual", command, manual: command.slice(MANUAL_VERIFY_PREFIX.length).trim() };
-    const timeoutMs = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
-    const logPath = integrationVerifyLogPath(slug, ticket);
-    const fd = fs.openSync(logPath, "w");
-    let result;
-    try {
-      result = spawnSync(command, {
-        cwd: readMeta(slug)?.path,
-        shell: true,
-        timeout: timeoutMs,
-        windowsHide: true,
-        stdio: ["ignore", fd, fd]
-      });
-    } finally {
-      fs.closeSync(fd);
+    if (requirement.kind === "manual") {
+      return { kind: "manual", status: "manual", evidence: String(ticket.submission?.verify || requirement.evidenceContract), command: requirement.command || null };
     }
-    const outputTail = integrationVerifyOutputTail(logPath);
-    const timedOut = result?.error?.code === "ETIMEDOUT";
-    if (timedOut) return { status: "timeout", command, timeoutMs, logPath, outputTail };
-    if (result?.status === 0) return { status: "passed", command, timeoutMs, logPath, summary: integrationVerifySummary(logPath) };
-    return {
-      status: "failed",
-      command,
-      exitCode: typeof result?.status === "number" ? result.status : null,
-      logPath,
-      outputTail,
-      error: result?.error ? String(result.error.message || result.error) : null
-    };
+    if (!requirement.command) {
+      return {
+        kind: requirement.kind,
+        status: "could_not_run",
+        evidence: "The prepared verification requirement has no executable command.",
+        command: null,
+        failureIdentities: ["could_not_run:missing-command"]
+      };
+    }
+    const validationError = verifyCommandError(requirement.command);
+    if (validationError) {
+      return {
+        kind: requirement.kind,
+        status: "could_not_run",
+        evidence: validationError,
+        command: requirement.command,
+        failureIdentities: ["could_not_run:invalid-command"]
+      };
+    }
+    const timeoutMilliseconds = normalizeIntegrationVerifyTimeoutMs(boardConfig(slug)?.integrationVerifyTimeoutMs);
+    return runProcessVerification(requirement, {
+      cwd: readMeta(slug)?.path,
+      timeoutMilliseconds,
+      logPath: integrationVerifyLogPath(slug, ticket),
+      outputTailBytes: INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES
+    });
   }
   function verificationFailureComment(verify) {
-    const outcome = verify.status === "timeout" ? `timed out after ${verify.timeoutMs}ms` : `exited ${verify.exitCode ?? "without an exit code"}`;
     return [
-      `Integration verification ${outcome}.`,
-      `Command: ${verify.command}`,
-      `Log: ${verify.logPath}`,
+      `Integration verification returned ${verify.status}.`,
+      verify.command ? `Command: ${verify.command}` : null,
+      verify.logPath ? `Log: ${verify.logPath}` : null,
+      Array.isArray(verify.failureIdentities) && verify.failureIdentities.length ? `Failures: ${verify.failureIdentities.join(", ")}` : null,
       verify.outputTail ? `Output tail:
 ${verify.outputTail}` : null
     ].filter(Boolean).join("\n");
@@ -569,12 +565,12 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "delivery_required", ticket };
     }
     const verify = ticket.submission.integration?.verify || verifyDeliveredSubmission(slug, ticket, opts);
-    const accepted = ["passed", "none", "skipped", "manual", "attestation"].includes(verify.status);
-    const stored = updateSubmissionIntegration(slug, ticket.id, { verify, outcome: accepted ? "verified" : "verify_failed" });
+    const accepted = verificationAccepted(verify);
+    const stored = updateSubmissionIntegration(slug, ticket.id, { verify, outcome: accepted ? "verified" : verificationOutcome(verify) });
     if (!stored.ok) return stored;
     if (accepted) return { ok: true, ticket: stored.ticket, verify };
     const comment = addComment(slug, ticket.id, { by: String(opts?.by || "orchestrator"), source: "integration", body: verificationFailureComment(verify) });
-    return { ok: false, reason: "verify_failed", ticket: comment.ticket || stored.ticket, verify };
+    return { ok: false, reason: verificationOutcome(verify), ticket: comment.ticket || stored.ticket, verify };
   }
   function changedIntegrationPaths(repo, submission) {
     if (Array.isArray(submission.changedPaths) && submission.changedPaths.length) return submission.changedPaths.slice();
@@ -700,19 +696,19 @@ ${verify.outputTail}` : null
     };
   }
   function postMergeVerificationFailure(slug, ticket, verify, repo, mode, before) {
-    const verificationMessage = `${ticket.ref} verification failed after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
+    const verificationMessage = `${ticket.ref} verification returned ${verify.status} after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`;
     try {
       restoreCleanIntegrationCheckout(repo, before);
     } catch (error) {
       return integrationFailure(slug, ticket, {
-        reason: "verify_failed_post_merge_rollback_failed",
+        reason: `${verificationOutcome(verify)}_post_merge_rollback_failed`,
         before,
         verify,
         message: `${verificationMessage} Rollback failed: ${integrationGitError(error)}`
       });
     }
     return integrationFailure(slug, ticket, {
-      reason: "verify_failed_post_merge",
+      reason: `${verificationOutcome(verify)}_post_merge`,
       before,
       verify,
       message: verificationMessage
@@ -817,11 +813,11 @@ ${verify.outputTail}` : null
         return { ok: false, reason: "delivery_content_missing", ticket, missingCommits: content.missing, message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(", ")}.` };
       }
       const verify = verifyDeliveredSubmission(slug, ticket);
-      if (verify.status !== "passed") {
+      if (!verificationAccepted(verify)) {
         return integrationFailure(slug, ticket, {
-          reason: "verify_failed_recorded_delivery",
+          reason: `${verificationOutcome(verify)}_recorded_delivery`,
           verify,
-          message: `${ticket.ref} merged-tree verification failed for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`
+          message: `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || "not created"}.`
         });
       }
       const recorded = updateSubmissionIntegration(slug, ticket.id, {
@@ -985,12 +981,12 @@ ${verify.outputTail}` : null
       if (admitted.scopeValidation.reconciled) {
         const resultingHead2 = integrationGit(repo, ["rev-parse", "HEAD"]);
         const verify2 = verifyDeliveredSubmission(slug, ticket, opts);
-        const acceptedVerify2 = ["passed", "none", "skipped", "manual"].includes(verify2.status);
+        const acceptedVerify2 = verificationAccepted(verify2);
         if (!acceptedVerify2) {
           return integrationFailure(slug, ticket, {
-            reason: "verify_failed_existing_delivery",
+            reason: `${verificationOutcome(verify2)}_existing_delivery`,
             verify: verify2,
-            message: `${ticket.ref} is already on ${target.branch}, but verification failed: ${verify2.command || `verification ${verify2.status}`}. Log: ${verify2.logPath || "not created"}.`
+            message: `${ticket.ref} is already on ${target.branch}, but verification returned ${verify2.status}: ${verify2.command || `verification ${verify2.status}`}. Log: ${verify2.logPath || "not created"}.`
           });
         }
         delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead: resultingHead2 };
@@ -1059,7 +1055,7 @@ ${verify.outputTail}` : null
         ...integrationGit(repo, ["diff", "--cached", "--name-only"]).split(/\r?\n/).filter(Boolean)
       ])) : changedPaths;
       const verify = verifyDeliveredSubmission(slug, ticket, opts);
-      const acceptedVerify = ["passed", "none", "skipped", "manual"].includes(verify.status);
+      const acceptedVerify = verificationAccepted(verify);
       if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
       delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
       const result = updateSubmissionIntegration(slug, ticket.id, {
@@ -1101,12 +1097,45 @@ ${verify.outputTail}` : null
       return { ok: false, message: error?.message || String(error) };
     }
   }
+  function submissionVerificationResult(ticket, sourceRevision, verify) {
+    const requirement = pinnedVerificationRequirement(ticket);
+    const evidence = String(verify || "").trim();
+    if (requirement.kind === "attestation" || sourceRevision != null) {
+      const artifact = sourceRevision ? sourceRevision.value : requirement.artifact;
+      const error2 = attestationErrors(evidence, artifact)[0];
+      const result2 = error2 ? { kind: "attestation", status: "failed_check", evidence: error2, failureIdentities: ["attestation:evidence-contract"] } : { kind: "attestation", status: "attestation", evidence };
+      return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
+    }
+    if (requirement.kind === "manual") {
+      const error2 = evidence ? null : "manual verification requires evidence from the prepared verifier contract";
+      const result2 = error2 ? { kind: "manual", status: "failed_check", evidence: error2, failureIdentities: ["manual:evidence-required"] } : { kind: "manual", status: "manual", evidence, command: requirement.command || null };
+      return { result: result2, expectedEvidence: null, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
+    }
+    if (requirement.command && evidence !== requirement.command) {
+      const error2 = `verification evidence must match the prepared ${requirement.kind} verifier; executors cannot replace the required command.`;
+      return {
+        result: { kind: requirement.kind, status: "failed_check", evidence: error2, command: requirement.command, failureIdentities: ["verification:evidence-mismatch"] },
+        expectedEvidence: requirement.command,
+        diagnostic: { code: "executor_verify_mismatch", message: error2, retryable: true }
+      };
+    }
+    if (requirement.command) {
+      const error2 = verifyCommandError(requirement.command);
+      const result2 = error2 ? { kind: requirement.kind, status: "could_not_run", evidence: error2, command: requirement.command, failureIdentities: ["could_not_run:invalid-command"] } : { kind: requirement.kind, status: "passed", evidence, command: requirement.command };
+      return { result: result2, expectedEvidence: requirement.command, ...error2 ? { diagnostic: { code: "invalid_verify", message: error2, retryable: true } } : {} };
+    }
+    if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
+      return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
+    }
+    const error = evidence ? null : `required ${requirement.kind} verification evidence is missing`;
+    const result = error ? { kind: requirement.kind, status: "failed_check", evidence: error, failureIdentities: [`${requirement.kind}:evidence-required`] } : { kind: requirement.kind, status: "passed", evidence };
+    return { result, expectedEvidence: null, ...error ? { diagnostic: { code: "invalid_verify", message: error, retryable: true } } : {} };
+  }
   function submissionAdmissionDecision(slug, ticket, by, opts, sourceRevision, pinnedBaseline, range, verify, changedSurfaces) {
     const adapterFacts = opts.admissionFacts || {};
     const sourceRevisionFacts = sourceRevision && isSourceRevisionAdapterFacts(opts.admissionFacts) ? opts.admissionFacts : null;
     const sourceRevisionResolution = sourceRevisionFacts?.baseline || null;
-    const attestation = ticket.executorVerifyKind === "attestation" || sourceRevision != null;
-    const verificationError = attestation ? attestationErrors(verify, sourceRevision ? sourceRevision.value : ticket.executorAttestationArtifact)[0] : verifyCommandError(verify);
+    const verification = submissionVerificationResult(ticket, sourceRevision, verify);
     const completion = sourceRevision ? { ok: true } : completionTreeCheck(slug, ticket, { explicitNoOp: range?.noOp === true });
     const admitted = adapterFacts.admittedScope || executionScope(slug, ticket);
     const scope = adapterFacts.scope || commitScope.ticketCommitScope(admitted, ticket.files, ticket.ref);
@@ -1142,7 +1171,7 @@ ${verify.outputTail}` : null
         allowSubmittedOwner: opts.force === true
       },
       completion: { complete: completion.ok, ...completion.ok ? {} : { diagnostic: { code: completion.reason, message: completion.message, retryable: true } } },
-      verification: { result: { kind: attestation ? "attestation" : "suite", status: verificationError ? "unavailable" : "passed", evidence: String(verify || "") }, expectedEvidence: attestation ? null : String(ticket.executorVerify || "").trim() || null, ...verificationError ? { diagnostic: { code: "invalid_verify", message: verificationError, retryable: true } } : {} },
+      verification,
       candidate: sourceRevision || { source: "git", value: String(opts.commit || "").trim().toLowerCase(), observedAt: (/* @__PURE__ */ new Date()).toISOString() },
       baseline: sourceRevision ? {
         candidateExists: sourceRevisionResolution?.candidateExists ?? null,
@@ -1169,7 +1198,7 @@ ${verify.outputTail}` : null
         ...readiness.ok ? [] : [{ code: readiness.reason, message: `submit: refused ${ticket.ref}; ${readiness.message} Request scope only for work this ticket owns. Commit only approved scope; never stash, revert, or include foreign paths.`, retryable: true }]
       ]
     });
-    return { decision, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
+    return { decision, verification, admittedScope: admitted, inheritedPaths, unsubmittedWorkingPaths, gatedPaths };
   }
   function submitTicket(slug, idOrRef, by, opts) {
     opts = opts || {};
@@ -1251,7 +1280,7 @@ ${verify.outputTail}` : null
         }
       }
       const rejectedSubmission = rejectionHistory(t).find((entry) => entry && !entry.supersededAt) || null;
-      const { admittedScope, inheritedPaths, unsubmittedWorkingPaths, gatedPaths } = admission;
+      const { admittedScope, verification: submissionVerification, inheritedPaths, unsubmittedWorkingPaths, gatedPaths } = admission;
       const workingPathAdvisory = sharedTreeWorkingPathAdvisory(inheritedPaths, unsubmittedWorkingPaths);
       const submittedAt = (/* @__PURE__ */ new Date()).toISOString();
       let comment = null;
@@ -1267,6 +1296,7 @@ ${verify.outputTail}` : null
         ...sourceRevision ? { sourceRevision, changedPaths: changedSurfaces, projectCapabilities } : { commit, gitRef: gitRef || submissionGitRef(t) },
         commentId: comment ? comment.id : null,
         verify,
+        verificationResult: submissionVerification.result,
         worktree,
         admittedScope,
         unscopedPaths: gatedPaths,

@@ -61,7 +61,7 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
   function manualVerify(value) {
     return /^manual:\s+\S/i.test(String(value || "").trim());
   }
-  const VERIFY_ORACLE_KINDS = ["command", "attestation"];
+  const VERIFY_ORACLE_KINDS = ["suite", "command", "document", "link", "schema", "manual", "attestation", "review", "custom"];
   function normalizeVerifyOracleKind(value) {
     const kind = String(value || "command").trim().toLowerCase();
     if (!VERIFY_ORACLE_KINDS.includes(kind)) throw new Error(`Verify oracle kind must be one of: ${VERIFY_ORACLE_KINDS.join(", ")}.`);
@@ -85,7 +85,8 @@ function createWarnings({ boardConfig, categoryReadOnly, claimReclaimable, coerc
     const verifyKind = normalizeVerifyOracleKind(kind);
     if (verifyKind === "attestation") return attestationErrors(value, artifact);
     if (String(artifact || "").trim()) return ["attestationArtifact requires verifyKind: attestation."];
-    return verifyCommandErrors(value);
+    if (verifyKind === "command" || verifyKind === "suite") return verifyCommandErrors(value);
+    return [];
   }
   function requireVerifyOracle(kind, value, artifact) {
     const errors = verifyOracleErrors(kind, value, artifact);

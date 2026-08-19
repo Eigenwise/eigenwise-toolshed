@@ -14,8 +14,14 @@ function createClaims(dependencies) {
   const DEFAULT_PREPARED_DISPATCH_TTL_HOURS = 6;
   const VERIFY_START_COMMENT = "[sidequest:verify-start] ";
   const VERIFY_COMPLETE_COMMENT = "[sidequest:verify-complete]";
-  const VERIFY_COMPLETE_STATUSES = /* @__PURE__ */ new Set(["passed", "failed-suite", "could-not-run"]);
-  const VERIFY_COMPLETE_STATUS_ALIASES = /* @__PURE__ */ new Map([["failed", "failed-suite"]]);
+  const VERIFY_COMPLETE_STATUSES = /* @__PURE__ */ new Set(["passed", "failed_suite", "toolchain_missing", "could_not_run", "timeout", "manual", "attestation", "skipped", "failed_check"]);
+  const VERIFY_COMPLETE_STATUS_ALIASES = /* @__PURE__ */ new Map([
+    ["failed", "failed_suite"],
+    ["failed-suite", "failed_suite"],
+    ["toolchain-missing", "toolchain_missing"],
+    ["could-not-run", "could_not_run"],
+    ["failed-check", "failed_check"]
+  ]);
   const NEGATIVE_CONTROL_COMMENT = "[sidequest:negative-control] ";
   const RELEASE_KINDS = /* @__PURE__ */ new Set(["handback", "oracle"]);
   function technicalBlockerRelease(args) {

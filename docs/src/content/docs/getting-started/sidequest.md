@@ -26,6 +26,8 @@ Sidequest is local. The dashboard runs on your machine and ticket data stays in 
 4. Ask Claude to dispatch the ready tickets. Claude chooses the configured route, starts the work, and reports verification results.
 5. When a ticket is ready, ask Claude to review and integrate it if the checks pass. Larger or higher-risk work may need an extra review before integration.
 
+Sidequest pins one verifier when it prepares the ticket, whether that is a command suite, document or schema check, review, manual evidence, or attestation. Executors report evidence against that verifier; they cannot swap it for an easier check. A skipped required check needs a bounded human waiver that names the authority, reason, affected gate, and scope or expiry. Delivery keeps the result and its log artifact, including failures and timeouts, so the next person can see what happened.
+
 ### Choose the planning depth
 
 Use the lightest planning that fits. Exact small changes and operational asks can stay lightweight. Substantial or ambiguous work starts with a visible surgical contract: the outcome, non-goals, smallest authority needed, scope, bounded oracle (the check that decides whether it worked), and review limit.

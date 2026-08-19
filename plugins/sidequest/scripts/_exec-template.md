@@ -85,7 +85,7 @@ Protocol for each ticket:
    On Windows with Node 22, use explicit test-file globs such as `plugins/<plugin>/test/*.test.js`, never a
    bare test directory. Keep the useful result count and a short
    relevant excerpt for the closing evidence. Post `[sidequest:verify-start] <command>` before verification only when it will run in the background or the declared scope is expected to be a no-op. Always post
-   `[sidequest:verify-complete] <passed|failed-suite|failed|could-not-run|no-op>: <evidence>` after it exits:
+   `[sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check|no-op>: <evidence>` after it exits:
    put the status first and the evidence after the colon. A bare
    `[sidequest:verify-complete]` remains valid; use `no-op` only for an intentionally clean declared scope.
 5. **Commit and submit, never publish.** For repo changes without the `[sidequest-artifact-mode]` briefing marker, call

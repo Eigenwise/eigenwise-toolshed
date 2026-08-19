@@ -644,7 +644,7 @@ async function cmdIntegrate(opts: any, positional: any) {
     skipVerify: !!opts['skip-verify'],
   });
   if (!delivery.ok) {
-    if (delivery.reason === 'verify_failed_post_merge' || delivery.reason === 'verify_failed_post_merge_rollback_failed') {
+    if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) {
       const payload = { project: slug, delivery: null, verifyFailed: delivery.verify };
       if (opts.json) {
         process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
@@ -665,12 +665,12 @@ async function cmdIntegrate(opts: any, positional: any) {
       process.exitCode = 1;
       return;
     }
-    fail(`integrate: delivered ${idOrRef}, but verification ${verification.verify.status === 'timeout' ? `timed out after ${verification.verify.timeoutMs}ms` : `failed with exit code ${verification.verify.exitCode}`}. Log: ${verification.verify.logPath}`);
+    fail(`integrate: delivered ${idOrRef}, but verification ${verification.verify.status === 'timeout' ? verification.verify.timeoutMilliseconds === undefined ? 'timed out at the configured limit' : `timed out after ${verification.verify.timeoutMilliseconds}ms` : `failed with exit code ${verification.verify.exitCode}`}. Log: ${verification.verify.logPath}`);
   }
   const verifyReason = verification.verify.status === 'attestation'
     ? `Attestation accepted for ${verification.verify.artifact || 'the source revision'}.`
     : verification.verify.status === 'skipped'
-      ? 'Verify skipped by choice.'
+      ? `Verification waived by ${verification.verify.waiver?.authority || 'an authorized human'}: ${verification.verify.waiver?.reason || verification.verify.evidence}.`
       : verification.verify.status === 'manual'
         ? `Manual verification recorded: ${verification.verify.manual}.`
         : verification.verify.status === 'none'

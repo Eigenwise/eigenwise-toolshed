@@ -817,7 +817,7 @@ const tools: ToolDefinition[] = [
             skipVerify: args.skipVerify === true,
         });
         const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
-        if (delivery.reason === 'verify_failed_post_merge' || delivery.reason === 'verify_failed_post_merge_rollback_failed') failure.verifyFailed = delivery.verify;
+        if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) failure.verifyFailed = delivery.verify;
         return Object.assign(mutationAck(slug, delivery), failure);
       }
       const usesGit = store.submissionUsesGit(ticket);
@@ -875,7 +875,7 @@ const tools: ToolDefinition[] = [
       });
       if (!delivery.ok) {
         const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
-        if (delivery.reason === 'verify_failed_post_merge' || delivery.reason === 'verify_failed_post_merge_rollback_failed') failure.verifyFailed = delivery.verify;
+        if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) failure.verifyFailed = delivery.verify;
         return Object.assign(mutationAck(slug, delivery), failure);
       }
       const integration = delivery.integration;
@@ -886,7 +886,7 @@ const tools: ToolDefinition[] = [
       const verifyReason = verification.verify.status === 'attestation'
         ? `Attestation accepted for ${verification.verify.artifact || 'the source revision'}.`
         : verification.verify.status === 'skipped'
-          ? 'Verify skipped by choice.'
+          ? `Verification waived by ${verification.verify.waiver?.authority || 'an authorized human'}: ${verification.verify.waiver?.reason || verification.verify.evidence}.`
           : verification.verify.status === 'manual'
             ? `Manual verification recorded: ${verification.verify.manual}.`
             : verification.verify.status === 'none'

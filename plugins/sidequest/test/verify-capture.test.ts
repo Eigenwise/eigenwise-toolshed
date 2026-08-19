@@ -22,7 +22,7 @@ test('verify capture runs generated POSIX scripts through the host shell', () =>
   assert.deepStrictEqual(shell.arguments, ['verify-script.sh']);
 });
 
-test('verify capture executes through the host shell and separates failed suites from unavailable capture shells', async () => {
+test('verify capture executes through the shared process port and preserves result classes', async () => {
   const passed = await runVerifyCapture('cd . && echo verify-capture-ran');
   try {
     assert.deepStrictEqual({ status: passed.status, exitCode: passed.exitCode }, { status: 'passed', exitCode: 0 });
@@ -33,7 +33,7 @@ test('verify capture executes through the host shell and separates failed suites
 
   const failed = await runVerifyCapture(process.platform === 'win32' ? 'cmd /d /s /c exit 7' : 'exit 7');
   try {
-    assert.deepStrictEqual({ status: failed.status, exitCode: failed.exitCode }, { status: 'failed-suite', exitCode: 7 });
+    assert.deepStrictEqual({ status: failed.status, exitCode: failed.exitCode }, { status: 'failed_suite', exitCode: 7 });
   } finally {
     deleteLog(failed);
   }
@@ -41,7 +41,7 @@ test('verify capture executes through the host shell and separates failed suites
   const missingCommand = `sidequest-missing-command-${process.pid}-${Date.now()}`;
   const unavailableCommand = await runVerifyCapture(missingCommand);
   try {
-    assert.equal(unavailableCommand.status, 'could-not-run');
+    assert.equal(unavailableCommand.status, 'toolchain_missing');
     assert.notEqual(unavailableCommand.exitCode, 0);
     assert.match(unavailableCommand.reason || '', new RegExp(missingCommand));
   } finally {
@@ -54,7 +54,7 @@ test('verify capture executes through the host shell and separates failed suites
   try {
     const unavailable = await runVerifyCapture('echo unreachable');
     try {
-      assert.equal(unavailable.status, 'could-not-run');
+      assert.equal(unavailable.status, 'could_not_run');
       assert.equal(unavailable.exitCode, 2);
     } finally {
       deleteLog(unavailable);
@@ -89,7 +89,7 @@ test('verify capture returns a timeout with partial output', async () => {
   try {
     assert.deepStrictEqual(
       { status: capture.status, exitCode: capture.exitCode },
-      { status: 'could-not-run', exitCode: 2 },
+      { status: 'timeout', exitCode: 2 },
     );
     assert.equal(capture.reason, `Verification timed out after ${timeoutMilliseconds}ms; partial output captured.`);
     assert.match(fs.readFileSync(capture.logPath, 'utf8'), /partial-output/);

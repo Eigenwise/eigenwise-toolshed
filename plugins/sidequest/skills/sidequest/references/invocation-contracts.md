@@ -11,9 +11,11 @@ this file only covers what the schema has no way to say.
   need `command` and `outputTail`, and are refused without them. `kind: oracle` parks the ticket in
   `awaiting-oracle` and the handoff stays visible until `verdict`. `kind: handback` is for refused paths:
   commit the in-scope work first, then name the paths you could not touch.
-- **`add` / `update` with `verifyKind: attestation`**: `verify` must be
-  `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`. Any other shape is
-  refused. `verifyKind: command` takes a runnable command instead.
+- **`add` / `update` verification**: `verifyKind` is one of `suite`, `command`, `document`, `link`,
+  `schema`, `manual`, `attestation`, `review`, or `custom`. `suite` and `command` require a runnable
+  command. The other kinds retain the submitted evidence contract. `verifyKind: attestation` also requires
+  `verify` in the form `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`;
+  any other shape is refused.
 - **`add`**: `complexity` is the legacy ambiguity fallback and requires `why` alongside it. Stamp
   `category` from the live taxonomy instead whenever one fits.
 - **`groomClose`**: one tool, three purposes, each with a different gate. `deliveryCommit` closes it as a

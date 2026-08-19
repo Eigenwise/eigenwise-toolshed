@@ -80,7 +80,7 @@ function sameBasenameSiblingDetails(project, ticket, projectPath, tool) {
 const VERIFY_ORACLE_PROP = {
   type: "string",
   maxLength: store.EXECUTOR_VERIFY_MAX,
-  description: "Verify the required property on produced output. An implementation-name grep is diagnostic evidence, not a behavior oracle. When verifyKind is command (the default), use one runnable cmd.exe command (for example `cd plugins/sidequest && npm run test:full`) or `manual: <what you checked>`. cmd.exe uses &&, never ;. When verifyKind is attestation, use exactly `attestation: <artifact> | <evidence produced> | <what it showed>` and replace <artifact> with attestationArtifact."
+  description: "Pin the required verifier in the prepared attempt. command and suite use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry."
 };
 const REVIEW_TARGET_PROP = {
   type: "object",
@@ -115,7 +115,7 @@ const tools = [
         readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
-        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification oracle. Defaults to command. attestation requires attestationArtifact; attestationArtifact is rejected when verifyKind is command." },
+        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact." },
         attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
         storyId: { type: "string", pattern: "^US-\\d+$", description: "A story ref (US-n) to file this ticket into." },
         complexity: { type: "integer", minimum: 1, maximum: 10, description: "Legacy score. Requires why (min 20 chars)." },
@@ -212,7 +212,7 @@ const tools = [
         readonly: { type: "boolean", description: "Closeout override." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
-        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification oracle. Defaults to command. attestation requires attestationArtifact; attestationArtifact is rejected when verifyKind is command." },
+        verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact." },
         attestationArtifact: { type: "string", maxLength: store.EXECUTOR_VERIFY_MAX, description: "Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command." },
         storyId: { anyOf: [{ type: "string", pattern: "^US-\\d+$" }, { const: "none" }] },
         complexity: { type: "integer", minimum: 1, maximum: 10 },

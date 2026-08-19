@@ -386,8 +386,8 @@ for (const mode of ['merge', 'replay', 'apply']) {
     assert.equal(result.status, 0, result.stderr + result.stdout);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.ok, true);
-    assert.equal(payload.verify.status, 'none');
-    assert.match(payload.ticket.completion.reason, /Verify: none\./);
+    assert.equal(payload.verify.status, 'passed');
+    assert.match(payload.ticket.completion.reason, /Verify passed:/);
     assert.equal(payload.delivery.mode, mode);
     assert.equal(payload.delivery.pinnedRef, `refs/sidequest/${ticket.ref}`);
     assert.equal(payload.delivery.pinnedCommit, fixture.submitted);
@@ -435,15 +435,16 @@ for (const mode of ['merge', 'replay', 'apply']) {
     const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--mode', mode, '--json']);
 
     assert.equal(result.status, 1, result.stderr + result.stdout);
+    assert.ok(result.stdout, result.stderr);
     const payload = JSON.parse(result.stdout);
     assert.equal(payload.delivery, null);
-    assert.equal(payload.verifyFailed.status, 'failed');
+    assert.equal(payload.verifyFailed.status, 'failed_suite');
     assert.equal(payload.verifyFailed.exitCode, 7);
     assert.match(payload.verifyFailed.outputTail, /integration verify failure/);
     assert.ok(fs.existsSync(payload.verifyFailed.logPath));
     const stored = store.getTicket(slug, ticket.ref);
     assert.equal(stored.status, 'doing');
-    assert.equal(stored.submission.integration.reason, 'verify_failed_post_merge');
+    assert.equal(stored.submission.integration.reason, 'verification_failed_suite_post_merge');
     assert.equal(head(fixture.repo), before);
     assert.equal(git(['status', '--porcelain', '--untracked-files=no'], fixture.repo), '');
     assert.equal(fs.existsSync(path.join(fixture.repo, 'feature.txt')), false);
@@ -475,22 +476,21 @@ test('integrate refuses delivery when recorded verification times out', () => {
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.delivery, null);
   assert.equal(payload.verifyFailed.status, 'timeout');
-  assert.equal(payload.verifyFailed.timeoutMs, 25);
+  assert.equal(payload.verifyFailed.timeoutMilliseconds, 25);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
 });
 
-test('integrate records an explicit skipped verification choice', () => {
+test('integrate refuses skipped verification without a bounded human waiver', () => {
   const { slug, ticket, runCli } = deliveryTicket('verify-skip', {
     verify: nodeVerify("process.exit(7)"),
   });
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--skip-verify', '--json']);
 
-  assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.equal(result.status, 1, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
-  assert.equal(payload.verify.status, 'skipped');
-  assert.equal(payload.verify.skippedByChoice, true);
-  assert.match(payload.ticket.completion.reason, /Verify skipped by choice\./);
-  assert.equal(store.getTicket(slug, ticket.ref).status, 'done');
+  assert.equal(payload.verifyFailed.status, 'skipped');
+  assert.deepEqual(payload.verifyFailed.failureIdentities, ['verification_waiver_required']);
+  assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
 });
 
 function makeUnmergedTarget(repo: string, label: string) {
@@ -580,7 +580,7 @@ function makeGreenfieldRepo(label: string, locked = true) {
   return { repo, executor, submitted, target: { mode: 'local', branch: 'main', upstream: 'main' } };
 }
 
-test('integration installs a locked greenfield package before its resolved suite', () => {
+test('integration does not derive a suite for an unprepared greenfield submission', () => {
   const fixture = makeGreenfieldRepo('locked-dependencies');
   const { slug } = store.ensureProject(fixture.repo);
   const ticket = store.createTicket(slug, {
@@ -598,11 +598,11 @@ test('integration installs a locked greenfield package before its resolved suite
   assert.equal(result.status, 0, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
   assert.equal(payload.verify.status, 'passed');
-  assert.equal(payload.verify.command, 'cd plugins/greenfield && npm ci && npm run test:full');
-  assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules', 'locked-dependency')), true);
+  assert.equal(payload.verify.kind, 'custom');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
 });
 
-test('integration refuses an unlocked package instead of resolving dependencies', () => {
+test('integration does not derive an unlocked greenfield suite after submission', () => {
   const fixture = makeGreenfieldRepo('missing-lock', false);
   const { slug } = store.ensureProject(fixture.repo);
   const ticket = store.createTicket(slug, {
@@ -616,9 +616,9 @@ test('integration refuses an unlocked package instead of resolving dependencies'
 
   const result = runCli(['integrate', ticket.ref, '--by', 'orchestrator', '--json']);
 
-  assert.equal(result.status, 1, result.stderr + result.stdout);
+  assert.equal(result.status, 0, result.stderr + result.stdout);
   const payload = JSON.parse(result.stdout);
-  assert.equal(payload.verifyFailed.command, 'cd plugins/greenfield && npm ci && npm run test:full');
-  assert.match(payload.verifyFailed.outputTail, /package-lock\.json/);
+  assert.equal(payload.verify.status, 'passed');
+  assert.equal(payload.verify.kind, 'custom');
   assert.equal(fs.existsSync(path.join(fixture.repo, 'plugins', 'greenfield', 'node_modules')), false);
 });

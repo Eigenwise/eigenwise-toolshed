@@ -73,6 +73,54 @@ function createFixture(title?: any, category = 'dispatch.lifecycle') {
   });
 }
 
+test('preparing a plugin ticket pins its resolved suite requirement', () => {
+  const pluginDirectory = path.join(PROJECT, 'plugins', 'verification-fixture');
+  fs.mkdirSync(pluginDirectory, { recursive: true });
+  fs.writeFileSync(path.join(pluginDirectory, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node --test test/*.test.js' } }));
+  execFileSync('git', ['add', 'plugins/verification-fixture/package.json'], { cwd: PROJECT, windowsHide: true });
+  execFileSync('git', ['commit', '--quiet', '-m', 'add verification fixture'], { cwd: PROJECT, windowsHide: true });
+
+  const ticket = store.createTicket(slug, {
+    title: 'pin the verification fixture suite',
+    category: 'dispatch.lifecycle',
+    files: ['plugins/verification-fixture/src/check.ts'],
+    executorVerifyKind: 'suite',
+    source: 'test',
+  });
+  assert.equal(store.readMeta(slug).path, PROJECT);
+  assert.deepEqual(ticket.files, ['plugins/verification-fixture/src/check.ts']);
+  assert.deepEqual(require('../lib/suite-resolver.js').resolveSuite(PROJECT, { name: 'verification-fixture', dir: 'plugins/verification-fixture' }), {
+    plugin: 'verification-fixture',
+    cwd: 'plugins/verification-fixture',
+    setup: 'npm ci',
+    command: 'npm run test:full',
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref);
+  assert.deepEqual(prepared.ticket.files, ['plugins/verification-fixture/src/check.ts']);
+  const requirement = prepared.ticket.dispatch.verificationRequirement;
+
+  assert.deepEqual(requirement, {
+    kind: 'suite',
+    suite: { name: 'verification-fixture', cwd: 'plugins/verification-fixture', setup: 'npm ci', command: 'npm run test:full' },
+    command: 'cd plugins/verification-fixture && npm ci && npm run test:full',
+    evidenceContract: 'suite verification-fixture output',
+  });
+  assert.deepEqual(prepared.ticket.dispatch.lifecycleAttempt.verificationRequirement, requirement);
+  assert.deepEqual(prepared.ticket.lifecycleAttempt.verificationRequirement, requirement);
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'verification-fixture-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
+test('preparing a ticket without a recorded verifier pins the legacy custom requirement', () => {
+  const ticket = createFixture('no verifier requirement');
+  const prepared = store.prepareDispatch(slug, ticket.ref);
+
+  assert.deepEqual(prepared.ticket.dispatch.verificationRequirement, {
+    kind: 'custom',
+    evidenceContract: 'legacy project verifier was not recorded',
+  });
+  assert.equal(store.releaseTicket(slug, ticket.ref, 'no-verifier-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
+});
+
 test('executors cannot prepare a shared-tree child dispatch while the orchestrator can', () => {
   const executorSessionId = `executor-dispatch-guard-${Date.now()}`;
   const orchestratorSessionId = `orchestrator-dispatch-guard-${Date.now()}`;

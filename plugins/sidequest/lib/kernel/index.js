@@ -21,6 +21,7 @@ __export(kernel_exports, {
   ATTEMPT_TRANSITIONS: () => ATTEMPT_TRANSITIONS,
   attemptDiagnostic: () => attemptDiagnostic,
   canonicalPath: () => import_worktree.canonicalPath,
+  captureVerificationResult: () => import_verification.captureVerificationResult,
   createWorktreeLease: () => import_worktree.createWorktreeLease,
   inlineEligibility: () => inlineEligibility,
   isCanonicalRegisteredWorktree: () => import_worktree.isCanonicalRegisteredWorktree,
@@ -29,6 +30,12 @@ __export(kernel_exports, {
   reduceAttempt: () => reduceAttempt,
   sameCanonicalPath: () => import_worktree.sameCanonicalPath,
   transitionAttempt: () => transitionAttempt,
+  validateVerificationWaiver: () => import_verification.validateVerificationWaiver,
+  verificationAccepted: () => import_verification.verificationAccepted,
+  verificationFailureDiagnostic: () => import_verification.verificationFailureDiagnostic,
+  verificationOutcome: () => import_verification.verificationOutcome,
+  verificationRequirement: () => import_verification.verificationRequirement,
+  verificationWaiverDiagnostic: () => import_verification.verificationWaiverDiagnostic,
   worktreeCleanupDecision: () => import_worktree.worktreeCleanupDecision,
   worktreeCreateDecision: () => import_worktree.worktreeCreateDecision,
   worktreeResumeDecision: () => import_worktree.worktreeResumeDecision,
@@ -36,6 +43,7 @@ __export(kernel_exports, {
 });
 module.exports = __toCommonJS(kernel_exports);
 var import_worktree = require("./worktree.js");
+var import_verification = require("./verification.js");
 const ATTEMPT_TRANSITIONS = {
   prepared: { launch: "launched", bind_claim_token: "bound", claim_direct: "claimed", release: "released" },
   launched: { bind: "bound", bind_claim_token: "bound", release: "released" },
@@ -49,13 +57,14 @@ const ATTEMPT_TRANSITIONS = {
   closed: {},
   released: {}
 };
-function prepareAttempt(baseline, authority, preparedCompatibility) {
+function prepareAttempt(baseline, authority, preparedCompatibility, verificationRequirement2) {
   return Object.freeze({
     state: "prepared",
     execution: "dispatched",
     baseline,
     authority,
-    ...preparedCompatibility ? { preparedCompatibility: Object.freeze({ ...preparedCompatibility }) } : {}
+    ...preparedCompatibility ? { preparedCompatibility: Object.freeze({ ...preparedCompatibility }) } : {},
+    ...verificationRequirement2 ? { verificationRequirement: Object.freeze({ ...verificationRequirement2 }) } : {}
   });
 }
 function prepareDirectAttempt(baseline, authority) {
@@ -96,6 +105,7 @@ function inlineEligibility(input) {
   ATTEMPT_TRANSITIONS,
   attemptDiagnostic,
   canonicalPath,
+  captureVerificationResult,
   createWorktreeLease,
   inlineEligibility,
   isCanonicalRegisteredWorktree,
@@ -104,6 +114,12 @@ function inlineEligibility(input) {
   reduceAttempt,
   sameCanonicalPath,
   transitionAttempt,
+  validateVerificationWaiver,
+  verificationAccepted,
+  verificationFailureDiagnostic,
+  verificationOutcome,
+  verificationRequirement,
+  verificationWaiverDiagnostic,
   worktreeCleanupDecision,
   worktreeCreateDecision,
   worktreeResumeDecision,

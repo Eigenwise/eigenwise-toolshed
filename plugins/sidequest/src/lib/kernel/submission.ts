@@ -1,6 +1,7 @@
 'use strict';
 
 import type { Authority, Baseline, Diagnostic, SourceRevision, VerificationResult } from './index';
+import { verificationAccepted } from './verification.js';
 
 export type SubmissionTicket = Readonly<{ ref: string }>;
 export type SubmissionFailure = Readonly<{ code: string; message: string; actionable?: boolean; retryable?: boolean }>;
@@ -109,7 +110,7 @@ export function decideSubmissionAdmission(facts: SubmissionAdmissionFacts): Subm
   } else if (!baseline.containsCandidate) {
     failures.push(supplied(baseline.diagnostic, { code: 'baseline_membership_mismatch', message: `submit: refused ${ticket.ref}; ${candidate.source}:${candidate.value} is outside the immutable project baseline.`, retryable: true }));
   }
-  if (verification.result.status !== 'passed') {
+  if (!verificationAccepted(verification.result)) {
     failures.push(supplied(verification.diagnostic, { code: 'invalid_verify', message: `submit: refused ${ticket.ref}; verification evidence is unavailable.`, retryable: true }));
   } else if (verification.expectedEvidence && verification.result.evidence !== verification.expectedEvidence) {
     failures.push({ code: 'executor_verify_mismatch', message: `submit: refused ${ticket.ref}; verification must match the declared executor verify command.`, retryable: true });

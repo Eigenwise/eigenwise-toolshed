@@ -32,7 +32,7 @@ function manualVerify(value?: any) {
   return /^manual:\s+\S/i.test(String(value || '').trim());
 }
 
-const VERIFY_ORACLE_KINDS = ['command', 'attestation'];
+const VERIFY_ORACLE_KINDS = ['suite', 'command', 'document', 'link', 'schema', 'manual', 'attestation', 'review', 'custom'];
 
 function normalizeVerifyOracleKind(value?: any) {
   const kind = String(value || 'command').trim().toLowerCase();
@@ -60,7 +60,8 @@ function verifyOracleErrors(kind?: any, value?: any, artifact?: any) {
   const verifyKind = normalizeVerifyOracleKind(kind);
   if (verifyKind === 'attestation') return attestationErrors(value, artifact);
   if (String(artifact || '').trim()) return ['attestationArtifact requires verifyKind: attestation.'];
-  return verifyCommandErrors(value);
+  if (verifyKind === 'command' || verifyKind === 'suite') return verifyCommandErrors(value);
+  return [];
 }
 
 function requireVerifyOracle(kind?: any, value?: any, artifact?: any) {

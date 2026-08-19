@@ -20,7 +20,9 @@ function admissionFacts(source: string, value: string): SubmissionAdmissionFacts
 
 test('kernel transitions artifact attempts through the full project-neutral lifecycle', () => {
   const baseline = { revision: { source: 'wiki', value: 'revision-4', observedAt: '2026-08-13T00:00:00.000Z' }, purpose: 'dispatch' };
-  let attempt = kernel.prepareAttempt(baseline, { actor: 'editor', operation: 'prepare' });
+  const requirement = kernel.verificationRequirement({ kind: 'schema', evidence: 'schema fixture output', command: 'node scripts/check-schema.mjs' });
+  let attempt = kernel.prepareAttempt(baseline, { actor: 'editor', operation: 'prepare' }, undefined, requirement);
+  assert.deepEqual(attempt.verificationRequirement, requirement);
   for (const event of ['launch', 'bind', 'claim', 'start_work', 'verify', 'submit', 'assemble', 'integrate', 'close']) attempt = kernel.transitionAttempt(attempt, event);
   assert.equal(attempt.state, 'closed');
 });
@@ -80,7 +82,7 @@ test('kernel returns every retryable submission diagnostic without mutating fact
   const originalFacts = admissionFacts('wiki', 'wiki-42');
   const facts: SubmissionAdmissionFacts = {
     ...originalFacts,
-    verification: { result: { kind: 'attestation', status: 'unavailable', evidence: '' }, expectedEvidence: null, diagnostic: { code: 'invalid_verify', message: 'evidence is missing' } },
+    verification: { result: { kind: 'attestation', status: 'failed_check', evidence: '' }, expectedEvidence: null, diagnostic: { code: 'invalid_verify', message: 'evidence is missing' } },
     surfaces: { ...originalFacts.surfaces, pending: ['docs/change.md'] },
   };
   const decision = submission.decideSubmissionAdmission(facts);

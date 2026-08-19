@@ -753,7 +753,7 @@ const tools = [
           skipVerify: args.skipVerify === true
         });
         const failure = delivery2.outside?.length ? { strayPaths: delivery2.outside } : {};
-        if (delivery2.reason === "verify_failed_post_merge" || delivery2.reason === "verify_failed_post_merge_rollback_failed") failure.verifyFailed = delivery2.verify;
+        if (delivery2.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery2.reason))) failure.verifyFailed = delivery2.verify;
         return Object.assign(mutationAck(slug, delivery2), failure);
       }
       const usesGit = store.submissionUsesGit(ticket);
@@ -811,7 +811,7 @@ const tools = [
       });
       if (!delivery.ok) {
         const failure = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
-        if (delivery.reason === "verify_failed_post_merge" || delivery.reason === "verify_failed_post_merge_rollback_failed") failure.verifyFailed = delivery.verify;
+        if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) failure.verifyFailed = delivery.verify;
         return Object.assign(mutationAck(slug, delivery), failure);
       }
       const integration = delivery.integration;
@@ -819,7 +819,7 @@ const tools = [
       if (!verification.ok) {
         return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });
       }
-      const verifyReason = verification.verify.status === "attestation" ? `Attestation accepted for ${verification.verify.artifact || "the source revision"}.` : verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
+      const verifyReason = verification.verify.status === "attestation" ? `Attestation accepted for ${verification.verify.artifact || "the source revision"}.` : verification.verify.status === "skipped" ? `Verification waived by ${verification.verify.waiver?.authority || "an authorized human"}: ${verification.verify.waiver?.reason || verification.verify.evidence}.` : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
       const reason = usesGit ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}` : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,

@@ -312,8 +312,15 @@
         "verifyKind": {
           "type": "string",
           "enum": [
+            "suite",
             "command",
-            "attestation"
+            "document",
+            "link",
+            "schema",
+            "manual",
+            "attestation",
+            "review",
+            "custom"
           ]
         },
         "attestationArtifact": {
@@ -482,8 +489,15 @@
         "verifyKind": {
           "type": "string",
           "enum": [
+            "suite",
             "command",
-            "attestation"
+            "document",
+            "link",
+            "schema",
+            "manual",
+            "attestation",
+            "review",
+            "custom"
           ]
         },
         "attestationArtifact": {
