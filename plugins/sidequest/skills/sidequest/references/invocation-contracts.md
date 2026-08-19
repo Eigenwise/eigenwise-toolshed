@@ -31,9 +31,11 @@ this file only covers what the schema has no way to say.
 Pass either name, never both: passing both is refused before anything is written. When a synonym is used
 the response carries `acceptedAliases` naming the substitution.
 
+- `add`: `story` for `storyId`
 - `comment`: `message` or `m` for `body`
 - `link`: `ref` for `from`, `type` for `verb`, `target` for `to`
 - `story_log`: `append` for `entry`
+- `unlink`: `from` for `a`, `to` for `b`
 - any tool taking a priority: `priority: "medium"` is coerced to `"normal"` (`medium` is an effort value,
   not a priority)
 
