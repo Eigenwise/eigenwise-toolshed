@@ -58,6 +58,16 @@ const {
   state
 } = require("./mcp-shared");
 const { sourceRevisionAdapterFacts, sourceRevisionBaseline } = require("./source-revision-capability");
+const VERIFICATION_WAIVER_PROP = {
+  description: "Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.",
+  properties: {
+    authority: { description: "Human authority granting this one waiver." },
+    reason: { description: "Why the required verification cannot run." },
+    affectedGate: { description: "Exact verification gate being waived." },
+    scope: { description: "Bounded files, artifact, or delivery scope covered by the waiver." },
+    expiresAt: { description: "Future ISO timestamp after which the waiver is invalid." }
+  }
+};
 function compactIntegrationDelivery(integration) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -737,7 +747,8 @@ const tools = [
         mode: { type: "string", enum: ["merge", "replay", "apply"], description: "Defaults to the board delivery setting." },
         deliveryCommit: { type: "string", description: "Delivery commit." },
         reason: { type: "string" },
-        skipVerify: { type: "boolean" },
+        skipVerify: { type: "boolean", description: "Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver." },
+        verificationWaiver: VERIFICATION_WAIVER_PROP,
         session: { type: "string" }
       },
       required: ["ref", "by"]
@@ -750,10 +761,11 @@ const tools = [
       if (!ticket) {
         const delivery2 = store.integrateSubmission(slug, args.ref, {
           mode: args.mode == null ? store.boardConfig(slug).delivery : args.mode,
-          skipVerify: args.skipVerify === true
+          skipVerify: args.skipVerify === true,
+          verificationWaiver: args.verificationWaiver
         });
         const failure = delivery2.outside?.length ? { strayPaths: delivery2.outside } : {};
-        if (delivery2.reason === "verify_failed_post_merge" || delivery2.reason === "verify_failed_post_merge_rollback_failed") failure.verifyFailed = delivery2.verify;
+        if (delivery2.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery2.reason))) failure.verifyFailed = delivery2.verify;
         return Object.assign(mutationAck(slug, delivery2), failure);
       }
       const usesGit = store.submissionUsesGit(ticket);
@@ -788,7 +800,8 @@ const tools = [
           target,
           deliveryCommit: args.deliveryCommit,
           reason: args.reason,
-          skipVerify: args.skipVerify === true
+          skipVerify: args.skipVerify === true,
+          verificationWaiver: args.verificationWaiver
         });
         if (!recorded.ok) return mutationAck(slug, recorded);
         const closed2 = store.completeTicketAsControlPlane(slug, args.ref, {
@@ -807,19 +820,24 @@ const tools = [
       const delivery = store.integrateSubmission(slug, args.ref, {
         mode,
         target,
-        skipVerify: args.skipVerify === true
+        skipVerify: args.skipVerify === true,
+        verificationWaiver: args.verificationWaiver
       });
       if (!delivery.ok) {
         const failure = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
-        if (delivery.reason === "verify_failed_post_merge" || delivery.reason === "verify_failed_post_merge_rollback_failed") failure.verifyFailed = delivery.verify;
+        if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) failure.verifyFailed = delivery.verify;
         return Object.assign(mutationAck(slug, delivery), failure);
       }
       const integration = delivery.integration;
-      const verification = store.verifyIntegration(slug, args.ref, { by, skipVerify: args.skipVerify === true });
+      const verification = store.verifyIntegration(slug, args.ref, {
+        by,
+        skipVerify: args.skipVerify === true,
+        verificationWaiver: args.verificationWaiver
+      });
       if (!verification.ok) {
         return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });
       }
-      const verifyReason = verification.verify.status === "attestation" ? `Attestation accepted for ${verification.verify.artifact || "the source revision"}.` : verification.verify.status === "skipped" ? "Verify skipped by choice." : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.manual}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command}.`;
+      const verifyReason = verification.verify.status === "attestation" ? `Attestation accepted for ${verification.verify.artifact || "the source revision"}.` : verification.verify.status === "skipped" ? `Verification waived by ${verification.verify.waiver?.authority || "an authorized human"}: ${verification.verify.waiver?.reason || verification.verify.evidence}.` : verification.verify.status === "manual" ? `Manual verification recorded: ${verification.verify.evidence}.` : verification.verify.status === "none" ? "Verify: none." : `Verify passed: ${verification.verify.command || verification.verify.evidence}.`;
       const reason = usesGit ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}` : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;
       const closed = store.completeTicketAsControlPlane(slug, args.ref, {
         by,

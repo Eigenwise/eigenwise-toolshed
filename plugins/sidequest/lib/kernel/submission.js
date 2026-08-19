@@ -21,6 +21,7 @@ __export(submission_exports, {
   decideSubmissionAdmission: () => decideSubmissionAdmission
 });
 module.exports = __toCommonJS(submission_exports);
+var import_verification = require("./verification.js");
 function diagnostic(failure) {
   return Object.freeze({ code: failure.code, message: failure.message, actionable: failure.actionable !== false });
 }
@@ -69,7 +70,7 @@ function decideSubmissionAdmission(facts) {
   } else if (!baseline.containsCandidate) {
     failures.push(supplied(baseline.diagnostic, { code: "baseline_membership_mismatch", message: `submit: refused ${ticket.ref}; ${candidate.source}:${candidate.value} is outside the immutable project baseline.`, retryable: true }));
   }
-  if (verification.result.status !== "passed") {
+  if (!(0, import_verification.verificationAccepted)(verification.result)) {
     failures.push(supplied(verification.diagnostic, { code: "invalid_verify", message: `submit: refused ${ticket.ref}; verification evidence is unavailable.`, retryable: true }));
   } else if (verification.expectedEvidence && verification.result.evidence !== verification.expectedEvidence) {
     failures.push({ code: "executor_verify_mismatch", message: `submit: refused ${ticket.ref}; verification must match the declared executor verify command.`, retryable: true });

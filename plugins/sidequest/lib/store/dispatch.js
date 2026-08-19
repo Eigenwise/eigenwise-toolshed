@@ -1,9 +1,35 @@
 "use strict";
 const { canonicalPreparedDispatchExecutor } = require("../prepared-dispatch.js");
+const { verificationRequirement } = require("../kernel/verification.js");
+const { resolveSuite } = require("../suite-resolver.js");
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require("../kernel/review-binding");
 function unscopedWriteCannotAutoApprove(ticket, options) {
   const { dispatchReadOnly, normalizeFiles, autoApproveScope } = options;
   return !dispatchReadOnly(ticket) && !normalizeFiles(ticket?.files).length && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
+}
+function namedSuiteForTicket(ticket, projectPath) {
+  const directories = new Set(
+    (Array.isArray(ticket?.files) ? ticket.files : []).map((file) => /^plugins\/([^/]+)(?:\/|$)/.exec(String(file || "").replace(/\\/g, "/"))?.[1]).filter(Boolean)
+  );
+  if (!projectPath || directories.size !== 1) return null;
+  const name = [...directories][0];
+  const resolved = resolveSuite(projectPath, { name, dir: `plugins/${name}` });
+  return resolved ? { name: resolved.plugin, cwd: resolved.cwd, setup: resolved.setup, command: resolved.command } : null;
+}
+function preparedVerificationRequirement(ticket, projectPath) {
+  const recorded = String(ticket?.executorVerify || "").trim();
+  const declaredKind = String(ticket?.executorVerifyKind || "command").trim().toLowerCase();
+  const manual = /^manual:\s+/i.test(recorded);
+  const suite = !recorded || declaredKind === "suite" ? namedSuiteForTicket(ticket, projectPath) : null;
+  const legacyWithoutVerifier = !recorded && !suite;
+  const kind = manual ? "manual" : legacyWithoutVerifier ? "custom" : declaredKind;
+  return verificationRequirement({
+    kind,
+    evidence: legacyWithoutVerifier ? "legacy project verifier was not recorded" : recorded || void 0,
+    command: ["suite", "command"].includes(kind) ? recorded || void 0 : void 0,
+    artifact: ticket?.executorAttestationArtifact,
+    suite
+  });
 }
 function createDispatch(dependencies) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
@@ -1109,12 +1135,15 @@ function createDispatch(dependencies) {
       }) : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
       const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(readMeta(slug)?.path || "", integrationTargetState.branch) : null;
       delete t.storyContractDrift;
+      const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
       t.dispatch = {
         lifecycleAttempt: prepareAttempt(
           Object.freeze({ revision: Object.freeze({ source: "board", value: String(t.id || t.ref), observedAt: now }), purpose: "dispatch" }),
           Object.freeze({ actor: dispatchPreparationAttribution(opts), operation: "prepare", sessionId: opts.sessionId ? String(opts.sessionId) : null }),
-          preparedPluginInstall && preparedPluginIdentity ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity }) : void 0
+          preparedPluginInstall && preparedPluginIdentity ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity }) : void 0,
+          verificationRequirement2
         ),
+        verificationRequirement: verificationRequirement2,
         sessionId: opts.sessionId ? String(opts.sessionId) : null,
         preparedBy: dispatchPreparationAttribution(opts),
         ...preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {},

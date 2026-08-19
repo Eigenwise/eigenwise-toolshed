@@ -1,6 +1,7 @@
 'use strict';
 
 const { resolveSuite } = require('../suite-resolver.js');
+const { VERIFICATION_KINDS } = require('../kernel/verification.js');
 const { canonicalPath, ignoredPathsMissingFromWorktree, parseWorktreeList } = require('../worktrees.js');
 const { unscopedWriteCannotAutoApprove } = require('./dispatch.js');
 
@@ -32,7 +33,7 @@ function manualVerify(value?: any) {
   return /^manual:\s+\S/i.test(String(value || '').trim());
 }
 
-const VERIFY_ORACLE_KINDS = ['command', 'attestation'];
+const VERIFY_ORACLE_KINDS = VERIFICATION_KINDS;
 
 function normalizeVerifyOracleKind(value?: any) {
   const kind = String(value || 'command').trim().toLowerCase();
@@ -60,7 +61,8 @@ function verifyOracleErrors(kind?: any, value?: any, artifact?: any) {
   const verifyKind = normalizeVerifyOracleKind(kind);
   if (verifyKind === 'attestation') return attestationErrors(value, artifact);
   if (String(artifact || '').trim()) return ['attestationArtifact requires verifyKind: attestation.'];
-  return verifyCommandErrors(value);
+  if (verifyKind === 'command' || verifyKind === 'suite') return verifyCommandErrors(value);
+  return [];
 }
 
 function requireVerifyOracle(kind?: any, value?: any, artifact?: any) {

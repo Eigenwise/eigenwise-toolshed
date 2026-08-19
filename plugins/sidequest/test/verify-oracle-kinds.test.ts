@@ -11,6 +11,7 @@ process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-or
 
 const store = require('../lib/store.js');
 const agentsync = require('../lib/agentsync.js');
+const verification = require('../lib/kernel/verification.js');
 
 test('attestation oracle requires an observed artifact and structured evidence', () => {
   const slug = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-oracle-project-')), 'verify oracle').slug;
@@ -47,7 +48,44 @@ test('attestation oracle requires an observed artifact and structured evidence',
   );
 
   const briefing = agentsync.renderTicketBriefing(ticket, 'oracle-token', slug);
-  assert.match(briefing, /Verify oracle: attestation/);
+  assert.match(briefing, /Legacy verifier: attestation/);
   assert.match(briefing, new RegExp(artifact.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.doesNotMatch(briefing, /Verify output discipline/);
+});
+
+test('verification failures retain domain-specific actionable identities', () => {
+  for (const kind of ['document', 'link', 'schema', 'review']) {
+    const failure = verification.verificationFailureDiagnostic({
+      kind,
+      status: 'failed_check',
+      evidence: `${kind} evidence did not satisfy the pinned contract`,
+      failureIdentities: [`${kind}:pinned-contract`],
+    });
+    assert.equal(failure.code, 'verification_failed_check');
+    assert.match(failure.message, new RegExp(`${kind}:pinned-contract`));
+  }
+});
+
+
+test('verification requirements pin suite execution and validate bounded waivers', () => {
+  const suite = verification.verificationRequirement({
+    kind: 'suite',
+    suite: { name: 'sidequest', cwd: 'plugins/sidequest', setup: 'npm ci', command: 'npm run test:full' },
+  });
+  assert.equal(suite.kind, 'suite');
+  assert.equal(suite.command, 'cd plugins/sidequest && npm ci && npm run test:full');
+  assert.equal(suite.evidenceContract, 'suite sidequest output');
+
+  const missingWaiver = verification.validateVerificationWaiver(null);
+  assert.equal(missingWaiver.code, 'verification_waiver_required');
+  const waiver = verification.validateVerificationWaiver({
+    authority: 'release-manager',
+    reason: 'vendor outage',
+    affectedGate: 'docs-link-check',
+    scope: 'docs/reference',
+  });
+  assert.equal(waiver.authority, 'release-manager');
+  assert.equal(verification.verificationAccepted({ kind: 'link', status: 'skipped', evidence: waiver.reason, waiver }), true);
+  assert.equal(verification.verificationAccepted({ kind: 'link', status: 'skipped', evidence: 'unapproved', waiver: {} }), false);
+  assert.equal(verification.verificationAccepted({ kind: 'link', status: 'skipped', evidence: 'unapproved' }), false);
 });

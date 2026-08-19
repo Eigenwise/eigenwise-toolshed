@@ -591,11 +591,28 @@ function publishLockRefusal(holder: any, by: any, runtimeSessionId: any): string
   return `integrate: publish lock is held by ${holder?.by || lockSessionId || 'another session'}; acquire or re-acquire it before delivery.`;
 }
 
+function verificationWaiverFromOptions(opts: any) {
+  const authority = String(opts['waiver-authority'] || '').trim();
+  const reason = String(opts['waiver-reason'] || '').trim();
+  const affectedGate = String(opts['waiver-gate'] || '').trim();
+  const scope = String(opts['waiver-scope'] || '').trim();
+  const expiresAt = String(opts['waiver-expires-at'] || '').trim();
+  if (![authority, reason, affectedGate, scope, expiresAt].some(Boolean)) return undefined;
+  return {
+    authority,
+    reason,
+    affectedGate,
+    ...(scope ? { scope } : {}),
+    ...(expiresAt ? { expiresAt } : {}),
+  };
+}
+
 async function cmdIntegrate(opts: any, positional: any) {
   const idOrRef = positional[0];
   if (!idOrRef) fail('integrate: pass a ticket id or ref, e.g. sidequest integrate SQ-3 --by orchestrator --mode replay.');
   const { slug, meta } = await resolveProject(opts);
   const by = workerId(opts);
+  const verificationWaiver = verificationWaiverFromOptions(opts);
   const ticket = store.getTicket(slug, idOrRef);
   const usesGit = store.submissionUsesGit(ticket);
   const publish = require('../lib/publish');
@@ -621,6 +638,7 @@ async function cmdIntegrate(opts: any, positional: any) {
       deliveryCommit: opts['delivery-commit'],
       reason: opts.reason,
       skipVerify: !!opts['skip-verify'],
+      verificationWaiver,
     });
     if (!recorded.ok) fail(`integrate: ${recorded.message || recorded.reason}.`);
     const closed = store.completeTicketAsControlPlane(slug, idOrRef, {
@@ -642,9 +660,10 @@ async function cmdIntegrate(opts: any, positional: any) {
     mode,
     target,
     skipVerify: !!opts['skip-verify'],
+    verificationWaiver,
   });
   if (!delivery.ok) {
-    if (delivery.reason === 'verify_failed_post_merge' || delivery.reason === 'verify_failed_post_merge_rollback_failed') {
+    if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) {
       const payload = { project: slug, delivery: null, verifyFailed: delivery.verify };
       if (opts.json) {
         process.stdout.write(JSON.stringify(payload, null, 2) + '\n');
@@ -657,7 +676,11 @@ async function cmdIntegrate(opts: any, positional: any) {
     fail(`integrate: ${(delivery.message || delivery.reason)}.`);
   }
   const integration = delivery.integration;
-  const verification = store.verifyIntegration(slug, idOrRef, { by, skipVerify: !!opts['skip-verify'] });
+  const verification = store.verifyIntegration(slug, idOrRef, {
+    by,
+    skipVerify: !!opts['skip-verify'],
+    verificationWaiver,
+  });
   if (!verification.ok) {
     const payload = { project: slug, delivery: integration, verifyFailed: verification.verify };
     if (opts.json) {
@@ -665,17 +688,17 @@ async function cmdIntegrate(opts: any, positional: any) {
       process.exitCode = 1;
       return;
     }
-    fail(`integrate: delivered ${idOrRef}, but verification ${verification.verify.status === 'timeout' ? `timed out after ${verification.verify.timeoutMs}ms` : `failed with exit code ${verification.verify.exitCode}`}. Log: ${verification.verify.logPath}`);
+    fail(`integrate: delivered ${idOrRef}, but verification ${verification.verify.status === 'timeout' ? verification.verify.timeoutMilliseconds === undefined ? 'timed out at the configured limit' : `timed out after ${verification.verify.timeoutMilliseconds}ms` : `failed with exit code ${verification.verify.exitCode}`}. Log: ${verification.verify.logPath}`);
   }
   const verifyReason = verification.verify.status === 'attestation'
     ? `Attestation accepted for ${verification.verify.artifact || 'the source revision'}.`
     : verification.verify.status === 'skipped'
-      ? 'Verify skipped by choice.'
+      ? `Verification waived by ${verification.verify.waiver?.authority || 'an authorized human'}: ${verification.verify.waiver?.reason || verification.verify.evidence}.`
       : verification.verify.status === 'manual'
-        ? `Manual verification recorded: ${verification.verify.manual}.`
+        ? `Manual verification recorded: ${verification.verify.evidence}.`
         : verification.verify.status === 'none'
           ? 'Verify: none.'
-          : `Verify passed: ${verification.verify.command}.`;
+          : `Verify passed: ${verification.verify.command || verification.verify.evidence}.`;
   const reason = usesGit
     ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`
     : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;

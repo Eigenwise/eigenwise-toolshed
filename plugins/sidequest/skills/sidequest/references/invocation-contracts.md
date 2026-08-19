@@ -11,9 +11,14 @@ this file only covers what the schema has no way to say.
   need `command` and `outputTail`, and are refused without them. `kind: oracle` parks the ticket in
   `awaiting-oracle` and the handoff stays visible until `verdict`. `kind: handback` is for refused paths:
   commit the in-scope work first, then name the paths you could not touch.
-- **`add` / `update` with `verifyKind: attestation`**: `verify` must be
-  `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`. Any other shape is
-  refused. `verifyKind: command` takes a runnable command instead.
+- **`add` / `update` verification**: `verifyKind` is one of `suite`, `command`, `document`, `link`,
+  `schema`, `manual`, `attestation`, `review`, or `custom`. `suite` and `command` require a runnable
+  command. The other kinds retain the submitted evidence contract. `verifyKind: attestation` also requires
+  `verify` in the form `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`;
+  any other shape is refused.
+- **`integrate` verification waiver**: `skipVerify: true` also requires `verificationWaiver` with `authority`,
+  `reason`, `affectedGate`, and either a bounded `scope` or future `expiresAt`. Sidequest validates and stores
+  the waiver Diagnostic with the integration result; a bare `skipVerify` is refused.
 - **`add`**: `complexity` is the legacy ambiguity fallback and requires `why` alongside it. Stamp
   `category` from the live taxonomy instead whenever one fits.
 - **`groomClose`**: one tool, three purposes, each with a different gate. `deliveryCommit` closes it as a
@@ -44,6 +49,7 @@ accepted name is within two edits.
 | comment body | `-m "text"` or `--body-file <path>` | `body` |
 | relate two tickets | `sidequest link SQ-4 depends-on SQ-3` (positional) | `{ from: "SQ-4", verb: "depends-on", to: "SQ-3" }` |
 | append to a story's decision log | `sidequest story log US-1 -m text` | `story_log` with `entry` |
+| waive integration verification | `--skip-verify` plus `--waiver-authority`, `--waiver-reason`, `--waiver-gate`, and `--waiver-scope` or `--waiver-expires-at` | `skipVerify: true` plus the structured `verificationWaiver` object |
 
 Paging is the same on both: `limit` plus `cursor`, and you follow `nextCursor` until it is null.
 

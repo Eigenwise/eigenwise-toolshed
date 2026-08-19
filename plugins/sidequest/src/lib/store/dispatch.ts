@@ -1,6 +1,8 @@
 'use strict';
 
 const { canonicalPreparedDispatchExecutor } = require('../prepared-dispatch.js');
+const { verificationRequirement } = require('../kernel/verification.js');
+const { resolveSuite } = require('../suite-resolver.js');
 const { reviewCandidateFromSubmission, sameReviewCandidate, reviewRelationFor, reviewRelationOutcome } = require('../kernel/review-binding');
 
 function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
@@ -8,6 +10,36 @@ function unscopedWriteCannotAutoApprove(ticket?: any, options?: any) {
   return !dispatchReadOnly(ticket)
     && !normalizeFiles(ticket?.files).length
     && (!Array.isArray(autoApproveScope) || !autoApproveScope.length);
+}
+
+function namedSuiteForTicket(ticket: any, projectPath: string) {
+  const directories = new Set(
+    (Array.isArray(ticket?.files) ? ticket.files : [])
+      .map((file: unknown) => /^plugins\/([^/]+)(?:\/|$)/.exec(String(file || '').replace(/\\/g, '/'))?.[1])
+      .filter(Boolean),
+  );
+  if (!projectPath || directories.size !== 1) return null;
+  const name = [...directories][0];
+  const resolved = resolveSuite(projectPath, { name, dir: `plugins/${name}` });
+  return resolved
+    ? { name: resolved.plugin, cwd: resolved.cwd, setup: resolved.setup, command: resolved.command }
+    : null;
+}
+
+function preparedVerificationRequirement(ticket: any, projectPath: string) {
+  const recorded = String(ticket?.executorVerify || '').trim();
+  const declaredKind = String(ticket?.executorVerifyKind || 'command').trim().toLowerCase();
+  const manual = /^manual:\s+/i.test(recorded);
+  const suite = !recorded || declaredKind === 'suite' ? namedSuiteForTicket(ticket, projectPath) : null;
+  const legacyWithoutVerifier = !recorded && !suite;
+  const kind = manual ? 'manual' : legacyWithoutVerifier ? 'custom' : declaredKind;
+  return verificationRequirement({
+    kind,
+    evidence: legacyWithoutVerifier ? 'legacy project verifier was not recorded' : recorded || undefined,
+    command: ['suite', 'command'].includes(kind) ? recorded || undefined : undefined,
+    artifact: ticket?.executorAttestationArtifact,
+    suite,
+  });
 }
 
 function createDispatch(dependencies: any) {
@@ -1290,6 +1322,7 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ? localAheadOfUpstreamWarning(readMeta(slug)?.path || '', integrationTargetState.branch)
       : null;
     delete t.storyContractDrift;
+    const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));
     t.dispatch = {
       lifecycleAttempt: prepareAttempt(
         Object.freeze({ revision: Object.freeze({ source: 'board', value: String(t.id || t.ref), observedAt: now }), purpose: 'dispatch' }),
@@ -1297,7 +1330,9 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
         preparedPluginInstall && preparedPluginIdentity
           ? Object.freeze({ pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity })
           : undefined,
+        verificationRequirement,
       ),
+      verificationRequirement,
       sessionId: opts.sessionId ? String(opts.sessionId) : null,
       preparedBy: dispatchPreparationAttribution(opts),
       ...(preparedPluginInstall && preparedPluginIdentity ? { preparedCompatibility: { pluginInstall: preparedPluginInstall, identity: preparedPluginIdentity } } : {}),

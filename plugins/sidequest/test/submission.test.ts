@@ -324,7 +324,7 @@ test('submit accepts runnable and manual verify commands', () => {
   assert.strictEqual(store.getTicket(slug, manual.ref).submission.verify, 'manual: submission tests passed');
 });
 
-test('integration rejects a plugin change when its merged-tree full gate fails', () => {
+test('integration keeps a recorded verifier instead of re-deriving a plugin gate', () => {
   const pluginDir = path.join(PROJECT_DIR, 'plugins', 'integration-gate-fixture');
   fs.mkdirSync(pluginDir, { recursive: true });
   fs.writeFileSync(path.join(pluginDir, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node -e "process.exit(7)"' } }));
@@ -339,9 +339,9 @@ test('integration rejects a plugin change when its merged-tree full gate fails',
   const result = store.verifyIntegration(slug, t.ref);
 
   assert.strictEqual(result.ok, false);
-  assert.strictEqual(result.reason, 'verify_failed');
-  assert.strictEqual(result.verify.status, 'failed');
-  assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && npm ci && npm run test:full');
+  assert.strictEqual(result.reason, 'verification_failed_suite');
+  assert.strictEqual(result.verify.status, 'failed_suite');
+  assert.strictEqual(result.verify.command, 'cd plugins/integration-gate-fixture && node --test test/changed.test.js');
 });
 
 test('SQ-1875: every submission range reason gives a pinned-base remedy', () => {
@@ -1221,11 +1221,11 @@ test('integration rolls back when post-merge verification fails', () => {
   const target = Object.assign({}, store.integrationTarget(slug), { branch: git(['branch', '--show-current']) });
   const rejected = store.integrateSubmission(slug, t.ref, { mode: 'merge', target });
   assert.strictEqual(rejected.ok, false);
-  assert.strictEqual(rejected.reason, 'verify_failed_post_merge');
+  assert.strictEqual(rejected.reason, 'verification_failed_suite_post_merge');
   assert.strictEqual(rejected.verify.command, 'node -e "process.exit(1)"');
   assert.ok(fs.existsSync(rejected.verify.logPath));
   assert.strictEqual(git(['rev-parse', 'HEAD']), before);
-  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verify_failed_post_merge');
+  assert.strictEqual(store.getTicket(slug, t.ref).submission.integration.reason, 'verification_failed_suite_post_merge');
 });
 
 test('SQ-1743: a held delivery lock refuses another integration before it changes the checkout', () => {

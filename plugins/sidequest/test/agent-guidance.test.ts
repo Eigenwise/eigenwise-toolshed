@@ -85,6 +85,9 @@ test('the invocation contracts reference is derived from the accepted synonyms a
       assert.ok(invocationContracts.includes(value), `${tool}.${property} value "${value}" is not explained`);
     }
   }
+  const waiverSchema = byName.get('integrate')!.inputSchema.properties.verificationWaiver;
+  assert.deepEqual(Object.keys(waiverSchema.properties), ['authority', 'reason', 'affectedGate', 'scope', 'expiresAt']);
+  assert.match(invocationContracts, /skipVerify: true[^\n]*verificationWaiver/);
 
   // An agent reads the schema description on the way in and this file when it needs the reason, so the
   // grammar has to be one string in both places: three tickets in a row were refused for guessing it.

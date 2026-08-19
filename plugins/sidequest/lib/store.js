@@ -19,7 +19,7 @@ const telemetry = require("./telemetry.js");
 const { negativeControlRecoveryGuidance, routingDisabledMessage } = require("./refusal-guidance.js");
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require("./prepared-dispatch.js");
 const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require("./dispatch-preflight.js");
-const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic } = require("./kernel/index.js");
+const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require("./kernel/index.js");
 const { sourceRevision } = require("./source-revision-capability.js");
 const { createAssets } = require("./store/assets.js");
 const { createNotifications } = require("./store/notifications.js");
@@ -196,7 +196,7 @@ function executorText(...args) {
 function manualVerify(...args) {
   return warningsLayer.manualVerify(...args);
 }
-const VERIFY_ORACLE_KINDS = ["command", "attestation"];
+const VERIFY_ORACLE_KINDS = VERIFICATION_KINDS;
 function normalizeVerifyOracleKind(...args) {
   return warningsLayer.normalizeVerifyOracleKind(...args);
 }
@@ -865,7 +865,7 @@ function completionTreeCheck(slug, ticket, opts) {
       ok: false,
       reason: "empty_declared_scope",
       declaredFiles,
-      message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed-suite|failed|could-not-run>: <evidence>.`
+      message: `${ticket.ref} completion refused: its declared write scope has an empty diff since dispatch base. Declared files: ${declaredFiles.join(", ")}. If this run intentionally made no repository change, report [sidequest:verify-complete] no-op: <evidence>; verification outcomes use [sidequest:verify-complete] <passed|failed_suite|toolchain_missing|could_not_run|timeout|manual|attestation|skipped|failed_check>: <evidence>.`
     };
   }
   if (changedPaths.some(isTestSidePath) && changedPaths.some((file) => !isTestSidePath(file))) {
