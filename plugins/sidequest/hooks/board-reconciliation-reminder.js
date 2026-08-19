@@ -297,7 +297,7 @@ function reconciliationMessage(data) {
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
     const submissionStoryIds = new Set(submissions.map((ticket) => ticket.storyId).filter(Boolean));
-    const liveClaimCount = projectTickets.filter((ticket) => ticket.claimLive && (submissionStoryIds.size ? submissionStoryIds.has(ticket.storyId) : dispatchedBySession(ticket, sessionId))).length;
+    const liveClaimCount = projectTickets.filter((ticket) => ticket.claimLive && store.claimMaySubmit(ticket) && (submissionStoryIds.size ? submissionStoryIds.has(ticket.storyId) : dispatchedBySession(ticket, sessionId))).length;
     const otherOpen = open.length - doing.length - submissions.length;
     if (!open.length) return null;
     const actionable = [

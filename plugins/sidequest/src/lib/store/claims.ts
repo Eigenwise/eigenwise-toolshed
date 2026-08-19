@@ -135,6 +135,20 @@ function createClaims(dependencies: any) {
     return { startedAt, command };
   }
 
+  function claimMaySubmit(ticket?: any) {
+    if (claimVerification(ticket)) return true;
+    const claim = ticket?.claim;
+    if (!claim?.by) return false;
+    let latestEvent: any = null;
+    for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
+      if (comment?.by !== claim.by) continue;
+      const event = verificationComment(comment.body);
+      if (event) latestEvent = event;
+    }
+    return latestEvent?.kind === 'complete'
+      && (latestEvent.status === 'passed' || (!latestEvent.status && !latestEvent.noOp));
+  }
+
   function verificationComment(body?: any) {
     const text = String(body || '');
     if (text.startsWith(VERIFY_START_COMMENT)) {
@@ -309,6 +323,7 @@ function createClaims(dependencies: any) {
     claimActivityMs,
     claimIdleAge,
     claimIdleMs,
+    claimMaySubmit,
     claimReclaimable,
     claimReleaseBlocker,
     claimReleaseNote,

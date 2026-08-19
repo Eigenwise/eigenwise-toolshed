@@ -124,6 +124,18 @@ ${evidence.outputTail}`;
     if (!Number.isFinite(Date.parse(startedAt)) || !command) return null;
     return { startedAt, command };
   }
+  function claimMaySubmit(ticket) {
+    if (claimVerification(ticket)) return true;
+    const claim = ticket?.claim;
+    if (!claim?.by) return false;
+    let latestEvent = null;
+    for (const comment of Array.isArray(ticket.comments) ? ticket.comments : []) {
+      if (comment?.by !== claim.by) continue;
+      const event = verificationComment(comment.body);
+      if (event) latestEvent = event;
+    }
+    return latestEvent?.kind === "complete" && (latestEvent.status === "passed" || !latestEvent.status && !latestEvent.noOp);
+  }
   function verificationComment(body) {
     const text = String(body || "");
     if (text.startsWith(VERIFY_START_COMMENT)) {
@@ -288,6 +300,7 @@ ${evidence.outputTail}`;
     claimActivityMs,
     claimIdleAge,
     claimIdleMs,
+    claimMaySubmit,
     claimReclaimable,
     claimReleaseBlocker,
     claimReleaseNote,
