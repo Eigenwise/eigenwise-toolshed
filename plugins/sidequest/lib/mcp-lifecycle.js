@@ -57,7 +57,7 @@ const {
   CATEGORY_TAXONOMY_WARNING,
   state
 } = require("./mcp-shared");
-const { sourceRevisionAdapterFacts, sourceRevisionBaseline } = require("./source-revision-capability");
+const { sourceRevisionBaseline } = require("./source-revision-capability");
 const VERIFICATION_WAIVER_PROP = {
   description: "Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.",
   properties: {
@@ -615,7 +615,7 @@ const tools = [
   },
   {
     name: "submit",
-    description: "Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. The server invokes the project source-revision capability with the candidate and dispatch-pinned baseline; callers cannot supply existence or membership facts. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. To bounce an unbound candidate back for repair, use rework; a review-bound candidate cannot be rejected by any route.",
+    description: 'Submit a verified Git range or immutable source revision for integration and release the claim. Source revisions are accepted only when the registered project path is outside Git; provide changedSurfaces and verifier evidence instead of commit, base, gitRef, or worktree. At registration, Sidequest persists the project adapter: non-Git projects use filesystem-snapshot revisions, whose source must be "filesystem-snapshot" and whose value must match the current project snapshot. The server resolves existence and baseline-membership facts from that persisted adapter; callers cannot supply them. A retry checkpoint supplies immutable candidate fields and verifier evidence when only corrected capability evidence is available. body carries the final report. To bounce an unbound candidate back for repair, use rework; a review-bound candidate cannot be rejected by any route.',
     inputSchema: {
       type: "object",
       properties: {
@@ -675,7 +675,7 @@ const tools = [
       const retryCandidate = ticket.submissionRetry?.candidate;
       const hydratedSourceRevision = retryCandidate ? retryCandidate.source === "git" ? null : retryCandidate : args.sourceRevision;
       if (hydratedSourceRevision) {
-        const adapterFacts = sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket));
+        const adapterFacts = store.sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket));
         const res2 = store.submitTicket(slug, args.ref, by, {
           sourceRevision: hydratedSourceRevision,
           changedSurfaces: retryCandidate ? ticket.submissionRetry?.changedSurfaces : args.changedSurfaces,

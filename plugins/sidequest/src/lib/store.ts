@@ -33,7 +33,14 @@ const { dispatchLaunchName, stableClaudeName, stableDispatchName, stableReadOnly
 const crypto = require('crypto');
 const { execFileSync, spawnSync } = require('child_process');
 const db = require('./db.js');
-const { registerSourceRevisionCapability } = require('./source-revision-capability.js');
+const sourceRevisionCapability = require('./source-revision-capability.js');
+const {
+  filesystemSnapshotCapability,
+  filesystemSnapshotRevision,
+  registerSourceRevisionCapability,
+  sourceRevision,
+  sourceRevisionAdapterFacts: resolveSourceRevisionAdapterFacts,
+} = sourceRevisionCapability;
 const { DEFAULT_CATEGORIES, ROUTING_PROFILE_SEED_REVISION, starterRoutingProfilesFor } = require('./category-defaults.js');
 const commitScope = require('./commit-scope.js');
 const { commitPaths } = commitScope;
@@ -47,7 +54,6 @@ const { negativeControlRecoveryGuidance, routingDisabledMessage } = require('./r
 const { canonicalPreparedDispatchExecutor, normalizePreparedDispatch } = require('./prepared-dispatch.js');
 const { assertSidequestInstall, checkSidequestInstall, assertDispatchTransport, ensurePythonIoEncoding, localAheadOfUpstreamWarning } = require('./dispatch-preflight.js');
 const { prepareAttempt, prepareDirectAttempt, transitionAttempt, attemptDiagnostic, VERIFICATION_KINDS } = require('./kernel/index.js');
-const { sourceRevision } = require('./source-revision-capability.js');
 const { createAssets } = require('./store/assets.js');
 const { createNotifications } = require('./store/notifications.js');
 const { createWorkers } = require('./store/workers.js');
@@ -141,6 +147,78 @@ function deleteProjectExact(...args: any[]) { return projectsLayer.deleteProject
 function listProjects(...args: any[]) { return projectsLayer.listProjects(...args); }
 function findProject(...args: any[]) { return projectsLayer.findProject(...args); }
 function mergeProject(...args: any[]) { return projectsLayer.mergeProject(...args); }
+
+const FILESYSTEM_SNAPSHOT_ADAPTER = 'filesystem-snapshot';
+const GIT_SOURCE_REVISION_ADAPTER = 'git';
+const SOURCE_REVISION_SNAPSHOTS_MAX = 256;
+
+function sourceRevisionAdapterForPath(projectPath: any) {
+  let directory = path.resolve(projectPath);
+  for (;;) {
+    if (fs.existsSync(path.join(directory, '.git'))) return GIT_SOURCE_REVISION_ADAPTER;
+    const parent = path.dirname(directory);
+    if (parent === directory) return FILESYSTEM_SNAPSHOT_ADAPTER;
+    directory = parent;
+  }
+}
+
+function sourceRevisionSnapshots(meta: any) {
+  return Array.isArray(meta?.sourceRevisionSnapshots)
+    ? meta.sourceRevisionSnapshots.filter((snapshot: any) => snapshot?.source === FILESYSTEM_SNAPSHOT_ADAPTER && typeof snapshot.value === 'string')
+    : [];
+}
+
+function persistFilesystemSnapshot(slug: any, revision: any) {
+  return withMetaLock(slug, () => {
+    const meta = readMeta(slug);
+    if (!meta || meta.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) {
+      throw new Error(`source revision adapter "${FILESYSTEM_SNAPSHOT_ADAPTER}" is not configured for project ${slug}.`);
+    }
+    const snapshots = sourceRevisionSnapshots(meta);
+    if (!snapshots.some((snapshot: any) => snapshot.value === revision.value)) {
+      snapshots.push(revision);
+      meta.sourceRevisionSnapshots = snapshots.slice(-SOURCE_REVISION_SNAPSHOTS_MAX);
+      putProject(slug, meta);
+    }
+    return revision;
+  });
+}
+
+function filesystemSnapshotBaseline(slug: any, observedAt: string) {
+  const meta = readMeta(slug);
+  const revision = filesystemSnapshotRevision(String(meta?.path || ''), observedAt);
+  if (!revision) {
+    throw new Error(`project registration refused: the configured ${FILESYSTEM_SNAPSHOT_ADAPTER} adapter cannot snapshot ${String(meta?.path || slug)}.`);
+  }
+  return persistFilesystemSnapshot(slug, revision);
+}
+
+function dispatchBaselineForProject(slug: any, ticket: any, observedAt: string, baseCommit: any, nonRepoOutput: boolean) {
+  const project = readMeta(slug);
+  const revision = project?.sourceRevisionAdapter === FILESYSTEM_SNAPSHOT_ADAPTER
+    ? filesystemSnapshotBaseline(slug, observedAt)
+    : Object.freeze({
+      source: nonRepoOutput ? 'project-snapshot' : 'git',
+      value: String(baseCommit || ticket.id || ticket.ref),
+      observedAt,
+    });
+  return Object.freeze({ revision, purpose: 'dispatch' as const });
+}
+
+function sourceRevisionAdapterFacts(slug: any, candidate: any, baseline: any) {
+  const meta = readMeta(slug);
+  if (meta?.sourceRevisionAdapter !== FILESYSTEM_SNAPSHOT_ADAPTER) {
+    return resolveSourceRevisionAdapterFacts(slug, candidate, baseline);
+  }
+  const persistedCapability = filesystemSnapshotCapability(String(meta.path), (pinnedBaseline) => (
+    sourceRevisionSnapshots(readMeta(slug)).some((snapshot: any) => (
+      snapshot.source === pinnedBaseline.revision.source && snapshot.value === pinnedBaseline.revision.value
+    ))
+  ));
+  const facts = resolveSourceRevisionAdapterFacts(slug, candidate, baseline, persistedCapability);
+  if (facts?.baseline?.candidateExists) persistFilesystemSnapshot(slug, facts.candidate);
+  return facts;
+}
 
 let warningsLayer: any;
 let DISPATCH_DESCRIPTION_MIN: any;
@@ -435,6 +513,7 @@ const {
   database,
   db,
   dispatchReadOnly: (...args: any[]) => dispatchReadOnly(...args),
+  dispatchBaselineForProject,
   dispatchVerifyCommandError: (...args: any[]) => dispatchVerifyCommandError(...args),
   dispatchRouteRefusal: (...args: any[]) => dispatchRouteRefusal(...args),
   dispatchRouteState: (...args: any[]) => dispatchRouteState(...args),
@@ -1538,12 +1617,16 @@ function directReasonAllowed(reason?: any) {
 
 function lifecycleBaseline(slug: any, ticket: any, purpose: 'dispatch' | 'wave' | 'submission') {
   const preparedAt = String(ticket.dispatch?.preparedAt || ticket.updatedAt || new Date().toISOString());
-  const projectPath = String(readMeta(slug)?.path || '').trim();
-  const commit = projectPath ? commitScope.headCommit(projectPath) : null;
-  return Object.freeze({
-    revision: Object.freeze({ source: commit ? 'git' : 'board', value: String(commit || ticket.id || ticket.ref), observedAt: preparedAt }),
-    purpose,
-  });
+  const project = readMeta(slug);
+  const projectPath = String(project?.path || '').trim();
+  const revision = project?.sourceRevisionAdapter === FILESYSTEM_SNAPSHOT_ADAPTER
+    ? filesystemSnapshotBaseline(slug, preparedAt)
+    : Object.freeze({
+      source: 'git',
+      value: String(commitScope.headCommit(projectPath) || ticket.id || ticket.ref),
+      observedAt: preparedAt,
+    });
+  return Object.freeze({ revision, purpose });
 }
 
 function recordLifecycleAttempt(ticket: any, attempt: any) {
@@ -2752,7 +2835,7 @@ const {
 projectsLayer = createProjects({
   acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
   deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
-  path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction,
+  path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction,
 });
 
 warningsLayer = createWarnings({
@@ -2870,6 +2953,7 @@ module.exports = {
   projectDir,
   ensureProject,
   registerSourceRevisionCapability,
+  sourceRevisionAdapterFacts,
   readMeta,
   boardConfig,
   setBoardConfig,

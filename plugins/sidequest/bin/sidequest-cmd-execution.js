@@ -14,7 +14,7 @@ const tempCleanup = require("../lib/temp-cleanup");
 const execNames = require("../lib/exec-names");
 const { claimRefusalMessage } = require("../lib/refusal-guidance");
 const { collectGitSubmissionFacts } = require("../lib/mcp-lifecycle");
-const { sourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../lib/source-revision-capability");
+const { sourceRevisionBaseline } = require("../lib/source-revision-capability");
 const { assertSidequestInstall, assertDispatchTransport } = require("../lib/dispatch-preflight");
 const { fail, resolveProject, workerId, sessionId, bodyFromOpts, addBodyComment } = require("./sidequest-cmd-shared");
 function reportClaimFailure(action, idOrRef, res, meta) {
@@ -433,7 +433,7 @@ async function cmdSubmit(opts, positional) {
   const hydratedSourceRevision = retryCandidate ? retryCandidate.source === "git" ? null : retryCandidate : requestedSourceRevision;
   if (hydratedSourceRevision || retryWithoutIdentity) {
     const projectCapabilities = hydratedSourceRevision ? sourceRevisionProjectCapabilities(opts, Boolean(sourceRevisionValue && !retryCandidate)) : void 0;
-    const adapterFacts = hydratedSourceRevision ? sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket)) : null;
+    const adapterFacts = hydratedSourceRevision ? store.sourceRevisionAdapterFacts(slug, hydratedSourceRevision, sourceRevisionBaseline(ticket)) : null;
     let res2;
     try {
       res2 = store.submitTicket(slug, idOrRef, by, {

@@ -1,5 +1,5 @@
 "use strict";
-function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, ticketsDir, transaction }) {
+function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
   function canonicalize(absPath) {
     const resolved = path.resolve(absPath);
     try {
@@ -11,6 +11,7 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
   function ensureProject(absPath, name) {
     const resolved = path.resolve(absPath);
     const slug = slugify(resolved);
+    const sourceRevisionAdapter = sourceRevisionAdapterForPath(resolved);
     const dir = projectDir(slug);
     ensureDir(ticketsDir(slug));
     let meta;
@@ -26,6 +27,7 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
           seq: 0,
           storySeq: 0,
           alwaysInScope: defaultAlwaysInScope(resolved),
+          sourceRevisionAdapter,
           worktreeIsolation: true
         };
         db.putRow(handle, "projects", { slug, data: meta });
@@ -41,6 +43,10 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
         }
         if (!meta.name) {
           meta.name = defaultProjectName(resolved);
+          changed = true;
+        }
+        if (!["git", "filesystem-snapshot"].includes(meta.sourceRevisionAdapter)) {
+          meta.sourceRevisionAdapter = sourceRevisionAdapter;
           changed = true;
         }
         if (typeof meta.seq !== "number") {
