@@ -42,6 +42,7 @@ export type VerificationResult = Readonly<{
   outputTail?: string | null;
   failureIdentities?: readonly string[];
   waiver?: VerificationWaiver;
+  diagnostics?: readonly Diagnostic[];
 }>;
 
 type RequirementInput = Readonly<{
@@ -102,7 +103,7 @@ export function verificationRequirement(input: RequirementInput): VerificationRe
     return Object.freeze({ kind: 'suite', suite, command: suiteCommand(suite), evidenceContract: `suite ${suite.name} output` });
   }
   if (['document', 'link', 'schema', 'custom'].includes(kind)) {
-    return Object.freeze({ kind, evidenceContract: evidence || `${kind} verification evidence`, ...(command ? { command } : {}) });
+    return Object.freeze({ kind, evidenceContract: evidence || `${kind} verification evidence` });
   }
   return Object.freeze({ kind: 'command', command: command || undefined, evidenceContract: command || 'command output' });
 }

@@ -782,7 +782,7 @@ function executorSafetyBody(ticket?: any, nonce?: any, tokenFile?: any, project?
       : requirement?.command
         ? `${verifierPrefix}: ${verifierKind}. Command: ${requirement.command}`
         : `${verifierPrefix}: ${verifierKind}. Evidence contract: ${verifierEvidence}`;
-  const verifierCommand = requirement?.command || (ticket.executorVerifyKind !== 'attestation' ? ticket.executorVerify : '');
+  const verifierCommand = requirement?.command || (!requirement && ['suite', 'command'].includes(verifierKind) ? ticket.executorVerify : '');
   const highStakes = ticket?.highStakes
     ? [
       'High-stakes verification:',

@@ -1175,7 +1175,7 @@
   },
   {
     "name": "integrate",
-    "description": "Deliver work.",
+    "description": "Integrate.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1204,6 +1204,15 @@
         },
         "skipVerify": {
           "type": "boolean"
+        },
+        "verificationWaiver": {
+          "properties": {
+            "authority": {},
+            "reason": {},
+            "affectedGate": {},
+            "scope": {},
+            "expiresAt": {}
+          }
         },
         "session": {
           "type": "string"

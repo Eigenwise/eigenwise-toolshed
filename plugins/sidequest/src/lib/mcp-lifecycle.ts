@@ -72,6 +72,17 @@ type ShippedPlugin = {
   source: string;
 };
 
+const VERIFICATION_WAIVER_PROP = {
+  description: 'Required with skipVerify. Names the human authority, reason, affected gate, and a bounded scope or future expiry. Runtime validation rejects incomplete, expired, or non-object values.',
+  properties: {
+    authority: { description: 'Human authority granting this one waiver.' },
+    reason: { description: 'Why the required verification cannot run.' },
+    affectedGate: { description: 'Exact verification gate being waived.' },
+    scope: { description: 'Bounded files, artifact, or delivery scope covered by the waiver.' },
+    expiresAt: { description: 'Future ISO timestamp after which the waiver is invalid.' },
+  },
+};
+
 function compactIntegrationDelivery(integration: any) {
   const { verify: _verify, ...delivery } = integration;
   return delivery;
@@ -801,7 +812,8 @@ const tools: ToolDefinition[] = [
         mode: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Defaults to the board delivery setting.' },
         deliveryCommit: { type: 'string', description: 'Delivery commit.' },
         reason: { type: 'string' },
-        skipVerify: { type: 'boolean' },
+        skipVerify: { type: 'boolean', description: 'Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver.' },
+        verificationWaiver: VERIFICATION_WAIVER_PROP,
         session: { type: 'string' },
       },
       required: ['ref', 'by'],
@@ -814,7 +826,8 @@ const tools: ToolDefinition[] = [
       if (!ticket) {
         const delivery = store.integrateSubmission(slug, args.ref, {
           mode: args.mode == null ? store.boardConfig(slug).delivery : args.mode,
-            skipVerify: args.skipVerify === true,
+          skipVerify: args.skipVerify === true,
+          verificationWaiver: args.verificationWaiver,
         });
         const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
         if (delivery.verify && /^verification_[a-z_]+_post_merge(?:_rollback_failed)?$/.test(String(delivery.reason))) failure.verifyFailed = delivery.verify;
@@ -853,6 +866,7 @@ const tools: ToolDefinition[] = [
           deliveryCommit: args.deliveryCommit,
           reason: args.reason,
           skipVerify: args.skipVerify === true,
+          verificationWaiver: args.verificationWaiver,
         });
         if (!recorded.ok) return mutationAck(slug, recorded);
         const closed = store.completeTicketAsControlPlane(slug, args.ref, {
@@ -872,6 +886,7 @@ const tools: ToolDefinition[] = [
         mode,
         target,
         skipVerify: args.skipVerify === true,
+        verificationWaiver: args.verificationWaiver,
       });
       if (!delivery.ok) {
         const failure: any = delivery.outside?.length ? { strayPaths: delivery.outside } : {};
@@ -879,7 +894,11 @@ const tools: ToolDefinition[] = [
         return Object.assign(mutationAck(slug, delivery), failure);
       }
       const integration = delivery.integration;
-      const verification = store.verifyIntegration(slug, args.ref, { by, skipVerify: args.skipVerify === true });
+      const verification = store.verifyIntegration(slug, args.ref, {
+        by,
+        skipVerify: args.skipVerify === true,
+        verificationWaiver: args.verificationWaiver,
+      });
       if (!verification.ok) {
         return Object.assign(mutationAck(slug, verification), { delivery: integration, verifyFailed: verification.verify });
       }
@@ -888,10 +907,10 @@ const tools: ToolDefinition[] = [
         : verification.verify.status === 'skipped'
           ? `Verification waived by ${verification.verify.waiver?.authority || 'an authorized human'}: ${verification.verify.waiver?.reason || verification.verify.evidence}.`
           : verification.verify.status === 'manual'
-            ? `Manual verification recorded: ${verification.verify.manual}.`
+            ? `Manual verification recorded: ${verification.verify.evidence}.`
             : verification.verify.status === 'none'
               ? 'Verify: none.'
-              : `Verify passed: ${verification.verify.command}.`;
+              : `Verify passed: ${verification.verify.command || verification.verify.evidence}.`;
       const reason = usesGit
         ? `Delivered via ${integration.mode} from ${integration.pinnedRef} (${integration.pinnedCommit}) onto ${integration.targetBranch}. ${verifyReason}`
         : `Delivered source revision ${integration.sourceRevision.source}:${integration.sourceRevision.value}. ${verifyReason}`;

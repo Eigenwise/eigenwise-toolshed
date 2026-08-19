@@ -1,5 +1,5 @@
 "use strict";
-const { verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver } = require("../kernel/verification.js");
+const { verificationAccepted, verificationFailureDiagnostic, verificationOutcome, verificationRequirement, validateVerificationWaiver, verificationWaiverDiagnostic } = require("../kernel/verification.js");
 const { runProcessVerification } = require("../ports/process.js");
 const { decideSubmissionAdmission } = require("../kernel/submission");
 const { isSourceRevisionAdapterFacts, sourceRevisionBaseline } = require("../source-revision-capability.js");
@@ -503,7 +503,8 @@ Expires: ${checkpoint.expiresAt}`;
       status: "skipped",
       evidence: validated.reason,
       command: requirement.command || null,
-      waiver: validated
+      waiver: validated,
+      diagnostics: [verificationWaiverDiagnostic(validated)]
     };
   }
   function verifyDeliveredSubmission(slug, ticket, opts) {
@@ -597,7 +598,8 @@ ${verify.outputTail}` : null
         return { ok: false, reason: "candidate_review_required", ticket, message: `${ticket.ref} integration refused; ${reviewFailure}.` };
       }
     }
-    if (ticket.executorVerifyKind !== "attestation" && !isArtifactSubmission(ticket.submission)) {
+    const requiredVerification = pinnedVerificationRequirement(ticket);
+    if (requiredVerification.command && !isArtifactSubmission(ticket.submission)) {
       const recordedVerify = String(ticket.submission?.verify || "").trim();
       const verifyError = verifyCommandErrors(recordedVerify)[0];
       if (verifyError) {

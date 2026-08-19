@@ -188,7 +188,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   update: "Update ticket fields by scope. reviewTarget binds once and never clears.",
   rework: "Reject an unbound candidate for repair; candidate owner only. A review-bound candidate is locked.",
   submit: "Submit verified work; clear needs owner; force only lets owner replace candidate.",
-  integrate: "Deliver work.",
+  integrate: "Integrate.",
   comment: "Add a handoff comment.",
   comments: "Read comments before work.",
   plan: "Set ticket plan.",

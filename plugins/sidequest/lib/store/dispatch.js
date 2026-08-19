@@ -22,10 +22,11 @@ function preparedVerificationRequirement(ticket, projectPath) {
   const manual = /^manual:\s+/i.test(recorded);
   const suite = !recorded || declaredKind === "suite" ? namedSuiteForTicket(ticket, projectPath) : null;
   const legacyWithoutVerifier = !recorded && !suite;
+  const kind = manual ? "manual" : legacyWithoutVerifier ? "custom" : declaredKind;
   return verificationRequirement({
-    kind: manual ? "manual" : legacyWithoutVerifier ? "custom" : declaredKind,
-    evidence: manual ? recorded : legacyWithoutVerifier ? "legacy project verifier was not recorded" : void 0,
-    command: manual ? void 0 : recorded || void 0,
+    kind,
+    evidence: legacyWithoutVerifier ? "legacy project verifier was not recorded" : recorded || void 0,
+    command: ["suite", "command"].includes(kind) ? recorded || void 0 : void 0,
     artifact: ticket?.executorAttestationArtifact,
     suite
   });
