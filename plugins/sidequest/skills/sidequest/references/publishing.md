@@ -8,10 +8,11 @@ pushing main, marking done — is ONE serialized transaction owned by the orches
 transaction.
 
 `submit` derives the admitted range from the base recorded on the ticket's dispatch. Pass `--base <commit>`
-(or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must lie on the
-submitted tip's history and be at or after the current merge base, or already be reachable from the integration
-branch. A non-integrated base must match the dispatch-recorded boundary; otherwise admission refuses it as
-`unrecognized_base` and preserves the candidate for retry. The range still has to satisfy the current ticket's declared scope and ownership checks. For an
+(or MCP `base`) only when automatic selection cannot identify the boundary. An explicit base must always lie on the
+submitted tip's history, and it must additionally either sit at or after the current merge base or already be
+reachable from the integration branch. A base that is not reachable from the integration branch must match the
+dispatch-recorded boundary; otherwise admission refuses it as `unrecognized_base` and preserves the candidate
+for retry. The range still has to satisfy the current ticket's declared scope and ownership checks. For an
 executor based on a feature branch, pass that branch as MCP dispatch `integrationBranch`. The dispatch
 records that target and its starting commit. A submitted range may contain merge commits; validate its
 reachable range and scope instead of treating a merge commit as an automatic refusal.
