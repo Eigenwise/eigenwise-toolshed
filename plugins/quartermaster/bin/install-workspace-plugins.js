@@ -5,7 +5,7 @@ const childProcess = require('node:child_process');
 const fs = require('node:fs');
 const path = require('node:path');
 
-const ALLOWED_SCOPES = new Set(['project', 'local', 'user']);
+const ALLOWED_SCOPES = new Set(['project', 'local']);
 const KNOWN_MARKETPLACES = new Map([
   ['claude-plugins-official', 'anthropics/claude-plugins-official'],
   ['eigenwise-toolshed', 'Eigenwise/eigenwise-toolshed'],
@@ -73,7 +73,7 @@ function normalizeProjectPath(value) {
 
 function validatePlan(plan, { checkProjectDir = false } = {}) {
   if (!plan || typeof plan !== 'object' || Array.isArray(plan)) throw new Error('Plan must be an object');
-  hasOnlyKeys(plan, new Set(['version', 'projectDir', 'marketplaces', 'plugins', 'userScopeConfirmed', 'settingsMerge']), 'Plan');
+  hasOnlyKeys(plan, new Set(['version', 'projectDir', 'marketplaces', 'plugins', 'settingsMerge']), 'Plan');
   if (plan.version !== 1) throw new Error('Plan version must be 1');
   if (!isAbsolutePath(plan.projectDir)) throw new Error('Plan projectDir must be an absolute path');
   if (checkProjectDir && (!fs.existsSync(plan.projectDir) || !fs.statSync(plan.projectDir).isDirectory())) {
@@ -81,9 +81,6 @@ function validatePlan(plan, { checkProjectDir = false } = {}) {
   }
   if (!Array.isArray(plan.marketplaces)) throw new Error('Plan marketplaces must be an array');
   if (!Array.isArray(plan.plugins)) throw new Error('Plan plugins must be an array');
-  if (plan.userScopeConfirmed !== undefined && typeof plan.userScopeConfirmed !== 'boolean') {
-    throw new Error('Plan userScopeConfirmed must be a boolean');
-  }
   if (plan.settingsMerge !== undefined && (!plan.settingsMerge || typeof plan.settingsMerge !== 'object' || Array.isArray(plan.settingsMerge))) {
     throw new Error('Plan settingsMerge must be an object');
   }
@@ -107,7 +104,6 @@ function validatePlan(plan, { checkProjectDir = false } = {}) {
     hasOnlyKeys(plugin, new Set(['id', 'scope', 'role', 'preflight']), 'Plugin');
     if (typeof plugin.id !== 'string' || !PLUGIN_ID.test(plugin.id)) throw new Error(`Plugin id is invalid: ${plugin.id}`);
     if (!ALLOWED_SCOPES.has(plugin.scope)) throw new Error(`Plugin has unsupported scope: ${plugin.scope}`);
-    if (plugin.scope === 'user' && plan.userScopeConfirmed !== true) throw new Error(`User-scope plugin needs userScopeConfirmed: ${plugin.id}`);
     if (plugin.role !== undefined && plugin.role !== 'core' && plugin.role !== 'optional') throw new Error(`Plugin has unsupported role: ${plugin.role}`);
     if (plugin.preflight !== undefined && !Array.isArray(plugin.preflight)) throw new Error(`Plugin preflight must be an array: ${plugin.id}`);
     const marketplace = plugin.id.slice(plugin.id.lastIndexOf('@') + 1);
@@ -186,10 +182,11 @@ function marketplaceAddCommand(marketplace, claude, projectDir) {
 }
 
 function pluginInstallCommand(plugin, claude, projectDir) {
+  if (!ALLOWED_SCOPES.has(plugin.scope)) throw new Error(`Plugin has unsupported scope: ${plugin.scope}`);
   return {
     command: claude,
     args: ['plugin', 'install', plugin.id, '--scope', plugin.scope],
-    cwd: plugin.scope === 'user' ? undefined : projectDir,
+    cwd: projectDir,
     label: `${plugin.id} (${plugin.scope})`,
   };
 }
