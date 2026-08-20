@@ -42,11 +42,11 @@ export default defineConfig({
         {
           label: 'Use the plugins',
           items: [
+            { label: 'Quartermaster', slug: 'getting-started/quartermaster' },
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },
             { label: 'Live Rules', slug: 'getting-started/live-rules' },
-            { label: 'Quartermaster', slug: 'getting-started/quartermaster' },
             { label: 'Experiment loops', slug: 'getting-started/experiments' },
           ],
         },
