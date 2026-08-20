@@ -1,6 +1,6 @@
 # Stack → installable plugin catalog
 
-Use this catalog to build the Workbench bootstrap plan. It contains only plugins with a current,
+Use this catalog to build the workspace bootstrap plan. It contains only plugins with a current,
 reproducible marketplace source. The bootstrap helper installs plugins with `claude plugin install`;
 do not copy these IDs into `enabledPlugins` yourself.
 
@@ -47,9 +47,7 @@ Propose these only when they fit the project:
 ### Frontend / web
 
 Propose `context7`, `frontend-design`, `playwright`, and `security-guidance` when they match the
-project and team. TypeScript and JavaScript code intelligence is already covered: Workbench ships
-pull-only tools for it (see the TypeScript note under the LSP table), so never propose
-`typescript-lsp@claude-plugins-official`.
+project and team.
 
 ### Cloudflare-deployed
 
@@ -169,12 +167,6 @@ A missing binary is a warning, not an automatic installer failure. The user can 
 knowing the LSP cannot work until the binary exists, or drop the plugin. After reload, confirm the
 binary is still on `PATH` and that the language server responds.
 
-TypeScript is deliberately absent from this table. Workbench itself serves TypeScript/JavaScript code
-intelligence through its pull-only `code-intel` MCP tools (`definition`, `references`, `diagnostics`),
-which pick a language server from the requested file's extension and talk to the project's own
-TypeScript install.
-
-Workbench also serves C and C++ through `clangd`, so do not propose `clangd-lsp@claude-plugins-official` for a CMake project. Before its code-intel tools can answer, the project must provide a current `compile_commands.json` that covers the queried translation unit. Workbench never runs a build to produce one, and never guesses a preset, generator, or toolchain: read the project's own configure step and tell the user to add `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to it, or `CMAKE_EXPORT_COMPILE_COMMANDS` to the preset's `cacheVariables`. Then record two settings so refusals stay actionable: `WORKBENCH_CODE_INTEL_CPP_COMPILE_COMMANDS` when the database is not at the project root, and `WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND` set to that project's real configure command. Workbench refuses a missing or stale database rather than returning wrong answers.
 Do not install `typescript-lsp@claude-plugins-official`: its push diagnostics are process-global and
 blind to which agent owns them, so diagnostics from parallel isolated worktrees leak into the wrong
 transcript. If it is already installed, recommend removing it with
@@ -213,6 +205,4 @@ user values instead of replacing them.
 ## Scope
 
 The plan defaults selected workspace plugins to project scope. Use local scope only when the user
-explicitly asks for a personal install in this repository. Use user scope only when the user explicitly
-requests a cross-project install and confirms it in the plan. Workbench itself remains user-scoped and
-never appears in generated project settings.
+explicitly asks for a personal install in this repository.

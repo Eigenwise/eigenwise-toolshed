@@ -93,13 +93,8 @@ One visible plan, then per-item approval. Draw from three sources, in this order
     hand off rather than wiring it yourself.
   - `model-gateway` puts the user's existing ChatGPT/Codex and Grok subscription models in
     Claude Code's `/model` picker through a local gateway, no API keys. It is what makes
-    sidequest's non-Claude routes possible. User-scope and global.
-  - `workbench` is the caretaker: it updates Toolshed plugins, guards against a session running
-    stale plugin code, and answers health questions through `/toolshed-doctor`. User-scope and
-    global.
+    sidequest's non-Claude routes possible. Project-scoped with the rest of the workspace plugins.
 
-  `model-gateway` and `workbench` install once for the whole machine, so check their state and
-  point at their own skills; never install them per-project.
 - **Stack plugins**, from [references/stack-plugins.md](references/stack-plugins.md) plus the
   catalog (`node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" catalog --query "<stack terms>"`).
   For LSP plugins, check the required binary is on PATH first; report a missing binary with its

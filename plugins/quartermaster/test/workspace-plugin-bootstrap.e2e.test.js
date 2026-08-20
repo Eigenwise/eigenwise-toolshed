@@ -148,7 +148,6 @@ function selectedPlan(projectDir, overrides = {}) {
       { id: 'cloudflare@cloudflare', scope: 'project', role: 'optional' },
       { id: 'frontend-design@claude-plugins-official', scope: 'project', role: 'optional' },
     ],
-    userScopeConfirmed: false,
     ...overrides,
   };
 }
@@ -239,4 +238,16 @@ test('honors a personal local scope only when it is explicit in the plan', () =>
     { type: 'plugin-install', id: 'personal-rules@eigenwise-toolshed', scope: 'local' },
   ]);
   assert.equal(state.plugins[0].scope, 'local');
+}));
+
+test('refuses a user-scoped plan before invoking Claude', () => withFixture((fixture) => {
+  const plan = selectedPlan(fixture.projectDir, {
+    plugins: [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'user', role: 'core' }],
+  });
+  const result = runInstaller(fixture, plan);
+
+  assert.equal(result.status, 2);
+  assert.equal(result.json.ok, false);
+  assert.match(result.json.error, /unsupported scope: user/);
+  assert.deepEqual(readJson(fixture.stateFile).events, []);
 }));

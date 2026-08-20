@@ -43,8 +43,8 @@ packaged.
 - Cost check before proposing: `claude plugin details <name>@<marketplace>` shows components and
   projected token cost. A plugin whose always-on cost outweighs what it saves is a bad trade; say
   so.
-- Apply: `claude plugin install <name>@<marketplace> --scope user` (project scope if it is clearly
-  project-specific). New hooks and MCP servers take effect on the next session.
+- Apply: `claude plugin install <name>@<marketplace> --scope project`. New hooks and MCP servers
+  take effect on the next session.
 - Fingerprint: `plugin-install:<name>`.
 
 ## 3. New skill (a workflow)

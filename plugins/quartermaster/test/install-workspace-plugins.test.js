@@ -9,6 +9,7 @@ const test = require('node:test');
 const {
   computeDelta,
   normalizeProjectPath,
+  pluginInstallCommand,
   runInstall,
   validatePlan,
 } = require('../bin/install-workspace-plugins.js');
@@ -28,7 +29,6 @@ function planFor(projectDir, overrides = {}) {
     projectDir,
     marketplaces: [{ name: 'eigenwise-toolshed', source: 'Eigenwise/eigenwise-toolshed' }],
     plugins: [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'project', role: 'core' }],
-    userScopeConfirmed: false,
     ...overrides,
   };
 }
@@ -165,17 +165,20 @@ test('dry-run inventories state and reports mutations without executing them', (
   assert.deepEqual(result.steps.slice(2).map((step) => step.status), ['dry-run', 'dry-run']);
 }));
 
-test('rejects malformed plans before querying or mutating Claude state', () => withWorkspace((projectDir) => {
+test('rejects malformed and user-scope plans before querying or mutating Claude state', () => withWorkspace((projectDir) => {
   const runner = inventoryRunner();
   const malformed = planFor(projectDir, {
     marketplaces: [{ name: 'untrusted', source: 'somebody/random-repo' }],
   });
+  const userScoped = planFor(projectDir, {
+    plugins: [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'user' }],
+  });
 
   assert.throws(() => runInstall({ plan: malformed, run: runner.run }), /not an approved portable source/);
+  assert.throws(() => runInstall({ plan: userScoped, run: runner.run }), /unsupported scope: user/);
+  assert.throws(() => pluginInstallCommand(userScoped.plugins[0], 'claude', projectDir), /unsupported scope: user/);
+  assert.throws(() => validatePlan({ ...planFor(projectDir), userScopeConfirmed: true }), /unknown key: userScopeConfirmed/);
   assert.equal(runner.calls.length, 0);
-  assert.throws(() => validatePlan(planFor(projectDir, {
-    plugins: [{ id: 'codebase-mapper@eigenwise-toolshed', scope: 'user' }],
-  })), /userScopeConfirmed/);
 }));
 
 test('installs disabled selected plugins again so Claude can enable them', () => withWorkspace((projectDir) => {
