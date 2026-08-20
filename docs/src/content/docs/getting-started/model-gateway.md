@@ -11,7 +11,7 @@ Run these in Claude Code:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install model-gateway@eigenwise-toolshed --scope user
+/plugin install model-gateway@eigenwise-toolshed --scope project
 ```
 
 Reload plugins or start a new Claude Code session. Then tell Claude:

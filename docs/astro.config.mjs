@@ -42,7 +42,6 @@ export default defineConfig({
         {
           label: 'Use the plugins',
           items: [
-            { label: 'Workbench', slug: 'getting-started/workbench' },
             { label: 'Model Gateway', slug: 'getting-started/model-gateway' },
             { label: 'Sidequest', slug: 'getting-started/sidequest' },
             { label: 'Codebase Mapper', slug: 'getting-started/codebase-mapper' },

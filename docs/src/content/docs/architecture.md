@@ -20,8 +20,7 @@ flowchart LR
   P --> API[Claude or Codex backend]
 ```
 
-- Quartermaster owns the cross-plugin setup plan for new and existing projects.
-- Workbench installs and updates Toolshed plugins, then checks workspace health.
+- Quartermaster owns the cross-plugin setup plan for new and existing projects, updates Toolshed plugins, and checks workspace health.
 - Codebase Mapper and Live Rules add project context without requiring the other plugins.
 - Observability records selected metadata locally. Its observer, collector, and dashboard stay on loopback.
 - Sidequest owns tickets, stories, routing, dispatch, and executor evidence.

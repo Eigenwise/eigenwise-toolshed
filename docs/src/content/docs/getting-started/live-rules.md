@@ -14,7 +14,7 @@ Run these in Claude Code from the project where the rules should live:
 /plugin install live-rules@eigenwise-toolshed --scope project
 ```
 
-Reload plugins or start a new Claude Code session. If you use Workbench to set up a workspace, it can install and configure Live Rules as part of that setup.
+Reload plugins or start a new Claude Code session. If you use Quartermaster to set up a workspace, it can install and configure Live Rules as part of that setup.
 
 ## Add your first rule
 

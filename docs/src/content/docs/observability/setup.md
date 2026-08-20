@@ -3,7 +3,7 @@ title: Observability setup
 description: Install Observability and start local usage tracking for a repository.
 ---
 
-Observability installs separately from Workbench. It keeps Claude Code usage data local by default and does nothing until a repository opts in.
+Observability installs separately from Quartermaster. It keeps Claude Code usage data local by default and does nothing until a repository opts in.
 
 ## Prerequisite
 
@@ -15,10 +15,10 @@ Run these in Claude Code:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install observability@eigenwise-toolshed --scope user
+/plugin install observability@eigenwise-toolshed --scope project
 ```
 
-Reload plugins or start a new Claude Code session. User scope keeps one managed observer on the machine. A project-scoped copy can start a second set of hooks.
+Reload plugins or start a new Claude Code session. The install is project-scoped, while one managed observer still runs per machine. Telemetry remains opt-in for each repository.
 
 ## Set up a repository
 
