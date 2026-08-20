@@ -3,7 +3,7 @@
 Internal test helper code for the Eigenwise Toolshed repository. This directory is not a Claude Code
 plugin and has no `.claude-plugin/plugin.json`, skills, hooks, or release version.
 
-> Start with the [test-support guide](https://eigenwise.github.io/eigenwise-toolshed/getting-started/test-support/), then see the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/).
+> See the [full docs site](https://eigenwise.github.io/eigenwise-toolshed/). There is no setup guide for this directory, because there is nothing to install.
 
 Test-support is project-scoped internal tooling, not a user-installable plugin. It travels with the repository and is not installed separately.
 
@@ -26,8 +26,8 @@ text for a process call.
 Plugin test suites import this helper with a relative path. Current consumers include:
 
 - `plugins/model-gateway/test/windows-hide.test.js`
+- `plugins/observability/test/windows-hide.test.js`
 - `plugins/sidequest/test/windows-hide.test.ts`
-- `plugins/sidequest/test/agentsync.test.ts`
 - `plugins/workbench/test/windows-hide.test.js`
 
 It exists to keep the Windows process-visibility policy in one test utility. It is not part of any plugin's
