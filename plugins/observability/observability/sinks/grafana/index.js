@@ -18,6 +18,8 @@ const MANAGED_CONFIG_VERSION = '1';
 const PROJECT_ACTIVITY_METRIC = 'claude_code_token_usage_tokens_total';
 const DEFAULT_ACTIVITY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const DOCKER_TIMEOUT_MS = 1_500;
+const DASHBOARD_READY_TIMEOUT_MS = 15_000;
+const DASHBOARD_READY_POLL_MS = 250;
 
 function runDocker(context, args) {
   const docker = context.docker || 'docker';
@@ -114,14 +116,27 @@ function resolve(config = {}) {
 }
 
 function parseInspection(output) {
-  const [running, image, rawVersion, rawConfigVersion, bindingsJson, mountsJson] = String(output || '').trim().split('|', 6);
+  const values = String(output || '').trim().split('|', 7);
+  const hasContainerStatus = values.length === 7;
+  const [rawStatus, running, image, rawVersion, rawConfigVersion, bindingsJson, mountsJson] = hasContainerStatus
+    ? values
+    : [null, ...values];
   let bindings = null;
   let mounts = null;
   try { bindings = bindingsJson ? JSON.parse(bindingsJson) : null; } catch {}
   try { mounts = mountsJson ? JSON.parse(mountsJson) : null; } catch {}
   const version = rawVersion && rawVersion !== '<no value>' ? rawVersion : null;
   const configVersion = rawConfigVersion && rawConfigVersion !== '<no value>' ? rawConfigVersion : null;
-  return { running: running === 'true', image: image || null, version, configVersion, bindings, mounts };
+  const isRunning = running === 'true';
+  return {
+    status: rawStatus || (isRunning ? 'running' : 'stopped'),
+    running: isRunning,
+    image: image || null,
+    version,
+    configVersion,
+    bindings,
+    mounts,
+  };
 }
 
 function managedConfigVersion(context = {}) {
@@ -130,7 +145,7 @@ function managedConfigVersion(context = {}) {
 
 function inspect(config = {}, context = {}) {
   const runtime = runtimeConfig(config);
-  const format = `{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{index .Config.Labels "${CONFIG_VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}|{{json .Mounts}}`;
+  const format = `{{.State.Status}}|{{.State.Running}}|{{.Config.Image}}|{{index .Config.Labels "${VERSION_LABEL}"}}|{{index .Config.Labels "${CONFIG_VERSION_LABEL}"}}|{{json .HostConfig.PortBindings}}|{{json .Mounts}}`;
   const result = runDocker(context, ['inspect', '--format', format, runtime.container]);
   if (result.error || result.status !== 0) return null;
   return parseInspection(result.stdout);
@@ -141,6 +156,7 @@ function status(config = {}, context = {}) {
   const state = inspect(config, context);
   return {
     ...runtime,
+    containerState: state?.status || 'missing',
     running: Boolean(state?.running),
     portBindingsCurrent: Boolean(state
       && bindingMatches(state.bindings, 3000, runtime.grafanaPort)
@@ -169,6 +185,59 @@ function dashboardMountMatches(mounts, dashboardDir) {
     && canonicalPath(mount.Source) === expectedSource);
 }
 
+function dashboardReadyTimeout(context = {}) {
+  const timeout = context.dashboardReadyTimeoutMs ?? DASHBOARD_READY_TIMEOUT_MS;
+  if (!Number.isInteger(timeout) || timeout < 0) throw new Error(`Invalid dashboard readiness timeout: ${timeout}`);
+  return timeout;
+}
+
+function dashboardReadyPoll(context = {}) {
+  const poll = context.dashboardReadyPollMs ?? DASHBOARD_READY_POLL_MS;
+  if (!Number.isInteger(poll) || poll < 0) throw new Error(`Invalid dashboard readiness poll interval: ${poll}`);
+  return poll;
+}
+
+function pause(context, milliseconds) {
+  if (typeof context.pause === 'function') {
+    context.pause(milliseconds);
+    return;
+  }
+  if (milliseconds > 0) Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
+}
+
+function dashboardProbe(runtime, context) {
+  const result = runDocker(context, [
+    'exec', runtime.container, 'curl', '--silent', '--show-error', '--fail',
+    '--request', 'POST', '--header', 'Content-Type: application/json',
+    '--data', '{"resourceMetrics":[]}', '--output', '/dev/null', '--write-out', '%{http_code}',
+    'http://127.0.0.1:4318/v1/metrics',
+  ]);
+  return !result.error && result.status === 0 && String(result.stdout).trim() === '200';
+}
+
+function dashboardFailure(runtime, context, state) {
+  const logs = runDocker(context, ['logs', '--tail', '20', runtime.container]);
+  const details = logs.error ? logs.error.message : String(logs.stdout || logs.stderr || '').trim();
+  const logSummary = details ? `; logs: ${details}` : '';
+  throw new Error(`Docker could not start the pinned loopback-only dashboard container (status: ${state?.status || 'missing'}${logSummary}).`);
+}
+
+function waitForDashboard(runtime, config, context) {
+  const deadline = Date.now() + dashboardReadyTimeout(context);
+  let state = inspect(config, context);
+  do {
+    if (state?.status === 'created') {
+      const started = runDocker(context, ['start', runtime.container]);
+      if (started.error || started.status !== 0) dashboardFailure(runtime, context, state);
+      state = inspect(config, context);
+    }
+    if (state?.running && dashboardProbe(runtime, context)) return;
+    if (Date.now() >= deadline) dashboardFailure(runtime, context, state);
+    pause(context, dashboardReadyPoll(context));
+    state = inspect(config, context);
+  } while (true);
+}
+
 function setup(config = {}, context = {}) {
   const dataDir = context.dataDir;
   const dashboardDir = context.dashboardDir || path.join(__dirname, 'dashboards');
@@ -183,6 +252,7 @@ function setup(config = {}, context = {}) {
       && bindingMatches(state.bindings, 4318, runtime.otlpPort)
       && dashboardMountMatches(state.mounts, dashboardDir);
     if (current && state.running) {
+      waitForDashboard(runtime, config, context);
       return { image: IMAGE, dataDir, container: runtime.container, resumed: false };
     }
     if (current) {
@@ -190,6 +260,7 @@ function setup(config = {}, context = {}) {
       if (restarted.error || restarted.status !== 0) {
         throw new Error('Docker could not resume the pinned loopback-only dashboard container.');
       }
+      waitForDashboard(runtime, config, context);
       return { image: IMAGE, dataDir, container: runtime.container, resumed: true };
     }
     const removed = runDocker(context, ['rm', '--force', runtime.container]);
@@ -224,6 +295,7 @@ function setup(config = {}, context = {}) {
   if (result.error || result.status !== 0) {
     throw new Error('Docker could not start the pinned loopback-only dashboard container.');
   }
+  waitForDashboard(runtime, config, context);
   return { image: IMAGE, dataDir, container: runtime.container, resumed: false };
 }
 

@@ -215,11 +215,12 @@ test('Grafana adopts the managed live container and honors configured loopback p
     pluginVersion: '0.19.0',
     spawnSync(command, args) {
       calls.push([command, args]);
+      if (args[0] === 'exec') return { status: 0, stdout: '200' };
       return { status: 0, stdout: `true|${grafana.IMAGE}|<no value>|${grafana.MANAGED_CONFIG_VERSION}|${bindings}|${mounts}` };
     },
   });
   assert.equal(result.container, 'workbench-otel-lgtm');
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'inspect', 'exec']);
   assert.throws(() => grafana.runtimeConfig({ container: '../bad' }), /Invalid dashboard container name/);
 });
 
@@ -264,11 +265,12 @@ test('Grafana recognizes a dashboard mount through a canonical path alias', (t) 
     pluginVersion: '0.19.0',
     spawnSync(command, args) {
       calls.push([command, args]);
+      if (args[0] === 'exec') return { status: 0, stdout: '200' };
       return { status: 0, stdout: `true|${grafana.IMAGE}|0.19.0|${grafana.MANAGED_CONFIG_VERSION}|${bindings}|${mounts}` };
     },
   });
 
-  assert.equal(calls.length, 1);
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'inspect', 'exec']);
 });
 
 test('Grafana replaces a container with an outdated dashboard mount', () => {
@@ -292,11 +294,11 @@ test('Grafana replaces a container with an outdated dashboard mount', () => {
       if (args[0] === 'inspect') {
         return { status: 0, stdout: `true|${grafana.IMAGE}|0.19.0|${grafana.MANAGED_CONFIG_VERSION}|${bindings}|${mounts}` };
       }
-      return { status: 0, stdout: '' };
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : '' };
     },
   });
 
-  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'rm', 'run']);
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'rm', 'run', 'inspect', 'exec']);
 });
 
 test('Grafana replaces a container missing the managed delete configuration', () => {
@@ -310,10 +312,10 @@ test('Grafana replaces a container missing the managed delete configuration', ()
     spawnSync(command, args) {
       calls.push([command, args]);
       if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}|0.20.0|<no value>|${bindings}` };
-      return { status: 0, stdout: '' };
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : '' };
     },
   });
-  assert.deepEqual(calls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
+  assert.deepEqual(calls.map((call) => call[1][0]), ['inspect', 'rm', 'run', 'inspect', 'exec']);
 });
 
 test('Grafana replaces a stale managed container and can delete its data volume', () => {
@@ -325,10 +327,10 @@ test('Grafana replaces a stale managed container and can delete its data volume'
     spawnSync(command, args) {
       calls.push([command, args]);
       if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}|0.19.0|null` };
-      return { status: 0, stdout: '' };
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : '' };
     },
   });
-  assert.deepEqual(calls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
+  assert.deepEqual(calls.map((call) => call[1][0]), ['inspect', 'rm', 'run', 'inspect', 'exec']);
   const run = calls[2][1];
   assert.ok(run.includes('127.0.0.1:13000:3000'));
   assert.ok(run.includes('127.0.0.1:14300:4318'));
