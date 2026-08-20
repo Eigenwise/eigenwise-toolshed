@@ -390,6 +390,20 @@ test('renders board routing previews and the profile library', async ({ page, da
   await expect(page.getByRole('combobox', { name: 'Profile library' })).toBeVisible();
   await expect(page.getByText(/Following/)).toBeVisible();
 
+  const categoryMetadata = settings.locator('.category-row').first().locator('.category-meta');
+  await expect(categoryMetadata.locator('span').first()).toHaveText(/\S+ · (low|medium|high|xhigh)/);
+  await expect(categoryMetadata.locator('span').nth(1)).toHaveText(/\d+ tickets/);
+  const metadataLayout = await categoryMetadata.evaluate((element) => {
+    const [route, usage] = Array.from(element.children);
+    const routeBounds = route.getBoundingClientRect();
+    const usageBounds = usage.getBoundingClientRect();
+    const style = getComputedStyle(element);
+    return { display: style.display, rowGap: Number.parseFloat(style.rowGap), routeBottom: routeBounds.bottom, usageTop: usageBounds.top };
+  });
+  expect(metadataLayout.display).toBe('grid');
+  expect(metadataLayout.rowGap).toBeGreaterThan(0);
+  expect(metadataLayout.usageTop).toBeGreaterThan(metadataLayout.routeBottom);
+
   await settings.getByRole('button', { name: 'Edit' }).first().click();
   await expect(settings).toBeVisible();
   await expect(settings.getByRole('heading', { name: /^Edit / })).toBeVisible();
