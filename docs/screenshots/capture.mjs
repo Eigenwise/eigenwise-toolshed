@@ -355,11 +355,13 @@ async function maskGeneratedBoardText(page) {
 }
 
 async function captureSidequest(browser, port) {
-  const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'light', deviceScaleFactor: 1 });
+  const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'light', reducedMotion: 'reduce', deviceScaleFactor: 1 });
   await page.addInitScript(() => localStorage.setItem('sq_theme', 'light'));
   await page.goto(`http://127.0.0.1:${port}`, { waitUntil: 'networkidle' });
   const skipTour = page.getByRole('button', { name: 'Skip', exact: true });
   if (await skipTour.isVisible()) await skipTour.click();
+  await page.evaluate(() => document.fonts.ready);
+  await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
 
   const capture = async (filename, content) => {
     await maskGeneratedBoardText(page);
@@ -389,7 +391,9 @@ async function captureSidequest(browser, port) {
   await priorityFilter.getByRole('button', { name: 'all', exact: true }).click();
 
   await page.getByRole('button', { name: 'Notifications' }).click();
-  await capture('sidequest-notifications.png', page.locator('section.inbox'));
+  const notificationInbox = page.locator('section.inbox');
+  await notificationInbox.evaluate((element) => { element.style.height = `${Math.ceil(element.getBoundingClientRect().height)}px`; });
+  await capture('sidequest-notifications.png', notificationInbox);
   await page.getByRole('button', { name: 'Notifications' }).click();
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
