@@ -891,13 +891,15 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
 test('doctor describes global user settings wiring', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-project-'));
+  const { ANTHROPIC_BASE_URL, ...environment } = process.env;
   try {
     const result = spawnSync(process.execPath, [CLI, 'doctor'], {
       cwd,
-      env: { ...process.env, HOME: home, USERPROFILE: home },
+      env: { ...environment, HOME: home, USERPROFILE: home },
       encoding: 'utf8',
     });
-    assert.match(result.stdout, /wiring: global ~\/\.claude\/settings\.json/);
+    assert.match(result.stdout, /wiring: effective none/);
+    assert.match(result.stdout, /selected wiring mode: global ~\/\.claude\/settings\.json/);
     assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
     assert.match(result.stdout, /user settings\.json: not wired/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
