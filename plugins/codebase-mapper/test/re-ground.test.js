@@ -16,6 +16,7 @@ const startHook = path.join(root, 'hooks', 'inject-context.js');
 const hooksConfig = require('../hooks/hooks.json');
 
 const TEST_LOCK_WAIT_MS = 5_000;
+const TEST_STATE_LOCK_REMOVE_RETRIES = 10;
 
 function project() {
   const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'codebase-mapper-'));
@@ -107,6 +108,21 @@ function publishStateLock(lockDirectory, ownerPid) {
   fs.writeFileSync(path.join(candidateDirectory, ownerName), `${ownerPid}\n`);
   fs.renameSync(candidateDirectory, lockDirectory);
   return path.join(lockDirectory, ownerName);
+}
+
+function removeFixtureStateLock(ownerFile, fixtureFiles = []) {
+  const lockDirectory = path.dirname(ownerFile);
+  fs.rmSync(ownerFile, { force: true });
+  for (const fixtureFile of fixtureFiles) fs.rmSync(fixtureFile, { force: true });
+  for (let attempt = 0; attempt < TEST_STATE_LOCK_REMOVE_RETRIES; attempt += 1) {
+    try {
+      fs.rmdirSync(lockDirectory);
+      return;
+    } catch (error) {
+      if (error.code === 'ENOENT') return;
+      if (error.code !== 'ENOTEMPTY') throw error;
+    }
+  }
 }
 
 function text(output) {
@@ -374,7 +390,7 @@ test('overlapping prompt-less Stop processes atomically claim one veto', async (
     hookAsync(startHook, directory, state, stop),
   ]);
   await waitForLockContenders(lockDirectory, 2);
-  fs.rmSync(lockDirectory, { recursive: true, force: true });
+  removeFixtureStateLock(fixtureOwnerFile);
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
@@ -402,7 +418,7 @@ test('overlapping Stop processes with distinct prompt ids atomically claim one b
     hookAsync(startHook, directory, state, { ...stop, prompt_id: 'second-host-prompt' }),
   ]);
   await waitForLockContenders(lockDirectory, 2);
-  fs.rmSync(lockDirectory, { recursive: true, force: true });
+  removeFixtureStateLock(fixtureOwnerFile);
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
   assert.strictEqual(results.filter((result) => result.stdout.trim()).length, 1);
@@ -418,7 +434,7 @@ test('an advancing transcript cannot split one prompt-independent Stop batch', a
   const stateFile = path.join(state, 'stop-veto-' + crypto.createHash('sha256').update(sessionId).digest('hex') + '.json');
   const lockDirectory = stateFile + '.lock-v2';
   fs.mkdirSync(path.dirname(stateFile), { recursive: true });
-  publishStateLock(lockDirectory, process.pid);
+  const fixtureOwnerFile = publishStateLock(lockDirectory, process.pid);
   const stop = {
     hook_event_name: 'Stop',
     session_id: sessionId,
@@ -432,7 +448,7 @@ test('an advancing transcript cannot split one prompt-independent Stop batch', a
   fs.appendFileSync(transcriptPath, '{"type":"system","message":"hook running"}\n');
   const second = hookAsync(startHook, directory, state, { ...stop, prompt_id: 'second-host-prompt' });
   await waitForLockContenders(lockDirectory, 2);
-  fs.rmSync(lockDirectory, { recursive: true, force: true });
+  removeFixtureStateLock(fixtureOwnerFile);
 
   const results = await Promise.all([first, second]);
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0]);
@@ -461,9 +477,9 @@ test('transcript path presence and value cannot split one Stop batch', async () 
     hookAsync(startHook, directory, state, { ...stop, transcript_path: path.join(directory, 'second.jsonl') }),
   ]);
   await waitForLockContenders(lockDirectory, 3);
-  fs.rmSync(fixtureOwnerFile, { force: true });
-  fs.writeFileSync(path.join(lockDirectory, 'late-entry'), '');
-  fs.rmSync(lockDirectory, { recursive: true, force: true });
+  const lateEntry = path.join(lockDirectory, 'late-entry');
+  fs.writeFileSync(lateEntry, '');
+  removeFixtureStateLock(fixtureOwnerFile, [lateEntry]);
 
   const results = await pending;
   assert.deepStrictEqual(results.map((result) => result.status), [0, 0, 0]);
