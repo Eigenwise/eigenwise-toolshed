@@ -19,7 +19,8 @@ const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
-const SYNTHETIC_NOW = Math.floor(Date.now() / 60_000) * 60_000;
+const SYNTHETIC_HOUR = 60 * 60 * 1_000;
+const SYNTHETIC_NOW = Math.floor(Date.now() / SYNTHETIC_HOUR) * SYNTHETIC_HOUR;
 const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
 const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
 const SYNTHETIC_BUCKETS = Math.floor((SYNTHETIC_NOW - SYNTHETIC_START) / SYNTHETIC_INTERVAL) + 1;
@@ -414,6 +415,8 @@ async function seedGrafana(otlpPort, grafanaPort) {
     { name: 'gpt-5.6-terra', role: 'executor', input: 100_000, output: 10_000, cacheRead: 30_000, context: 130_000 },
   ];
   const timestamps = Array.from({ length: SYNTHETIC_BUCKETS }, (_, index) => SYNTHETIC_START + (index * SYNTHETIC_INTERVAL));
+  const hookFailuresByBucket = new Map([[6, 1], [29, 2], [30, 1], [70, 1], [73, 2], [98, 1], [117, 2], [133, 1]]);
+  const gatewayFailuresByBucket = new Map([[12, 1], [46, 2], [47, 1], [83, 1], [84, 2], [85, 1], [125, 2], [133, 1]]);
   const droppedBucket = process.env.SYNTHETIC_GRAFANA_DROP_BUCKET;
   const droppedBucketIndex = droppedBucket === undefined ? null : Number(droppedBucket);
   assert.ok(droppedBucketIndex === null || (Number.isInteger(droppedBucketIndex) && droppedBucketIndex >= 0 && droppedBucketIndex < SYNTHETIC_BUCKETS), `SYNTHETIC_GRAFANA_DROP_BUCKET must be an index from 0 to ${SYNTHETIC_BUCKETS - 1}`);
@@ -454,16 +457,17 @@ async function seedGrafana(otlpPort, grafanaPort) {
         'workbench.attribute.tool_name': ['Read', 'Search', 'Terminal', 'Browser'][call % 4],
       }, eventTimestamp()));
     }
-    if (index % 13 === 4) {
+    for (let failure = 0; failure < (hookFailuresByBucket.get(index) ?? 0); failure += 1) {
       records.push(syntheticLog('workbench-observer', 'claude_code.hook_execution_complete', {
         ...primaryAttributes,
         'workbench.attribute.status': 'failed',
         'workbench.attribute.hook_name': 'post_tool_use',
       }, eventTimestamp()));
     }
-    if (index % 12 === 7) {
+    for (let failure = 0; failure < (gatewayFailuresByBucket.get(index) ?? 0); failure += 1) {
       records.push(syntheticLog('codex-gateway', 'gateway request throttled briefly', {}, eventTimestamp()));
-    } else {
+    }
+    if (!gatewayFailuresByBucket.has(index)) {
       records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, eventTimestamp()));
     }
     const rechargeTools = [
@@ -507,7 +511,9 @@ async function seedGrafana(otlpPort, grafanaPort) {
       'workbench.attribute.tool_name': ['Read', 'Search', 'Terminal', 'Browser', 'Read'][call],
     }, healthEventTimestamp()));
   }
-  records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, healthEventTimestamp()));
+  for (let request = 0; request < 10; request += 1) {
+    records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, healthEventTimestamp()));
+  }
   const healthRecharge = [
     ['all', 4, 0, 0],
     ['Read', 0, 20_000, 50_000],
@@ -541,7 +547,11 @@ async function seedGrafana(otlpPort, grafanaPort) {
     asInt: String((index + 1) * 25_000),
     startTimeUnixNano: String(BigInt(SYNTHETIC_NOW - (5 * 60 * 1_000)) * 1_000_000n),
     timeUnixNano: String(BigInt(SYNTHETIC_NOW - ((4 - (index * 0.4)) * 60 * 1_000)) * 1_000_000n),
-    attributes: otlpAttributes({ model: 'claude-sonnet-5', type: 'input', project_id: FIXTURE.project }),
+    attributes: otlpAttributes({
+      model: models[index % models.length].name,
+      type: ['input', 'output', 'cache_read', 'context'][index % 4],
+      project_id: FIXTURE.project,
+    }),
   }));
   await postOtlp(otlpPort, 'metrics', {
     resourceMetrics: [{
@@ -652,8 +662,12 @@ async function writeGrafanaDashboards(tempRoot) {
     ['Observer records, 5m', 'Observer records'],
     ['Gateway records, 5m', 'Gateway records'],
   ]);
+  const failurePanelWithoutZeroFallback = 'Hook failures over time';
   for (const { fileName, dashboard } of generatedDashboards(projects)) {
     for (const panel of dashboard.panels) {
+      if (panel.title === failurePanelWithoutZeroFallback) {
+        for (const target of panel.targets || []) target.expr = target.expr?.replace(' or vector(0)', '');
+      }
       const seriesName = statSeriesNames.get(panel.title);
       if (!seriesName) continue;
       panel.fieldConfig.defaults.displayName = seriesName;
