@@ -401,6 +401,24 @@ test('start records the managed process provenance next to its PID', (t) => {
   });
 });
 
+// The heartbeat is written by a worker thread that has to spawn, receive a message, and
+// swap the record through a temp file. Spawning alone can outlast a fixed sleep on a loaded
+// runner, so poll instead, and tolerate a read that lands mid-rename.
+async function waitForRefreshedHeartbeat(recordFile, timeoutMilliseconds = 30_000) {
+  const deadline = Date.now() + timeoutMilliseconds;
+  for (;;) {
+    let heartbeatAt = 0;
+    try {
+      heartbeatAt = Date.parse(JSON.parse(fs.readFileSync(recordFile, 'utf8')).heartbeatAt);
+    } catch {
+      heartbeatAt = 0;
+    }
+    if (heartbeatAt > 0) return heartbeatAt;
+    if (Date.now() >= deadline) return heartbeatAt;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+}
+
 test('observer refreshes its managed process heartbeat from a worker', async (t) => {
   const dataDir = temporaryDirectory(t);
   const recordFile = path.join(dataDir, 'observer.pid.json');
@@ -427,9 +445,8 @@ test('observer refreshes its managed process heartbeat from a worker', async (t)
   t.after(() => observer.close());
 
   await observer.start();
-  await new Promise((resolve) => setTimeout(resolve, 100));
 
-  assert.ok(Date.parse(JSON.parse(fs.readFileSync(recordFile, 'utf8')).heartbeatAt) > 0);
+  assert.ok(await waitForRefreshedHeartbeat(recordFile) > 0);
 });
 
 test('ensure replaces a stale managed observer from the current plugin root', async (t) => {
