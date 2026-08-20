@@ -4,7 +4,7 @@ Local, metadata-only usage telemetry for Claude Code. Choose the repositories yo
 
 [Observability guide](https://eigenwise.github.io/eigenwise-toolshed/observability/) · [Generated reference](https://eigenwise.github.io/eigenwise-toolshed/reference/observability/) · [Toolshed marketplace](../../README.md)
 
-Prompt and response text, code and file contents, tool inputs and results, credentials, and environment values are not recorded. Telemetry stays off until you approve a repository.
+Telemetry payloads include metadata: session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs. They exclude prompt and response text, code and file contents, tool inputs and results, credentials, and environment values. Sink configuration you provide, including OTLP headers or tokens, is stored locally in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, so the exporter can authenticate. Telemetry stays off until you approve a repository.
 
 ## Install
 
@@ -43,7 +43,7 @@ Tell Claude what happened:
 
 > Disable Observability for this repository, but keep its local history.
 
-Claude checks project wiring, recent activity, and the local services. Existing Claude Code sessions need a restart after opt-in or settings changes. A dashboard outage does not stop local observer ingestion: queued delivery resumes when the configured sink returns.
+Claude checks project wiring, recent activity, and the local services. Existing Claude Code sessions need a restart after opt-in or settings changes. A dashboard outage does not stop local observer ingestion. The outbox retries a failed delivery up to eight times. Exhausted rows need a `POST /v1/outbox/requeue` request before delivery can resume.
 
 ## License
 

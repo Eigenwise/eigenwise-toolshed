@@ -23,8 +23,8 @@ Claude uses the bundled skill to install and start the local gateway, check your
 
 Open `/model` and choose a row labeled `From gateway`.
 
-- `claude-gpt-*` uses your ChatGPT/Codex subscription.
-- `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in.
+- `claude-gpt-*` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, and `claude-gpt-5.6-luna`.
+- `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in. The current built-in Grok row is `claude-grok-4.5`.
 - Claude models keep using Anthropic normally.
 
 That’s it for daily use. The plugin keeps the gateway running: its shim supervisor checks the proxy's `/v1/models` endpoint, recovers an unavailable proxy with bounded backoff, and leaves a healthy proxy alone. An older session left open through an update leaves a newer shim running and tells you to reload plugins or restart Claude Code. Sidequest can select gateway models automatically when both plugins are installed.

@@ -15,25 +15,25 @@ Use the dashboard to answer three practical questions:
 - Which tools and MCP servers are active?
 - Which Sidequest stories are consuming the most work?
 
-The global view also includes total spend, work routed to Codex, tool failure rate, hook and gateway failures, source activity, and context recharge. Choose a smaller time bucket for investigation, then use the legend or data inspection view for exact series values.
+The global view is organized into four rows: **At a glance**, **Where the spend goes**, **Failures and source activity**, and **Context recharge**. It includes total spend, work routed to Codex, tool failure rate, hook and gateway failures, source activity, and context recharge. Choose a smaller time bucket for investigation, then use the legend or data inspection view for exact series values.
 
 The screenshots below use fixed synthetic records from the documentation capture pipeline. They show the shape of the views without exposing a real project, session, or cost record.
 
 ![Synthetic Tokens & models dashboard view showing model totals and roles](../../../assets/screenshots/observability-tokens-models.png)
 
-The **Tokens & models** view helps compare model usage and the role attached to each series.
+The **At a glance** row gives a quick read on model usage, roles, spend, and failures.
 
 ![Synthetic Who is burning tokens dashboard view showing model token totals and synthetic costs](../../../assets/screenshots/observability-who-is-burning.png)
 
-The **Who is burning tokens** view makes the largest model totals easy to find before you change routing or prompts.
+The **Where the spend goes** row breaks down model totals and estimated cost before you change routing or prompts.
 
 ![Synthetic MCP dashboard view showing definition tokens and call activity by server](../../../assets/screenshots/observability-mcp.png)
 
-The **MCP** view separates server definition footprint from call activity.
+The **Failures and source activity** row shows hook and gateway failures alongside source activity.
 
 ![Synthetic Sidequest board costs dashboard view showing story ticket counts and synthetic costs](../../../assets/screenshots/observability-board-costs.png)
 
-The **Sidequest board costs** view rolls usage up by story so a board can be compared with the work it represents.
+The **Context recharge** row shows context-related activity alongside the rest of the global usage signals.
 
 ## If a view is missing
 

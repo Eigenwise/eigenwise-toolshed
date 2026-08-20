@@ -5,7 +5,9 @@ description: See local Claude Code usage for the repositories you choose.
 
 Observability shows local Claude Code usage without sending project content to a hosted service. It records metadata such as token totals, tool activity, models, sessions, and costs. It is off until you opt a repository in.
 
-The data stays on your machine in local storage by default. If you configure a remote sink, it receives only the allowed redacted metadata. You can use the local report only, add the loopback dashboard, or choose a remote sink yourself. Prompt and response text, code and file contents, tool inputs and results, credentials, and environment values are not recorded.
+The data stays on your machine in local storage by default. If you configure a remote sink, it receives only allowed redacted metadata. Telemetry payloads include metadata: session IDs, prompt IDs, agent IDs, task IDs, tool-use IDs, and SendMessage recipient IDs. They do not include prompt or response text, code or file contents, tool inputs or results, credentials, or environment values.
+
+Credentials never appear in telemetry payloads. Sink configuration you provide, including OTLP headers or tokens, is stored locally so the exporter can authenticate. The file is `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set. You can use the local report only, add the loopback dashboard, or choose a remote sink yourself.
 
 ## Start here
 
@@ -35,6 +37,6 @@ Tell Claude:
 
 > My Observability dashboard is empty. Check the project setup and tell me what to fix.
 
-Existing sessions need a restart after opt-in. A project also needs fresh Claude Code activity before its panels appear. A dashboard outage does not stop local observer ingestion, and queued delivery resumes after the configured sink returns. If the local service is unavailable, ask Claude to diagnose Observability; it can check the managed local processes and configuration without making you run their internal commands. The observer health response includes hook-spool failures, the last error, and any quarantined poison file so diagnosis can distinguish a live service from a stalled drain.
+Existing sessions need a restart after opt-in. A project also needs fresh Claude Code activity before its panels appear. A dashboard outage does not stop local observer ingestion. The outbox retries a failed delivery up to eight times. After that, the row is exhausted and needs a `POST /v1/outbox/requeue` request before delivery can resume. If the local service is unavailable, ask Claude to diagnose Observability; it can check the managed local processes and configuration without making you run their internal commands. The observer health response includes hook-spool failures, the last error, and any quarantined poison file so diagnosis can distinguish a live service from a stalled drain.
 
 See the generated [Observability reference](/reference/observability/) for the agent-facing setup and command contract.
