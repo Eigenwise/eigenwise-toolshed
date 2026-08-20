@@ -26,8 +26,8 @@ You may need to complete a browser sign-in or restart Claude Code. Claude will a
 
 Open `/model` and choose a row labeled `From gateway`.
 
-- `claude-gpt-*` uses your ChatGPT/Codex subscription.
-- `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in.
+- `claude-gpt-*` uses your ChatGPT/Codex subscription. Current built-in rows are `claude-gpt-5.6-sol`, `claude-gpt-5.6-terra`, and `claude-gpt-5.6-luna`.
+- `claude-grok-*` uses your Grok subscription when the Grok CLI is installed and signed in. The current built-in Grok row is `claude-grok-4.5`.
 - Claude models keep using Anthropic.
 
 Sidequest can select these models automatically when both plugins are installed.

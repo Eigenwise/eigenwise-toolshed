@@ -5,6 +5,10 @@ description: Install Observability and start local usage tracking for a reposito
 
 Observability installs separately from Workbench. It keeps Claude Code usage data local by default and does nothing until a repository opts in.
 
+## Prerequisite
+
+Observability requires Claude Code 2.1.212 or newer.
+
 ## Install
 
 Run these in Claude Code:
@@ -31,7 +35,7 @@ After setup, restart any Claude Code session that was already running in the rep
 ## What you can expect
 
 - Usage stays off for repositories you have not approved.
-- Prompt and response text, code and file contents, tool inputs and results, credentials, and environment values stay out of telemetry.
+- Telemetry payloads exclude prompt and response text, code and file contents, tool inputs and results, credentials, and environment values. Sink configuration you provide, including OTLP headers or tokens, is stored locally in `%LOCALAPPDATA%\Eigenwise\Workbench\observability.json` on Windows, or `~/.local/share/Eigenwise/Workbench/observability.json` when `LOCALAPPDATA` is not set, so an exporter can authenticate.
 - The local dashboard is optional. Local reports still work when Docker is unavailable.
 - Claude keeps the managed local processes running after setup. You do not start them by hand.
 
