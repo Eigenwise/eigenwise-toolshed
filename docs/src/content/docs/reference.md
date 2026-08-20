@@ -12,5 +12,5 @@ Use the guides for decisions and daily workflows. Use this reference when Claude
 - [Codebase Mapper](/reference/codebase-mapper/) keeps a project map close at hand.
 - [Live Rules](/reference/live-rules/) loads project rules when they apply.
 - [Sidequest](/reference/sidequest/) captures and runs planned work.
-- [Quartermaster](/reference/quartermaster/) works out what a workspace is short of and gets it.
+- [Quartermaster](/reference/quartermaster/) works out what a workspace is short of and gets it, sets up new projects, and keeps Toolshed plugins current and healthy.
 - [Marketplace versions](/reference/marketplace/) lists the shipped plugin versions.
