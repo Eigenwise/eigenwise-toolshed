@@ -143,15 +143,19 @@ function writeProcessRecord(dataDir, name, record) {
   fs.writeFileSync(processRecordFile(dataDir, name), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
+function processRecordMatchesProvenance(name, dataDir, pid, provenance) {
+  if (!Number.isInteger(pid) || pid < 1) return false;
+  const record = readProcessRecord(dataDir, name);
+  return record?.pid === pid
+    && record.pluginVersion === provenance.pluginVersion
+    && record.scriptPath === provenance.scriptPath;
+}
+
 function managedProcessNeedsRestart(name, dataDir, provenance, options = {}) {
   const pid = readPid(pidFile(dataDir, name));
   const alive = options.processAlive || processAlive;
   if (!pid || !alive(pid)) return false;
-  const record = readProcessRecord(dataDir, name);
-  return !record
-    || record.pid !== pid
-    || record.pluginVersion !== provenance.pluginVersion
-    || record.scriptPath !== provenance.scriptPath;
+  return !processRecordMatchesProvenance(name, dataDir, pid, provenance);
 }
 
 function stopManagedProcess(name, dataDir, options = {}) {
@@ -361,10 +365,15 @@ async function ensureObservability(options = {}) {
         if (listening) {
           const identifyObserver = options.observerIdentity || (options.checkPort ? null : observerIdentity);
           const identity = identifyObserver ? await identifyObserver(process.port, options) : null;
-          needsRestart = identifyObserver
-            ? !identity || identity.pluginVersion !== currentPluginVersion
-            : restartManagedProcess;
-          if (needsRestart) owner = identity?.pid || (ownerFinder && ownerFinder(process.port, options));
+          const observedOwner = identity?.pid || (ownerFinder && ownerFinder(process.port, options));
+          const recordMatchesOwner = processRecordMatchesProvenance(process.name, dataDir, observedOwner, {
+            pluginVersion: currentPluginVersion,
+            scriptPath: process.scriptPath,
+          });
+          needsRestart = identity
+            ? identity.pluginVersion !== currentPluginVersion
+            : !recordMatchesOwner;
+          if (needsRestart) owner = observedOwner;
         } else {
           owner = ownerFinder && ownerFinder(process.port, options);
           needsRestart = Boolean(owner) || restartManagedProcess;
@@ -646,8 +655,12 @@ async function launchEnsure(options = {}) {
   const owner = identity?.pid || (ownerFinder && ownerFinder(observerPort, options));
   const pluginRoot = options.pluginRoot || path.resolve(__dirname, '..', '..');
   const currentPluginVersion = (options.setupModule || require('../../bin/setup-observability.js')).pluginVersion(pluginRoot);
+  const recordMatchesOwner = processRecordMatchesProvenance('observer', dataDir, owner, {
+    pluginVersion: currentPluginVersion,
+    scriptPath: path.join(pluginRoot, 'bin', 'observer.js'),
+  });
   const needsRestart = listening
-    ? !identity || identity.pluginVersion !== currentPluginVersion
+    ? identity ? identity.pluginVersion !== currentPluginVersion : !recordMatchesOwner
     : Boolean(owner);
   if (needsRestart) {
     const ownerDescription = identity

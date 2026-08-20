@@ -419,6 +419,34 @@ test('ensure adopts a fresh managed observer without restarting it', async (t) =
   assert.deepEqual(result.started, []);
 });
 
+test('ensure keeps a managed observer that times out during its identity probe', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async () => true,
+    observerIdentity: async () => null,
+    portOwner: () => 101,
+    killProcess() { throw new Error('busy managed observer must not restart'); },
+    startProcess() { throw new Error('busy managed observer must not restart'); },
+  });
+
+  assert.deepEqual(result.started, []);
+});
+
 test('ensure replaces an observer that reports another plugin version', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
@@ -468,20 +496,44 @@ test('ensure removes an observer that holds the port without accepting connectio
   assert.deepEqual(killed, [{ pid: 62536, name: 'observer' }]);
 });
 
-test('SessionStart warns when it replaces an observer that does not identify itself', async (t) => {
+test('SessionStart warns when it replaces a listening observer that does not identify itself', async (t) => {
   const dataDir = temporaryDirectory(t);
   writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
   const notices = [];
 
   await launchEnsure({
     dataDir,
-    checkPort: async () => false,
+    checkPort: async () => true,
+    observerIdentity: async () => null,
     portOwner: () => 202,
     reportNotice(message) { notices.push(message); },
     spawn() { return { unref() {} }; },
   });
 
   assert.deepEqual(notices, ['Observability: replacing the observer on 127.0.0.1:15432 held by pid 202, no health response.']);
+});
+
+test('SessionStart does not report a replacement for a busy managed observer', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 202,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+  })}\n`);
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+  const notices = [];
+
+  await launchEnsure({
+    dataDir,
+    checkPort: async () => true,
+    observerIdentity: async () => null,
+    portOwner: () => 202,
+    reportNotice(message) { notices.push(message); },
+    spawn() { return { unref() {} }; },
+  });
+
+  assert.deepEqual(notices, []);
 });
 
 test('SessionStart warns when it replaces an observer from an older plugin version', async (t) => {
