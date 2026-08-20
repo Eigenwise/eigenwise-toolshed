@@ -7,7 +7,6 @@ This section is generated from the plugin manifests, skills, hooks, binaries, an
 
 Use the guides for decisions and daily workflows. Use this reference when Claude needs the exact skill, hook, command, or configuration detail.
 
-- [Workbench](/reference/workbench/) sets up and maintains a Claude Code workspace.
 - [Observability](/reference/observability/) records selected local, metadata-only telemetry.
 - [Model Gateway](/reference/model-gateway/) adds ChatGPT, Codex, and Grok subscription models to Claude Code.
 - [Codebase Mapper](/reference/codebase-mapper/) keeps a project map close at hand.

@@ -73,7 +73,6 @@ export default defineConfig({
           label: 'Plugin reference',
           items: [
             { label: 'Overview', slug: 'reference' },
-            { label: 'Workbench', slug: 'reference/workbench' },
             { label: 'Observability', slug: 'reference/observability' },
             { label: 'Model Gateway', slug: 'reference/model-gateway' },
             { label: 'Codebase Mapper', slug: 'reference/codebase-mapper' },
