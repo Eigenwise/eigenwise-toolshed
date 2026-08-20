@@ -8,6 +8,17 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.492.0 (2026-08-20)
+
+### observability 0.7.12 → 0.7.13
+
+#### Fixes
+
+- Finish late hook spool drains (SQ-2294)
+  Finished hook spool drains now clear their temporary file and reset failure state even when the final batch exceeds its time budget.
+- Keep busy observers alive (SQ-2295)
+  Avoid replacing a managed observer when its health probe times out during spool processing.
+
 ## v3.491.0 (2026-08-20)
 
 ### codebase-mapper 2.15.5 → 2.15.6
