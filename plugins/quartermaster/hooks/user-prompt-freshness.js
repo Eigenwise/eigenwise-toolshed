@@ -20,8 +20,8 @@ const warnedStates = new Set();
 
 function isMaintenancePrompt(prompt) {
   const value = String(prompt || '').trim();
-  if (/^\/(?:workbench:)?update-toolshed(?:\s+[\w.-]+)*$/i.test(value)) return true;
-  if (/^\/(?:workbench:)?toolshed-doctor$/i.test(value)) return true;
+  if (/^\/(?:quartermaster:)?update-toolshed(?:\s+[\w.-]+)*$/i.test(value)) return true;
+  if (/^\/(?:quartermaster:)?toolshed-doctor$/i.test(value)) return true;
   if (/^\/reload-plugins(?:\s+--force)?$/i.test(value)) return true;
   if (/^\/plugin$/i.test(value)) return true;
   if (/^\/plugin\s+(?:install|update|enable|disable|remove|uninstall)(?:\s+[^\s]+){0,4}$/i.test(value)) return true;
@@ -32,7 +32,7 @@ function isMaintenancePrompt(prompt) {
 
 function newerInstalledVersion(instances, loadedVersion) {
   return instances
-    .filter((instance) => instance.name === 'workbench')
+    .filter((instance) => instance.name === 'quartermaster')
     .find((instance) => compareSemver(loadedVersion, instance.version) === -1)?.version || null;
 }
 
@@ -41,7 +41,7 @@ function warningOutput(message) {
 }
 
 function reloadWarning(installedVersion, loadedVersion) {
-  return `Workbench ${installedVersion} is installed, but this session loaded ${loadedVersion}. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.`;
+  return `Quartermaster ${installedVersion} is installed, but this session loaded ${loadedVersion}. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.`;
 }
 
 function reportedReloads(instances, input, options) {

@@ -482,11 +482,11 @@ function loadedPluginVersion(pluginRoot = process.env.CLAUDE_PLUGIN_ROOT) {
   return pluginRoot ? readJson(path.join(pluginRoot, '.claude-plugin', 'plugin.json'))?.version || null : null;
 }
 
-function newerWorkbenchVersion(instances, loadedVersion) {
+function newerQuartermasterVersion(instances, loadedVersion) {
   return instances
     .filter((instance) => {
       const parts = pluginIdParts(instance.id);
-      return parts?.marketplace === 'eigenwise-toolshed' && parts.name === 'workbench';
+      return parts?.marketplace === 'eigenwise-toolshed' && parts.name === 'quartermaster';
     })
     .find((instance) => compareVersions(loadedVersion, instance.version) === -1)?.version || null;
 }
@@ -503,8 +503,8 @@ function compressedUpdates(updates) {
 }
 
 function systemMessage(result, loadedVersion) {
-  const installedVersion = newerWorkbenchVersion(result.instances, loadedVersion);
-  if (installedVersion) return `Toolshed: workbench ${loadedVersion} loaded, ${installedVersion} installed — /reload-plugins to pick it up.`;
+  const installedVersion = newerQuartermasterVersion(result.instances, loadedVersion);
+  if (installedVersion) return `Toolshed: quartermaster ${loadedVersion} loaded, ${installedVersion} installed — /reload-plugins to pick it up.`;
   const update = result.updates
     .filter((candidate) => candidate.marketplace === 'eigenwise-toolshed')
     .sort((left, right) => left.name.localeCompare(right.name))[0];
@@ -542,7 +542,7 @@ function main() {
   try {
     const input = sessionInput();
     const loadedVersion = loadedPluginVersion();
-    reportLoadedPluginVersion(input, 'workbench@eigenwise-toolshed', loadedVersion);
+    reportLoadedPluginVersion(input, 'quartermaster@eigenwise-toolshed', loadedVersion);
     const result = audit({ currentProject: input.cwd });
     const context = [
       projectWarning(result.projectProblems),
@@ -583,7 +583,7 @@ module.exports = {
   installedFreshness,
   loadedPluginVersion,
   mapMaintenance,
-  newerWorkbenchVersion,
+  newerQuartermasterVersion,
   parseGatewayDoctorOutput,
   pluginInstances,
   sourceFreshness,

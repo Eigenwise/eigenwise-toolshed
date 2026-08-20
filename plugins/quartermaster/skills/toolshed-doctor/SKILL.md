@@ -1,7 +1,7 @@
 ---
 name: toolshed-doctor
 description: >-
-  Run a read-only health check for Workbench and installed Toolshed plugins. Use to diagnose Toolshed,
+  Run a read-only health check for Quartermaster and installed Toolshed plugins. Use to diagnose Toolshed,
   check workspace health, or troubleshoot stale plugins.
 ---
 

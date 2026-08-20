@@ -22,7 +22,7 @@ const now = Date.parse('2026-07-17T12:00:00Z');
 
 // audit() falls back to os.homedir() when no home is given, so a fixture without one reads the
 // developer's own ~/.claude/settings.json and passes or fails by whose machine it runs on.
-const absentHome = path.join(os.tmpdir(), `workbench-freshness-absent-home-${process.pid}`);
+const absentHome = path.join(os.tmpdir(), `quartermaster-freshness-absent-home-${process.pid}`);
 
 function fixture(overrides = {}) {
   return {
@@ -66,7 +66,7 @@ test('enumerates every board and maps it to its Sidequest project install', () =
 });
 
 test('maps a Sidequest board through an existing project alias', (t) => {
-  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-freshness-'));
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-freshness-'));
   const project = path.join(directory, 'project');
   const alias = path.join(directory, 'project-alias');
   fs.mkdirSync(project);
@@ -296,9 +296,9 @@ function seedSidequestBoards(home, boards) {
 }
 
 function hookOutput({ registry, manifest, loadedVersion, marketplaces = {}, input = {}, boards = [] }) {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-freshness-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-freshness-'));
   const cache = path.join(home, 'marketplace');
-  const pluginRoot = path.join(home, 'workbench');
+  const pluginRoot = path.join(home, 'quartermaster');
   try {
     if (boards.length) seedSidequestBoards(home, boards);
     fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
@@ -339,21 +339,21 @@ function hookFixture(plugins, versions) {
 test('writes a reload notice to SessionStart hook stdout for the current project', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
-    }, { workbench: '0.49.0' }),
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+    }, { quartermaster: '0.49.0' }),
     loadedVersion: '0.48.0',
     input: { cwd: 'C:/work/current' },
   });
 
-  assert.equal(output.systemMessage, 'Toolshed: workbench 0.48.0 loaded, 0.49.0 installed — /reload-plugins to pick it up.');
+  assert.equal(output.systemMessage, 'Toolshed: quartermaster 0.48.0 loaded, 0.49.0 installed — /reload-plugins to pick it up.');
   assert.equal(output.hookSpecificOutput, undefined);
 });
 
 test('SQ-1900: a finding the user has to fix reaches the user, not only the model', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
-    }, { workbench: '0.49.0' }),
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+    }, { quartermaster: '0.49.0' }),
     loadedVersion: '0.49.0',
     input: { cwd: 'C:/work/current' },
     boards: [{ name: 'current', path: 'C:/work/current' }],
@@ -369,9 +369,9 @@ test('SQ-1900: a finding the user has to fix reaches the user, not only the mode
 test('SQ-1900: a healthy project says nothing to the user at all', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
       'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '2.42.0' }],
-    }, { workbench: '0.49.0', sidequest: '2.42.0' }),
+    }, { quartermaster: '0.49.0', sidequest: '2.42.0' }),
     loadedVersion: '0.49.0',
     input: { cwd: 'C:/work/current' },
     boards: [{ name: 'current', path: 'C:/work/current' }],
@@ -383,14 +383,14 @@ test('SQ-1900: a healthy project says nothing to the user at all', () => {
 test('writes cached update availability to SessionStart hook stdout for the current project', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.49.0' }],
       'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '2.41.0' }],
-    }, { workbench: '0.50.0', sidequest: '2.42.0' }),
+    }, { quartermaster: '0.50.0', sidequest: '2.42.0' }),
     loadedVersion: '0.49.0',
     input: { cwd: 'C:/work/current' },
   });
 
-  assert.equal(output.systemMessage, 'Toolshed update available (cached): sidequest 2.41.0 → 2.42.0 — /update-toolshed, then /reload-plugins.');
+  assert.equal(output.systemMessage, 'Toolshed update available (cached): quartermaster 0.49.0 → 0.50.0 — /update-toolshed, then /reload-plugins.');
 });
 
 test('keeps third-party freshness and other projects out of SessionStart output', () => {
@@ -429,8 +429,8 @@ test('keeps another project cached update out of every SessionStart output', () 
 test('keeps another project reload notice out of every SessionStart output', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/other', version: '0.50.0' }],
-    }, { workbench: '0.50.0' }),
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/other', version: '0.50.0' }],
+    }, { quartermaster: '0.50.0' }),
     loadedVersion: '0.49.0',
     input: { cwd: 'C:/work/current' },
   });
@@ -441,9 +441,9 @@ test('keeps another project reload notice out of every SessionStart output', () 
 test('emits no SessionStart output without a usable current project', () => {
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.50.0' }],
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '0.50.0' }],
       'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:/work/current', version: '1.0.0' }],
-    }, { workbench: '0.50.0', sidequest: '1.1.0' }),
+    }, { quartermaster: '0.50.0', sidequest: '1.1.0' }),
     loadedVersion: '0.49.0',
   });
 
@@ -465,7 +465,7 @@ test('writes a project-scoped health warning to SessionStart context', () => {
 
 test('emits no SessionStart message when every version is current', () => {
   const output = hookOutput({
-    ...hookFixture({ 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }] }, { workbench: '0.49.0' }),
+    ...hookFixture({ 'quartermaster@eigenwise-toolshed': [{ scope: 'user', version: '0.49.0' }] }, { quartermaster: '0.49.0' }),
     loadedVersion: '0.49.0',
   });
 
@@ -584,7 +584,7 @@ test('the doctor phrasings the audit parses still exist in model-gateway', () =>
 // A real directory, because the detector reads the filesystem: an injected existsSync would also decide the
 // stale-worktree sweep, and the fake project paths every other test uses are exactly what keeps this quiet there.
 function mappedProject(t, { withMap = true } = {}) {
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-mapped-project-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-mapped-project-'));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   if (withMap) fs.mkdirSync(path.join(project, '.claude', '.codebase-info'), { recursive: true });
   return project;
@@ -594,8 +594,8 @@ test('SQ-2209: a codebase map with no codebase-mapper install reaches the user',
   const project = mappedProject(t);
   const output = hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
-    }, { workbench: '0.49.0' }),
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+    }, { quartermaster: '0.49.0' }),
     loadedVersion: '0.49.0',
     input: { cwd: project },
   });
@@ -608,9 +608,9 @@ test('SQ-2209: a user-scope codebase-mapper is named as such, and a project inst
   const project = mappedProject(t);
   const fixture = (instances) => hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
       'codebase-mapper@eigenwise-toolshed': instances,
-    }, { workbench: '0.49.0', 'codebase-mapper': '2.15.5' }),
+    }, { quartermaster: '0.49.0', 'codebase-mapper': '2.15.5' }),
     loadedVersion: '0.49.0',
     input: { cwd: project },
   });
@@ -632,9 +632,9 @@ test('SQ-2237: project settings without a codebase-mapper install report a dead 
   enablePlugins(project, 'settings.json', { 'codebase-mapper@eigenwise-toolshed': true });
   const output = (mapperInstances = []) => hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
       'codebase-mapper@eigenwise-toolshed': mapperInstances,
-    }, { workbench: '0.49.0', 'codebase-mapper': '2.15.5' }),
+    }, { quartermaster: '0.49.0', 'codebase-mapper': '2.15.5' }),
     loadedVersion: '0.49.0',
     input: { cwd: project },
   });
@@ -650,7 +650,7 @@ test('SQ-2237: project settings without a codebase-mapper install report a dead 
 });
 
 test('SQ-2237: user settings without a user codebase-mapper install report a dead flag', (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-home-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-home-'));
   const project = mappedProject(t);
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   enablePlugins(home, 'settings.json', { 'codebase-mapper@eigenwise-toolshed': true });
@@ -670,8 +670,8 @@ test('SQ-2211: a Toolshed marketplace declaration with auto-update on is not rep
   const project = mappedProject(t, { withMap: false });
   const output = () => hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
-    }, { workbench: '0.49.0' }),
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+    }, { quartermaster: '0.49.0' }),
     marketplaces: { 'eigenwise-toolshed': { lastUpdated: new Date().toISOString() } },
     loadedVersion: '0.49.0',
     input: { cwd: project },
@@ -691,8 +691,8 @@ test('SQ-2211: a Toolshed marketplace declaration with auto-update on is not rep
 });
 
 test('SQ-2237: settings-only Sidequest enablement reports a board dead flag', (t) => {
-  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-home-'));
-  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-settings-board-'));
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-home-'));
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'quartermaster-settings-board-'));
   t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   t.after(() => fs.rmSync(project, { recursive: true, force: true }));
   enablePlugins(project, 'settings.local.json', { 'sidequest@eigenwise-toolshed': true });
@@ -724,8 +724,8 @@ test('SQ-2209: a project without a codebase map is not asked to install a mapper
 
   assert.equal(hookOutput({
     ...hookFixture({
-      'workbench@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
-    }, { workbench: '0.49.0' }),
+      'quartermaster@eigenwise-toolshed': [{ scope: 'project', projectPath: project, version: '0.49.0' }],
+    }, { quartermaster: '0.49.0' }),
     loadedVersion: '0.49.0',
     input: { cwd: project },
   }), null);

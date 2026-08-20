@@ -18,17 +18,17 @@ function tempDirectory() {
 }
 
 function registry(installs) {
-  return { plugins: { 'workbench@eigenwise-toolshed': installs, 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:\\dev\\other', version: '1.0.0' }], 'other@elsewhere': [{ scope: 'user', version: '0.0.1' }] } };
+  return { plugins: { 'quartermaster@eigenwise-toolshed': installs, 'sidequest@eigenwise-toolshed': [{ scope: 'project', projectPath: 'C:\\dev\\other', version: '1.0.0' }], 'other@elsewhere': [{ scope: 'user', version: '0.0.1' }] } };
 }
 
-// A session running an OLDER workbench than the installed copy. Each case gets independent
+// A session running an OLDER quartermaster than the installed copy. Each case gets independent
 // warning state, so the once-per-session behavior cannot leak between tests.
 function reloadPending(directory) {
   const registryFile = path.join(directory, 'installed_plugins.json');
   const pluginRoot = path.join(directory, 'loaded');
   fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
   fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '1.0.0' }));
-  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '2.0.0' }] } }));
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'quartermaster@eigenwise-toolshed': [{ scope: 'user', version: '2.0.0' }] } }));
   return {
     registryFile,
     pluginRoot,
@@ -38,7 +38,7 @@ function reloadPending(directory) {
       pluginRoot,
       cache: {
         checkedAt: new Date().toISOString(),
-        manifest: { plugins: [{ name: 'workbench', version: '2.0.0' }] },
+        manifest: { plugins: [{ name: 'quartermaster', version: '2.0.0' }] },
       },
       warningStateDirectory: path.join(directory, 'warnings'),
       warnedStates: new Set(),
@@ -51,13 +51,13 @@ test('a session with no reload pending permits with empty output and never fetch
   const registryFile = path.join(directory, 'installed_plugins.json');
   fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '1.0.0' }])));
   let fetches = 0;
-  const result = decide({ prompt: 'ship it', cwd: 'C:\\dev\\project' }, { registryFile, platform: 'win32', cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [{ name: 'workbench', version: '1.0.0' }] } }, fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); } });
+  const result = decide({ prompt: 'ship it', cwd: 'C:\\dev\\project' }, { registryFile, platform: 'win32', cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [{ name: 'quartermaster', version: '1.0.0' }] } }, fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); } });
   assert.equal(result, '');
   assert.equal(fetches, 0);
 });
 
 test('installed behind the central marketplace is no longer blocked (regression: SQ-495)', () => {
-  // workbench installed at 1.0.0 while the marketplace has since moved far ahead. Previously
+  // quartermaster installed at 1.0.0 while the marketplace has since moved far ahead. Previously
   // this hard-blocked EVERY prompt (and trapped unrelated projects on each toolshed release).
   // Being behind is not a corruption risk, so it must permit — and must not reach the network.
   const directory = tempDirectory();
@@ -65,17 +65,17 @@ test('installed behind the central marketplace is no longer blocked (regression:
   fs.writeFileSync(registryFile, JSON.stringify(registry([{ scope: 'user', version: '1.0.0' }])));
   let fetches = 0;
   const result = decide({ prompt: 'drop this zip and work on it', cwd: 'C:\\dev\\unrelated' }, {
-    registryFile, platform: 'win32', cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [{ name: 'workbench', version: '1.0.0' }] } }, fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); },
+    registryFile, platform: 'win32', cache: { checkedAt: new Date().toISOString(), manifest: { plugins: [{ name: 'quartermaster', version: '1.0.0' }] } }, fetchFn: async () => { fetches += 1; throw new Error('must not fetch'); },
   });
   assert.equal(result, '');
   assert.equal(fetches, 0);
 });
 
-test('loaded workbench older than the installed registry permits the prompt with a reload warning', () => {
+test('loaded quartermaster older than the installed registry permits the prompt with a reload warning', () => {
   const { pluginRoot, project, options } = reloadPending(tempDirectory());
   const output = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'session-freshness' }, options));
   assert.equal(output.decision, undefined);
-  assert.equal(output.hookSpecificOutput.additionalContext, 'Workbench 2.0.0 is installed, but this session loaded 1.0.0. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.');
+  assert.equal(output.hookSpecificOutput.additionalContext, 'Quartermaster 2.0.0 is installed, but this session loaded 1.0.0. This prompt is proceeding. Reload with /reload-plugins or restart Claude Code before relying on the updated plugin code.');
 
   fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), JSON.stringify({ version: '2.0.0' }));
   assert.equal(decide({ prompt: 'continue', cwd: project, session_id: 'session-reloaded' }, options), '');
@@ -141,8 +141,8 @@ test('the bypass env var disables the guard entirely', () => {
 });
 
 test('only exact maintenance prompts bypass the guard', () => {
-  for (const prompt of ['/update-toolshed', '/update-toolshed --dry-run', '/workbench:update-toolshed', '/workbench:update-toolshed --check', '/toolshed-doctor', '/workbench:toolshed-doctor', '/reload-plugins', '/reload-plugins --force', '/plugin', '/plugin update sidequest@eigenwise-toolshed', '/plugin marketplace update eigenwise-toolshed', 'claude plugin marketplace update eigenwise-toolshed', 'claude plugin update sidequest@eigenwise-toolshed --scope user']) assert.equal(isMaintenancePrompt(prompt), true, prompt);
-  for (const prompt of ['please run /update-toolshed', '/update-toolshed; work on this', '/workbench:update-toolshed; work on this', '/workbench:toolshed-doctor now', '/workbench-doctor', '/workbench:workbench-doctor', '/reload-plugins and fix it', 'claude plugin update sidequest@eigenwise-toolshed --scope user && rm -rf x', 'I said /plugin update']) assert.equal(isMaintenancePrompt(prompt), false, prompt);
+  for (const prompt of ['/update-toolshed', '/update-toolshed --dry-run', '/quartermaster:update-toolshed', '/quartermaster:update-toolshed --check', '/toolshed-doctor', '/quartermaster:toolshed-doctor', '/reload-plugins', '/reload-plugins --force', '/plugin', '/plugin update sidequest@eigenwise-toolshed', '/plugin marketplace update eigenwise-toolshed', 'claude plugin marketplace update eigenwise-toolshed', 'claude plugin update sidequest@eigenwise-toolshed --scope user']) assert.equal(isMaintenancePrompt(prompt), true, prompt);
+  for (const prompt of ['please run /update-toolshed', '/update-toolshed; work on this', '/quartermaster:update-toolshed; work on this', '/quartermaster:toolshed-doctor now', '/quartermaster-doctor', '/quartermaster:quartermaster-doctor', '/workbench:update-toolshed', '/workbench:toolshed-doctor', '/reload-plugins and fix it', 'claude plugin update sidequest@eigenwise-toolshed --scope user && rm -rf x', 'I said /plugin update']) assert.equal(isMaintenancePrompt(prompt), false, prompt);
 });
 
 test('all prompts pass through and warn only once for the session', () => {
@@ -150,11 +150,11 @@ test('all prompts pass through and warn only once for the session', () => {
   const first = JSON.parse(decide({ prompt: 'keep working', cwd: project, session_id: 'session-warning' }, options));
   assert.equal(first.decision, undefined);
   assert.match(first.hookSpecificOutput.additionalContext, /This prompt is proceeding\./);
-  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'workbench@eigenwise-toolshed': [{ scope: 'user', version: '3.0.0' }] } }));
+  fs.writeFileSync(registryFile, JSON.stringify({ plugins: { 'quartermaster@eigenwise-toolshed': [{ scope: 'user', version: '3.0.0' }] } }));
   assert.equal(decide({ prompt: 'continue', cwd: project, session_id: 'session-warning' }, options), '');
 
   const nextSession = JSON.parse(decide({ prompt: 'continue', cwd: project, session_id: 'another-session' }, options));
-  assert.match(nextSession.hookSpecificOutput.additionalContext, /Workbench 3\.0\.0 is installed/);
+  assert.match(nextSession.hookSpecificOutput.additionalContext, /Quartermaster 3\.0\.0 is installed/);
 });
 
 test('compares installed plugins to the cached remote manifest rather than the local clone', () => {
@@ -182,7 +182,7 @@ test('reports every remotely outdated plugin in one compact warning', () => {
   const registryFile = path.join(directory, 'installed_plugins.json');
   fs.writeFileSync(registryFile, JSON.stringify({ plugins: {
     'sidequest@eigenwise-toolshed': [{ scope: 'user', version: '4.34.0' }],
-    'workbench@eigenwise-toolshed': [{ scope: 'user', version: '0.80.0' }],
+    'quartermaster@eigenwise-toolshed': [{ scope: 'user', version: '0.80.0' }],
     'model-gateway@eigenwise-toolshed': [{ scope: 'user', version: '0.47.0' }],
   } }));
   const output = JSON.parse(decide({ prompt: 'continue', cwd: path.join(directory, 'project'), session_id: 'multiple-remote-updates' }, {
@@ -191,7 +191,7 @@ test('reports every remotely outdated plugin in one compact warning', () => {
       checkedAt: new Date().toISOString(),
       manifest: { plugins: [
         { name: 'sidequest', version: '4.35.0' },
-        { name: 'workbench', version: '0.81.0' },
+        { name: 'quartermaster', version: '0.81.0' },
         { name: 'model-gateway', version: '0.48.0' },
       ] },
     },
@@ -201,7 +201,7 @@ test('reports every remotely outdated plugin in one compact warning', () => {
   const message = output.hookSpecificOutput.additionalContext;
   assert.match(message, /model-gateway 0\.47\.0 → 0\.48\.0/);
   assert.match(message, /sidequest 4\.34\.0 → 4\.35\.0/);
-  assert.match(message, /workbench 0\.80\.0 → 0\.81\.0/);
+  assert.match(message, /quartermaster 0\.80\.0 → 0\.81\.0/);
   assert.equal((message.match(/Toolshed updates available/g) || []).length, 1);
 });
 
