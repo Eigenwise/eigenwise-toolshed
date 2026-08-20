@@ -20,8 +20,13 @@ const {
 
 const now = Date.parse('2026-07-17T12:00:00Z');
 
+// audit() falls back to os.homedir() when no home is given, so a fixture without one reads the
+// developer's own ~/.claude/settings.json and passes or fails by whose machine it runs on.
+const absentHome = path.join(os.tmpdir(), `workbench-freshness-absent-home-${process.pid}`);
+
 function fixture(overrides = {}) {
   return {
+    home: absentHome,
     now,
     registry: {
       plugins: {
