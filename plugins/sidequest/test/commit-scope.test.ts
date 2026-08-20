@@ -20,6 +20,7 @@ interface ScopeResult {
 
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-home-'));
 const store = require('../lib/store.js') as any;
+const lifecycleTools = require('../lib/mcp-lifecycle.js').tools as Array<{ name: string; handler(args: Record<string, unknown>): any }>;
 
 interface RangeResult {
   ok: boolean;
@@ -47,6 +48,7 @@ const commitScope = require('../lib/commit-scope.js') as {
   validateStoredSubmissionRange(cwd: string, submission: unknown): RangeResult;
   scopedWorkPending(cwd: string, files: unknown, opts?: unknown): any;
   ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[];
+  foreignReleaseFragmentRefusalMessage(operation: string, ticketRef: unknown, fragments: readonly string[]): string;
   headCommit(cwd: string): string | null;
   preserveCommitRef(cwd: string, commit: string, gitRef: string): { ok: boolean; reason?: string; commit?: string; gitRef?: string };
 };
@@ -68,6 +70,12 @@ function repo(): string {
   git(root, ['add', '.']);
   git(root, ['commit', '-m', 'base']);
   return root;
+}
+
+function lifecycleHandler(name: string): (args: Record<string, unknown>) => any {
+  const tool = lifecycleTools.find((candidate) => candidate.name === name);
+  assert.ok(tool, `${name} tool is registered`);
+  return tool.handler;
 }
 
 test('configured generated pairs add only tracked outputs to effective scope and scoped commits', () => {
@@ -821,5 +829,44 @@ test('SQ-806: an empty dispatch binding falls back to the declared files instead
     commitScope.ticketCommitScope(store.executionScope(undefined, unbindable), unbindable.files, unbindable.ref),
     [],
     'a ticket with no declared files gets no synthesized fragment to chase',
+  );
+});
+
+test('scopeRequest and commit refuse a foreign release fragment with the same rule', () => {
+  const root = repo();
+  const slug = store.ensureProject(root, 'foreign release fragment scope').slug;
+  const ticket = store.createTicket(slug, {
+    title: 'foreign release fragment scope',
+    files: ['README.md'],
+    complexity: 1,
+    complexityWhy: 'The lifecycle handlers must reject another ticket’s release fragment before a commit.',
+  });
+  const by = 'foreign-release-fragment-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The handler regression fixture claims the ticket directly.' }).ok, true);
+
+  const foreignFragment = '.release/unreleased/SQ-foreign.md';
+  const scopeRequested = lifecycleHandler('scopeRequest')({
+    project: root,
+    ref: ticket.ref,
+    by,
+    files: [foreignFragment],
+  });
+  assert.equal(scopeRequested.ok, true);
+  assert.equal(scopeRequested.state, 'refused');
+  assert.deepEqual(scopeRequested.refused, [foreignFragment]);
+  assert.equal(
+    scopeRequested.message,
+    commitScope.foreignReleaseFragmentRefusalMessage('scopeRequest', ticket.ref, [foreignFragment]),
+  );
+  assert.equal(store.getTicket(slug, ticket.ref).files.includes(foreignFragment), false, 'the refusal leaves the foreign fragment out of commit scope');
+
+  fs.mkdirSync(path.dirname(path.join(root, foreignFragment)), { recursive: true });
+  fs.writeFileSync(path.join(root, foreignFragment), 'foreign release fragment\n');
+  const committed = lifecycleHandler('commit')({ project: root, ref: ticket.ref, by, message: 'attempt foreign fragment', worktree: root });
+  assert.equal(committed.ok, false);
+  assert.equal(committed.reason, 'outside_scope');
+  assert.equal(
+    committed.message,
+    commitScope.foreignReleaseFragmentRefusalMessage('commit', ticket.ref, [foreignFragment]),
   );
 });

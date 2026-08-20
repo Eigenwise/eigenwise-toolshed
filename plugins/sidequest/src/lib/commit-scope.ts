@@ -183,6 +183,22 @@ export function ticketReleaseFragment(ticketRef: unknown): string | null {
   return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(ref) ? `.release/unreleased/${ref}.md` : null;
 }
 
+export function foreignReleaseFragmentScopePaths(files: unknown, ticketRef: unknown): string[] {
+  const ownFragment = ticketReleaseFragment(ticketRef);
+  const releaseDirectory = '.release/unreleased';
+  return scopedPaths(files).filter((scope) => {
+    const key = scopeKey(scope);
+    const ownKey = ownFragment ? scopeKey(ownFragment) : '';
+    const coversReleaseDirectory = key === '.' || releaseDirectory.startsWith(`${key}/`) || key === releaseDirectory;
+    const foreignFragment = key.startsWith(`${releaseDirectory}/`) && key.endsWith('.md') && key !== ownKey;
+    return coversReleaseDirectory || foreignFragment;
+  });
+}
+
+export function foreignReleaseFragmentRefusalMessage(operation: string, ticketRef: unknown, fragments: readonly string[]): string {
+  return `${operation}: refused ${ticketRef}; only ${ticketReleaseFragment(ticketRef)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(', ')}.`;
+}
+
 export function ticketCommitScope(effectiveFiles: unknown, declaredFiles: unknown, ticketRef: unknown): string[] {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
   const fragment = Array.isArray(declaredFiles) && declaredFiles.length ? ticketReleaseFragment(ticketRef) : null;
