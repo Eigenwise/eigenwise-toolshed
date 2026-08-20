@@ -25,7 +25,7 @@ After a meaningful change, ask:
 
 > Update the codebase map for the changes in this session.
 
-Claude checks whether the map needs work and updates only the affected documents. The map is available automatically when a session starts.
+Claude checks whether the map needs work and updates only the affected documents. The map is available automatically when a session starts, and dispatched Sidequest executors and general-purpose subagents get it too.
 
 ## If something looks wrong
 

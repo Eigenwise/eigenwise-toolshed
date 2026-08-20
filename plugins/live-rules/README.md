@@ -21,7 +21,7 @@ Tell Claude the instruction and when it applies:
 
 > Add a rule that runs the linter before every commit.
 
-Claude writes the rule with the right scope. Global rules appear on prompts; file, directory, and keyword rules appear when those situations apply. Content changes take effect on the next prompt or relevant edit, with no restart.
+Claude writes the rule with the right scope. Global rules land at session start; file, directory, and keyword rules arrive the first time they match. After that a rule comes back only when its text changes, so rules do not repeat on every prompt. Content changes take effect on the next prompt or relevant edit, with no restart.
 
 Commit the project rules so your team gets the same guidance.
 
