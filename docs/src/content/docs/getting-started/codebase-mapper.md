@@ -28,7 +28,7 @@ After a meaningful structural or behavioral change, tell Claude:
 
 Claude checks whether the map needs work, updates only the affected documents, and keeps the map's document list and state current. If nothing documented changed, it leaves the map alone.
 
-The map is available automatically when a session starts, so you can begin with the task instead of explaining the repository layout again.
+The map is available automatically when a session starts, so you can begin with the task instead of explaining the repository layout again. Dispatched Sidequest executors and general-purpose subagents get it too, so delegated work starts oriented as well.
 
 ## If the map needs attention
 
