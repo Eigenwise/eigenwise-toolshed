@@ -157,7 +157,7 @@ function formatAudit(audit) {
     lines.push('then restart Claude Code in each of those directories before their metrics appear');
   }
   for (const { project, events } of audit.halfWired) {
-    lines.push(`half-wired: opted-in project ${project} has ${events} observer events and no claude_code_* samples in ${audit.windowHours}h; run /workbench:enable-project-telemetry from it, then restart Claude Code`);
+    lines.push(`half-wired: opted-in project ${project} has ${events} observer events and no claude_code_* samples in ${audit.windowHours}h; run /observability:enable-project-telemetry from it, then restart Claude Code`);
   }
   const unregistered = audit.unregistered.slice(0, 3);
   if (unregistered.length > 0) {

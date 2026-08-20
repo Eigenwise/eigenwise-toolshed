@@ -163,7 +163,7 @@ function globalDashboard(template, projects) {
 const GLOBAL_ONLY_PANELS = new Set(['Cost by project']);
 
 const EMPTY_STATE_TITLE = 'Telemetry in the selected range';
-const EMPTY_STATE_MESSAGE = 'No Claude Code metrics in this range. Sessions may be running in directories that never got the telemetry env: run /workbench:enable-project-telemetry in this repository, then restart Claude Code there.';
+const EMPTY_STATE_MESSAGE = 'No Claude Code metrics in this range. Sessions may be running in directories that never got the telemetry env: run /observability:enable-project-telemetry in this repository, then restart Claude Code there.';
 
 // A project with no samples rendered exactly like an idle one, so a half-wired repository
 // read as "quiet" instead of broken. The empty state has to be said out loud on the one
