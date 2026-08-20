@@ -4,8 +4,9 @@
  * temporary paths, ports, and container names are lifecycle-only and never rendered.
  */
 import assert from 'node:assert/strict';
+import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
@@ -18,7 +19,13 @@ const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
-const grafanaDashboards = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'dashboards');
+const SYNTHETIC_NOW = Date.parse('2026-08-20T12:00:00.000Z');
+const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
+const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
+const SYNTHETIC_BUCKETS = Math.floor((SYNTHETIC_NOW - SYNTHETIC_START) / SYNTHETIC_INTERVAL) + 1;
+const { generatedDashboards } = createRequire(import.meta.url)(
+  path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'dashboard-generator.js'),
+);
 
 const FIXTURE = Object.freeze({
   project: 'acme-webshop',
@@ -120,26 +127,6 @@ const FIXTURE = Object.freeze({
   dialogStory: 'US-1 · Checkout confidence',
   commentTimes: ['Mar 12, 2026, 9:18 AM', 'Mar 12, 2026, 9:34 AM', 'Mar 12, 2026, 10:03 AM', 'Mar 12, 2026, 10:27 AM'],
   notificationTimes: ['8m', '14m', '21m', '34m', '46m', '1h', '2h'],
-  models: [
-    ['fable', '68,400', 'Orchestrator'],
-    ['sonnet', '41,200', 'Research'],
-    ['gpt-5.6-terra', '97,600', 'Implementation'],
-  ],
-  mcp: [
-    ['sidequest', '2,840', '38 calls'],
-    ['github', '1,920', '24 calls'],
-    ['playwright', '1,360', '17 calls'],
-  ],
-  burn: [
-    ['fable', '1.82M', '$4.16'],
-    ['gpt-5.6-terra', '1.24M', '$2.84'],
-    ['sonnet', '836K', '$1.72'],
-  ],
-  board: [
-    ['Checkout confidence', '8 tickets', '$8.72'],
-    ['Storefront discovery', '7 tickets', '$5.24'],
-    ['Same-day fulfillment', '5 tickets', '$3.18'],
-  ],
   sessions: ['demo-alpha-7f3a', 'demo-beta-4c21', 'demo-gamma-9b18'],
 });
 
@@ -263,40 +250,284 @@ function startSidequest(tempHome, fakeProject, port) {
   return child;
 }
 
-function htmlEscape(value) {
-  return String(value).replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#039;' })[character]);
+function otlpValue(value) {
+  if (typeof value === 'boolean') return { boolValue: value };
+  if (typeof value === 'number') return Number.isInteger(value) ? { intValue: String(value) } : { doubleValue: value };
+  return { stringValue: String(value) };
 }
 
-function table(rows, headers) {
-  return `<table><thead><tr>${headers.map((header) => `<th>${htmlEscape(header)}</th>`).join('')}</tr></thead><tbody>${rows.map((row) => `<tr>${row.map((cell) => `<td>${htmlEscape(cell)}</td>`).join('')}</tr>`).join('')}</tbody></table>`;
+function otlpAttributes(attributes) {
+  return Object.entries(attributes).map(([key, value]) => ({ key, value: otlpValue(value) }));
 }
 
-function grafanaMock(title, caption, headers, rows) {
-  return `<!doctype html><html><head><style>
-    * { box-sizing: border-box; } body { margin: 0; background: #111827; color: #edf2f7; font: 15px Inter, ui-sans-serif, system-ui, sans-serif; }
-    header { height: 56px; padding: 0 28px; display: flex; align-items: center; gap: 18px; background: #171f2f; border-bottom: 1px solid #2b3a52; color: #dbeafe; }
-    .mark { color: #f59e0b; font-size: 22px; } .crumb { color: #91a4c3; } main { padding: 30px 42px; } h1 { font-size: 26px; margin: 0 0 8px; } p { color: #9fb0ca; margin: 0 0 24px; }
-    .tabs { display: flex; gap: 20px; border-bottom: 1px solid #2b3a52; margin-bottom: 24px; } .tabs span { padding: 0 0 12px; color: #9fb0ca; } .tabs .active { color: #f8fafc; border-bottom: 2px solid #f59e0b; }
-    .cards { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-bottom: 18px; } .card, .panel { background: #1b2638; border: 1px solid #31435d; border-radius: 5px; }
-    .card { padding: 18px; min-height: 112px; } .label { color: #a8bad1; font-size: 13px; } .value { font-size: 30px; font-weight: 650; padding-top: 12px; } .orange { color: #f59e0b; } .green { color: #4ade80; } .blue { color: #60a5fa; }
-    .panel { padding: 20px; } h2 { font-size: 17px; margin: 0 0 6px; } .panel p { font-size: 13px; } table { border-collapse: collapse; width: 100%; margin-top: 16px; } th { color: #9fb0ca; font-weight: 500; text-align: left; border-bottom: 1px solid #41536c; padding: 11px 12px; } td { border-bottom: 1px solid #2c3b52; padding: 13px 12px; } tr:last-child td { border: 0; }
-    .tag { padding: 3px 8px; border-radius: 999px; background: #243a56; color: #b9d4ff; font-size: 12px; } .note { padding-top: 20px; color: #71839f; font-size: 12px; }
-  </style></head><body><header><span class="mark">◢</span><strong>Grafana</strong><span class="crumb">Dashboards / Observability / Claude Code Usage</span></header><main><h1>Claude Code Usage</h1><p>Acme Webshop synthetic observability data</p><div class="tabs"><span class="active">${htmlEscape(title)}</span><span>Tool activity</span><span>MCP</span><span>Sessions & agents</span><span>Sidequest costs</span></div><div class="cards"><div class="card"><div class="label">Input tokens</div><div class="value orange">3.90M</div></div><div class="card"><div class="label">Output tokens</div><div class="value green">642K</div></div><div class="card"><div class="label">Synthetic cost</div><div class="value blue">$8.72</div></div></div><section class="panel"><h2>${htmlEscape(title)}</h2><p>${htmlEscape(caption)}</p>${table(rows, headers)}</section><div class="note">Demo only. Fixed synthetic records, captured by docs/screenshots/capture.mjs.</div></main></body></html>`;
+function syntheticLog(serviceName, eventName, attributes, timestamp) {
+  return {
+    serviceName,
+    record: {
+      timeUnixNano: String(BigInt(timestamp) * 1_000_000n),
+      body: { stringValue: eventName },
+      attributes: otlpAttributes(attributes),
+    },
+  };
+}
+
+function groupedLogs(records) {
+  const byService = new Map();
+  for (const { serviceName, record } of records) {
+    const serviceRecords = byService.get(serviceName) || [];
+    serviceRecords.push(record);
+    byService.set(serviceName, serviceRecords);
+  }
+  return {
+    resourceLogs: [...byService].map(([serviceName, logRecords]) => ({
+      resource: { attributes: [{ key: 'service.name', value: { stringValue: serviceName } }] },
+      scopeLogs: [{ scope: { name: 'toolshed-docs-fixture' }, logRecords }],
+    })),
+  };
+}
+
+async function postOtlp(otlpPort, signal, payload) {
+  const response = await fetch(`http://127.0.0.1:${otlpPort}/v1/${signal}`, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+  assert.equal(response.ok, true, `Synthetic OTLP ${signal} export failed: ${response.status} ${response.statusText}`);
+}
+
+async function seedGrafana(otlpPort) {
+  const projects = [
+    { name: 'acme-webshop', factor: 1 },
+    { name: 'acme-fulfillment', factor: 0.58 },
+    { name: 'acme-support-desk', factor: 0.34 },
+  ];
+  const models = [
+    { name: 'claude-sonnet-5', role: 'orchestrator', input: 80_000, output: 9_000, cacheRead: 24_000, context: 115_000 },
+    { name: 'claude-opus-5', role: 'orchestrator', input: 45_000, output: 6_000, cacheRead: 15_000, context: 90_000 },
+    { name: 'gpt-5.6-terra', role: 'executor', input: 100_000, output: 10_000, cacheRead: 30_000, context: 130_000 },
+  ];
+  const timestamps = Array.from({ length: SYNTHETIC_BUCKETS }, (_, index) => SYNTHETIC_START + (index * SYNTHETIC_INTERVAL));
+  const workloadAt = (timestamp, index) => {
+    const hour = new Date(timestamp).getUTCHours();
+    const workingHours = hour >= 7 && hour < 19;
+    const wave = 0.78 + ((Math.sin(index * 0.83) + 1) * 0.36);
+    const peak = index % 37 === 11 ? 1.7 : index % 53 === 29 ? 1.4 : 1;
+    return (workingHours ? 1.45 : 0.24) * wave * peak;
+  };
+  const records = [];
+  for (const [index, timestamp] of timestamps.entries()) {
+    let eventOffset = 0;
+    const eventTimestamp = () => timestamp + (eventOffset++ * 1_000);
+    const workload = workloadAt(timestamp, index);
+    for (const project of projects) {
+      for (const model of models) {
+        const scale = workload * project.factor;
+        records.push(syntheticLog('workbench-observer', 'gateway.token.usage', {
+          'workbench.attribute.project_name': project.name,
+          'workbench.attribute.model': model.name,
+          'workbench.attribute.agent_role': model.role,
+          'workbench.attribute.session_id': `synthetic-session-${index + 1}`,
+          'workbench.measurement.input_tokens.value': Math.round(model.input * scale),
+          'workbench.measurement.output_tokens.value': Math.round(model.output * scale),
+          'workbench.measurement.cache_read_tokens.value': Math.round(model.cacheRead * scale),
+          'workbench.measurement.context_tokens.value': Math.round(model.context * scale),
+        }, eventTimestamp()));
+      }
+    }
+    const primaryAttributes = { 'workbench.attribute.project_name': FIXTURE.project };
+    const toolCalls = Math.max(2, Math.round(workload * 4));
+    for (let call = 0; call < toolCalls; call += 1) {
+      const failed = call === 0 && index % 17 === 3;
+      records.push(syntheticLog('workbench-observer', 'hook.post_tool_use', {
+        ...primaryAttributes,
+        'workbench.attribute.status': failed ? 'error' : 'success',
+        'workbench.attribute.tool_name': ['Read', 'Search', 'Terminal', 'Browser'][call % 4],
+      }, eventTimestamp()));
+    }
+    if (index % 13 === 4) {
+      records.push(syntheticLog('workbench-observer', 'claude_code.hook_execution_complete', {
+        ...primaryAttributes,
+        'workbench.attribute.status': 'failed',
+        'workbench.attribute.hook_name': 'post_tool_use',
+      }, eventTimestamp()));
+    }
+    if (index % 12 === 7) {
+      records.push(syntheticLog('codex-gateway', 'gateway request throttled briefly', {}, eventTimestamp()));
+    } else {
+      records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, eventTimestamp()));
+    }
+    const rechargeTools = [
+      ['all', Math.max(1, Math.round(workload * 3)), 0, 0],
+      ['Read', 0, 18_000, 44_000],
+      ['Search', 0, 11_000, 27_000],
+      ['Terminal', 0, 8_000, 20_000],
+      ['Browser', 0, 6_000, 15_000],
+    ];
+    for (const [toolName, assistantTurns, resultBytes, weightedResultBytes] of rechargeTools) {
+      const scale = workload * (toolName === 'all' ? 1 : 0.75);
+      records.push(syntheticLog('workbench-observer', 'workbench.recharge_rollup', {
+        ...primaryAttributes,
+        'workbench.attribute.tool_name': toolName,
+        'workbench.measurement.assistant_turns.value': assistantTurns,
+        'workbench.measurement.tool_result_bytes.value': Math.round(resultBytes * scale),
+        'workbench.measurement.recharge_weighted_tool_result_bytes.value': Math.round(weightedResultBytes * scale),
+      }, eventTimestamp()));
+    }
+  }
+  const healthTimestamp = SYNTHETIC_NOW + (30 * 1_000);
+  let healthOffset = 0;
+  const healthEventTimestamp = () => healthTimestamp + (healthOffset++ * 1_000);
+  const healthAttributes = { 'workbench.attribute.project_name': FIXTURE.project };
+  for (const model of models) {
+    records.push(syntheticLog('workbench-observer', 'gateway.token.usage', {
+      ...healthAttributes,
+      'workbench.attribute.model': model.name,
+      'workbench.attribute.agent_role': model.role,
+      'workbench.attribute.session_id': 'synthetic-session-current',
+      'workbench.measurement.input_tokens.value': Math.round(model.input * 1.2),
+      'workbench.measurement.output_tokens.value': Math.round(model.output * 1.2),
+      'workbench.measurement.cache_read_tokens.value': Math.round(model.cacheRead * 1.2),
+      'workbench.measurement.context_tokens.value': Math.round(model.context * 1.2),
+    }, healthEventTimestamp()));
+  }
+  for (let call = 0; call < 5; call += 1) {
+    records.push(syntheticLog('workbench-observer', 'hook.post_tool_use', {
+      ...healthAttributes,
+      'workbench.attribute.status': call === 0 ? 'error' : 'success',
+      'workbench.attribute.tool_name': ['Read', 'Search', 'Terminal', 'Browser', 'Read'][call],
+    }, healthEventTimestamp()));
+  }
+  records.push(syntheticLog('codex-gateway', 'gateway request completed', {}, healthEventTimestamp()));
+  const healthRecharge = [
+    ['all', 4, 0, 0],
+    ['Read', 0, 20_000, 50_000],
+    ['Search', 0, 12_000, 30_000],
+    ['Terminal', 0, 9_000, 22_000],
+    ['Browser', 0, 7_000, 17_000],
+  ];
+  for (const [toolName, assistantTurns, resultBytes, weightedResultBytes] of healthRecharge) {
+    records.push(syntheticLog('workbench-observer', 'workbench.recharge_rollup', {
+      ...healthAttributes,
+      'workbench.attribute.tool_name': toolName,
+      'workbench.measurement.assistant_turns.value': assistantTurns,
+      'workbench.measurement.tool_result_bytes.value': resultBytes,
+      'workbench.measurement.recharge_weighted_tool_result_bytes.value': weightedResultBytes,
+    }, healthEventTimestamp()));
+  }
+  for (const timestamp of timestamps) {
+    const bucketStart = BigInt(timestamp) * 1_000_000n;
+    const bucketEnd = BigInt(timestamp + SYNTHETIC_INTERVAL) * 1_000_000n;
+    const bucketRecords = records.filter(({ record }) => {
+      const recordTimestamp = BigInt(record.timeUnixNano);
+      return recordTimestamp >= bucketStart && recordTimestamp < bucketEnd;
+    });
+    await postOtlp(otlpPort, 'logs', groupedLogs(bucketRecords));
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  const healthRecords = records.filter(({ record }) => BigInt(record.timeUnixNano) >= BigInt(healthTimestamp) * 1_000_000n);
+  await postOtlp(otlpPort, 'logs', groupedLogs(healthRecords));
+  const metricDataPoints = Array.from({ length: 10 }, (_, index) => ({
+    asInt: String((index + 1) * 25_000),
+    startTimeUnixNano: String(BigInt(SYNTHETIC_NOW - (5 * 60 * 1_000)) * 1_000_000n),
+    timeUnixNano: String(BigInt(SYNTHETIC_NOW - ((4 - (index * 0.4)) * 60 * 1_000)) * 1_000_000n),
+    attributes: otlpAttributes({ model: 'claude-sonnet-5', type: 'input', project_id: FIXTURE.project }),
+  }));
+  await postOtlp(otlpPort, 'metrics', {
+    resourceMetrics: [{
+      resource: {
+        attributes: [
+          { key: 'service.name', value: { stringValue: 'claude-code' } },
+          { key: 'project.id', value: { stringValue: FIXTURE.project } },
+        ],
+      },
+      scopeMetrics: [{
+        scope: { name: 'toolshed-docs-fixture' },
+        metrics: [{
+          name: 'claude_code.token.usage',
+          unit: 'tokens',
+          sum: {
+            aggregationTemporality: 2,
+            isMonotonic: true,
+            dataPoints: metricDataPoints,
+          },
+        }],
+      }],
+    }],
+  });
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
+}
+
+async function writeGrafanaDashboards(tempRoot) {
+  const dashboardDirectory = path.join(tempRoot, 'workbench-dashboards');
+  await mkdir(dashboardDirectory, { recursive: true });
+  const projects = [
+    { project_id: 'a'.repeat(64), project_name: 'acme-webshop' },
+    { project_id: 'b'.repeat(64), project_name: 'acme-fulfillment' },
+    { project_id: 'c'.repeat(64), project_name: 'acme-support-desk' },
+  ];
+  const statSeriesNames = new Map([
+    ['Claude metric samples, 5m', 'Claude metric samples'],
+    ['Observer records, 5m', 'Observer records'],
+    ['Gateway records, 5m', 'Gateway records'],
+  ]);
+  for (const { fileName, dashboard } of generatedDashboards(projects)) {
+    for (const panel of dashboard.panels) {
+      const seriesName = statSeriesNames.get(panel.title);
+      if (!seriesName) continue;
+      panel.fieldConfig.defaults.displayName = seriesName;
+      for (const target of panel.targets || []) target.legendFormat = seriesName;
+    }
+    await writeFile(path.join(dashboardDirectory, fileName), `${JSON.stringify(dashboard, null, 2)}\n`);
+  }
+  return dashboardDirectory;
+}
+
+async function dashboardRowBounds(page, title) {
+  const titleButton = page.getByTestId(`data-testid dashboard-row-title-${title}`);
+  await titleButton.scrollIntoViewIfNeeded();
+  await page.waitForTimeout(500);
+  const rowHeaders = await page.locator('[data-testid^="data-testid dashboard-row-title-"]').evaluateAll((elements) => elements.map((element) => {
+    const row = element.closest('.react-grid-item');
+    const bounds = row?.getBoundingClientRect();
+    return bounds ? { top: bounds.top, bottom: bounds.bottom } : null;
+  }).filter(Boolean));
+  const currentHeader = await titleButton.locator('xpath=ancestor::*[contains(@class, "react-grid-item")][1]').boundingBox();
+  assert.ok(currentHeader, `Could not measure Grafana row header ${title}`);
+  const nextTop = rowHeaders.find(({ top }) => top > currentHeader.y + 1)?.top ?? null;
+  const items = await page.locator('.react-grid-item').evaluateAll((elements) => elements.map((element) => {
+    const bounds = element.getBoundingClientRect();
+    return { x: bounds.x, y: bounds.y, right: bounds.right, bottom: bounds.bottom, text: element.innerText };
+  }));
+  const rowItems = items.filter(({ y }) => y >= currentHeader.y - 1 && (nextTop === null || y < nextTop - 1));
+  assert.ok(rowItems.length > 0, `Could not find panels in Grafana row ${title}`);
+  return {
+    bounds: {
+      x: Math.min(...rowItems.map(({ x }) => x)),
+      y: Math.min(...rowItems.map(({ y }) => y)),
+      width: Math.max(...rowItems.map(({ right }) => right)) - Math.min(...rowItems.map(({ x }) => x)),
+      height: Math.max(...rowItems.map(({ bottom }) => bottom)) - Math.min(...rowItems.map(({ y }) => y)),
+    },
+    text: rowItems.map(({ text }) => text).join('\n'),
+  };
 }
 
 async function captureGrafana(browser, grafanaPort) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', deviceScaleFactor: 1 });
-  await page.goto(`http://127.0.0.1:${grafanaPort}/d/claude-code-usage`, { waitUntil: 'domcontentloaded' });
-  await page.goto('about:blank');
+  const from = encodeURIComponent(new Date(SYNTHETIC_NOW - (23 * 60 * 60 * 1_000)).toISOString());
+  const to = encodeURIComponent(new Date(SYNTHETIC_NOW + 60_000).toISOString());
+  await page.goto(`http://127.0.0.1:${grafanaPort}/d/claude-code-usage?from=${from}&to=${to}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForTimeout(3_000);
+  await page.evaluate(() => document.fonts.ready);
   const captures = [
-    ['observability-tokens-models.png', 'Tokens & models', 'Fixed token totals by model for the Acme Webshop demo.', ['Model', 'Context tokens', 'Role'], FIXTURE.models],
-    ['observability-mcp.png', 'MCP', 'Tool-definition footprint and activity from the fixed demo dataset.', ['MCP server', 'Definition tokens', 'Activity'], FIXTURE.mcp],
-    ['observability-who-is-burning.png', 'Who is burning tokens', 'Synthetic model totals and demo-only cost figures.', ['Model', 'Tokens', 'Synthetic cost'], FIXTURE.burn],
-    ['observability-board-costs.png', 'Sidequest board costs', 'Example rollup for the Acme Webshop demo board.', ['Story', 'Tickets', 'Synthetic cost'], FIXTURE.board],
+    ['observability-at-a-glance.png', 'At a glance'],
+    ['observability-where-the-spend-goes.png', 'Where the spend goes'],
+    ['observability-failures-and-source-activity.png', 'Failures and source activity'],
+    ['observability-context-recharge.png', 'Context recharge'],
   ];
-  for (const [file, title, caption, headers, rows] of captures) {
-    await page.setContent(grafanaMock(title, caption, headers, rows), { waitUntil: 'domcontentloaded' });
-    await page.screenshot({ path: path.join(outputDir, file), fullPage: true });
+  for (const [file, title] of captures) {
+    const { bounds, text } = await dashboardRowBounds(page, title);
+    assert.doesNotMatch(text, /No data|No samples in|Query failed/i, `Grafana row ${title} did not render data: ${text}`);
+    await page.screenshot({ path: path.join(outputDir, file), clip: bounds });
   }
   await page.close();
 }
@@ -432,9 +663,16 @@ async function captureSidequest(browser, port) {
 async function main() {
   assertSyntheticFixture();
   await mkdir(outputDir, { recursive: true });
+  for (const file of [
+    'observability-tokens-models.png',
+    'observability-mcp.png',
+    'observability-who-is-burning.png',
+    'observability-board-costs.png',
+  ]) await rm(path.join(outputDir, file), { force: true });
   const tempRoot = await mkdtemp(path.join(os.tmpdir(), 'toolshed-docs-screenshots-'));
   const tempHome = path.join(tempRoot, 'sidequest-home');
   const fakeProject = path.join(tempRoot, FIXTURE.project);
+  const dashboardDirectory = await writeGrafanaDashboards(tempRoot);
   const sidequestPort = await freePort();
   const grafanaPort = await freePort();
   const otlpPort = await freePort();
@@ -447,10 +685,12 @@ async function main() {
     server = startSidequest(tempHome, fakeProject, sidequestPort);
     await waitFor(`http://127.0.0.1:${sidequestPort}`, 'Synthetic Sidequest server');
     command('docker', ['create', '--name', container, '--publish', `127.0.0.1:${grafanaPort}:3000`, '--publish', `127.0.0.1:${otlpPort}:4318`, '--volume', `${volume}:/data`, '--env', 'GF_AUTH_ANONYMOUS_ENABLED=true', '--env', 'GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer', 'grafana/otel-lgtm:0.11.0']);
-    command('docker', ['cp', path.join(grafanaProvisioning, '.'), `${container}:/otel-lgtm/grafana/conf/provisioning/dashboards`]);
-    command('docker', ['cp', path.join(grafanaDashboards, '.'), `${container}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards`]);
+    command('docker', ['cp', `${grafanaProvisioning}/.`, `${container}:/otel-lgtm/grafana/conf/provisioning/dashboards`]);
+    command('docker', ['cp', dashboardDirectory, `${container}:/otel-lgtm/grafana/conf/provisioning`]);
     command('docker', ['start', container]);
     await waitFor(`http://127.0.0.1:${grafanaPort}/api/health`, 'Isolated Grafana');
+    await waitFor(`http://127.0.0.1:${grafanaPort}/api/dashboards/uid/claude-code-usage`, 'Synthetic Grafana dashboard');
+    await seedGrafana(otlpPort);
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
     await captureGrafana(browser, grafanaPort);
