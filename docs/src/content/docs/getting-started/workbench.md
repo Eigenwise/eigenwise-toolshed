@@ -40,9 +40,9 @@ Claude uses the bundled update or doctor skill, tells you what it found, and ask
 
 ## Code intelligence
 
-Workbench includes a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects the language server. Each call binds to an explicit project root and uses that project's own TypeScript install. TypeScript 7 projects use the native TypeScript language server. TypeScript 5 projects use `typescript-language-server` instead.
+Workbench includes a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects among C++, TypeScript and JavaScript, and Python language servers. Each call binds to an explicit project root. For TypeScript and JavaScript, Workbench searches from that root upward for a language server and can fall back to a global wrapper. TypeScript 7 projects use the native TypeScript language server. TypeScript 5 projects use `typescript-language-server` instead.
 
-C and C++ files use `clangd`. Before the tools can answer, provide a current `compile_commands.json` covering the queried translation unit. A CMake project emits one by adding `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to its own configure command, or `CMAKE_EXPORT_COMPILE_COMMANDS` to the preset's `cacheVariables`. Workbench never runs that step for you, and it will not guess your preset or generator.
+C and C++ files use `clangd`. Python files use `pyright`. Workbench resolves a project or global pyright server and chooses an interpreter from an explicit override, an activated `VIRTUAL_ENV` that contains the file, a nearest `.venv` or `venv`, or `PATH`. Before the tools can answer, provide a current `compile_commands.json` covering the queried translation unit. A CMake project emits one by adding `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to its own configure command, or `CMAKE_EXPORT_COMPILE_COMMANDS` to the preset's `cacheVariables`. Workbench never runs that step for you, and it will not guess your preset or generator.
 
 Point Workbench at the database and tell it how to rebuild one:
 
@@ -53,6 +53,23 @@ WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND=cmake --preset your-preset -DCMAKE_E
 
 The database defaults to `compile_commands.json` at the project root. Setting the regenerate command is optional, and worth it: refusals name that command instead of describing the general case.
 
+The server reads these settings from the environment:
+
+| Variable | Purpose |
+| --- | --- |
+| `WORKBENCH_CODE_INTEL_CPP_COMPILE_COMMANDS` | Path to the C or C++ `compile_commands.json`; defaults to the bound project root. |
+| `WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND` | Command named in C++ refusal messages for regenerating the compilation database. Workbench never runs it. |
+| `WORKBENCH_CODE_INTEL_CPP_LANGUAGE_SERVER` | Override the `clangd` executable. |
+| `WORKBENCH_CODE_INTEL_NATIVE_SERVER` | Override the native TypeScript language-server executable. It cannot be set together with `WORKBENCH_CODE_INTEL_LANGUAGE_SERVER`. |
+| `WORKBENCH_CODE_INTEL_LANGUAGE_SERVER` | Override the `typescript-language-server` wrapper. It cannot be set together with `WORKBENCH_CODE_INTEL_NATIVE_SERVER`. |
+| `WORKBENCH_CODE_INTEL_PYRIGHT_SERVER` | Override the `pyright` language-server path. |
+| `WORKBENCH_CODE_INTEL_PYTHON_INTERPRETER` | Override the Python interpreter path. |
+| `WORKBENCH_CODE_INTEL_TIMEOUT_MS` | Request timeout in milliseconds; defaults to 45,000. |
+| `WORKBENCH_CODE_INTEL_IDLE_MS` | Idle client lifetime in milliseconds; defaults to 300,000 (5 minutes). |
+| `WORKBENCH_CODE_INTEL_SWEEP_MS` | Client sweep interval in milliseconds; defaults to 60,000 (1 minute). |
+| `VIRTUAL_ENV` | Python discovery uses this environment when the queried file is inside it. |
+| `PATH` or `Path` on Windows | Fallback discovery for Python, TypeScript, `pyright`, and `clangd`. |
+
 Workbench refuses a missing, invalid, stale, or incomplete database rather than guessing a toolchain or emitting misleading diagnostics. C++ reference results can be marked incomplete while clangd is building its background index. Retry or narrow the query.
 
 This replaces the official `typescript-lsp` plugin. Its push diagnostics are process-global and cannot tell which agent owns them, so diagnostics from parallel isolated worktrees can land in the wrong transcript. If it is installed, remove it and reload plugins:
@@ -61,7 +78,7 @@ This replaces the official `typescript-lsp` plugin. Its push diagnostics are pro
 /plugin uninstall typescript-lsp@claude-plugins-official
 ```
 
-The tools need a TypeScript 7 install resolvable from the project, for example:
+The TypeScript and JavaScript queries need a TypeScript language server available from the project or a global wrapper, for example:
 
 ```text
 npm install -D typescript@latest
