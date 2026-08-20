@@ -1,8 +1,8 @@
 # Eigenwise Toolshed codebase map
 
-Last Updated: 2026-08-15
+Last Updated: 2026-08-20
 
-Toolshed is a public Claude Code plugin marketplace. It ships seven published plugins, with Sidequest as the largest runtime system, plus shared test support, docs, examples, and release automation. The current gateway plugin is Model Gateway. `sandbox/windows/` is a maintainer-only, gitignored Windows Sandbox clean-room harness — not published, not linked from docs.
+Toolshed is a public Claude Code plugin marketplace. It ships six published plugins, with Sidequest as the largest runtime system, plus shared test support, docs, examples, and release automation. The current gateway plugin is Model Gateway. `sandbox/windows/` is a maintainer-only, gitignored Windows Sandbox clean-room harness — not published, not linked from docs.
 
 - [Architecture](architecture.md)
 - [Tech landscape](tech-landscape.md)

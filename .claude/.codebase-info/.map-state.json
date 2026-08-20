@@ -1,9 +1,9 @@
 {
   "schemaVersion": 1,
   "tool": "codebase-mapper",
-  "version": "2.15.5",
-  "mappedAt": "2026-08-19",
-  "gitCommit": "6194086399eefaa238a02ae49d60357ef26c9094",
+  "version": "2.15.6",
+  "mappedAt": "2026-08-20",
+  "gitCommit": "6fcf1ca87671a23804b17ab080f90ccaf8aebf61",
   "documents": [
     "architecture.md",
     "coding-style.md",
@@ -16,15 +16,15 @@
     "tech-landscape.md"
   ],
   "hashes": {
-    "INDEX.md": "f715a69d2f2ef080b2b0ea65b4217dafd23ac30ea2a707c0d3950121e05713ee",
-    "architecture.md": "676a493196ffbdad019f958ae8e8f9e7feb4b762bda168fd16149ca91ab3c3f6",
+    "INDEX.md": "73bd952b09ce21c5fc1443c72f99bad04e5f24094bb00bb94892d7efd00fc0a2",
+    "architecture.md": "daeebae0af38fbb8a93b156bfbd238d4cc9c2f5b4b18a04b53284acde2a98a1a",
     "coding-style.md": "9cf0a75f5a65bd017221473d022c32079fc92f2a4cefecbfbc01388875c53916",
-    "directory-structure.md": "9f6eb3c059bb5da9d08b59f117b7f27df4bd918408a87a1400ec8fe7d8f87934",
-    "entry-points.md": "5c325ced9b37fb8576391f5fbf90d79a895b97cce4dd4ea30ba802ded4f141cc",
-    "modules.md": "00274d330581b749eb871324c4c687f76dc58a309e0d143e712dcdd17824123f",
-    "onboarding.md": "d6c699b7d420054ddf11ee526ffa605792f464a28127c0ed04ef8d4bac2e91df",
-    "patterns.md": "6bfbc6520a246040664062a2558b8d437b8909285c6bcae8f8459a91ca384f8b",
+    "directory-structure.md": "e12d2bdec0784742456f8e9ed8e2c3d3eed23acbbc31a3876b0d2bdc67494b2a",
+    "entry-points.md": "820b975db7a0260fdb5a388320d47359742093134c40abf6af88f6597c77c653",
+    "modules.md": "fb373a13e1c863fc1cf4b3f22897ee97b9ede794245b50ab89ecff6250e4f1d5",
+    "onboarding.md": "5ff8ddade829648f85071eb7b3c87e4916cd154bfc929b9cd4df3dc6cd711f74",
+    "patterns.md": "8a5c64ce32583580e2c772c76c0f32fa3597d9a3512edc2e633436af3257375f",
     "release-publishing.md": "2d0f1492d0c12736cb364584258378269dc87c1ecda06ce3cfe3690c89ec7080",
-    "tech-landscape.md": "1a993505fe41a911f757810a707d683a63918c6a4bb564b372209c331c985c65"
+    "tech-landscape.md": "07b4b2270ef0a84ff3485dcc3495bf846f645edd120021873a1c06c788927911"
   }
 }
