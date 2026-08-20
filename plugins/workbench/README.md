@@ -29,22 +29,6 @@ Tell Claude what you need:
 
 Workbench updates only Eigenwise Toolshed plugins and Model Gateway when installed. It leaves third-party plugins alone and tells you when an affected session needs `/reload-plugins` or a restart. A health check also catches an `enabledPlugins` flag with no matching install, because that plugin's hooks do not run. Ask Claude to install it at the reported scope or remove the dead flag from the named settings file.
 
-## Code intelligence
-
-Workbench ships a local `code-intel` MCP server with three pull-only tools: `definition`, `references`, and `diagnostics`. The file extension selects among C++, TypeScript and JavaScript, and Python language servers. Every call binds to an explicit project root. For TypeScript and JavaScript, Workbench searches from that root upward for a language server and falls back to a global wrapper on `PATH` (the native TypeScript 7 language server, or `typescript-language-server` for TypeScript 5 projects). TypeScript 7 diagnostics use the server's pull endpoint; the TypeScript 5 fallback has no pull endpoint, so Workbench triggers a fresh check and harvests the push that answers it, correlated to the requested file and version, one call at a time. Results come back only in the response to the call that asked; a location is returned only when its native realpath (symlinks and junctions resolved) is an existing file inside the bound root, everything else (non-file URIs included) is withheld and counted, and every other pushed diagnostic is discarded, so parallel agents working in isolated worktrees never see each other's results, and nothing leaves the machine.
-
-Python files use `pyright`. Workbench resolves a project or global pyright server and picks an interpreter from an explicit `WORKBENCH_CODE_INTEL_PYTHON_INTERPRETER` override, an activated `VIRTUAL_ENV` that contains the file, the nearest `.venv` or `venv` between the file and the project root, or `python` on `PATH`. It refuses with that search list rather than guessing when none of them resolves.
-
-C++ and C files use `clangd`. Before Workbench can answer, provide a current `compile_commands.json` that covers the queried translation unit. Set `WORKBENCH_CODE_INTEL_CPP_COMPILE_COMMANDS` to its path when it is outside the project root. A CMake project emits one by adding `-DCMAKE_EXPORT_COMPILE_COMMANDS=ON` to its own configure command, or `CMAKE_EXPORT_COMPILE_COMMANDS` to the preset's `cacheVariables`; set `WORKBENCH_CODE_INTEL_CPP_REGENERATE_COMMAND` to that command so refusals name it. Workbench refuses a missing, invalid, stale, or incomplete database instead of guessing a toolchain or running CMake. Initial C++ reference results may be marked incomplete while clangd builds its background index; retry or narrow the query.
-
-This replaces the official `typescript-lsp` plugin, whose push diagnostics are process-global and blind to which agent owns them. If you have it installed, remove it:
-
-```text
-/plugin uninstall typescript-lsp@claude-plugins-official
-```
-
-The tools need TypeScript resolvable from the project: `npm install -D typescript@latest`, or a `typescript-language-server` install for TypeScript 5 projects.
-
 ## If something stops working
 
 Tell Claude the symptom and ask it to run a Workbench health check. For a stale-plugin warning, ask Claude to update the Toolshed, then reload plugins or restart Claude Code before retrying. If setup stopped with an error, include that error when you ask Claude to resume or rerun the setup.
