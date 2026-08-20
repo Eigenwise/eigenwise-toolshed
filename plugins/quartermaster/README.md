@@ -36,8 +36,8 @@ Three cheap hooks and two skills. The hooks never call a model.
 - **SessionStart hook**: injects the capability-capture charter, one short paragraph asking Claude
   to notice mid-session when the thing it is doing for the third time should become a skill, a
   codebase-map entry, a rule, or a committed measurement, and to offer capturing it right then.
-  Skipped in projects where setup already seeded the stronger per-prompt self-improvement live
-  rule. Once enough unreviewed sessions or friction events pile up, the same hook proactively asks
+  Skipped in projects where setup already seeded the stronger self-improvement live rule, which is
+  re-grounded at session start and returns on a later prompt or edit only when its text changes. Once enough unreviewed sessions or friction events pile up, the same hook proactively asks
   whether you want a focused optimization round for your development system, setup, tooling, or
   workflow; cooldown of 24h between offers. It runs the pass after you say yes, or automatically when
   you have explicitly given standing permission for optimization rounds.
