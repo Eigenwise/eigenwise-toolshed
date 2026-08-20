@@ -5,12 +5,13 @@ This is the [Astro Starlight](https://starlight.astro.build/) documentation site
 ```text
 npm ci
 npm run dev
+npm test
 npm run build
 npm run check
 npm run screenshots
 ```
 
-`dev` and `prebuild` run `npm run generate` first. `docs/scripts/generate-reference.mjs` rebuilds
+`npm test` checks prose links into the generated reference routes and regenerates the reference pages while it runs. `dev` and `prebuild` also run `npm run generate` first. `docs/scripts/generate-reference.mjs` rebuilds
 `src/content/docs/reference/` from plugin manifests, skill frontmatter, hooks, and the marketplace
 file. Those reference pages are generated output, so never edit them by hand. Edit the source
 manifest or generator instead.

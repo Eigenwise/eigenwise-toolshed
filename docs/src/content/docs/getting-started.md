@@ -18,11 +18,17 @@ Reload plugins or start a new Claude Code session. Workbench is user-scoped so i
 
 ## Prepare your first project
 
-From the project directory, tell Claude:
+Install Quartermaster at user scope if you have not already:
 
-> Set up this project as a Claude Code workspace with Workbench.
+```text
+/plugin install quartermaster@eigenwise-toolshed --scope user
+```
 
-Workbench asks which project tools you want, installs the selected plugins, writes the project configuration, and checks the result. You approve the plan before it changes the workspace.
+Reload plugins or start a new Claude Code session. Then, from the project directory, tell Claude:
+
+> /quartermaster:setup
+
+Quartermaster asks which project tools fit, installs the selected plugins, writes the project configuration, and checks the result. You approve the plan before it changes the workspace.
 
 When setup finishes, try one real request in the same project:
 
@@ -41,6 +47,6 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 - [Run a human-judged comparison](./getting-started/experiments/)
 - [View selected local usage](./observability/)
 
-You can ask Workbench to install or update the Toolshed plugins later. Claude handles the plugin-owned setup, checks, and recovery steps. Reload plugins or start a new session after an install or update so Claude sees the new version.
+You can ask Workbench to install or update Toolshed plugins later, and to check workspace health. Claude handles plugin-owned setup, checks, and recovery steps. Reload plugins or start a new session after an install or update so Claude sees the new version.
 
 The [generated plugin reference](/reference/) lists the agent-facing skills, hooks, and commands for each plugin.

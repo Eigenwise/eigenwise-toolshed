@@ -17,8 +17,12 @@ template: splash
   <p class="hero-kicker">Choose by what you want to do</p>
   <div class="shed-grid">
     <article class="shed-card card">
+      <h2>Install and maintain Toolshed</h2>
+      <p><a href="./getting-started/workbench/">Workbench</a> installs and updates Toolshed plugins, then checks workspace health.</p>
+    </article>
+    <article class="shed-card card">
       <h2>Set up a project</h2>
-      <p><a href="./getting-started/workbench/">Workbench</a> installs the Toolshed plugins you choose, writes the project settings, and checks the workspace.</p>
+      <p><a href="./getting-started/quartermaster/">Quartermaster</a> plans and sets up a Claude Code workspace around the Toolshed pieces your project needs.</p>
     </article>
     <article class="shed-card card">
       <h2>Give Claude better context</h2>
