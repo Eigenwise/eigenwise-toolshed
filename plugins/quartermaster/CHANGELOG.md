@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.6.0 (2026-08-20)
+
+Released in v3.494.0, up from 0.5.5.
+
+### Features
+
+- Move Workbench into Quartermaster (SQ-2307)
+  Quartermaster now includes Toolshed updates, health checks, workspace settings support, and freshness hooks. The separate Workbench plugin is gone.
+- Use project scope for new Toolshed installs (SQ-2308)
+
 ## 0.5.5 (2026-08-20)
 
 Released in v3.491.0, up from 0.5.4.

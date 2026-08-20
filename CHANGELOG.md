@@ -8,6 +8,55 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.494.0 (2026-08-20)
+
+### codebase-mapper 2.15.6 → 2.15.7
+
+#### Fixes
+
+- Make codebase-mapper Stop-veto fixture cleanup race-safe (SQ-2290)
+
+### model-gateway 0.48.15 → 0.48.16
+
+#### Fixes
+
+- Tolerate partial gateway usage records (SQ-2313)
+  Gateway usage polling now ignores an incomplete trailing record while it is still being appended.
+- Correct stale observability paths (SQ-2314)
+  Updated examples, Grafana instructions, test-support consumers, and the gateway observability seam comment to point at their current paths after the Workbench removal.
+
+### observability 0.7.14 → 0.7.15
+
+#### Fixes
+
+- Restore wedged observers (SQ-2298)
+  Observability now replaces a managed observer that stops refreshing its process-record heartbeat, while preserving long spool drains.
+- Isolate Sidequest test telemetry (SQ-2302)
+  Sidequest test CLIs no longer emit ticket telemetry to a local observer, and OTLP project resource IDs now reach observability records.
+- Correct stale observability paths (SQ-2314)
+  Updated examples, Grafana instructions, test-support consumers, and the gateway observability seam comment to point at their current paths after the Workbench removal.
+
+### quartermaster 0.5.5 → 0.6.0
+
+#### Features
+
+- Move Workbench into Quartermaster (SQ-2307)
+  Quartermaster now includes Toolshed updates, health checks, workspace settings support, and freshness hooks. The separate Workbench plugin is gone.
+- Use project scope for new Toolshed installs (SQ-2308)
+
+### sidequest 5.0.8 → 5.0.9
+
+#### Fixes
+
+- Isolate Sidequest test telemetry (SQ-2302)
+  Sidequest test CLIs no longer emit ticket telemetry to a local observer, and OTLP project resource IDs now reach observability records.
+- Reap abandoned MCP sessions (SQ-2310)
+  Sidequest now closes an MCP session that stops responding while keeping its pipe open, without touching another server process.
+- Refuse foreign release fragment scope requests (SQ-2311)
+  Reject scope requests for another ticket’s release fragment before work starts, using the same rule the commit gate enforces.
+- Prevent concurrent test fixture JSON truncation (SQ-2312)
+  Write shared Sidequest install JSON through temporary files before replacing the targets atomically, so concurrent full-suite test files cannot read truncated fixture data.
+
 ## v3.493.0 (2026-08-20)
 
 ### live-rules 2.10.3 → 2.10.4
