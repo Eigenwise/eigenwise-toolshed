@@ -161,6 +161,18 @@ function attributesFrom(received) {
   };
 }
 
+function usageRecords(received) {
+  return received.flatMap((entry, index) => {
+    try {
+      const record = attributesFrom(entry);
+      return record.eventName === 'gateway.token.usage' ? [record] : [];
+    } catch (error) {
+      if (index !== received.length - 1 || !(error instanceof SyntaxError)) throw error;
+      return [];
+    }
+  });
+}
+
 function dispatchBody(stream = false) {
   return JSON.stringify({
     model: 'claude-codex-auto',
@@ -177,6 +189,18 @@ function dispatchBody(stream = false) {
     ],
   });
 }
+
+test('usage reader ignores a truncated final spool record', () => {
+  const completeRecord = JSON.stringify({
+    resourceLogs: [{ scopeLogs: [{ logRecords: [{ eventName: 'gateway.token.usage', attributes: [] }] }] }],
+  });
+  const truncatedRecord = completeRecord.slice(0, -1);
+  const spool = `${completeRecord}\n${truncatedRecord}`;
+  const received = spool.split('\n').map((body) => ({ body }));
+
+  assert.deepEqual(usageRecords(received), [{ eventName: 'gateway.token.usage', values: {} }]);
+  assert.throws(() => usageRecords([{ body: truncatedRecord }, { body: completeRecord }]), SyntaxError);
+});
 
 test('isolated JSON proxy emits resolved, exact, counts-only gateway usage', async (t) => {
   let forwarded;
@@ -335,14 +359,11 @@ test('isolated multi-block Codex SSE emits one usage record per request', async 
   });
   assert.equal(response.status, 200);
 
-  const usageRecords = () => usageCollector.received
-    .map(attributesFrom)
-    .filter(({ eventName }) => eventName === 'gateway.token.usage');
-  const received = await waitFor(() => usageRecords()[0], 'multi-block SSE usage log was not received');
+  const received = await waitFor(() => usageRecords(usageCollector.received)[0], 'multi-block SSE usage log was not received');
   // Every record of one request is scheduled together, so anything extra is already
   // in flight by now; the settle only rules out a straggler.
   await new Promise((resolve) => setTimeout(resolve, 250));
-  assert.equal(usageRecords().length, 1, 'gateway metered the stream per content block');
+  assert.equal(usageRecords(usageCollector.received).length, 1, 'gateway metered the stream per content block');
 
   assert.equal(received.values.agent_role, 'executor');
   assert.equal(received.values.response_mode, 'sse');
