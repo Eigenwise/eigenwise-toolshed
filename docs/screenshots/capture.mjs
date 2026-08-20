@@ -6,11 +6,12 @@
 import assert from 'node:assert/strict';
 import { createRequire } from 'node:module';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtemp, mkdir, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { inflateSync } from 'node:zlib';
 import { chromium } from 'playwright';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -162,6 +163,94 @@ function command(commandName, args, options = {}) {
   if (result.error) throw result.error;
   if (result.status !== 0) throw new Error(`${commandName} ${args.join(' ')}\n${result.stderr || result.stdout}`);
   return result.stdout;
+}
+
+function paethPredictor(left, above, upperLeft) {
+  const estimate = left + above - upperLeft;
+  const leftDistance = Math.abs(estimate - left);
+  const aboveDistance = Math.abs(estimate - above);
+  const upperLeftDistance = Math.abs(estimate - upperLeft);
+  return leftDistance <= aboveDistance && leftDistance <= upperLeftDistance ? left : aboveDistance <= upperLeftDistance ? above : upperLeft;
+}
+
+function pngPixels(png, pathname) {
+  const signature = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
+  assert.equal(png.subarray(0, signature.length).equals(signature), true, `Screenshot ${pathname} is not a PNG`);
+  let offset = signature.length;
+  let header;
+  const compressed = [];
+  while (offset < png.length) {
+    const length = png.readUInt32BE(offset);
+    const type = png.toString('ascii', offset + 4, offset + 8);
+    const data = png.subarray(offset + 8, offset + 8 + length);
+    offset += length + 12;
+    if (type === 'IHDR') header = data;
+    if (type === 'IDAT') compressed.push(data);
+  }
+  assert.ok(header, `Screenshot ${pathname} is missing an IHDR chunk`);
+  const width = header.readUInt32BE(0);
+  const height = header.readUInt32BE(4);
+  const bitDepth = header[8];
+  const colorType = header[9];
+  const bytesPerPixel = colorType === 2 ? 3 : colorType === 6 ? 4 : 0;
+  assert.equal(bitDepth, 8, `Screenshot ${pathname} has unsupported bit depth ${bitDepth}`);
+  assert.ok(bytesPerPixel > 0, `Screenshot ${pathname} has unsupported color type ${colorType}`);
+  assert.equal(header[12], 0, `Screenshot ${pathname} uses unsupported interlacing`);
+  const rowLength = width * bytesPerPixel;
+  const filtered = inflateSync(Buffer.concat(compressed));
+  assert.equal(filtered.length, height * (rowLength + 1), `Screenshot ${pathname} has an unexpected pixel buffer length`);
+  const pixels = Buffer.alloc(rowLength * height);
+  let filteredOffset = 0;
+  for (let rowIndex = 0; rowIndex < height; rowIndex += 1) {
+    const filter = filtered[filteredOffset++];
+    const row = pixels.subarray(rowIndex * rowLength, (rowIndex + 1) * rowLength);
+    const previousRow = rowIndex === 0 ? null : pixels.subarray((rowIndex - 1) * rowLength, rowIndex * rowLength);
+    for (let column = 0; column < rowLength; column += 1) {
+      const filteredValue = filtered[filteredOffset++];
+      const left = column >= bytesPerPixel ? row[column - bytesPerPixel] : 0;
+      const above = previousRow ? previousRow[column] : 0;
+      const upperLeft = previousRow && column >= bytesPerPixel ? previousRow[column - bytesPerPixel] : 0;
+      row[column] = filter === 0 ? filteredValue
+        : filter === 1 ? (filteredValue + left) & 0xff
+          : filter === 2 ? (filteredValue + above) & 0xff
+            : filter === 3 ? (filteredValue + Math.floor((left + above) / 2)) & 0xff
+              : filter === 4 ? (filteredValue + paethPredictor(left, above, upperLeft)) & 0xff
+                : assert.fail(`Screenshot ${pathname} uses unsupported PNG filter ${filter}`);
+    }
+  }
+  return { width, height, bytesPerPixel, pixels };
+}
+
+function screenshotsMatch(existing, candidate, pathname) {
+  const expected = pngPixels(existing, pathname);
+  const actual = pngPixels(candidate, pathname);
+  if (expected.width !== actual.width || expected.height !== actual.height || expected.bytesPerPixel !== actual.bytesPerPixel) return false;
+  // Chromium occasionally changes a few antialiased pixels between identical captures.
+  let difference = 0;
+  for (let index = 0; index < expected.pixels.length; index += 1) {
+    if (expected.bytesPerPixel === 4 && index % expected.bytesPerPixel === 3) continue;
+    const channelDifference = Math.abs(expected.pixels[index] - actual.pixels[index]);
+    if (channelDifference > 16) return false;
+    difference += channelDifference;
+  }
+  return difference <= 1_024;
+}
+
+async function writeScreenshot(page, pathname, options) {
+  const candidatePath = pathname.replace(/\.png$/, '.candidate.png');
+  await page.screenshot({ ...options, path: candidatePath });
+  let existing;
+  try {
+    existing = await readFile(pathname);
+  } catch (error) {
+    if (error?.code !== 'ENOENT') throw error;
+  }
+  const candidate = await readFile(candidatePath);
+  if (existing && screenshotsMatch(existing, candidate, pathname)) {
+    await rm(candidatePath);
+    return;
+  }
+  await rename(candidatePath, pathname);
 }
 
 function ticketRef(output) {
@@ -728,7 +817,8 @@ async function captureGrafana(browser, grafanaPort) {
   for (const [file, title] of captures) {
     const { bounds, text } = await dashboardRowBounds(page, title);
     assert.doesNotMatch(text, /No data|No samples in|Query failed/i, `Grafana row ${title} did not render data: ${text}`);
-    await page.screenshot({ path: path.join(outputDir, file), clip: bounds });
+    const screenshotPath = path.join(outputDir, file);
+    await writeScreenshot(page, screenshotPath, { clip: bounds });
   }
   await page.close();
 }
@@ -794,27 +884,19 @@ async function captureSidequest(browser, port) {
   if (await skipTour.isVisible()) await skipTour.click();
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  await page.evaluate(() => {
-    const screenshotCornerMask = document.createElement('div');
-    Object.assign(screenshotCornerMask.style, {
-      position: 'fixed', top: '0', left: '0', width: '100vw', height: '20px',
-      backgroundColor: getComputedStyle(document.body).backgroundColor,
-      pointerEvents: 'none', zIndex: '2147483647',
-    });
-    document.body.append(screenshotCornerMask);
-  });
 
   const capture = async (filename, content) => {
     await maskGeneratedBoardText(page);
     await content.waitFor();
+    await page.waitForTimeout(500);
     const contentBounds = await content.boundingBox();
     const viewport = page.viewportSize();
     assert.ok(contentBounds, `Could not measure screenshot content for ${filename}`);
     assert.ok(viewport, `Could not read screenshot viewport for ${filename}`);
     const contentHeight = Math.min(viewport.height, Math.ceil(contentBounds.y + contentBounds.height + 24));
     await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-    await page.screenshot({
-      path: path.join(outputDir, filename),
+    const screenshotPath = path.join(outputDir, filename);
+    await writeScreenshot(page, screenshotPath, {
       clip: { x: 0, y: 0, width: viewport.width, height: contentHeight },
     });
   };
