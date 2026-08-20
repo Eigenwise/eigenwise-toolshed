@@ -37,6 +37,8 @@ Deleting those tags needs the publish lock, because Sidequest refuses a manual `
 
 This gate is local and it runs on your machine, so a test that reads your own environment can fail here while CI is green on the same commit. That is a bug in the test, not a reason to skip the gate.
 
+A failure that disappears when you rerun the failing file on its own is a different problem: a concurrency flake, usually two test files sharing a fixture, or a reader parsing a file another test is still writing. It is still worth stopping for, because an intermittent that can fail a cut can fail CI later. Undo the window, run the failing file alone to confirm, cut again, and file the flake as its own ticket so the next cut does not pay for it twice.
+
 GitHub Releases publish at most once per UTC day. When several marketplace tags land before the daily publish, the workflow releases the newest unreleased tag and generated notes cover the intermediate versions from the previous published Release. A cut whose release workflow succeeds under that cap reports the deferral as successful, and the scheduled publish catches it up.
 
 Executors stop at a verified commit. Integration, release cutting, manifest versioning, and publishing happen after their submission.
