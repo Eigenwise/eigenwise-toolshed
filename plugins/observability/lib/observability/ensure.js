@@ -418,10 +418,16 @@ async function ensureObservability(options = {}) {
     if (state.dashboard) {
       if (setup.dockerAvailable(options)) {
         const activityStart = dashboardActivityStart(dataDir, options.now ?? Date.now());
-        const activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
-          ...options,
-          activityStart,
-        });
+        let activeProjectNames = new Set();
+        try {
+          activeProjectNames = grafanaLgtm.activeProjectNames(state.sinks[DEFAULT_SINK] || {}, {
+            ...options,
+            activityStart,
+          });
+        } catch (error) {
+          const warningStream = options.stderr || process.stderr;
+          warningStream.write(`warning: could not determine active dashboard projects, provisioning the global dashboard only: ${error.message}\n`);
+        }
         const activeProjects = projectsWithActivity(state.optedInProjects, activeProjectNames);
         const dashboardDir = provisionDashboards(dataDir, activeProjects);
         dashboard = grafanaLgtm.setup(state.sinks[DEFAULT_SINK] || {}, {
