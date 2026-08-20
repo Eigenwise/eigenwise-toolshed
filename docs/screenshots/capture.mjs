@@ -20,7 +20,7 @@ const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
 const SYNTHETIC_HOUR = 60 * 60 * 1_000;
-const SYNTHETIC_NOW = Math.floor(Date.now() / (24 * SYNTHETIC_HOUR)) * (24 * SYNTHETIC_HOUR);
+const SYNTHETIC_NOW = Math.floor(Date.now() / SYNTHETIC_HOUR) * SYNTHETIC_HOUR;
 const METRIC_QUERY_TIME = Math.floor(Date.now() / 1_000);
 const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
 const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
@@ -702,13 +702,12 @@ async function dashboardRowBounds(page, title) {
   }));
   const rowItems = items.filter(({ y }) => y >= currentHeader.y - 1 && (nextTop === null || y < nextTop - 1));
   assert.ok(rowItems.length > 0, `Could not find panels in Grafana row ${title}`);
+  const left = Math.floor(Math.min(...rowItems.map(({ x }) => x)));
+  const top = Math.floor(Math.min(...rowItems.map(({ y }) => y)));
+  const right = Math.ceil(Math.max(...rowItems.map(({ right }) => right)));
+  const bottom = Math.ceil(Math.max(...rowItems.map(({ bottom }) => bottom)));
   return {
-    bounds: {
-      x: Math.min(...rowItems.map(({ x }) => x)),
-      y: Math.min(...rowItems.map(({ y }) => y)),
-      width: Math.max(...rowItems.map(({ right }) => right)) - Math.min(...rowItems.map(({ x }) => x)),
-      height: Math.max(...rowItems.map(({ bottom }) => bottom)) - Math.min(...rowItems.map(({ y }) => y)),
-    },
+    bounds: { x: left, y: top, width: right - left, height: bottom - top },
     text: rowItems.map(({ text }) => text).join('\n'),
   };
 }
@@ -795,6 +794,15 @@ async function captureSidequest(browser, port) {
   if (await skipTour.isVisible()) await skipTour.click();
   await page.evaluate(() => document.fonts.ready);
   await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+  await page.evaluate(() => {
+    const screenshotCornerMask = document.createElement('div');
+    Object.assign(screenshotCornerMask.style, {
+      position: 'fixed', top: '0', left: '0', width: '100vw', height: '20px',
+      backgroundColor: getComputedStyle(document.body).backgroundColor,
+      pointerEvents: 'none', zIndex: '2147483647',
+    });
+    document.body.append(screenshotCornerMask);
+  });
 
   const capture = async (filename, content) => {
     await maskGeneratedBoardText(page);
@@ -804,6 +812,7 @@ async function captureSidequest(browser, port) {
     assert.ok(contentBounds, `Could not measure screenshot content for ${filename}`);
     assert.ok(viewport, `Could not read screenshot viewport for ${filename}`);
     const contentHeight = Math.min(viewport.height, Math.ceil(contentBounds.y + contentBounds.height + 24));
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
     await page.screenshot({
       path: path.join(outputDir, filename),
       clip: { x: 0, y: 0, width: viewport.width, height: contentHeight },
