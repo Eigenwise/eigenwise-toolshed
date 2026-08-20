@@ -731,6 +731,38 @@ test('SessionStart does not report a replacement for a busy managed observer', a
   assert.deepEqual(notices, []);
 });
 
+test('SessionStart keeps a managed observer whose record mtime is a fraction of a millisecond ahead', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  const recordFile = path.join(dataDir, 'observer.pid.json');
+  fs.writeFileSync(recordFile, `${JSON.stringify({
+    pid: 202,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+  })}\n`);
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+
+  // A record with no heartbeatAt falls back to mtimeMs, which carries sub-millisecond precision that
+  // Date.now() does not. Pin the pair so the file is 0.4ms "ahead" of the clock every run, instead of
+  // the ~50% of real writes that land that way by chance.
+  const pinnedNow = Date.now();
+  const mtimeSeconds = (pinnedNow + 0.4) / 1000;
+  fs.utimesSync(recordFile, mtimeSeconds, mtimeSeconds);
+
+  const notices = [];
+  await launchEnsure({
+    dataDir,
+    now: pinnedNow,
+    checkPort: async () => true,
+    observerIdentity: async () => null,
+    portOwner: () => 202,
+    reportNotice(message) { notices.push(message); },
+    spawn() { return { unref() {} }; },
+  });
+
+  assert.deepEqual(notices, []);
+});
+
 test('SessionStart warns when it replaces an observer from an older plugin version', async (t) => {
   const dataDir = temporaryDirectory(t);
   writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());

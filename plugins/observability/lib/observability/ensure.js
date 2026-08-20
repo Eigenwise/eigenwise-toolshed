@@ -29,9 +29,12 @@ const PROCESS_RECORD_STALE_AFTER_MS = 120_000;
 
 // The worker records a five-second main-thread pulse. The longest measured spool drain is 17 seconds, so this permits seven such drains before takeover.
 const processRecordHeartbeatIsFresh = (record, recordFile, now = Date.now()) => {
+  // mtimeMs carries sub-millisecond precision while Date.now() is whole milliseconds, so a file
+  // written this instant reads as ~0.3ms in the FUTURE and fails the `<= now` guard below. Measured
+  // at 989/2000 writes. Floor it back to the clock's resolution before comparing.
   const heartbeatAt = typeof record?.heartbeatAt === 'string'
     ? Date.parse(record.heartbeatAt)
-    : fs.statSync(recordFile).mtimeMs;
+    : Math.floor(fs.statSync(recordFile).mtimeMs);
   return Number.isFinite(heartbeatAt)
     && heartbeatAt <= now
     && now - heartbeatAt <= PROCESS_RECORD_STALE_AFTER_MS;
