@@ -8,6 +8,42 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.493.0 (2026-08-20)
+
+### live-rules 2.10.3 → 2.10.4
+
+#### Fixes
+
+- Fix stale cross-plugin command references (SQ-2306)
+
+### model-gateway 0.48.14 → 0.48.15
+
+#### Fixes
+
+- Fix stale cross-plugin command references (SQ-2306)
+
+### observability 0.7.13 → 0.7.14
+
+#### Fixes
+
+- Keep telemetry running when dashboard activity checks fail (SQ-2296)
+  Telemetry setup now keeps the observer running and provisions the global dashboard if Prometheus cannot report active projects.
+- Fix stale cross-plugin command references (SQ-2306)
+
+### sidequest 5.0.7 → 5.0.8
+
+#### Fixes
+
+- Stop Sidequest MCP sibling reaping (SQ-2297)
+  Sidequest MCP servers now shut down with their stdio client without killing similarly named sibling processes.
+
+### workbench 0.88.7 → 0.89.0
+
+#### Features
+
+- Remove the code-intel MCP server (SQ-2305) [`b63c95c`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b63c95c2)
+  Workbench no longer ships the `code-intel` MCP server or its `definition`, `references`, and `diagnostics` tools. It covered only TypeScript, JavaScript, Python, and C++, and a language server plugin is the better route for the rest. The Toolshed doctor no longer checks for a language server backend.
+
 ## v3.492.0 (2026-08-20)
 
 ### observability 0.7.12 → 0.7.13
