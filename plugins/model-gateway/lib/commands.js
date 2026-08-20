@@ -198,8 +198,8 @@ const {
 
 const {
   cleanLegacyEnvSettings, cleanLegacyGatewayModelCache, effectiveBaseUrl, isWired, migrateLegacyProjectSettings,
-  readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, selectedWiringScope,
-  retireWiringModeConfig, settingsPath, wiredMode, writeSettings,
+  readSettingsForWrite, reconcileRegisteredProjectWirings, recordProjectWiring, registeredProjectWirings,
+  selectedWiringScope, retireWiringModeConfig, settingsPath, wiredMode, writeSettings,
 } = require('./settings-wiring.js');
 
 // ------------------------------------------------- RC-compatibility hosts
@@ -877,7 +877,12 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     user: 'user settings.json',
   };
   const scopeFor = { 'project-local': 'project', user: 'user' };
-  log('wiring: global ~/.claude/settings.json (one block covers every project)');
+  const effectiveWired = ourBaseUrls().includes(effective.value);
+  const effectiveLocation = effective.source
+    ? `${labelFor[effective.source]}${effective.file ? ` (${effective.file})` : ''}`
+    : 'none';
+  log(`wiring: effective ${effectiveLocation}${effectiveWired ? ' [model-gateway]' : ''}`);
+  log('selected wiring mode: global ~/.claude/settings.json (one block covers every project)');
   for (const source of ['env', 'project-local', 'project-shared', 'user']) {
     const scope = scopeFor[source];
     const file = source === 'env' ? null : settingsPath(source === 'project-local' ? 'project' : source);
@@ -892,7 +897,6 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     const modeLabel = mode === 'compat' ? ' [RC-compatibility mode]' : mode === 'default' ? ' [default mode]' : '';
     log(`${labelFor[source]}: ${wired ? 'wired' + modeLabel : 'not wired'}${file ? ` (${file})` : ''}${tags}`);
   }
-  const effectiveWired = ourBaseUrls().includes(effective.value);
   const effectiveScope = scopeFor[effective.source] || activeScope;
   if (!effectiveWired) {
     console.error('model-gateway: ERROR: global wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-user command and restart Claude Code.');
@@ -1832,6 +1836,22 @@ function runShim() {
 }
 
 
+function sessionStartWiringNotice({ readiness, effectiveWiring, projectWirings }) {
+  if (!readiness.checks.codexAuth) {
+    return 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.';
+  }
+  const locallyWired = effectiveWiring.source === 'project-local' && ourBaseUrls().includes(effectiveWiring.value);
+  if (locallyWired) {
+    return `Claude Code is wired to model-gateway through project settings.local.json (${effectiveWiring.file}).`;
+  }
+  const currentProjectFile = path.resolve(settingsPath('project'));
+  const siblingWiring = projectWirings.find(({ file }) => path.resolve(file) !== currentProjectFile);
+  if (siblingWiring) {
+    return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. A recorded project-local wiring exists at ${siblingWiring.file}; add its ANTHROPIC_BASE_URL to this project's .claude/settings.local.json, or run \`node "${CLI_PATH}" env --write-user\` to wire every project, then restart Claude Code.`;
+  }
+  return `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${CLI_PATH}" env --write-user\`, then restart Claude Code.`;
+}
+
 const commands = {
   setup: () => setup(),
   login: () => {
@@ -1880,10 +1900,13 @@ const commands = {
       finish(1);
     }
     warnIfProxyOutdated();
+    const effectiveWiring = effectiveBaseUrl();
     if (!wired) {
-      noticeForUser(readiness.checks.codexAuth
-        ? `Claude Code is not wired to model-gateway, so your ChatGPT/Codex models are missing from /model. Run \`node "${CLI_PATH}" env --write-user\`, then restart Claude Code.`
-        : 'model-gateway is running but not signed in to ChatGPT. Offer to run its login (browser sign-in), then setup to finish wiring. See the model-gateway skill.');
+      noticeForUser(sessionStartWiringNotice({
+        readiness,
+        effectiveWiring,
+        projectWirings: registeredProjectWirings(),
+      }));
     } else {
       if (installScope() === 'project-only') {
         noticeForUser('model-gateway is installed PROJECT-ONLY, but wiring is global. Other projects route through a shim this hook will not keep alive. Reinstall at user scope.');
@@ -1891,7 +1914,7 @@ const commands = {
       // isWired() accepts a base URL exported by the shell, which is how a machine ends up routed only in the
       // terminal that exported it: background sessions and executor worktrees start unwired, and the only place
       // that said so was a per-request stderr line in the worker.
-      const wiring = effectiveBaseUrl();
+      const wiring = effectiveWiring;
       if (wiring.source === 'env' && !wiring.shadowed.some((definition) => definition.file)) {
         noticeForUser(`model-gateway wiring is shell-only: ANTHROPIC_BASE_URL comes from this terminal's environment and no settings file sets it, so sessions started anywhere else are not routed through the gateway. Run \`node "${CLI_PATH}" env --write-user\` to make it permanent.`);
       }
@@ -1934,6 +1957,7 @@ module.exports = {
   writeEnv,
   migrateLegacyProjectSettings,
   effectiveBaseUrl,
+  sessionStartWiringNotice,
   settingsPath,
   COMPAT_HOST,
   COMPAT_PORT,

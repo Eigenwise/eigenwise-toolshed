@@ -232,6 +232,58 @@ function runDoctor(home, project) {
   return runNode(home, project, `require(${JSON.stringify(COMMANDS)}).commands.doctor({ readiness: ${JSON.stringify(readiness)} })`);
 }
 
+test('doctor reports project-local wiring as the effective source', (t) => {
+  const { home, project } = fixture(t);
+  wireProject(project);
+
+  const result = runDoctor(home, project);
+
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /wiring: effective project settings\.local\.json .*\[model-gateway\]/);
+  assert.match(result.output, /selected wiring mode: global ~\/\.claude\/settings\.json/);
+  assert.match(result.output, /project settings\.local\.json: wired .*\[effective\]/);
+  assert.match(result.output, /user settings\.json: not wired .*\[selected mode\]/);
+});
+
+test('SessionStart local wiring notice does not say the project is unwired', (t) => {
+  const { home, project } = fixture(t);
+  wireProject(project);
+
+  const result = runNode(home, project, `
+    const { effectiveBaseUrl } = require(${JSON.stringify(SETTINGS_WIRING)});
+    const { sessionStartWiringNotice } = require(${JSON.stringify(COMMANDS)});
+    process.stdout.write(sessionStartWiringNotice({
+      readiness: { checks: { codexAuth: true } },
+      effectiveWiring: effectiveBaseUrl(),
+      projectWirings: [],
+    }));
+  `);
+
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /wired to model-gateway through project settings\.local\.json/);
+  assert.doesNotMatch(result.output, /not wired to model-gateway/);
+});
+
+test('SessionStart names recorded project-local wiring alongside global setup', (t) => {
+  const { home, project } = fixture(t);
+  const siblingFile = path.join(path.dirname(project), 'sibling', '.claude', 'settings.local.json');
+
+  const result = runNode(home, project, `
+    const { sessionStartWiringNotice } = require(${JSON.stringify(COMMANDS)});
+    process.stdout.write(sessionStartWiringNotice({
+      readiness: { checks: { codexAuth: true } },
+      effectiveWiring: { source: null, file: null, value: null },
+      projectWirings: [{ file: ${JSON.stringify(siblingFile)} }],
+    }));
+  `);
+
+  assert.equal(result.code, 0, result.output);
+  assert.match(result.output, /recorded project-local wiring exists/);
+  assert.match(result.output, new RegExp(siblingFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+  assert.match(result.output, /this project's \.claude\/settings\.local\.json/);
+  assert.match(result.output, /env --write-user/);
+});
+
 test('doctor explains the no-model-fallback diagnostic for model divergence', (t) => {
   const { home, project } = fixture(t);
   const result = runDoctor(home, project);
