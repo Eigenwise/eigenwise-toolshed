@@ -26,7 +26,7 @@ It reads the project, mines your history across all projects (which plugins you 
 
 ## The in-the-moment loop
 
-Most self-improvement happens without any pass at all. A SessionStart line keeps one question in front of Claude while it works: is this the thing being done for the third time that should become a skill, a codebase-map entry, a rule, or a committed measurement? When it notices one, it says so and offers to capture it right then; if nothing was missing, it stays silent. Workspaces that ran setup get the stronger version, a live rule re-injected on every prompt, and the session line steps aside for it.
+Most self-improvement happens without any pass at all. A SessionStart line keeps one question in front of Claude while it works: is this the thing being done for the third time that should become a skill, a codebase-map entry, a rule, or a committed measurement? When it notices one, it says so and offers to capture it right then; if nothing was missing, it stays silent. Workspaces that ran setup get the stronger version. Unchanged rules are re-grounded at SessionStart, and a changed matching rule appears on the next prompt or edit; the session line steps aside for it.
 
 ## Resupply an existing workspace
 
