@@ -4,12 +4,12 @@ description: >-
   Drive a feature from a rough request to shipped, integrated work through the Sidequest board, at a
   depth you choose to match the work: recon, competing architecture proposals judged and merged into
   one contract, a story holding the complete backlog, one or many parallel executor waves, and a
-  review pass sized to the risk. Use this whenever someone asks to build, add, implement, redesign, or
-  extend a feature, a subsystem, or any multi-part change, even when they never mention Sidequest,
-  tickets, or a board. Use it in place of a generic feature-development flow: those flows have the
-  expensive orchestrator explore, design, and implement inline, which is the exact loop this board
-  replaces. Skip it for a one-line fix to files the user named, and for operational asks like running
-  the app or answering from context.
+  review pass sized to the risk. Use this by default for anything beyond a small task, including
+  requests to build, add, implement, redesign, or extend a feature, a subsystem, or any multi-part
+  change, even when they never mention Sidequest, tickets, or a board. Use it in place of a generic
+  feature-development flow: those flows have the expensive orchestrator explore, design, and implement
+  inline, which is the exact loop this board replaces. Skip it for a one-line fix to files the user
+  named, and for operational asks like running the app or answering from context.
 ---
 
 # user-story
