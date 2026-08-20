@@ -715,12 +715,12 @@ test('a rejected no-Git source revision reopens without Git quarantine', (contex
   );
 });
 
-test('wave assembly refuses an automatic scope grant overlapping a live sibling', (context: any) => {
+test('disjoint candidate changes integrate while an automatic scope grant overlaps a live sibling', (context: any) => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-wave-scope-project-'));
   const board = store.ensureProject(project).slug;
   const unregister = store.registerSourceRevisionCapability(board, () => ({ candidateExists: true, containsCandidate: true }));
   context.after(unregister);
-  assert.strictEqual(store.setBoardConfig(board, { alwaysInScope: ['docs/'] }).ok, true);
+  assert.strictEqual(store.setBoardConfig(board, { alwaysInScope: ['docs/', '.release/unreleased/'] }).ok, true);
   const participant = store.createTicket(board, {
     title: 'publish guide revision',
     description: 'Publish one immutable guide revision.',
@@ -751,11 +751,64 @@ test('wave assembly refuses an automatic scope grant overlapping a live sibling'
     executor: prepared.ticket.dispatchExecutor,
     source: 'test',
   }).ok, true);
-  assert.strictEqual(submitSourceRevision(board, participant.ref, 'guide-worker', {
+  const submitted = submitSourceRevision(board, participant.ref, 'guide-worker', {
     sourceRevision: { source: 'wiki', value: 'guide-revision-7', observedAt: '2026-08-19T00:00:00.000Z' },
     changedSurfaces: ['guides/overview.md'],
     projectCapabilities: { review: true, process: false, worktree: false },
     verify: 'attestation: guide-revision-7 | review-7 | editor approved the immutable revision',
+    source: 'test',
+  });
+  assert.strictEqual(submitted.ok, true, submitted.message);
+  assert.deepStrictEqual(submitted.ticket.submission.changedPaths, ['guides/overview.md']);
+
+  const integrated = store.integrateSubmission(board, participant.ref, { mode: 'apply' });
+
+  assert.strictEqual(integrated.ok, true, integrated.message);
+  assert.strictEqual(integrated.integration.outcome, 'delivered');
+  assert.strictEqual(store.getTicket(board, sibling.ref).claim.by, 'access-tiers-worker');
+});
+
+test('candidate changes overlapping a live sibling declared file refuse with the surface named', (context: any) => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-wave-declared-overlap-project-'));
+  const board = store.ensureProject(project).slug;
+  const unregister = store.registerSourceRevisionCapability(board, () => ({ candidateExists: true, containsCandidate: true }));
+  context.after(unregister);
+  assert.strictEqual(store.setBoardConfig(board, { alwaysInScope: ['docs/', '.release/unreleased/'] }).ok, true);
+  const participant = store.createTicket(board, {
+    title: 'publish store revision',
+    description: 'Publish one immutable store revision.',
+    category: 'repository-write',
+    files: ['plugins/sidequest/src/lib/store.ts'],
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'store-revision-8',
+    source: 'test',
+  });
+  const sibling = store.createTicket(board, {
+    title: 'edit store revision',
+    description: 'Keep overlapping store work live.',
+    category: 'repository-write',
+    files: ['plugins/sidequest/src/lib/store.ts'],
+    executorVerifyKind: 'attestation',
+    executorAttestationArtifact: 'store-revision-9',
+    source: 'test',
+  });
+  const siblingDispatch = store.prepareDispatch(board, sibling.ref, { sharedTree: false });
+  assert.strictEqual(store.claimTicket(board, sibling.ref, 'overlapping-store-worker', {
+    token: siblingDispatch.token,
+    executor: siblingDispatch.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  const prepared = store.prepareDispatch(board, participant.ref, { sharedTree: false });
+  assert.strictEqual(store.claimTicket(board, participant.ref, 'store-worker', {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    source: 'test',
+  }).ok, true);
+  assert.strictEqual(submitSourceRevision(board, participant.ref, 'store-worker', {
+    sourceRevision: { source: 'wiki', value: 'store-revision-8', observedAt: '2026-08-19T01:00:00.000Z' },
+    changedSurfaces: ['plugins/sidequest/src/lib/store.ts'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: store-revision-8 | review-8 | editor approved the immutable revision',
     source: 'test',
   }).ok, true);
 
@@ -763,7 +816,12 @@ test('wave assembly refuses an automatic scope grant overlapping a live sibling'
 
   assert.strictEqual(refused.ok, false);
   assert.strictEqual(refused.reason, 'wave_scope_overlap');
-  assert.deepStrictEqual(refused.conflicts, [{ participant: participant.ref, sibling: sibling.ref, surfaces: ['docs'] }]);
+  assert.deepStrictEqual(refused.conflicts, [{
+    participant: participant.ref,
+    sibling: sibling.ref,
+    surfaces: ['plugins/sidequest/src/lib/store.ts'],
+  }]);
+  assert.match(refused.message, /plugins\/sidequest\/src\/lib\/store\.ts/);
   assert.strictEqual(store.getTicket(board, participant.ref).submission.wave, undefined);
 });
 
