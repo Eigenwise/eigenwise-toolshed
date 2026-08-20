@@ -4,6 +4,7 @@ import assert from 'node:assert';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+import http from 'node:http';
 import { execFileSync } from 'node:child_process';
 import crypto from 'node:crypto';
 import { makeCliRunner, makeMcpCaller } from './_helpers.js';
@@ -194,4 +195,61 @@ test('shared store boundary emits once for MCP mutations', async () => {
   assert.strictEqual(observed.length, 1);
   assert.strictEqual(observed[0]?.ticket_ref, ref);
   assert.strictEqual(observed[0]?.attributes.task_status, 'todo');
+});
+
+test('ticket writes never post telemetry to an ambient observer during a test run', async (testContext) => {
+  const received: string[] = [];
+  let resolveObservation: ((body: string) => void) | null = null;
+  const observer = http.createServer((request, response) => {
+    const chunks: Buffer[] = [];
+    request.on('data', (chunk: Buffer) => chunks.push(chunk));
+    request.on('end', () => {
+      const body = Buffer.concat(chunks).toString();
+      received.push(body);
+      resolveObservation?.(body);
+      response.end();
+    });
+  });
+  const observationReceived = new Promise<string>((resolve) => {
+    resolveObservation = resolve;
+  });
+  await new Promise<void>((resolve, reject) => {
+    observer.once('error', reject);
+    observer.listen(0, '127.0.0.1', resolve);
+  });
+  testContext.after(() => new Promise<void>((resolve) => observer.close(() => resolve())));
+  const address = observer.address();
+  assert.ok(address && typeof address !== 'string');
+  const observerUrl = `http://127.0.0.1:${address.port}/v1/observations`;
+  const { cliJson: isolatedCliJson } = makeCliRunner(BIN, {
+    SIDEQUEST_HOME,
+    CLAUDE_PROJECT_DIR: PROJ,
+    SIDEQUEST_OBSERVER_URL: observerUrl,
+  });
+
+  isolatedCliJson<{ ticket: { ref: string } }>([
+    'add', '-t', 'ambient telemetry isolation fixture', '--file', 'lib/tracked.js', '--complexity', '3',
+    '--why', 'a ticket write must not reach the ambient observer during a test run', '--label', 'direct-ok', '--json',
+  ]);
+  await new Promise<void>((resolve) => setTimeout(resolve, 300));
+  assert.deepStrictEqual(received, []);
+
+  const { cliJson: unisolatedCliJson } = makeCliRunner(BIN, {
+    SIDEQUEST_HOME,
+    CLAUDE_PROJECT_DIR: PROJ,
+    SIDEQUEST_OBSERVER_URL: observerUrl,
+    SIDEQUEST_TEST_MODE: '0',
+    NODE_TEST_CONTEXT: undefined,
+  });
+  const unisolatedTicket = unisolatedCliJson<{ ticket: { ref: string } }>([
+    'add', '-t', 'ambient telemetry emission fixture', '--file', 'lib/tracked.js', '--complexity', '3',
+    '--why', 'the observer endpoint must receive a post when isolation is disabled', '--label', 'direct-ok', '--json',
+  ]);
+  const emitted = await Promise.race([
+    observationReceived,
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('observer did not receive telemetry')), 1000)),
+  ]);
+
+  assert.match(emitted, new RegExp(`"ticket_ref":"${unisolatedTicket.ticket.ref}"`));
+  assert.strictEqual(received.length, 1);
 });

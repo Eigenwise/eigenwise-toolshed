@@ -188,6 +188,24 @@ test('scalar metrics map to measurements; histograms become coverage gaps', () =
   assert.equal(observations.some((o) => o.event_name === 'coverage_gap' && o.attributes.status === 'unsupported_metric_shape'), true);
 });
 
+test('resource project ids attribute OTLP logs, traces, and metrics', () => {
+  const projectId = 'b'.repeat(64);
+  const resource = { attributes: attrs({ 'project.id': projectId }) };
+  const logs = otlpToObservations('logs', {
+    resourceLogs: [{ resource, scopeLogs: [{ logRecords: [{ timeUnixNano: NANO, eventName: 'claude_code.api_request', attributes: [] }] }] }],
+  });
+  const traces = otlpToObservations('traces', {
+    resourceSpans: [{ resource, scopeSpans: [{ spans: [{ traceId: TRACE, spanId: SPAN, name: 'claude_code.llm_request', startTimeUnixNano: NANO, attributes: [] }] }] }],
+  });
+  const metrics = otlpToObservations('metrics', {
+    resourceMetrics: [{ resource, scopeMetrics: [{ metrics: [{ name: 'claude_code.cost.usage', sum: { dataPoints: [{ asDouble: 0.05, timeUnixNano: NANO, attributes: [] }] } }] }] }],
+  });
+
+  assert.equal(logs[0].project_id, projectId);
+  assert.equal(traces[0].project_id, projectId);
+  assert.equal(metrics[0].project_id, projectId);
+});
+
 // --- Observer HTTP wiring (injected fake store, no SQLite) ---
 
 function freePort() {

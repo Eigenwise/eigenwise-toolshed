@@ -20,6 +20,7 @@ const HEX_SPAN = /^[0-9a-f]{16}$/;
 
 // OTLP resource attribute key -> canonical observation identifier column.
 const RESOURCE_ID_KEYS = Object.freeze({
+  'project.id': 'project_id',
   'session.id': 'session_id',
   'claude.session.id': 'session_id',
   'workflow.run.id': 'workflow_run_id',

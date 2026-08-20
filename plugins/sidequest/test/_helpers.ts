@@ -32,7 +32,7 @@ interface McpModule {
 
 export function makeCliRunner(bin: string, envOverrides?: NodeJS.ProcessEnv, options?: CliRunnerOptions) {
   function runCli(args: string[]): CliResult {
-    const env = Object.assign({}, process.env, envOverrides || {});
+    const env = Object.assign({}, process.env, { SIDEQUEST_TEST_MODE: '1' }, envOverrides || {});
     const result = spawnSync(process.execPath, [bin, ...args], {
       encoding: 'utf8',
       env,
