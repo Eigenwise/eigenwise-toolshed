@@ -18,9 +18,9 @@ and a config key. These are not that.
 
 Sidequest sends your work to different models and runs them in worktrees.
 Workbench writes config into your projects. Model Gateway puts other providers
-in your `/model` picker. Live Rules injects text into Claude's context on every
-prompt. Install these blind and you WILL see behavior you didn't ask for, with
-no idea which plugin did it.
+in your `/model` picker. Live Rules injects matching text into Claude's context
+when rules apply. Install these blind and you WILL see behavior you didn't ask
+for, with no idea which plugin did it.
 
 Twenty minutes up front saves you that.
 
@@ -36,13 +36,13 @@ This README is a signpost. The guides are over there.
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | A user-scope install and the shed's caretaker: Toolshed updates, health checks, and the freshness guard. Use `/update-toolshed` and `/toolshed-doctor`. |
+| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | A user-scope install and the shed's caretaker: Toolshed updates, health checks, and the freshness guard. Use `/workbench:update-toolshed` and `/workbench:toolshed-doctor`. |
 | [**quartermaster**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/) | Outfits your workspaces and keeps them earning their keep. `/quartermaster:setup` sets up a project (Toolshed core, stack plugins, rules, permissions) grounded in your actual session history; `/quartermaster:resupply` reads what you were working toward, proposes the capability that would make it easier one item at a time, then reports next pass whether it worked. |
 | [**observability**](https://eigenwise.github.io/eigenwise-toolshed/observability/) | Local, metadata-only telemetry: a loopback observer writing to SQLite on your machine, an optional statusline for live context and usage, and an OpenTelemetry Collector that can forward redacted signals to Grafana. Off until you opt a repository in. |
 | [**model-gateway**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) | Puts ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker through a local gateway. |
 | [**sidequest**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
 | [**codebase-mapper**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/codebase-mapper/) | Keeps a small, self-updating map of your codebase and loads it into every Claude session, so Claude already knows how your project is built when you start working. |
-| [**live-rules**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/) | Inject your own rules into Claude's context the moment they apply: global rules on every prompt, file-type and directory rules right before an edit, keyword rules when your prompt matches. Edit a rule, it applies on the next prompt. |
+| [**live-rules**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/live-rules/) | Inject your own rules into Claude's context when they apply: unchanged rules re-ground at `SessionStart`, and a changed matching rule appears on the next prompt or edit. |
 
 *More tools will move into the shed over time.*
 
@@ -70,6 +70,7 @@ Use this path for a first install:
 | **Workbench: user** | It keeps every workspace fresh and healthy. A second project-scoped copy loads its hooks twice. |
 | **Quartermaster: user** | Its session tallies, resupply passes, and decision ledger span every project. |
 | **Model Gateway: user, required** | Its wiring is global-only and writes `~/.claude/settings.json`. Its keepalive hook must be live in every project and every executor worktree. There is no project-scoped wiring anymore. |
+| **Observability: user** | Its observer is one process per machine, with local telemetry opt-in for each repository. |
 | **Everything else: project** | Sidequest, codebase-mapper, and live-rules keep their config with the repo. `/quartermaster:setup` installs them for you. |
 
 <details>
@@ -80,9 +81,10 @@ Use this path for a first install:
 /plugin install workbench@eigenwise-toolshed --scope user
 /plugin install quartermaster@eigenwise-toolshed --scope user
 /plugin install model-gateway@eigenwise-toolshed --scope user
-/plugin install sidequest@eigenwise-toolshed
-/plugin install codebase-mapper@eigenwise-toolshed
-/plugin install live-rules@eigenwise-toolshed
+/plugin install observability@eigenwise-toolshed --scope user
+/plugin install sidequest@eigenwise-toolshed --scope project
+/plugin install codebase-mapper@eigenwise-toolshed --scope project
+/plugin install live-rules@eigenwise-toolshed --scope project
 ```
 
 Then run `/reload-plugins` (or restart Claude Code). The marketplace is public, so there is no auth step.
@@ -93,7 +95,7 @@ Then run `/reload-plugins` (or restart Claude Code). The marketplace is public, 
 On any non-trivial repo, a fresh Claude session starts blind. It greps for the architecture, hunts down the entry points, and re-learns your conventions before it can do anything useful, then starts from scratch again the next session. codebase-mapper does that work **once** and keeps it:
 
 - It writes a set of small, atomic Markdown docs under `.claude/.codebase-info/` (architecture, modules, entry points, patterns, dependencies, and so on).
-- A bundled `UserPromptSubmit` hook re-injects the map on every prompt, so it stays in context deep into a long session and Claude keeps consulting and updating it as you work.
+- Injection runs at `SessionStart`, matching `SubagentStart` events, before `Skill` tool calls, and `Stop`. On `UserPromptSubmit`, it only reports changed map documents, so Claude can re-read them when needed.
 - A companion skill refreshes only the docs your changes actually touch, so the map stays current.
 - It works on any language or stack, and on both new and existing projects.
 
@@ -105,13 +107,10 @@ Two skills run it: `map-codebase` builds the map and `update-codebase-map` refre
 matters when you touch a `.tsx` file, a deploy checklist only matters when you deploy. Put it all in
 `CLAUDE.md` and it is either permanently in your context or quietly buried. live-rules fixes that:
 
-- You keep your rules in one Markdown file (`.claude/live-rules.md`, or wherever `LIVE_RULES_PATH`
-  points), each a short frontmatter block saying **when** it applies (global, a file glob, a directory,
-  or a prompt keyword).
-- Two bundled hooks inject only the rules that apply, right when they apply: global and keyword rules on
-  every prompt, file and directory rules the moment Claude is about to edit a matching file.
-- Rules are read fresh every time, so editing one takes effect on the **next prompt**, no restart.
-- A rule can also `include:` a live file, so its current contents ride along every prompt. That makes
+- New workspaces keep each rule in `.claude/live-rules/rules/<stable-name>.md`, with a generated manifest. Existing projects can keep the legacy single Markdown file (`.claude/live-rules.md`, or wherever `LIVE_RULES_PATH` points) until migrated.
+- Unchanged rules re-ground at `SessionStart`; a changed matching rule appears on the next prompt or edit.
+- Rules are read fresh when they re-ground, so editing one takes effect on the **next prompt or edit**, no restart.
+- A rule can also `include:` a live file. Included content refreshes when its rule is re-grounded or its source changes. That makes
   live-rules a general way to keep any file in front of Claude, a codebase map included: it is the same
   mechanism codebase-mapper uses, so a single rule reproduces that auto-loading.
 - Commit the file and the whole team shares the same rules.
@@ -127,27 +126,19 @@ that either derails what Claude is doing or gets forgotten three messages later.
 neither:
 
 - The Sidequest skill tells Claude to file a separate issue directly as a ticket without stopping the work in progress.
-- **Pasted images become attachments.** Paste a screenshot with your message and it's copied into the
-  ticket (as real bytes, so it survives Claude Code's ephemeral image cache) and shown on the card.
+- Attach images in the dashboard by pasting or dropping them, or pass explicit image paths through the CLI.
 - Ask *"show me the dashboard"* (or run `/sidequest:board`) and a **live, self-hosted Kanban board**
   opens in your browser. It polls, so new tickets appear and animate in on their own; drag cards
   between To do / Doing / Done, edit, filter, and search.
-- When Claude changes the board while you're heads-down elsewhere, you get a **desktop notification**
-  and an **unread badge** on that project in the sidebar — but only for Claude's changes, never your
-  own dashboard edits.
+- When Claude changes the board while you're heads-down elsewhere, you get a **desktop notification** if browser notification permission is granted and the dashboard tab is unfocused, plus an **unread badge** on that project in the sidebar, but only for Claude's changes, never your own dashboard edits.
 - Claude (or several agents at once) can **work** the board, not just fill it: a ticket is **claimed
   atomically** before anyone touches it, so two agents never do the same task — it's safe to point
   several sessions at one board.
-- Tickets carry **comment threads** — Claude leaves a **question** when it needs your input (and you
-  get pinged) and waits for your reply — and **link into dependencies** (`blocks` / `depends-on`), so a
-  blocked ticket is shown as blocked and skipped by "grab the next task" until its blocker is done.
-- Because claiming is atomic, Claude **fans out over independent ready tickets** — one subagent per
-  ticket, in parallel — instead of grinding through them one at a time. And finished work **archives**
-  out of the way (a quiet, restorable side view) so the board stays about what's left.
-- A persistent **notification inbox** (the bell) keeps every question, comment, and status change
-  Claude raised while you were away — read it whenever, it survives a reload or a closed tab. Set a
-  **reminder** on any ticket (a preset or a custom time) to get pinged later, and hand a ticket a
-  persistent **assignee** — yourself or an agent — filterable right on the board.
+- Tickets carry **comment threads**. When an executor needs a human verdict it releases an oracle handoff, which parks the ticket as `awaiting-oracle` until a verdict is recorded. Tickets also link into dependencies (`blocks` / `depends-on`), so a blocked ticket is shown as blocked and skipped by "grab the next task" until its blocker is done.
+- Because claiming is atomic, Claude **fans out over independent ready tickets**, one subagent per
+  ticket, in parallel, instead of grinding through them one at a time. You can archive finished work
+  into a quiet, restorable view so the board stays about what's left.
+- A persistent **notification inbox** (the bell) keeps configured created, comment, and status events made outside the dashboard, and survives reloads and closed tabs. Set a **reminder** on any ticket (a preset or a custom time) to get pinged later, and hand a ticket a persistent **assignee**, yourself or an agent, filterable right on the board.
 - **One board for every project.** Tickets are stored centrally under `~/.claude/sidequest` (keyed by
   project path, never inside your repos), so a single dashboard covers every folder you work in at
   once. The server binds to `127.0.0.1` only — nothing leaves your machine.
