@@ -446,7 +446,7 @@
   .category-row.disabled { border-color: var(--border-strong); border-style: dashed; box-shadow: inset .22rem 0 0 var(--border-strong); }
   .category-row code, .category-row small, .category-meta { display: block; color: var(--text-muted); font-size: .78rem; margin-top: .16rem; }
   .category-row small { display: -webkit-box; overflow: hidden; line-height: 1.35; line-clamp: 2; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
-  .category-meta { align-self: start; min-inline-size: 9rem; text-align: right; font-family: var(--font-mono); }
+  .category-row .category-meta { display: grid; gap: .25rem; align-self: start; min-inline-size: 9rem; text-align: right; font-family: var(--font-mono); }
   .category-actions { grid-column: 1 / -1; display: flex; gap: .35rem; flex-wrap: wrap; }
   .category-form { border: 1px solid var(--border); border-radius: var(--radius); padding: .8rem; background: var(--surface-muted); }
   .route-fields, .draft-row { display: grid; grid-template-columns: 1fr 1fr; gap: .55rem; }
