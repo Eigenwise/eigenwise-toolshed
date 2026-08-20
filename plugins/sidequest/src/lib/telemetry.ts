@@ -4,7 +4,7 @@ import http from 'node:http';
 const { canonicalPath } = require('./worktrees.js') as { canonicalPath: (value: unknown) => string };
 const { canonicalPreparedDispatchExecutor } = require('./prepared-dispatch.js') as { canonicalPreparedDispatchExecutor: (ticket: unknown) => string | null };
 
-const OBSERVER_URL = 'http://127.0.0.1:14319/v1/observations';
+const OBSERVER_URL = process.env.SIDEQUEST_OBSERVER_URL || 'http://127.0.0.1:14319/v1/observations';
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = new Set(['low', 'medium', 'high', 'xhigh', 'max']);
 const TIMEOUT_MS = 250;
@@ -155,6 +155,10 @@ export function ticketObservation(project: unknown, ticketValue: unknown): Ticke
   return observation;
 }
 
+function runningTestSuite(): boolean {
+  return process.env.NODE_TEST_CONTEXT !== undefined || process.env.SIDEQUEST_TEST_MODE === '1';
+}
+
 function send(observation: TicketObservation): void {
   if (testSink) {
     try {
@@ -164,6 +168,7 @@ function send(observation: TicketObservation): void {
     }
     return;
   }
+  if (runningTestSuite()) return;
   const body = JSON.stringify([observation]);
   const request = http.request(OBSERVER_URL, {
     method: 'POST',
