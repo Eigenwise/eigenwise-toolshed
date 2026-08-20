@@ -31,7 +31,7 @@
     },
     {
       "path": "rules/release-publication.md",
-      "hash": "702322dd1b34eca53913cae8ee1ed590328f0dad6fa9a331dec6f575f6e4196b",
+      "hash": "b846efef02599c0e24fd5f2acadda6d2b3e448792438e9a3715ab6171c9541f3",
       "description": "Automated release policy",
       "globs": [],
       "dirs": [],
