@@ -580,8 +580,8 @@ test('OTLP payload carries the event.name attribute the collector filter matches
   assert.equal(attributes['event.name'], 'gateway.token.usage');
   assert.equal(attributes.event_name, 'gateway.token.usage');
 
-  // Seam guard: this is the workbench collector's filter/signals allowlist
-  // (REQUIRED_LOG_FILTER in plugins/workbench/bin/install-otel-collector.js).
+  // Seam guard: this is the observability collector's filter/signals allowlist
+  // (REQUIRED_LOG_FILTER in plugins/observability/bin/install-otel-collector.js).
   // If either side changes its key or pattern, this must fail.
   const filterRegex = /^(claude_code|agent_sdk|gateway)\.|^(mcp_server_connection|hook_execution_(start|complete))$/;
   assert.match(attributes['event.name'], filterRegex);

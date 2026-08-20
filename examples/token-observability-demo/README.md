@@ -5,7 +5,7 @@ This is a disposable Workbench telemetry project. The end-to-end test copies the
 Run it from the repository root:
 
 ```text
-node --test plugins/workbench/test/observability-demo.e2e.test.js
+node --test plugins/observability/test/observability-demo.e2e.test.js
 ```
 
 The test calls Workbench initialization with a fake local Collector binary and a pinned Claude version. Initialization writes only the temporary project's `.claude/settings.json` and temporary application-data files. The observer is bound to an ephemeral loopback port. Grafana LGTM and a real Claude or Codex request are deliberately not required, because provider evidence and Docker behavior are not deterministic in a unit test.
