@@ -1,9 +1,14 @@
 {
-  "viewport": "1400px wide, dark mode",
+  "viewport": "1400px wide; Sidequest light mode; Grafana dark mode",
   "generatedBy": "npm run screenshots",
   "files": {
-    "sidequest-kanban.png": "Synthetic Acme Webshop Sidequest board.",
-    "sidequest-ticket-detail.png": "Synthetic Acme Webshop ticket detail.",
+    "sidequest-kanban.png": "Synthetic three-project Sidequest board with 21 active tickets.",
+    "sidequest-filtered-board.png": "Synthetic board filtered to normal-priority mobile work.",
+    "sidequest-notifications.png": "Synthetic notification inbox with comment activity across boards.",
+    "sidequest-settings.png": "Synthetic Sidequest settings dialog with routing and notification controls.",
+    "sidequest-archive.png": "Synthetic archive view with tickets from two boards.",
+    "sidequest-ticket-detail.png": "Synthetic ticket detail with a reminder, dependency link, and comment thread.",
+    "sidequest-second-project.png": "Synthetic Acme Fulfillment board selected from the project rail.",
     "observability-tokens-models.png": "Synthetic Grafana Tokens & models view.",
     "observability-mcp.png": "Synthetic Grafana MCP view.",
     "observability-who-is-burning.png": "Synthetic Grafana model burn table.",

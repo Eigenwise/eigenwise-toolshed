@@ -40,17 +40,47 @@ The board keeps the work visible while Claude and its executors handle the ticke
 
 ## Use the dashboard
 
-The dashboard shows every project you have registered in Sidequest. Use it to switch boards, scan todo, doing, and done work, search tickets, filter the view, and open a ticket's full details.
+The project rail keeps every registered board in one place, with ticket counts and status progress beside each project. The combined view is useful when you want to scan ownership, priorities, labels, stories, and routes across the whole queue.
 
-![Sidequest dashboard showing a synthetic board with todo, doing, and done columns](../../../assets/screenshots/sidequest-kanban.png)
+![Sidequest dashboard with three synthetic projects and populated todo, doing, and done columns](../../../assets/screenshots/sidequest-kanban.png)
 
-*Synthetic Acme Webshop demo data showing the board view and ticket status columns.*
+*Synthetic demo data showing three active project boards and 21 tickets.*
 
-Open a ticket to read its details, comments, links, reminders, story, and current ownership. You can edit tickets and leave a note from the detail view.
+Select a project in the rail when you need its focused board. The columns keep that project's open and completed work visible without losing the rest of the rail.
 
-![Sidequest ticket detail view showing synthetic details, status, story, links, reminder, and comment controls](../../../assets/screenshots/sidequest-ticket-detail.png)
+![Acme Fulfillment synthetic board selected in the Sidequest project rail](../../../assets/screenshots/sidequest-second-project.png)
 
-*Synthetic demo ticket detail view. The names, titles, timestamps, and comments are fixtures created for documentation.*
+*Synthetic demo data showing the Acme Fulfillment board selected from a three-project rail.*
+
+The toolbar searches refs, titles, and labels, then combines that query with priority, story, assignee, and sort controls. Active filters stay visible, so you can tell why a card is in the result.
+
+![Sidequest board with mobile typed into search and the normal priority filter active](../../../assets/screenshots/sidequest-filtered-board.png)
+
+*Synthetic demo data showing a mobile search narrowed to normal-priority tickets.*
+
+The inbox collects comments, reminders, ticket creation, and status activity across projects. Its tabs separate work that needs you from the wider activity stream.
+
+![Sidequest notification inbox open over a populated synthetic board](../../../assets/screenshots/sidequest-notifications.png)
+
+*Synthetic demo data showing several unread comment notifications from different tickets.*
+
+Open a ticket to edit its fields and read the working context in one place. The detail view keeps a scheduled reminder, dependency links, and the full comment thread beside the ticket fields.
+
+![Sidequest ticket detail with a populated reminder, dependency link, story, and comment thread](../../../assets/screenshots/sidequest-ticket-detail.png)
+
+*Synthetic demo data showing the Build cart summary ticket and its team discussion.*
+
+Completed work can move into the archive without disappearing. The archive view keeps the source board, priority, age, and restore action with each ticket.
+
+![Sidequest archive containing three synthetic tickets from two projects](../../../assets/screenshots/sidequest-archive.png)
+
+*Synthetic demo data showing archived storefront and fulfillment work.*
+
+Settings covers routing profiles, model fallback, theme, notification preferences, and the guided tour. Open it when you need to change how the board behaves rather than the work on a ticket.
+
+![Sidequest settings dialog showing routing, appearance, tour, and notification controls](../../../assets/screenshots/sidequest-settings.png)
+
+*Synthetic demo data behind the Sidequest settings dialog.*
 
 ## Daily use
 
