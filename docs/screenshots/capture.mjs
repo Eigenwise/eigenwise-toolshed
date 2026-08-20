@@ -20,7 +20,8 @@ const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
 const SYNTHETIC_HOUR = 60 * 60 * 1_000;
-const SYNTHETIC_NOW = Math.floor(Date.now() / SYNTHETIC_HOUR) * SYNTHETIC_HOUR;
+const SYNTHETIC_NOW = Math.floor(Date.now() / (24 * SYNTHETIC_HOUR)) * (24 * SYNTHETIC_HOUR);
+const METRIC_QUERY_TIME = Math.floor(Date.now() / 1_000);
 const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
 const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
 const SYNTHETIC_BUCKETS = Math.floor((SYNTHETIC_NOW - SYNTHETIC_START) / SYNTHETIC_INTERVAL) + 1;
@@ -376,7 +377,7 @@ async function verifyGrafanaSeed(grafanaPort, expectedCosts) {
   for (let attempt = 0; attempt < 240; attempt += 1) {
     try {
       const [bucketResult, totalResult, modelResult] = await Promise.all([
-        queryGrafana(grafanaPort, bucketExpression, SYNTHETIC_START, SYNTHETIC_NOW + 1),
+        queryGrafana(grafanaPort, bucketExpression, SYNTHETIC_START, SYNTHETIC_NOW + 60_000),
         queryGrafana(grafanaPort, totalExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
         queryGrafana(grafanaPort, modelExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
       ]);
@@ -544,10 +545,11 @@ async function seedGrafana(otlpPort, grafanaPort) {
   }
   const healthRecords = records.slice(historicalRecordCount);
   await postOtlp(otlpPort, 'logs', groupedLogs(healthRecords));
+  const metricSampleNow = METRIC_QUERY_TIME * 1_000;
   const metricDataPoints = Array.from({ length: 10 }, (_, index) => ({
     asInt: String((index + 1) * 25_000),
-    startTimeUnixNano: String(BigInt(SYNTHETIC_NOW - (5 * 60 * 1_000)) * 1_000_000n),
-    timeUnixNano: String(BigInt(SYNTHETIC_NOW - ((4 - (index * 0.4)) * 60 * 1_000)) * 1_000_000n),
+    startTimeUnixNano: String(BigInt(metricSampleNow - (5 * 60 * 1_000)) * 1_000_000n),
+    timeUnixNano: String(BigInt(metricSampleNow - ((4 - (index * 0.4)) * 60 * 1_000)) * 1_000_000n),
     attributes: otlpAttributes({
       model: models[index % models.length].name,
       type: ['input', 'output', 'cache_read', 'context'][index % 4],
@@ -668,6 +670,9 @@ async function writeGrafanaDashboards(tempRoot) {
     for (const panel of dashboard.panels) {
       if (panel.title === failurePanelWithoutZeroFallback) {
         for (const target of panel.targets || []) target.expr = target.expr?.replace(' or vector(0)', '');
+      }
+      if (panel.title === 'Claude metric samples, 5m') {
+        for (const target of panel.targets || []) target.expr = target.expr?.replace('[5m]', `[5m] @ ${METRIC_QUERY_TIME}`);
       }
       const seriesName = statSeriesNames.get(panel.title);
       if (!seriesName) continue;
