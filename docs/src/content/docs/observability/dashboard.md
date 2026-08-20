@@ -19,19 +19,19 @@ The global view is organized into four rows: **At a glance**, **Where the spend 
 
 The screenshots below use fixed synthetic records from the documentation capture pipeline. They show the shape of the views without exposing a real project, session, or cost record.
 
-![Synthetic Tokens & models dashboard view showing model totals and roles](../../../assets/screenshots/observability-tokens-models.png)
+![At a glance row showing total spend, work routed to Codex, and tool failure rate](../../../assets/screenshots/observability-at-a-glance.png)
 
 The **At a glance** row gives a quick read on model usage, roles, spend, and failures.
 
-![Synthetic Who is burning tokens dashboard view showing model token totals and synthetic costs](../../../assets/screenshots/observability-who-is-burning.png)
+![Where the spend goes row showing cost by model, cost by project, and context by agent role](../../../assets/screenshots/observability-where-the-spend-goes.png)
 
 The **Where the spend goes** row breaks down model totals and estimated cost before you change routing or prompts.
 
-![Synthetic MCP dashboard view showing definition tokens and call activity by server](../../../assets/screenshots/observability-mcp.png)
+![Failures and source activity row showing hook failures, gateway errors, and telemetry source activity](../../../assets/screenshots/observability-failures-and-source-activity.png)
 
 The **Failures and source activity** row shows hook and gateway failures alongside source activity.
 
-![Synthetic Sidequest board costs dashboard view showing story ticket counts and synthetic costs](../../../assets/screenshots/observability-board-costs.png)
+![Context recharge row showing assistant turns and tool-result byte totals](../../../assets/screenshots/observability-context-recharge.png)
 
 The **Context recharge** row shows context-related activity alongside the rest of the global usage signals.
 

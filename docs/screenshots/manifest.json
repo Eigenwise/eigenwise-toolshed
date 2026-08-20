@@ -9,9 +9,9 @@
     "sidequest-archive.png": "Synthetic archive view with nine tickets from three boards.",
     "sidequest-ticket-detail.png": "Synthetic ticket detail with a reminder, dependency link, and comment thread.",
     "sidequest-second-project.png": "Synthetic Acme Fulfillment board with nine active tickets selected from the project rail.",
-    "observability-tokens-models.png": "Synthetic Grafana Tokens & models view.",
-    "observability-mcp.png": "Synthetic Grafana MCP view.",
-    "observability-who-is-burning.png": "Synthetic Grafana model burn table.",
-    "observability-board-costs.png": "Synthetic Grafana Sidequest board-cost rollup."
+    "observability-at-a-glance.png": "Synthetic Grafana At a glance row with spend, Codex routing, and tool failure panels.",
+    "observability-where-the-spend-goes.png": "Synthetic Grafana Where the spend goes row with model, project, and agent-role cost panels.",
+    "observability-failures-and-source-activity.png": "Synthetic Grafana Failures and source activity row with failure and source activity panels.",
+    "observability-context-recharge.png": "Synthetic Grafana Context recharge row with assistant-turn and tool-result byte panels."
   }
 }
