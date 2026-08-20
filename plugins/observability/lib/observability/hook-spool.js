@@ -146,7 +146,9 @@ async function drainHookSpool(options) {
       const remainingLines = lines.slice(offset + batchSize);
       if (remainingLines.length === 0) fs.writeFileSync(drainingPath, '');
       else fs.writeFileSync(drainingPath, `${remainingLines.join('\n')}\n`);
-      assertWithinBudget(deadline, startedAt, budgetMs, remainingLines.length);
+      if (remainingLines.length > 0) {
+        assertWithinBudget(deadline, startedAt, budgetMs, remainingLines.length);
+      }
       await yieldToEventLoop();
     }
     fs.unlinkSync(drainingPath);
