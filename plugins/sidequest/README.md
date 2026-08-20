@@ -29,7 +29,7 @@ Claude can create the story, split it into tickets, connect dependencies, and ch
 
 Once the backlog looks right, ask Claude to dispatch the ready work. Claude handles routing, executor startup, verification, and the ticket updates. Independent tickets can run in parallel when their dependencies allow it.
 
-A codebase submission pins a verified Git range. A project without Git pins its native immutable revision and changed surfaces, then records review or attestation evidence. Its server integration registers `store.registerSourceRevisionCapability(project, resolver)`; Sidequest hydrates any preserved retry candidate, calls the current project resolver exactly once with that candidate and immutable dispatch baseline, and binds even an unavailable result to both. Replacing a registration invalidates the prior resolver, so teardown cannot restore it. CLI and MCP callers cannot assert existence or membership themselves. Missing Git, process, and worktree capabilities are explicit, so delivery does not probe or invoke those adapters.
+A codebase submission pins a verified Git range. A non-Git project pins its filesystem-snapshot revision and changed surfaces, then records attestation evidence tied to that snapshot. Its server integration registers `store.registerSourceRevisionCapability(project, resolver)`; Sidequest hydrates any preserved retry candidate, calls the current project resolver exactly once with that candidate and immutable dispatch baseline, and binds even an unavailable result to both. Replacing a registration invalidates the prior resolver, so teardown cannot restore it. CLI and MCP callers cannot assert existence or membership themselves. Missing Git, process, and worktree capabilities are explicit, so delivery does not probe or invoke those adapters.
 
 When work is ready, ask Claude to review and integrate it:
 
@@ -59,7 +59,7 @@ Tell Claude the symptom:
 
 > A submitted ticket is waiting. Check it and finish the integration if it is safe.
 
-Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection. A session loaded with Sidequest 4.48.1 or newer can finish compatible dispatches across a newer installed version, but it reports the skew and still requires a reload before schema-incompatible work.
+Claude checks the local plugin connection, ticket state, dependencies, configured route, and delivery status, then gives you the next action. After an install or upgrade, start a new Claude Code session or reload plugins so the session picks up the current Sidequest connection. When the loaded version is older than the installed version but at least 4.48.1, Sidequest permits dispatch and warns you to reload before the next dispatch. Malformed versions and loaded versions before 4.48.1 refuse.
 
 ## License
 
