@@ -25,6 +25,17 @@ const {
 const LOOPBACK = '127.0.0.1';
 const MAX_MANAGED_LOG_BYTES = 16 * 1024 * 1024;
 const MANAGED_LOG_ARCHIVES = 3;
+const PROCESS_RECORD_STALE_AFTER_MS = 120_000;
+
+// The worker records a five-second main-thread pulse. The longest measured spool drain is 17 seconds, so this permits seven such drains before takeover.
+const processRecordHeartbeatIsFresh = (record, recordFile, now = Date.now()) => {
+  const heartbeatAt = typeof record?.heartbeatAt === 'string'
+    ? Date.parse(record.heartbeatAt)
+    : fs.statSync(recordFile).mtimeMs;
+  return Number.isFinite(heartbeatAt)
+    && heartbeatAt <= now
+    && now - heartbeatAt <= PROCESS_RECORD_STALE_AFTER_MS;
+};
 
 function normalizeManagedConfig(value, options) {
   return require('../../bin/setup-observability.js').normalizeManagedConfig(value, options);
@@ -143,19 +154,25 @@ function writeProcessRecord(dataDir, name, record) {
   fs.writeFileSync(processRecordFile(dataDir, name), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
 }
 
-function processRecordMatchesProvenance(name, dataDir, pid, provenance) {
+function processRecordMatchesProvenance(name, dataDir, pid, provenance, options = {}) {
   if (!Number.isInteger(pid) || pid < 1) return false;
   const record = readProcessRecord(dataDir, name);
-  return record?.pid === pid
-    && record.pluginVersion === provenance.pluginVersion
-    && record.scriptPath === provenance.scriptPath;
+  if (record?.pid !== pid
+    || record.pluginVersion !== provenance.pluginVersion
+    || record.scriptPath !== provenance.scriptPath) return false;
+  try {
+    const now = typeof options.now === 'function' ? options.now() : options.now ?? Date.now();
+    return processRecordHeartbeatIsFresh(record, processRecordFile(dataDir, name), now);
+  } catch {
+    return false;
+  }
 }
 
 function managedProcessNeedsRestart(name, dataDir, provenance, options = {}) {
   const pid = readPid(pidFile(dataDir, name));
   const alive = options.processAlive || processAlive;
   if (!pid || !alive(pid)) return false;
-  return !processRecordMatchesProvenance(name, dataDir, pid, provenance);
+  return !processRecordMatchesProvenance(name, dataDir, pid, provenance, options);
 }
 
 function stopManagedProcess(name, dataDir, options = {}) {
@@ -217,10 +234,12 @@ function startManagedProcess(name, command, args, dataDir, options = {}) {
   }
   if (!child || !Number.isInteger(child.pid) || child.pid < 1) throw new Error(`Could not start the Workbench ${name}.`);
   fs.writeFileSync(pidFile(dataDir, name), `${child.pid}\n`, { encoding: 'utf8', mode: 0o600 });
+  const now = typeof options.now === 'function' ? options.now() : options.now ?? Date.now();
   writeProcessRecord(dataDir, name, {
     pid: child.pid,
     pluginVersion: options.pluginVersion,
     scriptPath: options.scriptPath,
+    heartbeatAt: new Date(now).toISOString(),
   });
   if (typeof child.unref === 'function') child.unref();
   return child.pid;
@@ -369,7 +388,7 @@ async function ensureObservability(options = {}) {
           const recordMatchesOwner = processRecordMatchesProvenance(process.name, dataDir, observedOwner, {
             pluginVersion: currentPluginVersion,
             scriptPath: process.scriptPath,
-          });
+          }, options);
           needsRestart = identity
             ? identity.pluginVersion !== currentPluginVersion
             : !recordMatchesOwner;
@@ -664,7 +683,7 @@ async function launchEnsure(options = {}) {
   const recordMatchesOwner = processRecordMatchesProvenance('observer', dataDir, owner, {
     pluginVersion: currentPluginVersion,
     scriptPath: path.join(pluginRoot, 'bin', 'observer.js'),
-  });
+  }, options);
   const needsRestart = listening
     ? identity ? identity.pluginVersion !== currentPluginVersion : !recordMatchesOwner
     : Boolean(owner);

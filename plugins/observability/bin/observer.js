@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { Worker } = require('node:worker_threads');
 const { DEFAULT_RETENTION_DAYS, openObservabilityStore } = require('../lib/observability/store.js');
 const { DEFAULT_DRAIN_BUDGET_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
 const { defaultSpoolPath } = require('../hooks/observability.js');
@@ -21,6 +22,41 @@ const {
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const OTLP_SIGNALS = Object.freeze({ '/v1/logs': 'logs', '/v1/traces': 'traces', '/v1/metrics': 'metrics' });
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+const PROCESS_RECORD_HEARTBEAT_INTERVAL_MS = 5_000;
+const PROCESS_RECORD_HEARTBEAT_WORKER_SOURCE = [
+  "const fs = require('node:fs');",
+  "const { parentPort, workerData } = require('node:worker_threads');",
+  'parentPort.on(\'message\', (heartbeatAt) => {',
+  '  try {',
+  "    const record = JSON.parse(fs.readFileSync(workerData.filePath, 'utf8'));",
+  '    if (record?.pid !== workerData.pid',
+  '      || record.pluginVersion !== workerData.pluginVersion',
+  '      || record.scriptPath !== workerData.scriptPath) return;',
+  "    const temporaryFile = `${workerData.filePath}.${workerData.pid}.heartbeat`;",
+  "    fs.writeFileSync(temporaryFile, `${JSON.stringify({ ...record, heartbeatAt })}\\n`, { encoding: 'utf8', mode: 0o600 });",
+  '    fs.renameSync(temporaryFile, workerData.filePath);',
+  '  } catch {}',
+  '});',
+].join('\n');
+
+function startProcessRecordHeartbeat(options) {
+  const writer = new Worker(PROCESS_RECORD_HEARTBEAT_WORKER_SOURCE, {
+    eval: true,
+    workerData: options,
+  });
+  writer.on('error', () => {});
+  writer.unref();
+  const refresh = () => writer.postMessage(new Date().toISOString());
+  refresh();
+  const timer = setInterval(refresh, PROCESS_RECORD_HEARTBEAT_INTERVAL_MS);
+  if (typeof timer.unref === 'function') timer.unref();
+  return {
+    async stop() {
+      clearInterval(timer);
+      await writer.terminate();
+    },
+  };
+}
 
 function assertLoopbackHost(host) {
   if (!LOOPBACK_HOSTS.has(host)) throw new Error(`Observer host must be loopback, received ${host}.`);
@@ -285,6 +321,7 @@ function createObserver(options = {}) {
   let maintenanceStartTimer = null;
   let maintenanceTimer = null;
   let staleVersionTimer = null;
+  let processRecordHeartbeat = null;
   let maintaining = false;
   let retiring = false;
   let drainingSpool = false;
@@ -327,6 +364,10 @@ function createObserver(options = {}) {
     if (spoolTimer) clearInterval(spoolTimer);
     if (outboxTimer) clearInterval(outboxTimer);
     if (staleVersionTimer) clearInterval(staleVersionTimer);
+    if (processRecordHeartbeat) {
+      void processRecordHeartbeat.stop();
+      processRecordHeartbeat = null;
+    }
     if (started && server.listening) {
       started = false;
       server.close(() => { if (ownsStore) store.close(); });
@@ -367,6 +408,12 @@ function createObserver(options = {}) {
         });
       });
       started = true;
+      processRecordHeartbeat = startProcessRecordHeartbeat({
+        filePath: path.join(path.dirname(options.databaseFile || defaultDatabaseFile()), 'observer.pid.json'),
+        pid: process.pid,
+        pluginVersion,
+        scriptPath: __filename,
+      });
       maintenanceStartTimer = setTimeout(runMaintenance, 0);
       if (typeof maintenanceStartTimer.unref === 'function') maintenanceStartTimer.unref();
       maintenanceTimer = setInterval(
@@ -406,6 +453,10 @@ function createObserver(options = {}) {
       if (staleVersionTimer) {
         clearInterval(staleVersionTimer);
         staleVersionTimer = null;
+      }
+      if (processRecordHeartbeat) {
+        await processRecordHeartbeat.stop();
+        processRecordHeartbeat = null;
       }
       await drainSpool();
       await drainOutbox();

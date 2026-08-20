@@ -7,6 +7,7 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 const setup = require('../bin/setup-observability.js');
+const { createObserver } = require('../bin/observer.js');
 const {
   ensureObservability,
   healthSnapshot,
@@ -388,6 +389,7 @@ test('start records the managed process provenance next to its PID', (t) => {
   startManagedProcess('observer', process.execPath, ['--version'], dataDir, {
     pluginVersion: '0.20.0',
     scriptPath: 'C:\\workbench\\bin\\workbench-observer.js',
+    now: 0,
     spawn() { return { pid: 101, unref() {} }; },
   });
 
@@ -395,7 +397,39 @@ test('start records the managed process provenance next to its PID', (t) => {
     pid: 101,
     pluginVersion: '0.20.0',
     scriptPath: 'C:\\workbench\\bin\\workbench-observer.js',
+    heartbeatAt: '1970-01-01T00:00:00.000Z',
   });
+});
+
+test('observer refreshes its managed process heartbeat from a worker', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const recordFile = path.join(dataDir, 'observer.pid.json');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  fs.writeFileSync(recordFile, `${JSON.stringify({
+    pid: process.pid,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+    heartbeatAt: new Date(0).toISOString(),
+  })}\n`);
+  const observer = createObserver({
+    databaseFile: path.join(dataDir, 'observability.db'),
+    host: '127.0.0.1',
+    port: 0,
+    pluginVersion: setup.pluginVersion(),
+    hookSpoolFile: path.join(dataDir, 'hook-spool.jsonl'),
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+    store: {
+      ingestBatch() { return []; },
+      preserveStorageHeadroom() { return { state: 'healthy', action: 'none', failure: null }; },
+      prune() { return null; },
+    },
+  });
+  t.after(() => observer.close());
+
+  await observer.start();
+  await new Promise((resolve) => setTimeout(resolve, 100));
+
+  assert.ok(Date.parse(JSON.parse(fs.readFileSync(recordFile, 'utf8')).heartbeatAt) > 0);
 });
 
 test('ensure replaces a stale managed observer from the current plugin root', async (t) => {
@@ -489,6 +523,106 @@ test('ensure keeps a managed observer that times out during its identity probe',
   });
 
   assert.deepEqual(result.started, []);
+});
+
+test('ensure keeps a fresh managed observer that misses its identity probe', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  const now = 1_000_000;
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+    heartbeatAt: new Date(now - 30_000).toISOString(),
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    now,
+    checkPort: async () => true,
+    observerIdentity: async () => null,
+    portOwner: () => 101,
+    killProcess() { throw new Error('fresh managed observer must not restart'); },
+    startProcess() { throw new Error('fresh managed observer must not restart'); },
+  });
+
+  assert.deepEqual(result.started, []);
+});
+
+test('ensure replaces a managed observer with a stale heartbeat', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: setup.pluginVersion(),
+    scriptPath: observerScript,
+    heartbeatAt: new Date(0).toISOString(),
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+  const killed = [];
+  const started = [];
+  let observerChecks = 0;
+
+  await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    now: 120_001,
+    checkPort: async (port) => port === 15432 && observerChecks++ === 0,
+    observerIdentity: async () => null,
+    portOwner: () => 101,
+    killProcess(pid, name) { killed.push({ pid, name }); },
+    startProcess(name) { started.push(name); return 1000 + started.length; },
+    waitForPort: async () => true,
+  });
+
+  assert.deepEqual(killed, [{ pid: 101, name: 'observer' }]);
+  assert.ok(started.includes('observer'));
+});
+
+test('ensure replaces a managed observer from another recorded plugin version', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  const observerScript = path.join(path.resolve(__dirname, '..'), 'bin', 'observer.js');
+  fs.writeFileSync(collectorBinary, 'test');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: '0.0.0',
+    scriptPath: observerScript,
+    heartbeatAt: new Date().toISOString(),
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+  const killed = [];
+  const started = [];
+  let observerChecks = 0;
+
+  await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async (port) => port === 15432 && observerChecks++ === 0,
+    observerIdentity: async () => null,
+    portOwner: () => 101,
+    killProcess(pid, name) { killed.push({ pid, name }); },
+    startProcess(name) { started.push(name); return 1000 + started.length; },
+    waitForPort: async () => true,
+  });
+
+  assert.deepEqual(killed, [{ pid: 101, name: 'observer' }]);
+  assert.ok(started.includes('observer'));
 });
 
 test('ensure replaces an observer that reports another plugin version', async (t) => {
