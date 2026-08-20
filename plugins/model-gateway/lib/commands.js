@@ -208,7 +208,45 @@ const {
   addManagedHostsBlock, configureRemoteControl, detectHostsCompat, findConflictingHostsMappings, hostsFilePath,
   managedHostsBlock, parseHostsCompatBlock, parseHostsCompatEntry, removeManagedHostsBlock, remoteControlCommand,
 } = require('./remote-control.js');
-configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode });
+function compatibilityPortOwnerIdentifiers() {
+  const portLookup = WIN
+    ? spawnSync('netstat', ['-ano', '-p', 'tcp'], { encoding: 'utf8', windowsHide: true })
+    : spawnSync('lsof', ['-nP', `-iTCP:${COMPAT_PORT}`, '-sTCP:LISTEN', '-t'], { encoding: 'utf8', windowsHide: true });
+  if (portLookup.status !== 0) return [];
+  const output = String(portLookup.stdout || '');
+  if (!WIN) return [...new Set(output.split(/\s+/).map(Number).filter(Boolean))];
+  const listeningPort = new RegExp(`^\\s*TCP\\s+\\S+:${COMPAT_PORT}\\s+\\S+\\s+LISTENING\\s+(\\d+)\\s*$`, 'gim');
+  return [...new Set(Array.from(output.matchAll(listeningPort), (match) => Number(match[1])).filter(Boolean))];
+}
+
+function processNameForIdentifier(processIdentifier) {
+  const processLookup = WIN
+    ? spawnSync('tasklist', ['/FI', `PID eq ${processIdentifier}`, '/FO', 'CSV', '/NH'], { encoding: 'utf8', windowsHide: true })
+    : spawnSync('ps', ['-p', String(processIdentifier), '-o', 'comm='], { encoding: 'utf8', windowsHide: true });
+  if (processLookup.status !== 0) return null;
+  const output = String(processLookup.stdout || '').trim();
+  if (!output) return null;
+  return WIN ? output.match(/^"([^"]+)"/)?.[1] || null : output;
+}
+
+function compatibilityPortConflict() {
+  const owners = compatibilityPortOwnerIdentifiers().map((processIdentifier) => {
+    const processName = processNameForIdentifier(processIdentifier);
+    return { processIdentifier, processName };
+  });
+  if (!owners.length) return null;
+  const holders = owners.map(({ processIdentifier, processName }) => {
+    const holder = processName ? `${processName} (PID ${processIdentifier})` : `PID ${processIdentifier}`;
+    return processName && /docker/i.test(processName) ? `Docker Desktop (${holder})` : holder;
+  });
+  const includesDockerDesktop = owners.some(({ processName }) => processName && /docker/i.test(processName));
+  const releaser = owners.length === 1
+    ? (includesDockerDesktop ? 'Docker Desktop' : 'that process')
+    : (includesDockerDesktop ? 'Docker Desktop and the other listed processes' : 'the listed processes');
+  return `port ${COMPAT_PORT}: held by ${holders.join(', ')}. RC-compatibility cannot start until ${releaser} release${owners.length === 1 ? 's' : ''} port ${COMPAT_PORT}.`;
+}
+
+configureRemoteControl({ args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict });
 
 // model-gateway is inherently a USER-SCOPE tool: it wires a GLOBAL env var
 // (ANTHROPIC_BASE_URL, every session routes through the shim) and its keepalive

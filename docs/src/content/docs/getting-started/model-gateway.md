@@ -46,6 +46,18 @@ Claude checks the relevant state and tells you if a browser sign-in or restart n
 
 ## Remote Control
 
-Remote Control conflicts with gateway model discovery. Tell Claude you want to enable or disable Model Gateway’s Remote Control compatibility. It will explain which model rows will disappear before making the change.
+Remote Control gives each project two choices.
+
+### Use RC-compatibility mode
+
+RC-compatibility keeps Model Gateway routed for the project. It maps `api.anthropic.com` to loopback in the hosts file and needs the gateway shim to bind port 80. Gateway rows disappear from `/model`, but only in RC-compatibility mode, explicit gateway ids such as `/model claude-gpt-5.6-terra` still work.
+
+Tell Claude you want to enable, disable, or diagnose RC-compatibility. Its read-only diagnosis checks port 80 before any hosts-file change. If another process already holds the port, RC-compatibility cannot start until that process releases it. Docker Desktop is a common holder and is named in the refusal.
+
+### Turn the gateway off for this project
+
+To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL` from the `env` object in that project's `.claude/settings.local.json`. Keep every other gateway setting, then restart Claude Code. The project talks to `api.anthropic.com` directly and Remote Control becomes available.
+
+That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A manually exported `ANTHROPIC_BASE_URL` still wins over the file edit, so remove that environment variable before restarting if the project remains wired.
 
 The generated [Model Gateway reference](/reference/model-gateway/) records the agent-facing commands and configuration details used by the skill.
