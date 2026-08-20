@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 "use strict";
 const mcp = require("../lib/mcp.js");
-const { reapMcpSiblings } = require("../lib/mcp-process-lifecycle.js");
 const pending = /* @__PURE__ */ new Set();
 function writeMessage(obj) {
   if (obj == null) return;
@@ -31,8 +30,15 @@ function handleLine(line) {
   dispatchMessage(message);
 }
 function main() {
-  reapMcpSiblings();
   let buffer = "";
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (buffer.trim()) handleLine(buffer);
+    await Promise.allSettled(Array.from(pending));
+    process.exit(0);
+  };
   process.stdin.setEncoding("utf8");
   process.stdin.on("data", (chunk) => {
     buffer += chunk;
@@ -43,11 +49,8 @@ function main() {
       newline = buffer.indexOf("\n");
     }
   });
-  process.stdin.on("end", async () => {
-    if (buffer.trim()) handleLine(buffer);
-    await Promise.allSettled(Array.from(pending));
-    process.exit(0);
-  });
+  process.stdin.once("end", shutdown);
+  process.stdin.once("close", shutdown);
   process.stdin.resume();
 }
 main();
