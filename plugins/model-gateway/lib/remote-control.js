@@ -130,7 +130,7 @@ let remoteControlDependencies = {};
 function configureRemoteControl(dependencies) { remoteControlDependencies = dependencies; }
 
 async function remoteControlCommand() {
-  const { args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode } = remoteControlDependencies;
+  const { args, flag, log, die, doctor, fetchShimHealth, startAll, syncCompatMode, compatibilityPortConflict = () => null } = remoteControlDependencies;
   const action = args[0];
   if (!['enable', 'disable', 'doctor'].includes(action)) {
     die('usage: remote-control <enable|disable|doctor>');
@@ -149,6 +149,7 @@ async function remoteControlCommand() {
     log(`loopback mapping: ${detected ? detected.line : 'not present'}`);
     log(`conflicting mappings: ${conflicts.length ? conflicts.join(' | ') : 'none'}`);
     log(`elevated write: ${hostsWriteStatus(file)}`);
+    log(compatibilityPortConflict() || `port ${COMPAT_PORT}: available for RC-compatibility`);
     const dnsResult = await lookupCompatHost();
     log(`DNS lookup: ${dnsResult ? `${dnsResult.address} (IPv${dnsResult.family})` : 'failed'}`);
     await doctor();
@@ -168,6 +169,10 @@ async function remoteControlCommand() {
   if (!transformed.changed) {
     log(`remote-control compatibility is already ${action === 'enable' ? 'enabled' : 'disabled'} in ${file}`);
     return;
+  }
+  if (action === 'enable') {
+    const conflict = compatibilityPortConflict();
+    if (conflict) die(conflict);
   }
 
   log(`${action === 'enable' ? 'Enable' : 'Disable'} Remote Control compatibility by ${action === 'enable' ? 'adding' : 'removing'} only this block:`);

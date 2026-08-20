@@ -205,7 +205,7 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
 
   const output = [];
   let startCalls = 0;
-  function configure(args) {
+  function configure(args, compatibilityPortConflict = () => null) {
     remoteControl.configureRemoteControl({
       args,
       flag: (value) => args.includes(value),
@@ -218,6 +218,7 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
         return { ok: true };
       },
       syncCompatMode: async () => {},
+      compatibilityPortConflict,
     });
   }
 
@@ -257,6 +258,42 @@ test('remote-control enable adopts unmarked loopback mappings and distinguishes 
   assert.equal(fs.readFileSync(hostsFile, 'utf8'), gw.managedHostsBlock());
   assert.equal(startCalls, 1);
   assert.match(output.join('\n'), /already enabled/);
+});
+
+test('remote-control enable refuses a port conflict before hosts writes and names Docker Desktop', async (t) => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-remote-control-port-conflict-'));
+  const hostsFile = path.join(directory, 'hosts');
+  const previousHostsFile = process.env.CODEX_GATEWAY_HOSTS_FILE;
+  t.after(() => {
+    if (previousHostsFile === undefined) delete process.env.CODEX_GATEWAY_HOSTS_FILE;
+    else process.env.CODEX_GATEWAY_HOSTS_FILE = previousHostsFile;
+    fs.rmSync(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+  });
+  const original = '127.0.0.1 localhost\n';
+  fs.writeFileSync(hostsFile, original);
+  process.env.CODEX_GATEWAY_HOSTS_FILE = hostsFile;
+  let startCalls = 0;
+  remoteControl.configureRemoteControl({
+    args: ['enable', '--confirm'],
+    flag: (value) => ['enable', '--confirm'].includes(value),
+    log: () => {},
+    die: (message) => { throw new Error(message); },
+    doctor: async () => {},
+    fetchShimHealth: async () => ({ ok: true, models: 1, compat: { port80Bound: true } }),
+    startAll: async () => {
+      startCalls += 1;
+      return { ok: true };
+    },
+    syncCompatMode: async () => {},
+    compatibilityPortConflict: () => 'port 80: held by Docker Desktop (com.docker.backend.exe, PID 71488). RC-compatibility cannot start until Docker Desktop releases port 80.',
+  });
+
+  await assert.rejects(
+    remoteControl.remoteControlCommand(),
+    /held by Docker Desktop \(com\.docker\.backend\.exe, PID 71488\).*cannot start until Docker Desktop releases port 80/,
+  );
+  assert.equal(fs.readFileSync(hostsFile, 'utf8'), original);
+  assert.equal(startCalls, 0);
 });
 
 // ------------------------------------------------------- detectHostsCompat
