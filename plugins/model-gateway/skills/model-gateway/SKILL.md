@@ -39,7 +39,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup    # finishes the wiring
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
 needs a real TTY). `env --write-user` writes `~/.claude/settings.json` for every project.
-`/workbench:update-toolshed` writes that block and reconciles leftover per-project wiring. A project
+`/quartermaster:update-toolshed` writes that block and reconciles leftover per-project wiring. A project
 `settings.local.json` `env` block overrides user settings completely, so run `doctor` when a project
 has its own env settings and the Codex rows are missing: it names the file that actually wins. All
 wiring changes apply to new Claude Code sessions, so restart after the write. The Codex rows appear in `/model` labeled "From gateway".

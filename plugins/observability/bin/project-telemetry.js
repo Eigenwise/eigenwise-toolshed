@@ -329,7 +329,7 @@ async function main() {
   if (options.disable) {
     const result = disableProjectTelemetry(projectDir);
     if (!result.changed) {
-      process.stdout.write('Project telemetry was not enabled by Workbench.\n');
+      process.stdout.write('Project telemetry was not enabled by Observability.\n');
       return;
     }
     const unwired = result.directories.filter((entry) => entry.changed);
