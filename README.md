@@ -17,16 +17,17 @@ Nobody reads the docs for a plugin. Fair enough, most plugins are one command
 and a config key. These are not that.
 
 Sidequest sends your work to different models and runs them in worktrees.
-Workbench writes config into your projects. Model Gateway puts other providers
-in your `/model` picker. Live Rules injects matching text into Claude's context
-when rules apply. Install these blind and you WILL see behavior you didn't ask
-for, with no idea which plugin did it.
+Quartermaster sets up projects, keeps Toolshed plugins current, and checks
+workspace health. Model Gateway puts other providers in your `/model` picker.
+Live Rules injects matching text into Claude's context when rules apply. Install
+these blind and you WILL see behavior you didn't ask for, with no idea which
+plugin did it.
 
 Twenty minutes up front saves you that.
 
 **[Read the Eigenwise Toolshed documentation](https://eigenwise.github.io/eigenwise-toolshed/)**
 
-Start with [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), then the page for whichever plugin you're installing: [Workbench](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), or the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/) for every skill, hook, and command.
+Start with [getting started](https://eigenwise.github.io/eigenwise-toolshed/getting-started/), then the page for whichever plugin you're installing: [Quartermaster](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/), [Sidequest](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/), or the [plugin reference](https://eigenwise.github.io/eigenwise-toolshed/reference/) for every skill, hook, and command.
 
 This README is a signpost. The guides are over there.
 
@@ -36,8 +37,7 @@ This README is a signpost. The guides are over there.
 
 | Plugin | What it does |
 |--------|--------------|
-| [**workbench**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/workbench/) | A user-scope install and the shed's caretaker: Toolshed updates, health checks, and the freshness guard. Use `/workbench:update-toolshed` and `/workbench:toolshed-doctor`. |
-| [**quartermaster**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/) | Outfits your workspaces and keeps them earning their keep. `/quartermaster:setup` sets up a project (Toolshed core, stack plugins, rules, permissions) grounded in your actual session history; `/quartermaster:resupply` reads what you were working toward, proposes the capability that would make it easier one item at a time, then reports next pass whether it worked. |
+| [**quartermaster**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/quartermaster/) | Sets up projects, keeps Toolshed plugins current, and checks workspace health. Use `/quartermaster:setup`, `/quartermaster:update-toolshed`, and `/quartermaster:toolshed-doctor`. It also reads recent session history to find missing capabilities through `/quartermaster:resupply`. |
 | [**observability**](https://eigenwise.github.io/eigenwise-toolshed/observability/) | Local, metadata-only telemetry: a loopback observer writing to SQLite on your machine, an optional statusline for live context and usage, and an OpenTelemetry Collector that can forward redacted signals to Grafana. Off until you opt a repository in. |
 | [**model-gateway**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/model-gateway/) | Puts ChatGPT/Codex and Grok subscription models in Claude Code's `/model` picker through a local gateway. |
 | [**sidequest**](https://eigenwise.github.io/eigenwise-toolshed/getting-started/sidequest/) | The Toolshed's core work board and board-first orchestration loop. Tickets are classified into categories that route each one to a concrete model and reasoning effort, then dispatched to token-gated executors. Side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in. |
@@ -54,34 +54,26 @@ Use this path for a first install:
    ```text
    /plugin marketplace add Eigenwise/eigenwise-toolshed
    ```
-2. Install Workbench and Quartermaster at user scope:
+2. Install Quartermaster in the project you want to prepare:
    ```text
-   /plugin install workbench@eigenwise-toolshed --scope user
-   /plugin install quartermaster@eigenwise-toolshed --scope user
+   /plugin install quartermaster@eigenwise-toolshed --scope project
    ```
-3. Reload the plugins:
+3. Reload the plugin:
    ```text
    /reload-plugins
    ```
-4. In any project, run `/quartermaster:setup` or ask **"set up a Claude workspace here"**. It mines your session history, interviews you, then installs and configures every other plugin for that project. You do not need to install them by hand.
+4. From the project directory, run `/quartermaster:setup` or ask **"set up a Claude workspace here"**. It mines your session history, interviews you, then installs and configures the other plugins for that project. You do not need to install them by hand.
 
-| Plugin scope | Use it for |
-|--------------|------------|
-| **Workbench: user** | It keeps every workspace fresh and healthy. A second project-scoped copy loads its hooks twice. |
-| **Quartermaster: user** | Its session tallies, resupply passes, and decision ledger span every project. |
-| **Model Gateway: user, required** | Its wiring is global-only and writes `~/.claude/settings.json`. Its keepalive hook must be live in every project and every executor worktree. There is no project-scoped wiring anymore. |
-| **Observability: user** | Its observer is one process per machine, with local telemetry opt-in for each repository. |
-| **Everything else: project** | Sidequest, codebase-mapper, and live-rules keep their config with the repo. `/quartermaster:setup` installs them for you. |
+Every Toolshed plugin installs with project scope. Quartermaster can install and update the selected plugins for the project. Observability still runs one managed observer per machine, while telemetry stays opt-in for each repository.
 
 <details>
 <summary>Installing by hand instead</summary>
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install workbench@eigenwise-toolshed --scope user
-/plugin install quartermaster@eigenwise-toolshed --scope user
-/plugin install model-gateway@eigenwise-toolshed --scope user
-/plugin install observability@eigenwise-toolshed --scope user
+/plugin install quartermaster@eigenwise-toolshed --scope project
+/plugin install model-gateway@eigenwise-toolshed --scope project
+/plugin install observability@eigenwise-toolshed --scope project
 /plugin install sidequest@eigenwise-toolshed --scope project
 /plugin install codebase-mapper@eigenwise-toolshed --scope project
 /plugin install live-rules@eigenwise-toolshed --scope project

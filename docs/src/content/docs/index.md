@@ -18,7 +18,7 @@ template: splash
   <div class="shed-grid">
     <article class="shed-card card">
       <h2>Install and maintain Toolshed</h2>
-      <p><a href="./getting-started/workbench/">Workbench</a> installs and updates Toolshed plugins, then checks workspace health.</p>
+      <p><a href="./getting-started/quartermaster/">Quartermaster</a> installs and updates Toolshed plugins, then checks workspace health and helps set up projects.</p>
     </article>
     <article class="shed-card card">
       <h2>Set up a project</h2>
