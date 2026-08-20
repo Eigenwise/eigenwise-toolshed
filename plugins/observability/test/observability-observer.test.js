@@ -590,6 +590,29 @@ test('hook spool drain keeps committed rows out of the next attempt after its bu
   assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
 });
 
+test('hook spool drain finishes late final batches and records success', async (t) => {
+  const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-late-final-batch-'));
+  t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
+  const spoolPath = path.join(spoolDirectory, 'hook-spool.jsonl');
+  fs.writeFileSync(spoolPath, '{"event":"one"}\n');
+  const state = { consecutive_failures: 2, last_error: { code: 'SQLITE_BUSY' } };
+  const store = {
+    async ingestBatch() {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return [{ accepted: true, duplicate: false }];
+    },
+  };
+
+  assert.deepEqual(
+    await drainHookSpool({ spoolPath, store, batchSize: 1, drainBudgetMs: 10, failureState: state }),
+    { drained: 1, duplicates: 0, rejected: 0, malformed: 0, droppedBytes: 0 },
+  );
+  assert.equal(fs.existsSync(`${spoolPath}.draining`), false);
+  assert.equal(state.consecutive_failures, 0);
+  assert.equal(state.last_error, null);
+  assert.equal(typeof state.last_success_at, 'string');
+});
+
 test('health reports a hook spool drain that remains in flight past its deadline', async (t) => {
   const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-stalled-spool-'));
   t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
