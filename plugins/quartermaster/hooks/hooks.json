@@ -1,5 +1,5 @@
 {
-  "description": "quartermaster: a SessionEnd tally of this session's friction (streamed locally, no LLM, no network) and a SessionStart line that keeps the capability-capture charter in front of Claude (turn the thing done three times into a skill, map entry, rule, or measurement) and has Claude proactively offer a focused optimization round once enough unreviewed sessions or friction events pile up. Neither hook analyzes content or changes anything; current or explicit standing user permission authorizes the round, and each recommendation is separately approved unless the same standing permission covers that class of change.",
+  "description": "quartermaster: a SessionEnd tally of this session's friction (streamed locally, no LLM, no network) and a SessionStart line that keeps the capability-capture charter in front of Claude (turn the thing done three times into a skill, map entry, rule, or measurement) and has Claude proactively offer a focused optimization round once enough unreviewed sessions or friction events pile up. Neither hook analyzes content or changes anything; current or explicit standing user permission authorizes the round, and each recommendation is separately approved unless the same standing permission covers that class of change. It also reports local Toolshed freshness health and warns when this session loaded older plugin code.",
   "hooks": {
     "SessionStart": [
       {
@@ -16,6 +16,26 @@
             "timeout": 10
           }
         ]
+      },
+      {
+        "matcher": "startup|resume",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/session-start-freshness.js\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/billing-path-check.js\"",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/marketplace-freshness-cache.js\"",
+            "timeout": 2
+          }
+        ]
       }
     ],
     "SessionEnd": [
@@ -25,6 +45,17 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end-tally.js\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/user-prompt-freshness.js\"",
+            "timeout": 2
           }
         ]
       }

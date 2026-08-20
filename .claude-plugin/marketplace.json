@@ -8,26 +8,6 @@
   "version": "3.493.0",
   "plugins": [
     {
-      "name": "workbench",
-      "source": "./plugins/workbench",
-      "description": "Set up and maintain a Claude Code workspace, and the front door to the rest of the Toolshed: initialize project-side configuration, install and update plugins, diagnose local health, and wire up local observability.",
-      "version": "0.89.0",
-      "author": {
-        "name": "Eigenwise"
-      },
-      "homepage": "https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/workbench",
-      "repository": "https://github.com/Eigenwise/eigenwise-toolshed",
-      "license": "MIT",
-      "category": "productivity",
-      "keywords": [
-        "workspace",
-        "setup",
-        "maintenance",
-        "health",
-        "observability"
-      ]
-    },
-    {
       "name": "observability",
       "source": "./plugins/observability",
       "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Prompts, responses, code, tool inputs and results, credentials, and environment values are never stored. Every sink beyond local SQLite is opt-in.",
@@ -122,7 +102,7 @@
     {
       "name": "quartermaster",
       "source": "./plugins/quartermaster",
-      "description": "Works out what your workspace is short of and gets it. Reads what your recent Claude Code sessions were actually working toward, then asks what is missing against that: a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving, and the setup pushing back at you. A SessionStart line keeps Claude watching for the task done three times that should become a skill, map entry, rule, or measurement, offering to capture it in the moment. A SessionEnd hook tallies each session locally (no LLM, no network); once enough piles up, a nudge has Claude run the resupply skill on its own: it mines that history and proposes one change at a time, each needing your approval; the next pass reports whether what you applied actually helped. Its setup skill outfits a new project from what your history shows you keep needing.",
+      "description": "Works out what your workspace is short of and gets it. Reads what your recent Claude Code sessions were actually working toward, then asks what is missing against that: a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving, and the setup pushing back at you. A SessionStart line keeps Claude watching for the task done three times that should become a skill, map entry, rule, or measurement, offering to capture it in the moment. A SessionEnd hook tallies each session locally (no LLM, no network); once enough piles up, a nudge has Claude run the resupply skill on its own: it mines that history and proposes one change at a time, each needing your approval; the next pass reports whether what you applied actually helped. Its setup skill outfits a new project from what your history shows you keep needing. It also keeps Eigenwise Toolshed plugins current, checks workspace health, and warns when an open session has loaded stale plugin code.",
       "version": "0.5.5",
       "author": {
         "name": "Eigenwise"
