@@ -7,7 +7,6 @@
  */
 
 const mcp = require('../lib/mcp.js');
-const { reapMcpSiblings } = require('../lib/mcp-process-lifecycle.js');
 
 const pending = new Set<Promise<void>>();
 
@@ -41,8 +40,16 @@ function handleLine(line?: any) {
 }
 
 function main() {
-  reapMcpSiblings();
   let buffer = '';
+  let shuttingDown = false;
+  const shutdown = async () => {
+    if (shuttingDown) return;
+    shuttingDown = true;
+    if (buffer.trim()) handleLine(buffer);
+    await Promise.allSettled(Array.from(pending));
+    process.exit(0);
+  };
+
   process.stdin.setEncoding('utf8');
   process.stdin.on('data', (chunk: string) => {
     buffer += chunk;
@@ -53,11 +60,8 @@ function main() {
       newline = buffer.indexOf('\n');
     }
   });
-  process.stdin.on('end', async () => {
-    if (buffer.trim()) handleLine(buffer);
-    await Promise.allSettled(Array.from(pending));
-    process.exit(0);
-  });
+  process.stdin.once('end', shutdown);
+  process.stdin.once('close', shutdown);
   process.stdin.resume();
 }
 
