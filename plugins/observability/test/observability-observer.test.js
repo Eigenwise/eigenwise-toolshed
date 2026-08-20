@@ -434,45 +434,232 @@ test('outbox transport deadlines release the drainer for the next tick', async (
   assert.equal(sends, 2);
 });
 
-test('refuses stale observer versions and removes them after the installed version advances', async (t) => {
+test('keeps an observer serving when the newest installed registry path is missing', async (t) => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-home-'));
-  t.after(() => fs.rmSync(home, { recursive: true, force: true }));
   const registryDirectory = path.join(home, '.claude', 'plugins');
   fs.mkdirSync(registryDirectory, { recursive: true });
-  fs.writeFileSync(path.join(registryDirectory, 'installed_plugins.json'), JSON.stringify({
+  const registryFile = path.join(registryDirectory, 'installed_plugins.json');
+  fs.writeFileSync(registryFile, JSON.stringify({
     plugins: {
-      'observability@eigenwise-toolshed': [{ version: '0.5.2' }, { version: '0.5.3' }],
+      'observability@eigenwise-toolshed': [{ version: '0.5.2' }],
     },
   }));
-  assert.equal(installedPluginVersion(home), '0.5.3');
+  assert.equal(installedPluginVersion(home), '0.5.2');
 
-  const staleObserver = createObserver({
-    databaseFile: path.join(home, 'stale.db'),
-    pluginVersion: '0.5.2',
-    home,
-    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
-  });
-  await assert.rejects(staleObserver.start(), /older than installed version 0\.5\.3/);
-  await staleObserver.close();
-
-  let installedVersion = '0.5.2';
   const observer = createObserver({
     databaseFile: path.join(home, 'active.db'),
     pluginVersion: '0.5.2',
+    home,
     host: '127.0.0.1',
     port: 0,
-    getInstalledPluginVersion: () => installedVersion,
     sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
   });
-  t.after(() => observer.close());
+  t.after(async () => {
+    await observer.close();
+    await removeTemporaryDirectory(home);
+  });
   const address = await observer.start();
-  installedVersion = '0.5.3';
+  fs.writeFileSync(registryFile, JSON.stringify({
+    plugins: {
+      'observability@eigenwise-toolshed': [
+        { version: '0.5.2' },
+        { version: '0.5.3', installPath: path.join(home, 'missing-observability-install') },
+      ],
+    },
+  }));
+
   const response = await fetch(`http://127.0.0.1:${address.port}/health`);
-  assert.equal(response.status, 503);
+  assert.equal(response.status, 200);
   const health = await response.json();
-  assert.equal(health.ok, false);
+  assert.equal(health.ok, true);
   assert.equal(health.pluginVersion, '0.5.2');
-  assert.equal(health.error, 'plugin_version_outdated');
+});
+
+async function availableLoopbackPort() {
+  const server = require('node:net').createServer();
+  await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
+  const { port } = server.address();
+  await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+  return port;
+}
+
+async function waitForHealth(port, pluginVersion) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}/health`);
+      const health = await response.json();
+      if (response.status === 200 && health.pluginVersion === pluginVersion) return health;
+    } catch {}
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Observer plugin ${pluginVersion} did not begin listening on port ${port}.`);
+}
+
+async function waitForProcessExit(pid) {
+  const deadline = Date.now() + 10_000;
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0);
+    } catch {
+      return;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+  }
+  throw new Error(`Observer process ${pid} did not exit.`);
+}
+
+async function removeTemporaryDirectory(directory) {
+  let error;
+  for (let attempt = 0; attempt < 30; attempt += 1) {
+    try {
+      fs.rmSync(directory, { recursive: true, force: true });
+      return;
+    } catch (caught) {
+      error = caught;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+  throw error;
+}
+
+test('SessionStart restores an unbound observer port after an old observer retires', async (t) => {
+  const { launchEnsure } = require('../lib/observability/ensure.js');
+  const setup = require('../bin/setup-observability.js');
+  const { writeObservabilityConfig } = require('../observability/sinks/index.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-arrival-'));
+  const dataDir = path.join(home, 'Eigenwise', 'Workbench');
+  const configFile = path.join(dataDir, 'observability.json');
+  const databaseFile = path.join(dataDir, 'observability.db');
+  const observerPort = await availableLoopbackPort();
+  const collectorPort = await availableLoopbackPort();
+  const successorRoot = path.resolve(__dirname, '..');
+  const successorVersion = require('../.claude-plugin/plugin.json').version;
+  fs.mkdirSync(path.join(home, '.claude', 'plugins'), { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  writeObservabilityConfig(configFile, {
+    observability: {
+      enabled: true,
+      sink: 'none',
+      dashboard: false,
+      ports: { observer: observerPort, collector: collectorPort, dashboard: 15433, dashboardOtlp: 15434 },
+      sinks: {},
+      managedVersion: successorVersion,
+      collectorVersion: setup.COLLECTOR_VERSION,
+    },
+  });
+  t.after(async () => {
+    let pid = null;
+    try {
+      pid = Number(fs.readFileSync(path.join(dataDir, 'observer.pid'), 'utf8').trim());
+    } catch {}
+    if (Number.isInteger(pid) && pid > 0) {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+      await waitForProcessExit(pid);
+    }
+    await removeTemporaryDirectory(home);
+  });
+
+  const oldObserver = createObserver({
+    databaseFile,
+    configFile,
+    home,
+    host: '127.0.0.1',
+    port: observerPort,
+    pluginVersion: '0.0.0',
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  await oldObserver.start();
+  fs.writeFileSync(path.join(home, '.claude', 'plugins', 'installed_plugins.json'), JSON.stringify({
+    plugins: {
+      'observability@eigenwise-toolshed': [
+        { version: '0.0.0', installPath: successorRoot },
+        { version: successorVersion, installPath: successorRoot },
+      ],
+    },
+  }));
+  assert.equal(installedPluginVersion(home), successorVersion);
+  await oldObserver.close();
+
+  assert.equal(await launchEnsure({
+    dataDir,
+    environment: { LOCALAPPDATA: home, WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+  }), true);
+  const successorHealth = await waitForHealth(observerPort, successorVersion);
+  assert.equal(successorHealth.ok, true);
+});
+
+test('hands a retired observer to the newest installed observer', async (t) => {
+  const setup = require('../bin/setup-observability.js');
+  const { writeObservabilityConfig } = require('../observability/sinks/index.js');
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-handoff-'));
+  const dataDir = path.join(home, 'data');
+  const configFile = path.join(dataDir, 'observability.json');
+  const databaseFile = path.join(dataDir, 'observability.db');
+  const registryDirectory = path.join(home, '.claude', 'plugins');
+  const registryFile = path.join(registryDirectory, 'installed_plugins.json');
+  const successorRoot = path.resolve(__dirname, '..');
+  const successorVersion = require('../.claude-plugin/plugin.json').version;
+  const observerPort = await availableLoopbackPort();
+  const collectorPort = await availableLoopbackPort();
+  fs.mkdirSync(registryDirectory, { recursive: true });
+  fs.mkdirSync(dataDir, { recursive: true });
+  writeObservabilityConfig(configFile, {
+    observability: {
+      enabled: true,
+      sink: 'none',
+      dashboard: false,
+      ports: { observer: observerPort, collector: collectorPort, dashboard: 15433, dashboardOtlp: 15434 },
+      sinks: {},
+      managedVersion: successorVersion,
+      collectorVersion: setup.COLLECTOR_VERSION,
+    },
+  });
+  fs.writeFileSync(registryFile, JSON.stringify({
+    plugins: { 'observability@eigenwise-toolshed': [{ version: '0.0.0', installPath: successorRoot }] },
+  }));
+  t.after(async () => {
+    let pid = null;
+    try {
+      pid = Number(fs.readFileSync(path.join(dataDir, 'observer.pid'), 'utf8').trim());
+    } catch {}
+    if (Number.isInteger(pid) && pid > 0) {
+      try { process.kill(pid, 'SIGTERM'); } catch {}
+      await waitForProcessExit(pid);
+    }
+    await removeTemporaryDirectory(home);
+  });
+
+  const handoffLogs = [];
+  const observer = createObserver({
+    databaseFile,
+    configFile,
+    home,
+    host: '127.0.0.1',
+    port: observerPort,
+    pluginVersion: '0.0.0',
+    environment: { WORKBENCH_OTELCOL_CONTRIB: process.execPath },
+    logger: { info(message) { handoffLogs.push(message); } },
+    sink: { id: 'none', egress: 'loopback', outbox: { enabled: false } },
+  });
+  await observer.start();
+  fs.writeFileSync(registryFile, JSON.stringify({
+    plugins: {
+      'observability@eigenwise-toolshed': [
+        { version: '0.0.0', installPath: successorRoot },
+        { version: successorVersion, installPath: successorRoot },
+      ],
+    },
+  }));
+  assert.equal(installedPluginVersion(home), successorVersion);
+
+  const retiringHealth = await fetch(`http://127.0.0.1:${observerPort}/health`);
+  assert.equal(retiringHealth.status, 503);
+  assert.equal((await retiringHealth.json()).error, 'plugin_version_outdated');
+  const successorHealth = await waitForHealth(observerPort, successorVersion);
+  assert.equal(successorHealth.ok, true);
+  assert.match(handoffLogs[0], /retiring plugin 0\.0\.0 for installed plugin/);
+  assert.match(handoffLogs[0], /lib[\\/]observability[\\/]ensure\.js/);
 });
 
 test('health reports an outbox that stopped attempting delivery', async (t) => {

@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
+const { spawn } = require('node:child_process');
 const { Worker } = require('node:worker_threads');
 const { DEFAULT_RETENTION_DAYS, openObservabilityStore } = require('../lib/observability/store.js');
 const { DEFAULT_DRAIN_BUDGET_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
@@ -141,19 +142,52 @@ function compareVersions(left, right) {
   return 0;
 }
 
-function installedPluginVersion(home = os.homedir()) {
+function installedPluginInstallation(home = os.homedir()) {
   try {
     const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const registry = JSON.parse(fs.readFileSync(registryFile, 'utf8'));
     const installations = registry.plugins?.['observability@eigenwise-toolshed'];
     if (!Array.isArray(installations)) return null;
     return installations
-      .map((installation) => installation?.version)
-      .filter((version) => typeof version === 'string')
-      .sort((left, right) => compareVersions(right, left))[0] || null;
+      .filter((installation) => typeof installation?.version === 'string')
+      .sort((left, right) => compareVersions(right.version, left.version))[0] || null;
   } catch {
     return null;
   }
+}
+
+function installedPluginVersion(home = os.homedir()) {
+  return installedPluginInstallation(home)?.version || null;
+}
+
+function installedEnsureScript(installation) {
+  if (typeof installation?.installPath !== 'string') return null;
+  const script = path.join(installation.installPath, 'lib', 'observability', 'ensure.js');
+  try {
+    return fs.statSync(script).isFile() ? script : null;
+  } catch {
+    return null;
+  }
+}
+
+function startObserverHandoff(successor, options = {}) {
+  const child = (options.spawn || spawn)(process.execPath, [
+    successor.ensureScript,
+    '--handoff',
+    '--data-dir', successor.dataDir,
+    '--config', successor.configFile,
+    '--observer-port', String(successor.port),
+  ], {
+    detached: true,
+    env: { ...process.env, ...(options.environment || {}) },
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  if (!child || !Number.isInteger(child.pid) || child.pid < 1) {
+    throw new Error(`Could not start installed observer handoff for plugin ${successor.installedVersion}.`);
+  }
+  if (typeof child.unref === 'function') child.unref();
+  return child.pid;
 }
 
 function outboxIsStalled(outboxHealth, retryIntervalMs, now = Date.now()) {
@@ -177,11 +211,28 @@ function createObserver(options = {}) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error(`Invalid observer port: ${options.port}`);
   const maxBodyBytes = Math.max(1024, Number(options.maxBodyBytes) || 1024 * 1024);
   const pluginVersion = options.pluginVersion || ownPluginVersion();
-  const getInstalledPluginVersion = options.getInstalledPluginVersion || (() => installedPluginVersion(options.home));
+  const getInstalledPluginInstallation = options.getInstalledPluginInstallation || (() => installedPluginInstallation(options.home));
+  const observerDataDir = path.dirname(options.databaseFile || defaultDatabaseFile());
+  const observerConfigFile = options.configFile || defaultConfigPath(observerDataDir);
+  const successor = () => {
+    const installation = getInstalledPluginInstallation();
+    const versionError = observerVersionError(pluginVersion, installation?.version);
+    if (!versionError) return { versionError: null };
+    const ensureScript = installedEnsureScript(installation);
+    if (!ensureScript) return { versionError: null, unavailableInstalledVersion: installation.version };
+    return {
+      versionError,
+      ensureScript,
+      installedVersion: installation.version,
+      dataDir: observerDataDir,
+      configFile: observerConfigFile,
+      port,
+    };
+  };
+  const staleObserverError = () => successor().versionError;
   const outboxRetryIntervalMs = Math.max(250, Number(options.outboxIntervalMs) || 1000);
   const hookSpoolDrainBudgetMs = Math.max(10, Math.min(60_000, Number(options.hookSpoolDrainBudgetMs) || DEFAULT_DRAIN_BUDGET_MS));
   const hookSpoolStallMs = Math.max(100, hookSpoolDrainBudgetMs * 4);
-  const staleObserverError = () => observerVersionError(pluginVersion, getInstalledPluginVersion());
   const overriddenOutbox = options.outboxEndpoint
     ? { enabled: true, endpoint: options.outboxEndpoint, headers: options.outboxHeaders || {}, allowRemote: false }
     : null;
@@ -357,8 +408,16 @@ function createObserver(options = {}) {
     ? outboxDrainer.flush().catch(() => null)
     : Promise.resolve(null);
   retireOutdatedObserver = () => {
-    if (retiring || !staleObserverError()) return;
+    const nextObserver = successor();
+    if (retiring || !nextObserver.versionError) return;
+    try {
+      (options.startObserverHandoff || startObserverHandoff)(nextObserver, options);
+    } catch (error) {
+      logger.error?.(`Observer handoff failed; plugin ${pluginVersion} remains active while installed plugin ${nextObserver.installedVersion} waits: ${error instanceof Error ? error.message : String(error)}`);
+      return;
+    }
     retiring = true;
+    logger.info?.(`Observer handoff: retiring plugin ${pluginVersion} for installed plugin ${nextObserver.installedVersion} via ${nextObserver.ensureScript}.`);
     if (maintenanceStartTimer) clearTimeout(maintenanceStartTimer);
     if (maintenanceTimer) clearInterval(maintenanceTimer);
     if (spoolTimer) clearInterval(spoolTimer);
@@ -509,8 +568,8 @@ async function main() {
 }
 
 if (require.main === module) {
-  main().catch(() => {
-    process.stderr.write('Workbench observer failed to start.\n');
+  main().catch((error) => {
+    process.stderr.write(`Workbench observer failed to start: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });
 }
