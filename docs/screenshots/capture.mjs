@@ -46,6 +46,7 @@ const FIXTURE = Object.freeze({
         { key: 'receipt-tax-copy', title: 'Explain estimated tax on receipts', description: 'Pending receipts implied that estimated tax was final. The revised copy distinguishes authorization from settlement.', status: 'done', priority: 'low', category: 'content', story: 'checkout', assignee: 'Noor Hassan', labels: ['content', 'tax'], age: 'yesterday' },
         { key: 'winter-promotion', title: 'Retire the winter promotion', description: 'The seasonal landing page and coupon have expired. Remove the campaign entry points while keeping the report available.', status: 'done', priority: 'low', category: 'content', story: 'discovery', assignee: 'Eli Brooks', labels: ['campaign', 'cleanup'], age: '3d ago', archived: true },
         { key: 'legacy-coupon', title: 'Remove the legacy coupon banner', description: 'The old banner still appears on bookmarked sale URLs. Redirect those visits to the current offers page.', status: 'done', priority: 'normal', category: 'product', story: 'checkout', assignee: 'Maya Chen', labels: ['checkout', 'cleanup'], age: '5d ago', archived: true },
+        { key: 'spring-lookbook', title: 'Archive the spring lookbook', description: 'The spring editorial collection has left the main navigation. Keep its campaign results available while retiring the storefront route.', status: 'done', priority: 'low', category: 'content', story: 'discovery', assignee: 'Noor Hassan', labels: ['campaign', 'content'], age: '9d ago', archived: true },
       ],
     },
     {
@@ -55,10 +56,16 @@ const FIXTURE = Object.freeze({
       tickets: [
         { key: 'stock-reservation', title: 'Protect stock reservations', description: 'Two pickers can reserve the last unit during a short race. Make the reservation atomic and return a clear conflict state.', status: 'todo', priority: 'urgent', category: 'reliability', story: 'same-day', assignee: 'Maya Chen', labels: ['inventory', 'backend'], age: '9m ago' },
         { key: 'carrier-cutoff', title: 'Show the local carrier cutoff', description: 'The checkout promise uses warehouse time instead of the shopper-facing cutoff. Return the correct local message for each region.', status: 'todo', priority: 'high', category: 'product', story: 'same-day', assignee: 'Diego Park', labels: ['shipping', 'checkout'], age: '31m ago' },
+        { key: 'mobile-address', title: 'Show mobile address exceptions', description: 'Small screens hide the apartment warning below the sticky action bar. Keep the exception beside the address and preserve the corrected value.', status: 'todo', priority: 'normal', category: 'product', story: 'same-day', assignee: 'Noor Hassan', labels: ['mobile', 'shipping'], age: '44m ago' },
         { key: 'pick-list', title: 'Condense the mobile pick list', description: 'Pickers lose the bin location when item names wrap. Keep location and quantity pinned beside each line.', status: 'doing', priority: 'normal', category: 'product', story: 'same-day', assignee: 'Priya Shah', labels: ['warehouse', 'mobile'], age: '58m ago' },
-        { key: 'refund-webhook', title: 'Reconcile refund webhooks', description: 'Partial refunds can arrive before the shipment update. Buffer the pair and publish one consistent order state.', status: 'doing', priority: 'high', category: 'analytics', assignee: 'Jonah Reed', labels: ['returns', 'webhooks'], age: '2h ago' },
+        { key: 'refund-webhook', title: 'Reconcile refund webhooks', description: 'Partial refunds can arrive before the shipment update. Buffer the pair and publish one consistent order state.', status: 'done', priority: 'high', category: 'analytics', assignee: 'Jonah Reed', labels: ['returns', 'webhooks'], age: '2h ago' },
+        { key: 'mobile-packing', title: 'Summarize mobile packing exceptions', description: 'Supervisors need a compact list of skipped scans while walking the floor. Group exceptions by wave and keep the affected bin visible.', status: 'doing', priority: 'normal', category: 'analytics', story: 'same-day', assignee: 'Eli Brooks', labels: ['mobile', 'warehouse'], age: '2h ago' },
+        { key: 'scan-timeout', title: 'Recover stalled dock scans', description: 'A scanner that wakes from sleep can leave the loading task pending forever. Expire the old attempt and let the operator retry the same carton.', status: 'doing', priority: 'urgent', category: 'reliability', story: 'same-day', assignee: 'Diego Park', labels: ['warehouse', 'reliability'], age: '3h ago' },
         { key: 'tracking-email', title: 'Launch shipment tracking email', description: 'The new email groups split shipments and names the next expected scan. Support approved the copy and fallback state.', status: 'done', priority: 'normal', category: 'content', story: 'same-day', assignee: 'Noor Hassan', labels: ['email', 'shipping'], age: 'yesterday' },
+        { key: 'mobile-dock', title: 'Finish the mobile dock dashboard', description: 'Dock leads can now see late trailers and open doors without pinching the desktop table. The final pass keeps status colors readable outdoors.', status: 'done', priority: 'normal', category: 'analytics', story: 'same-day', assignee: 'Priya Shah', labels: ['mobile', 'analytics'], age: '2d ago' },
         { key: 'carrier-table', title: 'Archive the holiday carrier table', description: 'Holiday exceptions are no longer active. Preserve the decisions in the runbook and remove the table from daily views.', status: 'done', priority: 'low', category: 'content', story: 'same-day', assignee: 'Eli Brooks', labels: ['operations', 'cleanup'], age: '7d ago', archived: true },
+        { key: 'overnight-promise', title: 'Retire the overnight promise test', description: 'The regional promise experiment has ended. Save its result and remove the stale assignment rule from fulfillment planning.', status: 'done', priority: 'normal', category: 'analytics', story: 'same-day', assignee: 'Jonah Reed', labels: ['shipping', 'experiment'], age: '11d ago', archived: true },
+        { key: 'gift-wrap-station', title: 'Close the gift-wrap station pilot', description: 'The pilot finished with a smaller permanent station plan. Archive the temporary queue and keep the staffing notes with the decision.', status: 'done', priority: 'low', category: 'content', assignee: 'Maya Chen', labels: ['warehouse', 'pilot'], age: '14d ago', archived: true },
       ],
     },
     {
@@ -69,6 +76,9 @@ const FIXTURE = Object.freeze({
         { key: 'vip-tags', title: 'Tag high-value conversations', description: 'Support needs a quiet signal for shoppers with recent high-value orders. Add the tag without exposing order totals in the queue.', status: 'todo', priority: 'low', category: 'analytics', assignee: 'Eli Brooks', labels: ['support', 'crm'], age: '16m ago' },
         { key: 'order-sidebar', title: 'Add order context to the sidebar', description: 'Agents switch tabs to check fulfillment and refund state. Show the latest safe order summary beside the conversation.', status: 'doing', priority: 'high', category: 'product', assignee: 'Maya Chen', labels: ['support', 'orders'], age: '49m ago' },
         { key: 'macro-audit', title: 'Audit delayed-order macros', description: 'Several saved replies still quote the old delivery window. Replace them with the current regional guidance.', status: 'done', priority: 'normal', category: 'content', assignee: 'Diego Park', labels: ['support', 'content'], age: '2d ago' },
+        { key: 'refund-macro', title: 'Archive the refund delay macro', description: 'The payments migration removed the delay this reply described. Keep the response history and retire it from the agent picker.', status: 'done', priority: 'low', category: 'content', assignee: 'Noor Hassan', labels: ['support', 'cleanup'], age: '8d ago', archived: true },
+        { key: 'legacy-inbox', title: 'Retire the legacy priority inbox', description: 'The unified queue now owns every escalation path. Archive the old inbox rules after preserving the weekly volume comparison.', status: 'done', priority: 'normal', category: 'analytics', assignee: 'Priya Shah', labels: ['support', 'analytics'], age: '12d ago', archived: true },
+        { key: 'courier-script', title: 'Close the courier callback script', description: 'Carriers now send structured delay updates directly. Remove the manual callback script while retaining its escalation contacts.', status: 'done', priority: 'low', category: 'product', assignee: 'Jonah Reed', labels: ['support', 'shipping'], age: '16d ago', archived: true },
       ],
     },
   ],
@@ -139,6 +149,7 @@ function fixtureText(value) {
 
 function assertSyntheticFixture() {
   const text = fixtureText(FIXTURE);
+  const tickets = FIXTURE.projects.flatMap((project) => project.tickets);
   // Only genuinely identifying environment values: paths and the username.
   // Matching every env value false-positives on generic words ("high", "true")
   // that legitimately appear in the fixture.
@@ -147,6 +158,9 @@ function assertSyntheticFixture() {
     ...Object.values(process.env).filter((value) => typeof value === 'string' && /[\\/]/.test(value)),
   ].filter((value) => typeof value === 'string' && value.length > 3);
   assert.match(text, /acme-webshop/);
+  assert.equal(FIXTURE.projects.length, 3);
+  assert.equal(tickets.filter((ticket) => !ticket.archived).length, 25);
+  assert.equal(tickets.filter((ticket) => ticket.archived).length, 9);
   for (const value of forbidden) assert.equal(text.includes(value), false, `Synthetic fixture contains environment text: ${value}`);
 }
 
@@ -347,39 +361,57 @@ async function captureSidequest(browser, port) {
   const skipTour = page.getByRole('button', { name: 'Skip', exact: true });
   if (await skipTour.isVisible()) await skipTour.click();
 
-  const capture = async (filename, fullPage = true) => {
+  const capture = async (filename, content) => {
     await maskGeneratedBoardText(page);
-    await page.screenshot({ path: path.join(outputDir, filename), fullPage });
+    await content.waitFor();
+    const contentBounds = await content.boundingBox();
+    const viewport = page.viewportSize();
+    assert.ok(contentBounds, `Could not measure screenshot content for ${filename}`);
+    assert.ok(viewport, `Could not read screenshot viewport for ${filename}`);
+    const contentHeight = Math.min(viewport.height, Math.ceil(contentBounds.y + contentBounds.height + 24));
+    await page.screenshot({
+      path: path.join(outputDir, filename),
+      clip: { x: 0, y: 0, width: viewport.width, height: contentHeight },
+    });
   };
 
-  await capture('sidequest-kanban.png');
+  const board = page.locator('.board');
+  await capture('sidequest-kanban.png', board);
 
   await page.getByRole('textbox', { name: 'Search tickets' }).fill('mobile');
-  await page.getByRole('button', { name: 'normal', exact: true }).click();
-  await capture('sidequest-filtered-board.png');
+  const priorityFilter = page.locator('[aria-label="Priority filter"]');
+  const normalPriority = priorityFilter.getByRole('button', { name: 'normal', exact: true });
+  await normalPriority.click();
+  await page.waitForFunction(() => document.querySelector('[aria-label="Priority filter"] button.active')?.textContent?.trim() === 'normal');
+  assert.equal(await board.locator('[data-tour="ticket-card"]').count(), 6, 'Synthetic mobile and normal filters did not produce six cards');
+  await capture('sidequest-filtered-board.png', board);
   await page.getByRole('textbox', { name: 'Search tickets' }).fill('');
-  await page.getByRole('button', { name: 'all', exact: true }).click();
+  await priorityFilter.getByRole('button', { name: 'all', exact: true }).click();
 
   await page.getByRole('button', { name: 'Notifications' }).click();
-  await capture('sidequest-notifications.png', false);
+  await capture('sidequest-notifications.png', page.locator('section.inbox'));
   await page.getByRole('button', { name: 'Notifications' }).click();
 
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
-  await page.getByRole('dialog', { name: 'Settings' }).waitFor();
-  await capture('sidequest-settings.png', false);
+  const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
+  await settingsDialog.waitFor();
+  await capture('sidequest-settings.png', settingsDialog);
   await page.getByRole('button', { name: 'Close settings' }).click();
 
   const secondProject = page.locator('aside[aria-label="Boards"] nav button').filter({ hasText: 'Acme Fulfillment' });
   await secondProject.click();
   await page.getByRole('heading', { name: 'Acme Fulfillment', exact: true }).waitFor();
   await page.waitForTimeout(200);
-  await capture('sidequest-second-project.png');
+  assert.equal(await board.locator('[data-tour="ticket-card"]').count(), 9, 'Synthetic Fulfillment board did not render nine active tickets');
+  await capture('sidequest-second-project.png', board);
 
   await page.locator('aside[aria-label="Boards"] nav > button').first().click();
   await page.locator('.archive-button').click();
+  const archive = page.locator('section.archive');
   await page.getByText('Archived tickets', { exact: true }).waitFor();
   await page.getByText('Archive the holiday carrier table', { exact: true }).waitFor();
-  await capture('sidequest-archive.png');
+  assert.equal(await archive.locator('article').count(), 9, 'Synthetic archive did not render nine tickets');
+  await capture('sidequest-archive.png', archive);
   await page.getByRole('button', { name: 'Back to board' }).click();
 
   const primaryProject = page.locator('aside[aria-label="Boards"] nav button').filter({ hasText: 'Acme Webshop' });
@@ -388,7 +420,7 @@ async function captureSidequest(browser, port) {
   await page.getByText('Build cart summary', { exact: true }).click();
   const category = page.getByRole('combobox', { name: 'Category' });
   assert.match((await category.textContent()) ?? '', /Product/, 'Synthetic ticket detail did not load its board category');
-  await capture('sidequest-ticket-detail.png', false);
+  await capture('sidequest-ticket-detail.png', page.getByRole('dialog'));
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await page.close();
 }

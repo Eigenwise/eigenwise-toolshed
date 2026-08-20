@@ -44,19 +44,19 @@ The project rail keeps every registered board in one place, with ticket counts a
 
 ![Sidequest dashboard with three synthetic projects and populated todo, doing, and done columns](../../../assets/screenshots/sidequest-kanban.png)
 
-*Synthetic demo data showing three active project boards and 21 tickets.*
+*Synthetic demo data showing three active project boards and 25 tickets.*
 
 Select a project in the rail when you need its focused board. The columns keep that project's open and completed work visible without losing the rest of the rail.
 
 ![Acme Fulfillment synthetic board selected in the Sidequest project rail](../../../assets/screenshots/sidequest-second-project.png)
 
-*Synthetic demo data showing the Acme Fulfillment board selected from a three-project rail.*
+*Synthetic demo data showing nine active Fulfillment tickets across todo, doing, and done.*
 
 The toolbar searches refs, titles, and labels, then combines that query with priority, story, assignee, and sort controls. Active filters stay visible, so you can tell why a card is in the result.
 
 ![Sidequest board with mobile typed into search and the normal priority filter active](../../../assets/screenshots/sidequest-filtered-board.png)
 
-*Synthetic demo data showing a mobile search narrowed to normal-priority tickets.*
+*Synthetic demo data showing six mobile tickets narrowed to normal priority.*
 
 The inbox collects comments, reminders, ticket creation, and status activity across projects. Its tabs separate work that needs you from the wider activity stream.
 
@@ -72,9 +72,9 @@ Open a ticket to edit its fields and read the working context in one place. The 
 
 Completed work can move into the archive without disappearing. The archive view keeps the source board, priority, age, and restore action with each ticket.
 
-![Sidequest archive containing three synthetic tickets from two projects](../../../assets/screenshots/sidequest-archive.png)
+![Sidequest archive containing nine synthetic tickets from three projects](../../../assets/screenshots/sidequest-archive.png)
 
-*Synthetic demo data showing archived storefront and fulfillment work.*
+*Synthetic demo data showing archived storefront, fulfillment, and support work.*
 
 Settings covers routing profiles, model fallback, theme, notification preferences, and the guided tour. Open it when you need to change how the board behaves rather than the work on a ticket.
 
