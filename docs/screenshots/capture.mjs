@@ -19,12 +19,16 @@ const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
-const SYNTHETIC_NOW = Date.parse('2026-08-20T12:00:00.000Z');
+const SYNTHETIC_NOW = Math.floor(Date.now() / 60_000) * 60_000;
 const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
 const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
 const SYNTHETIC_BUCKETS = Math.floor((SYNTHETIC_NOW - SYNTHETIC_START) / SYNTHETIC_INTERVAL) + 1;
+const FIXTURE_WORKLOAD_START_HOUR = 13;
 const { generatedDashboards } = createRequire(import.meta.url)(
   path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'dashboard-generator.js'),
+);
+const { MODEL_PRICES_PER_MILLION, gatewayModelCostTargets, gatewayTotalCostExpression } = createRequire(import.meta.url)(
+  path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'model-prices.js'),
 );
 
 const FIXTURE = Object.freeze({
@@ -295,7 +299,110 @@ async function postOtlp(otlpPort, signal, payload) {
   assert.equal(response.ok, true, `Synthetic OTLP ${signal} export failed: ${response.status} ${response.statusText}`);
 }
 
-async function seedGrafana(otlpPort) {
+function recordAttribute(record, key) {
+  const attribute = record.attributes.find((candidate) => candidate.key === key);
+  assert.ok(attribute, `Synthetic gateway record is missing ${key}`);
+  return Object.values(attribute.value)[0];
+}
+
+function expectedGatewayCosts(records) {
+  const costs = new Map();
+  for (const { record } of records) {
+    if (record.body.stringValue !== 'gateway.token.usage') continue;
+    const model = String(recordAttribute(record, 'workbench.attribute.model'));
+    const prices = MODEL_PRICES_PER_MILLION[model];
+    assert.ok(prices, `Synthetic gateway model ${model} is not priced`);
+    const cost = (
+      (recordAttribute(record, 'workbench.measurement.input_tokens.value') * prices.input)
+      + (recordAttribute(record, 'workbench.measurement.output_tokens.value') * prices.output)
+      + (recordAttribute(record, 'workbench.measurement.cache_read_tokens.value') * prices.cacheRead)
+    ) / 1_000_000;
+    costs.set(model, (costs.get(model) ?? 0) + cost);
+  }
+  return costs;
+}
+
+function numericSeries(queryResult) {
+  const result = queryResult.data?.result;
+  assert.ok(Array.isArray(result), `Grafana datasource query failed: ${JSON.stringify(queryResult)}`);
+  return result.map(({ metric, values, value }) => ({
+    labels: metric ?? {},
+    values: (values ?? [value]).map(([, sample]) => Number(sample)),
+  }));
+}
+
+function syntheticBucketCounts(queryResult) {
+  const result = queryResult.data?.result;
+  assert.ok(Array.isArray(result), `Grafana datasource query failed: ${JSON.stringify(queryResult)}`);
+  const counts = Array(SYNTHETIC_BUCKETS).fill(0);
+  for (const { values = [] } of result) {
+    for (const [timestamp] of values) {
+      const recordTime = Number(BigInt(timestamp) / 1_000_000n);
+      const index = Math.floor((recordTime - SYNTHETIC_START) / SYNTHETIC_INTERVAL);
+      if (index >= 0 && index < SYNTHETIC_BUCKETS) counts[index] += 1;
+    }
+  }
+  return counts;
+}
+
+async function queryGrafana(grafanaPort, expression, from, to, instant = false) {
+  const params = new URLSearchParams({
+    query: expression,
+    start: String(from / 1_000),
+    end: String(to / 1_000),
+    step: String(SYNTHETIC_INTERVAL / 1_000),
+    limit: '5000',
+    direction: 'forward',
+  });
+  if (instant) params.set('time', String(to / 1_000));
+  const endpoint = instant ? 'query' : 'query_range';
+  const response = await fetch(`http://127.0.0.1:${grafanaPort}/api/datasources/proxy/uid/loki/loki/api/v1/${endpoint}?${params}`);
+  if (!response.ok) throw new Error(`Grafana datasource query failed: ${response.status} ${response.statusText}: ${await response.text()}`);
+  return response.json();
+}
+
+function singleSeriesValue(series, description) {
+  const values = series.values.filter((value) => value !== null);
+  assert.equal(values.length, 1, `${description} returned ${values.length} values instead of one`);
+  return values[0];
+}
+
+async function verifyGrafanaSeed(grafanaPort, expectedCosts) {
+  const bucketExpression = '{service_name="workbench-observer"} |= "gateway.token.usage"';
+  const totalExpression = gatewayTotalCostExpression('23h1m1ms');
+  const modelExpression = gatewayModelCostTargets()[0].expr.replaceAll('$bucket', '23h1m1ms');
+  let failure;
+  for (let attempt = 0; attempt < 240; attempt += 1) {
+    try {
+      const [bucketResult, totalResult, modelResult] = await Promise.all([
+        queryGrafana(grafanaPort, bucketExpression, SYNTHETIC_START, SYNTHETIC_NOW + 1),
+        queryGrafana(grafanaPort, totalExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
+        queryGrafana(grafanaPort, modelExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
+      ]);
+      const bucketValues = syntheticBucketCounts(bucketResult);
+      assert.equal(bucketValues.length, SYNTHETIC_BUCKETS, `Grafana returned ${bucketValues.length} synthetic buckets instead of ${SYNTHETIC_BUCKETS}`);
+      for (const [index, value] of bucketValues.entries()) assert.ok(value >= 1, `Synthetic bucket ${index + 1} has no gateway records`);
+      const total = singleSeriesValue(numericSeries(totalResult)[0], 'Total spend');
+      const expectedTotal = [...expectedCosts.values()].reduce((sum, cost) => sum + cost, 0);
+      const actualCosts = new Map(numericSeries(modelResult).map((series) => [series.labels.workbench_attribute_model, singleSeriesValue(series, `Cost for ${series.labels.workbench_attribute_model}`)]));
+      assert.equal(actualCosts.size, expectedCosts.size, `Grafana returned ${actualCosts.size} model totals instead of ${expectedCosts.size}`);
+      for (const [model, expectedCost] of expectedCosts) {
+        const actualCost = actualCosts.get(model);
+        assert.ok(actualCost !== undefined, `Grafana did not return a total for ${model}`);
+        assert.ok(Math.abs(actualCost - expectedCost) < 0.000001, `Cost for ${model} was $${actualCost.toFixed(6)} instead of $${expectedCost.toFixed(6)}`);
+      }
+      assert.ok(Math.abs(total - expectedTotal) < 0.000001, `Total spend was $${total.toFixed(6)} instead of $${expectedTotal.toFixed(6)}`);
+      console.log(`Verified Grafana seed: Total spend $${total.toFixed(2)}; ${[...expectedCosts].map(([model, cost]) => `${model} $${cost.toFixed(2)}`).join(', ')}`);
+      return;
+    } catch (error) {
+      failure = error;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    }
+  }
+  throw failure;
+}
+
+async function seedGrafana(otlpPort, grafanaPort) {
   const projects = [
     { name: 'acme-webshop', factor: 1 },
     { name: 'acme-fulfillment', factor: 0.58 },
@@ -307,8 +414,11 @@ async function seedGrafana(otlpPort) {
     { name: 'gpt-5.6-terra', role: 'executor', input: 100_000, output: 10_000, cacheRead: 30_000, context: 130_000 },
   ];
   const timestamps = Array.from({ length: SYNTHETIC_BUCKETS }, (_, index) => SYNTHETIC_START + (index * SYNTHETIC_INTERVAL));
-  const workloadAt = (timestamp, index) => {
-    const hour = new Date(timestamp).getUTCHours();
+  const droppedBucket = process.env.SYNTHETIC_GRAFANA_DROP_BUCKET;
+  const droppedBucketIndex = droppedBucket === undefined ? null : Number(droppedBucket);
+  assert.ok(droppedBucketIndex === null || (Number.isInteger(droppedBucketIndex) && droppedBucketIndex >= 0 && droppedBucketIndex < SYNTHETIC_BUCKETS), `SYNTHETIC_GRAFANA_DROP_BUCKET must be an index from 0 to ${SYNTHETIC_BUCKETS - 1}`);
+  const workloadAt = (index) => {
+    const hour = (FIXTURE_WORKLOAD_START_HOUR + Math.floor((index * SYNTHETIC_INTERVAL) / (60 * 60 * 1_000))) % 24;
     const workingHours = hour >= 7 && hour < 19;
     const wave = 0.78 + ((Math.sin(index * 0.83) + 1) * 0.36);
     const peak = index % 37 === 11 ? 1.7 : index % 53 === 29 ? 1.4 : 1;
@@ -318,7 +428,7 @@ async function seedGrafana(otlpPort) {
   for (const [index, timestamp] of timestamps.entries()) {
     let eventOffset = 0;
     const eventTimestamp = () => timestamp + (eventOffset++ * 1_000);
-    const workload = workloadAt(timestamp, index);
+    const workload = workloadAt(index);
     for (const project of projects) {
       for (const model of models) {
         const scale = workload * project.factor;
@@ -414,7 +524,8 @@ async function seedGrafana(otlpPort) {
       'workbench.measurement.recharge_weighted_tool_result_bytes.value': weightedResultBytes,
     }, healthEventTimestamp()));
   }
-  for (const timestamp of timestamps) {
+  for (const [index, timestamp] of timestamps.entries()) {
+    if (index === droppedBucketIndex) continue;
     const bucketStart = BigInt(timestamp) * 1_000_000n;
     const bucketEnd = BigInt(timestamp + SYNTHETIC_INTERVAL) * 1_000_000n;
     const bucketRecords = records.filter(({ record }) => {
@@ -455,6 +566,77 @@ async function seedGrafana(otlpPort) {
     }],
   });
   await new Promise((resolve) => setTimeout(resolve, 3_000));
+  await verifyGrafanaSeed(grafanaPort, expectedGatewayCosts(records));
+}
+
+async function writeOtelCollectorConfig(tempRoot) {
+  const collectorConfig = path.join(tempRoot, 'otelcol-config.yaml');
+  await writeFile(collectorConfig, `receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+  prometheus/collector:
+    config:
+      scrape_configs:
+        - job_name: "opentelemetry-collector"
+          scrape_interval: 1s
+          static_configs:
+            - targets: ["localhost:8888"]
+
+processors:
+  batch:
+  batch/logs:
+    timeout: 50ms
+
+exporters:
+  otlphttp/metrics:
+    endpoint: http://localhost:9090/api/v1/otlp
+    tls:
+      insecure: true
+  otlphttp/traces:
+    endpoint: http://localhost:4418
+    tls:
+      insecure: true
+  otlphttp/logs:
+    endpoint: http://localhost:3100/otlp
+    tls:
+      insecure: true
+    retry_on_failure:
+      enabled: true
+      initial_interval: 1s
+      max_interval: 5s
+      max_elapsed_time: 30s
+    sending_queue:
+      enabled: true
+      num_consumers: 1
+      queue_size: 10000
+  otlp/profiles:
+    endpoint: http://localhost:4040
+    tls:
+      insecure: true
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/traces]
+    metrics:
+      receivers: [otlp, prometheus/collector]
+      processors: [batch]
+      exporters: [otlphttp/metrics]
+    logs:
+      receivers: [otlp]
+      processors: [batch/logs]
+      exporters: [otlphttp/logs]
+    profiles:
+      receivers: [otlp]
+      exporters: [otlp/profiles]
+`);
+  return collectorConfig;
 }
 
 async function writeGrafanaDashboards(tempRoot) {
@@ -673,6 +855,7 @@ async function main() {
   const tempHome = path.join(tempRoot, 'sidequest-home');
   const fakeProject = path.join(tempRoot, FIXTURE.project);
   const dashboardDirectory = await writeGrafanaDashboards(tempRoot);
+  const collectorConfig = await writeOtelCollectorConfig(tempRoot);
   const sidequestPort = await freePort();
   const grafanaPort = await freePort();
   const otlpPort = await freePort();
@@ -686,11 +869,12 @@ async function main() {
     await waitFor(`http://127.0.0.1:${sidequestPort}`, 'Synthetic Sidequest server');
     command('docker', ['create', '--name', container, '--publish', `127.0.0.1:${grafanaPort}:3000`, '--publish', `127.0.0.1:${otlpPort}:4318`, '--volume', `${volume}:/data`, '--env', 'GF_AUTH_ANONYMOUS_ENABLED=true', '--env', 'GF_AUTH_ANONYMOUS_ORG_ROLE=Viewer', 'grafana/otel-lgtm:0.11.0']);
     command('docker', ['cp', `${grafanaProvisioning}/.`, `${container}:/otel-lgtm/grafana/conf/provisioning/dashboards`]);
+    command('docker', ['cp', collectorConfig, `${container}:/otel-lgtm/otelcol-config.yaml`]);
     command('docker', ['cp', dashboardDirectory, `${container}:/otel-lgtm/grafana/conf/provisioning`]);
     command('docker', ['start', container]);
     await waitFor(`http://127.0.0.1:${grafanaPort}/api/health`, 'Isolated Grafana');
     await waitFor(`http://127.0.0.1:${grafanaPort}/api/dashboards/uid/claude-code-usage`, 'Synthetic Grafana dashboard');
-    await seedGrafana(otlpPort);
+    await seedGrafana(otlpPort, grafanaPort);
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
     await captureGrafana(browser, grafanaPort);
