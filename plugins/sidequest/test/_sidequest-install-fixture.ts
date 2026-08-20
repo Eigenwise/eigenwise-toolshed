@@ -38,6 +38,16 @@ function renameWithRetry(temporaryPath: string, targetPath: string): void {
   }
 }
 
+function writeFileAtomically(filePath: string, contents: string): void {
+  const temporaryPath = `${filePath}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryPath, contents, 'utf8');
+    renameWithRetry(temporaryPath, filePath);
+  } finally {
+    fs.rmSync(temporaryPath, { force: true });
+  }
+}
+
 export function stubSidequestInstall(): void {
   if (installed) return;
   installed = true;
@@ -47,17 +57,12 @@ export function stubSidequestInstall(): void {
   const installPath = path.join(claudeHome, 'sidequest-test-install');
   fs.mkdirSync(installPath, { recursive: true });
   const manifestPath = path.join(installPath, '.mcp.json');
-  const temporaryManifestPath = path.join(installPath, `.mcp.json.${process.pid}.${randomUUID()}.tmp`);
-  try {
-    fs.writeFileSync(temporaryManifestPath, JSON.stringify({
-      mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } },
-    }));
-    renameWithRetry(temporaryManifestPath, manifestPath);
-  } finally {
-    fs.rmSync(temporaryManifestPath, { force: true });
-  }
-  fs.mkdirSync(path.join(installPath, 'hooks'), { recursive: true });
-  fs.writeFileSync(path.join(installPath, 'hooks', 'hooks.json'), JSON.stringify({ hooks: {} }));
+  writeFileAtomically(manifestPath, JSON.stringify({
+    mcpServers: { board: { command: 'node', args: ['bin/sidequest-mcp.js'] } },
+  }));
+  const hooksPath = path.join(installPath, 'hooks', 'hooks.json');
+  fs.mkdirSync(path.dirname(hooksPath), { recursive: true });
+  writeFileAtomically(hooksPath, JSON.stringify({ hooks: {} }));
 
   const registryPath = path.join(claudeHome, 'plugins', 'installed_plugins.json');
   let registry: { plugins?: Record<string, unknown> } = { plugins: {} };
