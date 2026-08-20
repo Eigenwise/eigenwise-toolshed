@@ -310,7 +310,10 @@ async function cmdCommit(opts, positional) {
       fail(`commit: refused ${ticket.ref}; this dispatch requires a linked worktree. Do not commit in the shared tree. Report that the executor lost its worktree to the orchestrator and re-dispatch.`);
     }
   }
-  const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
+  const scope = [.../* @__PURE__ */ new Set([
+    ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
+    ...rejectedRelatedReleaseFragments(slug, ticket)
+  ])];
   const foreignFragments = commitScope.foreignReleaseFragmentPaths(process.cwd(), ticket.ref, rejectedRelatedReleaseFragments(slug, ticket));
   if (foreignFragments.length) {
     fail(`commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${foreignFragments.join(", ")}.`);

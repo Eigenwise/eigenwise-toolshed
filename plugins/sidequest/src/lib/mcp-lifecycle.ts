@@ -143,6 +143,13 @@ function rejectedRelatedReleaseFragments(slug: string, ticket: any): string[] {
   });
 }
 
+function ticketCommitScope(slug: string, ticket: any): string[] {
+  return [...new Set([
+    ...commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref),
+    ...rejectedRelatedReleaseFragments(slug, ticket),
+  ])];
+}
+
 function combinedRefusal(ticket: any, failures: Array<{ reason: string; message: string }>) {
   const primary = failures[0];
   if (!primary) throw new Error('combined refusal requires at least one failure');
@@ -234,7 +241,7 @@ function collectGitSubmissionFacts(options: any) {
   const range = target
     ? commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream, integrationBranch: target.branch, base, dispatchBase, allowedBases: dispatchBase ? [dispatchBase] : [] })
     : null;
-  const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
+  const scope = ticketCommitScope(slug, ticket);
   const requirements: any[] = targetFailure ? [targetFailure] : [];
   const surfaces: any = { declared: scope, admitted: scope, changed: range?.ok ? range.changedPaths : [], pending: [] };
   if (!range?.ok) {
@@ -638,7 +645,7 @@ const tools: ToolDefinition[] = [
           });
         }
       }
-      const scope = commitScope.ticketCommitScope(store.executionScope(slug, ticket), ticket.files, ticket.ref);
+      const scope = ticketCommitScope(slug, ticket);
       const outsideWorktree = commitScope.validateRelativeScopes(scope).outside;
       if (outsideWorktree.length) {
         return mutationAck(slug, {

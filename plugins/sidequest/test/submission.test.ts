@@ -721,7 +721,7 @@ test('CLI commit admits a related review-rejected fragment transfer and refuses 
   });
 
   const repair = store.createTicket(project, {
-    title: 'repair rejected release candidate', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    title: 'repair rejected release candidate', files: ['plugins/fixture-plugin'], complexity: 3,
     complexityWhy: 'The CLI commit fixture transfers a rejected source release fragment.', labels: ['direct-ok'],
   });
   assert.equal(store.linkTickets(project, repair.ref, 'related', source.ref).ok, true);
@@ -742,7 +742,7 @@ test('CLI commit admits a related review-rejected fragment transfer and refuses 
   gitAtRoot(['add', unrelatedFragment]);
   gitAtRoot(['commit', '-m', 'unrelated release candidate']);
   const blocked = store.createTicket(project, {
-    title: 'unrelated fragment removal', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    title: 'unrelated fragment removal', files: ['plugins/fixture-plugin'], complexity: 3,
     complexityWhy: 'The CLI commit fixture confirms unrelated release fragments stay protected.', labels: ['direct-ok'],
   });
   const blockedBy = 'cli-foreign-fragment-worker';
