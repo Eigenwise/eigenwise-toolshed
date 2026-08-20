@@ -31,6 +31,8 @@ __export(commit_scope_exports, {
   commitPaths: () => commitPaths,
   commitScoped: () => commitScoped,
   foreignReleaseFragmentPaths: () => foreignReleaseFragmentPaths,
+  foreignReleaseFragmentRefusalMessage: () => foreignReleaseFragmentRefusalMessage,
+  foreignReleaseFragmentScopePaths: () => foreignReleaseFragmentScopePaths,
   headCommit: () => headCommit,
   isInScope: () => import_scope_match2.isInScope,
   linkedWorktree: () => linkedWorktree,
@@ -202,6 +204,20 @@ function workingPaths(cwd) {
 function ticketReleaseFragment(ticketRef) {
   const ref = typeof ticketRef === "string" ? ticketRef.trim() : "";
   return /^[A-Za-z0-9][A-Za-z0-9_-]*$/.test(ref) ? `.release/unreleased/${ref}.md` : null;
+}
+function foreignReleaseFragmentScopePaths(files, ticketRef) {
+  const ownFragment = ticketReleaseFragment(ticketRef);
+  const releaseDirectory = ".release/unreleased";
+  return (0, import_scope_match.scopedPaths)(files).filter((scope) => {
+    const key = (0, import_scope_match.scopeKey)(scope);
+    const ownKey = ownFragment ? (0, import_scope_match.scopeKey)(ownFragment) : "";
+    const coversReleaseDirectory = key === "." || releaseDirectory.startsWith(`${key}/`) || key === releaseDirectory;
+    const foreignFragment = key.startsWith(`${releaseDirectory}/`) && key.endsWith(".md") && key !== ownKey;
+    return coversReleaseDirectory || foreignFragment;
+  });
+}
+function foreignReleaseFragmentRefusalMessage(operation, ticketRef, fragments) {
+  return `${operation}: refused ${ticketRef}; only ${ticketReleaseFragment(ticketRef)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${fragments.join(", ")}.`;
 }
 function ticketCommitScope(effectiveFiles, declaredFiles, ticketRef) {
   const scope = Array.isArray(effectiveFiles) ? effectiveFiles.slice() : [];
@@ -624,6 +640,8 @@ function commitScoped(cwd, message, files) {
   commitPaths,
   commitScoped,
   foreignReleaseFragmentPaths,
+  foreignReleaseFragmentRefusalMessage,
+  foreignReleaseFragmentScopePaths,
   headCommit,
   isInScope,
   linkedWorktree,

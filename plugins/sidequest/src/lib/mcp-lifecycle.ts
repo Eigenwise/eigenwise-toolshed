@@ -569,7 +569,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request scope and receive an immediate ruling.',
+    description: 'Request scope and receive an immediate ruling. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -592,6 +592,7 @@ const tools: ToolDefinition[] = [
         state: res.state,
         effectiveScope: res.resolution?.effectiveScope,
         resolution: res.resolution || null,
+        ...(res.message ? { message: res.message } : {}),
         ...(res.state === 'refused' ? {
           instruction: 'Commit in-scope work, then release with kind "handback" and name the refused paths.',
         } : {}),
@@ -657,7 +658,7 @@ const tools: ToolDefinition[] = [
           ok: false,
           ticket,
           reason: 'outside_scope',
-          message: `commit: refused ${ticket.ref}; only ${commitScope.ticketReleaseFragment(ticket.ref)} is implicitly writable, except a deleted fragment from a related review-rejected candidate. Other release fragments: ${foreignFragments.join(', ')}.`,
+          message: commitScope.foreignReleaseFragmentRefusalMessage('commit', ticket.ref, foreignFragments),
         });
       }
       const result = commitScope.commitScoped(root, message, scope);

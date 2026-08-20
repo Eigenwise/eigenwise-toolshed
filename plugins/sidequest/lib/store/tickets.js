@@ -587,13 +587,15 @@ function createTickets(dependencies) {
       if (!requested.length) return { ok: false, reason: "files_required", ticket: t };
       const validation = commitScope.validateRelativeScopes(requested);
       if (!validation.ok) return { ok: false, reason: "invalid_scope", ticket: t, paths: validation.outside };
+      const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(requested, t.ref);
+      const isForeignReleaseFragmentScope = (file) => foreignReleaseFragments.some((fragment) => commitScope.isInScope(file, [fragment]) && commitScope.isInScope(fragment, [file]));
       const scope = commitScope.ticketCommitScope(effectiveScope(slug, t.files), t.files, t.ref);
-      const additions = requested.filter((file) => !commitScope.isInScope(file, scope));
-      const covered = requested.filter((file) => commitScope.isInScope(file, scope));
+      const additions = requested.filter((file) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
+      const covered = requested.filter((file) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();
       touchClaimActivity(t, by, now);
       const request = { by, files: additions, requested, covered, at: now };
-      if (!additions.length) {
+      if (!additions.length && !foreignReleaseFragments.length) {
         scopeResolution(slug, t, request, "granted", now, requested, []);
         t.updatedAt = now;
         putTicket(slug, t);
@@ -612,8 +614,11 @@ function createTickets(dependencies) {
         t.files = boundedFiles(scopeExpansionFiles(t, approved));
         syncLiveDispatchScope(slug, t);
       }
-      const refused = additions.filter((file) => !commitScope.isInScope(file, approved));
-      const granted = requested.filter((file) => commitScope.isInScope(file, effectiveScope(slug, t.files)));
+      const refused = normalizeFiles([
+        ...foreignReleaseFragments,
+        ...additions.filter((file) => !commitScope.isInScope(file, approved))
+      ]);
+      const granted = requested.filter((file) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, effectiveScope(slug, t.files)));
       const state = refused.length ? "refused" : "granted";
       scopeResolution(slug, t, request, state, now, granted, refused);
       if (!Array.isArray(t.comments)) t.comments = [];
@@ -621,7 +626,8 @@ function createTickets(dependencies) {
       const undeclared = !normalizeFiles(t.files).length ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.` : "";
       const evidenceDirectory = String(t.dispatch?.evidenceDirectory || "").trim();
       const evidenceGuidance = evidenceDirectory ? ` Verification evidence belongs in ${evidenceDirectory}; do not request or commit it inside the repository.` : "";
-      const body = refused.length ? `Scope expansion refused: ${refused.join(", ")}.${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
+      const foreignReleaseFragmentMessage = foreignReleaseFragments.length ? commitScope.foreignReleaseFragmentRefusalMessage("scopeRequest", t.ref, foreignReleaseFragments) : "";
+      const body = refused.length ? `${foreignReleaseFragmentMessage}${foreignReleaseFragmentMessage ? " " : `Scope expansion refused: ${refused.join(", ")}.`}${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
       const comment = createComment({ by: refused.length ? "board" : "board", body, kind: "comment", source: refused.length ? opts.source || "cli" : "policy" }, now);
       t.comments.push(comment);
       t.lastEventType = refused.length ? "scope_refused" : "scope_auto_approved";
@@ -629,7 +635,18 @@ function createTickets(dependencies) {
       t.updatedAt = now;
       putTicket(slug, t);
       queueEventNotification(slug, t, "comment", comment.source, { commentBody: comment.body });
-      return { ok: true, ticket: t, covered, approved, autoApproved: !refused.length, refused, state, resolution: t.scopeResolution, comment };
+      return {
+        ok: true,
+        ticket: t,
+        covered,
+        approved,
+        autoApproved: !refused.length,
+        refused,
+        state,
+        resolution: t.scopeResolution,
+        comment,
+        ...foreignReleaseFragmentMessage ? { message: foreignReleaseFragmentMessage } : {}
+      };
     });
   }
   function migrateLegacyScopeRequest(slug, idOrRef) {
