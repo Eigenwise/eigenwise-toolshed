@@ -8,6 +8,69 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.491.0 (2026-08-20)
+
+### codebase-mapper 2.15.5 → 2.15.6
+
+#### Fixes
+
+- Correct when Live Rules guidance and the codebase map reach Claude (SQ-2289)
+  State that rules land at session start and return only when their text changes, and that the codebase map also reaches dispatched executors and general-purpose subagents.
+
+### live-rules 2.10.2 → 2.10.3
+
+#### Fixes
+
+- Correct when Live Rules guidance and the codebase map reach Claude (SQ-2289)
+  State that rules land at session start and return only when their text changes, and that the codebase map also reaches dispatched executors and general-purpose subagents.
+
+### model-gateway 0.48.13 → 0.48.14
+
+#### Fixes
+
+- Report effective model-gateway wiring (SQ-2280)
+  Make doctor and SessionStart notices accurately describe project-local model-gateway wiring.
+- Correct Observability privacy and model docs (SQ-2282)
+  Correct Observability privacy, recovery, and setup guidance, and list current Model Gateway IDs.
+- Explain Remote Control project gateway opt-out (SQ-2284)
+  Document turning Model Gateway off for one project and refuse RC-compatibility before a port-80 conflict can change the hosts file.
+
+### observability 0.7.11 → 0.7.12
+
+#### Fixes
+
+- Correct Observability privacy and model docs (SQ-2282)
+  Correct Observability privacy, recovery, and setup guidance, and list current Model Gateway IDs.
+- Capture seeded Grafana observability rows (SQ-2286)
+  Replace fabricated observability dashboard images with live row captures from the isolated Grafana fixture, using deterministic synthetic telemetry across the full time window.
+
+### quartermaster 0.5.4 → 0.5.5
+
+#### Fixes
+
+- Align the Workbench and Quartermaster READMEs with what code-intel and live rules actually do (SQ-2291)
+  Name Python and the upward language-server search in the code-intel section, and stop describing the setup-seeded live rule as per-prompt.
+
+### sidequest 5.0.6 → 5.0.7
+
+#### Fixes
+
+- Align the Sidequest README with enforced submission and freshness rules (SQ-2278)
+  Describe non-Git submissions as filesystem-snapshot revisions with verifier evidence, and state the dispatch version-skew rule the way the code enforces it.
+- Keep route effort and ticket count readable in Settings (SQ-2285)
+  Lay out each routing profile's model and effort separately from its ticket count in Settings.
+- Route multi-part work through the user-story skill (SQ-2287)
+  Load the user-story skill before ticketing or dispatching work beyond a small task, while keeping named quick edits, one-line fixes, operational requests, and direct questions inline.
+- Detect live integration conflicts from changed paths (SQ-2288)
+  Let integrations proceed past unrelated live claims by comparing submitted changed paths with each sibling ticket's declared files, while still refusing real overlap with the conflicting surfaces named.
+
+### workbench 0.88.6 → 0.88.7
+
+#### Fixes
+
+- Align the Workbench and Quartermaster READMEs with what code-intel and live rules actually do (SQ-2291)
+  Name Python and the upward language-server search in the code-intel section, and stop describing the setup-seeded live rule as per-prompt.
+
 ## v3.490.0 (2026-08-19)
 
 ### sidequest 5.0.5 → 5.0.6

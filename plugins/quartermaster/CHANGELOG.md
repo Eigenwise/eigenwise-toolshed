@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.5.5 (2026-08-20)
+
+Released in v3.491.0, up from 0.5.4.
+
+### Fixes
+
+- Align the Workbench and Quartermaster READMEs with what code-intel and live rules actually do (SQ-2291)
+  Name Python and the upward language-server search in the code-intel section, and stop describing the setup-seeded live rule as per-prompt.
+
 ## 0.5.4 (2026-08-17)
 
 Released in v3.481.0, up from 0.5.3.
