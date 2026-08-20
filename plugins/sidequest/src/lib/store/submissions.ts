@@ -2424,12 +2424,12 @@ function waveScopeConflicts(slug: any, tickets: any[]) {
   const participantRefs = new Set(tickets.map((ticket) => ticket.ref));
   const conflicts: any[] = [];
   for (const participant of tickets) {
-    const participantScope = scopedPaths(executionScope(slug, participant));
+    const participantChanges = scopedPaths(participant.submission?.changedPaths);
     for (const sibling of listTickets(slug)) {
       if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !hasLiveClaim(sibling)) continue;
-      const siblingScope = scopedPaths(executionScope(slug, sibling));
-      const surfaces = participantScope.filter((surface: string) => isInScope(surface, siblingScope)
-        || siblingScope.some((siblingSurface: string) => isInScope(siblingSurface, [surface])));
+      const siblingDeclaredScope = scopedPaths(sibling.files);
+      const surfaces = participantChanges.filter((surface: string) => isInScope(surface, siblingDeclaredScope)
+        || siblingDeclaredScope.some((siblingSurface: string) => isInScope(siblingSurface, [surface])));
       if (surfaces.length) conflicts.push({ participant: participant.ref, sibling: sibling.ref, surfaces });
     }
   }
@@ -2590,7 +2590,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
       ok: false,
       reason: 'wave_scope_overlap',
       conflicts: scopeConflicts,
-      message: `Wave assembly refused because its effective scope overlaps live sibling work: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. Add every conflicting candidate to one explicitly resolved wave or narrow its granted scope before assembly.`,
+      message: `Wave assembly refused because candidate changes overlap live sibling declared scope: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. Add every conflicting candidate to one explicitly resolved wave or narrow the sibling ticket's declared files before assembly.`,
     };
   }
   const firstCandidate = waveCandidates[0];
