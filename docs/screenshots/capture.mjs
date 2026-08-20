@@ -488,6 +488,7 @@ async function seedGrafana(otlpPort, grafanaPort) {
       }, eventTimestamp()));
     }
   }
+  const historicalRecordCount = records.length;
   const healthTimestamp = SYNTHETIC_NOW + (30 * 1_000);
   let healthOffset = 0;
   const healthEventTimestamp = () => healthTimestamp + (healthOffset++ * 1_000);
@@ -534,14 +535,14 @@ async function seedGrafana(otlpPort, grafanaPort) {
     if (index === droppedBucketIndex) continue;
     const bucketStart = BigInt(timestamp) * 1_000_000n;
     const bucketEnd = BigInt(timestamp + SYNTHETIC_INTERVAL) * 1_000_000n;
-    const bucketRecords = records.filter(({ record }) => {
+    const bucketRecords = records.slice(0, historicalRecordCount).filter(({ record }) => {
       const recordTimestamp = BigInt(record.timeUnixNano);
       return recordTimestamp >= bucketStart && recordTimestamp < bucketEnd;
     });
     await postOtlp(otlpPort, 'logs', groupedLogs(bucketRecords));
     await new Promise((resolve) => setTimeout(resolve, 300));
   }
-  const healthRecords = records.filter(({ record }) => BigInt(record.timeUnixNano) >= BigInt(healthTimestamp) * 1_000_000n);
+  const healthRecords = records.slice(historicalRecordCount);
   await postOtlp(otlpPort, 'logs', groupedLogs(healthRecords));
   const metricDataPoints = Array.from({ length: 10 }, (_, index) => ({
     asInt: String((index + 1) * 25_000),
