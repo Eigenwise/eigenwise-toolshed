@@ -276,6 +276,50 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
   );
 });
 
+test('ensure keeps the observer listening when dashboard activity lookup fails', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  const config = enabledConfig();
+  config.observability.dashboard = true;
+  config.observability.sink = 'grafana-lgtm';
+  config.observability.optedInProjects = [{ project_name: 'atlas', project_id: 'a'.repeat(64) }];
+  config.observability.sinks = { 'grafana-lgtm': {} };
+  writeObservabilityConfig(configFile, config);
+  const listeningPorts = new Set();
+  const warnings = [];
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    dockerAvailable: true,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async (port) => listeningPorts.has(port),
+    waitForPort: async (port, expected) => listeningPorts.has(port) === expected,
+    startProcess(name) {
+      listeningPorts.add(config.observability.ports[name]);
+      return 1000 + listeningPorts.size;
+    },
+    stderr: { write(message) { warnings.push(message); } },
+    spawnSync(command, args) {
+      assert.equal(command, 'docker');
+      if (args[0] === 'exec') return { status: 1, stdout: '' };
+      return {
+        status: 0,
+        stdout: `true|${setup.LGTM_IMAGE}|${setup.pluginVersion()}|1|null|[]`,
+      };
+    },
+  });
+
+  assert.equal(listeningPorts.has(config.observability.ports.observer), true);
+  assert.deepEqual(result.started, ['observer', 'collector']);
+  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'grafana-dashboards')), ['claude-code-usage.json']);
+  assert.deepEqual(warnings, [
+    'warning: could not determine active dashboard projects, provisioning the global dashboard only: Prometheus could not report recently active dashboard projects.\n',
+  ]);
+});
+
 test('ensure reclaims a stale versioned ensure owner and restores the observer', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
