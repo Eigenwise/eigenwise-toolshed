@@ -110,6 +110,11 @@ const SETTLED_BUDGET_MILLISECONDS = 5000;
 // up as a null status either way, so there is nothing to gain from a tight number here.
 const PROBE_BUDGET_MILLISECONDS = 20_000;
 
+// The Windows fallback arms at process spawn, before Node can record the descendant. Give cold start a full
+// second, then leave four seconds before the descendant can write its marker.
+const SPAWN_ARMED_DEADLINE_MILLISECONDS = 1000;
+const SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS = 5000;
+
 async function assertTerminalWithin(processId: number, budgetMilliseconds: number, subject: string) {
   const state = await waitUntilTerminal(processId, budgetMilliseconds);
   assert.notEqual(state, 'live', `${subject} (process ${processId}) was still live after ${budgetMilliseconds}ms`);
@@ -549,11 +554,11 @@ test('large phase output is forwarded whole while the retained tail stays bounde
 });
 
 test('a deadline fails the phase and ends its tree before a delayed descendant can act', { timeout: 60_000 }, async () => {
-  const fixture = descendantFixture(3000, false, 'spin');
+  const fixture = descendantFixture(SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS, false, 'spin');
   const result = await runOwnedPhase(silently({
     command: process.execPath,
     args: fixture.args,
-    timeoutMilliseconds: 400,
+    timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS,
     terminationGraceMilliseconds: 200,
     cleanupDrainMilliseconds: 300,
   }));
@@ -730,11 +735,11 @@ test('100 exact-deadline races leave no descendant behind and spare an unrelated
 });
 
 test('the Windows deadline ends the owned tree through its live handle without helper latency', { ...windowsOnly, timeout: 60_000 }, async () => {
-  const fixture = descendantFixture(3000, false, 'spin');
+  const fixture = descendantFixture(SPAWN_ARMED_DESCENDANT_DELAY_MILLISECONDS, false, 'spin');
   const result = await runOwnedPhase(silently({
     command: process.execPath,
     args: fixture.args,
-    timeoutMilliseconds: 400,
+    timeoutMilliseconds: SPAWN_ARMED_DEADLINE_MILLISECONDS,
     terminationGraceMilliseconds: 200,
   }));
 
