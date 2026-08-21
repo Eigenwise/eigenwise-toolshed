@@ -198,7 +198,12 @@ function runSessionWithHome(home?: any, envOverrides?: any) {
   return execFileSync(process.execPath, [SESSION], {
     input: JSON.stringify({ session_id: 'bootstrap-test' }),
     encoding: 'utf8',
-    env: { ...process.env, SIDEQUEST_HOME: home, ...(envOverrides || {}) },
+    env: {
+      ...process.env,
+      SIDEQUEST_HOME: home,
+      SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
+      ...(envOverrides || {}),
+    },
   });
 }
 
@@ -2121,7 +2126,7 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
     id: staleTicket.id, project: slug, ref: staleTicket.ref, status: staleTicket.status,
     archived: staleTicket.archived ? 1 : 0, ord: staleTicket.order, claim_by: staleTicket.claim.by, data: staleTicket,
   });
-  assert.doesNotThrow(() => runHook(SESSION, { session_id: 'sweep-test' }));
+  assert.doesNotThrow(() => runHook(SESSION, { session_id: 'sweep-test' }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000' }));
   assert.equal(store.getTicket(slug, stale.ref).claim, null);
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
 });
@@ -4339,14 +4344,14 @@ test('session start reconciles a reload-lost launch once and leaves it ready to 
     executor: prepared.ticket.dispatchExecutor,
     agentName: 'lost-native-task',
   }).ok, true);
-  const first = runHook(SESSION, { session_id: sessionId, source: 'resume' });
+  const first = runHook(SESSION, { session_id: sessionId, source: 'resume' }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000' });
   assert.match(first, new RegExp(`${ticket.ref} launched but never claimed`));
   const after = store.getTicket(slug, ticket.ref);
   assert.equal(after.status, 'todo');
   assert.equal(after.dispatch.outcome, 'failed');
   assert.equal(after.dispatchNonce, null);
   assert.deepStrictEqual(store.reconcileLaunchedDispatches(sessionId, { source: 'session-start' }).reconciled, []);
-  const second = runHook(SESSION, { session_id: sessionId, source: 'resume' });
+  const second = runHook(SESSION, { session_id: sessionId, source: 'resume' }, { SIDEQUEST_SWEEP_DEADLINE_MS: '60000' });
   assert.ok(!second.includes('launched but never claimed'));
 });
 
