@@ -13,7 +13,7 @@ function createProjectBoardWatch(project, environment = process.env, dependencie
     board: project.slug,
     changesPayload: (board, since) => {
       if (board !== project.slug) throw new Error("watch attempted to read a board other than its registered identity.");
-      return { project: project.slug, ...store.changesPayload(project.slug, since) };
+      return { project: project.slug, ...store.changesPayload(project.slug, since, { includeDispatchOwner: true }) };
     },
     ciRunsProvider: createGitHubCiRunsProvider(project.meta?.path),
     includeAllTickets,

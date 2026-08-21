@@ -270,7 +270,8 @@ function createPulse(dependencies) {
       git
     };
   }
-  function changesPayload(slug, since) {
+  function changesPayload(slug, since, options) {
+    const includeDispatchOwner = Boolean(options && options.includeDispatchOwner);
     const serverTime = (/* @__PURE__ */ new Date()).toISOString();
     const nowMs = Date.parse(serverTime);
     const defaultSince = new Date(Date.now() - 60 * 60 * 1e3).toISOString();
@@ -298,7 +299,7 @@ function createPulse(dependencies) {
         lastComment: latestCommentExcerpt(ticket),
         claim,
         checkpoint: checkpointProjection(ticket, nowMs),
-        ...dispatch ? {
+        ...includeDispatchOwner && dispatch ? {
           dispatch: {
             preparedBy: dispatch.preparedBy ? { sessionId: String(dispatch.preparedBy.sessionId || "").trim() || null } : null,
             terminalAt: dispatch.terminalAt || null

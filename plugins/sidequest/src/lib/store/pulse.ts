@@ -296,7 +296,11 @@ function createPulse(dependencies: any) {
     };
   }
 
-  function changesPayload(slug?: any, since?: any) {
+  // Only the board watch needs to know which session prepared a dispatch, and a
+  // session id per ticket is enough to push the MCP `changes` result past its
+  // 1200-byte budget. So it is opt-in rather than a default field (SQ-2338).
+  function changesPayload(slug?: any, since?: any, options?: any) {
+    const includeDispatchOwner = Boolean(options && options.includeDispatchOwner);
     const serverTime = new Date().toISOString();
     const nowMs = Date.parse(serverTime);
     const defaultSince = new Date(Date.now() - 60 * 60 * 1000).toISOString();
@@ -327,7 +331,7 @@ function createPulse(dependencies: any) {
           lastComment: latestCommentExcerpt(ticket),
           claim,
           checkpoint: checkpointProjection(ticket, nowMs),
-          ...(dispatch ? {
+          ...(includeDispatchOwner && dispatch ? {
             dispatch: {
               preparedBy: dispatch.preparedBy
                 ? { sessionId: String(dispatch.preparedBy.sessionId || '').trim() || null }

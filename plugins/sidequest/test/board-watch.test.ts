@@ -111,13 +111,37 @@ test('changes projects dispatch preparation ownership for watch filtering', () =
     storyDecisionLogWarnings: () => [],
   });
 
-  const changes = pulse.changesPayload('board-a', new Date(0).toISOString());
+  const changes = pulse.changesPayload('board-a', new Date(0).toISOString(), { includeDispatchOwner: true });
 
   assert.deepEqual(changes.tickets.find((changedTicket: any) => changedTicket.ref === 'SQ-owned').dispatch, {
     preparedBy: { sessionId: 'orchestrator-session' },
     terminalAt: null,
   });
   assert.equal(Object.hasOwn(changes.tickets.find((changedTicket: any) => changedTicket.ref === 'SQ-unowned'), 'dispatch'), false);
+
+  const defaultChanges = pulse.changesPayload('board-a', new Date(0).toISOString());
+
+  for (const changedTicket of defaultChanges.tickets) {
+    assert.equal(Object.hasOwn(changedTicket, 'dispatch'), false);
+  }
+});
+
+test('the watch asks for dispatch ownership that plain changes callers do not pay for', () => {
+  const requests: any[] = [];
+  createProjectBoardWatch({ slug: 'project-a', meta: { path: '/project-a' } }, {
+    CLAUDE_CODE_SESSION_ID: 'watching-session',
+  }, {
+    createBoardWatch: (options: any) => ({ poll: () => options.changesPayload('project-a', 'since'), start: () => {} }),
+    createGitHubCiRunsProvider: () => null,
+    store: {
+      changesPayload: (slug: string, since: string, payloadOptions: any) => {
+        requests.push(payloadOptions);
+        return { serverTime: '2026-08-13T00:00:01.000Z', tickets: [] };
+      },
+    },
+  }).poll();
+
+  assert.deepEqual(requests, [{ includeDispatchOwner: true }]);
 });
 
 test('watch suppresses an actionable event owned by another active session', () => {
