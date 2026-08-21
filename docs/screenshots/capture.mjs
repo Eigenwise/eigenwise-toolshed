@@ -50,7 +50,7 @@ const FIXTURE = Object.freeze({
         { key: 'checkout-events', title: 'Map checkout recovery events', description: 'The recovery path emits two names for the same completed order. Consolidate the schema before the funnel dashboard ships.', status: 'todo', priority: 'high', category: 'analytics', story: 'checkout', assignee: 'Jonah Reed', labels: ['analytics', 'checkout'], age: '1h ago' },
         { key: 'express-wallet', title: 'Add express checkout option', description: 'Returning shoppers need a one-tap wallet choice above the address form. Keep taxes and promotions visible before confirmation.', status: 'todo', priority: 'high', category: 'product', story: 'checkout', assignee: 'Noor Hassan', labels: ['checkout', 'payments'], age: '2h ago' },
         { key: 'returns-copy', title: 'Clarify final-sale returns copy', description: 'The product page and cart use different final-sale language. Use the approved policy text in both places.', status: 'todo', priority: 'low', category: 'content', assignee: null, labels: ['content', 'policy'], age: '3h ago' },
-        { key: 'cart-summary', title: 'Build cart summary', description: 'The new summary keeps discounts, shipping, tax, and the final total in one stable grid. Mobile can wrap promotion labels, but totals must stay aligned.', status: 'doing', priority: 'urgent', category: 'product', story: 'checkout', assignee: null, labels: ['checkout', 'cart'], images: ['checkout-flow.svg'], age: '18m ago' },
+        { key: 'cart-summary', title: 'Build cart summary', description: 'The new summary keeps discounts, shipping, tax, and the final total in one stable grid. Mobile can wrap promotion labels, but totals must stay aligned.', status: 'doing', priority: 'urgent', category: 'product', story: 'checkout', assignee: null, labels: ['checkout', 'cart'], files: ['src/checkout/CartSummary.tsx', 'src/checkout/cart-summary.css'], images: ['checkout-flow.svg', 'mobile-checkout.svg', 'order-confirmation.svg'], age: '18m ago' },
         { key: 'inventory-badge', title: 'Harden low-stock badge refresh', description: 'The badge can show stale inventory after a variant change. Cancel the old request and render only the latest response.', status: 'doing', priority: 'high', category: 'reliability', story: 'discovery', assignee: 'Eli Brooks', labels: ['inventory', 'api'], age: '37m ago' },
         { key: 'purchase-funnel', title: 'Wire the purchase funnel dashboard', description: 'Analysts need one view from product impression through paid order. Join the settled event names and call out late-arriving payments.', status: 'doing', priority: 'normal', category: 'analytics', story: 'checkout', assignee: 'Priya Shah', labels: ['analytics'], age: '1h ago' },
         { key: 'payment-retry', title: 'Retry payment confirmation safely', description: 'A network retry can duplicate the confirmation request. Reuse the idempotency key and surface the original result.', status: 'doing', priority: 'urgent', category: 'reliability', story: 'checkout', assignee: 'Diego Park', labels: ['payments', 'reliability'], age: '2h ago' },
@@ -110,10 +110,10 @@ const FIXTURE = Object.freeze({
   ],
   comments: {
     'cart-summary': [
-      ['Maya Chen', 'The totals line up on desktop, but the tax row wraps on the 360 px checkout.'],
-      ['Diego Park', 'The promotion label is keeping its full width. I can wrap that label without changing the tablet grid.'],
-      ['Maya Chen', 'Keep the tablet layout as-is. Two lines on mobile are fine if the total stays aligned.'],
-      ['Noor Hassan', 'Updated the mobile spec with that constraint. The wallet row uses the same grid now.'],
+      ['Maya Chen', 'The 360 px tax row stays aligned.'],
+      ['Diego Park', 'Promotion labels now wrap cleanly.'],
+      ['Maya Chen', 'Tablet stays fixed; mobile gets two lines.'],
+      ['Noor Hassan', 'Wallet rows now share the same grid.'],
     ],
     'checkout-events': [
       ['Priya Shah', 'order_complete still fires before the retry settles. The dashboard would count that order twice.'],
@@ -170,7 +170,9 @@ function assertSyntheticFixture() {
   for (const project of FIXTURE.projects) assert.ok(project.stories.length >= 2, `${project.name} needs multiple synthetic stories`);
   assert.ok(FIXTURE.links.length >= 6, 'Synthetic fixture needs enough links for the dependency capture');
   assert.ok(FIXTURE.reminders.length >= 2, 'Synthetic fixture needs reminders on more than one ticket');
-  assert.ok(tickets.some((ticket) => ticket.images?.length), 'Synthetic fixture needs an image attachment');
+  const cartSummary = tickets.find((ticket) => ticket.key === 'cart-summary');
+  assert.deepEqual(cartSummary?.files, ['src/checkout/CartSummary.tsx', 'src/checkout/cart-summary.css']);
+  assert.equal(cartSummary?.images?.length, 3, 'Synthetic ticket detail needs enough image attachments to fill the row');
   for (const value of forbidden) assert.equal(text.includes(value), false, `Synthetic fixture contains environment text: ${value}`);
 }
 
@@ -304,7 +306,9 @@ async function waitFor(url, label) {
 async function seedSidequest(tempHome, tempRoot) {
   const refs = new Map();
   const projectClis = new Map();
-  await writeFile(path.join(tempRoot, 'checkout-flow.svg'), `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#f6f1e8"/><rect x="40" y="40" width="160" height="100" rx="12" fill="#d9e5ef"/><rect x="240" y="40" width="160" height="100" rx="12" fill="#eadfc5"/><rect x="440" y="40" width="160" height="100" rx="12" fill="#d8e5d3"/><path d="M200 90h40m160 0h40" stroke="#475569" stroke-width="8" stroke-linecap="round"/><rect x="40" y="200" width="560" height="28" rx="14" fill="#d5cec2"/><rect x="40" y="260" width="420" height="28" rx="14" fill="#d5cec2"/></svg>`);
+  await writeFile(path.join(tempRoot, 'checkout-flow.svg'), `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" rx="18" fill="#f8f6f1"/><rect x="18" y="18" width="604" height="324" rx="14" fill="#fff" stroke="#b8b3aa" stroke-width="4"/><circle cx="42" cy="42" r="6" fill="#e67e73"/><circle cx="62" cy="42" r="6" fill="#e0b45a"/><circle cx="82" cy="42" r="6" fill="#77b58a"/><path d="M18 62h604" stroke="#d7d2c9" stroke-width="4"/><text x="44" y="105" fill="#28262c" font-family="Arial,sans-serif" font-size="30" font-weight="700">CART</text><path d="M62 142l30-18 25 18 25-18 30 18-18 42v88H80v-88z" fill="#65a8c7" stroke="#32738f" stroke-width="5"/><text x="194" y="169" fill="#28262c" font-family="Arial,sans-serif" font-size="22" font-weight="700">Weekend shirt</text><text x="194" y="204" fill="#68636c" font-family="Arial,sans-serif" font-size="18">Blue · Medium</text><text x="194" y="246" fill="#28262c" font-family="Arial,sans-serif" font-size="24" font-weight="700">$48</text><rect x="384" y="92" width="208" height="218" rx="12" fill="#f0ece4"/><text x="408" y="132" fill="#28262c" font-family="Arial,sans-serif" font-size="19" font-weight="700">ORDER SUMMARY</text><text x="408" y="177" fill="#68636c" font-family="Arial,sans-serif" font-size="18">Total</text><text x="520" y="177" fill="#28262c" font-family="Arial,sans-serif" font-size="24" font-weight="700">$128</text><rect x="408" y="218" width="160" height="58" rx="10" fill="#5c63a9"/><text x="447" y="255" fill="#fff" font-family="Arial,sans-serif" font-size="20" font-weight="700">CHECKOUT</text></svg>`);
+  await writeFile(path.join(tempRoot, 'mobile-checkout.svg'), `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" rx="18" fill="#e9f2f3"/><rect x="222" y="20" width="196" height="320" rx="28" fill="#272b34"/><rect x="236" y="40" width="168" height="280" rx="18" fill="#fff"/><rect x="286" y="50" width="68" height="7" rx="4" fill="#9b9da3"/><text x="254" y="90" fill="#28262c" font-family="Arial,sans-serif" font-size="22" font-weight="700">Your cart</text><rect x="254" y="110" width="58" height="64" rx="8" fill="#f0c579"/><path d="M270 126l11-7 10 7 11-7 10 7-7 18v25h-28v-25z" fill="#fff"/><rect x="324" y="116" width="58" height="9" rx="4" fill="#424652"/><rect x="324" y="137" width="44" height="8" rx="4" fill="#aaa7a0"/><rect x="324" y="157" width="35" height="8" rx="4" fill="#aaa7a0"/><path d="M254 197h128" stroke="#d7d2c9" stroke-width="3"/><text x="254" y="225" fill="#68636c" font-family="Arial,sans-serif" font-size="16">Total</text><text x="338" y="225" fill="#28262c" font-family="Arial,sans-serif" font-size="19" font-weight="700">$128</text><rect x="254" y="246" width="128" height="45" rx="10" fill="#5c63a9"/><text x="286" y="275" fill="#fff" font-family="Arial,sans-serif" font-size="16" font-weight="700">PAY NOW</text></svg>`);
+  await writeFile(path.join(tempRoot, 'order-confirmation.svg'), `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" rx="18" fill="#f3eee5"/><rect x="155" y="24" width="330" height="312" rx="14" fill="#fff" stroke="#c9c2b6" stroke-width="4"/><circle cx="320" cy="93" r="42" fill="#70b58a"/><path d="M298 93l15 15 31-34" fill="none" stroke="#fff" stroke-width="10" stroke-linecap="round" stroke-linejoin="round"/><text x="220" y="164" fill="#28262c" font-family="Arial,sans-serif" font-size="28" font-weight="700">ORDER CONFIRMED</text><text x="239" y="202" fill="#68636c" font-family="Arial,sans-serif" font-size="19">Receipt #ACM-2048</text><path d="M205 228h230" stroke="#d7d2c9" stroke-width="4"/><text x="205" y="266" fill="#68636c" font-family="Arial,sans-serif" font-size="19">Total paid</text><text x="368" y="266" fill="#28262c" font-family="Arial,sans-serif" font-size="24" font-weight="700">$128</text><rect x="205" y="287" width="230" height="12" rx="6" fill="#dbe7df"/></svg>`);
   for (const project of FIXTURE.projects) {
     const fakeProject = path.join(tempRoot, project.slug);
     await mkdir(fakeProject, { recursive: true });
@@ -325,6 +329,7 @@ async function seedSidequest(tempHome, tempRoot) {
       const args = ['add', '-t', ticket.title, '--category', ticket.category, '-p', ticket.priority, '-s', ticket.status, '-d', ticket.description];
       if (ticket.story) args.push('--story', stories.get(ticket.story));
       for (const label of ticket.labels) args.push('-l', label);
+      for (const file of ticket.files ?? []) args.push('--file', file);
       for (const image of ticket.images ?? []) args.push('--image', path.join(tempRoot, image));
       const ref = ticketRef(cli(args));
       refs.set(ticket.key, { ref, slug: project.slug });
@@ -918,6 +923,26 @@ async function captureSidequest(browser, port) {
     });
   };
 
+  const captureRegion = async (filename, contents, padding = 16) => {
+    await maskGeneratedBoardText(page);
+    for (const content of contents) await content.waitFor();
+    await page.waitForTimeout(500);
+    const bounds = await Promise.all(contents.map((content) => content.boundingBox()));
+    const viewport = page.viewportSize();
+    assert.ok(bounds.every(Boolean), `Could not measure screenshot region for ${filename}`);
+    assert.ok(viewport, `Could not read screenshot viewport for ${filename}`);
+    const measured = bounds.filter(Boolean);
+    const x = Math.max(0, Math.floor(Math.min(...measured.map((box) => box.x)) - padding));
+    const y = Math.max(0, Math.floor(Math.min(...measured.map((box) => box.y)) - padding));
+    const right = Math.min(viewport.width, Math.ceil(Math.max(...measured.map((box) => box.x + box.width)) + padding));
+    const bottom = Math.min(viewport.height, Math.ceil(Math.max(...measured.map((box) => box.y + box.height)) + padding));
+    assert.ok(right > x && bottom > y, `Screenshot region for ${filename} is outside the viewport`);
+    await page.evaluate(() => new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await writeScreenshot(page, path.join(outputDir, filename), {
+      clip: { x, y, width: right - x, height: bottom - y },
+    });
+  };
+
   const board = page.locator('.board');
   await capture('sidequest-kanban.png', board);
 
@@ -940,6 +965,7 @@ async function captureSidequest(browser, port) {
   await page.getByRole('button', { name: 'Settings', exact: true }).click();
   const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
   await settingsDialog.waitFor();
+  await settingsDialog.getByText('Saving profile changes updates 3 boards.', { exact: true }).waitFor();
   await capture('sidequest-settings.png', settingsDialog);
   await page.getByRole('button', { name: 'Close settings' }).click();
 
@@ -967,19 +993,48 @@ async function captureSidequest(browser, port) {
   assert.match((await category.textContent()) ?? '', /Product/, 'Synthetic ticket detail did not load its board category');
   await capture('sidequest-ticket-detail.png', page.getByRole('dialog'));
 
-  const storyPicker = page.getByRole('combobox', { name: 'Story' });
-  await page.locator('.main-grid').evaluate((element) => { element.scrollTop = element.scrollHeight; });
-  await page.waitForTimeout(200);
-  await storyPicker.click();
-  await page.getByRole('listbox', { name: 'Story' }).waitFor();
-  await storyPicker.click();
-
   const linkTarget = page.getByRole('combobox', { name: 'Link target' });
   await linkTarget.scrollIntoViewIfNeeded();
   await linkTarget.click();
-  await page.getByRole('listbox', { name: 'Link target' }).waitFor();
-  await capture('sidequest-ticket-links.png', page.getByRole('dialog'));
+  const targetOptions = page.getByRole('listbox', { name: 'Link target' });
+  await targetOptions.waitFor();
+  await targetOptions.getByRole('option', { name: /Explain estimated tax on receipts/ }).click();
+  await page.getByRole('button', { name: 'Add link' }).click();
+  const linkSection = page.locator('section.links');
+  await linkSection.locator('.link').filter({ hasText: 'SQ-13' }).waitFor();
+  assert.equal(await linkSection.locator('.link').count(), 2, 'Synthetic ticket links capture needs two populated relationships');
   await linkTarget.click();
+  await page.getByRole('listbox', { name: 'Link target' }).getByRole('option', { name: 'Choose a ticket', exact: true }).click();
+  await linkSection.scrollIntoViewIfNeeded();
+  await captureRegion('sidequest-ticket-links.png', [linkSection], 8);
+
+  const attachments = page.locator('section.attachments');
+  await attachments.locator('img').evaluateAll((images) => Promise.all(images.map((image) => image.decode())));
+  const mainGrid = page.locator('.main-grid');
+  await mainGrid.evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await page.waitForTimeout(200);
+  const fields = page.locator('.fields');
+  const labelsField = page.getByText('Labels', { exact: true }).locator('..');
+  const affectedFilesField = page.getByText('Affected files', { exact: true }).locator('..');
+  const comments = page.locator('section.comments');
+  const [labelsBounds, commentsBounds] = await Promise.all([labelsField.boundingBox(), comments.boundingBox()]);
+  assert.ok(labelsBounds && commentsBounds, 'Could not align the synthetic ticket context capture');
+  const contextOffset = Math.max(0, Math.round(labelsBounds.y - commentsBounds.y));
+  await fields.evaluate((element, offset) => {
+    let contextStarted = false;
+    for (const child of element.children) {
+      if (child.textContent?.trim().startsWith('Labels')) contextStarted = true;
+      if (contextStarted) child.style.transform = `translateY(-${offset}px)`;
+      else child.style.visibility = 'hidden';
+    }
+  }, contextOffset);
+  await captureRegion('sidequest-ticket-context.png', [labelsField, affectedFilesField, attachments, comments], 8);
+  await fields.evaluate((element) => {
+    for (const child of element.children) {
+      child.style.removeProperty('transform');
+      child.style.removeProperty('visibility');
+    }
+  });
 
   await page.getByRole('button', { name: 'Close', exact: true }).click();
   await page.locator('aside[aria-label="Boards"] nav > button').first().click();
@@ -1029,7 +1084,7 @@ async function main() {
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
     await captureGrafana(browser, grafanaPort);
-    console.log(`Generated 13 synthetic screenshots in ${outputDir}`);
+    console.log(`Generated 14 synthetic screenshots in ${outputDir}`);
   } finally {
     await browser?.close();
     server?.kill();

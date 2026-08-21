@@ -78,9 +78,15 @@ Stories group tickets into a plan you can filter and discuss before dispatch. Th
 
 Links show which tickets block or relate to each other. Use the dependency list to inspect the existing chain, then choose a link type and target when you add another relationship.
 
-![Sidequest ticket links editor showing dependency targets and an existing block](../../../assets/screenshots/sidequest-ticket-links.png)
+![Sidequest ticket links editor showing two populated dependency relationships and the add-link controls](../../../assets/screenshots/sidequest-ticket-links.png)
 
-*Synthetic demo data showing the dependency options for the Build cart summary ticket.*
+*Synthetic demo data showing the existing and newly added dependencies for the Build cart summary ticket.*
+
+The lower ticket context keeps declared files, attachment previews, and the full discussion visible without putting the link picker over the comments.
+
+![Sidequest ticket context showing affected files, three checkout attachment previews, and four complete comments](../../../assets/screenshots/sidequest-ticket-context.png)
+
+*Synthetic demo data showing the declared checkout files, visual references, and team decisions attached to the same ticket.*
 
 Completed work can move into the archive without disappearing. The archive view keeps the source board, priority, age, and restore action with each ticket.
 
