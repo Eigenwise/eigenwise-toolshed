@@ -321,12 +321,21 @@ function normalizeFiles(files?: any) {
   return out;
 }
 
-function isVerificationEvidencePath(file: any, evidenceDirectory: any) {
+function isVerificationEvidencePath(file: any, evidenceDirectory: any, ticketRef?: any) {
   const directory = String(evidenceDirectory || '').trim();
   const requestedPath = String(file || '').trim();
-  if (!directory || !requestedPath) return false;
-  const relative = path.relative(path.resolve(directory), path.resolve(requestedPath));
-  return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+  if (!requestedPath) return false;
+  if (directory) {
+    const relative = path.relative(path.resolve(directory), path.resolve(requestedPath));
+    if (relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative))) return true;
+  }
+  const normalizedPath = requestedPath.replace(/\\/g, '/').toLowerCase();
+  const normalizedRef = String(ticketRef || '').trim().toLowerCase();
+  return Boolean(
+    normalizedRef
+    && normalizedPath.includes(normalizedRef)
+    && normalizedPath.split('/').some((segment: string) => ['artifacts', 'evidence', 'verification'].includes(segment)),
+  );
 }
 
 function verificationEvidenceGuidance(evidenceDirectory: any, evidencePaths: any[]) {
@@ -659,7 +668,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const requested = normalizeFiles(files);
     if (!requested.length) return { ok: false, reason: 'files_required', ticket: t };
     const evidenceDirectory = String(t.dispatch?.evidenceDirectory || '').trim();
-    const requestedEvidencePaths = requested.filter((file?: any) => isVerificationEvidencePath(file, evidenceDirectory));
+    const requestedEvidencePaths = requested.filter((file?: any) => isVerificationEvidencePath(file, evidenceDirectory, t.ref));
     const validation = commitScope.validateRelativeScopes(requested);
     if (!validation.ok) {
       const refusalMessage = `Scope expansion refused: ${validation.outside.join(', ')}.`;
@@ -726,9 +735,9 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const undeclared = !normalizeFiles(t.files).length
       ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.`
       : '';
-    const refusedEvidencePaths = refused.filter((file?: any) => isVerificationEvidencePath(file, evidenceDirectory));
+    const refusedEvidencePaths = refused.filter((file?: any) => isVerificationEvidencePath(file, evidenceDirectory, t.ref));
     const refusedOutsideDeclaredFiles = refused.filter((file?: any) => (
-      !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory)
+      !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory, t.ref)
     ));
     const foreignReleaseFragmentMessage = foreignReleaseFragments.length
       ? commitScope.foreignReleaseFragmentRefusalMessage('scopeRequest', t.ref, foreignReleaseFragments)

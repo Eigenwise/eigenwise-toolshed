@@ -323,12 +323,19 @@ function createTickets(dependencies) {
     }
     return out;
   }
-  function isVerificationEvidencePath(file, evidenceDirectory) {
+  function isVerificationEvidencePath(file, evidenceDirectory, ticketRef) {
     const directory = String(evidenceDirectory || "").trim();
     const requestedPath = String(file || "").trim();
-    if (!directory || !requestedPath) return false;
-    const relative = path.relative(path.resolve(directory), path.resolve(requestedPath));
-    return relative === "" || !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative);
+    if (!requestedPath) return false;
+    if (directory) {
+      const relative = path.relative(path.resolve(directory), path.resolve(requestedPath));
+      if (relative === "" || !relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative)) return true;
+    }
+    const normalizedPath = requestedPath.replace(/\\/g, "/").toLowerCase();
+    const normalizedRef = String(ticketRef || "").trim().toLowerCase();
+    return Boolean(
+      normalizedRef && normalizedPath.includes(normalizedRef) && normalizedPath.split("/").some((segment) => ["artifacts", "evidence", "verification"].includes(segment))
+    );
   }
   function verificationEvidenceGuidance(evidenceDirectory, evidencePaths) {
     if (!evidencePaths.length) return "";
@@ -610,7 +617,7 @@ function createTickets(dependencies) {
       const requested = normalizeFiles(files);
       if (!requested.length) return { ok: false, reason: "files_required", ticket: t };
       const evidenceDirectory = String(t.dispatch?.evidenceDirectory || "").trim();
-      const requestedEvidencePaths = requested.filter((file) => isVerificationEvidencePath(file, evidenceDirectory));
+      const requestedEvidencePaths = requested.filter((file) => isVerificationEvidencePath(file, evidenceDirectory, t.ref));
       const validation = commitScope.validateRelativeScopes(requested);
       if (!validation.ok) {
         const refusalMessage2 = `Scope expansion refused: ${validation.outside.join(", ")}.`;
@@ -661,8 +668,8 @@ function createTickets(dependencies) {
       if (!Array.isArray(t.comments)) t.comments = [];
       const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "matching package surface derived from the ticket’s declared files";
       const undeclared = !normalizeFiles(t.files).length ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.` : "";
-      const refusedEvidencePaths = refused.filter((file) => isVerificationEvidencePath(file, evidenceDirectory));
-      const refusedOutsideDeclaredFiles = refused.filter((file) => !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory));
+      const refusedEvidencePaths = refused.filter((file) => isVerificationEvidencePath(file, evidenceDirectory, t.ref));
+      const refusedOutsideDeclaredFiles = refused.filter((file) => !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory, t.ref));
       const foreignReleaseFragmentMessage = foreignReleaseFragments.length ? commitScope.foreignReleaseFragmentRefusalMessage("scopeRequest", t.ref, foreignReleaseFragments) : "";
       const scopeExpansionRefusalMessage = additions.length ? `Scope expansion refused: ${refused.join(", ")}.` : "";
       const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(" ");

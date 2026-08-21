@@ -45,3 +45,14 @@ test('scopeRequest refuses board-owned verification evidence with its directory 
   assert.match(result.message, /The refused path is board-owned verification evidence/);
   assert.match(result.message, /Verification evidence belongs in/);
 });
+
+test('scopeRequest identifies ticket-specific repository probe output as verification evidence', () => {
+  const fixture = createClaimedDispatch();
+  const evidencePath = `plugins/sidequest/artifacts/${fixture.ticket.ref}-probe.png`;
+  const result = fixture.store.requestScope(fixture.project, fixture.ticket.ref, 'scope-evidence-worker', [evidencePath]);
+  const comment = fixture.store.getTicket(fixture.project, fixture.ticket.ref).comments.at(-1).body;
+
+  assert.equal(result.state, 'refused');
+  assert.match(comment, /The refused path is board-owned verification evidence/);
+  assert.match(comment, /Verification evidence belongs in/);
+});
