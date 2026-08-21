@@ -76,6 +76,15 @@ function completeCheckoutCreation(sessionId: string, worktree: string): void {
   assert.equal(store.completeDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
 }
 
+function removeWorktreeBranch(worktree: string, branch: string): void {
+  if (fs.existsSync(worktree)) execFileSync('git', ['worktree', 'remove', '--force', worktree], { cwd: PROJECT, windowsHide: true });
+  try {
+    execFileSync('git', ['show-ref', '--verify', '--quiet', `refs/heads/${branch}`], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' });
+    execFileSync('git', ['branch', '-D', branch], { cwd: PROJECT, windowsHide: true, stdio: 'ignore' });
+  } catch (_) {
+  }
+}
+
 function dispatched(agentId: string, options: { sharedTree?: boolean } = {}) {
   const ticket = store.createTicket(slug, {
     title: `isolation fixture ${agentId}`,
@@ -789,6 +798,320 @@ test('SQ-2190: a creation order that crossed two siblings is exchanged for the c
       store.releaseTicket(slug, target.ref, 'sq2190-cleanup', { status: 'todo', source: 'test', force: true });
       if (fs.existsSync(target.worktree)) execFileSync('git', ['worktree', 'remove', '--force', target.worktree], { cwd: PROJECT, windowsHide: true });
     }
+  }
+});
+
+test('a fresh re-dispatch binds its created checkout when the runtime reports the prior retained identity', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: `stale retained identity fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'A fresh retry after a terminal isolated run retained its old checkout.',
+    files: ['README.md'],
+  });
+  const priorSessionId = `stale-retained-prior-session-${sequence}`;
+  const priorAgentId = `stale-retained-prior-agent-${sequence}`;
+  const priorAgentName = `stale-retained-prior-name-${sequence}`;
+  const priorBranch = `stale-retained-prior-${sequence}`;
+  const priorWorktree = path.join(SIDEQUEST_HOME, 'stale-retained-targets', `prior-${sequence}`);
+  const freshSessionId = `stale-retained-fresh-session-${sequence}`;
+  const freshAgentName = `stale-retained-fresh-name-${sequence}`;
+  const freshBranch = `stale-retained-fresh-${sequence}`;
+  const freshWorktree = path.join(SIDEQUEST_HOME, 'stale-retained-targets', `fresh-${sequence}`);
+  fs.mkdirSync(path.dirname(priorWorktree), { recursive: true });
+
+  try {
+    const prior = store.prepareDispatch(slug, ticket.ref, { sessionId: priorSessionId });
+    const executor = prior.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prior.token,
+      executor,
+      sessionId: priorSessionId,
+      agentName: priorAgentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, priorSessionId, priorWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', priorBranch, priorWorktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(priorSessionId, priorWorktree);
+    assert.equal(store.bindDispatchAgent(priorSessionId, executor, priorAgentId, priorAgentName, priorWorktree).ok, true);
+    assert.equal(store.claimTicket(slug, ticket.ref, 'stale-retained-prior-worker', {
+      token: prior.token,
+      executor,
+      sessionId: priorSessionId,
+      requireBoundAgent: true,
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, 'stale-retained-prior-worker', {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'No committed progress to retain.',
+    }).ok, true);
+
+    const fresh = store.prepareDispatch(slug, ticket.ref, { sessionId: freshSessionId });
+    assert.equal(fresh.ticket.dispatch.continuation, undefined);
+    assert.equal(agentsync.ticketIsolation(fresh.ticket, fresh.ticket.dispatch.sharedTree), 'worktree');
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: fresh.token,
+      executor: fresh.ticket.dispatchExecutor,
+      sessionId: freshSessionId,
+      agentName: freshAgentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, freshSessionId, freshWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', freshBranch, freshWorktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(freshSessionId, freshWorktree);
+
+    const bound = store.bindDispatchAgent(freshSessionId, fresh.ticket.dispatchExecutor, priorAgentId, priorAgentName, freshWorktree);
+    assert.equal(bound.ok, true, `a stale runtime identity must bind through its fresh checkout: ${bound.reason}`);
+    const expectation = store.dispatchIsolationExpectation({
+      sessionId: freshSessionId,
+      executor: fresh.ticket.dispatchExecutor,
+      agentId: priorAgentId,
+      observedWorktree: freshWorktree,
+    });
+    assert.equal(expectation?.matchedBy, 'agent');
+    assert.equal(expectation?.expectedWorktree, worktrees.canonicalPath(freshWorktree));
+    assert.notEqual(expectation?.expectedWorktree, worktrees.canonicalPath(priorWorktree));
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'stale-retained-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(freshWorktree, freshBranch);
+    removeWorktreeBranch(priorWorktree, priorBranch);
+  }
+});
+
+test('a release-fragment-only checkpoint cannot permanently block a fresh retry', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: `release-only checkpoint fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'A rejected candidate left only its implicit release fragment behind.',
+    files: ['README.md'],
+  });
+  const candidateSessionId = `release-only-candidate-session-${sequence}`;
+  const candidateAgentName = `release-only-candidate-agent-${sequence}`;
+  const candidateBranch = `release-only-candidate-${sequence}`;
+  const candidateWorktree = path.join(SIDEQUEST_HOME, 'release-only-targets', `candidate-${sequence}`);
+  const abandonedSessionId = `release-only-abandoned-session-${sequence}`;
+  const abandonedAgentName = `release-only-abandoned-agent-${sequence}`;
+  const abandonedBranch = `release-only-abandoned-${sequence}`;
+  const abandonedWorktree = path.join(SIDEQUEST_HOME, 'release-only-targets', `abandoned-${sequence}`);
+  fs.mkdirSync(path.dirname(candidateWorktree), { recursive: true });
+
+  try {
+    const candidate = store.prepareDispatch(slug, ticket.ref, { sessionId: candidateSessionId });
+    const executor = candidate.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: candidate.token,
+      executor,
+      sessionId: candidateSessionId,
+      agentName: candidateAgentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, candidateSessionId, candidateWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', candidateBranch, candidateWorktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(candidateSessionId, candidateWorktree);
+    assert.equal(store.bindDispatchAgent(candidateSessionId, executor, candidateAgentName, candidateAgentName, candidateWorktree).ok, true);
+    const candidateOwner = `release-only-owner-${sequence}`;
+    assert.equal(store.claimTicket(slug, ticket.ref, candidateOwner, {
+      token: candidate.token,
+      executor,
+      sessionId: candidateSessionId,
+      requireBoundAgent: true,
+    }).ok, true);
+    const releaseFragment = path.join(candidateWorktree, '.release', 'unreleased', `${ticket.ref}.md`);
+    fs.mkdirSync(path.dirname(releaseFragment), { recursive: true });
+    fs.writeFileSync(releaseFragment, '---\ntype: fix\n---\n\nRelease-only checkpoint fixture.\n');
+    execFileSync('git', ['add', path.relative(candidateWorktree, releaseFragment)], { cwd: candidateWorktree, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', `chore(release): add ${ticket.ref} fragment`], { cwd: candidateWorktree, windowsHide: true });
+    const checkpointCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: candidateWorktree, encoding: 'utf8', windowsHide: true }).trim();
+    assert.equal(store.checkpointTicket(slug, ticket.ref, candidateOwner, {
+      commit: checkpointCommit,
+      verify: 'release fragment fixture inspected',
+      source: 'test',
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, candidateOwner, {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'The release-only checkpoint has no implementation to retain.',
+    }).ok, true);
+    removeWorktreeBranch(candidateWorktree, candidateBranch);
+
+    const abandoned = store.prepareDispatch(slug, ticket.ref, { sessionId: abandonedSessionId });
+    assert.equal(abandoned.ticket.dispatch.continuation, undefined);
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: abandoned.token,
+      executor: abandoned.ticket.dispatchExecutor,
+      sessionId: abandonedSessionId,
+      agentName: abandonedAgentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, abandonedSessionId, abandonedWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', abandonedBranch, abandonedWorktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(abandonedSessionId, abandonedWorktree);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: abandoned.token,
+      executor: abandoned.ticket.dispatchExecutor,
+      sessionId: abandonedSessionId,
+      taskName: abandonedAgentName,
+      error: 'Subagent terminated unexpectedly',
+      source: 'test',
+    }).ok, true);
+
+    const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: `${abandonedSessionId}-retry` });
+    assert.equal(retry.ok, true);
+    assert.equal(retry.ticket.dispatch.continuation, undefined);
+    assert.equal(agentsync.ticketIsolation(retry.ticket, retry.ticket.dispatch.sharedTree), 'worktree');
+    assert.equal(fs.existsSync(abandonedWorktree), false);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'release-only-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(abandonedWorktree, abandonedBranch);
+    removeWorktreeBranch(candidateWorktree, candidateBranch);
+  }
+});
+
+test('a meaningful checkpoint stays protected and names its retained-resume escape', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: `meaningful checkpoint fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'A checkpoint with implementation work must survive an unrelated failed retry.',
+    files: ['README.md'],
+  });
+  const candidateSessionId = `meaningful-candidate-session-${sequence}`;
+  const candidateAgentName = `meaningful-candidate-agent-${sequence}`;
+  const candidateBranch = `meaningful-candidate-${sequence}`;
+  const candidateWorktree = path.join(SIDEQUEST_HOME, 'meaningful-checkpoint-targets', `candidate-${sequence}`);
+  const abandonedSessionId = `meaningful-abandoned-session-${sequence}`;
+  const abandonedBranch = `meaningful-abandoned-${sequence}`;
+  const abandonedWorktree = path.join(SIDEQUEST_HOME, 'meaningful-checkpoint-targets', `abandoned-${sequence}`);
+  fs.mkdirSync(path.dirname(candidateWorktree), { recursive: true });
+
+  try {
+    const candidate = store.prepareDispatch(slug, ticket.ref, { sessionId: candidateSessionId });
+    const executor = candidate.ticket.dispatchExecutor;
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: candidate.token,
+      executor,
+      sessionId: candidateSessionId,
+      agentName: candidateAgentName,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, candidateSessionId, candidateWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', candidateBranch, candidateWorktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(candidateSessionId, candidateWorktree);
+    assert.equal(store.bindDispatchAgent(candidateSessionId, executor, candidateAgentName, candidateAgentName, candidateWorktree).ok, true);
+    const candidateOwner = `meaningful-owner-${sequence}`;
+    assert.equal(store.claimTicket(slug, ticket.ref, candidateOwner, {
+      token: candidate.token,
+      executor,
+      sessionId: candidateSessionId,
+      requireBoundAgent: true,
+    }).ok, true);
+    fs.appendFileSync(path.join(candidateWorktree, 'README.md'), `\nMeaningful checkpoint ${sequence}.\n`);
+    execFileSync('git', ['add', 'README.md'], { cwd: candidateWorktree, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', `test: preserve ${ticket.ref} checkpoint`], { cwd: candidateWorktree, windowsHide: true });
+    const releaseFragment = path.join(candidateWorktree, '.release', 'unreleased', `${ticket.ref}.md`);
+    fs.mkdirSync(path.dirname(releaseFragment), { recursive: true });
+    fs.writeFileSync(releaseFragment, '---\ntype: fix\n---\n\nMeaningful candidate release fragment.\n');
+    execFileSync('git', ['add', path.relative(candidateWorktree, releaseFragment)], { cwd: candidateWorktree, windowsHide: true });
+    execFileSync('git', ['commit', '--quiet', '-m', `chore(release): add ${ticket.ref} fragment`], { cwd: candidateWorktree, windowsHide: true });
+    const checkpointCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: candidateWorktree, encoding: 'utf8', windowsHide: true }).trim();
+    assert.equal(store.checkpointTicket(slug, ticket.ref, candidateOwner, {
+      commit: checkpointCommit,
+      verify: 'meaningful checkpoint fixture inspected',
+      source: 'test',
+    }).ok, true);
+    assert.equal(store.releaseTicket(slug, ticket.ref, candidateOwner, {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'handback',
+      releaseReason: 'Keep the implementation checkpoint available.',
+    }).ok, true);
+    removeWorktreeBranch(candidateWorktree, candidateBranch);
+
+    const abandoned = store.prepareDispatch(slug, ticket.ref, { sessionId: abandonedSessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: abandoned.token,
+      executor: abandoned.ticket.dispatchExecutor,
+      sessionId: abandonedSessionId,
+      agentName: `meaningful-abandoned-agent-${sequence}`,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, abandonedSessionId, abandonedWorktree).ok, true);
+    execFileSync('git', ['worktree', 'add', '-b', abandonedBranch, abandonedWorktree, 'HEAD'], { cwd: PROJECT, windowsHide: true });
+    completeCheckoutCreation(abandonedSessionId, abandonedWorktree);
+    assert.equal(store.recordDispatchAgentFailure(slug, ticket.ref, {
+      token: abandoned.token,
+      executor: abandoned.ticket.dispatchExecutor,
+      sessionId: abandonedSessionId,
+      taskName: `meaningful-abandoned-agent-${sequence}`,
+      error: 'Subagent terminated unexpectedly',
+      source: 'test',
+    }).ok, true);
+
+    assert.throws(
+      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${abandonedSessionId}-retry` }),
+      (error: any) => {
+        assert.match(error.message, new RegExp(`checkpoint ${checkpointCommit}`));
+        assert.match(error.message, /Restore .* to checkpoint .* then dispatch again; the board will resume that retained checkout/);
+        return true;
+      },
+    );
+    assert.equal(fs.existsSync(abandonedWorktree), true);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'meaningful-checkpoint-cleanup', { status: 'todo', source: 'test', force: true });
+    removeWorktreeBranch(abandonedWorktree, abandonedBranch);
+    removeWorktreeBranch(candidateWorktree, candidateBranch);
+  }
+});
+
+test('a token-validated failed claimant can surrender an unclaimed dispatch immediately', () => {
+  const sequence = `${process.pid}-${Date.now()}`;
+  const ticket = store.createTicket(slug, {
+    title: `tokened surrender fixture ${sequence}`,
+    category: 'codebase-exploration',
+    description: 'The claiming runtime has a valid token but cannot bind its runtime session.',
+    files: ['README.md'],
+  });
+  const dispatchSessionId = `tokened-surrender-dispatch-${sequence}`;
+  const by = `tokened-surrender-worker-${sequence}`;
+
+  try {
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: dispatchSessionId });
+    const refusedClaim = store.claimTicket(slug, ticket.ref, by, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      requireBoundAgent: true,
+    });
+    assert.equal(refusedClaim.ok, false);
+    assert.equal(refusedClaim.reason, 'unbound_dispatch');
+
+    const wrongClaimant = store.releaseTicket(slug, ticket.ref, `${by}-other`, {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'technical_blocker',
+      releaseReason: 'A different claimant must not consume this failed claim.',
+    });
+    assert.equal(wrongClaimant.ok, false);
+    assert.equal(wrongClaimant.reason, 'unclaimed_active_dispatch');
+
+    const surrendered = store.releaseTicket(slug, ticket.ref, by, {
+      status: 'todo',
+      source: 'test',
+      releaseKind: 'technical_blocker',
+      releaseReason: 'The current token could not bind this runtime.',
+      releaseEvidence: {
+        kind: 'technical_blocker',
+        command: 'claim',
+        exitCode: 1,
+        outputTail: 'unbound_dispatch',
+      },
+    });
+    assert.equal(surrendered.ok, true, surrendered.message);
+    assert.equal(surrendered.ticket.claim, null);
+    assert.equal(surrendered.ticket.dispatchNonce, null);
+    assert.equal(surrendered.ticket.dispatch.outcome, 'released');
+
+    const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: `${dispatchSessionId}-retry` });
+    assert.equal(retry.ok, true);
+    assert.notEqual(retry.token, prepared.token);
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'tokened-surrender-cleanup', { status: 'todo', source: 'test', force: true });
   }
 });
 
