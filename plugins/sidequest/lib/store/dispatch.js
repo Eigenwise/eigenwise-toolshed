@@ -852,15 +852,16 @@ function createDispatch(dependencies) {
     const reportedWorktree = String(worktree || "").trim();
     return Boolean(projectPath && reportedWorktree && canonicalPath(projectPath) === canonicalPath(reportedWorktree));
   }
-  function releasedContinuationState(slug, ticket, state) {
-    if (!state || state.outcome !== "released" || !state.terminalAt || state.sharedTree !== false) return null;
+  function retainedWorktreeContinuationState(slug, ticket, state) {
+    const attempts = Array.isArray(state?.attempts) ? state.attempts : [];
+    const attempt = attempts[attempts.length - 1] || null;
+    const checkpointCommit = String(attempt?.commit || "").trim();
+    const checkpointedTerminalFailure = Boolean(state?.terminalAt && checkpointCommit && ["failed", "died"].includes(state.outcome));
+    if (!state || !checkpointedTerminalFailure && state.outcome !== "released" || !state.terminalAt || state.sharedTree !== false) return null;
     const recordedWorktree = String(state.worktree || "").trim();
     if (!recordedWorktree || !fs.existsSync(recordedWorktree)) {
       return { fallback: continuationFallback("released_worktree_missing", recordedWorktree) };
     }
-    const attempts = Array.isArray(state.attempts) ? state.attempts : [];
-    const attempt = attempts[attempts.length - 1] || null;
-    const checkpointCommit = String(attempt?.commit || "").trim();
     let worktree = recordedWorktree;
     try {
       const recordedGitDirectory = String(state.worktreeGitDirectory || "").trim();
@@ -953,6 +954,37 @@ function createDispatch(dependencies) {
       return { fallback: continuationFallback("released_worktree_git_state_is_unreadable", worktree, { cause: gitFailureEvidence(error) }) };
     }
   }
+  function releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, baseCommit) {
+    const repository = String(projectPath || "").trim();
+    const commit = String(checkpointCommit || "").trim();
+    const baseline = String(baseCommit || "").trim();
+    const ticketRef = String(ticket?.ref || "").trim();
+    if (!repository || !commit || !baseline || !ticketRef) return false;
+    try {
+      gitOutput(repository, ["merge-base", "--is-ancestor", baseline + "^{commit}", commit + "^{commit}"]);
+      const changedPaths = gitOutput(repository, ["diff", "--name-only", baseline + "^{commit}", commit + "^{commit}", "--"]).split(/\r?\n/).map((changedPath) => changedPath.replace(/\\/g, "/").trim()).filter(Boolean);
+      return changedPaths.length === 1 && changedPaths[0] === `.release/unreleased/${ticketRef}.md`;
+    } catch (_) {
+      return false;
+    }
+  }
+  function unclaimedWorktreeRecoveryFacts(projectPath, ticket, state) {
+    const checkpointCommit = String(ticket?.checkpoint?.commit || ticket?.submission?.commit || "").trim();
+    if (!checkpointCommit || !releaseFragmentOnlyCheckpoint(projectPath, ticket, checkpointCommit, state?.baseCommit)) {
+      return { state, checkpointCommit: checkpointCommit || null };
+    }
+    const worktree = String(state?.worktree || "").trim();
+    if (!worktree || !fs.existsSync(worktree)) return { state, checkpointCommit: null };
+    try {
+      const checkpointRevision = gitOutput(projectPath, ["rev-parse", "--verify", checkpointCommit + "^{commit}"]);
+      const worktreeRevision = gitOutput(worktree, ["rev-parse", "--verify", "HEAD^{commit}"]);
+      if (checkpointRevision === worktreeRevision) {
+        return { state: Object.assign({}, state, { baseCommit: checkpointRevision }), checkpointCommit: null };
+      }
+    } catch (_) {
+    }
+    return { state, checkpointCommit: null };
+  }
   function prepareDispatch(slug, idOrRef, opts) {
     opts = opts || {};
     if (!projectRoutingEnabled(slug)) throw new Error(routingDisabledMessage(idOrRef));
@@ -992,11 +1024,17 @@ function createDispatch(dependencies) {
         throw new Error(`prepare dispatch: ${t.ref} has a pending submission${candidate ? ` (${candidate})` : ""} waiting on integration, so it is parked for the publish transaction rather than for another executor. Integrate it (\`sidequest integrate ${t.ref} --by <who>\`), send it back for repair and dispatch the replacement (\`sidequest rework ${t.ref} --by ${t.submission.by || "<candidate-owner>"} --review <review-ticket-or-evidence> --reason "what needs repair"\`), or close it as abandoned (\`sidequest groom-close ${t.ref} --abandon-submission --reason "<evidence it never landed>"\`).`);
       }
       if (current?.terminalAt && current.sharedTree === false && !current.claimedAt && !(t.claim && t.claim.by)) {
-        const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, current, {
-          checkpointCommit: t.checkpoint?.commit || t.submission?.commit || null
+        const recoveryFacts = unclaimedWorktreeRecoveryFacts(projectPath, t, current);
+        const recovery2 = reclaimUnclaimedDispatchWorktree(projectPath, recoveryFacts.state, {
+          checkpointCommit: recoveryFacts.checkpointCommit
         });
         if (recovery2 && recovery2.reclaimed === false && recovery2.discardable !== true) {
-          throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery2.message || `immutable recovery fact ${recovery2.reason || "is unreadable"}`}`);
+          const retainedContinuation = retainedWorktreeContinuationState(slug, t, current);
+          if (!retainedContinuation?.continuation) {
+            const checkpointCommit = String(t.checkpoint?.commit || "").trim();
+            const checkpointRecovery = checkpointCommit ? ` Restore ${current.worktree} to checkpoint ${checkpointCommit}, then dispatch again; the board will resume that retained checkout without creating another.` : "";
+            throw new Error(`prepare dispatch: ${t.ref} cannot retry because ${recovery2.message || `immutable recovery fact ${recovery2.reason || "is unreadable"}`}${checkpointRecovery}`);
+          }
         }
       }
       const activeRuntimeAttempt = current && !current.terminalAt && !(t.claim && t.claim.by) && Boolean(current.launchedAt || current.boundAt);
@@ -1010,7 +1048,7 @@ function createDispatch(dependencies) {
       const repeatFailure = repeatNoCommitDispatchError(t, current);
       const unboundAttemptsSkipped = skippedUnboundNoCommitAttempts(current);
       if (repeatFailure && opts.allowRepeatFailure !== true) throw new Error(repeatFailure);
-      const releasedContinuation = releasedContinuationState(slug, t, current);
+      const releasedContinuation = retainedWorktreeContinuationState(slug, t, current);
       if (t.claim && t.claim.by && !claimReclaimable(t)) {
         throw new Error(`prepare dispatch: ${t.ref} has a live claim by ${t.claim.by}. Release it (\`sidequest release ${t.ref} --by ${t.claim.by}\`) before dispatching again.`);
       }
@@ -1833,11 +1871,22 @@ function createDispatch(dependencies) {
       return { ok: false, reason: "missing_identity" };
     }
     let matches = [];
+    const unclaimedCreationReservations = [];
     for (const project of listProjects({ all: true })) {
       for (const ticket of listTickets(project.slug)) {
         const state = dispatchState(ticket);
+        if (state?.executor === normalizedExecutor && unclaimedCreationReservation(ticket, state, normalizedSessionId)) {
+          unclaimedCreationReservations.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
+        }
         if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) continue;
         matches.push({ slug: project.slug, id: ticket.id, sharedTree: state.sharedTree, state });
+      }
+    }
+    if (!matches.length && normalizedAgentId && normalizedWorktree && unclaimedCreationReservations.length === 1) {
+      const reservation = unclaimedCreationReservations[0];
+      const completed = completedWorktreeCreationFacts(reservation.state);
+      if (completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree)) {
+        matches = [Object.assign({}, reservation, { checkoutIdentityOverride: true })];
       }
     }
     if (normalizedWorktree) {
@@ -1859,7 +1908,9 @@ function createDispatch(dependencies) {
       const result = withTicketLock(match.slug, match.id, () => {
         const t = getTicket(match.slug, match.id);
         const state = dispatchState(t);
-        if (!dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) {
+        const completedReservation = completedWorktreeCreationFacts(state);
+        const checkoutIdentityOverride = Boolean(match.checkoutIdentityOverride && unclaimedCreationReservation(t, state, normalizedSessionId) && completedReservation && canonicalPath(completedReservation.worktree) === canonicalPath(normalizedWorktree));
+        if (!checkoutIdentityOverride && !dispatchCanBindRuntimeIdentity(state, normalizedSessionId, normalizedExecutor, normalizedAgentId, normalizedAgentName)) {
           return { ok: false };
         }
         if (state.sharedTree === false && normalizedWorktree && !state.continuation?.sourceWorktree && (state.worktreeBindingSource !== "worktree-create" || !state.worktree)) {

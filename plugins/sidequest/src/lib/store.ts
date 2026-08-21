@@ -1815,7 +1815,23 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       activeAttempt = transitionAttempt(activeAttempt, 'bind_claim_token');
     }
     if (!directExecution && opts.requireBoundAgent && activeAttempt.state !== 'bound' && activeAttempt.state !== 'claimed') {
-      return { ok: false, reason: 'unbound_dispatch', ticket: t };
+      currentDispatch.failedClaimSurrender = {
+        by,
+        executor: String(opts.executor || ''),
+        sessionId: opts.sessionId ? String(opts.sessionId) : null,
+        tokenDigest: dispatchTokenDigest(admission.token),
+        tokenPrefix: dispatchTokenPrefix(admission.token),
+        at: now,
+      };
+      stampDispatchEvent(t, opts.source || 'claim', now);
+      putTicket(slug, t);
+      queueEventNotification(slug, t, t.lastEventType, t.lastEventSource);
+      return {
+        ok: false,
+        reason: 'unbound_dispatch',
+        ticket: t,
+        message: `claim: refused ${t.ref}; this runtime presented the current token and executor but did not bind to the prepared dispatch. ${by} may immediately release this attempt with kind technical_blocker, using this refusal as the command/output evidence and the same session identity when one was supplied, then stop.`,
+      };
     }
     if (currentDispatch?.resumedAt && isolatedDispatchWorktreeMissing(currentDispatch)) return { ok: false, reason: 'worktree_missing', ticket: t };
     // Submitted work awaits the orchestrator's publish transaction, not another
@@ -1885,6 +1901,7 @@ function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     }
     const state = dispatchState(t);
     if (state) {
+      delete state.failedClaimSurrender;
       state.sessionId = opts.sessionId ? String(opts.sessionId) : state.sessionId || null;
       state.claimedAt = now;
       state.outcome = 'claimed';
@@ -1954,6 +1971,17 @@ function clearOracleMarker(ticket?: any) {
   return true;
 }
 
+function failedClaimCanSurrender(ticket?: any, dispatch?: any, by?: any, opts?: any) {
+  const authorization = dispatch?.failedClaimSurrender;
+  const nonce = String(ticket?.dispatchNonce || '').trim();
+  if (!authorization || !nonce || opts?.releaseKind !== 'technical_blocker') return false;
+  if (String(authorization.by || '') !== String(by || '')) return false;
+  if (String(authorization.executor || '') !== String(dispatch?.executor || '')) return false;
+  if (String(authorization.tokenDigest || '') !== dispatchTokenDigest(nonce)) return false;
+  const authorizedSessionId = String(authorization.sessionId || '').trim();
+  return !authorizedSessionId || authorizedSessionId === String(opts?.sessionId || '').trim();
+}
+
 // Release a claim. Only the owner or a reclaimable claim may release it.
 // force can reopen the owner's pending submission, never bypass ownership.
 function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -2019,11 +2047,13 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // did the work must always be able to hand it in, 5 minutes or 5 hours in.
     const liveClaim = Boolean(held && held.by);
     const activeDispatch = Boolean(t.dispatchNonce || (dispatch && !dispatch.terminalAt));
-    if (!liveClaim && activeDispatch && !opts.force) {
+    const surrenderingFailedClaim = !liveClaim && activeDispatch && failedClaimCanSurrender(t, dispatch, by, opts);
+    if (!liveClaim && activeDispatch && !surrenderingFailedClaim && !opts.force) {
+      const foundState = dispatch?.outcome || (t.dispatchNonce ? 'prepared' : 'unknown');
       return {
         ok: false,
         reason: 'unclaimed_active_dispatch',
-        message: `${t.ref} has a newer active dispatch but no claim owned by ${by}. Do not release it from this executor. Wait for the current attempt to finish, then have the orchestrator dispatch once from todo. When the dispatch is provably dead and verified work already landed, the orchestrator delivers it itself with \`sidequest groomClose ${t.ref} --by <integrator> --recoveryEvidence "<observed terminal evidence>" --deliveryCommit <sha>\`. Do not hand that command to a user.`,
+        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. When verified work already landed, the orchestrator delivers it through \`sidequest groomClose ${t.ref} --by <integrator> --recoveryEvidence "<observed terminal evidence>" --deliveryCommit <sha>\`.`,
         ticket: t,
       };
     }
@@ -2201,6 +2231,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       at: now,
     } : null;
     if (release) t.release = release;
+    if (dispatch) delete dispatch.failedClaimSurrender;
     if (!dispatch?.terminalAt || dispatch.outcome !== terminalOutcome) {
       setDispatchTerminal(t, terminalOutcome, opts.source || 'cli', {
         slug,
