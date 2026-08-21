@@ -18,7 +18,9 @@ Reload plugins or start a new Claude Code session. Then tell Claude:
 
 > Set up Model Gateway for me.
 
-Claude takes care of the rest through the bundled Model Gateway skill. It installs and starts the local gateway, checks your subscription login, writes the required user settings, and confirms that model discovery works.
+Claude takes care of the rest through the bundled Model Gateway skill. It installs and starts the local gateway, checks your subscription login, writes this project's local settings, and confirms that model discovery works.
+
+Model Gateway writes `ANTHROPIC_BASE_URL` to `.claude/settings.local.json`, never the committed `.claude/settings.json`. That keeps your local gateway endpoint out of other people's checkouts. You can opt into one shared fallback URL in `~/.claude/settings.json`, but a project's local setting wins. `model-gateway doctor` marks the effective source and calls out conflicting gateway modes.
 
 You may need to complete a browser sign-in or restart Claude Code. Claude will ask only when either step is actually needed.
 

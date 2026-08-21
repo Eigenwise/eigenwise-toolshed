@@ -6,12 +6,10 @@ const path = require('node:path');
 const { COMPAT_BASE_URL, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
 const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
 
-// Wiring is global-only. Per-project wiring existed as a mode and was removed:
-// a project-local ANTHROPIC_BASE_URL silently shadows the user-scope one, which
-// made /remote-control unreachable across a dozen projects with no diagnosis.
-// Deliberately shadowing one project is still supported (write the key into that
-// project's settings.local.json by hand); having it be the DEFAULT was the bug.
-const WIRING_SCOPE = 'user';
+// Project-local wiring is the default because the plugin itself is installed per
+// project. Claude Code still lets a local setting shadow user settings, so doctor
+// reports the effective source and treats conflicting gateway modes as an error.
+const WIRING_SCOPE = 'project';
 
 function selectedWiringScope() {
   return WIRING_SCOPE;
@@ -194,11 +192,14 @@ function migrateLegacyProjectSettings() {
     .map(([key]) => key);
   if (entries.length === 0 && legacyKeys.length === 0) return { migrated: false };
 
-  // Wiring is global, so these keys are stripped rather than relocated into
-  // settings.local.json: a project-scope copy would outrank the user scope and
-  // recreate the silent shadow that per-project wiring was removed for. The
-  // mode is still carried out so the user-scope write preserves compat mode.
   const localFile = settingsPath('project');
+  const local = readSettingsForWrite(localFile);
+  local.env = local.env || {};
+  for (const [key, value] of entries) {
+    if (local.env[key] === undefined) local.env[key] = value;
+  }
+  if (entries.length) writeSettings(localFile, local);
+
   const nextLegacy = structuredClone(legacy);
   nextLegacy.env = { ...(nextLegacy.env || {}) };
   for (const [key] of entries) delete nextLegacy.env[key];
@@ -248,16 +249,13 @@ function cleanLegacyGatewayModelCache() {
 }
 
 function isWired() {
-  if (ourBaseUrls().includes(process.env.ANTHROPIC_BASE_URL)) return true;
-  try {
-    const s = JSON.parse(fs.readFileSync(settingsPath(selectedWiringScope()), 'utf8'));
-    return !!(s.env && ourBaseUrls().includes(s.env.ANTHROPIC_BASE_URL));
-  } catch { return false; }
+  return ourBaseUrls().includes(effectiveBaseUrl().value);
 }
 
-// The selected wiring scope owns compatibility switching. A legacy global block
-// remains readable during migration but must never be changed in local mode.
-const WRITABLE_SCOPE_BY_SOURCE = { 'project-local': 'project', 'project-shared': 'project-shared', user: 'user' };
+// The selected wiring scope owns compatibility switching. A committed project
+// settings.json can still contain legacy wiring, but every new write belongs in
+// settings.local.json.
+const WRITABLE_SCOPE_BY_SOURCE = { 'project-local': 'project', 'project-shared': 'project', user: 'user' };
 
 function modeForBaseUrl(value) {
   if (value === COMPAT_BASE_URL) return 'compat';

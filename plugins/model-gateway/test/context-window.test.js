@@ -888,7 +888,7 @@ test('credential-free alias probes cache valid 1M defaults without replacing ove
   }
 });
 
-test('doctor describes global user settings wiring', () => {
+test('doctor describes project-local wiring as the default', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-doctor-project-'));
   const { ANTHROPIC_BASE_URL, ...environment } = process.env;
@@ -899,9 +899,9 @@ test('doctor describes global user settings wiring', () => {
       encoding: 'utf8',
     });
     assert.match(result.stdout, /wiring: effective none/);
-    assert.match(result.stdout, /selected wiring mode: global ~\/\.claude\/settings\.json/);
+    assert.match(result.stdout, /default wiring target: this project's \.claude\/settings\.local\.json/);
     assert.match(result.stdout, /Claude opus pin: claude-opus-5\[1m\] \(default\)/);
-    assert.match(result.stdout, /user settings\.json: not wired/);
+    assert.match(result.stdout, /project settings\.local\.json: not wired .*\[default write target\]/);
     assert.doesNotMatch(result.stdout, /wiring mode: local/);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
@@ -909,7 +909,7 @@ test('doctor describes global user settings wiring', () => {
   }
 });
 
-test('env with no scope flag explains global wiring and writes nothing', () => {
+test('env with no scope flag explains project wiring and writes nothing', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-mode-'));
   const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-wiring-project-'));
   try {
@@ -919,12 +919,10 @@ test('env with no scope flag explains global wiring and writes nothing', () => {
       encoding: 'utf8',
     });
     assert.equal(shown.status, 0, shown.stderr);
-    assert.match(shown.stdout, /Wiring is global/);
-    assert.doesNotMatch(shown.stdout, /defaulted to per-project/);
+    assert.match(shown.stdout, /Project wiring is the default/);
+    assert.match(shown.stdout, /env --write-project/);
     assert.equal(fs.existsSync(path.join(cwd, '.claude', 'settings.local.json')), false);
 
-    // The retired mode config must never come back: a stale one would otherwise
-    // keep an old install pointed at a project file that shadows the user scope.
     const retired = spawnSync(process.execPath, [CLI, 'env', '--mode', 'global'], {
       cwd,
       env: { ...process.env, HOME: home, USERPROFILE: home },
@@ -940,7 +938,7 @@ test('env with no scope flag explains global wiring and writes nothing', () => {
 
 test('SessionStart nudges hand off gateway actions to the runnable skill', () => {
   const source = fs.readFileSync(COMMANDS, 'utf8');
-  assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-user command/);
+  assert.match(source, /Run \/model-gateway:model-gateway, then use its env --write-project command/);
   assert.match(source, /claude-code-proxy is missing[\s\S]*No Anthropic fallback was used\./);
   assert.doesNotMatch(source, /(?:Run|run):? env --/);
 });

@@ -20,9 +20,9 @@ All commands: `node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" <command>`
 
 ## First-time setup
 
-Wiring is global. `env --write-user` writes `~/.claude/settings.json` and covers every project and every executor worktree. There is no mode to choose and nothing to ask the user: per-project wiring was removed because a project `settings.local.json` silently outranks user settings, which left projects pointing at a stale URL with no visible cause.
+Project-local wiring is the standard setup. `env --write-project` writes the current project's `.claude/settings.local.json`, so the gateway stays configured for this project's sessions and executor worktrees without putting a machine-local endpoint in a committed file. `setup` uses the same project-local target.
 
-To exempt a single project deliberately, put `ANTHROPIC_BASE_URL` in that project's `.claude/settings.local.json` by hand. `doctor` will show it winning as `[effective]`, which is the point: a deliberate override is visible, the old default was not.
+`env --write-user` remains an opt-in shared fallback for people who deliberately want one gateway URL in `~/.claude/settings.json` across every project. Claude Code gives a current project's `settings.local.json` higher precedence, so `doctor` marks the winner `[effective]`, names both files, and says that project-local wiring wins when their gateway modes disagree.
 
 The SessionStart hook injects a one-line nudge while the gateway is in any half-configured
 state; act on it. The user sees that same line in the transcript, because a state only they can fix used to
@@ -38,24 +38,22 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/model-gateway.js" setup    # finishes the wiring
 ```
 
 `login` opens the user's browser; they complete it themselves (suggest `! node ... login` if it
-needs a real TTY). `env --write-user` writes `~/.claude/settings.json` for every project.
-`/quartermaster:update-toolshed` writes that block and reconciles leftover per-project wiring. A project
-`settings.local.json` `env` block overrides user settings completely, so run `doctor` when a project
-has its own env settings and the Codex rows are missing: it names the file that actually wins. All
-wiring changes apply to new Claude Code sessions, so restart after the write. The Codex rows appear in `/model` labeled "From gateway".
+needs a real TTY). `env --write-project` writes this project's `.claude/settings.local.json`.
+Use `env --write-user` only when the user wants a shared fallback across projects. If both are
+present, project-local wiring wins: `doctor` marks it `[effective]`, names the shadowed user file,
+and fails when their gateway modes differ. All wiring changes apply to new Claude Code sessions,
+so restart after the write. The Codex rows appear in `/model` labeled "From gateway".
 
 The winning `ANTHROPIC_BASE_URL` source follows Claude Code's precedence: process environment,
 current-project `.claude/settings.local.json`, project `.claude/settings.json`, then user
-`~/.claude/settings.json`. `doctor` marks the winner `[effective]` and the configured scope
-`[selected mode]`. A contradiction between those modes is a hard failure with both files and the
-exact fix. If process environment wins, unset it and start a new session; rewriting settings cannot
-override it.
+`~/.claude/settings.json`. A process export always wins, so settings writes cannot replace it.
 
-`env --write-user --reconcile` is confirmation-gated. Plain `env --write-user` writes user settings, then lists recorded projects whose local URL differs without
-changing their files. The confirmed command writes to OTHER projects' `.claude/settings.local.json`
-files and removes only Model Gateway-owned keys: its base URL, the three Claude alias pins, and
-static gateway flags whose values equal plugin defaults. It leaves unrelated settings alone, skips
-projects already agreeing, cannot change `process.env`, and needs a restart to affect a new session.
+`env --write-user --reconcile` is confirmation-gated. Plain `env --write-user` writes the shared
+user fallback, then lists recorded projects whose local URL differs without changing their files.
+The confirmed command removes only Model Gateway-owned keys from those other projects'
+`.claude/settings.local.json` files: its base URL, the three Claude alias pins, and static gateway
+flags whose values equal plugin defaults. It leaves unrelated settings alone, skips projects already
+agreeing, cannot change `process.env`, and needs a restart to affect a new session.
 Discovery needs Claude Code v2.1.129+ and fails silently if the shim answers slowly; `models` shows
 exactly what's advertised.
 
@@ -92,8 +90,8 @@ back, or you kill the session that was about to use it.
   `pin --opus claude-opus-4-8[1m]` (same for `--sonnet` and `--fable`), or use `pin --opus default`
   to return to auto-detection. Overrides always win. `pin` with no arguments shows each effective
   pin and whether it is overridden. Overrides live in `~/.claude/model-gateway/pins.json`, outside
-  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-user` (or
-  `env --write-user`) and start a new Claude Code session; changing a saved value alone cannot alter
+  the plugin cache. After a pin change or Claude CLI upgrade, run `env --write-project` (or
+  `env --write-user` for a shared fallback) and start a new Claude Code session; changing a saved value alone cannot alter
   an open session.
 - Do NOT set a
   global `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it applies to both providers and can make Codex

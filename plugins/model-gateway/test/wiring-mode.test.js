@@ -44,8 +44,6 @@ function writeJson(file, value) {
   fs.writeFileSync(file, JSON.stringify(value, null, 2));
 }
 
-// --write-project is gone with local wiring mode; tests that need a shadowing
-// project now create the file directly, the way a stale install would have left it.
 function wireProject(project, baseUrl = DEFAULT_BASE_URL) {
   writeJson(path.join(project, '.claude', 'settings.local.json'), { env: { ANTHROPIC_BASE_URL: baseUrl } });
 }
@@ -58,7 +56,16 @@ function projectRegistry(home) {
   return path.join(home, '.claude', 'model-gateway', 'wired-projects.json');
 }
 
-test('env --write-user wires user settings', (t) => {
+test('env --write-project wires the current project-local settings', (t) => {
+  const { home, project } = fixture(t);
+
+  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
+  const settings = JSON.parse(fs.readFileSync(path.join(project, '.claude', 'settings.local.json'), 'utf8'));
+  assert.equal(settings.env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
+  assert.equal(fs.existsSync(path.join(home, '.claude', 'settings.json')), false);
+});
+
+test('env --write-user keeps a deliberate shared fallback available', (t) => {
   const { home, project } = fixture(t);
 
   assert.equal(run(home, project, ['env', '--write-user']).code, 0);
@@ -66,22 +73,22 @@ test('env --write-user wires user settings', (t) => {
   assert.equal(settings.env.ANTHROPIC_BASE_URL, DEFAULT_BASE_URL);
 });
 
-test('retired per-project wiring flags fail loudly instead of silently wiring a project', (t) => {
+test('retired wiring-mode flags fail loudly', (t) => {
   const { home, project } = fixture(t);
 
-  for (const retired of [['env', '--mode', 'local'], ['env', '--mode', 'global'], ['env', '--write-project'], ['env', '--show-mode']]) {
+  for (const retired of [['env', '--mode', 'local'], ['env', '--mode', 'global'], ['env', '--show-mode']]) {
     const result = run(home, project, retired);
     assert.equal(result.code, 2, `${retired.join(' ')} should exit 2`);
-    assert.match(result.output, /wiring is global only/);
+    assert.match(result.output, /env --write-project/);
   }
   assert.equal(fs.existsSync(path.join(project, '.claude', 'settings.local.json')), false);
 });
 
-test('writing user wiring retires a stale local wiring-mode config', (t) => {
+test('writing project wiring retires a stale local wiring-mode config', (t) => {
   const { home, project } = fixture(t);
   writeJson(wiringConfig(home), { mode: 'local' });
 
-  assert.equal(run(home, project, ['env', '--write-user']).code, 0);
+  assert.equal(run(home, project, ['env', '--write-project']).code, 0);
   assert.equal(fs.existsSync(wiringConfig(home)), false);
 });
 
@@ -113,7 +120,7 @@ test('project wiring registry deduplicates an existing project alias', (t) => {
   assert.equal(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects.length, 1);
 });
 
-test('global wiring adopts and reports conflicting current project wiring without changing it', (t) => {
+test('user wiring reports conflicting current project wiring without changing it', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');
   writeJson(localFile, { env: { ANTHROPIC_BASE_URL: COMPAT_BASE_URL, UNRELATED: 'keep-me' } });
@@ -122,14 +129,14 @@ test('global wiring adopts and reports conflicting current project wiring withou
   const result = run(home, project, ['env', '--write-user']);
 
   assert.equal(result.code, 0);
-  assert.match(result.output, /1 recorded project-local wiring entry overrides the global URL/);
+  assert.match(result.output, /1 recorded project-local wiring entry overrides the user-scoped URL/);
   assert.match(result.output, new RegExp(localFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(result.output, /--reconcile/);
   assert.equal(fs.readFileSync(localFile, 'utf8'), before);
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
 });
 
-test('global wiring reconciliation removes only plugin-owned project env entries', (t) => {
+test('user-fallback reconciliation removes only plugin-owned project env entries', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');
   wireProject(project, COMPAT_BASE_URL);
@@ -143,7 +150,7 @@ test('global wiring reconciliation removes only plugin-owned project env entries
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, []);
 });
 
-test('global wiring reconciliation leaves agreeing project wiring alone', (t) => {
+test('user-fallback reconciliation leaves agreeing project wiring alone', (t) => {
   const { home, project } = fixture(t);
   const localFile = path.join(project, '.claude', 'settings.local.json');
   wireProject(project);
@@ -157,14 +164,14 @@ test('global wiring reconciliation leaves agreeing project wiring alone', (t) =>
   assert.deepEqual(JSON.parse(fs.readFileSync(projectRegistry(home), 'utf8')).projects, [project]);
 });
 
-test('doctor fails when the global user settings are unwired', (t) => {
+test('doctor fails when wiring is not configured', (t) => {
   const { home, project } = fixture(t);
 
   const result = run(home, project, ['doctor']);
 
   assert.notEqual(result.code, 0);
-  assert.match(result.output, /global wiring is not configured/);
-  assert.match(result.output, /env --write-user/);
+  assert.match(result.output, /wiring is not configured/);
+  assert.match(result.output, /env --write-project/);
 });
 
 test('doctor skips a project env block without ANTHROPIC_BASE_URL', (t) => {
@@ -175,10 +182,11 @@ test('doctor skips a project env block without ANTHROPIC_BASE_URL', (t) => {
   const result = run(home, project, ['doctor']);
 
   assert.doesNotMatch(result.output, /masks global user wiring/);
-  assert.match(result.output, /user settings\.json: wired .*\[effective\] \[selected mode\]/);
+  assert.match(result.output, /user settings\.json: wired .*\[effective\]/);
+  assert.match(result.output, /project settings\.local\.json: not wired .*\[default write target\]/);
 });
 
-test('global wiring preserves existing user env values', (t) => {
+test('user fallback preserves existing user env values', (t) => {
   const { home, project } = fixture(t);
   const userSettings = path.join(home, '.claude', 'settings.json');
   writeJson(userSettings, {
@@ -240,9 +248,9 @@ test('doctor reports project-local wiring as the effective source', (t) => {
 
   assert.equal(result.code, 0, result.output);
   assert.match(result.output, /wiring: effective project settings\.local\.json .*\[model-gateway\]/);
-  assert.match(result.output, /selected wiring mode: global ~\/\.claude\/settings\.json/);
-  assert.match(result.output, /project settings\.local\.json: wired .*\[effective\]/);
-  assert.match(result.output, /user settings\.json: not wired .*\[selected mode\]/);
+  assert.match(result.output, /default wiring target: this project's \.claude\/settings\.local\.json/);
+  assert.match(result.output, /project settings\.local\.json: wired .*\[effective\] \[default write target\]/);
+  assert.match(result.output, /user settings\.json: not wired/);
 });
 
 test('SessionStart local wiring notice does not say the project is unwired', (t) => {
@@ -264,7 +272,24 @@ test('SessionStart local wiring notice does not say the project is unwired', (t)
   assert.doesNotMatch(result.output, /not wired to model-gateway/);
 });
 
-test('SessionStart names recorded project-local wiring alongside global setup', (t) => {
+test('SessionStart skips unwired notices for project-local wiring without a user setting', (t) => {
+  const { home, project } = fixture(t);
+  wireProject(project);
+
+  const result = runNode(home, project, `
+    const { isWired, sessionStartWiringNotice, effectiveBaseUrl } = require(${JSON.stringify(COMMANDS)});
+    if (!isWired()) process.stdout.write(sessionStartWiringNotice({
+      readiness: { checks: { codexAuth: true } },
+      effectiveWiring: effectiveBaseUrl(),
+      projectWirings: [],
+    }));
+  `);
+
+  assert.equal(result.code, 0, result.output);
+  assert.equal(result.output, '');
+});
+
+test('SessionStart names recorded project-local wiring before project setup', (t) => {
   const { home, project } = fixture(t);
   const siblingFile = path.join(path.dirname(project), 'sibling', '.claude', 'settings.local.json');
 
@@ -281,7 +306,7 @@ test('SessionStart names recorded project-local wiring alongside global setup', 
   assert.match(result.output, /recorded project-local wiring exists/);
   assert.match(result.output, new RegExp(siblingFile.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.match(result.output, /this project's \.claude\/settings\.local\.json/);
-  assert.match(result.output, /env --write-user/);
+  assert.match(result.output, /env --write-project/);
 });
 
 test('doctor explains the no-model-fallback diagnostic for model divergence', (t) => {
@@ -363,11 +388,13 @@ test('doctor fails on a selected-mode contradiction and passes when modes agree'
   assert.notEqual(result.code, 0);
   assert.match(result.output, /effective .*settings\.local\.json uses default mode/);
   assert.match(result.output, /shadowed .*settings\.json uses compat mode/);
-  assert.match(result.output, /env --write-user/);
+  assert.match(result.output, /Project settings\.local\.json wins/);
+  assert.match(result.output, /env --write-project/);
 
   writeJson(user, { env: { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL } });
   result = runDoctor(home, project);
   assert.equal(result.code, 0);
+  assert.match(result.output, /wiring precedence: project settings\.local\.json wins over user settings\.json/);
   assert.doesNotMatch(result.output, /ERROR:/);
 });
 
