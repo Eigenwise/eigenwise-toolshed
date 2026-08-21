@@ -193,6 +193,7 @@ function createTickets(dependencies) {
     const status = fields.status === void 0 ? "todo" : requireStatus(fields.status);
     const id = newTicketId();
     const seq = nextSeq(slug);
+    const ref = `SQ-${seq}`;
     const now = (/* @__PURE__ */ new Date()).toISOString();
     const assets = [];
     const imgs = Array.isArray(fields.images) ? fields.images : [];
@@ -215,7 +216,7 @@ function createTickets(dependencies) {
     const storyId = coerceStoryId(slug, fields.storyId);
     const ticket = {
       id,
-      ref: `SQ-${seq}`,
+      ref,
       title: String(fields.title || "Untitled").trim().slice(0, 300) || "Untitled",
       description: String(fields.description || "").trim(),
       status,
@@ -234,7 +235,9 @@ function createTickets(dependencies) {
       files: boundedFiles(fields.files, {
         category: fields.category,
         readonlyOverride: requestedReadonlyOverride(fields),
-        slug
+        slug,
+        ticketRef: ref,
+        operation: "add"
       }),
       // declared file scope, for parallel-wave planning
       contracts: boundedContracts(fields.contracts),
@@ -343,6 +346,10 @@ function createTickets(dependencies) {
     const outside = commitScope.validateRelativeScopes(declaredFiles).outside;
     if (outside.length && !externalOutputAllowed(context)) {
       throw new Error(`declared file scope contains paths outside the repo worktree: ${outside.join(", ")}. For genuine non-repo output, classify as non-repo/artifact work; otherwise declare in-repo paths.`);
+    }
+    const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(declaredFiles, context?.ticketRef);
+    if (foreignReleaseFragments.length) {
+      throw new Error(commitScope.foreignReleaseFragmentRefusalMessage(context?.operation || "declared file scope", context?.ticketRef, foreignReleaseFragments));
     }
     return declaredFiles;
   }
@@ -627,7 +634,9 @@ function createTickets(dependencies) {
       const evidenceDirectory = String(t.dispatch?.evidenceDirectory || "").trim();
       const evidenceGuidance = evidenceDirectory ? ` Verification evidence belongs in ${evidenceDirectory}; do not request or commit it inside the repository.` : "";
       const foreignReleaseFragmentMessage = foreignReleaseFragments.length ? commitScope.foreignReleaseFragmentRefusalMessage("scopeRequest", t.ref, foreignReleaseFragments) : "";
-      const body = refused.length ? `${foreignReleaseFragmentMessage}${foreignReleaseFragmentMessage ? " " : `Scope expansion refused: ${refused.join(", ")}.`}${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
+      const scopeExpansionRefusalMessage = additions.length ? `Scope expansion refused: ${refused.join(", ")}.` : "";
+      const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(" ");
+      const body = refused.length ? `${refusalMessage}${approved.length ? ` Auto-approved ${policy}: ${approved.join(", ")}.` : ""}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind "handback" and name the refused paths.` : `Auto-approved ${policy}: ${approved.join(", ")}.`;
       const comment = createComment({ by: refused.length ? "board" : "board", body, kind: "comment", source: refused.length ? opts.source || "cli" : "policy" }, now);
       t.comments.push(comment);
       t.lastEventType = refused.length ? "scope_refused" : "scope_auto_approved";
@@ -645,7 +654,7 @@ function createTickets(dependencies) {
         state,
         resolution: t.scopeResolution,
         comment,
-        ...foreignReleaseFragmentMessage ? { message: foreignReleaseFragmentMessage } : {}
+        ...refusalMessage ? { message: refusalMessage } : {}
       };
     });
   }
@@ -853,7 +862,13 @@ function createTickets(dependencies) {
   function activeClaimScopeRefusal(slug, ticket, files, patch) {
     if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
     const current = normalizeFiles(ticket.files);
-    const next = boundedFiles(files, { category: ticket.category, readonlyOverride: ticket.readonlyOverride, slug });
+    const next = boundedFiles(files, {
+      category: ticket.category,
+      readonlyOverride: ticket.readonlyOverride,
+      slug,
+      ticketRef: ticket.ref,
+      operation: "update"
+    });
     if (sameFiles(current, next)) return null;
     const caller = String(patch?.by || "").trim();
     if (caller && caller !== ticket.claim.by) return null;
@@ -916,7 +931,9 @@ function createTickets(dependencies) {
         t.files = boundedFiles(patch.files, {
           category: patch.category === void 0 ? t.category : patch.category,
           readonlyOverride: patch.readonly === void 0 && patch.readonlyOverride === void 0 ? t.readonlyOverride : requestedReadonlyOverride(patch),
-          slug
+          slug,
+          ticketRef: t.ref,
+          operation: "update"
         });
         syncLiveDispatchScope(slug, t);
       }
@@ -924,7 +941,13 @@ function createTickets(dependencies) {
       if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
       if (patch.readonly !== void 0 || patch.readonlyOverride !== void 0) t.readonlyOverride = requestedReadonlyOverride(patch);
       if (patch.category !== void 0 || patch.readonly !== void 0 || patch.readonlyOverride !== void 0) {
-        t.files = boundedFiles(t.files, { category: t.category, readonlyOverride: t.readonlyOverride, slug });
+        t.files = boundedFiles(t.files, {
+          category: t.category,
+          readonlyOverride: t.readonlyOverride,
+          slug,
+          ticketRef: t.ref,
+          operation: "update"
+        });
       }
       if (patch.executorAnchors !== void 0) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors");
       const nextVerifyKind = patch.executorVerifyKind === void 0 ? t.executorVerifyKind : patch.executorVerifyKind;

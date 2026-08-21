@@ -21,6 +21,7 @@ interface ScopeResult {
 process.env.SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-commit-scope-home-'));
 const store = require('../lib/store.js') as any;
 const lifecycleTools = require('../lib/mcp-lifecycle.js').tools as Array<{ name: string; handler(args: Record<string, unknown>): any }>;
+const ticketTools = require('../lib/mcp-tickets.js').tools as Array<{ name: string; handler(args: Record<string, unknown>): any }>;
 
 interface RangeResult {
   ok: boolean;
@@ -74,6 +75,12 @@ function repo(): string {
 
 function lifecycleHandler(name: string): (args: Record<string, unknown>) => any {
   const tool = lifecycleTools.find((candidate) => candidate.name === name);
+  assert.ok(tool, `${name} tool is registered`);
+  return tool.handler;
+}
+
+function ticketHandler(name: string): (args: Record<string, unknown>) => any {
+  const tool = ticketTools.find((candidate) => candidate.name === name);
   assert.ok(tool, `${name} tool is registered`);
   return tool.handler;
 }
@@ -830,6 +837,70 @@ test('SQ-806: an empty dispatch binding falls back to the declared files instead
     [],
     'a ticket with no declared files gets no synthesized fragment to chase',
   );
+});
+
+test('add and update refuse foreign declared release fragments while retaining the ticket fragment', () => {
+  const root = repo();
+  const add = ticketHandler('add');
+  const update = ticketHandler('update');
+  const created = add({
+    project: root,
+    title: 'declared release fragment scope',
+    files: ['README.md'],
+    complexity: 1,
+    why: 'The add and update handlers must reject a sibling release fragment before dispatch.',
+  });
+  const slug = store.ensureProject(root).slug;
+  const ticket = store.getTicket(slug, created.ref);
+  const foreignFragment = '.release/unreleased/SQ-foreign.md';
+
+  assert.throws(
+    () => update({ project: root, ref: ticket.ref, files: [foreignFragment] }),
+    (error: Error) => error.message === commitScope.foreignReleaseFragmentRefusalMessage('update', ticket.ref, [foreignFragment]),
+  );
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, ['README.md'], 'a refused update leaves the prior declaration intact');
+
+  const ownFragment = `.release/unreleased/${ticket.ref}.md`;
+  update({ project: root, ref: ticket.ref, files: [ownFragment] });
+  assert.deepEqual(store.getTicket(slug, ticket.ref).files, [ownFragment], 'declaring the ticket fragment remains harmless');
+
+  assert.throws(
+    () => add({
+      project: root,
+      title: 'foreign release declaration',
+      files: [foreignFragment],
+      complexity: 1,
+      why: 'The add handler must reject a sibling release fragment before a ticket persists.',
+    }),
+    (error: Error) => /add: refused SQ-\d+; only \.release\/unreleased\/SQ-\d+\.md is implicitly writable/.test(error.message)
+      && error.message.includes(foreignFragment),
+  );
+});
+
+test('scopeRequest reports every mixed foreign and ordinary refusal in its message body', () => {
+  const root = repo();
+  const slug = store.ensureProject(root, 'mixed scope refusal').slug;
+  const ticket = store.createTicket(slug, {
+    title: 'mixed scope refusal',
+    files: ['README.md'],
+    complexity: 1,
+    complexityWhy: 'The handler must name each refused path when a release fragment and ordinary paths mix.',
+  });
+  const by = 'mixed-scope-refusal-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The handler regression fixture claims the ticket directly.' }).ok, true);
+
+  const refusedPaths = ['.release/unreleased/SQ-foreign.md', 'src/other/thing.ts', 'scripts/x.mjs'];
+  const scopeRequested = lifecycleHandler('scopeRequest')({ project: root, ref: ticket.ref, by, files: refusedPaths });
+  const persistedMessage = store.getTicket(slug, ticket.ref).comments.at(-1).body;
+
+  assert.equal(scopeRequested.ok, true);
+  assert.equal(scopeRequested.state, 'refused');
+  assert.deepEqual(scopeRequested.refused, refusedPaths);
+  for (const refusedPath of refusedPaths) {
+    assert.ok(scopeRequested.message.includes(refusedPath), `${refusedPath} is in the response message`);
+    assert.ok(persistedMessage.includes(refusedPath), `${refusedPath} is in the persisted message body`);
+  }
+  assert.match(scopeRequested.message, /Scope expansion refused:/);
 });
 
 test('scopeRequest and commit refuse a foreign release fragment with the same rule', () => {

@@ -2213,7 +2213,7 @@ test('MCP submit requires release fragments for marketplace plugin changes', asy
   gitAt(foreignWorktree, ['commit', '-m', 'foreign release fragment']);
   const foreignProject = store.ensureProject(foreignWorktree).slug;
   const foreign = store.createTicket(foreignProject, {
-    title: 'other release fragment', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    title: 'other release fragment', files: ['plugins/fixture-plugin'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'confirm a ticket cannot remove an unrelated ticket release fragment',
   });
   const foreignBy = 'mcp-foreign-fragment-worker';
@@ -2265,7 +2265,7 @@ test('MCP repair submission transfers a related rejected candidate fragment to i
   persistTicket(project, rejectedReview);
 
   const repair = store.createTicket(project, {
-    title: 'repair rejected plugin candidate', files: ['plugins/fixture-plugin', '.release/unreleased'], complexity: 3,
+    title: 'repair rejected plugin candidate', files: ['plugins/fixture-plugin'], complexity: 3,
     labels: ['direct-ok'], complexityWhy: 'fixture for a repair that ships the rejected candidate correction',
   });
   assert.equal(store.linkTickets(project, repair.ref, 'related', source.ref).ok, true);

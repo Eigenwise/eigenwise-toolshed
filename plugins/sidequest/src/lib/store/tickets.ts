@@ -185,6 +185,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   const status = fields.status === undefined ? 'todo' : requireStatus(fields.status);
   const id = newTicketId();
   const seq = nextSeq(slug);
+  const ref = `SQ-${seq}`;
   const now = new Date().toISOString();
 
   const assets: any[] = [];
@@ -211,7 +212,7 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
   const storyId = coerceStoryId(slug, fields.storyId);
   const ticket = {
     id,
-    ref: `SQ-${seq}`,
+    ref,
     title: String(fields.title || 'Untitled').trim().slice(0, 300) || 'Untitled',
     description: String(fields.description || '').trim(),
     status,
@@ -228,6 +229,8 @@ function createTicket(slug?: any, fields?: any, reviewTarget?: any) {
       category: fields.category,
       readonlyOverride: requestedReadonlyOverride(fields),
       slug,
+      ticketRef: ref,
+      operation: 'add',
     }),          // declared file scope, for parallel-wave planning
     contracts: boundedContracts(fields.contracts), // declared contract edges, for parallel-wave planning
     contractWaiver: !!fields.contractWaiver,
@@ -344,6 +347,10 @@ function boundedFiles(files?: any, context?: any) {
   const outside = commitScope.validateRelativeScopes(declaredFiles).outside;
   if (outside.length && !externalOutputAllowed(context)) {
     throw new Error(`declared file scope contains paths outside the repo worktree: ${outside.join(', ')}. For genuine non-repo output, classify as non-repo/artifact work; otherwise declare in-repo paths.`);
+  }
+  const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(declaredFiles, context?.ticketRef);
+  if (foreignReleaseFragments.length) {
+    throw new Error(commitScope.foreignReleaseFragmentRefusalMessage(context?.operation || 'declared file scope', context?.ticketRef, foreignReleaseFragments));
   }
   return declaredFiles;
 }
@@ -693,8 +700,12 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const foreignReleaseFragmentMessage = foreignReleaseFragments.length
       ? commitScope.foreignReleaseFragmentRefusalMessage('scopeRequest', t.ref, foreignReleaseFragments)
       : '';
+    const scopeExpansionRefusalMessage = additions.length
+      ? `Scope expansion refused: ${refused.join(', ')}.`
+      : '';
+    const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(' ');
     const body = refused.length
-      ? `${foreignReleaseFragmentMessage}${foreignReleaseFragmentMessage ? ' ' : `Scope expansion refused: ${refused.join(', ')}.`}${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
+      ? `${refusalMessage}${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
       : `Auto-approved ${policy}: ${approved.join(', ')}.`;
     const comment = createComment({ by: refused.length ? 'board' : 'board', body, kind: 'comment', source: refused.length ? (opts.source || 'cli') : 'policy' }, now);
     t.comments.push(comment);
@@ -713,7 +724,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       state,
       resolution: t.scopeResolution,
       comment,
-      ...(foreignReleaseFragmentMessage ? { message: foreignReleaseFragmentMessage } : {}),
+      ...(refusalMessage ? { message: refusalMessage } : {}),
     };
   });
 }
@@ -957,7 +968,13 @@ function sameFiles(left?: any, right?: any) {
 function activeClaimScopeRefusal(slug?: any, ticket?: any, files?: any, patch?: any) {
   if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
   const current = normalizeFiles(ticket.files);
-  const next = boundedFiles(files, { category: ticket.category, readonlyOverride: ticket.readonlyOverride, slug });
+  const next = boundedFiles(files, {
+    category: ticket.category,
+    readonlyOverride: ticket.readonlyOverride,
+    slug,
+    ticketRef: ticket.ref,
+    operation: 'update',
+  });
   if (sameFiles(current, next)) return null;
   const caller = String(patch?.by || '').trim();
   if (caller && caller !== ticket.claim.by) return null;
@@ -1030,6 +1047,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
           ? t.readonlyOverride
           : requestedReadonlyOverride(patch),
         slug,
+        ticketRef: t.ref,
+        operation: 'update',
       });
       syncLiveDispatchScope(slug, t);
     }
@@ -1037,7 +1056,13 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     if (patch.contractWaiver !== undefined) t.contractWaiver = !!patch.contractWaiver;
     if (patch.readonly !== undefined || patch.readonlyOverride !== undefined) t.readonlyOverride = requestedReadonlyOverride(patch);
     if (patch.category !== undefined || patch.readonly !== undefined || patch.readonlyOverride !== undefined) {
-      t.files = boundedFiles(t.files, { category: t.category, readonlyOverride: t.readonlyOverride, slug });
+      t.files = boundedFiles(t.files, {
+        category: t.category,
+        readonlyOverride: t.readonlyOverride,
+        slug,
+        ticketRef: t.ref,
+        operation: 'update',
+      });
     }
     if (patch.executorAnchors !== undefined) t.executorAnchors = executorText(patch.executorAnchors, EXECUTOR_ANCHORS_MAX, 'executor anchors');
     const nextVerifyKind = patch.executorVerifyKind === undefined ? t.executorVerifyKind : patch.executorVerifyKind;

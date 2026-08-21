@@ -849,10 +849,23 @@ function negativeControlRefusal(ticket?: any, result?: any) {
   };
 }
 
+function completionScope(slug?: any, ticket?: any) {
+  const relatedFragments = Array.isArray(ticket?.links)
+    ? ticket.links.flatMap((link: any) => {
+      if (link?.type !== 'related') return [];
+      const source = getTicket(slug, link.ref);
+      if (source?.submission?.review?.outcome !== 'rejected') return [];
+      const fragment = commitScope.ticketReleaseFragment(source.ref);
+      return fragment ? [fragment] : [];
+    })
+    : [];
+  return [...new Set([...executionScope(slug, ticket), ...relatedFragments])];
+}
+
 function completionTreeCheck(slug?: any, ticket?: any, opts?: any) {
   const state = dispatchState(ticket);
   if (!state || state.readonly === true || state.nonRepoOutput === true) return { ok: true, applicable: false };
-  const declaredFiles = executionScope(slug, ticket);
+  const declaredFiles = completionScope(slug, ticket);
   if (!declaredFiles.length) return { ok: true, applicable: false };
   const delta = dispatchDelta(slug, ticket);
   if (!delta.ok) return { ok: true, applicable: false, unavailable: true };
