@@ -934,6 +934,9 @@ async function doctor({ readiness: suppliedReadiness = null } = {}) {
     const modeLabel = mode === 'compat' ? ' [RC-compatibility mode]' : mode === 'default' ? ' [default mode]' : '';
     log(`${labelFor[source]}: ${wired ? 'wired' + modeLabel : 'not wired'}${file ? ` (${file})` : ''}${tags}`);
   }
+  if (effective.source === 'project-local' && effective.shadowed.some(({ source }) => source === 'user')) {
+    log('wiring precedence: project settings.local.json wins over user settings.json.');
+  }
   if (!effectiveWired) {
     console.error('model-gateway: ERROR: wiring is not configured. Run /model-gateway:model-gateway, then use its env --write-project command and restart Claude Code.');
     process.exitCode = 1;

@@ -394,6 +394,7 @@ test('doctor fails on a selected-mode contradiction and passes when modes agree'
   writeJson(user, { env: { ANTHROPIC_BASE_URL: DEFAULT_BASE_URL } });
   result = runDoctor(home, project);
   assert.equal(result.code, 0);
+  assert.match(result.output, /wiring precedence: project settings\.local\.json wins over user settings\.json/);
   assert.doesNotMatch(result.output, /ERROR:/);
 });
 
