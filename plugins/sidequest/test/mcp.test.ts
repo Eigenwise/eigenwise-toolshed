@@ -3101,9 +3101,9 @@ test('MCP scopeRequest auto-approves a concrete path inside the declared plugin 
 });
 
 
-test('MCP scopeRequest refuses evidence files outside the declared package surface', async () => {
+test('MCP scopeRequest names declared-files scope for refused tracked source', async () => {
   const fixture = isolatedDispatch('sq-mcp-evidence-scope-', 'evidence-scope-worker', ['plugins/sidequest/src/lib/store/tickets.ts']);
-  const requestedFile = `plugins/sidequest/artifacts/${fixture.ref}-probe.png`;
+  const requestedFile = 'plugins/sidequest/.claude/skills/verify/SKILL.md';
 
   const result = await callTool('scopeRequest', {
     project: fixture.project,
@@ -3117,8 +3117,8 @@ test('MCP scopeRequest refuses evidence files outside the declared package surfa
   assert.deepEqual(result.refused, [requestedFile]);
   const ticket = store.getTicket(fixture.project, fixture.ref);
   assert.equal(ticket.files.includes(requestedFile), false);
-  assert.match(ticket.comments.at(-1).body, /Verification evidence belongs in/);
-  assert.match(ticket.comments.at(-1).body, /do not request or commit it inside the repository/);
+  assert.match(ticket.comments.at(-1).body, /The refused path is outside this ticket's declared files/);
+  assert.doesNotMatch(ticket.comments.at(-1).body, /Verification evidence belongs in/);
 });
 
 test('MCP submit keeps board-owned evidence out of delivered paths', async () => {
