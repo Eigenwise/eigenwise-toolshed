@@ -327,6 +327,14 @@ function createPulse(dependencies: any) {
           lastComment: latestCommentExcerpt(ticket),
           claim,
           checkpoint: checkpointProjection(ticket, nowMs),
+          ...(dispatch ? {
+            dispatch: {
+              preparedBy: dispatch.preparedBy
+                ? { sessionId: String(dispatch.preparedBy.sessionId || '').trim() || null }
+                : null,
+              terminalAt: dispatch.terminalAt || null,
+            },
+          } : {}),
           ...(oracleProjection(ticket) ? { oracle: oracleProjection(ticket) } : {}),
           ...(warnings.length ? { warnings } : {}),
           updatedAt: ticket.updatedAt,
@@ -348,6 +356,7 @@ function createBoardWatch(dependencies: any) {
     board,
     changesPayload,
     ciRunsProvider,
+    includeAllTickets = false,
     setTimer = setTimeout,
     writeError = (line: string) => process.stderr.write(`${line}\n`),
     writeLine = (line: string) => process.stdout.write(`${line}\n`),
@@ -374,7 +383,16 @@ function createBoardWatch(dependencies: any) {
     return String(comment.sourceSession || '') === sessionId;
   }
 
+  function ownedByAnotherSession(ticket: any): boolean {
+    if (includeAllTickets) return false;
+    const watchingSessionId = String(watchingOrigin.sessionId || watchingSession || '').trim();
+    const owningSessionId = String(ticket?.dispatch?.preparedBy?.sessionId || '').trim();
+    if (!watchingSessionId || !owningSessionId || ticket?.dispatch?.terminalAt) return false;
+    return owningSessionId !== watchingSessionId;
+  }
+
   function actionableEvent(ticket: any): { type: string; author: string; excerpt: string; warningIdentity?: string } | null {
+    if (ownedByAnotherSession(ticket)) return null;
     if (ticket.status === 'awaiting-oracle') return { type: 'awaiting-oracle', author: '', excerpt: '' };
     if (ticket.lastEventType === 'release' || ticket.lastEventType === 'scope-request') {
       return { type: ticket.lastEventType, author: '', excerpt: '' };

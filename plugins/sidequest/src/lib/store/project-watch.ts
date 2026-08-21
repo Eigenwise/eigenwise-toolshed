@@ -1,10 +1,13 @@
 'use strict';
 
 function createProjectBoardWatch(project: any, environment = process.env, dependencies?: any) {
-  const { store, createBoardWatch, createGitHubCiRunsProvider } = dependencies || {
-    store: require('../store'),
-    ...require('./pulse'),
-  };
+  const pulse = require('./pulse');
+  const {
+    store = require('../store'),
+    createBoardWatch = pulse.createBoardWatch,
+    createGitHubCiRunsProvider = pulse.createGitHubCiRunsProvider,
+    includeAllTickets = false,
+  } = dependencies || {};
   const watchingSession = environment.CLAUDE_CODE_SESSION_ID || environment.CLAUDE_SESSION_ID || '';
   const watchingActor = environment.SIDEQUEST_AGENT || watchingSession;
   return createBoardWatch({
@@ -14,6 +17,7 @@ function createProjectBoardWatch(project: any, environment = process.env, depend
       return { project: project.slug, ...store.changesPayload(project.slug, since) };
     },
     ciRunsProvider: createGitHubCiRunsProvider(project.meta?.path),
+    includeAllTickets,
     watchingAuthor: watchingActor,
     watchingSession,
     watchingOrigin: { sessionId: watchingSession, actor: watchingActor, operation: 'comment' },

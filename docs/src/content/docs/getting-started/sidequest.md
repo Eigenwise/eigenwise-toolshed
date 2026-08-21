@@ -112,6 +112,8 @@ Ask Claude to do the board work in plain language:
 
 For substantial changes, Claude can turn the request into a story with linked tickets so you can see the whole plan before execution. Side issues that come up during a session can become separate tickets instead of disappearing into the current task.
 
+Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. Ticket alerts default to dispatches prepared by the watching Claude session, plus tickets with no attributed owner and terminal dispatches so restart recovery stays visible. GitHub CI alerts always cover the shared repository. After a restart, use `--all` when the new session must follow still-active tickets prepared by the old session; it restores project-wide ticket alerts.
+
 ## If something stops working
 
 **The board does not open.** Reload Claude Code after installing Sidequest, then ask Claude to open the board again. If the browser still does not open, ask Claude to start the Sidequest dashboard and report its local URL.

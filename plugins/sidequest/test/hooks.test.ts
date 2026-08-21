@@ -2677,6 +2677,9 @@ test('session-start: tells orchestrators to arm the board watch when Monitor exi
   for (const source of ['', 'compact', 'resume']) {
     const context = runHookForBudget(SESSION, { session_id: `watch-${source || 'startup'}`, source });
     assert.match(context, /Arm a persistent Monitor running node "?.+[/\\]bin[/\\]sidequest\.js"? watch --project <path>/);
+    assert.match(context, /ticket alerts default to dispatches prepared by this session plus unowned and terminal tickets/i);
+    assert.match(context, /failed GitHub CI runs stay project-wide/i);
+    assert.match(context, /Use --all for project-wide ticket alerts/i);
     assert.match(context, /Skip it if Monitor is unavailable/);
   }
 });
