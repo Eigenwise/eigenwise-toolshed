@@ -70,6 +70,18 @@ Open a ticket to edit its fields and read the working context in one place. The 
 
 *Synthetic demo data showing the Build cart summary ticket and its team discussion.*
 
+Stories group tickets into a plan you can filter and discuss before dispatch. The toolbar story filter keeps the story list visible while you scan the combined board.
+
+![Sidequest story filter showing synthetic stories across the combined board](../../../assets/screenshots/sidequest-stories.png)
+
+*Synthetic demo data showing the Checkout confidence, Storefront discovery, and fulfillment story groups.*
+
+Links show which tickets block or relate to each other. Use the dependency list to inspect the existing chain, then choose a link type and target when you add another relationship.
+
+![Sidequest ticket links editor showing dependency targets and an existing block](../../../assets/screenshots/sidequest-ticket-links.png)
+
+*Synthetic demo data showing the dependency options for the Build cart summary ticket.*
+
 Completed work can move into the archive without disappearing. The archive view keeps the source board, priority, age, and restore action with each ticket.
 
 ![Sidequest archive containing nine synthetic tickets from three projects](../../../assets/screenshots/sidequest-archive.png)
