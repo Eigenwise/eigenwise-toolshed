@@ -8,6 +8,30 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.497.0 (2026-08-21)
+
+### observability 0.7.16 → 0.7.17
+
+#### Fixes
+
+- Verify dashboard startup (SQ-2320)
+  Verify the Grafana dashboard container is running and accepting OTLP before setup succeeds.
+
+### sidequest 5.0.10 → 5.0.11
+
+#### Fixes
+
+- Recover stranded Sidequest redispatches (SQ-2328)
+  Fresh isolated redispatches now bind to their created checkout even when the runtime reports stale identity. Token-validated failed claims can surrender immediately, and release-fragment-only checkpoints no longer block retries.
+- Name refused scope paths accurately (SQ-2332)
+- Make Sidequest ticket-link screenshots readable (SQ-2334)
+- Stabilize settings screenshot capture (SQ-2335)
+  Wait for the populated routing settings list before capturing the dashboard settings screenshot.
+- Pin SessionStart sweep deadlines in tests (SQ-2336)
+  Pin the SessionStart sweep deadline in hook tests so assertions do not depend on machine speed.
+- Close already-landed Sidequest candidates (SQ-2337)
+  Grooming now records a reachable submitted candidate as delivered without rerunning an assembled-wave gate. Missing gate commands identify the broken environment and configured worktree setup, while `skipVerify` without a complete waiver is refused before assembly.
+
 ## v3.496.0 (2026-08-21)
 
 ### model-gateway 0.48.16 → 0.48.17
