@@ -906,6 +906,8 @@ ${verify.outputTail}` : null
     opts = opts || {};
     const preflight = validateIntegrationSubmission(slug, idOrRef);
     if (!preflight.ok) return preflight;
+    const preflightTicket = preflight.ticket;
+    if (opts.skipVerify === true) return { ok: false, reason: "delivery_verify_required", ticket: preflightTicket, message: `${preflightTicket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
     const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
     if (!assembled.ok) return assembled;
     const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
@@ -916,7 +918,6 @@ ${verify.outputTail}` : null
     const requestedCommit = String(opts.deliveryCommit || "").trim();
     if (!reason) return { ok: false, reason: "evidence_required", ticket, message: `${ticket.ref} reconciliation requires delivery evidence.` };
     if (!SUBMISSION_COMMIT_RE.test(requestedCommit)) return { ok: false, reason: "delivery_commit_required", ticket, message: `${ticket.ref} reconciliation requires the delivery commit hash.` };
-    if (opts.skipVerify === true) return { ok: false, reason: "delivery_verify_required", ticket, message: `${ticket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
     const repo = String(readMeta(slug)?.path || "").trim();
     const target = opts.target;
     if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket };
@@ -1020,6 +1021,52 @@ ${verify.outputTail}` : null
       return { ok: false, reason: "delivery_evidence_unavailable", ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
     }
   }
+  function recordAlreadyLandedSubmission(slug, found, target, candidate, reason, repo) {
+    const resultingHead = integrationGit(repo, ["rev-parse", `refs/heads/${target.branch}`]).toLowerCase();
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    const deliveryRevision = {
+      source: `git:${target.upstream || target.branch}`,
+      value: resultingHead,
+      observedAt: now
+    };
+    return withTicketLock(slug, found.id, () => {
+      const ticket = getTicket(slug, found.id);
+      if (!ticket?.submission || !pendingSubmission(ticket)) return { ok: false, reason: "submission_required", ticket };
+      if (String(ticket.submission.commit || "").trim().toLowerCase() !== candidate) {
+        return { ok: false, reason: "submission_changed", ticket, message: `${ticket.ref} changed candidates while landed delivery evidence was being recorded.` };
+      }
+      const changedPaths = changedIntegrationPaths(repo, ticket.submission);
+      ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, {
+        mode: "already-landed",
+        outcome: "delivered",
+        pinnedRef: submissionGitRef(ticket),
+        pinnedCommit: candidate,
+        deliveryCommit: candidate,
+        resultingHead,
+        contentCommit: candidate,
+        deliveryRevision,
+        deliveryIdentity: {
+          kind: "already-landed-candidate",
+          pinnedRef: submissionGitRef(ticket),
+          candidate,
+          sourceRevision: deliveryRevision
+        },
+        targetBranch: target.branch,
+        targetUpstream: target.upstream,
+        changedPaths,
+        deliveredFiles: changedPaths,
+        evidence: reason,
+        contentEvidence: "candidate_ancestor",
+        recordedAt: now,
+        deliveredAt: now
+      });
+      ticket.submission.integratedAt = now;
+      ticket.updatedAt = now;
+      putTicket(slug, ticket);
+      queueEventNotification(slug, ticket, "status", "integration");
+      return { ok: true, ticket, integration: ticket.submission.integration };
+    });
+  }
   function recordAbandonedSubmission(slug, idOrRef, opts) {
     opts = opts || {};
     const found = getTicket(slug, idOrRef);
@@ -1032,23 +1079,26 @@ ${verify.outputTail}` : null
     if (!repo || !target?.branch) return { ok: false, reason: "integration_target_unavailable", ticket: found };
     const candidate = String(found.submission?.commit || "").trim();
     let candidateState = "unresolvable";
+    let landedCandidate = null;
     if (submissionUsesGit(found) && candidate) {
       try {
         const resolved = integrationGit(repo, ["rev-parse", "--verify", `${candidate}^{commit}`]).toLowerCase();
         try {
           integrationGit(repo, ["merge-base", "--is-ancestor", resolved, `refs/heads/${target.branch}`]);
-          return {
-            ok: false,
-            reason: "candidate_already_landed",
-            ticket: found,
-            message: `${found.ref} cannot be abandoned: its candidate ${resolved} is reachable from ${target.branch}, so it shipped. Close it as a delivery with that commit as the delivery evidence instead.`
-          };
+          landedCandidate = resolved;
         } catch (error) {
           if (error?.status !== 1) throw error;
+          candidateState = "unreachable";
         }
-        candidateState = "unreachable";
       } catch (error) {
         candidateState = "unresolvable";
+      }
+    }
+    if (landedCandidate) {
+      try {
+        return recordAlreadyLandedSubmission(slug, found, target, landedCandidate, reason, repo);
+      } catch (error) {
+        return { ok: false, reason: "delivery_evidence_unavailable", ticket: found, message: `${found.ref} landed delivery evidence could not be recorded: ${integrationGitError(error)}` };
       }
     }
     const now = (/* @__PURE__ */ new Date()).toISOString();
@@ -2232,6 +2282,10 @@ ${verify.outputTail}` : null
   function ensureSingletonAssembledWave(slug, idOrRef, opts) {
     const ticket = getTicket(slug, idOrRef);
     if (!ticket) return { ok: false, reason: "not_found" };
+    if (opts?.skipVerify === true) {
+      const waiver = validateVerificationWaiver(opts.verificationWaiver);
+      if ("code" in waiver) return { ok: false, reason: waiver.code, message: waiver.message, ticket };
+    }
     const existing = ticket.submission?.wave;
     if (existing?.state === "invalidated") {
       return {
@@ -2358,11 +2412,24 @@ ${verify.outputTail}` : null
       }
     });
     if (gate.state === "gate_failed") {
+      const wave = { id: waveId, baseline: opened.baseline, participants: participantRefs };
+      if (gate.verification.status === "toolchain_missing") {
+        const worktreeSetup = String(boardConfig(slug)?.worktreeSetup || "").trim();
+        const setupEvidence = worktreeSetup ? `Configured worktree setup ${JSON.stringify(worktreeSetup)} should provide that command before the gate runs.` : "No worktree setup is configured to provide the missing command.";
+        return {
+          ok: false,
+          reason: "assembled_wave_environment_problem",
+          message: `Wave ${waveId} gate could not run because its verification environment is incomplete. ${gate.verification.evidence} ${setupEvidence} Provision the gate environment and retry; no candidate was rejected.`,
+          wave,
+          assembly: decision.assembly,
+          gate
+        };
+      }
       return {
         ok: false,
         reason: "assembled_wave_gate_failed",
         message: `Wave ${waveId} gate returned ${gate.verification.status}. Refresh and reverify its candidates before delivery.`,
-        wave: { id: waveId, baseline: opened.baseline, participants: participantRefs },
+        wave,
         assembly: decision.assembly,
         gate
       };
