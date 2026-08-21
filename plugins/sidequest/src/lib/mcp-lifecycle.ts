@@ -88,6 +88,44 @@ function compactIntegrationDelivery(integration: any) {
   return delivery;
 }
 
+function waveAssemblyAck(slug: string, result: any) {
+  const wave = result.wave;
+  const gate = result.gate;
+  return Object.assign(mutationAck(slug, result), {
+    action: result.ok ? 'wave_assembled' : 'wave_assembly_refused',
+    ...(wave ? { wave } : {}),
+    ...(wave?.id ? { waveId: wave.id } : {}),
+    ...(Array.isArray(wave?.participants) ? { participantRefs: wave.participants } : {}),
+    ...(gate ? { gate } : {}),
+    ...(gate?.state ? { gateState: gate.state } : {}),
+    ...(result.assembly ? { assembly: result.assembly } : {}),
+    ...(result.invalidated ? { invalidated: result.invalidated } : {}),
+    ...(result.conflicts ? { conflicts: result.conflicts } : {}),
+    ...(result.ok ? {
+      deliveryRequired: true,
+      message: `Wave ${wave.id} assembled with gate ${gate?.state || 'assembled'}. Call integrate again without wave to deliver it.`,
+    } : {}),
+  });
+}
+
+function deliveredAck(slug: string, result: any, integration: any, changed: any = {}) {
+  const delivery = compactIntegrationDelivery(integration);
+  const commits = Array.isArray(delivery.pinnedCommits)
+    ? delivery.pinnedCommits
+    : delivery.pinnedCommit ? [delivery.pinnedCommit] : [];
+  const message = commits.length
+    ? `Delivered ${commits.join(', ')} to ${delivery.targetBranch || 'the integration target'}.`
+    : delivery.sourceRevision
+      ? `Delivered source revision ${delivery.sourceRevision.source}:${delivery.sourceRevision.value}.`
+      : 'Delivered the submitted candidate.';
+  return mutationAck(slug, result, {
+    action: 'delivered',
+    delivery,
+    message,
+    ...changed,
+  });
+}
+
 async function cleanupDeliveredWorktree(slug: string, projectPath: string, ticket: any, claimWasLive: boolean = false): Promise<void> {
   try {
     const dispatch = ticket?.dispatch;
@@ -843,7 +881,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'integrate',
-    description: 'Deliver a ref or exact comma group; wave:{dependencies,verification,waveId} assembles it. After the delivery record is durable, terminal isolated worktrees are reclaimed best-effort; busy or locked worktrees defer to SessionStart.',
+    description: 'Deliver a ref or exact comma group. wave:{dependencies,verification,waveId} assembles and gates only, returning action:"wave_assembled", wave, gate, and deliveryRequired:true; call again without wave to deliver, which returns action:"delivered" and delivery commit or source-revision details. After the delivery record is durable, terminal isolated worktrees are reclaimed best-effort; busy or locked worktrees defer to SessionStart.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -867,7 +905,7 @@ const tools: ToolDefinition[] = [
       const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
       if (!refs.length) throw new Error('integrate: pass one or more ticket refs.');
       if (args.wave != null) {
-        return mutationAck(slug, store.assembleSubmissionWave(slug, refs, args.wave));
+        return waveAssemblyAck(slug, store.assembleSubmissionWave(slug, refs, args.wave));
       }
       const failures: Array<{ reason: string; message: string }> = [];
       const ticket = store.getTicket(slug, refs[0]!);
@@ -900,8 +938,7 @@ const tools: ToolDefinition[] = [
           closeDispatchExecutor(closure.ticket);
           await cleanupDeliveredWorktree(slug, meta.path, closure.ticket, Boolean(ticketsBeforeClosure[index]?.claim?.by));
         }
-        return mutationAck(slug, failedClosure || closures[0], {
-          delivery: compactIntegrationDelivery(delivery.integration),
+        return deliveredAck(slug, failedClosure || closures[0], delivery.integration, {
           verify: delivery.integration.verify,
           tickets: closures.map((closure: any) => closure.ticket || null),
         });
@@ -963,8 +1000,7 @@ const tools: ToolDefinition[] = [
           closeDispatchExecutor(recorded.ticket);
           await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
         }
-        return mutationAck(slug, closed, {
-          delivery: compactIntegrationDelivery(recorded.integration),
+        return deliveredAck(slug, closed, recorded.integration, {
           verify: recorded.integration.verify,
           ...(closed.ok ? { completion: closed.ticket.completion } : {}),
         });
@@ -1012,8 +1048,7 @@ const tools: ToolDefinition[] = [
         closeDispatchExecutor(delivery.ticket);
         await cleanupDeliveredWorktree(slug, meta.path, closed.ticket, Boolean(deliveryTicket?.claim?.by));
       }
-      return mutationAck(slug, closed, {
-        delivery: compactIntegrationDelivery(integration),
+      return deliveredAck(slug, closed, integration, {
         verify: verification.verify,
         ...(closed.ok ? { completion: closed.ticket.completion } : {}),
       });
