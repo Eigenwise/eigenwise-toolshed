@@ -321,6 +321,26 @@ function normalizeFiles(files?: any) {
   return out;
 }
 
+function isVerificationEvidencePath(file: any, evidenceDirectory: any) {
+  const directory = String(evidenceDirectory || '').trim();
+  const requestedPath = String(file || '').trim();
+  if (!directory || !requestedPath) return false;
+  const relative = path.relative(path.resolve(directory), path.resolve(requestedPath));
+  return relative === '' || (!relative.startsWith(`..${path.sep}`) && !path.isAbsolute(relative));
+}
+
+function verificationEvidenceGuidance(evidenceDirectory: any, evidencePaths: any[]) {
+  if (!evidencePaths.length) return '';
+  const subject = evidencePaths.length === 1 ? 'The refused path is' : 'The refused paths are';
+  return ` ${subject} board-owned verification evidence: ${evidencePaths.join(', ')}. Verification evidence belongs in ${evidenceDirectory}; do not request or commit it inside the repository.`;
+}
+
+function declaredScopeGuidance(ticket: any, refusedPaths: any[]) {
+  if (!refusedPaths.length || !normalizeFiles(ticket.files).length) return '';
+  const subject = refusedPaths.length === 1 ? 'The refused path is' : 'The refused paths are';
+  return ` ${subject} outside this ticket's declared files: ${refusedPaths.join(', ')}. The orchestrator has to declare them (\`sidequest update ${ticket.ref} --file <path>\`) and redispatch.`;
+}
+
 const DECLARED_FILES_MAX = 100;
 const CONTRACT_NAMES_MAX = 40;
 const LABELS_MAX = 24;
@@ -638,8 +658,21 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     if (held.by !== by && !opts.force) return { ok: false, reason: 'not_owner', ticket: t, claim: held };
     const requested = normalizeFiles(files);
     if (!requested.length) return { ok: false, reason: 'files_required', ticket: t };
+    const evidenceDirectory = String(t.dispatch?.evidenceDirectory || '').trim();
+    const requestedEvidencePaths = requested.filter((file?: any) => isVerificationEvidencePath(file, evidenceDirectory));
     const validation = commitScope.validateRelativeScopes(requested);
-    if (!validation.ok) return { ok: false, reason: 'invalid_scope', ticket: t, paths: validation.outside };
+    if (!validation.ok) {
+      const refusalMessage = `Scope expansion refused: ${validation.outside.join(', ')}.`;
+      return {
+        ok: false,
+        reason: 'invalid_scope',
+        ticket: t,
+        paths: validation.outside,
+        ...(requestedEvidencePaths.length ? {
+          message: `${refusalMessage}${verificationEvidenceGuidance(evidenceDirectory, requestedEvidencePaths)}`,
+        } : {}),
+      };
+    }
     const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(requested, t.ref);
     const isForeignReleaseFragmentScope = (file?: any) => foreignReleaseFragments.some((fragment: string) => (
       commitScope.isInScope(file, [fragment]) && commitScope.isInScope(fragment, [file])
@@ -693,10 +726,10 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     const undeclared = !normalizeFiles(t.files).length
       ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.`
       : '';
-    const evidenceDirectory = String(t.dispatch?.evidenceDirectory || '').trim();
-    const evidenceGuidance = evidenceDirectory
-      ? ` Verification evidence belongs in ${evidenceDirectory}; do not request or commit it inside the repository.`
-      : '';
+    const refusedEvidencePaths = refused.filter((file?: any) => isVerificationEvidencePath(file, evidenceDirectory));
+    const refusedOutsideDeclaredFiles = refused.filter((file?: any) => (
+      !isForeignReleaseFragmentScope(file) && !isVerificationEvidencePath(file, evidenceDirectory)
+    ));
     const foreignReleaseFragmentMessage = foreignReleaseFragments.length
       ? commitScope.foreignReleaseFragmentRefusalMessage('scopeRequest', t.ref, foreignReleaseFragments)
       : '';
@@ -705,7 +738,7 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       : '';
     const refusalMessage = [foreignReleaseFragmentMessage, scopeExpansionRefusalMessage].filter(Boolean).join(' ');
     const body = refused.length
-      ? `${refusalMessage}${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${evidenceGuidance} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
+      ? `${refusalMessage}${approved.length ? ` Auto-approved ${policy}: ${approved.join(', ')}.` : ''}${undeclared}${declaredScopeGuidance(t, refusedOutsideDeclaredFiles)}${verificationEvidenceGuidance(evidenceDirectory, refusedEvidencePaths)} Commit in-scope work, then release with kind \"handback\" and name the refused paths.`
       : `Auto-approved ${policy}: ${approved.join(', ')}.`;
     const comment = createComment({ by: refused.length ? 'board' : 'board', body, kind: 'comment', source: refused.length ? (opts.source || 'cli') : 'policy' }, now);
     t.comments.push(comment);
