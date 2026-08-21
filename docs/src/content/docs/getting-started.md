@@ -40,6 +40,10 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 - [Run a human-judged comparison](./getting-started/experiments/)
 - [View selected local usage](./observability/)
 
+![Sidequest board with three synthetic projects and a populated work queue](../assets/screenshots/sidequest-kanban.png)
+
+*An isolated synthetic board view from the Sidequest workflow guide.*
+
 You can ask Quartermaster to install or update Toolshed plugins later, and to check workspace health. Claude handles plugin-owned setup, checks, and recovery steps. Reload plugins or start a new session after an install or update so Claude sees the new version.
 
 The [generated plugin reference](/reference/) lists the agent-facing skills, hooks, and commands for each plugin.

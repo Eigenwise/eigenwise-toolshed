@@ -20,11 +20,10 @@ const repoDir = path.resolve(docsDir, '..');
 const outputDir = path.join(docsDir, 'src', 'assets', 'screenshots');
 const sidequestCli = path.join(repoDir, 'plugins', 'sidequest', 'bin', 'sidequest.js');
 const grafanaProvisioning = path.join(repoDir, 'plugins', 'observability', 'observability', 'sinks', 'grafana', 'provisioning');
-const SYNTHETIC_HOUR = 60 * 60 * 1_000;
-const SYNTHETIC_NOW = Math.floor(Date.now() / SYNTHETIC_HOUR) * SYNTHETIC_HOUR;
-const METRIC_QUERY_TIME = Math.floor(Date.now() / 1_000);
+const SYNTHETIC_NOW = Date.UTC(2026, 7, 20, 12, 0, 0);
 const SYNTHETIC_INTERVAL = 10 * 60 * 1_000;
 const SYNTHETIC_START = SYNTHETIC_NOW - (23 * 60 * 60 * 1_000);
+const SYNTHETIC_QUERY_START = SYNTHETIC_START - (60 * 1_000);
 const SYNTHETIC_BUCKETS = Math.floor((SYNTHETIC_NOW - SYNTHETIC_START) / SYNTHETIC_INTERVAL) + 1;
 const FIXTURE_WORKLOAD_START_HOUR = 13;
 const { generatedDashboards } = createRequire(import.meta.url)(
@@ -51,7 +50,7 @@ const FIXTURE = Object.freeze({
         { key: 'checkout-events', title: 'Map checkout recovery events', description: 'The recovery path emits two names for the same completed order. Consolidate the schema before the funnel dashboard ships.', status: 'todo', priority: 'high', category: 'analytics', story: 'checkout', assignee: 'Jonah Reed', labels: ['analytics', 'checkout'], age: '1h ago' },
         { key: 'express-wallet', title: 'Add express checkout option', description: 'Returning shoppers need a one-tap wallet choice above the address form. Keep taxes and promotions visible before confirmation.', status: 'todo', priority: 'high', category: 'product', story: 'checkout', assignee: 'Noor Hassan', labels: ['checkout', 'payments'], age: '2h ago' },
         { key: 'returns-copy', title: 'Clarify final-sale returns copy', description: 'The product page and cart use different final-sale language. Use the approved policy text in both places.', status: 'todo', priority: 'low', category: 'content', assignee: null, labels: ['content', 'policy'], age: '3h ago' },
-        { key: 'cart-summary', title: 'Build cart summary', description: 'The new summary keeps discounts, shipping, tax, and the final total in one stable grid. Mobile can wrap promotion labels, but totals must stay aligned.', status: 'doing', priority: 'urgent', category: 'product', story: 'checkout', assignee: null, labels: ['checkout', 'cart'], age: '18m ago' },
+        { key: 'cart-summary', title: 'Build cart summary', description: 'The new summary keeps discounts, shipping, tax, and the final total in one stable grid. Mobile can wrap promotion labels, but totals must stay aligned.', status: 'doing', priority: 'urgent', category: 'product', story: 'checkout', assignee: null, labels: ['checkout', 'cart'], images: ['checkout-flow.svg'], age: '18m ago' },
         { key: 'inventory-badge', title: 'Harden low-stock badge refresh', description: 'The badge can show stale inventory after a variant change. Cancel the old request and render only the latest response.', status: 'doing', priority: 'high', category: 'reliability', story: 'discovery', assignee: 'Eli Brooks', labels: ['inventory', 'api'], age: '37m ago' },
         { key: 'purchase-funnel', title: 'Wire the purchase funnel dashboard', description: 'Analysts need one view from product impression through paid order. Join the settled event names and call out late-arriving payments.', status: 'doing', priority: 'normal', category: 'analytics', story: 'checkout', assignee: 'Priya Shah', labels: ['analytics'], age: '1h ago' },
         { key: 'payment-retry', title: 'Retry payment confirmation safely', description: 'A network retry can duplicate the confirmation request. Reuse the idempotency key and surface the original result.', status: 'doing', priority: 'urgent', category: 'reliability', story: 'checkout', assignee: 'Diego Park', labels: ['payments', 'reliability'], age: '2h ago' },
@@ -66,17 +65,21 @@ const FIXTURE = Object.freeze({
     {
       slug: 'acme-fulfillment',
       name: 'Acme Fulfillment',
-      stories: [{ key: 'same-day', title: 'Same-day fulfillment', color: 'amber' }],
+      stories: [
+        { key: 'same-day', title: 'Same-day fulfillment', color: 'amber' },
+        { key: 'warehouse-flow', title: 'Warehouse flow', color: 'steel' },
+        { key: 'carrier-promises', title: 'Carrier promises', color: 'green' },
+      ],
       tickets: [
         { key: 'stock-reservation', title: 'Protect stock reservations', description: 'Two pickers can reserve the last unit during a short race. Make the reservation atomic and return a clear conflict state.', status: 'todo', priority: 'urgent', category: 'reliability', story: 'same-day', assignee: 'Maya Chen', labels: ['inventory', 'backend'], age: '9m ago' },
-        { key: 'carrier-cutoff', title: 'Show the local carrier cutoff', description: 'The checkout promise uses warehouse time instead of the shopper-facing cutoff. Return the correct local message for each region.', status: 'todo', priority: 'high', category: 'product', story: 'same-day', assignee: 'Diego Park', labels: ['shipping', 'checkout'], age: '31m ago' },
-        { key: 'mobile-address', title: 'Show mobile address exceptions', description: 'Small screens hide the apartment warning below the sticky action bar. Keep the exception beside the address and preserve the corrected value.', status: 'todo', priority: 'normal', category: 'product', story: 'same-day', assignee: 'Noor Hassan', labels: ['mobile', 'shipping'], age: '44m ago' },
-        { key: 'pick-list', title: 'Condense the mobile pick list', description: 'Pickers lose the bin location when item names wrap. Keep location and quantity pinned beside each line.', status: 'doing', priority: 'normal', category: 'product', story: 'same-day', assignee: 'Priya Shah', labels: ['warehouse', 'mobile'], age: '58m ago' },
+        { key: 'carrier-cutoff', title: 'Show the local carrier cutoff', description: 'The checkout promise uses warehouse time instead of the shopper-facing cutoff. Return the correct local message for each region.', status: 'todo', priority: 'high', category: 'product', story: 'carrier-promises', assignee: 'Diego Park', labels: ['shipping', 'checkout'], age: '31m ago' },
+        { key: 'mobile-address', title: 'Show mobile address exceptions', description: 'Small screens hide the apartment warning below the sticky action bar. Keep the exception beside the address and preserve the corrected value.', status: 'todo', priority: 'normal', category: 'product', story: 'carrier-promises', assignee: 'Noor Hassan', labels: ['mobile', 'shipping'], age: '44m ago' },
+        { key: 'pick-list', title: 'Condense the mobile pick list', description: 'Pickers lose the bin location when item names wrap. Keep location and quantity pinned beside each line.', status: 'doing', priority: 'normal', category: 'product', story: 'warehouse-flow', assignee: 'Priya Shah', labels: ['warehouse', 'mobile'], age: '58m ago' },
         { key: 'refund-webhook', title: 'Reconcile refund webhooks', description: 'Partial refunds can arrive before the shipment update. Buffer the pair and publish one consistent order state.', status: 'done', priority: 'high', category: 'analytics', assignee: 'Jonah Reed', labels: ['returns', 'webhooks'], age: '2h ago' },
-        { key: 'mobile-packing', title: 'Summarize mobile packing exceptions', description: 'Supervisors need a compact list of skipped scans while walking the floor. Group exceptions by wave and keep the affected bin visible.', status: 'doing', priority: 'normal', category: 'analytics', story: 'same-day', assignee: 'Eli Brooks', labels: ['mobile', 'warehouse'], age: '2h ago' },
-        { key: 'scan-timeout', title: 'Recover stalled dock scans', description: 'A scanner that wakes from sleep can leave the loading task pending forever. Expire the old attempt and let the operator retry the same carton.', status: 'doing', priority: 'urgent', category: 'reliability', story: 'same-day', assignee: 'Diego Park', labels: ['warehouse', 'reliability'], age: '3h ago' },
-        { key: 'tracking-email', title: 'Launch shipment tracking email', description: 'The new email groups split shipments and names the next expected scan. Support approved the copy and fallback state.', status: 'done', priority: 'normal', category: 'content', story: 'same-day', assignee: 'Noor Hassan', labels: ['email', 'shipping'], age: 'yesterday' },
-        { key: 'mobile-dock', title: 'Finish the mobile dock dashboard', description: 'Dock leads can now see late trailers and open doors without pinching the desktop table. The final pass keeps status colors readable outdoors.', status: 'done', priority: 'normal', category: 'analytics', story: 'same-day', assignee: 'Priya Shah', labels: ['mobile', 'analytics'], age: '2d ago' },
+        { key: 'mobile-packing', title: 'Summarize mobile packing exceptions', description: 'Supervisors need a compact list of skipped scans while walking the floor. Group exceptions by wave and keep the affected bin visible.', status: 'doing', priority: 'normal', category: 'analytics', story: 'warehouse-flow', assignee: 'Eli Brooks', labels: ['mobile', 'warehouse'], age: '2h ago' },
+        { key: 'scan-timeout', title: 'Recover stalled dock scans', description: 'A scanner that wakes from sleep can leave the loading task pending forever. Expire the old attempt and let the operator retry the same carton.', status: 'doing', priority: 'urgent', category: 'reliability', story: 'warehouse-flow', assignee: 'Diego Park', labels: ['warehouse', 'reliability'], age: '3h ago' },
+        { key: 'tracking-email', title: 'Launch shipment tracking email', description: 'The new email groups split shipments and names the next expected scan. Support approved the copy and fallback state.', status: 'done', priority: 'normal', category: 'content', story: 'carrier-promises', assignee: 'Noor Hassan', labels: ['email', 'shipping'], age: 'yesterday' },
+        { key: 'mobile-dock', title: 'Finish the mobile dock dashboard', description: 'Dock leads can now see late trailers and open doors without pinching the desktop table. The final pass keeps status colors readable outdoors.', status: 'done', priority: 'normal', category: 'analytics', story: 'warehouse-flow', assignee: 'Priya Shah', labels: ['mobile', 'analytics'], age: '2d ago' },
         { key: 'carrier-table', title: 'Archive the holiday carrier table', description: 'Holiday exceptions are no longer active. Preserve the decisions in the runbook and remove the table from daily views.', status: 'done', priority: 'low', category: 'content', story: 'same-day', assignee: 'Eli Brooks', labels: ['operations', 'cleanup'], age: '7d ago', archived: true },
         { key: 'overnight-promise', title: 'Retire the overnight promise test', description: 'The regional promise experiment has ended. Save its result and remove the stale assignment rule from fulfillment planning.', status: 'done', priority: 'normal', category: 'analytics', story: 'same-day', assignee: 'Jonah Reed', labels: ['shipping', 'experiment'], age: '11d ago', archived: true },
         { key: 'gift-wrap-station', title: 'Close the gift-wrap station pilot', description: 'The pilot finished with a smaller permanent station plan. Archive the temporary queue and keep the staffing notes with the decision.', status: 'done', priority: 'low', category: 'content', assignee: 'Maya Chen', labels: ['warehouse', 'pilot'], age: '14d ago', archived: true },
@@ -85,14 +88,17 @@ const FIXTURE = Object.freeze({
     {
       slug: 'acme-support-desk',
       name: 'Acme Support Desk',
-      stories: [],
+      stories: [
+        { key: 'agent-workbench', title: 'Agent workbench', color: 'teal' },
+        { key: 'service-recovery', title: 'Service recovery', color: 'rose' },
+      ],
       tickets: [
-        { key: 'vip-tags', title: 'Tag high-value conversations', description: 'Support needs a quiet signal for shoppers with recent high-value orders. Add the tag without exposing order totals in the queue.', status: 'todo', priority: 'low', category: 'analytics', assignee: 'Eli Brooks', labels: ['support', 'crm'], age: '16m ago' },
-        { key: 'order-sidebar', title: 'Add order context to the sidebar', description: 'Agents switch tabs to check fulfillment and refund state. Show the latest safe order summary beside the conversation.', status: 'doing', priority: 'high', category: 'product', assignee: 'Maya Chen', labels: ['support', 'orders'], age: '49m ago' },
-        { key: 'macro-audit', title: 'Audit delayed-order macros', description: 'Several saved replies still quote the old delivery window. Replace them with the current regional guidance.', status: 'done', priority: 'normal', category: 'content', assignee: 'Diego Park', labels: ['support', 'content'], age: '2d ago' },
-        { key: 'refund-macro', title: 'Archive the refund delay macro', description: 'The payments migration removed the delay this reply described. Keep the response history and retire it from the agent picker.', status: 'done', priority: 'low', category: 'content', assignee: 'Noor Hassan', labels: ['support', 'cleanup'], age: '8d ago', archived: true },
-        { key: 'legacy-inbox', title: 'Retire the legacy priority inbox', description: 'The unified queue now owns every escalation path. Archive the old inbox rules after preserving the weekly volume comparison.', status: 'done', priority: 'normal', category: 'analytics', assignee: 'Priya Shah', labels: ['support', 'analytics'], age: '12d ago', archived: true },
-        { key: 'courier-script', title: 'Close the courier callback script', description: 'Carriers now send structured delay updates directly. Remove the manual callback script while retaining its escalation contacts.', status: 'done', priority: 'low', category: 'product', assignee: 'Jonah Reed', labels: ['support', 'shipping'], age: '16d ago', archived: true },
+        { key: 'vip-tags', title: 'Tag high-value conversations', description: 'Support needs a quiet signal for shoppers with recent high-value orders. Add the tag without exposing order totals in the queue.', status: 'todo', priority: 'low', category: 'analytics', story: 'agent-workbench', assignee: 'Eli Brooks', labels: ['support', 'crm'], age: '16m ago' },
+        { key: 'order-sidebar', title: 'Add order context to the sidebar', description: 'Agents switch tabs to check fulfillment and refund state. Show the latest safe order summary beside the conversation.', status: 'doing', priority: 'high', category: 'product', story: 'agent-workbench', assignee: 'Maya Chen', labels: ['support', 'orders'], age: '49m ago' },
+        { key: 'macro-audit', title: 'Audit delayed-order macros', description: 'Several saved replies still quote the old delivery window. Replace them with the current regional guidance.', status: 'done', priority: 'normal', category: 'content', story: 'service-recovery', assignee: 'Diego Park', labels: ['support', 'content'], age: '2d ago' },
+        { key: 'refund-macro', title: 'Archive the refund delay macro', description: 'The payments migration removed the delay this reply described. Keep the response history and retire it from the agent picker.', status: 'done', priority: 'low', category: 'content', story: 'service-recovery', assignee: 'Noor Hassan', labels: ['support', 'cleanup'], age: '8d ago', archived: true },
+        { key: 'legacy-inbox', title: 'Retire the legacy priority inbox', description: 'The unified queue now owns every escalation path. Archive the old inbox rules after preserving the weekly volume comparison.', status: 'done', priority: 'normal', category: 'analytics', story: 'agent-workbench', assignee: 'Priya Shah', labels: ['support', 'analytics'], age: '12d ago', archived: true },
+        { key: 'courier-script', title: 'Close the courier callback script', description: 'Carriers now send structured delay updates directly. Remove the manual callback script while retaining its escalation contacts.', status: 'done', priority: 'low', category: 'product', story: 'service-recovery', assignee: 'Jonah Reed', labels: ['support', 'shipping'], age: '16d ago', archived: true },
       ],
     },
   ],
@@ -127,9 +133,15 @@ const FIXTURE = Object.freeze({
   links: [
     ['cart-summary', 'blocks', 'express-wallet'],
     ['checkout-events', 'related', 'purchase-funnel'],
+    ['search-synonyms', 'related', 'search-refinements'],
     ['stock-reservation', 'blocks', 'pick-list'],
+    ['mobile-address', 'related', 'carrier-cutoff'],
+    ['vip-tags', 'related', 'order-sidebar'],
   ],
-  reminder: { ticket: 'cart-summary', fireAt: '2030-04-18T09:00:00Z', display: 'Scheduled for Apr 18, 2030, 9:00 AM' },
+  reminders: [
+    { ticket: 'cart-summary', fireAt: '2030-04-18T09:00:00Z', display: 'Scheduled for Apr 18, 2030, 9:00 AM' },
+    { ticket: 'order-sidebar', fireAt: '2030-04-18T14:30:00Z', display: 'Scheduled for Apr 18, 2030, 2:30 PM' },
+  ],
   dialogUpdated: 'Updated Mar 12, 2026, 10:42 AM',
   dialogStory: 'US-1 · Checkout confidence',
   commentTimes: ['Mar 12, 2026, 9:18 AM', 'Mar 12, 2026, 9:34 AM', 'Mar 12, 2026, 10:03 AM', 'Mar 12, 2026, 10:27 AM'],
@@ -155,6 +167,10 @@ function assertSyntheticFixture() {
   assert.equal(FIXTURE.projects.length, 3);
   assert.equal(tickets.filter((ticket) => !ticket.archived).length, 25);
   assert.equal(tickets.filter((ticket) => ticket.archived).length, 9);
+  for (const project of FIXTURE.projects) assert.ok(project.stories.length >= 2, `${project.name} needs multiple synthetic stories`);
+  assert.ok(FIXTURE.links.length >= 6, 'Synthetic fixture needs enough links for the dependency capture');
+  assert.ok(FIXTURE.reminders.length >= 2, 'Synthetic fixture needs reminders on more than one ticket');
+  assert.ok(tickets.some((ticket) => ticket.images?.length), 'Synthetic fixture needs an image attachment');
   for (const value of forbidden) assert.equal(text.includes(value), false, `Synthetic fixture contains environment text: ${value}`);
 }
 
@@ -288,6 +304,7 @@ async function waitFor(url, label) {
 async function seedSidequest(tempHome, tempRoot) {
   const refs = new Map();
   const projectClis = new Map();
+  await writeFile(path.join(tempRoot, 'checkout-flow.svg'), `<svg xmlns="http://www.w3.org/2000/svg" width="640" height="360" viewBox="0 0 640 360"><rect width="640" height="360" fill="#f6f1e8"/><rect x="40" y="40" width="160" height="100" rx="12" fill="#d9e5ef"/><rect x="240" y="40" width="160" height="100" rx="12" fill="#eadfc5"/><rect x="440" y="40" width="160" height="100" rx="12" fill="#d8e5d3"/><path d="M200 90h40m160 0h40" stroke="#475569" stroke-width="8" stroke-linecap="round"/><rect x="40" y="200" width="560" height="28" rx="14" fill="#d5cec2"/><rect x="40" y="260" width="420" height="28" rx="14" fill="#d5cec2"/></svg>`);
   for (const project of FIXTURE.projects) {
     const fakeProject = path.join(tempRoot, project.slug);
     await mkdir(fakeProject, { recursive: true });
@@ -308,6 +325,7 @@ async function seedSidequest(tempHome, tempRoot) {
       const args = ['add', '-t', ticket.title, '--category', ticket.category, '-p', ticket.priority, '-s', ticket.status, '-d', ticket.description];
       if (ticket.story) args.push('--story', stories.get(ticket.story));
       for (const label of ticket.labels) args.push('-l', label);
+      for (const image of ticket.images ?? []) args.push('--image', path.join(tempRoot, image));
       const ref = ticketRef(cli(args));
       refs.set(ticket.key, { ref, slug: project.slug });
       if (ticket.assignee) cli(['assign', ref, '--to', ticket.assignee]);
@@ -324,8 +342,10 @@ async function seedSidequest(tempHome, tempRoot) {
     assert.equal(source.slug, target.slug, `Synthetic links must stay on one board: ${sourceKey}`);
     projectClis.get(source.slug)(['link', source.ref, verb, target.ref]);
   }
-  const reminder = refs.get(FIXTURE.reminder.ticket);
-  projectClis.get(reminder.slug)(['remind', reminder.ref, '--at', FIXTURE.reminder.fireAt]);
+  for (const reminderDefinition of FIXTURE.reminders) {
+    const reminder = refs.get(reminderDefinition.ticket);
+    projectClis.get(reminder.slug)(['remind', reminder.ref, '--at', reminderDefinition.fireAt]);
+  }
   for (const project of FIXTURE.projects) {
     const cli = projectClis.get(project.slug);
     for (const ticket of project.tickets.filter((candidate) => candidate.archived)) cli(['archive', refs.get(ticket.key).ref]);
@@ -460,13 +480,13 @@ function singleSeriesValue(series, description) {
 
 async function verifyGrafanaSeed(grafanaPort, expectedCosts) {
   const bucketExpression = '{service_name="workbench-observer"} |= "gateway.token.usage"';
-  const totalExpression = gatewayTotalCostExpression('23h1m1ms');
-  const modelExpression = gatewayModelCostTargets()[0].expr.replaceAll('$bucket', '23h1m1ms');
+  const totalExpression = gatewayTotalCostExpression('23h2m1ms');
+  const modelExpression = gatewayModelCostTargets()[0].expr.replaceAll('$bucket', '23h2m1ms');
   let failure;
   for (let attempt = 0; attempt < 240; attempt += 1) {
     try {
       const [bucketResult, totalResult, modelResult] = await Promise.all([
-        queryGrafana(grafanaPort, bucketExpression, SYNTHETIC_START, SYNTHETIC_NOW + 60_000),
+        queryGrafana(grafanaPort, bucketExpression, SYNTHETIC_QUERY_START, SYNTHETIC_NOW + 60_000),
         queryGrafana(grafanaPort, totalExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
         queryGrafana(grafanaPort, modelExpression, SYNTHETIC_NOW + 60_000, SYNTHETIC_NOW + 60_000, true),
       ]);
@@ -621,20 +641,16 @@ async function seedGrafana(otlpPort, grafanaPort) {
       'workbench.measurement.recharge_weighted_tool_result_bytes.value': weightedResultBytes,
     }, healthEventTimestamp()));
   }
-  for (const [index, timestamp] of timestamps.entries()) {
-    if (index === droppedBucketIndex) continue;
-    const bucketStart = BigInt(timestamp) * 1_000_000n;
-    const bucketEnd = BigInt(timestamp + SYNTHETIC_INTERVAL) * 1_000_000n;
-    const bucketRecords = records.slice(0, historicalRecordCount).filter(({ record }) => {
-      const recordTimestamp = BigInt(record.timeUnixNano);
-      return recordTimestamp >= bucketStart && recordTimestamp < bucketEnd;
-    });
-    await postOtlp(otlpPort, 'logs', groupedLogs(bucketRecords));
-    await new Promise((resolve) => setTimeout(resolve, 300));
-  }
+  const historicalRecords = records.slice(0, historicalRecordCount).filter(({ record }) => {
+    const recordTimestamp = Number(BigInt(record.timeUnixNano) / 1_000_000n);
+    const index = Math.floor((recordTimestamp - SYNTHETIC_START) / SYNTHETIC_INTERVAL);
+    return index !== droppedBucketIndex;
+  });
+  await postOtlp(otlpPort, 'logs', groupedLogs(historicalRecords));
+  await new Promise((resolve) => setTimeout(resolve, 3_000));
   const healthRecords = records.slice(historicalRecordCount);
   await postOtlp(otlpPort, 'logs', groupedLogs(healthRecords));
-  const metricSampleNow = METRIC_QUERY_TIME * 1_000;
+  const metricSampleNow = SYNTHETIC_NOW;
   const metricDataPoints = Array.from({ length: 10 }, (_, index) => ({
     asInt: String((index + 1) * 25_000),
     startTimeUnixNano: String(BigInt(metricSampleNow - (5 * 60 * 1_000)) * 1_000_000n),
@@ -761,7 +777,8 @@ async function writeGrafanaDashboards(tempRoot) {
         for (const target of panel.targets || []) target.expr = target.expr?.replace(' or vector(0)', '');
       }
       if (panel.title === 'Claude metric samples, 5m') {
-        for (const target of panel.targets || []) target.expr = target.expr?.replace('[5m]', `[5m] @ ${METRIC_QUERY_TIME}`);
+        // Prometheus drops old OTLP timestamps, so keep this documentation stat independent of wall-clock time.
+        for (const target of panel.targets || []) target.expr = 'vector(10)';
       }
       const seriesName = statSeriesNames.get(panel.title);
       if (!seriesName) continue;
@@ -803,7 +820,7 @@ async function dashboardRowBounds(page, title) {
 
 async function captureGrafana(browser, grafanaPort) {
   const page = await browser.newPage({ viewport: { width: 1400, height: 950 }, colorScheme: 'dark', deviceScaleFactor: 1 });
-  const from = encodeURIComponent(new Date(SYNTHETIC_NOW - (23 * 60 * 60 * 1_000)).toISOString());
+  const from = encodeURIComponent(new Date(SYNTHETIC_QUERY_START).toISOString());
   const to = encodeURIComponent(new Date(SYNTHETIC_NOW + 60_000).toISOString());
   await page.goto(`http://127.0.0.1:${grafanaPort}/d/claude-code-usage?from=${from}&to=${to}`, { waitUntil: 'domcontentloaded' });
   await page.waitForTimeout(3_000);
@@ -832,7 +849,7 @@ async function maskGeneratedBoardText(page) {
     dialogStory: FIXTURE.dialogStory,
     commentTimes: FIXTURE.commentTimes,
     notificationTimes: FIXTURE.notificationTimes,
-    reminder: FIXTURE.reminder.display,
+    reminders: FIXTURE.reminders.map((reminder) => reminder.display),
   };
   await page.evaluate((fixed) => {
     const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -872,7 +889,7 @@ async function maskGeneratedBoardText(page) {
       time.textContent = fixed.notificationTimes[index % fixed.notificationTimes.length];
     });
     const reminder = document.querySelector('section.reminder .active span');
-    if (reminder) reminder.textContent = fixed.reminder;
+    if (reminder) reminder.textContent = fixed.reminders[0];
   }, masks);
 }
 
@@ -949,7 +966,30 @@ async function captureSidequest(browser, port) {
   const category = page.getByRole('combobox', { name: 'Category' });
   assert.match((await category.textContent()) ?? '', /Product/, 'Synthetic ticket detail did not load its board category');
   await capture('sidequest-ticket-detail.png', page.getByRole('dialog'));
+
+  const storyPicker = page.getByRole('combobox', { name: 'Story' });
+  await page.locator('.main-grid').evaluate((element) => { element.scrollTop = element.scrollHeight; });
+  await page.waitForTimeout(200);
+  await storyPicker.click();
+  await page.getByRole('listbox', { name: 'Story' }).waitFor();
+  await storyPicker.click();
+
+  const linkTarget = page.getByRole('combobox', { name: 'Link target' });
+  await linkTarget.scrollIntoViewIfNeeded();
+  await linkTarget.click();
+  await page.getByRole('listbox', { name: 'Link target' }).waitFor();
+  await capture('sidequest-ticket-links.png', page.getByRole('dialog'));
+  await linkTarget.click();
+
   await page.getByRole('button', { name: 'Close', exact: true }).click();
+  await page.locator('aside[aria-label="Boards"] nav > button').first().click();
+  const storyFilter = page.locator('[data-tour="story-filter"]');
+  await storyFilter.getByRole('button', { name: 'Stories: All', exact: true }).click();
+  const storyMenu = storyFilter.getByRole('menu');
+  await storyMenu.waitFor();
+  assert.match(await storyMenu.innerText(), /Checkout confidence.*Storefront discovery/s, 'Synthetic story filter did not render the primary stories');
+  await capture('sidequest-stories.png', storyMenu);
+  await storyFilter.getByRole('button', { name: 'Stories: All', exact: true }).click();
   await page.close();
 }
 
@@ -989,7 +1029,7 @@ async function main() {
     browser = await chromium.launch();
     await captureSidequest(browser, sidequestPort);
     await captureGrafana(browser, grafanaPort);
-    console.log(`Generated 11 synthetic screenshots in ${outputDir}`);
+    console.log(`Generated 13 synthetic screenshots in ${outputDir}`);
   } finally {
     await browser?.close();
     server?.kill();

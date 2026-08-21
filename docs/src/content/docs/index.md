@@ -47,6 +47,10 @@ template: splash
   </div>
 </section>
 
+![Sidequest board with three synthetic projects and a populated work queue](../assets/screenshots/sidequest-kanban.png)
+
+*An isolated synthetic board view, showing the kind of work Sidequest keeps visible.*
+
 <section>
   <p class="page-ledge">Start with <a href="./getting-started/">the setup path</a>, then open a plugin guide for its first workflow. Maintainers can jump to <a href="./architecture/">architecture</a> or <a href="./contributing/">contributing</a>.</p>
 </section>
