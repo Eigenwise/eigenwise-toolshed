@@ -47,7 +47,7 @@ template: splash
   </div>
 </section>
 
-![Sidequest board with three synthetic projects and a populated work queue](../assets/screenshots/sidequest-kanban.png)
+![Sidequest board with three synthetic projects and a populated work queue](../../assets/screenshots/sidequest-kanban.png)
 
 *An isolated synthetic board view, showing the kind of work Sidequest keeps visible.*
 

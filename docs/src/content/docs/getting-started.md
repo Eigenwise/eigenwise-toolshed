@@ -40,7 +40,7 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 - [Run a human-judged comparison](./getting-started/experiments/)
 - [View selected local usage](./observability/)
 
-![Sidequest board with three synthetic projects and a populated work queue](../assets/screenshots/sidequest-kanban.png)
+![Sidequest board with three synthetic projects and a populated work queue](../../assets/screenshots/sidequest-kanban.png)
 
 *An isolated synthetic board view from the Sidequest workflow guide.*
 
