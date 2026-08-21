@@ -2653,16 +2653,69 @@ test('MCP submits and integrates project-neutral source revisions through one re
       wave: { verification: store.getTicket(project, ticket.ref).submission.verificationResult },
     });
     assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+    assert.equal(assembled.action, 'wave_assembled');
+    assert.equal(assembled.deliveryRequired, true);
+    assert.equal(assembled.waveId, assembled.wave.id);
+    assert.deepEqual(assembled.participantRefs, [ticket.ref]);
+    assert.equal(assembled.gateState, 'gate_passed');
 
     const integrated = await callTool('integrate', { project, ref: ticket.ref, by: 'mcp-source-publisher' });
     assert.equal(integrated.ok, true, integrated.message || integrated.reason);
+    assert.equal(integrated.action, 'delivered');
+    assert.notEqual(integrated.action, assembled.action, 'assembly and delivery acknowledgements must be distinguishable');
     assert.equal(integrated.delivery.mode, 'source-revision');
+    assert.equal(integrated.message, `Delivered source revision ${revision.source}:${revision.value}.`);
     assert.deepEqual(integrated.delivery.changedPaths, [revision.surface]);
     assert.equal(store.getTicket(project, ticket.ref).lifecycleAttempt.state, 'closed');
   }
   assert.equal(capabilityInvocations.length, revisions.length);
   assert.deepEqual(capabilityInvocations.map((invocation) => invocation.candidate.source), revisions.map((revision) => revision.source));
   assert.ok(capabilityInvocations.every((invocation) => invocation.baseline.purpose === 'dispatch'));
+});
+
+test('MCP integrate preserves assembled-wave failure details', async () => {
+  const projectPath = committedRepo('sq-mcp-wave-ack-');
+  const project = store.ensureProject(projectPath).slug;
+  const originalAssembleSubmissionWave = store.assembleSubmissionWave;
+  const wave = { id: 'wave-ack-fixture', baseline: { revision: { source: 'git', value: 'base-commit' } } };
+  const invalidated = [{ ref: 'SQ-9002', reason: 'baseline_moved', message: 'SQ-9002 was verified against an earlier baseline.' }];
+  store.assembleSubmissionWave = (_slug: string, refs: string[]) => (
+    refs.length === 1 && refs[0] === 'SQ-9001'
+      ? {
+        ok: false,
+        reason: 'assembled_wave_gate_failed',
+        message: 'Wave wave-ack-fixture gate returned failed_suite. Refresh and reverify its candidates before delivery.',
+        wave: { ...wave, participants: refs },
+        assembly: { state: 'assembled' },
+        gate: { state: 'gate_failed', verification: { status: 'failed_suite' } },
+      }
+      : { ok: false, reason: 'wave_invalidated', invalidated, wave }
+  );
+  try {
+    const gateFailed = await callTool('integrate', {
+      project,
+      ref: 'SQ-9001',
+      by: 'wave-ack-tester',
+      wave: {},
+    });
+    assert.equal(gateFailed.action, 'wave_assembly_refused');
+    assert.equal(gateFailed.waveId, wave.id);
+    assert.equal(gateFailed.gateState, 'gate_failed');
+    assert.deepEqual(gateFailed.gate, { state: 'gate_failed', verification: { status: 'failed_suite' } });
+
+    const invalidatedResult = await callTool('integrate', {
+      project,
+      ref: 'SQ-9001,SQ-9002',
+      by: 'wave-ack-tester',
+      wave: {},
+    });
+    assert.equal(invalidatedResult.action, 'wave_assembly_refused');
+    assert.equal(invalidatedResult.reason, 'wave_invalidated');
+    assert.equal(invalidatedResult.waveId, wave.id);
+    assert.deepEqual(invalidatedResult.invalidated, invalidated);
+  } finally {
+    store.assembleSubmissionWave = originalAssembleSubmissionWave;
+  }
 });
 
 test('MCP resolves a persisted filesystem-snapshot adapter without runtime registration', async () => {
