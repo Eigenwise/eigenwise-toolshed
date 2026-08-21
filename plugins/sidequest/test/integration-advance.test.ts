@@ -592,9 +592,9 @@ test('integrate public surfaces honor a bounded verification waiver and refuse a
 
   assert.equal(refused.status, 1, refused.stderr + refused.stdout);
   const refusedPayload = JSON.parse(refused.stdout);
-  assert.equal(refusedPayload.reason, 'assembled_wave_gate_failed');
-  assert.equal(refusedPayload.gate.verification.status, 'skipped');
-  assert.deepEqual(refusedPayload.gate.verification.failureIdentities, ['verification_waiver_required']);
+  assert.equal(refusedPayload.reason, 'verification_waiver_required');
+  assert.match(refusedPayload.message, /human waiver with authority, reason, affectedGate/);
+  assert.equal(refusedPayload.gate, undefined);
   assert.equal(store.getTicket(slug, ticket.ref).status, 'doing');
 
   const accepted = runCli([

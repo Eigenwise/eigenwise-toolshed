@@ -88,6 +88,17 @@ function commandNotFound(logPath: string, exitCode: number): boolean {
   return /^'[^']+' is not recognized as an internal or external command,$/m.test(fs.readFileSync(logPath, 'utf8'));
 }
 
+function missingCommandName(logPath: string): string | null {
+  const output = fs.readFileSync(logPath, 'utf8');
+  const windowsMatch = output.match(/^'([^']+)' is not recognized as an internal or external command,$/m);
+  if (windowsMatch?.[1]) return windowsMatch[1];
+  for (const line of output.split(/\r?\n/)) {
+    const posixMatch = line.match(/(?:^|:\s)([^:\s]+): (?:command )?not found$/);
+    if (posixMatch?.[1]) return posixMatch[1];
+  }
+  return null;
+}
+
 function processTimedOut(error: unknown): boolean {
   return error instanceof Error && 'code' in error && error.code === 'ETIMEDOUT';
 }
@@ -152,7 +163,9 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     return failedResult(requirement, 'could_not_run', command, logPath, `The command shell exited ${shellExitCode ?? 'without a code'} before reporting the suite exit code.`, shellExitCode, tail);
   }
   if (commandNotFound(logPath, exitCode)) {
-    return failedResult(requirement, 'toolchain_missing', command, logPath, `The command shell could not find a command for ${JSON.stringify(command)} (exit code ${exitCode}).`, exitCode, tail);
+    const missingCommand = missingCommandName(logPath);
+    const missingCommandEvidence = missingCommand ? `command ${JSON.stringify(missingCommand)}` : 'a command';
+    return failedResult(requirement, 'toolchain_missing', command, logPath, `The verification environment could not find ${missingCommandEvidence} while running ${JSON.stringify(command)} (exit code ${exitCode}).`, exitCode, tail);
   }
   if (exitCode === 0) {
     return Object.freeze({ kind: requirement.kind, status: 'passed', evidence: requirement.evidenceContract, command, logPath, exitCode });

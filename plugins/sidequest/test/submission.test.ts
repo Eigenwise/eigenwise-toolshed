@@ -1358,6 +1358,44 @@ test('integration refuses delivery when the assembled-wave gate fails', () => {
   assert.ok(fs.existsSync(rejected.gate.verification.logPath));
   assert.strictEqual(git(['rev-parse', 'HEAD']), before);
   assert.strictEqual(store.getTicket(slug, t.ref).submission.integration, undefined);
+
+  const missingWaiver = store.integrateSubmission(slug, t.ref, { mode: 'merge', target, skipVerify: true });
+  assert.strictEqual(missingWaiver.ok, false);
+  assert.strictEqual(missingWaiver.reason, 'verification_waiver_required');
+  assert.match(missingWaiver.message, /human waiver with authority, reason, affectedGate/);
+});
+
+test('a missing assembled-wave command reports the gate environment and its setup', () => {
+  cleanBranch();
+  const missingCommand = `sidequest-missing-gate-command-${process.pid}-${Date.now()}`;
+  const originalConfig = store.boardConfig(slug);
+  store.setBoardConfig(slug, { worktreeSetup: 'cd plugins/sidequest && npm ci' });
+  try {
+    const ticket = addTicket('missing assembled-wave command', { files: ['lib/missing-gate-command.js'] });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'missing-command-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'missing-gate-command.js'), 'candidate\n');
+    git(['add', 'lib/missing-gate-command.js']);
+    git(['commit', '-m', 'missing gate command candidate']);
+    const commit = git(['rev-parse', 'HEAD']);
+    pin(ticket, commit);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'missing-command-worker', { commit, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    submitted.executorVerify = missingCommand;
+    submitted.submission.verify = missingCommand;
+    persist(submitted);
+
+    const refused = store.assembleSubmissionWave(slug, [ticket.ref]);
+
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'assembled_wave_environment_problem');
+    assert.strictEqual(refused.gate.verification.status, 'toolchain_missing');
+    assert.match(refused.message, new RegExp(missingCommand));
+    assert.match(refused.message, /cd plugins\/sidequest && npm ci/);
+    assert.doesNotMatch(refused.message, /Refresh and reverify/);
+  } finally {
+    store.setBoardConfig(slug, { worktreeSetup: originalConfig.worktreeSetup });
+  }
 });
 
 test('SQ-1743: a held delivery lock refuses another integration before it changes the checkout', () => {
@@ -3265,7 +3303,7 @@ test('SQ-2184: control-plane closure recognizes released submissions and consume
   }
 });
 
-test('SQ-2188: grooming abandons a candidate that never landed and refuses to abandon one that did', () => {
+test('SQ-2188: grooming records stranded candidates as abandoned and landed candidates as delivered', () => {
   cleanBranch();
   const originalConfig = store.boardConfig(slug);
   const integrationBranch = git(['branch', '--show-current']);
@@ -3328,6 +3366,7 @@ test('SQ-2188: grooming abandons a candidate that never landed and refuses to ab
     assert.strictEqual(store.pendingSubmission(store.getTicket(slug, strandedTicket.ref)), false);
 
     const landedTicket = addTicket('landed candidate', { files: ['lib/landed.js'] });
+    const branchBeforeLandedCandidate = git(['rev-parse', 'HEAD']);
     fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'landed.js'), 'candidate\n');
     git(['add', 'lib/landed.js']);
     git(['commit', '-m', 'landed candidate']);
@@ -3336,32 +3375,35 @@ test('SQ-2188: grooming abandons a candidate that never landed and refuses to ab
     assert.strictEqual(store.claimTicket(slug, landedTicket.ref, 'landed-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
     assert.strictEqual(store.submitTicket(slug, landedTicket.ref, 'landed-worker', { commit: landedCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
     const submittedLanded = store.getTicket(slug, landedTicket.ref);
+    const missingGateCommand = `sidequest-missing-landed-gate-${process.pid}-${Date.now()}`;
+    submittedLanded.executorVerify = missingGateCommand;
     Object.assign(submittedLanded.submission, {
-      base: git(['rev-parse', `${landedCandidate}^`]),
+      verify: missingGateCommand,
+      base: branchBeforeLandedCandidate,
       upstream: integrationBranch,
-      upstreamCommit: landedCandidate,
+      upstreamCommit: branchBeforeLandedCandidate,
       integrationBranch,
       commits: [landedCandidate],
       changedPaths: ['lib/landed.js'],
     });
     persist(submittedLanded);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'after-landed.js'), 'main moved after delivery\n');
+    git(['add', 'lib/after-landed.js']);
+    git(['commit', '-m', 'main moved after landed candidate']);
 
-    // The safety property: abandonment stays illegal while the work is actually on the branch,
-    // so the flag can never be used to write off something that shipped.
-    const refusedAbandon = store.completeTicketAsControlPlane(slug, landedTicket.ref, {
+    const recordedDelivery = store.completeTicketAsControlPlane(slug, landedTicket.ref, {
       by: 'orchestrator',
       purpose: 'grooming',
       abandonSubmission: true,
-      reason: 'Attempting to abandon work that is already on the integration branch.',
+      reason: 'Reachability proves this candidate already landed.',
     });
-    assert.strictEqual(refusedAbandon.ok, false);
-    assert.strictEqual(refusedAbandon.reason, 'candidate_already_landed');
-    assert.strictEqual(store.getTicket(slug, landedTicket.ref).status !== 'done', true);
+    assert.strictEqual(recordedDelivery.ok, true, recordedDelivery.message);
+    assert.strictEqual(recordedDelivery.ticket.status, 'done');
+    assert.strictEqual(recordedDelivery.ticket.submission.integration.outcome, 'delivered');
+    assert.strictEqual(recordedDelivery.ticket.submission.integration.deliveryCommit, landedCandidate);
+    assert.strictEqual(recordedDelivery.ticket.submission.integration.mode, 'already-landed');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, landedTicket.ref)), false);
 
-    // The abandonment hint on a failed delivery keys on reachability, not on the refusal code: a
-    // stranded candidate is refused for divergence before reachability is ever checked, and a
-    // candidate that did land can be refused for reasons abandonment would not fix. SQ-2153 was
-    // refused for a pending candidate review and got told to abandon a submission that had shipped.
     const commitScope = require('../lib/commit-scope.js');
     assert.strictEqual(
       commitScope.submissionCommitReachedIntegrationBranch(PROJECT_DIR, store.getTicket(slug, landedTicket.ref).submission, integrationBranch),
@@ -3371,6 +3413,61 @@ test('SQ-2188: grooming abandons a candidate that never landed and refuses to ab
       commitScope.submissionCommitReachedIntegrationBranch(PROJECT_DIR, submittedStranded.submission, integrationBranch),
       false,
     );
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
+test('SQ-2337: a failed delivery gate cannot redirect already-landed abandonment back to delivery', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const integrationBranch = git(['branch', '--show-current']);
+  store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch });
+  try {
+    const ticket = addTicket('landed candidate after failed gate', { files: ['lib/landed-after-failed-gate.js'] });
+    const baseline = git(['rev-parse', 'HEAD']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'landed-after-failed-gate.js'), 'candidate\n');
+    git(['add', 'lib/landed-after-failed-gate.js']);
+    git(['commit', '-m', 'landed candidate before failed gate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'failed-gate-worker', { direct: true, reason: 'The submission fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'failed-gate-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    const missingGateCommand = `sidequest-missing-cycle-gate-${process.pid}-${Date.now()}`;
+    submitted.executorVerify = missingGateCommand;
+    Object.assign(submitted.submission, {
+      verify: missingGateCommand,
+      base: baseline,
+      upstream: integrationBranch,
+      upstreamCommit: baseline,
+      integrationBranch,
+      commits: [candidate],
+      changedPaths: ['lib/landed-after-failed-gate.js'],
+    });
+    persist(submitted);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'after-failed-gate.js'), 'main moved after candidate\n');
+    git(['add', 'lib/after-failed-gate.js']);
+    git(['commit', '-m', 'main moved before failed gate']);
+
+    const target = store.integrationTarget(slug);
+    const refusedDelivery = store.recordDeliveredSubmission(slug, ticket.ref, {
+      target,
+      deliveryCommit: candidate,
+      reason: 'The already-landed candidate still encountered a gate environment failure.',
+    });
+    assert.strictEqual(refusedDelivery.ok, false);
+
+    const terminalRecording = store.recordAbandonedSubmission(slug, ticket.ref, {
+      target,
+      reason: 'Reachability must terminate the abandonment path as delivered.',
+    });
+    assert.strictEqual(terminalRecording.ok, true, terminalRecording.message);
+    assert.strictEqual(terminalRecording.integration.outcome, 'delivered');
+    assert.strictEqual(terminalRecording.integration.deliveryCommit, candidate);
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, ticket.ref)), false);
   } finally {
     store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
     cleanBranch();
