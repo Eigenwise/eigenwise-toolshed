@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.498.0 (2026-08-21)
+
+### sidequest 5.0.11 → 5.0.12
+
+#### Fixes
+
+- Scope board watch alerts to the active session (SQ-2338) [`b1c4664`](https://github.com/Eigenwise/eigenwise-toolshed/commit/b1c466442720c9ec6916fffd19f408d073e9b107)
+
 ## v3.497.0 (2026-08-21)
 
 ### observability 0.7.16 → 0.7.17
