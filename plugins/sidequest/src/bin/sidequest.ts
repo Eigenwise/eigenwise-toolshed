@@ -21,7 +21,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   list: ['status', 'archived', 'brief', 'limit', 'cursor', 'all'],
   pulse: [],
   changes: ['since'],
-  watch: ['interval'],
+  watch: ['interval', 'all'],
   update: ['title', 'desc', 'description', 'body', 'body-file', 'priority', 'status', 'category', 'complexity', 'why', 'high-stakes', 'label', 'image', 'file', 'produces', 'changes', 'consumes', 'contract-waiver', 'readonly', 'anchors', 'verify-kind', 'attestation-artifact', 'verify', 'story', 'route-model', 'route-effort', 'route', 'model', 'effort', 'review-ref', 'review-commit', 'review-source', 'review-revision', 'by'],
   rm: ['force'],
   profile: ['retired', 'name', 'title', 'description', 'desc', 'from', 'project', 'profile', 'from-project', 'by', 'dry-run'],
@@ -205,7 +205,7 @@ const HELP_COMMANDS: any = {
   list: 'sidequest list [--status todo|doing|awaiting-oracle|done] [--archived] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]  (defaults to active tickets; --status done or --all includes done)',
   pulse: 'sidequest pulse <SQ-n> [--project <path-or-slug>]',
   changes: 'sidequest changes [--since <iso>] [--project <path-or-slug>]',
-  watch: 'sidequest watch [--project <path-or-slug>] [--interval <seconds>]  print board and GitHub CI alerts as they arrive',
+  watch: 'sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]  print session-owned, unowned, and terminal ticket alerts plus all GitHub CI alerts; --all includes every ticket',
   update: 'sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "motivation"] [--by who]',
   rm: 'sidequest rm <id|SQ-n> [--force]',
   profile: 'sidequest profile <hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board> ... [--retired] [--project <path-or-slug>] [--dry-run] [--json]',
@@ -286,7 +286,7 @@ Usage:
   sidequest list [--status todo|doing|awaiting-oracle|done] [--json] [--brief] [--limit N] [--cursor <nextCursor>] [--all]   active tickets by default; use --status done or --all for completed tickets. --brief: compact JSON, no bodies; implies --json. Follow nextCursor until null.
   sidequest pulse <SQ-n> [--project <path-or-slug>]   compact liveness read for one ticket
   sidequest changes [--since <iso>] [--project <path-or-slug>]   compact ticket delta (defaults to last 60 min)
-  sidequest watch [--project <path-or-slug>] [--interval <seconds>]   stream actionable board and GitHub CI events (30s default)
+  sidequest watch [--project <path-or-slug>] [--interval <seconds>] [--all]   stream session-owned, unowned, and terminal ticket events plus all GitHub CI events; --all includes every ticket (30s default)
   sidequest update <id|SQ-n> [-t title] [-d desc|--body-file path] [-p priority] [-s status] [--file <path>|--file none]... [--high-stakes[=false]] [-l label]... [--produces name]... [--changes name]... [--consumes name]... [--contract-waiver[=false]] [--readonly true|false] [-i image]... [--category <id|none>] [--route-model <model> --route-effort <effort>|--route none] [--complexity 1-10 --why "<motivation>"]
   sidequest profile hygiene|list|show|get|create|edit|retire|use|repoint|promote|new-board ... [--json]
   sidequest category list|add|edit|rm|disable|enable|pin|reset <id> (--profile <profile> | --project <path-or-slug>) [--route-model <model> --route-effort <effort>] [--fallback-model <model> --fallback-effort <effort> | --no-fallback] [--readonly true|false] [--json]
@@ -469,7 +469,7 @@ async function main() {
       break;
     case 'watch': {
       const project = await resolveWatchProject(opts);
-      createProjectBoardWatch(project).start(opts.interval);
+      createProjectBoardWatch(project, process.env, { includeAllTickets: Boolean(opts.all) }).start(opts.interval);
       break;
     }
     case 'update':

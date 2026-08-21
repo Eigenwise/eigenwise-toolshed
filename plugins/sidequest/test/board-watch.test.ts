@@ -1,7 +1,8 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 
-const { createBoardWatch, createGitHubCiRunsProvider } = require('../lib/store/pulse');
+const { createPulse, createBoardWatch, createGitHubCiRunsProvider } = require('../lib/store/pulse');
 const { createProjectBoardWatch } = require('../lib/store/project-watch');
 const store = require('../lib/store');
 const fs = require('node:fs');
@@ -19,7 +20,7 @@ function ticket(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function watch(polls: unknown[], watchingAuthor = 'orchestrator', ciPolls: unknown[] = [], watchingSession = '', board = 'board-a') {
+function watch(polls: unknown[], watchingAuthor = 'orchestrator', ciPolls: unknown[] = [], watchingSession = '', board = 'board-a', includeAllTickets = false) {
   const lines: string[] = [];
   const errors: string[] = [];
   const boardWatch = createBoardWatch({
@@ -31,12 +32,17 @@ function watch(polls: unknown[], watchingAuthor = 'orchestrator', ciPolls: unkno
       return { project: board, ...(next as object) };
     },
     ciRunsProvider: ciPolls.length ? () => ciPolls.shift() : undefined,
+    includeAllTickets,
     watchingAuthor,
     watchingSession,
     writeLine: (line: string) => lines.push(line),
     writeError: (line: string) => errors.push(line),
   });
   return { boardWatch, lines, errors };
+}
+
+function dispatchPreparedBy(sessionId: string, terminalAt: string | null = null) {
+  return { preparedBy: { sessionId }, terminalAt };
 }
 
 function ciProvider(remoteHead: string, runs: Record<string, unknown>[]) {
@@ -76,6 +82,168 @@ test('project watch consumes only its board changes', () => {
 
   assert.deepEqual(firstPolls.map((entry: any) => entry[0]), ['project-a']);
   assert.deepEqual(secondPolls.map((entry: any) => entry[0]), ['project-b']);
+});
+
+test('changes projects dispatch preparation ownership for watch filtering', () => {
+  const updatedAt = '2026-08-13T00:00:01.000Z';
+  const ownedTicket = {
+    ref: 'SQ-owned',
+    title: 'Owned ticket',
+    status: 'doing',
+    updatedAt,
+    comments: [],
+    dispatch: { preparedBy: { sessionId: 'orchestrator-session', surface: 'mcp' }, terminalAt: null },
+  };
+  const unownedTicket = {
+    ref: 'SQ-unowned',
+    title: 'Unowned ticket',
+    status: 'todo',
+    updatedAt,
+    comments: [],
+  };
+  const pulse = createPulse({
+    checkpointProjection: () => null,
+    claimPulse: () => null,
+    dispatchState: (sourceTicket: any) => sourceTicket.dispatch || null,
+    listTickets: () => [ownedTicket, unownedTicket],
+    oracleProjection: () => null,
+    storyContractDriftWarnings: () => [],
+    storyDecisionLogWarnings: () => [],
+  });
+
+  const changes = pulse.changesPayload('board-a', new Date(0).toISOString());
+
+  assert.deepEqual(changes.tickets.find((changedTicket: any) => changedTicket.ref === 'SQ-owned').dispatch, {
+    preparedBy: { sessionId: 'orchestrator-session' },
+    terminalAt: null,
+  });
+  assert.equal(Object.hasOwn(changes.tickets.find((changedTicket: any) => changedTicket.ref === 'SQ-unowned'), 'dispatch'), false);
+});
+
+test('watch suppresses an actionable event owned by another active session', () => {
+  const ownedElsewhere = ticket({
+    status: 'awaiting-oracle',
+    dispatch: dispatchPreparedBy('session-2'),
+  });
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownedElsewhere] },
+  ], 'orchestrator', [], 'session-1');
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, []);
+});
+
+test('watch emits an actionable event owned by the watching session', () => {
+  const ownedHere = ticket({
+    status: 'awaiting-oracle',
+    dispatch: dispatchPreparedBy('session-1'),
+  });
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownedHere] },
+  ], 'orchestrator', [], 'session-1');
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['SQ-1 awaiting-oracle awaiting-oracle - -']);
+});
+
+test('watch emits tickets without a dispatch or attributed owner', () => {
+  const noDispatch = ticket({ ref: 'SQ-no-dispatch', status: 'awaiting-oracle' });
+  const noOwner = ticket({
+    ref: 'SQ-no-owner',
+    status: 'awaiting-oracle',
+    dispatch: dispatchPreparedBy(''),
+  });
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [noDispatch, noOwner] },
+  ], 'orchestrator', [], 'session-1');
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, [
+    'SQ-no-dispatch awaiting-oracle awaiting-oracle - -',
+    'SQ-no-owner awaiting-oracle awaiting-oracle - -',
+  ]);
+});
+
+test('watch without a session emits events owned by every session', () => {
+  const ownedElsewhere = ticket({
+    status: 'awaiting-oracle',
+    dispatch: dispatchPreparedBy('session-2'),
+  });
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownedElsewhere] },
+  ]);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['SQ-1 awaiting-oracle awaiting-oracle - -']);
+});
+
+test('watch all emits events owned by another active session', () => {
+  const ownedElsewhere = ticket({
+    status: 'awaiting-oracle',
+    dispatch: dispatchPreparedBy('session-2'),
+  });
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownedElsewhere] },
+  ], 'orchestrator', [], 'session-1', 'board-a', true);
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['SQ-1 awaiting-oracle awaiting-oracle - -']);
+});
+
+test('watch emits terminal events prepared by a previous session after restart', () => {
+  const terminalDispatch = ticket({
+    lastEventType: 'release',
+    dispatch: dispatchPreparedBy('previous-session', '2026-08-13T00:00:00.000Z'),
+  });
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [terminalDispatch] },
+  ], 'orchestrator', [], 'replacement-session');
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, ['SQ-1 doing release - -']);
+});
+
+test('watch emits shared CI failures while suppressing another session ticket', () => {
+  const ownedElsewhere = ticket({
+    status: 'awaiting-oracle',
+    dispatch: dispatchPreparedBy('session-2'),
+  });
+  const ci = {
+    headSha: 'shared-failure',
+    lastGreenHeadSha: 'previous-green',
+    hasCompletedGreenRun: false,
+    runs: [{ id: 42, headSha: 'shared-failure', status: 'completed', conclusion: 'failure', workflowName: 'Test', failingJobCount: 1 }],
+  };
+  const { boardWatch, lines } = watch([
+    { serverTime: '2026-08-13T00:00:01.000Z', tickets: [ownedElsewhere] },
+  ], 'orchestrator', [ci], 'session-1');
+
+  boardWatch.poll();
+
+  assert.deepEqual(lines, [
+    'CI shared-failure failed Test 1',
+    'CI shared-failure unchecked - -',
+  ]);
+});
+
+test('watch help names the project-wide all fallback', () => {
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  for (const arguments_ of [['watch', '--help'], ['--help']]) {
+    const result = spawnSync(process.execPath, [cli, ...arguments_], { encoding: 'utf8', windowsHide: true });
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /--all/);
+    assert.match(result.stdout, /every ticket|project-wide ticket/i);
+  }
+
+  const accepted = spawnSync(process.execPath, [cli, 'watch', '--all'], { encoding: 'utf8', windowsHide: true });
+  assert.notEqual(accepted.status, 0);
+  assert.match(accepted.stderr, /watch: --project must name the board root or registered board identity/i);
 });
 
 test('watch emits an out-of-scope comment once across repeated polls', () => {
