@@ -29,7 +29,8 @@ const {
 } = require('../bin/setup-observability.js');
 
 const GRAFANA_SINK_DIR = path.join(path.resolve(__dirname, '..'), 'observability', 'sinks', 'grafana');
-const { MANAGED_CONFIG_VERSION } = require('../observability/sinks/grafana/index.js');
+const grafana = require('../observability/sinks/grafana/index.js');
+const { MANAGED_CONFIG_VERSION } = grafana;
 
 test('bundles a valid Grafana provider for the Claude Code Usage dashboard', () => {
   const provisioning = fs.readFileSync(path.join(GRAFANA_SINK_DIR, 'provisioning', 'workbench.yaml'), 'utf8');
@@ -191,12 +192,24 @@ test('plans current-user application data and only starts LGTM on request', (t) 
   assert.equal(plan.lgtm, false);
   const calls = [];
   const registeredProject = { project_id: 'a'.repeat(64), project_name: 'atlas' };
+  let dashboardRunning = false;
   const lgtm = startLgtm(plan.dataDir, {
     config: { observability: { optedInProjects: [registeredProject] } },
     activeProjectNames: ['atlas'],
     spawnSync(command, args) {
       calls.push([command, args]);
-      return args[0] === 'inspect' ? { status: 1, stdout: '' } : { status: 0, stdout: 'container' };
+      if (args[0] === 'inspect') {
+        if (!dashboardRunning) return { status: 1, stdout: '' };
+        return {
+          status: 0,
+          stdout: `running|true|${LGTM_IMAGE}||${MANAGED_CONFIG_VERSION}|null|${JSON.stringify([{
+            Source: path.join(plan.dataDir, 'grafana-dashboards'),
+            Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
+          }])}`,
+        };
+      }
+      if (args[0] === 'run') dashboardRunning = true;
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : 'container' };
     },
   });
   assert.equal(lgtm.image, LGTM_IMAGE);
@@ -211,8 +224,90 @@ test('plans current-user application data and only starts LGTM on request', (t) 
     Source: path.join(plan.dataDir, 'grafana-dashboards'),
     Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
   }]);
-  startLgtm(plan.dataDir, { activeProjectNames: [], spawnSync(command, args) { resumed.push([command, args]); return { status: 0, stdout: `true|||${MANAGED_CONFIG_VERSION}|null|${dashboardMounts}` }; } });
-  assert.equal(resumed.length, 1);
+  startLgtm(plan.dataDir, {
+    activeProjectNames: [],
+    spawnSync(command, args) {
+      resumed.push([command, args]);
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : `true|||${MANAGED_CONFIG_VERSION}|null|${dashboardMounts}` };
+    },
+  });
+  assert.equal(resumed.length, 3);
+});
+
+test('repairs a created dashboard container before reporting setup success', () => {
+  const bindings = JSON.stringify({
+    '3000/tcp': [{ HostIp: '127.0.0.1', HostPort: '3000' }],
+    '4318/tcp': [{ HostIp: '127.0.0.1', HostPort: '14318' }],
+  });
+  const dashboardDir = path.join(os.tmpdir(), 'workbench-grafana-created-container');
+  const mounts = JSON.stringify([{
+    Source: dashboardDir,
+    Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
+  }]);
+  const calls = [];
+  let containerState = 'missing';
+
+  const result = grafana.setup({}, {
+    dashboardDir,
+    pluginVersion: '0.20.0',
+    dashboardReadyTimeoutMs: 0,
+    spawnSync(command, args) {
+      calls.push([command, args]);
+      if (args[0] === 'inspect') {
+        if (containerState === 'missing') return { status: 1, stdout: '' };
+        const running = containerState === 'running';
+        return {
+          status: 0,
+          stdout: `${containerState}|${running}|${grafana.IMAGE}|0.20.0|${MANAGED_CONFIG_VERSION}|${bindings}|${mounts}`,
+        };
+      }
+      if (args[0] === 'run') {
+        containerState = 'created';
+        return { status: 0, stdout: 'container-id' };
+      }
+      if (args[0] === 'start') {
+        containerState = 'running';
+        return { status: 0, stdout: 'workbench-otel-lgtm-demo' };
+      }
+      if (args[0] === 'exec') return { status: 0, stdout: '200' };
+      throw new Error(`Unexpected Docker command: ${args[0]}`);
+    },
+  });
+
+  assert.equal(result.resumed, false);
+  assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'run', 'inspect', 'start', 'inspect', 'exec']);
+  const probe = calls.at(-1)[1];
+  assert.deepEqual(probe.slice(0, 3), ['exec', 'workbench-otel-lgtm-demo', 'curl']);
+  assert.equal(probe[probe.indexOf('--write-out') + 1], '%{http_code}');
+});
+
+test('reports created container diagnostics when it cannot become ready', () => {
+  let containerCreated = false;
+
+  assert.throws(() => grafana.setup({}, {
+    dashboardReadyTimeoutMs: 0,
+    spawnSync(command, args) {
+      if (args[0] === 'inspect') {
+        return containerCreated
+          ? { status: 0, stdout: 'created|false|grafana/otel-lgtm:0.11.0|<no value>|1|null|null' }
+          : { status: 1, stdout: '' };
+      }
+      if (args[0] === 'run') containerCreated = true;
+      if (args[0] === 'logs') return { status: 0, stdout: 'collector never became ready' };
+      return { status: 0, stdout: '' };
+    },
+  }), /status: created; logs: collector never became ready/);
+});
+
+test('reports created dashboard containers distinctly from stopped ones', () => {
+  const result = grafana.status({}, {
+    spawnSync() {
+      return { status: 0, stdout: 'created|false|grafana/otel-lgtm:0.11.0|<no value>|1|null|null' };
+    },
+  });
+
+  assert.equal(result.containerState, 'created');
+  assert.equal(result.running, false);
 });
 
 test('setup mounts generated Grafana dashboards only for active opted-in projects', async (t) => {
@@ -226,6 +321,7 @@ test('setup mounts generated Grafana dashboards only for active opted-in project
   ];
   fs.mkdirSync(projectDir, { recursive: true });
   const calls = [];
+  let dashboardRunning = false;
 
   await setupObservability({
     projectDir,
@@ -247,8 +343,13 @@ test('setup mounts generated Grafana dashboards only for active opted-in project
     ensure: async () => ({ enabled: true, started: [] }),
     spawnSync(command, args) {
       calls.push([command, args]);
-      if (args[0] === 'inspect') return { status: 1, stdout: '' };
-      return { status: 0, stdout: process.version };
+      if (args[0] === 'inspect') {
+        return dashboardRunning
+          ? { status: 0, stdout: `running|true|${LGTM_IMAGE}||${MANAGED_CONFIG_VERSION}|null|null` }
+          : { status: 1, stdout: '' };
+      }
+      if (args[0] === 'run') dashboardRunning = true;
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : process.version };
     },
   });
 
@@ -268,6 +369,7 @@ test('continues setup when the dashboard activity probe fails', async (t) => {
   const projectDir = path.join(directory, 'project');
   fs.mkdirSync(projectDir, { recursive: true });
   let ensured = false;
+  let dashboardProbeCount = 0;
 
   const result = await setupObservability({
     projectDir,
@@ -287,7 +389,10 @@ test('continues setup when the dashboard activity probe fails', async (t) => {
     applyProjectSettings: false,
     ensure: async () => { ensured = true; return { enabled: true, started: ['observer', 'collector'] }; },
     spawnSync(command, args) {
-      if (args[0] === 'exec') return { status: 1, stdout: '' };
+      if (args[0] === 'exec') {
+        dashboardProbeCount += 1;
+        return { status: dashboardProbeCount === 1 ? 1 : 0, stdout: dashboardProbeCount === 1 ? '' : '200' };
+      }
       if (args[0] === 'inspect') return { status: 0, stdout: `true|${LGTM_IMAGE}||${MANAGED_CONFIG_VERSION}|null|null` };
       return { status: 0, stdout: process.version };
     },
@@ -304,6 +409,7 @@ test('does not generate project dashboards from configured project paths', async
   const dataDir = path.join(directory, 'data');
   const projectDir = path.join(directory, 'project');
   fs.mkdirSync(projectDir, { recursive: true });
+  let dashboardRunning = false;
 
   await setupObservability({
     projectDir,
@@ -323,8 +429,13 @@ test('does not generate project dashboards from configured project paths', async
     applyProjectSettings: false,
     ensure: async () => ({ enabled: true, started: [] }),
     spawnSync(command, args) {
-      if (args[0] === 'inspect') return { status: 1, stdout: '' };
-      return { status: 0, stdout: process.version };
+      if (args[0] === 'inspect') {
+        return dashboardRunning
+          ? { status: 0, stdout: `running|true|${LGTM_IMAGE}||${MANAGED_CONFIG_VERSION}|null|null` }
+          : { status: 1, stdout: '' };
+      }
+      if (args[0] === 'run') dashboardRunning = true;
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : process.version };
     },
   });
 

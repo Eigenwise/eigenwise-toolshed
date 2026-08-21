@@ -263,12 +263,12 @@ test('dashboard drift survives Docker downtime and heals when Docker returns', a
     spawnSync(command, args) {
       dockerCalls.push([command, args]);
       if (args[0] === 'inspect') return { status: 0, stdout: `true|${setup.LGTM_IMAGE}|0.0.0|null` };
-      return { status: 0, stdout: '' };
+      return { status: 0, stdout: args[0] === 'exec' ? '200' : '' };
     },
   });
 
   assert.equal(result.dashboardDrift, true);
-  assert.deepEqual(dockerCalls.map((call) => call[1][0]), ['inspect', 'rm', 'run']);
+  assert.deepEqual(dockerCalls.map((call) => call[1][0]), ['inspect', 'rm', 'run', 'inspect', 'exec']);
   assert.ok(dockerCalls[2][1].includes(`${path.join(dataDir, 'grafana-dashboards')}:/otel-lgtm/grafana/conf/provisioning/workbench-dashboards:ro`));
   assert.equal(readObservabilityConfig(configFile).observability.dashboardVersion, setup.pluginVersion());
   assert.equal(
@@ -290,6 +290,7 @@ test('ensure keeps the observer listening when dashboard activity lookup fails',
   writeObservabilityConfig(configFile, config);
   const listeningPorts = new Set();
   const warnings = [];
+  let dashboardProbeCount = 0;
 
   const result = await ensureObservability({
     dataDir,
@@ -305,7 +306,10 @@ test('ensure keeps the observer listening when dashboard activity lookup fails',
     stderr: { write(message) { warnings.push(message); } },
     spawnSync(command, args) {
       assert.equal(command, 'docker');
-      if (args[0] === 'exec') return { status: 1, stdout: '' };
+      if (args[0] === 'exec') {
+        dashboardProbeCount += 1;
+        return { status: dashboardProbeCount === 1 ? 1 : 0, stdout: dashboardProbeCount === 1 ? '' : '200' };
+      }
       return {
         status: 0,
         stdout: `true|${setup.LGTM_IMAGE}|${setup.pluginVersion()}|1|null|[]`,
