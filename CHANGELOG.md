@@ -8,6 +8,28 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.495.0 (2026-08-21)
+
+### observability 0.7.15 → 0.7.16
+
+#### Fixes
+
+- Hand off retired observers (SQ-2317)
+  Observers now hand off to a verified newer installation before retiring, so an update in any project no longer stops machine-wide telemetry. Missing installations leave the active observer serving and retirement failures include the reason in the log.
+- Keep observers whose record was just written (SQ-2323)
+  Observability no longer treats a process record written in the current millisecond as stale, so a healthy observer is not replaced on session start.
+
+### sidequest 5.0.9 → 5.0.10
+
+#### Fixes
+
+- Block foreign release-fragment scope (SQ-2316)
+  Reject foreign release fragments when tickets declare files, and report every refused path in mixed scope requests.
+- Widen spawn-armed deadline race window (SQ-2324)
+  The deadline tree tests now leave enough startup time for Windows to record a spawned descendant before the deadline race begins.
+- Distinguish wave assembly from delivery acknowledgements (SQ-2325)
+  The integrate MCP response now identifies assembled waves and delivered candidates, including wave gate and invalidation context.
+
 ## v3.494.0 (2026-08-20)
 
 ### codebase-mapper 2.15.6 → 2.15.7
