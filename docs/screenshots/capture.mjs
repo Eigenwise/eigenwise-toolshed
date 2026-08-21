@@ -966,6 +966,7 @@ async function captureSidequest(browser, port) {
   const settingsDialog = page.getByRole('dialog', { name: 'Settings' });
   await settingsDialog.waitFor();
   await settingsDialog.getByText('Saving profile changes updates 3 boards.', { exact: true }).waitFor();
+  await settingsDialog.locator('.category-row').first().waitFor();
   await capture('sidequest-settings.png', settingsDialog);
   await page.getByRole('button', { name: 'Close settings' }).click();
 
