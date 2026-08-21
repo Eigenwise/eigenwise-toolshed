@@ -71,6 +71,18 @@ async function waitForPort(port, expected, options = {}) {
   return false;
 }
 
+async function runObserverHandoff(options = {}) {
+  const observerPort = Number(options.observerPort);
+  if (!Number.isInteger(observerPort) || observerPort < 1 || observerPort > 65535) {
+    throw new Error(`Invalid observer handoff port: ${options.observerPort}`);
+  }
+  const wait = options.waitForPort || waitForPort;
+  if (!await wait(observerPort, false, { ...options, waitTimeoutMs: options.waitTimeoutMs || 10_000 })) {
+    throw new Error(`Observer handoff timed out waiting for port ${observerPort} to close.`);
+  }
+  return ensureObservability(options);
+}
+
 function pidFile(dataDir, name) {
   return path.join(dataDir, `${name}.pid`);
 }
@@ -708,7 +720,22 @@ async function launchEnsure(options = {}) {
   return true;
 }
 
+function handoffArgument(argv, name) {
+  const index = argv.indexOf(name);
+  if (index < 0 || !argv[index + 1]) throw new Error(`Missing ${name} for observer handoff.`);
+  return argv[index + 1];
+}
+
 async function main() {
+  if (process.argv.includes('--handoff')) {
+    const dataDir = handoffArgument(process.argv, '--data-dir');
+    await runObserverHandoff({
+      dataDir,
+      configFile: handoffArgument(process.argv, '--config'),
+      observerPort: handoffArgument(process.argv, '--observer-port'),
+    });
+    return;
+  }
   if (process.argv.includes('--launch')) {
     await launchEnsure({
       reportNotice(message) {
@@ -740,6 +767,7 @@ module.exports = {
   portOwner,
   releaseLock,
   rotateManagedLog,
+  runObserverHandoff,
   startManagedProcess,
   stopManagedProcess,
   storageHealth,
