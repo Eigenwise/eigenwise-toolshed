@@ -15,7 +15,7 @@ Approve the setup when Claude asks. It wires that repository for metadata-only C
 
 An opt-in wires the repository root and its eligible descendant directories. It does not wire linked worktrees, sibling checkouts, or directories outside the repository. Native Claude Code metrics require telemetry settings in the exact directory where the session starts.
 
-Settings changes apply to new Claude Code sessions. Restart existing sessions in the directories Claude lists before expecting their native metrics to appear.
+Settings changes apply to new Claude Code sessions. Restart existing sessions in the directories Claude lists before expecting their native metrics to appear. The restart reloads project wiring; an older session leaves a newer live observer untouched.
 
 ## Verify the first workflow
 
