@@ -6,6 +6,8 @@ const { spool, defaultSpoolPath } = require('../hooks/observability.js');
 const { estimateRequestBodyBytes, formatRequestBodyStatus } = require('../lib/observability/request-body.js');
 
 const SAFE_IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
+const OBSERVER_HEALTH_URL = 'http://127.0.0.1:14319/health';
+const OBSERVER_HEALTH_TIMEOUT_MS = 100;
 
 function identifier(value) {
   return typeof value === 'string' && SAFE_IDENTIFIER.test(value) ? value : null;
@@ -144,16 +146,33 @@ function formatRateLimitStatus(payload) {
     .join(' ');
 }
 
+function formatObserverHealthStatus(health) {
+  if (!health || health.ok !== false) return '';
+  return `obs: ${typeof health.error === 'string' && health.error ? health.error : 'degraded'}`;
+}
+
+async function readObserverHealth(fetch = globalThis.fetch) {
+  if (typeof fetch !== 'function') return null;
+  try {
+    const response = await fetch(OBSERVER_HEALTH_URL, { signal: AbortSignal.timeout(OBSERVER_HEALTH_TIMEOUT_MS) });
+    const health = await response.json();
+    return health && typeof health === 'object' ? health : null;
+  } catch {
+    return null;
+  }
+}
+
 function statuslinePayload(raw, suppliedPayload) {
   if (suppliedPayload && typeof suppliedPayload === 'object') return suppliedPayload;
   try { return JSON.parse(raw); } catch { return null; }
 }
 
-function renderStatusline(raw, requestBodyEstimate, suppliedPayload) {
+function renderStatusline(raw, requestBodyEstimate, suppliedPayload, observerHealth) {
   const rendered = renderPassthrough(raw).trimEnd();
   const additions = [
     formatRequestBodyStatus(requestBodyEstimate),
     formatRateLimitStatus(statuslinePayload(raw, suppliedPayload)),
+    formatObserverHealthStatus(observerHealth),
   ].filter(Boolean);
   return [rendered, ...additions].filter(Boolean).join(' | ');
 }
@@ -165,7 +184,8 @@ async function main() {
   try {
     const payload = JSON.parse(raw);
     const requestBodyEstimate = estimateRequestBodyBytes(payload.session_id);
-    process.stdout.write(renderStatusline(raw, requestBodyEstimate, payload));
+    const observerHealth = await readObserverHealth();
+    process.stdout.write(renderStatusline(raw, requestBodyEstimate, payload, observerHealth));
     for (const observation of buildStatuslineObservations(payload, new Date(), requestBodyEstimate)) {
       spool(process.env.WORKBENCH_HOOK_SPOOL || defaultSpoolPath(), observation);
     }
@@ -176,4 +196,12 @@ async function main() {
 
 if (require.main === module) main();
 
-module.exports = { buildStatuslineObservations, formatRateLimitStatus, main, renderPassthrough, renderStatusline };
+module.exports = {
+  buildStatuslineObservations,
+  formatObserverHealthStatus,
+  formatRateLimitStatus,
+  main,
+  readObserverHealth,
+  renderPassthrough,
+  renderStatusline,
+};

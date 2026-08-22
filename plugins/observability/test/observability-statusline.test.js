@@ -7,7 +7,12 @@ const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
 
-const { buildStatuslineObservations, renderStatusline } = require('../bin/statusline.js');
+const {
+  buildStatuslineObservations,
+  formatObserverHealthStatus,
+  readObserverHealth,
+  renderStatusline,
+} = require('../bin/statusline.js');
 const { buildPreflightOutput } = require('../hooks/request-body-preflight.js');
 const { openObservabilityStore } = require('../lib/observability/store.js');
 const {
@@ -51,6 +56,25 @@ test('request-body threshold is visible in the statusline and warns before Task 
   const hooks = JSON.parse(fs.readFileSync(path.join(__dirname, '..', 'hooks', 'hooks.json'), 'utf8')).hooks;
   const preflight = hooks.PreToolUse.find((group) => group.matcher === 'Agent|Task');
   assert.ok(preflight.hooks.some((hook) => hook.command.includes('request-body-preflight.js')));
+});
+
+test('statusline renders a degraded observer verdict and stays quiet when healthy', () => {
+  assert.equal(formatObserverHealthStatus({ ok: false, error: 'outbox_not_draining' }), 'obs: outbox_not_draining');
+  assert.equal(renderStatusline('', null, null, { ok: false, error: 'outbox_not_draining' }), 'obs: outbox_not_draining');
+  assert.equal(renderStatusline('', null, null, { ok: true }), '');
+});
+
+test('statusline health lookup sends a bounded request and fails silent', async () => {
+  let request;
+  const health = await readObserverHealth(async (url, options) => {
+    request = { url, options };
+    return { ok: false, json: async () => ({ ok: false, error: 'outbox_not_draining' }) };
+  });
+  assert.ok(request);
+  assert.equal(request.url, 'http://127.0.0.1:14319/health');
+  assert.ok(request.options.signal);
+  assert.deepEqual(health, { ok: false, error: 'outbox_not_draining' });
+  assert.equal(await readObserverHealth(async () => { throw new TypeError('observer unavailable'); }), null);
 });
 
 test('real statusline invocation appends subscription burn and ledgers both windows', (t) => {
