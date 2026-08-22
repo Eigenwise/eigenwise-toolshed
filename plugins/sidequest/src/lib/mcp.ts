@@ -126,6 +126,10 @@ const ARGUMENT_ALIASES: Record<string, Record<string, string>> = {
   unlink: { from: 'a', to: 'b' },
 };
 
+const REQUIRED_ARGUMENT_HINTS: Record<string, string> = {
+  pulse: 'pulse reads one ticket; for a project-wide liveness/progress read call changes.',
+};
+
 // The skill's invocation-contracts reference is drift-tested against these two, so a caller never reads a
 // synonym list that the validator has since stopped accepting.
 const COERCED_PRIORITY: { from: string; to: string } = { from: 'medium', to: 'normal' };
@@ -180,6 +184,13 @@ function validateToolArguments(tool: ToolDefinition, rawArgs: any) {
     const accepted = Object.keys(properties).join(', ');
     const suggestion = unknown.length === 1 && unknown[0] !== undefined ? argumentSuggestion(unknown[0], allowed) : '';
     throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? '' : 's'} ${quoted} — ${tool.name} accepts: ${accepted}.${suggestion}`);
+  }
+  const missing = (tool.inputSchema.required || []).filter((key: string) => args[key] === undefined);
+  if (missing.length) {
+    const names = missing.map((key: string) => `"${key}"`).join(', ');
+    const argument = missing.length === 1 ? 'argument' : 'arguments';
+    const hint = REQUIRED_ARGUMENT_HINTS[tool.name];
+    throw new Error(`${tool.name}: missing required ${argument} ${names}${hint ? ` — ${hint}` : '.'}`);
   }
   for (const [key, value] of Object.entries(args)) {
     const values = properties[key]?.enum;
