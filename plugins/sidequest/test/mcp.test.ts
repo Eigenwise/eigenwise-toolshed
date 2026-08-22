@@ -644,6 +644,63 @@ test('add and update preserve descriptions and expose storyId explicitly', async
   assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, '^US-\\d+$');
 });
 
+test('update defers verifier amendments until a fresh dispatch and explains recovery', async () => {
+  const project = store.ensureProject(committedRepo('sq-mcp-verify-amendment-')).slug;
+  const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(1)"';
+  const amendedCommand = 'node -e "process.exit(0)"';
+  const added = await callTool('add', {
+    project,
+    title: 'deferred verifier amendment',
+    description: DISPATCH_DESCRIPTION,
+    category: 'general',
+    files: ['src/fixture.js'],
+    verifyKind: 'command',
+    verify: pinnedCommand,
+  });
+  const firstDispatch = store.prepareDispatch(project, added.ref, {
+    allowUnscoped: true,
+    sharedTree: true,
+    sessionId: 'verify-amendment-first-dispatch',
+  });
+  const by = 'verify-amendment-worker';
+  assert.equal(store.claimTicket(project, added.ref, by, {
+    token: firstDispatch.token,
+    executor: firstDispatch.ticket.dispatchExecutor,
+    sessionId: 'verify-amendment-first-dispatch',
+  }).ok, true);
+
+  const updated = await callTool('update', {
+    project,
+    ref: added.ref,
+    verifyKind: 'command',
+    verify: amendedCommand,
+  });
+
+  assert.ok(updated.deferredVerificationAmendment, 'live dispatch amendment returns a deferred notice');
+  assert.equal(updated.deferredVerificationAmendment.status, 'deferred_until_redispatch');
+  assert.equal(updated.deferredVerificationAmendment.pinnedCommand, pinnedCommand);
+  assert.ok(updated.deferredVerificationAmendment.message.includes(pinnedCommand));
+  assert.match(updated.deferredVerificationAmendment.message, /checkpoint current work, release the claim, and re-dispatch/i);
+  assert.match(updated.deferredVerificationAmendment.message, /recovery dispatch resumes the retained worktree and pins the amended verify/);
+  assert.match(updated.deferredVerificationAmendment.message, /groomClose with deliveryCommit/);
+  const liveTicket = store.getTicket(project, added.ref);
+  assert.equal(liveTicket.executorVerify, amendedCommand);
+  assert.equal(liveTicket.dispatch.verificationRequirement.command, pinnedCommand);
+
+  assert.equal(store.releaseTicket(project, added.ref, by, {
+    status: 'todo',
+    source: 'test',
+    releaseKind: 'handback',
+    releaseReason: 'Re-dispatch the fixture with its amended verifier.',
+  }).ok, true);
+  const rebound = store.prepareDispatch(project, added.ref, {
+    allowUnscoped: true,
+    sharedTree: true,
+    sessionId: 'verify-amendment-recovery-dispatch',
+  });
+  assert.equal(rebound.ticket.dispatch.verificationRequirement.command, amendedCommand);
+});
+
 // SQ-900: a 25- and then 28-entry files array both returned ok:true and persisted
 // only the first 20, so the executor's board commit refused paths the orchestrator
 // had already approved. A scope write now round-trips whole, or it is refused.

@@ -328,6 +328,60 @@ test('MCP submit requires a completed capture for the declared executor verifier
   }
 });
 
+test('capture reports a post-dispatch verify amendment and keeps the legacy fallback', async () => {
+  const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(1)"';
+  const amendedCommand = 'node -e "process.exit(0)"';
+  const dispatched = addTicket('amended dispatched capture', {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: pinnedCommand,
+  });
+  const prepared = store.prepareDispatch(slug, dispatched.ref, {
+    sessionId: 'amended-capture-dispatch',
+    sharedTree: true,
+  });
+  assert.strictEqual(prepared.ticket.dispatch.verificationRequirement.command, pinnedCommand);
+  store.updateTicket(slug, dispatched.ref, {
+    executorVerifyKind: 'command',
+    executorVerify: amendedCommand,
+    source: 'test',
+  });
+
+  const amendedCapture = await runVerifyCapture(amendedCommand, PROJECT_DIR);
+  try {
+    assert.strictEqual(amendedCapture.status, 'passed');
+    const refused = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, amendedCapture, PROJECT_DIR);
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'verification_capture_command_mismatch');
+    assert.match(refused.message, /verify was amended after dispatch/);
+    assert.ok(refused.message.includes(pinnedCommand));
+    assert.match(refused.message, /checkpoint current work, release the claim, and re-dispatch/i);
+    assert.match(refused.message, /groomClose with deliveryCommit/);
+
+    const unrelated = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, {
+      ...amendedCapture,
+      command: 'node --version',
+    }, PROJECT_DIR);
+    assert.strictEqual(unrelated.reason, 'verification_capture_command_mismatch');
+    assert.match(unrelated.message, /declared command pinned at dispatch/);
+    assert.ok(unrelated.message.includes(pinnedCommand));
+  } finally {
+    fs.rmSync(amendedCapture.logPath, { force: true });
+  }
+
+  const legacy = addTicket('legacy amended capture', {
+    executorVerifyKind: 'command',
+    executorVerify: amendedCommand,
+  });
+  const legacyCapture = await runVerifyCapture(amendedCommand, PROJECT_DIR);
+  try {
+    const accepted = recordCapture({ project: PROJECT_DIR, ticket: legacy.ref }, legacyCapture, PROJECT_DIR);
+    assert.strictEqual(accepted.ok, true, accepted.message);
+  } finally {
+    fs.rmSync(legacyCapture.logPath, { force: true });
+  }
+});
+
 test('MCP submit refuses a completed capture from before the submitted candidate', async () => {
   const command = 'node --version';
   const t = addTicket('stale declared capture', { executorVerify: command, files: ['lib'] });

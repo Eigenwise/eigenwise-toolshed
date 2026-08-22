@@ -93,6 +93,21 @@ const VERIFY_ORACLE_PROP = {
   description: 'Pin the required verifier in the prepared attempt. command and suite use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry.',
 };
 
+function deferredVerificationAmendment(ticket: any) {
+  const dispatch = ticket.dispatch;
+  const pinnedRequirement = ticket.lifecycleAttempt?.verificationRequirement
+    || dispatch?.lifecycleAttempt?.verificationRequirement
+    || dispatch?.verificationRequirement;
+  if (!dispatch || dispatch.terminalAt || !pinnedRequirement || typeof pinnedRequirement !== 'object') return null;
+  const pinnedCommand = String(pinnedRequirement.command || '').trim();
+  const displayedPinnedCommand = pinnedCommand || '<none>';
+  return {
+    status: 'deferred_until_redispatch',
+    pinnedCommand: pinnedCommand || null,
+    message: `Verification was amended for ${ticket.ref} after dispatch. The live ticket changed, but the open dispatch keeps its pinned verification requirement.\nPinned command:\n${displayedPinnedCommand}\nCheckpoint current work, release the claim, and re-dispatch; the recovery dispatch resumes the retained worktree and pins the amended verify. If the work is already verified by other evidence, release the claim and use orchestrator groomClose with deliveryCommit.`,
+  };
+}
+
 const REVIEW_TARGET_PROP = {
   type: 'object',
   properties: {
@@ -203,7 +218,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'update',
-    description: 'Update ticket fields by scope. by scopes an active ticket scope approval to the control-plane identity. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update ticket fields by scope. by scopes an active ticket scope approval to the control-plane identity. Any omitted field is left unchanged. Verify changes affect future dispatches; an open dispatch keeps its pinned verifier and the response explains recovery. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -224,7 +239,7 @@ const tools: ToolDefinition[] = [
         readonly: { type: 'boolean', description: 'Closeout override.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: VERIFY_ORACLE_PROP,
-        verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
+        verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
         attestationArtifact: { type: 'string', maxLength: store.EXECUTOR_VERIFY_MAX, description: 'Required only when verifyKind is attestation: the specific URL, file, frame, or returned count observed. It is rejected when verifyKind is command.' },
         storyId: { anyOf: [{ type: 'string', pattern: '^US-\\d+$' }, { const: 'none' }] },
         complexity: { type: 'integer', minimum: 1, maximum: 10 },
@@ -269,6 +284,8 @@ const tools: ToolDefinition[] = [
           };
         }
       }
+      const verificationWasAmended = (args.verify !== undefined && args.verify !== existing.executorVerify)
+        || (args.verifyKind !== undefined && args.verifyKind !== existing.executorVerifyKind);
       const patch: any = { source: 'mcp', sessionId: sessionOf(args) };
       if (args.by !== undefined) patch.by = args.by;
       for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
@@ -309,8 +326,12 @@ const tools: ToolDefinition[] = [
       const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
       const presentedWarnings = store.presentWarnings(t, warnings, sessionOf(args));
+      const verificationAmendment = verificationWasAmended
+        ? deferredVerificationAmendment(t)
+        : null;
       return mutationAck(slug, { ok: true, ticket: t }, Object.assign(
         presentedWarnings.length ? { warnings: presentedWarnings } : {},
+        verificationAmendment ? { deferredVerificationAmendment: verificationAmendment } : {},
         sameBasenameSiblingDetails(slug, t, meta.path, 'update'),
       ));
     },
