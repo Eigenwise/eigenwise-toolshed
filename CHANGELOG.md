@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.502.0 (2026-08-22)
+
+### sidequest 5.0.13 → 5.0.14
+
+#### Fixes
+
+- Explain verifier amendments during active dispatches (SQ-2343) [`831c522`](https://github.com/Eigenwise/eigenwise-toolshed/commit/831c5227add1d238d3f2e55817d4e32547284a69)
+
 ## v3.501.0 (2026-08-22)
 
 ### observability 0.7.18 → 0.7.19
