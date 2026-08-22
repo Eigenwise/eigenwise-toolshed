@@ -356,14 +356,14 @@ test('Grafana replaces a stale managed container and can delete its data volume'
   ]);
 });
 
-test('discovers recently active projects from Prometheus series with a default start', () => {
+test('discovers recently active projects from Prometheus label values with a default start', () => {
   const calls = [];
   const active = grafana.activeProjectNames({}, {
     now: Date.parse('2026-08-07T12:00:00.000Z'),
     spawnSync(command, args) {
       calls.push([command, args]);
       if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}||${grafana.MANAGED_CONFIG_VERSION}|null|null` };
-      return { status: 0, stdout: JSON.stringify({ status: 'success', data: [{ project_id: 'atlas' }, { project_id: 'beacon' }] }) };
+      return { status: 0, stdout: JSON.stringify({ status: 'success', data: ['atlas', 'beacon'] }) };
     },
   });
 
@@ -371,7 +371,22 @@ test('discovers recently active projects from Prometheus series with a default s
   assert.deepEqual(calls.map(([, args]) => args[0]), ['inspect', 'exec']);
   assert.ok(calls[1][1].includes('start=2026-07-08T12:00:00.000Z'));
   assert.ok(calls[1][1].includes('match[]=claude_code_token_usage_tokens_total'));
+  assert.ok(calls[1][1].includes('http://127.0.0.1:9090/api/v1/label/project_id/values'));
   assert.throws(() => grafana.activeProjectNames({}, { activityStart: 'undefined' }), /activityStart must be an ISO-8601 timestamp/);
+});
+
+test('keeps active projects when a Prometheus label-values response exceeds one megabyte', () => {
+  let dockerOptions;
+  const active = grafana.activeProjectNames({}, {
+    spawnSync(command, args, options) {
+      dockerOptions = options;
+      if (args[0] === 'inspect') return { status: 0, stdout: `true|${grafana.IMAGE}||${grafana.MANAGED_CONFIG_VERSION}|null|null` };
+      return { status: 0, stdout: JSON.stringify({ status: 'success', data: ['atlas', 'x'.repeat(1_048_576)] }) };
+    },
+  });
+
+  assert.equal(dockerOptions.maxBuffer, 16 * 1024 * 1024);
+  assert.equal(active.has('atlas'), true);
 });
 
 test('a dashboard reset removes generated files and excludes old activity', (t) => {

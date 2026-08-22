@@ -18,6 +18,7 @@ const MANAGED_CONFIG_VERSION = '1';
 const PROJECT_ACTIVITY_METRIC = 'claude_code_token_usage_tokens_total';
 const DEFAULT_ACTIVITY_WINDOW_MS = 30 * 24 * 60 * 60 * 1000;
 const DOCKER_TIMEOUT_MS = 1_500;
+const DOCKER_MAX_BUFFER_BYTES = 16 * 1024 * 1024;
 const DASHBOARD_READY_TIMEOUT_MS = 15_000;
 const DASHBOARD_READY_POLL_MS = 250;
 
@@ -28,6 +29,7 @@ function runDocker(context, args) {
     return spawn(docker, args, {
       encoding: 'utf8',
       timeout: DOCKER_TIMEOUT_MS,
+      maxBuffer: DOCKER_MAX_BUFFER_BYTES,
       killSignal: 'SIGKILL',
       windowsHide: true,
     });
@@ -55,7 +57,7 @@ function activeProjectNames(config = {}, context = {}) {
     'exec', runtime.container, 'curl', '--silent', '--show-error', '--fail', '--get',
     '--data-urlencode', `match[]=${PROJECT_ACTIVITY_METRIC}`,
     '--data-urlencode', `start=${activityStart}`,
-    'http://127.0.0.1:9090/api/v1/series',
+    'http://127.0.0.1:9090/api/v1/label/project_id/values',
   ]);
   if (result.error || result.status !== 0) {
     throw new Error('Prometheus could not report recently active dashboard projects.');
@@ -69,7 +71,7 @@ function activeProjectNames(config = {}, context = {}) {
   if (response.status !== 'success' || !Array.isArray(response.data)) {
     throw new Error('Prometheus returned incomplete project activity data.');
   }
-  return new Set(response.data.map(({ project_id: projectName }) => projectName).filter(Boolean));
+  return new Set(response.data.filter((projectName) => typeof projectName === 'string' && projectName));
 }
 
 function port(value, fallback, name) {

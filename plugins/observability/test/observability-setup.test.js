@@ -277,6 +277,7 @@ test('plans current-user application data and only starts LGTM on request', (t) 
     Destination: '/otel-lgtm/grafana/conf/provisioning/workbench-dashboards',
   }]);
   startLgtm(plan.dataDir, {
+    config: { observability: { optedInProjects: [registeredProject] } },
     activeProjectNames: [],
     spawnSync(command, args) {
       resumed.push([command, args]);
@@ -284,6 +285,10 @@ test('plans current-user application data and only starts LGTM on request', (t) 
     },
   });
   assert.equal(resumed.length, 3);
+  assert.deepEqual(fs.readdirSync(path.join(plan.dataDir, 'grafana-dashboards')).sort(), [
+    'claude-code-aaaaaaaaaaaaaaaa.json',
+    'claude-code-usage.json',
+  ]);
 });
 
 test('repairs a created dashboard container before reporting setup success', () => {
@@ -432,7 +437,10 @@ test('continues setup when the dashboard activity probe fails', async (t) => {
         dashboard: true,
         sink: 'grafana-lgtm',
         projects: [projectDir],
-        optedInProjects: [{ project_id: 'a'.repeat(64), project_name: 'atlas' }],
+        optedInProjects: [
+          { project_id: 'a'.repeat(64), project_name: 'atlas' },
+          { project_id: 'b'.repeat(64), project_name: 'beacon' },
+        ],
       },
     },
     dockerAvailable: true,
@@ -452,7 +460,22 @@ test('continues setup when the dashboard activity probe fails', async (t) => {
 
   assert.equal(ensured, true);
   assert.deepEqual(result.runtime.started, ['observer', 'collector']);
-  assert.deepEqual(fs.readdirSync(path.join(dataDir, 'grafana-dashboards')), ['claude-code-usage.json']);
+  const dashboardDir = path.join(dataDir, 'grafana-dashboards');
+  const dashboardFiles = fs.readdirSync(dashboardDir).sort();
+  assert.deepEqual(dashboardFiles, [
+    'claude-code-aaaaaaaaaaaaaaaa.json',
+    'claude-code-bbbbbbbbbbbbbbbb.json',
+    'claude-code-usage.json',
+  ]);
+  const globalDashboard = fs.readFileSync(path.join(dashboardDir, 'claude-code-usage.json'), 'utf8');
+  const globalExpressions = JSON.parse(globalDashboard).panels
+    .flatMap((panel) => panel.targets || [])
+    .map(({ expr }) => expr);
+  assert.ok(globalExpressions.some((expression) => expression.includes('project_id=~"atlas|beacon"')));
+  assert.ok(globalExpressions.some((expression) => expression.includes('workbench_attribute_project_name=~"atlas|beacon"')));
+  for (const fileName of dashboardFiles) {
+    assert.doesNotMatch(fs.readFileSync(path.join(dashboardDir, fileName), 'utf8'), /\$\^/);
+  }
 });
 
 test('does not generate project dashboards from configured project paths', async (t) => {
