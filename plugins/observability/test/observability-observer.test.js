@@ -10,6 +10,7 @@ const {
   assertLoopbackHost,
   createObserver,
   installedPluginVersion,
+  outboxIsNotDraining,
 } = require('../bin/observer.js');
 const { createOutboxDrainer, flushOutbox } = require('../lib/observability/outbox.js');
 const { DEFAULT_DRAIN_BUDGET_MS, drainHookSpool } = require('../lib/observability/hook-spool.js');
@@ -694,6 +695,88 @@ test('health reports an outbox that stopped attempting delivery', async (t) => {
   assert.equal(health.outbox.last_error_code, 'transport_typeerror');
 });
 
+test('health reports a continuously retrying outbox that is not draining', async (t) => {
+  t.mock.method(Date, 'now', () => Date.parse('2026-08-20T19:18:40.000Z'));
+  const capturedOutboxHealth = {
+    pending_count: 5264,
+    retryable_count: 5264,
+    exhausted_count: 0,
+    total_attempts: 3,
+    oldest_pending_at: '2026-08-20T18:54:49.536Z',
+    last_attempt_at: '2026-08-20T19:18:39.266Z',
+    last_error_code: 'transport_typeerror',
+  };
+  const store = {
+    ingestBatch() { return []; },
+    pendingOutbox() { return []; },
+    queryView() { return [capturedOutboxHealth]; },
+    storageMetrics() { return {}; },
+  };
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    outboxIntervalMs: 60_000,
+    hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}-not-draining.jsonl`),
+    sink: {
+      id: 'test',
+      egress: 'loopback',
+      outbox: { enabled: true, endpoint: 'http://127.0.0.1:45679/v1/logs', headers: {}, allowRemote: false },
+    },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+
+  assert.equal(outboxIsNotDraining(capturedOutboxHealth, Date.parse('2026-08-20T19:18:40.000Z')), true);
+  const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+  assert.equal(response.status, 503);
+  const health = await response.json();
+  assert.equal(health.ok, false);
+  assert.equal(health.error, 'outbox_not_draining');
+  assert.equal(health.outbox.last_attempt_at, '2026-08-20T19:18:39.266Z');
+  assert.equal(health.outbox.last_error_code, 'transport_typeerror');
+});
+
+test('health stays healthy while a recent outbox has pending records', async (t) => {
+  const now = new Date().toISOString();
+  const store = {
+    ingestBatch() { return []; },
+    pendingOutbox() { return []; },
+    queryView() {
+      return [{
+        pending_count: 3,
+        retryable_count: 3,
+        exhausted_count: 0,
+        total_attempts: 1,
+        oldest_pending_at: now,
+        last_attempt_at: now,
+        last_error_code: null,
+      }];
+    },
+    storageMetrics() { return {}; },
+  };
+  const observer = createObserver({
+    store,
+    host: '127.0.0.1',
+    port: 0,
+    outboxIntervalMs: 60_000,
+    hookSpoolFile: path.join(os.tmpdir(), `workbench-observer-spool-${process.pid}-recent-outbox.jsonl`),
+    sink: {
+      id: 'test',
+      egress: 'loopback',
+      outbox: { enabled: true, endpoint: 'http://127.0.0.1:45679/v1/logs', headers: {}, allowRemote: false },
+    },
+  });
+  t.after(() => observer.close());
+  const address = await observer.start();
+
+  const response = await fetch(`http://127.0.0.1:${address.port}/health`);
+  assert.equal(response.status, 200);
+  const health = await response.json();
+  assert.equal(health.ok, true);
+  assert.equal(health.error, undefined);
+});
+
 test('quarantines repeatedly failing hook spools, logs their error, and keeps health answering', async (t) => {
   const spoolDirectory = fs.mkdtempSync(path.join(os.tmpdir(), 'workbench-observer-poison-spool-'));
   t.after(() => fs.rmSync(spoolDirectory, { recursive: true, force: true }));
@@ -884,6 +967,9 @@ test('observer binds only to loopback and acknowledges HTTP ingestion after comm
   const body = await response.json();
   assert.equal(body.committed, true);
   assert.equal(store.database.prepare('SELECT COUNT(*) AS count FROM observation').get().count, 1);
+  while (store.queryView('outbox_health')[0].pending_count > 0) {
+    await new Promise((resolve) => setImmediate(resolve));
+  }
 
   const view = await fetch(`${base}/v1/views/request_usage_resolved?limit=10`);
   assert.equal(view.status, 200);

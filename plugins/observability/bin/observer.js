@@ -23,6 +23,8 @@ const {
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 const OTLP_SIGNALS = Object.freeze({ '/v1/logs': 'logs', '/v1/traces': 'traces', '/v1/metrics': 'metrics' });
 const DEFAULT_MAINTENANCE_INTERVAL_MS = 6 * 60 * 60 * 1000;
+// The longest recorded spool drain is 17 seconds; two minutes leaves room for a legitimate flush while reporting far before the 25-minute dashboard gap users noticed.
+const OUTBOX_NOT_DRAINING_AFTER_MS = 120_000;
 const PROCESS_RECORD_HEARTBEAT_INTERVAL_MS = 5_000;
 const PROCESS_RECORD_HEARTBEAT_WORKER_SOURCE = [
   "const fs = require('node:fs');",
@@ -196,6 +198,12 @@ function outboxIsStalled(outboxHealth, retryIntervalMs, now = Date.now()) {
   return Number.isFinite(lastAttemptAt) && now - lastAttemptAt > retryIntervalMs;
 }
 
+function outboxIsNotDraining(outboxHealth, now = Date.now()) {
+  if (Number(outboxHealth?.pending_count) <= 0) return false;
+  const oldestPendingAt = Date.parse(outboxHealth?.oldest_pending_at || '');
+  return Number.isFinite(oldestPendingAt) && now - oldestPendingAt > OUTBOX_NOT_DRAINING_AFTER_MS;
+}
+
 function observerVersionError(pluginVersion, installedVersion) {
   if (!installedVersion || compareVersions(pluginVersion, installedVersion) >= 0) return null;
   return new Error(`Observer plugin ${pluginVersion} is older than installed version ${installedVersion}.`);
@@ -283,14 +291,15 @@ function createObserver(options = {}) {
         const [outboxHealth] = store.queryView('outbox_health', { limit: 1 });
         const versionError = staleObserverError();
         const outboxStalled = outbox.enabled && outboxIsStalled(outboxHealth, outboxRetryIntervalMs);
+        const outboxNotDraining = outbox.enabled && outboxIsNotDraining(outboxHealth);
         const spoolDrainStartedAt = Date.parse(spoolStatus.in_flight_at || '');
         const spoolStalled = Number.isFinite(spoolDrainStartedAt) && Date.now() - spoolDrainStartedAt > hookSpoolStallMs;
         const spoolFailed = spoolStatus.consecutive_failures > 0 || spoolStalled;
         const storage = store.storageMetrics();
         const storagePressure = readStoragePressure();
         const storageFailed = storagePressure.state === 'unrecoverable';
-        jsonResponse(response, versionError || outboxStalled || spoolFailed || storageFailed ? 503 : 200, {
-          ok: !versionError && !outboxStalled && !spoolFailed && !storageFailed,
+        jsonResponse(response, versionError || outboxStalled || outboxNotDraining || spoolFailed || storageFailed ? 503 : 200, {
+          ok: !versionError && !outboxStalled && !outboxNotDraining && !spoolFailed && !storageFailed,
           pid: process.pid,
           pluginVersion,
           sink: { id: sink.id, egress: sink.egress, enabled: outbox.enabled },
@@ -298,7 +307,7 @@ function createObserver(options = {}) {
           spool: spoolStatus,
           storage: { ...storage, pressure: storagePressure },
           maintenance: maintenanceStatus,
-          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : spoolStalled ? 'hook_spool_drain_stalled' : spoolFailed ? 'hook_spool_drain_failed' : storageFailed ? 'storage_headroom_unrecoverable' : undefined,
+          error: versionError ? 'plugin_version_outdated' : outboxStalled ? 'outbox_stalled' : outboxNotDraining ? 'outbox_not_draining' : spoolStalled ? 'hook_spool_drain_stalled' : spoolFailed ? 'hook_spool_drain_failed' : storageFailed ? 'storage_headroom_unrecoverable' : undefined,
         });
         if (versionError) setImmediate(retireOutdatedObserver);
         return;
@@ -581,6 +590,7 @@ module.exports = {
   defaultDatabaseFile,
   installedPluginVersion,
   loadConfiguredSink,
+  outboxIsNotDraining,
   outboxIsStalled,
   parseArgs,
 };
