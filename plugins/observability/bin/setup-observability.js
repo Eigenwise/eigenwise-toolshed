@@ -34,6 +34,7 @@ const OBSERVER_PORT = DEFAULT_PORTS.observer;
 const COLLECTOR_PORT = DEFAULT_PORTS.collector;
 const STATUSLINE_SHIM = 'workbench-statusline.js';
 const MANAGED_DASHBOARD_CONTAINER = 'workbench-otel-lgtm';
+const DOCKER_PROBE_TIMEOUT_MS = 1_500;
 
 function managedPort(value, fallback, name) {
   const port = value === undefined ? fallback : Number(value);
@@ -374,17 +375,52 @@ function pluginVersion(root = path.resolve(__dirname, '..')) {
   return JSON.parse(fs.readFileSync(path.join(root, '.claude-plugin', 'plugin.json'), 'utf8')).version;
 }
 
-function dockerAvailable(options = {}) {
-  if (typeof options.dockerAvailable === 'function') return Boolean(options.dockerAvailable());
-  if (typeof options.dockerAvailable === 'boolean') return options.dockerAvailable;
-  try {
-    const result = (options.spawnSync || spawnSync)(options.docker || 'docker', ['info', '--format', '{{.ServerVersion}}'], {
-      encoding: 'utf8', timeout: 1500, killSignal: 'SIGKILL', windowsHide: true,
-    });
-    return !result.error && result.status === 0;
-  } catch {
-    return false;
+function dockerProbe(options = {}) {
+  if (typeof options.dockerAvailable === 'function') {
+    const available = Boolean(options.dockerAvailable());
+    return { available, state: available ? 'available' : 'daemon-unavailable', timeoutMs: DOCKER_PROBE_TIMEOUT_MS };
   }
+  if (typeof options.dockerAvailable === 'boolean') {
+    return { available: options.dockerAvailable, state: options.dockerAvailable ? 'available' : 'daemon-unavailable', timeoutMs: DOCKER_PROBE_TIMEOUT_MS };
+  }
+  let result;
+  try {
+    result = (options.spawnSync || spawnSync)(options.docker || 'docker', ['info', '--format', '{{.ServerVersion}}'], {
+      encoding: 'utf8', timeout: DOCKER_PROBE_TIMEOUT_MS, killSignal: 'SIGKILL', windowsHide: true,
+    });
+  } catch (error) {
+    result = { error };
+  }
+  if (result.error?.code === 'ENOENT') {
+    return { available: false, state: 'not-installed', timeoutMs: DOCKER_PROBE_TIMEOUT_MS };
+  }
+  if (result.error?.code === 'ETIMEDOUT') {
+    return { available: false, state: 'timeout', timeoutMs: DOCKER_PROBE_TIMEOUT_MS };
+  }
+  return {
+    available: !result.error && result.status === 0,
+    state: !result.error && result.status === 0 ? 'available' : 'daemon-unavailable',
+    timeoutMs: DOCKER_PROBE_TIMEOUT_MS,
+  };
+}
+
+function dockerAvailable(options = {}) {
+  return dockerProbe(options).available;
+}
+
+function dashboardDockerProblem(docker) {
+  if (docker?.state === 'not-installed') return 'Docker is not installed or not on PATH.';
+  if (docker?.state === 'timeout') return `Docker probe timed out after ${docker.timeoutMs}ms, so Docker state is unknown.`;
+  if (docker?.state === 'daemon-unavailable') return 'Docker is installed but its daemon is not responding.';
+  return 'Docker responded, but the dashboard state could not be read.';
+}
+
+function dashboardSkippedMessage(docker) {
+  return `Dashboard skipped: ${dashboardDockerProblem(docker)} SQLite observability will keep running.\n`;
+}
+
+function dashboardUnhealthyMessage(docker) {
+  return `Dashboard unhealthy: ${dashboardDockerProblem(docker)} Observer, collector, and SQLite ingestion are independent.\n`;
 }
 
 function configuredOptedInProjects(config) {
@@ -540,12 +576,13 @@ async function setupObservability(options = {}) {
   }
   const before = readManagedConfig(plan.observabilityConfig);
   const config = configuredSink(plan, { ...options, defaultDashboard: options.defaultDashboard ?? false });
+  const docker = config.observability.dashboard ? dockerProbe(options) : null;
   const changes = configurationChanges(before, config);
   if (options.check) {
-    const dashboardStatus = config.observability.dashboard && dockerAvailable(options)
+    const dashboardStatus = docker?.available
       ? grafanaLgtm.status(config.observability.sinks[DEFAULT_SINK] || {}, options)
       : null;
-    return { ...plan, check: true, before, config, changes, dashboardStatus };
+    return { ...plan, check: true, before, config, changes, dashboardStatus, docker, dockerAvailable: docker?.available ?? false };
   }
 
   fs.mkdirSync(plan.dataDir, { recursive: true, mode: 0o700 });
@@ -614,7 +651,7 @@ async function setupObservability(options = {}) {
   let dashboard = runtime.dashboard || null;
   let dashboardSkipped = Boolean(runtime.dashboardSkipped);
   if (config.observability.dashboard && !dashboard) {
-    if (dockerAvailable(options)) {
+    if (docker?.available) {
       const dashboardDir = provisionDashboards(plan.dataDir, activeDashboardProjects(config, plan.dataDir, options));
       dashboard = grafanaLgtm.setup(config.observability.sinks[DEFAULT_SINK], {
         ...options,
@@ -642,7 +679,8 @@ async function setupObservability(options = {}) {
     lgtm: dashboard,
     dashboard,
     dashboardSkipped,
-    dockerAvailable: config.observability.dashboard ? !dashboardSkipped : false,
+    docker,
+    dockerAvailable: docker?.available ?? false,
     runtime,
   };
 }
@@ -713,12 +751,12 @@ async function main() {
       ? `Changes: ${result.changes.map(describeChange).join('; ')}.\n`
       : 'Changes: none.\n');
     if (result.config.observability.dashboard && !result.dashboardStatus) {
-      process.stdout.write('Dashboard unhealthy: Docker is unavailable. Observer, collector, and SQLite ingestion are independent.\n');
+      process.stdout.write(dashboardUnhealthyMessage(result.docker));
     } else if (result.dashboardStatus && (!result.dashboardStatus.running || !result.dashboardStatus.portBindingsCurrent)) {
       process.stdout.write(`Dashboard unhealthy: ${result.dashboardStatus.container} does not match configured loopback ports ${result.dashboardStatus.grafanaPort}->3000 and ${result.dashboardStatus.otlpPort}->4318.\n`);
     }
     if (result.config.observability.dashboard && !result.dockerAvailable) {
-      process.stdout.write('Dashboard skipped: Docker is unavailable; SQLite observability will keep running.\n');
+      process.stdout.write(dashboardSkippedMessage(result.docker));
     }
     return;
   }
@@ -737,7 +775,7 @@ async function main() {
   process.stdout.write(`Downstream sink: ${result.sink.id}.\n`);
   process.stdout.write(verificationGuidance(result.config.observability.ports));
   if (result.dashboardSkipped) {
-    process.stdout.write('Dashboard skipped: Docker is unavailable; SQLite observability will keep running.\n');
+    process.stdout.write(dashboardSkippedMessage(result.docker));
   } else if (result.sink.visualization) {
     process.stdout.write(`Grafana is available at ${result.sink.visualization.url}.\n`);
   }
@@ -746,6 +784,7 @@ async function main() {
 module.exports = {
   COLLECTOR_VERSION,
   DEFAULT_PORTS,
+  DOCKER_PROBE_TIMEOUT_MS,
   LGTM_IMAGE,
   MANAGED_DASHBOARD_CONTAINER,
   MIN_CLAUDE_VERSION,
@@ -758,9 +797,13 @@ module.exports = {
   configurationChanges,
   configurationSummary,
   configuredSink,
+  dashboardDockerProblem,
+  dashboardSkippedMessage,
+  dashboardUnhealthyMessage,
   defaultDataDir,
   deleteLocalObservabilityData,
   dockerAvailable,
+  dockerProbe,
   downloadCollector,
   ensureCollectorConfig,
   ensureStatuslineShim,
