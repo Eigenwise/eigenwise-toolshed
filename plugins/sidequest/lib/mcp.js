@@ -103,6 +103,9 @@ const ARGUMENT_ALIASES = {
   story_log: { append: "entry" },
   unlink: { from: "a", to: "b" }
 };
+const REQUIRED_ARGUMENT_HINTS = {
+  pulse: "pulse reads one ticket; for a project-wide liveness/progress read call changes."
+};
 const COERCED_PRIORITY = { from: "medium", to: "normal" };
 function editDistance(left, right) {
   let previous = Array.from({ length: right.length + 1 }, (_, index) => index);
@@ -152,6 +155,13 @@ function validateToolArguments(tool, rawArgs) {
     const accepted = Object.keys(properties).join(", ");
     const suggestion = unknown.length === 1 && unknown[0] !== void 0 ? argumentSuggestion(unknown[0], allowed) : "";
     throw new Error(`${tool.name}: unknown argument${unknown.length === 1 ? "" : "s"} ${quoted} — ${tool.name} accepts: ${accepted}.${suggestion}`);
+  }
+  const missing = (tool.inputSchema.required || []).filter((key) => args[key] === void 0);
+  if (missing.length) {
+    const names = missing.map((key) => `"${key}"`).join(", ");
+    const argument = missing.length === 1 ? "argument" : "arguments";
+    const hint = REQUIRED_ARGUMENT_HINTS[tool.name];
+    throw new Error(`${tool.name}: missing required ${argument} ${names}${hint ? ` — ${hint}` : "."}`);
   }
   for (const [key, value] of Object.entries(args)) {
     const values = properties[key]?.enum;

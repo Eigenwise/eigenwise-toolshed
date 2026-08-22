@@ -893,7 +893,7 @@ test('MCP accepts curated natural aliases and names each accepted mapping', asyn
 
   const missingReview = await callToolRaw('rework', { project, ref: first.ref, by: 'alias-worker', reason: 'Review found a defect.' });
   assert.equal(missingReview.isError, true);
-  assert.match(missingReview.content[0].text, /rework: "review" is required\./);
+  assert.match(missingReview.content[0].text, /rework: missing required argument "review"\./);
 
   const documentedReadForm = await callToolRaw('board_config', { project, action: 'get' });
   assert.equal(documentedReadForm.isError, true);
@@ -922,6 +922,22 @@ test('MCP suggests a unique close argument and preserves unrelated unknown-argum
   assert.equal(distant.isError, true);
   assert.match(distant.content[0].text, /comment: unknown argument "unrelated" — comment accepts: .*body, by\.$/);
   assert.doesNotMatch(distant.content[0].text, /did you mean/);
+});
+
+test('MCP rejects missing required arguments before tools receive undefined values', async () => {
+  const pulse = await callToolRaw('pulse', {});
+  assert.equal(pulse.isError, true);
+  assert.equal(pulse.content[0].text, 'pulse: missing required argument "ref" — pulse reads one ticket; for a project-wide liveness/progress read call changes.');
+  assert.doesNotMatch(pulse.content[0].text, /no ticket "undefined"/);
+
+  const update = await callToolRaw('update', {});
+  assert.equal(update.isError, true);
+  assert.equal(update.content[0].text, 'update: missing required argument "ref".');
+  assert.doesNotMatch(update.content[0].text, /no ticket "undefined"/);
+
+  const commit = await callToolRaw('commit', {});
+  assert.equal(commit.isError, true);
+  assert.equal(commit.content[0].text, 'commit: missing required arguments "ref", "by", "message", "worktree".');
 });
 
 test('MCP list accepts brief output shaping and advertises it in the schema', async () => {
@@ -3951,7 +3967,7 @@ test('MCP done requires a final report and release records its reason', async ()
 
   const missing = await callToolRaw('done', { ref: added.ref, by: 'mcp-report-worker', model: ticket.model, effort: ticket.effort });
   assert.ok(missing.isError, 'done refuses a missing final report');
-  assert.match(missing.content[0].text, /"body" is required.*completion comment.*full final report/i);
+  assert.equal(missing.content[0].text, 'done: missing required argument "body".');
   const blank = await callToolRaw('done', { ref: added.ref, by: 'mcp-report-worker', model: ticket.model, effort: ticket.effort, body: ' \n\t ' });
   assert.ok(blank.isError, 'done refuses a blank final report');
   assert.match(blank.content[0].text, /"body" is required.*full final report/i);
@@ -4259,7 +4275,7 @@ test('claim requires a worker id (no shared-identity default)', async () => {
   const added = await callTool('add', { title: 'needs by', complexity: 2, why: 'confirm the atomic-claim identity guard is enforced over MCP' });
   const res = await callToolRaw('claim', { ref: added.ref });
   assert.ok(res.isError, 'a claim without by is refused');
-  assert.match(res.content[0].text, /by.*required/i);
+  assert.match(res.content[0].text, /missing required argument "by"/);
 });
 
 test('MCP dispatch returns the Codex readiness recovery text without preparing state', async () => {
@@ -4513,10 +4529,10 @@ test('mutations queue FIFO per board without blocking another board', async () =
     started.push(args.ref);
     releases.set(args.ref, () => resolve({ marker: args.ref }));
   });
-  const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'first' } } });
-  const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'second' } } });
+  const first = mcp.handleRequest({ jsonrpc: '2.0', id: 9201, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'first', body: 'first comment' } } });
+  const second = mcp.handleRequest({ jsonrpc: '2.0', id: 9202, method: 'tools/call', params: { name: 'comment', arguments: { project: PROJ, ref: 'second', body: 'second comment' } } });
   const otherProject = store.ensureProject(path.join(FIXTURE_ROOT, 'other-board')).slug;
-  const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, ref: 'other' } } });
+  const other = mcp.handleRequest({ jsonrpc: '2.0', id: 9203, method: 'tools/call', params: { name: 'comment', arguments: { project: otherProject, ref: 'other', body: 'other comment' } } });
   try {
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(started, ['first', 'other']);
