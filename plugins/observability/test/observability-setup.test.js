@@ -7,6 +7,7 @@ const path = require('node:path');
 const test = require('node:test');
 const {
   COLLECTOR_VERSION,
+  DOCKER_PROBE_TIMEOUT_MS,
   LGTM_IMAGE,
   MANAGED_DASHBOARD_CONTAINER,
   MIN_CLAUDE_VERSION,
@@ -15,6 +16,8 @@ const {
   collectorArchiveUrl,
   compareVersions,
   configuredSink,
+  dashboardSkippedMessage,
+  dockerProbe,
   downloadCollector,
   mergeObservabilitySettings,
   parseArgs,
@@ -60,6 +63,55 @@ test('prints copy-pasteable observer verification guidance', () => {
     verificationGuidance(),
     `Reload plugins once now, then verify: claude --version; curl http://127.0.0.1:14319/health; node "${healthPath}" --health; node "${reportPath}".\n`,
   );
+});
+
+test('identifies a Docker binary missing from PATH', () => {
+  const probe = dockerProbe({
+    spawnSync() {
+      return { error: Object.assign(new Error('not found'), { code: 'ENOENT' }) };
+    },
+  });
+
+  assert.deepEqual(probe, { available: false, state: 'not-installed', timeoutMs: DOCKER_PROBE_TIMEOUT_MS });
+  assert.match(dashboardSkippedMessage(probe), /Docker is not installed or not on PATH/);
+});
+
+test('identifies a Docker daemon that refuses the probe', () => {
+  const probe = dockerProbe({ spawnSync: () => ({ status: 1, stderr: 'daemon is not running' }) });
+
+  assert.deepEqual(probe, { available: false, state: 'daemon-unavailable', timeoutMs: DOCKER_PROBE_TIMEOUT_MS });
+  assert.match(dashboardSkippedMessage(probe), /Docker is installed but its daemon is not responding/);
+});
+
+test('reports an unknown Docker state when the probe exceeds its budget', () => {
+  const probe = dockerProbe({
+    spawnSync() {
+      return { error: Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' }) };
+    },
+  });
+  const message = dashboardSkippedMessage(probe);
+
+  assert.deepEqual(probe, { available: false, state: 'timeout', timeoutMs: DOCKER_PROBE_TIMEOUT_MS });
+  assert.match(message, new RegExp(`Docker probe timed out after ${DOCKER_PROBE_TIMEOUT_MS}ms`));
+  assert.match(message, /Docker state is unknown/);
+  assert.doesNotMatch(message, /Docker is unavailable/);
+});
+
+test('check results preserve a successful Docker probe', async () => {
+  const result = await setupObservability({
+    check: true,
+    dataDir: path.join(os.tmpdir(), 'workbench-observability-check-result'),
+    dockerAvailable: true,
+    config: {
+      observability: { enabled: true, sink: 'grafana-lgtm', dashboard: true, projects: [] },
+    },
+    spawnSync() {
+      return { status: 1, stdout: '' };
+    },
+  });
+
+  assert.equal(result.dockerAvailable, true);
+  assert.equal(result.docker.state, 'available');
 });
 
 test('merges safe local OTLP settings without replacing an existing status line', () => {
