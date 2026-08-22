@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.500.0 (2026-08-22)
+
+### observability 0.7.17 → 0.7.18
+
+#### Fixes
+
+- Clarify Docker dashboard diagnostics (SQ-2318)
+  Observability now distinguishes missing Docker, daemon failures, and timed-out checks instead of incorrectly reporting Docker unavailable.
+- Report stalled outbox delivery (SQ-2321)
+  Report aged outbox backlogs in health and the statusline before telemetry gaps go unnoticed.
+- Start observers from the newest installed plugin (SQ-2341)
+  Observability hooks now launch the newest installed observer and leave a newer running observer alone.
+
 ## v3.499.0 (2026-08-22)
 
 ### sidequest 5.0.12 → 5.0.13
