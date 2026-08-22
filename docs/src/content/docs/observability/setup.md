@@ -18,7 +18,7 @@ Run these in Claude Code:
 /plugin install observability@eigenwise-toolshed --scope project
 ```
 
-Reload plugins or start a new Claude Code session. The install is project-scoped, while one managed observer still runs per machine. Telemetry remains opt-in for each repository.
+Reload plugins or start a new Claude Code session. The install is project-scoped, while one managed observer still runs per machine. When a session ensures Observability, it launches the newest installed plugin version. If an older session runs afterward, it leaves a newer live observer in place rather than replacing it. Telemetry remains opt-in for each repository.
 
 ## Set up a repository
 
@@ -30,7 +30,17 @@ From inside the repository you want to track, run:
 
 Claude asks for consent, shows the setup choices, and handles the local observer and dashboard. Choose local SQLite reports only, the loopback dashboard, or a remote sink if you have one. Remote sinks may require you to provide an endpoint or complete the provider's sign-in yourself.
 
-After setup, restart any Claude Code session that was already running in the repository. New sessions pick up the project settings and send metadata for that repository only.
+After setup, restart any Claude Code session that was already running in the repository. This is still required for project settings and hooks to apply. The restart does not let an older session replace a newer live observer. New sessions pick up the project settings and send metadata for that repository only.
+
+## Dashboard checks
+
+When the dashboard is enabled, `setup-observability.js --check` names the Docker condition it finds:
+
+- `Docker is not installed or not on PATH.`
+- `Docker is installed but its daemon is not responding.`
+- `Docker probe timed out after 1500ms, so Docker state is unknown.`
+
+The Docker probe has a 1500 ms budget. Local SQLite observability continues when the dashboard is skipped.
 
 ## What you can expect
 
