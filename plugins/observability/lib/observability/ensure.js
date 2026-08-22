@@ -155,6 +155,70 @@ function processAlive(pid) {
   }
 }
 
+function parseSemver(version) {
+  const match = typeof version === 'string'
+    && version.match(/^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-([0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*))?(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?$/);
+  if (!match) return null;
+  return {
+    major: Number(match[1]),
+    minor: Number(match[2]),
+    patch: Number(match[3]),
+    prerelease: match[4] ? match[4].split('.') : [],
+  };
+}
+
+function compareSemver(leftVersion, rightVersion) {
+  const left = parseSemver(leftVersion);
+  const right = parseSemver(rightVersion);
+  if (!left || !right) return null;
+  for (const name of ['major', 'minor', 'patch']) {
+    if (left[name] !== right[name]) return left[name] > right[name] ? 1 : -1;
+  }
+  if (!left.prerelease.length || !right.prerelease.length) {
+    if (left.prerelease.length === right.prerelease.length) return 0;
+    return left.prerelease.length ? -1 : 1;
+  }
+  const count = Math.max(left.prerelease.length, right.prerelease.length);
+  for (let index = 0; index < count; index += 1) {
+    const leftIdentifier = left.prerelease[index];
+    const rightIdentifier = right.prerelease[index];
+    if (leftIdentifier === undefined) return -1;
+    if (rightIdentifier === undefined) return 1;
+    if (leftIdentifier === rightIdentifier) continue;
+    const leftNumeric = /^\d+$/.test(leftIdentifier);
+    const rightNumeric = /^\d+$/.test(rightIdentifier);
+    if (leftNumeric && rightNumeric) return Number(leftIdentifier) > Number(rightIdentifier) ? 1 : -1;
+    if (leftNumeric !== rightNumeric) return leftNumeric ? -1 : 1;
+    return leftIdentifier > rightIdentifier ? 1 : -1;
+  }
+  return 0;
+}
+
+function versionIsNewer(candidateVersion, currentVersion) {
+  return compareSemver(candidateVersion, currentVersion) === 1;
+}
+
+function resolveNewestInstalledObserver(pluginRoot, getPluginVersion, options = {}) {
+  const observerPath = path.join(pluginRoot, 'bin', 'observer.js');
+  const candidates = [{ scriptPath: observerPath, pluginVersion: getPluginVersion(pluginRoot) }];
+  const readDirectory = options.readDirectory || fs.readdirSync;
+  const pathExists = options.pathExists || fs.existsSync;
+  try {
+    for (const entry of readDirectory(path.dirname(pluginRoot), { withFileTypes: true })) {
+      if (!entry.isDirectory()) continue;
+      const siblingRoot = path.join(path.dirname(pluginRoot), entry.name);
+      const siblingScriptPath = path.join(siblingRoot, 'bin', 'observer.js');
+      if (!pathExists(siblingScriptPath)) continue;
+      try {
+        candidates.push({ scriptPath: siblingScriptPath, pluginVersion: getPluginVersion(siblingRoot) });
+      } catch {}
+    }
+  } catch {}
+  return candidates.reduce((newest, candidate) => (
+    versionIsNewer(candidate.pluginVersion, newest.pluginVersion) ? candidate : newest
+  ));
+}
+
 function readProcessRecord(dataDir, name) {
   try {
     const record = JSON.parse(fs.readFileSync(processRecordFile(dataDir, name), 'utf8'));
@@ -167,6 +231,17 @@ function readProcessRecord(dataDir, name) {
 
 function writeProcessRecord(dataDir, name, record) {
   fs.writeFileSync(processRecordFile(dataDir, name), `${JSON.stringify(record)}\n`, { encoding: 'utf8', mode: 0o600 });
+}
+
+function newerManagedObserverIsRunning(dataDir, currentPluginVersion, options = {}) {
+  const pid = readPid(pidFile(dataDir, 'observer'));
+  const record = readProcessRecord(dataDir, 'observer');
+  if (!pid || record?.pid !== pid || typeof record.pluginVersion !== 'string') return false;
+  try {
+    return (options.processAlive || processAlive)(pid) && versionIsNewer(record.pluginVersion, currentPluginVersion);
+  } catch {
+    return false;
+  }
 }
 
 function processRecordMatchesProvenance(name, dataDir, pid, provenance, options = {}) {
@@ -330,12 +405,16 @@ async function ensureObservability(options = {}) {
   const setup = options.setupModule || require('../../bin/setup-observability.js');
   const pluginRoot = options.pluginRoot || path.resolve(__dirname, '..', '..');
   const currentPluginVersion = setup.pluginVersion(pluginRoot);
+  const observerProvenance = resolveNewestInstalledObserver(pluginRoot, (root) => setup.pluginVersion(root), options);
   const lock = acquireLock(dataDir, { ...options, pluginVersion: currentPluginVersion });
   if (!lock) return { enabled: true, started: [], skipped: 'locked' };
 
   try {
     config = consentedConfig(configFile);
     if (!config) return { enabled: false, started: [] };
+    if (newerManagedObserverIsRunning(dataDir, currentPluginVersion, options)) {
+      return { enabled: true, started: [], skipped: 'newer-observer' };
+    }
     let state = config.observability;
     const ports = state.ports;
     if (state.dashboard) {
@@ -380,16 +459,26 @@ async function ensureObservability(options = {}) {
     const checkPort = options.checkPort || portListening;
     const startProcess = options.startProcess || startManagedProcess;
     const wait = options.waitForPort || waitForPort;
-    const observerScript = path.join(pluginRoot, 'bin', 'observer.js');
+    const observerScript = observerProvenance.scriptPath;
     const processes = [
-      { name: 'observer', port: ports.observer, scriptPath: observerScript },
-      { name: 'collector', port: ports.collector, scriptPath: collectorBinary },
+      {
+        name: 'observer',
+        port: ports.observer,
+        pluginVersion: observerProvenance.pluginVersion,
+        scriptPath: observerScript,
+      },
+      {
+        name: 'collector',
+        port: ports.collector,
+        pluginVersion: currentPluginVersion,
+        scriptPath: collectorBinary,
+      },
     ];
     for (const process of processes) {
       const listening = await checkPort(process.port, options);
       const logNeedsRotation = managedLogNeedsRotation(process.name, dataDir, options);
       const restartManagedProcess = managedProcessNeedsRestart(process.name, dataDir, {
-        pluginVersion: currentPluginVersion,
+        pluginVersion: process.pluginVersion,
         scriptPath: process.scriptPath,
       }, options);
       let owner = null;
@@ -401,11 +490,11 @@ async function ensureObservability(options = {}) {
           const identity = identifyObserver ? await identifyObserver(process.port, options) : null;
           const observedOwner = identity?.pid || (ownerFinder && ownerFinder(process.port, options));
           const recordMatchesOwner = processRecordMatchesProvenance(process.name, dataDir, observedOwner, {
-            pluginVersion: currentPluginVersion,
+            pluginVersion: process.pluginVersion,
             scriptPath: process.scriptPath,
           }, options);
           needsRestart = identity
-            ? identity.pluginVersion !== currentPluginVersion
+            ? identity.pluginVersion !== process.pluginVersion
             : !recordMatchesOwner;
           if (needsRestart) owner = observedOwner;
         } else {
@@ -433,7 +522,7 @@ async function ensureObservability(options = {}) {
         '--config', configFile,
       ], dataDir, {
         ...options,
-        pluginVersion: currentPluginVersion,
+        pluginVersion: observerProvenance.pluginVersion,
         scriptPath: observerScript,
       });
       started.push('observer');
@@ -695,6 +784,8 @@ async function launchEnsure(options = {}) {
   const owner = identity?.pid || (ownerFinder && ownerFinder(observerPort, options));
   const pluginRoot = options.pluginRoot || path.resolve(__dirname, '..', '..');
   const currentPluginVersion = (options.setupModule || require('../../bin/setup-observability.js')).pluginVersion(pluginRoot);
+  if (newerManagedObserverIsRunning(dataDir, currentPluginVersion, options)) return false;
+  if (identity && versionIsNewer(identity.pluginVersion, currentPluginVersion)) return false;
   const recordMatchesOwner = processRecordMatchesProvenance('observer', dataDir, owner, {
     pluginVersion: currentPluginVersion,
     scriptPath: path.join(pluginRoot, 'bin', 'observer.js'),

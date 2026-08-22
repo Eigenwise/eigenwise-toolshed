@@ -42,6 +42,15 @@ function enabledConfig(ports = {}) {
   };
 }
 
+function installedPluginRoot(cacheRoot, version) {
+  const pluginRoot = path.join(cacheRoot, version);
+  fs.mkdirSync(path.join(pluginRoot, '.claude-plugin'), { recursive: true });
+  fs.mkdirSync(path.join(pluginRoot, 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(pluginRoot, '.claude-plugin', 'plugin.json'), `${JSON.stringify({ version })}\n`);
+  fs.writeFileSync(path.join(pluginRoot, 'bin', 'observer.js'), '');
+  return pluginRoot;
+}
+
 test('SessionStart launch is a silent no-op without enabled consent', async (t) => {
   const dataDir = temporaryDirectory(t);
   let spawned = false;
@@ -105,6 +114,41 @@ test('ensure restores observer and collector on configured loopback ports', asyn
   const collectorConfig = fs.readFileSync(path.join(dataDir, 'otel-collector-config.yaml'), 'utf8');
   assert.match(collectorConfig, /127\.0\.0\.1:15431/);
   assert.match(collectorConfig, /127\.0\.0\.1:15432/);
+});
+
+test('ensure from an older plugin root starts the newest installed observer', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const cacheRoot = path.join(dataDir, 'cache');
+  const olderPluginRoot = installedPluginRoot(cacheRoot, '0.7.9');
+  const newerPluginRoot = installedPluginRoot(cacheRoot, '0.7.10');
+  const configFile = path.join(dataDir, 'observability.json');
+  const collectorBinary = path.join(dataDir, 'collector-test-binary');
+  fs.writeFileSync(collectorBinary, 'test');
+  writeObservabilityConfig(configFile, enabledConfig());
+  const starts = [];
+  let nextPid = 1000;
+
+  await ensureObservability({
+    dataDir,
+    configFile,
+    pluginRoot: olderPluginRoot,
+    dockerAvailable: false,
+    environment: { WORKBENCH_OTELCOL_CONTRIB: collectorBinary },
+    checkPort: async () => false,
+    waitForPort: async () => true,
+    spawn(command, args, options) {
+      starts.push({ command, args, options });
+      return { pid: nextPid++, unref() {} };
+    },
+  });
+
+  const observerRecord = JSON.parse(fs.readFileSync(path.join(dataDir, 'observer.pid.json'), 'utf8'));
+  assert.equal(starts[0].args[0], path.join(newerPluginRoot, 'bin', 'observer.js'));
+  assert.equal(starts[0].options.windowsHide, true);
+  assert.equal(observerRecord.pid, 1000);
+  assert.equal(observerRecord.pluginVersion, '0.7.10');
+  assert.equal(observerRecord.scriptPath, path.join(newerPluginRoot, 'bin', 'observer.js'));
+  assert.ok(Number.isFinite(Date.parse(observerRecord.heartbeatAt)));
 });
 
 test('ensure is idempotent while both managed ports are healthy', async (t) => {
@@ -518,6 +562,33 @@ test('ensure adopts a fresh managed observer without restarting it', async (t) =
   assert.deepEqual(result.started, []);
 });
 
+test('an older ensure leaves a newer managed observer untouched', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const cacheRoot = path.join(dataDir, 'cache');
+  const olderPluginRoot = installedPluginRoot(cacheRoot, '0.7.9');
+  const newerPluginRoot = installedPluginRoot(cacheRoot, '0.7.10');
+  const configFile = path.join(dataDir, 'observability.json');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid'), '101\n');
+  fs.writeFileSync(path.join(dataDir, 'observer.pid.json'), `${JSON.stringify({
+    pid: 101,
+    pluginVersion: '0.7.10',
+    scriptPath: path.join(newerPluginRoot, 'bin', 'observer.js'),
+  })}\n`);
+  writeObservabilityConfig(configFile, enabledConfig());
+
+  const result = await ensureObservability({
+    dataDir,
+    configFile,
+    pluginRoot: olderPluginRoot,
+    processAlive: () => true,
+    checkPort() { throw new Error('newer observer must prevent port and container checks'); },
+    killProcess() { throw new Error('newer observer must not be killed'); },
+    startProcess() { throw new Error('newer observer must not be restarted'); },
+  });
+
+  assert.deepEqual(result, { enabled: true, started: [], skipped: 'newer-observer' });
+});
+
 test('ensure keeps a managed observer that times out during its identity probe', async (t) => {
   const dataDir = temporaryDirectory(t);
   const configFile = path.join(dataDir, 'observability.json');
@@ -781,6 +852,25 @@ test('SessionStart warns when it replaces an observer from an older plugin versi
   });
 
   assert.deepEqual(notices, ['Observability: replacing the observer on 127.0.0.1:15432 held by pid 202, plugin 0.3.1.']);
+});
+
+test('SessionStart from an older plugin root leaves a newer health-reported observer alone', async (t) => {
+  const dataDir = temporaryDirectory(t);
+  const olderPluginRoot = installedPluginRoot(path.join(dataDir, 'cache'), '0.7.9');
+  writeObservabilityConfig(path.join(dataDir, 'observability.json'), enabledConfig());
+  const notices = [];
+
+  const launched = await launchEnsure({
+    dataDir,
+    pluginRoot: olderPluginRoot,
+    checkPort: async () => true,
+    observerIdentity: async () => ({ pid: 202, pluginVersion: '0.7.10' }),
+    reportNotice(message) { notices.push(message); },
+    spawn() { throw new Error('newer observer must not launch an older ensure'); },
+  });
+
+  assert.equal(launched, false);
+  assert.deepEqual(notices, []);
 });
 
 test('setup disable runs without a circular dependency warning', (t) => {
