@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.501.0 (2026-08-22)
+
+### observability 0.7.18 → 0.7.19
+
+#### Fixes
+
+- Keep Grafana project dashboards after activity probe failures (SQ-2344)
+  Dashboard provisioning keeps opted-in project matchers when the Prometheus activity probe fails or returns no projects.
+
 ## v3.500.0 (2026-08-22)
 
 ### observability 0.7.17 → 0.7.18
