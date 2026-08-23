@@ -1,7 +1,7 @@
-# Workbench OTel Collector
+# Observability OTel Collector
 
 Loopback-bound OpenTelemetry Collector that sits between Claude Code / the Agent SDK
-and the Workbench observer. It receives OTLP/HTTP, drops non-Claude signals, strips
+and the Observability observer. It receives OTLP/HTTP, drops non-Claude signals, strips
 content-bearing attributes, batches, and commits to the observer with a persistent
 on-disk queue so nothing is lost if the observer is briefly down.
 

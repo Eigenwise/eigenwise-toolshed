@@ -355,7 +355,7 @@ function main() {
   const written = writeCollectorConfig(target);
   process.stdout.write(`Wrote loopback OTel Collector config to ${written}\n`);
   process.stdout.write('Run: otelcol-contrib --config ' + written + '\n');
-  process.stdout.write('It receives OTLP/HTTP on 127.0.0.1:4318 and commits to the Workbench observer on 127.0.0.1:14319.\n');
+  process.stdout.write('It receives OTLP/HTTP on 127.0.0.1:4318 and commits to the Observability observer on 127.0.0.1:14319.\n');
 }
 
 if (require.main === module) main();

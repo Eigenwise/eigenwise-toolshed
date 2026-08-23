@@ -273,7 +273,7 @@ function openObservabilityStore(databaseFile, options = {}) {
   const schema = database.prepare("SELECT value FROM observability_meta WHERE key = 'schema_version'").get();
   if (!schema || Number(schema.value) !== SCHEMA_VERSION) {
     database.close();
-    throw new Error(`Unsupported Workbench observability schema ${schema ? schema.value : 'missing'}.`);
+    throw new Error(`Unsupported Observability schema ${schema ? schema.value : 'missing'}.`);
   }
 
   const statements = createStatements(database);
@@ -358,7 +358,7 @@ function openObservabilityStore(databaseFile, options = {}) {
   }
 
   function assertOpen() {
-    if (closed) throw new Error('Workbench observability store is closed.');
+    if (closed) throw new Error('Observability store is closed.');
   }
 
   function transaction(work) {

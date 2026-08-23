@@ -322,7 +322,7 @@ function startManagedProcess(name, command, args, dataDir, options = {}) {
   } finally {
     fs.closeSync(descriptor);
   }
-  if (!child || !Number.isInteger(child.pid) || child.pid < 1) throw new Error(`Could not start the Workbench ${name}.`);
+  if (!child || !Number.isInteger(child.pid) || child.pid < 1) throw new Error(`Could not start the Observability ${name}.`);
   fs.writeFileSync(pidFile(dataDir, name), `${child.pid}\n`, { encoding: 'utf8', mode: 0o600 });
   const now = typeof options.now === 'function' ? options.now() : options.now ?? Date.now();
   writeProcessRecord(dataDir, name, {

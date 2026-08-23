@@ -1,4 +1,4 @@
-# Workbench LGTM demo viewer
+# Observability LGTM demo viewer
 
 This is a disposable, loopback-only Grafana OTel LGTM viewer. SQLite remains the report source of truth, so `token-usage-report.js` works with Docker stopped.
 

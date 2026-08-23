@@ -770,7 +770,7 @@ async function main() {
   }
   process.stdout.write(`Observability is prepared in ${result.dataDir}.\n`);
   if (result.settings.statusLine?.existing) {
-    process.stdout.write(`Status line left unchanged: ${result.settings.statusLine.existing}. Workbench would use: ${result.settings.statusLine.command}.\n`);
+    process.stdout.write(`Status line left unchanged: ${result.settings.statusLine.existing}. Observability would use: ${result.settings.statusLine.command}.\n`);
   }
   process.stdout.write(`Downstream sink: ${result.sink.id}.\n`);
   process.stdout.write(verificationGuidance(result.config.observability.ports));

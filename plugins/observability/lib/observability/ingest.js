@@ -373,7 +373,7 @@ function normalizeObservation(input, options = {}) {
 }
 
 function createIngestor(store) {
-  if (!store || typeof store.ingest !== 'function') throw new TypeError('A Workbench observability store is required.');
+  if (!store || typeof store.ingest !== 'function') throw new TypeError('An Observability store is required.');
   return {
     ingest: (observation) => store.ingest(observation),
     ingestBatch: (observations) => store.ingestBatch(observations),

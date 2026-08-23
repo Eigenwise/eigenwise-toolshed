@@ -128,7 +128,7 @@ test('merges safe local OTLP settings without replacing an existing status line'
   assert.deepEqual(settings.hooks, { SessionEnd: [{ hooks: [{ type: 'command', command: 'existing-hook' }] }] });
 });
 
-test('does not replace a Workbench status line on repeat setup', () => {
+test('does not replace an existing status line on repeat setup', () => {
   const settings = mergeObservabilitySettings({
     env: { WORKBENCH_STATUSLINE_RENDER: 'existing renderer' },
     statusLine: { type: 'command', command: 'node workbench-statusline.js', padding: 3 },
@@ -587,7 +587,7 @@ test('uses dashboard language, keeps the lgtm alias, and defaults bare setup fro
   assert.throws(() => parseArgs(['--dashboard', '--sink', 'otlp']), /cannot be combined/);
 });
 
-test('removes only Workbench settings without changing a status line', () => {
+test('removes only Observability settings without changing a status line', () => {
   const configured = mergeObservabilitySettings({
     env: { KEEP_ME: 'yes' },
     statusLine: { type: 'command', command: 'node custom-statusline.js' },

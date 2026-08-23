@@ -212,7 +212,7 @@ test('declared schema members have a local fixture or an explicit external reser
   assert.deepEqual(EXTERNAL_INGRESS_OR_RESERVED.measurements.filter((value) => !ALLOWED_MEASUREMENTS.includes(value)), []);
 });
 
-test('canonical project identity stays aligned across Workbench emitters and selectors', () => {
+test('canonical project identity stays aligned across Observability emitters and selectors', () => {
   const identity = projectMetadata(PROJECT_DIR);
   const hook = buildObservation({ hook_event_name: 'SessionStart', cwd: PROJECT_DIR, session_id: 'session-canonical', agent_id: 'agent-canonical' }, NOW);
   const statusline = { ...buildStatuslineObservations({ session_id: 'session-canonical', context_window: { used_tokens: 10, window_tokens: 100 } }, NOW, { value: 42 })[0], project_id: identity.project_id };

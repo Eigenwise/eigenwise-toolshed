@@ -38,7 +38,7 @@
   "tags": ["workbench", "observability", "demo"],
   "templating": { "list": [] },
   "time": { "from": "now-7d", "to": "now" },
-  "title": "Workbench telemetry demo",
+  "title": "Observability telemetry demo",
   "uid": "workbench-telemetry-demo",
   "version": 1
 }
