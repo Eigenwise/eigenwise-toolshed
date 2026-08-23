@@ -242,11 +242,18 @@ test('leaves gateway wiring to the stable updater', () => withRegistry(registry,
 
     assert.equal(calls.filter((command) => command.args.includes('env')).length, 0);
     assert.ok(calls.some((command) => command.args[0] === path.join(home, '.claude', 'model-gateway', 'update.js')));
-    assert.deepEqual(result.healedGatewayWiring, { mode: 'global', results: [], failures: [] });
+    assert.deepEqual(result.healedGatewayWiring, { mode: 'preserved-recorded-scope', results: [], failures: [] });
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
 }));
+
+test('documents that the stable updater preserves recorded gateway wiring scope', () => {
+  const skillPath = path.join(__dirname, '..', 'skills', 'update-toolshed', 'SKILL.md');
+  const document = fs.readFileSync(skillPath, 'utf8');
+  assert.match(document, /stable updater delegates to setup, which preserves per-project `\.claude\/settings\.local\.json` or user-level `~\/\.claude\/settings\.json` wiring and never escalates scope/);
+  assert.doesNotMatch(document, /Gateway wiring is global now/);
+});
 
 test('skips stale project installs without blocking gateway wiring', () => {
   const stalePath = path.join(os.tmpdir(), `toolshed-stale-project-${process.pid}-${Date.now()}`);
@@ -485,7 +492,7 @@ test('parses check and dry-run options and rejects the retired wiring-mode flag'
     migrateModelGateway: true,
     confirmSessionsClosed: true,
   });
-  assert.throws(() => parseArgs(['--wiring-mode', 'global']), /--wiring-mode was removed: model gateway wiring is global only/);
+  assert.throws(() => parseArgs(['--wiring-mode', 'global']), /--wiring-mode was removed: model gateway wiring follows the scope where it is recorded\. To change it, use \/model-gateway:model-gateway env --write-project for one project or env --write-user for machine-wide wiring\./);
 });
 
 test('skips statusline healing when the observability plugin is not installed', () => {

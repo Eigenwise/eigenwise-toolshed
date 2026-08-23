@@ -635,10 +635,12 @@ test('disable tears down managed runtime and keeps the consent record reconfigur
   assert.equal(otherSettings.statusLine, undefined);
 });
 
-test('enable-project-telemetry excludes retired gateway modes', () => {
+test('enable-project-telemetry points current projects at scoped gateway wiring', () => {
   const skillPath = path.join(__dirname, '..', 'skills', 'enable-project-telemetry', 'SKILL.md');
   const document = fs.readFileSync(skillPath, 'utf8');
-  assert.doesNotMatch(document, /--show-mode|--mode global|--mode local|--write-project/);
+  assert.match(document, /\/model-gateway:model-gateway.*env --write-project/);
+  assert.match(document, /env --write-user/);
+  assert.doesNotMatch(document, /--show-mode|--mode global|--mode local/);
   assert.doesNotMatch(document, /`codex-gateway env --/);
 });
 

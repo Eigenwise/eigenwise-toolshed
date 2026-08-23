@@ -23,7 +23,7 @@ and the deletion rules. Do the setup pass first, then the per-project wiring bel
 
 ## Enable
 
-Gateway wiring is global and has no mode to choose, so do not ask about it. If the gateway is unwired, invoke `/model-gateway:model-gateway` and use its `env --write-user` command. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH.
+Gateway wiring is per-scope. If the gateway is unwired for the current project, invoke `/model-gateway:model-gateway` and use its `env --write-project` command to wire this project. Use `env --write-user` only when machine-wide wiring is wanted. Do not invoke a bare `codex-gateway` shell command, since the installed plugin command is not on PATH.
 
 1. Confirm the user wants local, metadata-only usage telemetry for the current repository. Say it writes only
    this repository's own `.claude/settings.local.json` files, then sends metadata through the local loopback

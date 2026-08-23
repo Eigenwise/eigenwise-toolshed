@@ -25,7 +25,7 @@ function parseArgs(argv) {
       options.claude = argv[index + 1];
       index += 1;
     } else if (arg === '--wiring-mode') {
-      throw new Error('--wiring-mode was removed: model gateway wiring is global only');
+      throw new Error('--wiring-mode was removed: model gateway wiring follows the scope where it is recorded. To change it, use /model-gateway:model-gateway env --write-project for one project or env --write-user for machine-wide wiring.');
     } else if (arg === '--help' || arg === '-h') options.help = true;
     else throw new Error(`Unknown option: ${arg}`);
   }
@@ -612,7 +612,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
     if (!gatewaySetupOk) failures.push(gateway.label);
   }
 
-  let healedGatewayWiring = { mode: 'global', results: [], failures: [] };
+  let healedGatewayWiring = { mode: 'preserved-recorded-scope', results: [], failures: [] };
   if (!options.check && gateway && gatewaySetupOk) {
     report('Gateway wiring is handled by the stable model-gateway updater.');
   }
