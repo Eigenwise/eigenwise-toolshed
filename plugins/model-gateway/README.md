@@ -10,14 +10,16 @@ Run these in Claude Code:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install model-gateway@eigenwise-toolshed --scope user
+/plugin install model-gateway@eigenwise-toolshed --scope project
 ```
+
+Any install scope works: user, project, or local. User scope makes the plugin available in every project, while project and local scopes keep it out of repositories that did not opt in.
 
 Reload plugins or start a new Claude Code session, then tell Claude:
 
 > Set up Model Gateway for me.
 
-Claude uses the bundled skill to install and start the local gateway, check your login, write the required settings, and confirm that models are available. If a browser sign-in or restart is needed, Claude tells you exactly when to do it.
+Claude uses the bundled skill to install and start the local gateway, check your login, wire the current project's `.claude/settings.local.json`, and confirm that models are available. Setup uses that project-local target by default. The bundled `env --write-user` command enables machine-wide wiring, while `env --write-project` wires one project. If a browser sign-in or restart is needed, Claude tells you exactly when to do it.
 
 ## Use a model
 
