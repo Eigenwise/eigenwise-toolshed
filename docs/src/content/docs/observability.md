@@ -45,4 +45,4 @@ Tell Claude:
 
 Existing sessions need a restart after opt-in. A project also needs fresh Claude Code activity before its panels appear. A dashboard outage does not stop local observer ingestion. The outbox retries a failed delivery up to eight times. After that, the row is exhausted and needs a `POST /v1/outbox/requeue` request before delivery can resume. If the local service is unavailable, ask Claude to diagnose Observability; it can check the managed local processes and configuration without making you run their internal commands. The observer health response includes hook-spool failures, the last error, and any quarantined poison file so diagnosis can distinguish a live service from a stalled drain.
 
-See the generated [Observability reference](/reference/observability/) for the agent-facing setup and command contract.
+See the generated [Observability reference](../reference/observability/) for the agent-facing setup and command contract.

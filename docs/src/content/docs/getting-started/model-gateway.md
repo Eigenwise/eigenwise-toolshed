@@ -62,4 +62,4 @@ To get Remote Control without RC-compatibility, remove only `ANTHROPIC_BASE_URL`
 
 That project has no gateway models after the restart: gateway rows disappear from `/model` and typed gateway ids do not work either. A manually exported `ANTHROPIC_BASE_URL` still wins over the file edit, so remove that environment variable before restarting if the project remains wired.
 
-The generated [Model Gateway reference](/reference/model-gateway/) records the agent-facing commands and configuration details used by the skill.
+The generated [Model Gateway reference](../../reference/model-gateway/) records the agent-facing commands and configuration details used by the skill.
