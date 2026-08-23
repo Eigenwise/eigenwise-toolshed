@@ -7,7 +7,7 @@ Quartermaster sets up Claude Code projects, keeps Eigenwise Toolshed plugins cur
 
 ## Install
 
-Install Quartermaster in the project you want to set up. Every Toolshed plugin uses project scope:
+Install Quartermaster in the project you want to set up. This example uses project scope:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed

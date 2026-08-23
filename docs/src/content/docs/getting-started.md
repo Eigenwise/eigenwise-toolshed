@@ -14,7 +14,11 @@ Run these in Claude Code from the project you want to prepare:
 /plugin install quartermaster@eigenwise-toolshed --scope project
 ```
 
-Every Toolshed plugin installs with project scope. Reload plugins or start a new Claude Code session.
+This example uses project scope. Reload plugins or start a new Claude Code session.
+
+## Choosing a scope
+
+Every Toolshed plugin works at user, project, or local scope, and you choose which one to use. User scope loads a plugin in every project. Project scope records it in the repository's `.claude/settings.json`, so it loads only there. Local scope keeps it out of shared settings entirely. User scope is one install for everything; project or local scope keeps plugins out of repositories that did not ask for them.
 
 ## Prepare your first project
 

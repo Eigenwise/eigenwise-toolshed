@@ -18,7 +18,7 @@ Run these in Claude Code:
 /plugin install observability@eigenwise-toolshed --scope project
 ```
 
-Reload plugins or start a new Claude Code session. The install is project-scoped, while one managed observer still runs per machine. When a session ensures Observability, it launches the newest installed plugin version. If an older session runs afterward, it leaves a newer live observer in place rather than replacing it. Telemetry remains opt-in for each repository.
+Reload plugins or start a new Claude Code session. This example installs Observability at project scope, while one managed observer still runs per machine. When a session ensures Observability, it launches the newest installed plugin version. If an older session runs afterward, it leaves a newer live observer in place rather than replacing it. Telemetry remains opt-in for each repository.
 
 ## Set up a repository
 
