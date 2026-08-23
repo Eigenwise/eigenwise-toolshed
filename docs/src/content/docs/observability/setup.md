@@ -49,7 +49,7 @@ The Docker probe has a 1500 ms budget. Local SQLite observability continues when
 - The local dashboard is optional. Local reports still work when Docker is unavailable.
 - Claude keeps the managed local processes running after setup. You do not start them by hand.
 
-Continue with [per-project opt-in](./project-opt-in/) to see how repository coverage and verification work.
+Continue with [per-project opt-in](../project-opt-in/) to see how repository coverage and verification work.
 
 If setup or the dashboard stops working, tell Claude what you see and ask it to diagnose Observability. The bundled skill and the Toolshed doctor handle the checks and repairs.
 
