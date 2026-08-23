@@ -1391,6 +1391,57 @@ test('existing tickets with prose verify fields remain readable', () => {
   assert.strictEqual(store.getTicket(slug, t.ref).executorVerify, t.executorVerify);
 });
 
+test('SQ-2355: integration reports a diverged expected upstream without an empty scope list', () => {
+  cleanBranch();
+  const originalConfig = store.boardConfig(slug);
+  const divergenceBranch = `diverged-upstream-${process.pid}-${Date.now()}`;
+  try {
+    const ticket = addTicket('diverged expected upstream', { files: ['lib/diverged-upstream.js'] });
+    const expectedUpstream = git(['rev-parse', 'HEAD']);
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'diverged-upstream.js'), 'candidate\n');
+    git(['add', 'lib/diverged-upstream.js']);
+    git(['commit', '-m', 'diverged upstream candidate']);
+    const candidate = git(['rev-parse', 'HEAD']);
+    pin(ticket, candidate);
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, 'diverged-upstream-worker', { direct: true, reason: 'The divergence fixture requires a local direct claim.' }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, ticket.ref, 'diverged-upstream-worker', { commit: candidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const submitted = store.getTicket(slug, ticket.ref);
+    Object.assign(submitted.submission, {
+      base: expectedUpstream,
+      upstream: divergenceBranch,
+      upstreamCommit: expectedUpstream,
+      integrationBranch: divergenceBranch,
+      commits: [candidate],
+      changedPaths: ['lib/diverged-upstream.js'],
+    });
+    persist(submitted);
+
+    git(['checkout', '--orphan', divergenceBranch]);
+    git(['rm', '-rf', '.']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'replacement integration history\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'replacement integration history']);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: divergenceBranch });
+
+    const refused = store.integrateSubmission(slug, ticket.ref, {
+      mode: 'merge',
+      target: { branch: divergenceBranch, upstream: `refs/heads/${divergenceBranch}` },
+    });
+
+    assert.strictEqual(refused.ok, false);
+    assert.strictEqual(refused.reason, 'expected_upstream_diverged');
+    assert.match(refused.message, new RegExp(`recorded expected upstream ${expectedUpstream}`));
+    assert.match(refused.message, new RegExp(`no longer reachable from target branch ${divergenceBranch}`));
+    assert.match(refused.message, /Rework and submit a fresh candidate against current main/);
+    assert.match(refused.message, /groomClose with deliveryCommit/);
+    assert.doesNotMatch(refused.message, /outside its admitted scope:/);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+    cleanBranch();
+  }
+});
+
 test('integration refuses delivery when the assembled-wave gate fails', () => {
   cleanBranch();
   const t = addTicket('post-merge verification', { files: ['lib/preflight.js'] });
