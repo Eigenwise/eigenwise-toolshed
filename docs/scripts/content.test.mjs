@@ -24,6 +24,17 @@ const localLinkTargets = (text) => [...text.matchAll(/\]\(([^)]+)\)|href=["']([^
   .map((match) => match[1] ?? match[2])
   .filter((target) => !target.startsWith('#') && !target.startsWith('http://') && !target.startsWith('https://'));
 
+test('prose links use route-relative paths instead of root-absolute internal targets', () => {
+  const invalidLinks = [];
+  for (const file of markdownFiles(contentRoot)) {
+    const text = fs.readFileSync(file, 'utf8');
+    for (const target of localLinkTargets(text).filter((target) => target.startsWith('/') && !target.startsWith('//'))) {
+      invalidLinks.push(`${path.relative(repositoryRoot, file)}: ${target}`);
+    }
+  }
+  assert.deepEqual(invalidLinks, [], 'Use a route-relative link instead of a root-absolute internal link');
+});
+
 test('prose reference links resolve under the generated reference route', () => {
   const invalidLinks = [];
   for (const file of markdownFiles(contentRoot)) {
