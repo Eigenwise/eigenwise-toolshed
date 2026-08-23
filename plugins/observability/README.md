@@ -12,8 +12,10 @@ Run these in Claude Code:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install observability@eigenwise-toolshed --scope user
+/plugin install observability@eigenwise-toolshed --scope project
 ```
+
+Any scope works (user, project, or local). Pick user scope to cover every project at once, or project/local scope to keep the plugin out of repositories that did not opt in.
 
 Reload plugins or start a new Claude Code session. Then, from the repository you want to track, run:
 

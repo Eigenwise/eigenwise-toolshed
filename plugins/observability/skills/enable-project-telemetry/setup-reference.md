@@ -1,8 +1,9 @@
 # Observability setup
 
 This skill owns the observability interview. `/quartermaster:setup` hands off to it after telemetry
-consent, and it also runs standalone. This plugin must be installed at user scope: the observer is one
-process per machine.
+consent, and it also runs standalone. Install this plugin at any scope (user, project, or local). The observer,
+Collector, and dashboard container are machine-shared regardless of the install scope used by the launching
+session.
 
 The state directory (`%LOCALAPPDATA%\Eigenwise\Workbench` on Windows), the OpenTelemetry service name
 `workbench-observer`, and the `workbench_` attribute prefix all kept their names when this plugin split out
