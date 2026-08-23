@@ -6,9 +6,10 @@ const path = require('node:path');
 const { COMPAT_BASE_URL, DEFAULT_BASE_URL, GATEWAY_MODELS_CACHE, LEGACY_ENV_BLOCK, PIN_ALIASES, PROJECT_WIRING_REGISTRY_PATH, STATIC_ENV_BLOCK, STATE, WIRING_CONFIG_PATH } = require('./runtime.js');
 const { isGatewayModelId, ourBaseUrls } = require('./pins.js');
 
-// Project-local wiring is the default because the plugin itself is installed per
-// project. Claude Code still lets a local setting shadow user settings, so doctor
-// reports the effective source and treats conflicting gateway modes as an error.
+// Project-local wiring is the default so each repository opts into the
+// machine-local gateway endpoint independently. Claude Code still lets a local
+// setting shadow user settings, so doctor reports the effective source and
+// treats conflicting gateway modes as an error.
 const WIRING_SCOPE = 'project';
 
 function selectedWiringScope() {
