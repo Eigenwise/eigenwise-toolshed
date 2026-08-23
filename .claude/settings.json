@@ -14,6 +14,7 @@
     "svelte@svelte": true,
     "codebase-mapper@eigenwise-toolshed": true,
     "observability@eigenwise-toolshed": true,
-    "quartermaster@eigenwise-toolshed": true
+    "quartermaster@eigenwise-toolshed": true,
+    "model-gateway@eigenwise-toolshed": true
   }
 }
