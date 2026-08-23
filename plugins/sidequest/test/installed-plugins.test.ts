@@ -114,13 +114,15 @@ test('dispatch preflight retries transient plugin registry read errors', () => {
 
   const originalReadFileSyncDescriptor = Object.getOwnPropertyDescriptor(fs, 'readFileSync')!;
   const originalReadFileSync = fs.readFileSync;
+  const transientRegistryReadErrors = ['EPERM', 'ENOENT'];
   let registryReadAttempts = 0;
   Object.defineProperty(fs, 'readFileSync', {
     ...originalReadFileSyncDescriptor,
     value: function (...arguments_: unknown[]) {
-      if (arguments_[0] === registryPath && registryReadAttempts < 2) {
+      if (arguments_[0] === registryPath && registryReadAttempts < transientRegistryReadErrors.length) {
+        const code = transientRegistryReadErrors[registryReadAttempts];
         registryReadAttempts += 1;
-        throw Object.assign(new Error('simulated transient registry read failure'), { code: 'EPERM' });
+        throw Object.assign(new Error(`simulated transient registry read failure (${code})`), { code });
       }
       if (arguments_[0] === registryPath) registryReadAttempts += 1;
       return Reflect.apply(originalReadFileSync, fs, arguments_);
