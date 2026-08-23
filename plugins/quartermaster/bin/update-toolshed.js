@@ -161,8 +161,8 @@ function healStatuslineFile(filePath, fallbackStatusLine, command, dryRun) {
 }
 
 // The statusline belongs to the observability plugin. Resolve its setup module from
-// the install registry rather than importing it, so Workbench keeps working for the
-// people who never installed observability.
+// the install registry rather than importing it, so Observability keeps working for the
+// people who never installed it directly.
 function observabilitySetup(home) {
   const registryPath = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
   let registry;
@@ -619,7 +619,7 @@ function runUpdate({ registryFile = registryPath(), home = os.homedir(), options
 
   const healedStatuslines = options.check ? [] : healStaleStatuslines(instances, { home, dryRun: options.dryRun });
   if (healedStatuslines.length > 0) {
-    report(`Healed ${healedStatuslines.length} stale Workbench status line setting(s).`);
+    report(`Healed ${healedStatuslines.length} stale managed status-line shim setting(s).`);
   }
 
   for (const line of reloadAdvice(instances)) report(line);

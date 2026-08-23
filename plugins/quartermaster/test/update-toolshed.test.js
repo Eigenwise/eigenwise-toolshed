@@ -400,8 +400,9 @@ test('reports a stable gateway updater failure', () => withRegistry(registry, (r
   }
 }));
 
-test('heals stale Workbench status line pins after updating', () => {
+test('heals stale managed status-line shim pins after updating', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'toolshed-statusline-'));
+  const lines = [];
   try {
     const registryFile = path.join(home, '.claude', 'plugins', 'installed_plugins.json');
     const settingsFile = path.join(home, '.claude', 'settings.json');
@@ -419,11 +420,12 @@ test('heals stale Workbench status line pins after updating', () => {
       registryFile,
       options: { claude: 'claude', dryRun: false, check: false },
       run: () => ({ ok: true }),
-      report: () => {},
+      report: (line) => lines.push(line),
     });
 
     const settings = JSON.parse(fs.readFileSync(settingsFile, 'utf8'));
     assert.equal(result.healedStatuslines.length, 1);
+    assert.match(lines.join('\n'), /Healed 1 stale managed status-line shim setting\(s\)\./);
     assert.equal(settings.statusLine.command, `node --no-warnings "${path.join(home, '.claude', 'workbench-statusline.js')}"`);
     assert.ok(fs.existsSync(path.join(home, '.claude', 'workbench-statusline.js')));
   } finally {
