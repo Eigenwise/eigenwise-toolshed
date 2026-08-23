@@ -43,7 +43,7 @@ export function localAheadOfUpstreamWarning(projectPath: string, branch: string)
 const PLUGIN_ID = 'sidequest@eigenwise-toolshed';
 const REPAIR_COMMAND = 'claude plugin install sidequest@eigenwise-toolshed --scope project';
 const FILE_READ_RETRY_DELAYS_MS = [20, 60, 140, 300] as const;
-const RETRYABLE_FILE_READ_CODES = new Set(['EPERM', 'EACCES', 'EBUSY']);
+const RETRYABLE_FILE_READ_CODES = new Set(['ENOENT', 'EPERM', 'EACCES', 'EBUSY']);
 
 function isRetryableFileReadError(error: unknown): boolean {
   if (!error || typeof error !== 'object' || !('code' in error)) return false;
