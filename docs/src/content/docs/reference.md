@@ -7,10 +7,10 @@ This section is generated from the plugin manifests, skills, hooks, binaries, an
 
 Use the guides for decisions and daily workflows. Use this reference when Claude needs the exact skill, hook, command, or configuration detail.
 
-- [Observability](/reference/observability/) records selected local, metadata-only telemetry.
-- [Model Gateway](/reference/model-gateway/) adds ChatGPT, Codex, and Grok subscription models to Claude Code.
-- [Codebase Mapper](/reference/codebase-mapper/) keeps a project map close at hand.
-- [Live Rules](/reference/live-rules/) loads project rules when they apply.
-- [Sidequest](/reference/sidequest/) captures and runs planned work.
-- [Quartermaster](/reference/quartermaster/) works out what a workspace is short of and gets it, sets up new projects, and keeps Toolshed plugins current and healthy.
-- [Marketplace versions](/reference/marketplace/) lists the shipped plugin versions.
+- [Observability](./observability/) records selected local, metadata-only telemetry.
+- [Model Gateway](./model-gateway/) adds ChatGPT, Codex, and Grok subscription models to Claude Code.
+- [Codebase Mapper](./codebase-mapper/) keeps a project map close at hand.
+- [Live Rules](./live-rules/) loads project rules when they apply.
+- [Sidequest](./sidequest/) captures and runs planned work.
+- [Quartermaster](./quartermaster/) works out what a workspace is short of and gets it, sets up new projects, and keeps Toolshed plugins current and healthy.
+- [Marketplace versions](./marketplace/) lists the shipped plugin versions.

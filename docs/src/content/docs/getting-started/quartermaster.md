@@ -22,7 +22,7 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-It reads the project, mines your history across your projects (which plugins you lean on, which permission denials repeat, and which corrections you keep giving), interviews you briefly, and proposes a plan: Toolshed core, stack plugins, starter rules, and permission allowlist entries. Every item is approved individually before anything is installed or written. Selected Toolshed plugins are installed for the project, and the result is verified against a really-loaded session rather than assumed.
+It reads the project, mines recent session history across your projects, asks a few setup questions, and proposes a plan covering Toolshed plugins, stack plugins, starter rules, and permission entries. You approve each item before it installs or writes anything. After you reload plugins, it verifies the selected plugins and project configuration.
 
 If you choose telemetry, Claude handles the Observability setup and tells you when a restart is needed. You can also decline and continue without it.
 
@@ -44,30 +44,28 @@ The updater covers the Eigenwise Toolshed marketplace and Model Gateway when it 
 
 ## The in-the-moment loop
 
-Most self-improvement happens without any pass at all. A SessionStart line keeps one question in front of Claude while it works: is this the thing being done for the third time that should become a skill, a codebase-map entry, a rule, or a committed measurement? When it notices one, it says so and offers to capture it right then; if nothing was missing, it stays silent. Workspaces that ran setup get the stronger version. Unchanged rules are re-grounded at SessionStart, and a changed matching rule appears on the next prompt or edit; the session line steps aside for it.
+Quartermaster's SessionStart hook can flag a repeated task that may belong in a skill, codebase-map entry, rule, or measurement. It offers to capture the improvement when it notices one; otherwise it stays silent. Setup also re-grounds unchanged rules and surfaces changed matching rules on the next prompt or edit.
 
 ## Resupply an existing workspace
 
-After a stretch of real work, run it directly, or accept Quartermaster's proactive offer of a focused optimization round:
+After real work has accumulated, run it directly or accept Quartermaster's offer of a focused optimization round:
 
 > /quartermaster:resupply
 
-The miner streams your recent transcripts (subagents included) and emits a bounded aggregate. Every session carries what it was for: its own title, its first real prompt, any explicit `/goal` and whether that goal was ever met. An explicit goal is the strongest signal and also the rarest, so the title and the opening ask carry most sessions. Sessions nobody typed into twice are flagged, because a hook that spawns fifty review sessions would otherwise report its purpose back to you as yours.
+The miner includes subagents and emits a bounded aggregate from recent transcripts. It records each session's title, opening prompt, explicit `/goal` and outcome, and flags sessions with little direct user input so hook-created work does not look like user intent.
 
-Alongside that: the areas of the tree your work landed in, repeated commands, per-plugin and per-MCP attribution, documentation lookups, per-session cost, and friction (denials with their targets, interrupts, corrections with themes).
+It also aggregates changed tree areas, repeated commands, plugin and MCP attribution, documentation lookups, per-session cost, and friction such as denials, interrupts, and recurring corrections.
 
-The skill looks for what is missing against that purpose, in value order: something you have no way to measure, work you keep doing by hand, knowledge you keep re-deriving, and only then the setup pushing back. That is the order it looks in. What it leads with is whatever your history actually attests, so a missing measurement comes first when the evidence carries it and gets labelled as inference when it is a guess. At most seven findings, each proposed one at a time with evidence and the exact change. Say no and that recommendation never comes back; say yes and the next pass reports whether it helped.
-
-Friction is last on purpose. Fixing what went wrong returns you to the speed you already expected; adding a capability you never had moves that baseline, and the best capabilities leave no friction trace at all. A measurement you are missing throws no errors, gets nothing denied, and happens exactly once, so anything that watches for repeated pain will never find it.
+The skill ranks findings in this order: a missing measurement, manual work, knowledge being re-derived, then setup friction. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
 
 Findings route to the cheapest durable fix: a measurement built as a committed skill, a plugin install from the catalog, a workflow skill, a codebase-map or CLAUDE.md entry, a live rule, a `permissions.allow` entry, or a plugin disable.
 
 ## How the loop closes
 
-A SessionEnd hook tallies each session locally: no LLM, no network, one streamed pass. Applied recommendations record what they target, and `verify` compares that signal per session before and after. For a capability no counter tracks, the check is whether the new skill or plugin shows up in attribution at all. A SessionStart nudge (one line, 24-hour cooldown) fires only when enough unreviewed sessions or friction pile up, then proactively asks whether you want a focused optimization round for your development system, setup, tooling, or workflow. It mines the sessions after you say yes, or automatically if you have explicitly given standing permission for optimization rounds. Each change is proposed separately unless that standing permission already covers its exact class.
+A SessionEnd hook tallies each session locally in one streamed pass. Applied recommendations record their targets, and later checks compare the signal before and after. A SessionStart nudge uses a 24-hour cooldown and only appears after enough unreviewed sessions or friction; it asks whether to run a focused optimization round. Recommendations still need separate approval unless standing permission covers their exact class.
 
 ## What it stores
 
 Tallies and decisions live under `~/.claude/quartermaster-state/`: per-session counters and a decision ledger with fingerprints. Raw transcripts are never loaded into model context; the resupply skill is explicitly forbidden from opening them. Everything taken from a transcript is clipped: session titles to 120 characters, opening asks to 240, goal conditions and evidence quotes to 300. Paths are reduced to the two directory segments nearest the file, and scratch directories are dropped entirely.
 
-The [generated Quartermaster reference](/reference/quartermaster/) contains the agent-facing skill and command details.
+The [generated Quartermaster reference](../../reference/quartermaster/) contains the agent-facing skill and command details.

@@ -38,4 +38,4 @@ The loop ends when you accept a candidate, spend the declared rounds without fin
 - **A candidate needs another pass:** Ask Claude to continue from the last verdict and state the one change you want tested.
 - **The experiment is going in circles:** Ask Claude to review the recorded constraints and ruled-out options before proposing another round.
 
-See the generated [Sidequest reference](/reference/sidequest/) for the agent-facing experiment workflow.
+See the generated [Sidequest reference](../../reference/sidequest/) for the agent-facing experiment workflow.

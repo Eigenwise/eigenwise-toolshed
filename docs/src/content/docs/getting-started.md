@@ -18,7 +18,7 @@ This example uses project scope. Reload plugins or start a new Claude Code sessi
 
 ## Choosing a scope
 
-Every Toolshed plugin works at user, project, or local scope, and you choose which one to use. User scope loads a plugin in every project. Project scope records it in the repository's `.claude/settings.json`, so it loads only there. Local scope keeps it out of shared settings entirely. User scope is one install for everything; project or local scope keeps plugins out of repositories that did not ask for them.
+Every Toolshed plugin works at user, project, or local scope. The examples use `--scope project`: use `--scope user` to load a plugin in every project, `--scope project` to record it in this repository, or `--scope local` to keep it out of shared settings.
 
 ## Prepare your first project
 
@@ -26,7 +26,7 @@ From the project directory, run:
 
 > /quartermaster:setup
 
-Quartermaster asks which project tools fit, installs the selected plugins for that project, writes the project configuration, and checks the result. You approve the plan before it changes the workspace.
+Quartermaster asks which project tools fit, installs the selected plugins for that project, writes the project configuration, and asks you to reload before verifying the result. You approve the plan before it changes the workspace.
 
 When setup finishes, try one real request in the same project:
 
@@ -35,6 +35,8 @@ When setup finishes, try one real request in the same project:
 If you enabled Codebase Mapper, Claude can use the maintained project map to answer that request. If you chose other plugins, their guides show the first workflow to try.
 
 ## Choose your next workflow
+
+The marketplace currently publishes six plugins: Quartermaster, Sidequest, Model Gateway, Codebase Mapper, Live Rules, and Observability.
 
 - [Set up and maintain a workspace](./getting-started/quartermaster/)
 - [Plan and deliver tracked work](./getting-started/sidequest/)
@@ -48,6 +50,6 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 
 *An isolated synthetic board view from the Sidequest workflow guide.*
 
-You can ask Quartermaster to install or update Toolshed plugins later, and to check workspace health. Claude handles plugin-owned setup, checks, and recovery steps. Reload plugins or start a new session after an install or update so Claude sees the new version.
+Quartermaster can install selected plugins during setup, update Toolshed plugins later, and check workspace health. Reload plugins or start a new session after an install or update so Claude sees the new version.
 
-The [generated plugin reference](/reference/) lists the agent-facing skills, hooks, and commands for each plugin.
+The [generated plugin reference](../reference/) lists the agent-facing skills, hooks, and commands for each plugin.

@@ -53,4 +53,4 @@ Continue with [per-project opt-in](./project-opt-in/) to see how repository cove
 
 If setup or the dashboard stops working, tell Claude what you see and ask it to diagnose Observability. The bundled skill and the Toolshed doctor handle the checks and repairs.
 
-See the generated [Observability reference](/reference/observability/) for the agent-facing setup contract.
+See the generated [Observability reference](../../reference/observability/) for the agent-facing setup contract.

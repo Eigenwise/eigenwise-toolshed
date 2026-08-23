@@ -21,4 +21,4 @@ A profile is a complete routing policy with category rows, descriptions, contrac
 
 Profile revisions are audit metadata and do not change executor identity. The Sidequest CLI and MCP expose the profile lifecycle, while the board keeps its profile choice as a pointer instead of copying the profile entries.
 
-User setup and daily workflows belong in the [plugin guides](../getting-started/). The [generated reference](/reference/) remains the source for agent-facing command and configuration detail.
+User setup and daily workflows belong in the [plugin guides](../getting-started/). The [generated reference](../../reference/) remains the source for agent-facing command and configuration detail.
