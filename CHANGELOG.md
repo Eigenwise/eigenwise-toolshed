@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.504.0 (2026-08-23)
+
+### sidequest 5.0.15 → 5.0.16
+
+#### Fixes
+
+- Clarify diverged upstream integration refusals (SQ-2355)
+  Explain when a submitted candidate's expected upstream no longer exists on the integration branch, including the right recovery paths.
+- Retry transient installed-plugin registry reads (SQ-2357)
+  Retry transient Windows registry replacement gaps during dispatch preflight so installed-plugin checks do not report a missing Sidequest install while the registry is being replaced.
+- Restore verified delivery rollback (SQ-2358)
+  Sidequest now restores the recorded pre-merge checkout when a post-merge verifier rebuilds tracked output, while preserving main if it advances unexpectedly.
+
 ## v3.503.0 (2026-08-23)
 
 ### model-gateway 0.48.17 → 0.48.18
