@@ -920,6 +920,41 @@ function restoreCleanIntegrationCheckout(repo: string, before: string) {
   }
 }
 
+function deliveryResultIsReachable(repo: string, deliveryHead: string, currentHead: string) {
+  try {
+    integrationGit(repo, ['merge-base', '--is-ancestor', deliveryHead, currentHead]);
+    return true;
+  } catch (error: any) {
+    if (error?.status === 1) return false;
+    throw error;
+  }
+}
+
+function rejectedPostMergeRollbackMessage(repo: string, before: string, deliveryHead: string, targetBranch: string, currentHead: string) {
+  if (deliveryResultIsReachable(repo, deliveryHead, currentHead)) {
+    return `Automatic rollback refused: ${targetBranch} STILL CONTAINS the delivered merge ${deliveryHead} at ${currentHead}, so Sidequest will not discard commits after it. Manual recovery: inspect ${targetBranch}, then reset it to the recorded pre-merge head ${before} only when that is safe.`;
+  }
+  return `Automatic rollback refused: ${targetBranch} no longer contains the delivered merge ${deliveryHead}; it now points at ${currentHead}. Manual recovery: inspect ${targetBranch} and recover it from the recorded pre-merge head ${before}.`;
+}
+
+function restorePostMergeVerificationCheckout(repo: string, before: string, deliveryHead: string, targetBranch: string, mode: string) {
+  const currentBranch = integrationGit(repo, ['branch', '--show-current']);
+  const currentHead = integrationGit(repo, ['rev-parse', 'HEAD']);
+  const branchHead = integrationGit(repo, ['rev-parse', '--verify', `refs/heads/${targetBranch}^{commit}`]);
+  const mergeBase = mode === 'merge' ? integrationGit(repo, ['rev-parse', `${deliveryHead}^1`]) : before;
+  if (currentBranch !== targetBranch || currentHead !== deliveryHead || branchHead !== deliveryHead || mergeBase !== before) {
+    throw new Error(rejectedPostMergeRollbackMessage(repo, before, deliveryHead, targetBranch, currentHead));
+  }
+  integrationGit(repo, ['reset', '--hard', before]);
+  const resultingHead = integrationGit(repo, ['rev-parse', 'HEAD']);
+  const checkoutState = integrationTargetCheckoutState(repo);
+  const operationResidue = integrationOperationResidue(repo);
+  if (resultingHead !== before || checkoutState.length || operationResidue.length) {
+    throw new Error(`Expected clean hard-reset checkout at ${before}; HEAD is ${resultingHead}, status has ${checkoutState.length} entries, operation residue: ${operationResidue.join(', ') || 'none'}.`);
+  }
+  return { strategy: 'hard-reset-delivery-head', before, deliveryHead, targetBranch };
+}
+
 function deliveryLockPath(repo: string) {
   return path.resolve(repo, integrationGit(repo, ['rev-parse', '--git-common-dir']), 'sidequest-delivery.lock');
 }
@@ -933,24 +968,28 @@ function deliveryInProgress(ticket: any) {
   };
 }
 
-function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string) {
+function postMergeVerificationFailure(slug: any, ticket: any, verify: any, repo: string, mode: string, before: string, deliveryHead: string, targetBranch: string) {
   const verificationMessage = `${ticket.ref} verification returned ${verify.status} after ${mode} delivery: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`;
   try {
-    restoreCleanIntegrationCheckout(repo, before);
+    const rollback = restorePostMergeVerificationCheckout(repo, before, deliveryHead, targetBranch, mode);
+    return integrationFailure(slug, ticket, {
+      reason: `${verificationOutcome(verify)}_post_merge`,
+      before,
+      deliveryHead,
+      rollback,
+      verify,
+      message: `${verificationMessage} Sidequest rolled back delivery ${deliveryHead} to the recorded pre-merge head ${before} after verification changed tracked files.`,
+    });
   } catch (error: any) {
     return integrationFailure(slug, ticket, {
       reason: `${verificationOutcome(verify)}_post_merge_rollback_failed`,
       before,
+      deliveryHead,
+      rollback: { strategy: 'refused', before, deliveryHead, targetBranch },
       verify,
       message: `${verificationMessage} Rollback failed: ${integrationGitError(error)}`,
     });
   }
-  return integrationFailure(slug, ticket, {
-    reason: `${verificationOutcome(verify)}_post_merge`,
-    before,
-    verify,
-    message: verificationMessage,
-  });
 }
 
 function submissionUsesGit(ticket?: any) {
@@ -1675,10 +1714,10 @@ function integrateSubmissionUnlocked(slug?: any, idOrRef?: any, opts?: any) {
       : changedPaths;
     const verify = verifyDeliveredSubmission(slug, ticket, opts);
     const acceptedVerify = verificationAccepted(verify);
-    if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
+    if (!acceptedVerify) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch);
     delivered = { commit: pinnedCommit, targetBranch: target.branch, resultingHead };
     const waveDelivery = recordTicketWaveDelivery(slug, ticket, { source: 'git', value: resultingHead, observedAt: new Date().toISOString() }, verify);
-    if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before);
+    if (!waveDelivery.ok) return postMergeVerificationFailure(slug, ticket, verify, repo, mode, before, resultingHead, target.branch);
     const result = updateSubmissionIntegration(slug, ticket.id, {
       outcome: 'delivered',
       deliveredAt: new Date().toISOString(),

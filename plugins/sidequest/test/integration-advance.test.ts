@@ -518,6 +518,59 @@ for (const mode of ['merge', 'replay', 'apply']) {
   });
 }
 
+test('post-merge verification rolls back a rebuilt committed output to its recorded pre-merge head', () => {
+  const fixture = makeRepo('post-merge-rebuilt-output');
+  fixture.submitted = commitFile(fixture.executor, 'generated-output.js', 'candidate generated output\n');
+  const verify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); fs.writeFileSync('generated-output.js',branch==='main'?'rebuilt generated output\\n':'candidate generated output\\n'); if(branch==='main') process.exit(7)");
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'rollback rebuilt generated output',
+    category: 'codebase-exploration',
+    description: 'A delivery fixture whose post-merge verifier rebuilds a committed output before failing.',
+    files: ['feature.txt', 'generated-output.js'],
+  });
+  submitFixture(slug, ticket, fixture);
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'suite', executorVerify: verify });
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'verification_failed_suite_post_merge');
+  assert.equal(result.before, before);
+  assert.equal(head(fixture.repo), before);
+  assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), '');
+  assert.equal(fs.existsSync(path.join(fixture.repo, 'generated-output.js')), false);
+  const integration = store.getTicket(slug, ticket.ref).submission.integration;
+  assert.equal(integration.reason, 'verification_failed_suite_post_merge');
+  assert.equal(integration.rollback.strategy, 'hard-reset-delivery-head');
+  assert.match(integration.message, /rolled back delivery/);
+});
+
+test('post-merge verification refuses a hard reset after an extra main commit', () => {
+  const fixture = makeRepo('post-merge-extra-commit');
+  const verify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); if(branch==='main'){fs.writeFileSync('verify-extra.txt','unexpected main commit\\n'); execFileSync('git',['add','verify-extra.txt']); execFileSync('git',['commit','-m','verify extra commit']); process.exit(7)}");
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'refuse reset after extra commit',
+    category: 'codebase-exploration',
+    description: 'A delivery fixture whose verifier advances main after the delivery merge.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture);
+  store.updateTicket(slug, ticket.ref, { executorVerifyKind: 'suite', executorVerify: verify });
+  const before = head(fixture.repo);
+
+  const result = store.integrateSubmission(slug, ticket.ref, { mode: 'merge', target: fixture.target });
+
+  assert.equal(result.ok, false);
+  assert.equal(result.reason, 'verification_failed_suite_post_merge_rollback_failed');
+  assert.notEqual(head(fixture.repo), before);
+  assert.equal(git(['status', '--porcelain=v2', '--untracked-files=all'], fixture.repo), '');
+  assert.match(result.message, /main STILL CONTAINS the delivered merge/);
+  assert.match(result.message, /manual recovery/i);
+});
+
 test('integrate finalizes after a passing recorded verification command', () => {
   const { slug, ticket, runCli } = deliveryTicket('verify-pass', {
     verify: nodeVerify("console.log('integration verify passed')"),
