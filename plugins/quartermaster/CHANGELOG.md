@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 (2026-08-23)
+
+Released in v3.503.0, up from 0.6.0.
+
+### Fixes
+
+- Quartermaster scope guidance defaults to project installs (SQ-2347)
+  Quartermaster guidance now covers every supported scope and defaults examples to project installs.
+- Describe scoped gateway wiring (SQ-2350)
+  Describe Model Gateway project and machine-wide wiring scopes in updater and telemetry guidance.
+- Refresh renamed plugin prose (SQ-2352)
+  Refresh stale Workbench and codex-gateway prose to the current Observability and model-gateway names, and clarify Quartermaster's managed status-line healing output.
+
 ## 0.6.0 (2026-08-20)
 
 Released in v3.494.0, up from 0.5.5.

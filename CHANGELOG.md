@@ -8,6 +8,45 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.503.0 (2026-08-23)
+
+### model-gateway 0.48.17 → 0.48.18
+
+#### Fixes
+
+- Clarify Model Gateway install and wiring scopes (SQ-2349)
+  Model Gateway's README now covers user, project, and local installs, along with project-local and machine-wide wiring choices.
+- Refresh renamed plugin prose (SQ-2352)
+  Refresh stale Workbench and codex-gateway prose to the current Observability and model-gateway names, and clarify Quartermaster's managed status-line healing output.
+
+### observability 0.7.19 → 0.7.20
+
+#### Fixes
+
+- Clarify observability install scopes (SQ-2346) [`4fc5f18`](https://github.com/Eigenwise/eigenwise-toolshed/commit/4fc5f18a7561dccffdf2776405c0c00298f4e579)
+- Describe scoped gateway wiring (SQ-2350)
+  Describe Model Gateway project and machine-wide wiring scopes in updater and telemetry guidance.
+- Rename Observability prose (SQ-2351)
+  Rename remaining Workbench-facing Observability strings and internal documentation.
+
+### quartermaster 0.6.0 → 0.6.1
+
+#### Fixes
+
+- Quartermaster scope guidance defaults to project installs (SQ-2347)
+  Quartermaster guidance now covers every supported scope and defaults examples to project installs.
+- Describe scoped gateway wiring (SQ-2350)
+  Describe Model Gateway project and machine-wide wiring scopes in updater and telemetry guidance.
+- Refresh renamed plugin prose (SQ-2352)
+  Refresh stale Workbench and codex-gateway prose to the current Observability and model-gateway names, and clarify Quartermaster's managed status-line healing output.
+
+### sidequest 5.0.14 → 5.0.15
+
+#### Fixes
+
+- Refresh renamed plugin prose (SQ-2352)
+  Refresh stale Workbench and codex-gateway prose to the current Observability and model-gateway names, and clarify Quartermaster's managed status-line healing output.
+
 ## v3.502.0 (2026-08-22)
 
 ### sidequest 5.0.13 → 5.0.14
