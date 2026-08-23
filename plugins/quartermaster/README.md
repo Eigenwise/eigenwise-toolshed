@@ -16,12 +16,14 @@ project, with every item approved individually.
 
 ## Install
 
-Quartermaster spans every project, so install it once at user scope:
+Quartermaster works at user, project, or local scope. Install it at the scope you want, for example:
 
 ```text
 /plugin marketplace add Eigenwise/eigenwise-toolshed
-/plugin install quartermaster@eigenwise-toolshed --scope user
+/plugin install quartermaster@eigenwise-toolshed --scope project
 ```
+
+User scope is convenient when you want its freshness guard and setup skills in every project; choose project or local scope when you want it only where you opt in.
 
 Then `/quartermaster:setup` in a project, or `/quartermaster:resupply` after some real sessions.
 

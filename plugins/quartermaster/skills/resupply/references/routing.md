@@ -70,7 +70,9 @@ question re-answered across sessions.
 
 Only when no plugin wraps the capability. Search the registry:
 `https://registry.modelcontextprotocol.io/v0/servers?search=<terms>` (WebFetch, JSON). Apply with
-`claude mcp add <name> ...` per the server's own instructions, user scope by default.
+`claude mcp add --scope project <name> ...` per the server's own instructions. This writes the repo's
+`.mcp.json`, so the server lands only in the project that asked for it. The CLI defaults to user scope
+if no `--scope` flag is passed.
 Fingerprint: `mcp:<name>`.
 
 ## 6. Rule (live-rules or CLAUDE.md)
