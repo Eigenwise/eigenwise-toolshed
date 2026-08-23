@@ -26,4 +26,4 @@ flowchart LR
 - Sidequest owns tickets, stories, routing, dispatch, and executor evidence.
 - Model Gateway owns the optional model-proxy boundary. Claude models can keep their normal API path.
 
-See [modular Toolshed architecture](./architecture/modular-architecture/) for the registry and routing boundaries. User-facing installation and daily use belong in the [plugin guides](./getting-started/), not here.
+See [modular Toolshed architecture](./modular-architecture/) for the registry and routing boundaries. User-facing installation and daily use belong in the [plugin guides](../getting-started/), not here.

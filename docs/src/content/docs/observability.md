@@ -11,17 +11,17 @@ Credentials never appear in telemetry payloads. Sink configuration you provide, 
 
 ## Start here
 
-1. Install the [Observability plugin](./observability/setup/).
+1. Install the [Observability plugin](./setup/).
 2. From the repository you want to watch, run `/observability:enable-project-telemetry`.
 3. Approve local metadata-only telemetry and choose whether to use the local dashboard.
 4. Restart Claude Code sessions that were already open in that repository.
-5. Open the [dashboard](./observability/dashboard/) after the new session creates activity.
+5. Open the [dashboard](./dashboard/) after the new session creates activity.
 
 The skill handles the observer, dashboard setup, project wiring, and verification. You only choose whether to enable telemetry, which local or remote sink to use, and any external sign-in or endpoint required by that sink.
 
 ## Daily use
 
-Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare usage across opted-in repositories or focus on one project. Use it to spot model and token use, tool activity, MCP activity, Sidequest costs, and failures. See the [dashboard guide](./observability/dashboard/) for the main views.
+Open the configured loopback dashboard, usually `http://127.0.0.1:3000`, to compare usage across opted-in repositories or focus on one project. Use it to spot model and token use, tool activity, MCP activity, Sidequest costs, and failures. See the [dashboard guide](./dashboard/) for the main views.
 
 To check setup or disable telemetry, run the same skill and describe what you want. Claude reports whether a project is sending data and tells you when a restart or more activity is needed.
 

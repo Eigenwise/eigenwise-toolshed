@@ -38,13 +38,13 @@ If you enabled Codebase Mapper, Claude can use the maintained project map to ans
 
 The marketplace currently publishes six plugins: Quartermaster, Sidequest, Model Gateway, Codebase Mapper, Live Rules, and Observability.
 
-- [Set up and maintain a workspace](./getting-started/quartermaster/)
-- [Plan and deliver tracked work](./getting-started/sidequest/)
-- [Add GPT or Grok subscription models](./getting-started/model-gateway/)
-- [Keep a project map nearby](./getting-started/codebase-mapper/)
-- [Load project rules when they apply](./getting-started/live-rules/)
-- [Run a human-judged comparison](./getting-started/experiments/)
-- [View selected local usage](./observability/)
+- [Set up and maintain a workspace](./quartermaster/)
+- [Plan and deliver tracked work](./sidequest/)
+- [Add GPT or Grok subscription models](./model-gateway/)
+- [Keep a project map nearby](./codebase-mapper/)
+- [Load project rules when they apply](./live-rules/)
+- [Run a human-judged comparison](./experiments/)
+- [View selected local usage](../observability/)
 
 ![Sidequest board with three synthetic projects and a populated work queue](../../assets/screenshots/sidequest-kanban.png)
 
