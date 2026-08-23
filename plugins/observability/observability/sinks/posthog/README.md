@@ -1,6 +1,6 @@
 # PostHog sink
 
-The PostHog sink sends the canonical Workbench observation ledger to PostHog's batch capture API. Both Claude and gateway observations use the same observer and durable outbox path.
+The PostHog sink sends the canonical Observability observation ledger to PostHog's batch capture API. Both Claude and gateway observations use the same observer and durable outbox path.
 
 ```json
 {

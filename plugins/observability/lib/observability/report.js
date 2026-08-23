@@ -283,7 +283,7 @@ function coverage(store) {
 }
 
 function buildTokenUsageReport(store, options = {}) {
-  if (!store || !store.database || typeof store.queryView !== 'function') throw new TypeError('A Workbench observability store is required.');
+  if (!store || !store.database || typeof store.queryView !== 'function') throw new TypeError('An Observability store is required.');
   const includeLedger = options.includeLedger !== false;
   return {
     generated_at: new Date().toISOString(),
@@ -306,7 +306,7 @@ function textValue(entry) {
 }
 
 function formatTokenUsageReport(report) {
-  const lines = ['Workbench token usage report', `Generated: ${report.generated_at}`];
+  const lines = ['Observability token usage report', `Generated: ${report.generated_at}`];
   lines.push('', `Session usage (${report.session_usage.length})`, `Agent usage (${report.agent_usage.length})`, `Input composition (${report.input_composition.length})`);
   lines.push(`Cache economics (${report.cache_economics.length})`, `Limit signals (${report.limit_signals.length})`);
   lines.push('', `Context timeline (${report.context_timeline.length})`);

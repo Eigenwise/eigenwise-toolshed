@@ -88,7 +88,7 @@ test('merges telemetry settings without dropping existing environment keys', (t)
 });
 
 
-test('disable restores only telemetry values owned by Workbench', (t) => {
+test('disable restores only telemetry values owned by Observability', (t) => {
   const { projectDir } = temporaryProject(t);
   const settingsPath = path.join(projectDir, '.claude', 'settings.local.json');
   fs.mkdirSync(path.dirname(settingsPath), { recursive: true });

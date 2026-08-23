@@ -79,7 +79,7 @@ function boundDuration(promise, timeoutMs) {
 }
 
 async function flushOutbox(store, options = {}) {
-  if (!store || typeof store.pendingOutbox !== 'function') throw new TypeError('A Workbench observability store is required.');
+  if (!store || typeof store.pendingOutbox !== 'function') throw new TypeError('An Observability store is required.');
   if (options.enabled === false) {
     return { selected: 0, delivered: 0, failed: 0, exhausted: 0, disabled: true };
   }

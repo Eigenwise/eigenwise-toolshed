@@ -190,6 +190,7 @@ test('builds a quality-labeled report from resolved SQLite views', (t) => {
   assert.equal(report.route_comparison[0].backend.value, 'codex');
   assert.equal(report.ticket_usage[0].attribution, 'direct-only');
   assert.ok(report.coverage.explicitly_unavailable.includes('hidden MCP usage'));
+  assert.match(formatTokenUsageReport(report), /^Observability token usage report/);
   assert.match(formatTokenUsageReport(report), /cache creation 5 \(exact\)/);
 });
 

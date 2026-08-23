@@ -567,7 +567,7 @@ async function main() {
   if (!options.outboxEndpoint) options.sink = loadConfiguredSink(options.databaseFile, options.configFile);
   const observer = createObserver(options);
   const address = await observer.start();
-  process.stdout.write(`Workbench observer listening on ${address.address}:${address.port}\n`);
+  process.stdout.write(`Observability observer listening on ${address.address}:${address.port}\n`);
   const stop = async () => {
     await observer.close();
     process.exitCode = 0;
@@ -578,7 +578,7 @@ async function main() {
 
 if (require.main === module) {
   main().catch((error) => {
-    process.stderr.write(`Workbench observer failed to start: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.stderr.write(`Observability observer failed to start: ${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;
   });
 }

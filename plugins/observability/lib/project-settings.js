@@ -1,6 +1,6 @@
 'use strict';
 
-// Workbench owns the full workspace-settings writer (agent teams, compaction). Plugins cannot require
+// Quartermaster owns the full workspace-settings writer (agent teams, compaction). Plugins cannot require
 // across plugin roots, so this keeps only the read/merge/write primitives the telemetry flow needs.
 
 const fs = require('node:fs');
