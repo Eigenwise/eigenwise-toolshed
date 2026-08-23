@@ -23,7 +23,7 @@ The authoritative editing surfaces are `src/lib/*.ts`, `src/bin/*.ts`, `src/hook
 2. Keep the deleted JavaScript test twins deleted. Tests run from `test/*.test.ts` against committed generated runtime files.
 3. Keep `dashboard/index.html` deleted. The Svelte production artifact is `dashboard/dist`.
 4. Keep the reconciled README, executor template, skill, orchestration references, category defaults, TypeScript contract, and getting-started prose when main carries an older form of the same behavior.
-5. Accept unrelated main changes that do not conflict with the rewrite, including Workbench and codebase-mapper releases.
+5. Accept unrelated main changes that do not conflict with the rewrite, including observability, quartermaster, and codebase-mapper releases.
 6. Do not assign the Sidequest 3.0.0 version during the merge ticket. The orchestrator owns the release bump and publication.
 
 ## Acceptance

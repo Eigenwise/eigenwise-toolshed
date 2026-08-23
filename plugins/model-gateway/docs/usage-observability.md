@@ -2,9 +2,9 @@
 
 ## Decision
 
-The gateway is the primary token-usage producer. It emits one counts-only `gateway.token.usage` OTLP log after each successful proxied `/v1/messages` response. Throttled or failed responses with useful limit headers emit a counts-only `gateway.limit.signal` record instead. The existing loopback Collector and Workbench observer ingest those records. Claude Code telemetry remains useful for productivity and UX events, but the resolved usage views prefer gateway evidence.
+The gateway is the primary token-usage producer. It emits one counts-only `gateway.token.usage` OTLP log after each successful proxied `/v1/messages` response. Throttled or failed responses with useful limit headers emit a counts-only `gateway.limit.signal` record instead. The existing loopback Collector and Observability observer ingest those records. Claude Code telemetry remains useful for productivity and UX events, but the resolved usage views prefer gateway evidence.
 
-The emitter stays inside codex-gateway as one small module. Workbench owns the canonical schema, resolved views, reports, and dashboard queries.
+The emitter stays inside model-gateway as one small module. Observability owns the canonical schema, resolved views, reports, and dashboard queries.
 
 ## Options considered
 
@@ -12,13 +12,13 @@ The emitter stays inside codex-gateway as one small module. Workbench owns the c
 
 This already has broad client lifecycle coverage, but it reports the virtual `claude-codex-auto` model for Sidequest executors, does not expose request-body composition, and leaves token counts unavailable on some `llm_request` rows. Temporal joins against `request-routes.jsonl` also cannot provide exact per-request attribution.
 
-### Direct Workbench observation POSTs
+### Direct Observability observation POSTs
 
-Posting canonical observations to `/v1/observations` would make database ingestion simple. It would couple codex-gateway to Workbench's private schema and bypass the OTLP path already used for gateway routing evidence.
+Posting canonical observations to `/v1/observations` would make database ingestion simple. It would couple model-gateway to Observability's private schema and bypass the OTLP path already used for gateway routing evidence.
 
 ### Counts-only OTLP log from the gateway
 
-This uses the existing local transport, keeps codex-gateway independent of the observer database, preserves one authoritative response record, and can carry request, session, and agent IDs as first-class columns. This is the selected option.
+This uses the existing local transport, keeps model-gateway independent of the observer database, preserves one authoritative response record, and can carry request, session, and agent IDs as first-class columns. This is the selected option.
 
 ## Emit path
 
@@ -103,7 +103,7 @@ The request timeline uses exact total input tokens to show context growth by ses
 
 ## Observer and dashboard
 
-Workbench treats `gateway.token.usage` as evidence rank 1 for resolved request usage. Existing Claude Code and Agent SDK usage remain fallback evidence.
+Observability treats `gateway.token.usage` as evidence rank 1 for resolved request usage. Existing Claude Code and Agent SDK usage remain fallback evidence.
 
 The observer exposes:
 
@@ -125,6 +125,6 @@ Two Claude Code checks bypass the configured base URL and remain unmetered: fast
 
 - Unit tests cover byte-only composition, normalized token allocation, cache split, usage merging, limit-header parsing, counts-only payloads, bounded-buffer overflow, and fail-open transport.
 - Gateway integration tests drive JSON and SSE responses through an isolated shim and fake upstream.
-- An isolated Workbench observer receives the gateway record. Its request, session, agent, and composition views must match the raw response usage exactly for exact fields.
+- An isolated Observability observer receives the gateway record. Its request, session, agent, and composition views must match the raw response usage exactly for exact fields.
 - A collector that deliberately delays its OTLP response must not delay the proxied response.
-- Full gateway tests run with `node --test plugins/codex-gateway/test/*.test.js`; Workbench observability tests run with explicit Windows-safe globs.
+- Full gateway tests run with `node --test plugins/model-gateway/test/*.test.js`; Observability tests run with explicit Windows-safe globs.
