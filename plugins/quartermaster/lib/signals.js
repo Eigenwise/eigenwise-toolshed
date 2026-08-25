@@ -140,6 +140,7 @@ function createSignalCollector() {
   const denialsByTool = new Map();
   const errorsByTool = new Map();
   const hookErrorsByHook = new Map();
+  const hookTimeoutsByHook = new Map();
   const attributionPlugins = new Map();
   const attributionSkills = new Map();
   const attributionMcpServers = new Map();
@@ -190,6 +191,9 @@ function createSignalCollector() {
           return;
         case 'hook_error':
           bump(hookErrorsByHook, event.hookName, event.sessionId);
+          return;
+        case 'hook_timeout':
+          bump(hookTimeoutsByHook, event.hookName, event.sessionId);
           return;
         case 'tool_use': {
           tally.toolCalls += 1;
@@ -308,6 +312,7 @@ function createSignalCollector() {
           },
           toolErrors: { total: totals.toolErrors, byTool: topOf(errorsByTool, 10) },
           hookErrors: countsOf(hookErrorsByHook),
+          hookTimeouts: countsOf(hookTimeoutsByHook),
         },
         attribution: {
           plugins: countsOf(attributionPlugins),

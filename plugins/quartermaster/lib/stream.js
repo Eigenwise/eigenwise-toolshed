@@ -98,8 +98,13 @@ async function streamTranscript(source, collector) {
 
     if (record.type === 'attachment') {
       const attachment = record.attachment ?? {};
-      if (attachment.hookEvent && Number(attachment.exitCode) !== 0) {
-        collector.onEvent({ ...base, kind: 'hook_error', hookName: attachment.hookName ?? attachment.hookEvent });
+      if (attachment.hookEvent) {
+        const hookName = attachment.hookName ?? attachment.hookEvent;
+        if (attachment.timedOut === true) {
+          collector.onEvent({ ...base, kind: 'hook_timeout', hookName });
+        } else if (Number.isFinite(attachment.exitCode) && attachment.exitCode !== 0) {
+          collector.onEvent({ ...base, kind: 'hook_error', hookName });
+        }
       }
       if (attachment.type === 'goal_status') {
         collector.onEvent({ ...base, kind: 'goal', condition: attachment.condition ?? null, met: attachment.met === true });

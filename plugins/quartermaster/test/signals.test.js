@@ -84,14 +84,17 @@ test('aggregates attribution from tool_use records', async () => {
   assert.equal(signals.attribution.mcpServers['plugin:sidequest:board'], 1);
 });
 
-test('counts hook errors from attachments and habit commands', async () => {
+test('separates hook errors and timeouts from successful context attachments', async () => {
   const signals = await collect([
+    { type: 'attachment', attachment: { hookEvent: 'SubagentStart', hookName: 'SubagentStart:context', type: 'hook_additional_context' }, timestamp: '2026-08-01T10:00:00Z' },
+    { type: 'attachment', attachment: { hookEvent: 'Stop', hookName: 'Stop:sidequest', timedOut: true, exitCode: 1 }, timestamp: '2026-08-01T10:00:15Z' },
     { type: 'attachment', attachment: { hookEvent: 'SessionStart', hookName: 'SessionStart:startup', exitCode: 1 }, timestamp: '2026-08-01T10:00:30Z' },
     assistantToolUse('Bash', { command: 'git   push origin main --force-with-lease' }),
     assistantToolUse('Bash', { command: 'git push' }),
     assistantToolUse('WebFetch', { url: 'https://docs.python.org/3/library/json.html' }),
   ]);
-  assert.equal(signals.friction.hookErrors['SessionStart:startup'], 1);
+  assert.deepEqual(signals.friction.hookErrors, { 'SessionStart:startup': 1 });
+  assert.deepEqual(signals.friction.hookTimeouts, { 'Stop:sidequest': 1 });
   const gitPush = signals.habits.commandsTop.find((entry) => entry.name === 'git push');
   assert.equal(gitPush.count, 2);
   assert.equal(signals.habits.webFetchDomainsTop[0].name, 'docs.python.org');
