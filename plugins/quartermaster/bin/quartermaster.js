@@ -29,11 +29,79 @@ Usage:
   quartermaster verify [--project <path>]
   quartermaster mark-resupply [--project <path>]
   quartermaster decline-resupply [--project <path>]
-  quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>]
+  quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>] [--blocked]
   quartermaster enable-auto-allowlist [--project <path>]
 
 Everything prints JSON. Defaults: --days ${DEFAULT_DAYS}, --sessions ${DEFAULT_SESSIONS}, project = cwd.
+Blocked allowlist candidates are summarized by default; --blocked includes up to 25 detailed entries.
 `;
+
+const BLOCKED_SUMMARY_LIMIT = 5;
+const BLOCKED_DETAIL_LIMIT = 25;
+const BLOCKED_COMMAND_LIMIT = 160;
+
+function truncateCommand(command) {
+  return command.length <= BLOCKED_COMMAND_LIMIT ? command : `${command.slice(0, BLOCKED_COMMAND_LIMIT - 1)}…`;
+}
+
+function blockedReason(entry) {
+  if (entry.vetoReason) return `vetoed as too broad a rule (${entry.vetoReason})`;
+  return `sighted destructive command ${JSON.stringify(truncateCommand(entry.destructiveCommand ?? ''))}`;
+}
+
+function sortedBlocked(entries) {
+  return [...entries].sort((left, right) => right.approvals - left.approvals || left.fingerprint.localeCompare(right.fingerprint));
+}
+
+function blockedTool(fingerprint) {
+  return /^permission:([^:]+)/.exec(fingerprint)?.[1] ?? 'unknown';
+}
+
+function blockedReportEntry(entry) {
+  return { fingerprint: entry.fingerprint, approvals: entry.approvals, reason: blockedReason(entry) };
+}
+
+function blockedReport(entries, includeDetails) {
+  const sorted = sortedBlocked(entries);
+  const byTool = {};
+  for (const entry of sorted) {
+    const tool = blockedTool(entry.fingerprint);
+    byTool[tool] = (byTool[tool] ?? 0) + 1;
+  }
+  const report = {
+    total: sorted.length,
+    byTool,
+    top: sorted.slice(0, BLOCKED_SUMMARY_LIMIT).map(blockedReportEntry),
+  };
+  if (includeDetails) {
+    report.details = sorted.slice(0, BLOCKED_DETAIL_LIMIT).map(blockedReportEntry);
+    if (sorted.length > BLOCKED_DETAIL_LIMIT) report.omitted = sorted.length - BLOCKED_DETAIL_LIMIT;
+  }
+  return { report, sorted };
+}
+
+function printBlockedReport(entries, includeDetails) {
+  const { report, sorted } = blockedReport(entries, includeDetails);
+  if (!report.total) return report;
+  const counts = Object.entries(report.byTool).map(([tool, count]) => `${tool}: ${count}`).join(', ');
+  const displayed = includeDetails ? sorted.slice(0, BLOCKED_DETAIL_LIMIT) : sorted.slice(0, BLOCKED_SUMMARY_LIMIT);
+  process.stdout.write(`blocked ${report.total} fingerprint${report.total === 1 ? '' : 's'} by tool (${counts})\n`);
+  for (const entry of displayed) {
+    process.stdout.write(`blocked ${entry.fingerprint}: ${blockedReason(entry)} after ${entry.approvals} approvals\n`);
+  }
+  if (includeDetails && report.omitted) process.stdout.write(`blocked detail capped at ${BLOCKED_DETAIL_LIMIT}; ${report.omitted} more omitted\n`);
+  return report;
+}
+
+function permissionReport(result, includeBlockedDetails) {
+  return {
+    projectDir: result.projectDir,
+    additions: result.additions,
+    blocked: blockedReport(result.blocked, includeBlockedDetails).report,
+    applied: result.applied,
+    scanned: result.scanned,
+  };
+}
 
 function parseArgs(argv) {
   const options = {
@@ -51,6 +119,7 @@ function parseArgs(argv) {
     kind: null,
     signal: 'any',
     detail: null,
+    includeBlocked: false,
   };
 
   const rest = [...argv];
@@ -81,6 +150,7 @@ function parseArgs(argv) {
       case '--kind': options.kind = take(); break;
       case '--signal': options.signal = take(); break;
       case '--detail': options.detail = take(); break;
+      case '--blocked': options.includeBlocked = true; break;
       case '--help': case '-h': options.command = 'help'; break;
       default: throw new Error(`Unknown argument: ${argument}`);
     }
@@ -144,16 +214,14 @@ async function main(argv = process.argv.slice(2)) {
       for (const addition of result.additions) {
         process.stdout.write(`added ${addition.fingerprint} after ${addition.approvals} approvals\n`);
       }
-      for (const blocked of result.blocked) {
-        process.stdout.write(`blocked ${blocked.fingerprint}: destructive command after ${blocked.approvals} approvals\n`);
-      }
+      printBlockedReport(result.blocked, options.includeBlocked);
       if (!result.applied) {
         for (const entry of result.eligible.filter((candidate) => !candidate.destructive)) {
           process.stdout.write(`would add ${ruleFor(entry.fingerprint)} after ${entry.approvals} approvals\n`);
         }
         process.stdout.write(`reported only: this project has not run enable-auto-allowlist\n`);
       }
-      printJson(result);
+      printJson(permissionReport(result, options.includeBlocked));
       return;
     }
     case 'enable-auto-allowlist':

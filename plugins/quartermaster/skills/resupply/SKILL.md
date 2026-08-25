@@ -181,7 +181,7 @@ Before ordinary friction findings, check whether the project opted into automati
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" allowlist --project "${CLAUDE_PROJECT_DIR}"
 ```
 
-Until the project opts in, that command only reports what it would add: it considers a fingerprint with at least three user approvals and no user rejection, and never considers a destructive Bash command. Report those candidates and offer the opt-in; approving it is what turns on the writing, and every later addition goes to the decision ledger:
+Until the project opts in, that command only reports what it would add: it considers a fingerprint with at least three user approvals and no user rejection, and never considers a destructive Bash command. Blocked fingerprints are summarized by tool with the most-approved candidates; use `--blocked` for up to 25 detailed entries, which identify an over-broad wildcard rule or the sighted destructive command. Report the safe candidates and offer the opt-in; approving it is what turns on the writing, and every later addition goes to the decision ledger:
 
 ```
 node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"

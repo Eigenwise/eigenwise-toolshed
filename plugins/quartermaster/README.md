@@ -77,9 +77,11 @@ node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status a
 node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
 node bin/quartermaster.js decline-resupply [--project <path>]
-node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40]
+node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40] [--blocked]
 node bin/quartermaster.js enable-auto-allowlist [--project <path>]
 ```
+
+Allowlist reports summarize blocked fingerprints by tool and show the five most-approved candidates. Use `--blocked` for up to 25 detailed blocked entries, each stating whether the wildcard rule was too broad or a sighted command was destructive.
 
 Everything prints JSON. Node stdlib only, no dependencies, cross-platform.
 
