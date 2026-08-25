@@ -9,6 +9,7 @@ const { applyPermissionAllowlist, enablePermissionAutomation, ruleFor } = requir
 const { readAvailable, readInstalled, searchAvailable } = require('../lib/catalog.js');
 const {
   appendDecision,
+  declineResupply,
   markResupply,
   readDecisions,
   statusFor,
@@ -27,6 +28,7 @@ Usage:
                           [--project <path>] [--detail <text>]
   quartermaster verify [--project <path>]
   quartermaster mark-resupply [--project <path>]
+  quartermaster decline-resupply [--project <path>]
   quartermaster allowlist [--project <path>] [--days <n>] [--sessions <n>]
   quartermaster enable-auto-allowlist [--project <path>]
 
@@ -157,10 +159,16 @@ async function main(argv = process.argv.slice(2)) {
     case 'enable-auto-allowlist':
       printJson({ ok: true, enabled: enablePermissionAutomation(options.projectPath) });
       return;
-    case 'mark-resupply':
-      markResupply(options.projectPath);
-      printJson({ ok: true, lastResupplyAt: new Date().toISOString() });
+    case 'mark-resupply': {
+      const state = markResupply(options.projectPath);
+      printJson({ ok: true, lastResupplyAt: state.lastResupplyAt });
       return;
+    }
+    case 'decline-resupply': {
+      const state = declineResupply(options.projectPath);
+      printJson({ ok: true, lastDeclinedAt: state.lastDeclinedAt, lastResupplyAt: state.lastResupplyAt });
+      return;
+    }
     default:
       throw new Error(`Unknown command: ${options.command}\n\n${USAGE}`);
   }

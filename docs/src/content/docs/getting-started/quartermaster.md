@@ -62,7 +62,7 @@ Findings route to the cheapest durable fix: a measurement built as a committed s
 
 ## How the loop closes
 
-A SessionEnd hook tallies each session locally in one streamed pass. Applied recommendations record their targets, and later checks compare the signal before and after. A SessionStart nudge uses a 24-hour cooldown and only appears after enough unreviewed sessions or friction; it asks whether to run a focused optimization round. Recommendations still need separate approval unless standing permission covers their exact class.
+A SessionEnd hook tallies each session locally in one streamed pass. Once enough unreviewed sessions or friction accumulates, the SessionStart nudge records that an offer is due and a Stop hook holds one real pause open for Claude to offer a focused optimization round. It blocks once per session, ignores its own continuation, and uses a separate 24-hour cross-session offer cooldown, so a fresh SessionStart nudge cannot suppress that first offer. Declining the whole round runs `decline-resupply`, which resets the evidence window until new sessions or friction accumulate. Applied recommendations record their targets, and later checks compare the signal before and after. Recommendations still need separate approval unless standing permission covers their exact class.
 
 ## What it stores
 

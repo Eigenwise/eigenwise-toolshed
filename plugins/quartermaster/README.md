@@ -29,7 +29,7 @@ Then `/quartermaster:setup` in a project, or `/quartermaster:resupply` after som
 
 ## How it works
 
-Three cheap hooks and two skills. The hooks never call a model.
+Four cheap hooks and two skills. The hooks never call a model.
 
 - **SessionStart auto-allowlist hook**: opt-in only. Once the project enables it, the hook streams the bounded recent-transcript window and appends project-local `permissions.allow` entries for a tool fingerprint approved at least three times with no user rejection. Bash rules use the normalized command prefix. Destructive commands are reported but never added. Every addition is logged to the decision ledger and printed. Enable it with `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" enable-auto-allowlist --project "${CLAUDE_PROJECT_DIR}"`; it writes only `.claude/settings.local.json`. Before that marker exists, both the hook and the `allowlist` command only report what they would add.
 - **SessionEnd hook**: streams the transcript that just ended and records a small tally per
@@ -39,10 +39,8 @@ Three cheap hooks and two skills. The hooks never call a model.
   to notice mid-session when the thing it is doing for the third time should become a skill, a
   codebase-map entry, a rule, or a committed measurement, and to offer capturing it right then.
   Skipped in projects where setup already seeded the stronger self-improvement live rule, which is
-  re-grounded at session start and returns on a later prompt or edit only when its text changes. Once enough unreviewed sessions or friction events pile up, the same hook proactively asks
-  whether you want a focused optimization round for your development system, setup, tooling, or
-  workflow; cooldown of 24h between offers. It runs the pass after you say yes, or automatically when
-  you have explicitly given standing permission for optimization rounds.
+  re-grounded at session start and returns on a later prompt or edit only when its text changes. Once enough unreviewed sessions or friction events pile up, it records a nudge so a Stop-time offer will hold the next real pause open.
+- **Stop hook**: reads only the project tally state at every turn end. Once a resupply is due, it blocks once for that session and directs Claude to offer the focused optimization round now. It stays silent on its own `stop_hook_active` continuation, after an offer in the same session, during the separate 24-hour offer cooldown, and after `decline-resupply` resets the evidence window. The offer tells Claude to run the pass after you say yes, or automatically when you have explicitly given standing permission for optimization rounds; a whole-round decline runs `node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"`.
 - **resupply skill**: after the user accepts the optimization round, runs the miner (`bin/quartermaster.js mine`), which streams recent transcripts
   and emits a bounded JSON aggregate. Each session carries **what it was for**: its own title, its
   first real prompt, any explicit `/goal` and whether that goal was ever met, plus a `humanDriven`
@@ -78,6 +76,7 @@ node bin/quartermaster.js decisions list
 node bin/quartermaster.js decisions add --title <t> --fingerprint <f> --status applied|rejected ...
 node bin/quartermaster.js verify [--project <path>]
 node bin/quartermaster.js mark-resupply [--project <path>]
+node bin/quartermaster.js decline-resupply [--project <path>]
 node bin/quartermaster.js allowlist [--project <path>] [--days 30] [--sessions 40]
 node bin/quartermaster.js enable-auto-allowlist [--project <path>]
 ```
@@ -92,7 +91,8 @@ Environment variables, all optional:
 | --- | --- | --- |
 | `QUARTERMASTER_MIN_SESSIONS` | 4 | Unreviewed sessions before a nudge |
 | `QUARTERMASTER_MIN_FRICTION` | 6 | Friction events (denials + interrupts + corrections) before a nudge |
-| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between nudges, and after a resupply pass |
+| `QUARTERMASTER_NUDGE_HOURS` | 24 | Cooldown between SessionStart nudges, and after a resupply pass |
+| `QUARTERMASTER_OFFER_HOURS` | 24 | Cross-session cooldown between Stop-time offers |
 | `QUARTERMASTER_STATE_DIR` | `~/.claude/quartermaster-state` | Where tallies and the decision ledger live |
 
 ## Privacy

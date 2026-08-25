@@ -34,8 +34,8 @@ test('session-start proactively offers an optimization round and waits for appro
   }
 
   const context = runHook(projectDir, stateDir);
-  assert.match(context, /proactively ask whether the user wants a focused optimization round/i);
-  assert.match(context, /development system, setup, tooling, or workflow/i);
+  assert.match(context, /Stop-time offer will hold one real pause open/i);
+  assert.match(context, /focused optimization round/i);
   assert.match(context, /after they say yes, or automatically if they have explicitly given standing permission/i);
   assert.match(context, /each recommendation still needs separate approval unless their standing permission also covers that exact class of change/i);
 });

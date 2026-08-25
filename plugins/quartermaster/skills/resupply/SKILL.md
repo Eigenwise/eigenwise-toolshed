@@ -7,7 +7,7 @@ description: >-
   proposes one item at a time for approval. Use whenever the user asks what would make this easier
   or faster, what they are missing, why something keeps being hard, or what could have gone better;
   when they want to improve their Claude Code setup, tooling, or workflow; whenever the
-  quartermaster nudge fires, after proactively asking and receiving the user's approval or when the
+  quartermaster nudge fires at SessionStart or a Stop-time offer blocks a real pause, after proactively asking and receiving the user's approval or when the
   user has explicitly given standing permission for these rounds; proactively offer the round at a
   natural pause after a long or expensive stretch of work; or when they are starting a goal they have
   no way to verify. Running the pass requires current or standing user approval. Every recommendation
@@ -38,6 +38,14 @@ So lead with what the user was trying to do, and treat the friction counts as on
 question rather than the question itself.
 
 ## Process
+
+If the user declines a SessionStart nudge or Stop-time offer before the round starts, record that whole-round decline, then stop. Run:
+
+```
+node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" decline-resupply --project "${CLAUDE_PROJECT_DIR}"
+```
+
+It resets the evidence window, so another offer waits for new sessions or friction to accumulate.
 
 ### 1. Mine
 
