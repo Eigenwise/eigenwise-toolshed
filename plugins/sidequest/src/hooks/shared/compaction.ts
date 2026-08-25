@@ -19,7 +19,7 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string; meta?: { path?: string } };
   listTickets: (slug: string) => any[];
-  worktreeGcTickets: () => Array<{ project?: string; ref?: string; claimLive?: boolean }>;
+  claimReclaimable: (ticket: any) => boolean;
 }
 
 function disabledValue(value: unknown): boolean {
@@ -161,8 +161,8 @@ export async function compactionSuggestion(input: Record<string, unknown>): Prom
   try {
     const store = require(runtimeModule('store')) as Store;
     const tickets = store.listTickets(project.slug);
-    const liveClaimRefs = new Set(store.worktreeGcTickets()
-      .filter((ticket) => ticket.project === project.slug && ticket.claimLive && ticket.ref)
+    const liveClaimRefs = new Set(tickets
+      .filter((ticket) => ticket.claim?.by && !store.claimReclaimable(ticket) && ticket.ref)
       .map((ticket) => String(ticket.ref)));
     if (activeBoardWork(tickets, liveClaimRefs) || await publishLockHeld(project.path)) return null;
 

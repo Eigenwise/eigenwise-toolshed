@@ -8,15 +8,14 @@ async function main(): Promise<void> {
   const input = readStdin();
   if (!input || input.stop_hook_active === true) return;
 
-  const [reconciliation, compaction] = await Promise.all([
-    Promise.resolve(boardReconciliationReminder(input)),
-    compactionSuggestion(input),
-  ]);
+  const reconciliation = boardReconciliationReminder(input);
   if (reconciliation) {
     writeContext('Stop', reconciliation);
-  } else if (compaction) {
-    writeSystemMessage('Stop', compaction);
+    return;
   }
+
+  const compaction = await compactionSuggestion(input);
+  if (compaction) writeSystemMessage('Stop', compaction);
 }
 
 void main().catch(() => {});

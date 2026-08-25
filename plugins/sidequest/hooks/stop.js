@@ -292,12 +292,12 @@ function reminderSessionId(data) {
 function acknowledgementFreeContinuation(action) {
   return `${action} Continue working without replying to this reminder; do not send an acknowledgment-only or progress reply.`;
 }
-function reconciliationMessage(data) {
+function reconciliationMessage(data, providedStore) {
   if (nudgeOff()) return null;
   const sessionId = reminderSessionId(data);
   if (!sessionId) return null;
   try {
-    const store = require(runtimeModule("store"));
+    const store = providedStore || require(runtimeModule("store"));
     const start = stringField(data, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
     let project = store.findProject(store.nearestRepoRoot(start));
     if (!project.ok || !project.slug) project = store.findProject(start);
@@ -305,7 +305,11 @@ function reconciliationMessage(data) {
     const claimedRefs = new Set(store.sessionClaims(sessionId).filter((claim) => claim.held).map((claim) => String(claim.ref || "")).filter(Boolean));
     const claimedByThisSession = (ticket) => claimedRefs.has(String(ticket.ref || "")) || Boolean(ticket.claim?.by && dispatchedBySession(ticket, sessionId));
     const touched = (ticket) => claimedByThisSession(ticket) || pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId) || dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId);
-    const projectTickets = store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug);
+    const projectTickets = store.listTickets(project.slug).map((ticket) => ({
+      ...ticket,
+      project: project.slug,
+      claimLive: Boolean(ticket.claim?.by && !store.claimReclaimable(ticket))
+    }));
     const open = projectTickets.filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
@@ -348,13 +352,16 @@ function reconciliationMessage(data) {
     return null;
   }
 }
-function boardReconciliationReminder(data) {
-  const reminder = reconciliationMessage(data);
+function reconciliationReminder(data, store) {
+  const reminder = reconciliationMessage(data, store);
   if (!reminder) {
     clearReminderState(reminderSessionId(data));
     return null;
   }
   return rememberTransition(reminder) ? reminder.message : null;
+}
+function boardReconciliationReminder(data) {
+  return reconciliationReminder(data);
 }
 function main() {
   const data = readStdin();
@@ -478,7 +485,7 @@ async function compactionSuggestion(input) {
   try {
     const store = require(runtimeModule("store"));
     const tickets = store.listTickets(project.slug);
-    const liveClaimRefs = new Set(store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug && ticket.claimLive && ticket.ref).map((ticket) => String(ticket.ref)));
+    const liveClaimRefs = new Set(tickets.filter((ticket) => ticket.claim?.by && !store.claimReclaimable(ticket) && ticket.ref).map((ticket) => String(ticket.ref)));
     if (activeBoardWork(tickets, liveClaimRefs) || await publishLockHeld(project.path)) return null;
     const closed = recentlyClosed(tickets, state.resetAt);
     const newlyClosed = closedAfter(tickets, state.ticketBaselineAt);
@@ -511,15 +518,13 @@ async function compactionSuggestion(input) {
 async function main2() {
   const input = readStdin();
   if (!input || input.stop_hook_active === true) return;
-  const [reconciliation, compaction] = await Promise.all([
-    Promise.resolve(boardReconciliationReminder(input)),
-    compactionSuggestion(input)
-  ]);
+  const reconciliation = boardReconciliationReminder(input);
   if (reconciliation) {
     writeContext("Stop", reconciliation);
-  } else if (compaction) {
-    writeSystemMessage("Stop", compaction);
+    return;
   }
+  const compaction = await compactionSuggestion(input);
+  if (compaction) writeSystemMessage("Stop", compaction);
 }
 void main2().catch(() => {
 });

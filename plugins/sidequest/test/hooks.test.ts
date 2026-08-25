@@ -32,6 +32,7 @@ fs.writeFileSync(path.join(DISCOVERY, 'model-gateway', 'catalog.json'), JSON.str
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 process.env.SIDEQUEST_DISCOVERY_DIRS = DISCOVERY;
 const store = require('../lib/store.js');
+const { boardReconciliationReminderForStore } = require('../src/hooks/board-reconciliation-reminder.ts');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
 const db = require('../lib/db.js');
@@ -2194,6 +2195,35 @@ test('stop reminder: a live executor claim is in progress, not unfinished busine
   assert.equal(store.releaseTicket(slug, ticket.ref, 'reconcile-live-orchestrator', { status: 'todo', source: 'test' }).ok, true);
 });
 
+test('stop reminder reads only the current project instead of scanning every board ticket', () => {
+  const sessionId = `reconcile-project-scope-${++sqSeq}`;
+  const currentTicket = {
+    ref: 'SQ-current',
+    status: 'doing',
+    claim: { by: 'project-scope-worker', at: new Date().toISOString() },
+  };
+  const scopedStore = {
+    nearestRepoRoot: (start: string) => start,
+    findProject: () => ({ ok: true, slug: 'current-project' }),
+    sessionClaims: (requestedSessionId: string) => {
+      assert.equal(requestedSessionId, sessionId);
+      return [{ ref: currentTicket.ref, held: true }];
+    },
+    listTickets: (projectSlug: string) => {
+      assert.equal(projectSlug, 'current-project');
+      return [currentTicket];
+    },
+    claimReclaimable: () => false,
+    claimMaySubmit: () => false,
+    worktreeGcTickets: () => {
+      throw new Error('Stop reconciliation must not deserialize tickets from other projects.');
+    },
+  };
+
+  const reminder = boardReconciliationReminderForStore({ session_id: sessionId, cwd: BOARD_PATH }, scopedStore);
+  assert.match(reminder, /1 ticket in doing/);
+});
+
 test('stop reminder: holds a pending submission only while a live claim may submit', () => {
   const sessionId = `reconcile-wave-hold-${++sqSeq}`;
   const story = store.createStory(slug, { title: 'integration wave hold' });
@@ -3524,6 +3554,7 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
 
   const config = JSON.parse(fs.readFileSync(path.join(HOOKS, 'hooks.json'), 'utf8'));
   assert.match(config.description, /Stop reconciliation atomically emits one <=360 B item per responsibility transition/);
+  assert.match(config.description, /from the current project's tickets/);
   assert.match(config.description, /generation-bound stale-lock cleanup cannot delete a live replacement/);
   assert.match(config.description, /claim generations distinguish reopened work/);
   assert.match(config.description, /Claude batches it with concurrent blocking hooks into one continuation/);
