@@ -1,5 +1,5 @@
 {
-  "description": "quartermaster: a SessionEnd tally of this session's friction (streamed locally, no LLM, no network) and a SessionStart line that keeps the capability-capture charter in front of Claude (turn the thing done three times into a skill, map entry, rule, or measurement) and has Claude proactively offer a focused optimization round once enough unreviewed sessions or friction events pile up. Neither hook analyzes content or changes anything; current or explicit standing user permission authorizes the round, and each recommendation is separately approved unless the same standing permission covers that class of change. It also reports local Toolshed freshness health and warns when this session loaded older plugin code.",
+  "description": "quartermaster: a SessionEnd tally of this session's friction (streamed locally, no LLM, no network), a SessionStart line that keeps the capability-capture charter in front of Claude (turn the thing done three times into a skill, map entry, rule, or measurement), and a Stop-time offer that blocks once per overdue session so Claude offers a focused optimization round at a real pause. The Stop hook stays silent on stop_hook_active re-entry, after its offer cooldown, and after decline-resupply resets the evidence window. No hook analyzes content or changes anything; current or explicit standing user permission authorizes the round, and each recommendation is separately approved unless the same standing permission covers that class of change. It also reports local Toolshed freshness health and warns when this session loaded older plugin code.",
   "hooks": {
     "SessionStart": [
       {
@@ -45,6 +45,17 @@
             "type": "command",
             "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/session-end-tally.js\"",
             "timeout": 30
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node --no-warnings \"${CLAUDE_PLUGIN_ROOT}/hooks/stop-resupply-offer.js\"",
+            "timeout": 10
           }
         ]
       }

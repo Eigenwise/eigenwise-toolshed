@@ -56,7 +56,7 @@ function resupplyNudge(projectDir) {
   const status = statusFor(projectDir);
   if (!status.shouldNudge) return null;
   markNudged(projectDir);
-  return `quartermaster: ${status.unanalyzedSessions} sessions since the last resupply, with ${status.frictionEvents} friction events recorded (permission denials, interrupts, corrections). At the first natural pause, proactively ask whether the user wants a focused optimization round for their development system, setup, tooling, or workflow. Run the quartermaster resupply skill after they say yes, or automatically if they have explicitly given standing permission for these rounds. Nothing has been analyzed yet, and each recommendation still needs separate approval unless their standing permission also covers that exact class of change.`;
+  return `quartermaster: ${status.unanalyzedSessions} sessions since the last resupply, with ${status.frictionEvents} friction events recorded (permission denials, interrupts, corrections). The Stop-time offer will hold one real pause open so you briefly offer the user a focused optimization round for their development system, setup, tooling, or workflow. Run the quartermaster resupply skill after they say yes, or automatically if they have explicitly given standing permission for these rounds. Nothing has been analyzed yet, and each recommendation still needs separate approval unless their standing permission also covers that exact class of change.`;
 }
 
 function main() {

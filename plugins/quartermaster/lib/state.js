@@ -15,6 +15,10 @@ const NUDGE_DEFAULTS = {
   cooldownHours: 24,
 };
 
+const OFFER_DEFAULTS = {
+  cooldownHours: 24,
+};
+
 function nudgeThresholds(env = process.env) {
   const number = (value, fallback) => {
     const parsed = Number(value);
@@ -24,6 +28,13 @@ function nudgeThresholds(env = process.env) {
     minSessions: number(env.QUARTERMASTER_MIN_SESSIONS, NUDGE_DEFAULTS.minSessions),
     minFriction: number(env.QUARTERMASTER_MIN_FRICTION, NUDGE_DEFAULTS.minFriction),
     cooldownHours: number(env.QUARTERMASTER_NUDGE_HOURS, NUDGE_DEFAULTS.cooldownHours),
+  };
+}
+
+function offerThresholds(env = process.env) {
+  const parsed = Number(env.QUARTERMASTER_OFFER_HOURS);
+  return {
+    cooldownHours: Number.isFinite(parsed) && parsed > 0 ? parsed : OFFER_DEFAULTS.cooldownHours,
   };
 }
 
@@ -82,6 +93,10 @@ function emptyProjectState(projectDir) {
     sessions: [],
     lastResupplyAt: null,
     lastNudgeAt: null,
+    lastOfferAt: null,
+    lastOfferSessionId: null,
+    offeredSessionIds: [],
+    lastDeclinedAt: null,
   };
 }
 
@@ -153,6 +168,13 @@ function readProjectState(projectDir, env = process.env) {
     : migrateLegacyProjectState(canonicalDir, env);
   state.projectDir = canonicalDir;
   if (state.lastResupplyAt === undefined) state.lastResupplyAt = state.lastRetroAt ?? null;
+  if (state.lastNudgeAt === undefined) state.lastNudgeAt = null;
+  if (state.lastOfferAt === undefined) state.lastOfferAt = null;
+  if (state.lastOfferSessionId === undefined) state.lastOfferSessionId = null;
+  if (!Array.isArray(state.offeredSessionIds)) {
+    state.offeredSessionIds = state.lastOfferSessionId ? [state.lastOfferSessionId] : [];
+  }
+  if (state.lastDeclinedAt === undefined) state.lastDeclinedAt = null;
   if (!Array.isArray(state.sessions)) state.sessions = [];
   delete state.lastRetroAt;
   return state;
@@ -181,12 +203,15 @@ function sessionsSince(state, isoTimestamp) {
 function statusFor(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   const thresholds = nudgeThresholds(env);
+  const offer = offerThresholds(env);
   const unanalyzed = sessionsSince(state, state.lastResupplyAt);
   const friction = unanalyzed.reduce((total, session) => total + frictionOf(session.tally), 0);
 
   const nudgedRecently = state.lastNudgeAt && now - Date.parse(state.lastNudgeAt) < thresholds.cooldownHours * HOUR_MS;
   const resuppliedRecently = state.lastResupplyAt && now - Date.parse(state.lastResupplyAt) < thresholds.cooldownHours * HOUR_MS;
+  const offerRecently = state.lastOfferAt && now - Date.parse(state.lastOfferAt) < offer.cooldownHours * HOUR_MS;
   const overThreshold = unanalyzed.length >= thresholds.minSessions || friction >= thresholds.minFriction;
+  const resupplyDue = Boolean(overThreshold && !resuppliedRecently);
 
   return {
     projectDir: state.projectDir,
@@ -195,8 +220,14 @@ function statusFor(projectDir, env = process.env, now = Date.now()) {
     frictionEvents: friction,
     lastResupplyAt: state.lastResupplyAt,
     lastNudgeAt: state.lastNudgeAt,
+    lastOfferAt: state.lastOfferAt,
+    lastOfferSessionId: state.lastOfferSessionId,
+    offeredSessionIds: state.offeredSessionIds,
+    lastDeclinedAt: state.lastDeclinedAt,
     thresholds,
-    shouldNudge: Boolean(overThreshold && !nudgedRecently && !resuppliedRecently),
+    offer,
+    shouldNudge: Boolean(resupplyDue && !nudgedRecently),
+    shouldOffer: Boolean(resupplyDue && !offerRecently),
   };
 }
 
@@ -206,9 +237,28 @@ function markNudged(projectDir, env = process.env, now = Date.now()) {
   writeJsonAtomic(projectStateFile(projectDir, env), state);
 }
 
+function markOffered(projectDir, sessionId, env = process.env, now = Date.now()) {
+  const state = readProjectState(projectDir, env);
+  state.lastOfferAt = new Date(now).toISOString();
+  state.lastOfferSessionId = sessionId;
+  state.offeredSessionIds = [...new Set([...state.offeredSessionIds, sessionId])].slice(-MAX_TRACKED_SESSIONS);
+  writeJsonAtomic(projectStateFile(projectDir, env), state);
+  return state;
+}
+
 function markResupply(projectDir, env = process.env, now = Date.now()) {
   const state = readProjectState(projectDir, env);
   state.lastResupplyAt = new Date(now).toISOString();
+  state.lastDeclinedAt = null;
+  writeJsonAtomic(projectStateFile(projectDir, env), state);
+  return state;
+}
+
+function declineResupply(projectDir, env = process.env, now = Date.now()) {
+  const state = readProjectState(projectDir, env);
+  const timestamp = new Date(now).toISOString();
+  state.lastResupplyAt = timestamp;
+  state.lastDeclinedAt = timestamp;
   writeJsonAtomic(projectStateFile(projectDir, env), state);
   return state;
 }
@@ -301,10 +351,13 @@ function verifyDecisions(projectDir, env = process.env) {
 module.exports = {
   appendDecision,
   decisionsFile,
+  declineResupply,
   frictionOf,
   markNudged,
+  markOffered,
   markResupply,
   nudgeThresholds,
+  offerThresholds,
   projectStateFile,
   readDecisions,
   readProjectState,

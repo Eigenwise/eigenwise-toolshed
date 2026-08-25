@@ -55,6 +55,17 @@ test('keeps startup-only and startup-or-resume hooks separate with their existin
         ],
       },
     ],
+    Stop: [
+      {
+        hooks: [
+          {
+            type: 'command',
+            command: 'node --no-warnings "${CLAUDE_PLUGIN_ROOT}/hooks/stop-resupply-offer.js"',
+            timeout: 10,
+          },
+        ],
+      },
+    ],
     UserPromptSubmit: [
       {
         hooks: [

@@ -9,7 +9,9 @@ const { test, beforeEach } = require('node:test');
 
 const {
   appendDecision,
+  declineResupply,
   markNudged,
+  markOffered,
   markResupply,
   projectStateFile,
   readProjectState,
@@ -108,6 +110,26 @@ test('statusFor nudges on session count and resets after a resupply pass', () =>
   const status = statusFor(PROJECT, environment, now);
   assert.equal(status.unanalyzedSessions, 0);
   assert.equal(status.shouldNudge, false);
+});
+
+test('statusFor keeps Stop offers independent from SessionStart nudges and records a decline', () => {
+  const now = Date.now();
+  for (let index = 0; index < 4; index += 1) {
+    recordSessionTally(PROJECT, `session-${index}`, tallyWith(), environment, now - DAY_MS);
+  }
+
+  markNudged(PROJECT, environment, now);
+  assert.equal(statusFor(PROJECT, environment, now).shouldOffer, true, 'a fresh nudge does not suppress an offer');
+
+  markOffered(PROJECT, 'stop-session', environment, now);
+  const offeredStatus = statusFor(PROJECT, environment, now);
+  assert.equal(offeredStatus.shouldOffer, false, 'the offer cooldown applies across sessions');
+  assert.deepEqual(offeredStatus.offeredSessionIds, ['stop-session']);
+
+  declineResupply(PROJECT, environment, now);
+  const status = statusFor(PROJECT, environment, now);
+  assert.equal(status.shouldOffer, false);
+  assert.equal(status.lastDeclinedAt, new Date(now).toISOString());
 });
 
 test('state written before the rename keeps its history under the new key', () => {
