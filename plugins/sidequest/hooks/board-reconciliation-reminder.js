@@ -31,7 +31,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 // src/hooks/board-reconciliation-reminder.ts
 var board_reconciliation_reminder_exports = {};
 __export(board_reconciliation_reminder_exports, {
-  boardReconciliationReminder: () => boardReconciliationReminder
+  boardReconciliationReminder: () => boardReconciliationReminder,
+  boardReconciliationReminderForStore: () => boardReconciliationReminderForStore
 });
 module.exports = __toCommonJS(board_reconciliation_reminder_exports);
 var import_node_crypto2 = __toESM(require("node:crypto"));
@@ -285,12 +286,12 @@ function reminderSessionId(data) {
 function acknowledgementFreeContinuation(action) {
   return `${action} Continue working without replying to this reminder; do not send an acknowledgment-only or progress reply.`;
 }
-function reconciliationMessage(data) {
+function reconciliationMessage(data, providedStore) {
   if (nudgeOff()) return null;
   const sessionId = reminderSessionId(data);
   if (!sessionId) return null;
   try {
-    const store = require(runtimeModule("store"));
+    const store = providedStore || require(runtimeModule("store"));
     const start = stringField(data, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
     let project = store.findProject(store.nearestRepoRoot(start));
     if (!project.ok || !project.slug) project = store.findProject(start);
@@ -298,7 +299,11 @@ function reconciliationMessage(data) {
     const claimedRefs = new Set(store.sessionClaims(sessionId).filter((claim) => claim.held).map((claim) => String(claim.ref || "")).filter(Boolean));
     const claimedByThisSession = (ticket) => claimedRefs.has(String(ticket.ref || "")) || Boolean(ticket.claim?.by && dispatchedBySession(ticket, sessionId));
     const touched = (ticket) => claimedByThisSession(ticket) || pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId) || dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId);
-    const projectTickets = store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug);
+    const projectTickets = store.listTickets(project.slug).map((ticket) => ({
+      ...ticket,
+      project: project.slug,
+      claimLive: Boolean(ticket.claim?.by && !store.claimReclaimable(ticket))
+    }));
     const open = projectTickets.filter((ticket) => ticket.status !== "done" && touched(ticket) && (!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket) || pendingSubmission(ticket)));
     const doing = open.filter((ticket) => ticket.status === "doing" && !pendingSubmission(ticket));
     const submissions = open.filter(pendingSubmission);
@@ -341,13 +346,19 @@ function reconciliationMessage(data) {
     return null;
   }
 }
-function boardReconciliationReminder(data) {
-  const reminder = reconciliationMessage(data);
+function reconciliationReminder(data, store) {
+  const reminder = reconciliationMessage(data, store);
   if (!reminder) {
     clearReminderState(reminderSessionId(data));
     return null;
   }
   return rememberTransition(reminder) ? reminder.message : null;
+}
+function boardReconciliationReminder(data) {
+  return reconciliationReminder(data);
+}
+function boardReconciliationReminderForStore(data, store) {
+  return reconciliationReminder(data, store);
 }
 function main() {
   const data = readStdin();
@@ -358,5 +369,6 @@ function main() {
 if (import_node_path2.default.basename(process.argv[1] || "") === "board-reconciliation-reminder.js") main();
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
-  boardReconciliationReminder
+  boardReconciliationReminder,
+  boardReconciliationReminderForStore
 });

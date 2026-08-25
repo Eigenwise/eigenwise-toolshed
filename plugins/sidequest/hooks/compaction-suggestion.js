@@ -170,7 +170,7 @@ async function compactionSuggestion(input) {
   try {
     const store = require(runtimeModule("store"));
     const tickets = store.listTickets(project.slug);
-    const liveClaimRefs = new Set(store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug && ticket.claimLive && ticket.ref).map((ticket) => String(ticket.ref)));
+    const liveClaimRefs = new Set(tickets.filter((ticket) => ticket.claim?.by && !store.claimReclaimable(ticket) && ticket.ref).map((ticket) => String(ticket.ref)));
     if (activeBoardWork(tickets, liveClaimRefs) || await publishLockHeld(project.path)) return null;
     const closed = recentlyClosed(tickets, state.resetAt);
     const newlyClosed = closedAfter(tickets, state.ticketBaselineAt);

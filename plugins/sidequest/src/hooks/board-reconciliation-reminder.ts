@@ -30,7 +30,8 @@ interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string };
   sessionClaims: (sessionId: string) => Array<{ ref?: string | null; held?: boolean }>;
-  worktreeGcTickets: () => LifecycleTicket[];
+  listTickets: (slug: string) => Ticket[];
+  claimReclaimable: (ticket: Ticket) => boolean;
   claimMaySubmit: (ticket: Ticket) => boolean;
 }
 
@@ -220,13 +221,13 @@ function acknowledgementFreeContinuation(action: string): string {
   return `${action} Continue working without replying to this reminder; do not send an acknowledgment-only or progress reply.`;
 }
 
-function reconciliationMessage(data: HookInput): Reminder | null {
+function reconciliationMessage(data: HookInput, providedStore?: Store): Reminder | null {
   if (nudgeOff()) return null;
   const sessionId = reminderSessionId(data);
   if (!sessionId) return null;
 
   try {
-    const store = require(runtimeModule('store')) as Store;
+    const store = providedStore || require(runtimeModule('store')) as Store;
     const start = stringField(data, 'cwd') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
     let project = store.findProject(store.nearestRepoRoot(start));
     if (!project.ok || !project.slug) project = store.findProject(start);
@@ -241,7 +242,11 @@ function reconciliationMessage(data: HookInput): Reminder | null {
     const touched = (ticket: Ticket): boolean => claimedByThisSession(ticket)
       || (pendingSubmission(ticket) && dispatchedBySession(ticket, sessionId))
       || (dispatchedBySession(ticket, sessionId) && !ticket.dispatch?.terminalAt && !liveDispatch(ticket, sessionId));
-    const projectTickets = store.worktreeGcTickets().filter((ticket) => ticket.project === project.slug);
+    const projectTickets = store.listTickets(project.slug).map((ticket) => ({
+      ...ticket,
+      project: project.slug,
+      claimLive: Boolean(ticket.claim?.by && !store.claimReclaimable(ticket)),
+    }));
     const open = projectTickets.filter((ticket) => ticket.status !== 'done'
       && touched(ticket)
       && ((!liveDispatch(ticket, sessionId) && !heldByLiveExecutor(ticket)) || pendingSubmission(ticket)));
@@ -298,13 +303,21 @@ function reconciliationMessage(data: HookInput): Reminder | null {
   }
 }
 
-export function boardReconciliationReminder(data: HookInput): string | null {
-  const reminder = reconciliationMessage(data);
+function reconciliationReminder(data: HookInput, store?: Store): string | null {
+  const reminder = reconciliationMessage(data, store);
   if (!reminder) {
     clearReminderState(reminderSessionId(data));
     return null;
   }
   return rememberTransition(reminder) ? reminder.message : null;
+}
+
+export function boardReconciliationReminder(data: HookInput): string | null {
+  return reconciliationReminder(data);
+}
+
+export function boardReconciliationReminderForStore(data: HookInput, store: Store): string | null {
+  return reconciliationReminder(data, store);
 }
 
 function main(): void {
