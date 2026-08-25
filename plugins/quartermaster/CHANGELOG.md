@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.7.0 (2026-08-25)
+
+Released in v3.505.0, up from 0.6.1.
+
+### Features
+
+- Force the Quartermaster resupply offer at a real pause (SQ-2360)
+
 ## 0.6.1 (2026-08-23)
 
 Released in v3.503.0, up from 0.6.0.

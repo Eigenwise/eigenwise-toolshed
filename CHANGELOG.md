@@ -8,6 +8,14 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.505.0 (2026-08-25)
+
+### quartermaster 0.6.1 → 0.7.0
+
+#### Features
+
+- Force the Quartermaster resupply offer at a real pause (SQ-2360)
+
 ## v3.504.0 (2026-08-23)
 
 ### sidequest 5.0.15 → 5.0.16
