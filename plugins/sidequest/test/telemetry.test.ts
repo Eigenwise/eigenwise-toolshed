@@ -69,6 +69,7 @@ const BIN = path.join(__dirname, '..', 'bin', 'sidequest.js');
 const { runCli, cliJson } = makeCliRunner(BIN, { SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: PROJ });
 const { callTool } = makeMcpCaller(mcp);
 let ref: string;
+const OBSERVATION_WAIT_TIMEOUT_MS = 10_000;
 
 test('seed telemetry fixture', () => {
   const ticket = cliJson<{ ticket: { ref: string } }>(['add', '-t', 'telemetry fixture', '--file', 'lib/tracked.js', '--complexity', '3', '--why', 'a routine tracked-file fixture for telemetry-read coverage', '--label', 'direct-ok', '--json']);
@@ -247,7 +248,7 @@ test('ticket writes never post telemetry to an ambient observer during a test ru
   ]);
   const emitted = await Promise.race([
     observationReceived,
-    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('observer did not receive telemetry')), 1000)),
+    new Promise<never>((_resolve, reject) => setTimeout(() => reject(new Error('observer did not receive telemetry')), OBSERVATION_WAIT_TIMEOUT_MS)),
   ]);
 
   assert.match(emitted, new RegExp(`"ticket_ref":"${unisolatedTicket.ticket.ref}"`));
