@@ -77,14 +77,15 @@ function isDestructive(input) {
 // own veto: anything that runs caller-supplied code, a bare tool whose
 // subcommands differ wildly in blast radius, or a family with a destructive
 // sibling the wildcard would cover.
-function ruleTooBroad(fingerprint) {
+function ruleTooBroadReason(fingerprint) {
   const match = /^permission:Bash:(.+)$/.exec(fingerprint);
-  if (!match) return false;
+  if (!match) return null;
   const prefix = match[1];
   const [executable] = prefix.split(' ');
-  if (ARBITRARY_EXECUTION.test(executable)) return true;
-  if (!prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable)) return true;
-  return DESTRUCTIVE_FAMILY.test(prefix);
+  if (ARBITRARY_EXECUTION.test(executable)) return 'arbitrary execution';
+  if (!prefix.includes(' ') && NEEDS_SUBCOMMAND.test(executable)) return 'bare tool';
+  if (DESTRUCTIVE_FAMILY.test(prefix)) return 'wildcard would cover destructive siblings';
+  return null;
 }
 
 function createPermissionCollector() {
@@ -94,13 +95,25 @@ function createPermissionCollector() {
     if (!fingerprint) return null;
     let entry = fingerprints.get(fingerprint);
     if (!entry) {
-      entry = { fingerprint, input, approvals: 0, denials: 0, destructive: ruleTooBroad(fingerprint) };
+      const vetoReason = ruleTooBroadReason(fingerprint);
+      entry = {
+        fingerprint,
+        input,
+        approvals: 0,
+        denials: 0,
+        destructive: Boolean(vetoReason),
+        vetoReason,
+        destructiveCommand: null,
+      };
       fingerprints.set(fingerprint, entry);
     }
     // One destructive sighting condemns the fingerprint: `git push origin main`
     // and `git push --force` share a prefix, and the first must not earn a rule
     // that covers the second.
-    if (isDestructive(input)) entry.destructive = true;
+    if (isDestructive(input)) {
+      entry.destructive = true;
+      entry.destructiveCommand ??= String(input?.command ?? '');
+    }
     return entry;
   };
   return {

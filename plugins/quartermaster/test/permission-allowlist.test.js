@@ -7,6 +7,7 @@ const path = require('node:path');
 const { test } = require('node:test');
 
 const { applyPermissionAllowlist, enablePermissionAutomation, permissionAutomationEnabled } = require('../lib/permission-allowlist.js');
+const { readDecisions } = require('../lib/state.js');
 const { slugForProject } = require('../lib/paths.js');
 
 function temporaryProject() {
@@ -55,6 +56,20 @@ test('always-approved permission fingerprints append project-local allow rules',
   assert.equal(result.additions[0].fingerprint, 'permission:Bash:npm test');
   assert.match(after, /"allow": \[\n      "Read",\n      "Bash\(npm test:\*\)"\n    \]/);
   assert.equal(after.replace(',\n      "Bash(npm test:*)"', ''), before);
+  const [decision] = readDecisions(environment);
+  assert.deepEqual({
+    fingerprint: decision.fingerprint,
+    status: decision.status,
+    signal: decision.signal,
+    detail: decision.detail,
+    approvals: decision.approvals,
+  }, {
+    fingerprint: 'permission:Bash:npm test',
+    status: 'applied',
+    signal: 'denials',
+    detail: 'auto-approved after 3 approvals',
+    approvals: 3,
+  });
 });
 
 test('without the opt-in marker the pass reports candidates and writes nothing', async () => {
@@ -96,6 +111,8 @@ test('denylisted destructive commands never enter the allowlist', async () => {
 
   assert.equal(result.additions.length, 0);
   assert.equal(result.blocked[0].fingerprint, 'permission:Bash:git reset');
+  assert.equal(result.blocked[0].vetoReason, 'wildcard would cover destructive siblings');
+  assert.equal(result.blocked[0].destructiveCommand, 'git reset --hard HEAD');
   assert.equal(fs.existsSync(path.join(projectDir, '.claude', 'settings.local.json')), false);
 });
 
@@ -119,6 +136,8 @@ test('an approved command never earns a rule whose wildcard covers a destructive
 
   assert.equal(result.additions.length, 0, 'Bash(git push:*) would also permit git push --force');
   assert.equal(result.blocked[0].fingerprint, 'permission:Bash:git push');
+  assert.equal(result.blocked[0].vetoReason, 'wildcard would cover destructive siblings');
+  assert.equal(result.blocked[0].destructiveCommand, null);
 });
 
 test('an interpreter never earns a rule, because its wildcard runs arbitrary code', async () => {
