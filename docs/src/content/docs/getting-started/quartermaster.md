@@ -56,7 +56,11 @@ The miner includes subagents and emits a bounded aggregate from recent transcrip
 
 It also aggregates changed tree areas, repeated commands, plugin and MCP attribution, documentation lookups, per-session cost, and friction such as denials, interrupts, and recurring corrections.
 
-The skill ranks findings in this order: a missing measurement, manual work, knowledge being re-derived, then setup friction. It proposes at most seven findings one at a time with evidence and an exact change. A rejected recommendation is recorded and does not return; an accepted one is checked in a later pass.
+The skill ranks findings in this order: a missing measurement, manual work, existing capabilities
+that underperform, knowledge being re-derived, then setup friction. It proposes at most seven
+findings one at a time with evidence and an exact change. A rejected recommendation is recorded and
+does not return; an accepted one is checked in a later pass. Each pass also checks whether existing
+skills, rules, or instruments need improvement, favoring that over parallel new capabilities.
 
 Findings route to the cheapest durable fix: a measurement built as a committed skill, a plugin install from the catalog, a workflow skill, a codebase-map or CLAUDE.md entry, a live rule, a `permissions.allow` entry, or a plugin disable.
 

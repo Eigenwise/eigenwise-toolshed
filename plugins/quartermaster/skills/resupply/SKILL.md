@@ -105,13 +105,14 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/quartermaster.js" verify --project "${CLAUDE_PRO
 ```
 
 Open with one line per earlier decision that has a verdict. Ask two things of each: is it being
-used (`attribution`), and did what it targeted actually get cheaper. Something unused or making no
-difference is your first finding, as a rollback. Being honest about a recommendation that did not
-work is what makes the next one credible.
+used (`attribution`), and did what it targeted actually get cheaper. Name the three verdicts out
+loud: **keep** when it is used and helping, **improve** when it is used but underperforming, and
+**roll back** when it is unused or making no difference. Being honest about a recommendation that
+did not work is what makes the next one credible.
 
 ### 4. Find the gaps
 
-Four questions, in value order. Spend your attention at the top. This is the order to look in, not
+Five questions, in value order. Spend your attention at the top. This is the order to look in, not
 the order to propose in: step 6 ranks what you actually find.
 
 #### 4a. Is there something the user cannot measure?
@@ -166,6 +167,15 @@ Then list what the project already has (`.claude/skills/`, `.claude/commands/`).
 of what feels missing is already installed under a name nobody thought of, and what is genuinely
 missing turns into a better skill when it reuses what is there.
 
+#### 4c'. What exists but underperforms?
+
+Improve the capability already serving this work before proposing a parallel new one. Look for a
+skill in `attribution` with corrections or interrupts clustered around its use; an installed skill
+absent from attribution even though sessions did what its description covers, which points to an
+under-triggering description; an instrument whose numbers were doubted or re-derived by hand; or a
+rule that keeps being violated. The same evidence favors improving the existing skill, rule, or
+instrument over building a parallel capability.
+
 #### 4c. What knowledge keeps being re-derived?
 
 The same material re-explored, the same lookups repeated, facts re-established every session. Heavy
@@ -201,10 +211,13 @@ Map each finding to exactly one destination using [references/routing.md](refere
 Prefer the highest destination that fits: installable things beat written rules, and written rules
 beat asking someone to remember.
 
-New skills go through **skill-creator**. A hand-rolled SKILL.md tends to encode the one example in
-front of you instead of the general shape, and its description ends up too vague to trigger when it
-is needed. If skill-creator is not installed, that install is the finding; point the user at the
-official marketplace and `/reload-plugins`.
+New skills and skill improvements go through **skill-creator**. A hand-rolled SKILL.md tends to
+encode the one example in front of you instead of the general shape, and its description ends up
+too vague to trigger when it is needed. skill-creator explicitly supports modifying existing skills
+and optimizing their trigger descriptions. Prefer improving an existing skill over building a
+parallel new one from the same evidence, and show the exact diff for approval. If skill-creator is
+not installed, that install is the finding; point the user at the official marketplace and
+`/reload-plugins`.
 
 Drop any finding whose fingerprint sits in `decisions.rejected`. The user already said no; do not
 re-litigate unless they raise it.
@@ -261,6 +274,9 @@ will check.
   standards it cannot check and chores done by hand just as much; only the instruments differ.
 - Attribution counts are evidence of use; absence is only a hint. Say "no recorded tool activity in
   the window", never "unused". Hook-only and context-injection plugins legitimately show nothing.
+- **Kaizen:** Every pass should leave at least one existing capability better, or state explicitly
+  that the existing skills, rules, and instruments were reviewed and hold up. Small repeated
+  improvements beat batching a rewrite.
 - Quotes and titles are the user's own words back at them. Keep them short and only where they
   carry the finding.
 - Every number you cite is the aggregate's number, as it reports it. Rounding a count, attributing a
@@ -278,6 +294,7 @@ will check.
 - [ ] Nothing was proposed as a missing measurement on inference alone without saying so
 - [ ] The findings were ranked once, and the closing order matched the order they were presented in
 - [ ] Existing plugins and skills were searched before anything new was proposed
+- [ ] Existing skills, rules, and instruments were assessed for improvement, not only for gaps
 - [ ] Every proposal showed the exact change and got an explicit yes or no
 - [ ] Every decision, including rejections, was recorded with a fingerprint
 - [ ] mark-resupply ran at the end

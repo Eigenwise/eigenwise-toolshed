@@ -2,9 +2,10 @@
 
 Looks at your recent Claude Code sessions and asks what would make your goals easier to reach:
 a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving,
-permissions worth allowing, plugins worth installing or disabling. Every change is proposed one at
+existing skills that underperform, permissions worth allowing, plugins worth installing or disabling. Every change is proposed one at
 a time and applied only when you say yes. The next pass then tells you whether the last round
-actually helped.
+actually helped. A result that is used but underperforms becomes a targeted improvement; an unused
+or ineffective result can roll back.
 
 Friction is in there, at the bottom of the list. Fixing what went wrong gets you back to the speed
 you already expected; adding a capability you never had moves that baseline, and the best

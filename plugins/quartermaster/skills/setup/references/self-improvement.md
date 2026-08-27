@@ -29,12 +29,16 @@ whether anything went wrong: the gaps that cost the most raise no errors at all.
   a week later. Build the measurement first, as a skill with its scripts committed in the repo, so
   the number can be re-run instead of re-argued.
 - **A multi-step task you did by hand** becomes a skill (build it with skill-creator).
+- **A skill that misfired, under-triggered, or needed manual correction** should be improved with
+  skill-creator, including its trigger description. Prefer that over building a parallel skill.
 - **Something you re-derived or re-explored** becomes a codebase map doc or a CLAUDE.md line.
 - **A convention you had to be told** becomes a tightly-scoped live rule.
 - **A tool that would have done this for you**: check what's already installed, then propose one.
 Look at what exists before building; a lot of what feels missing is installed under a name you
-didn't think of. Keep it to one improvement, as its own step and commit. If the work genuinely
-needed nothing new, skip silently. For a deeper periodic pass, run `resupply`.
+didn't think of. Improve an existing skill, rule, or instrument before building a parallel one from
+the same evidence. Keep it to one improvement, as its own step and commit. If existing skills,
+rules, and instruments hold up, say so explicitly. Small repeated improvements beat batching a
+rewrite. For a deeper periodic pass, run `resupply`.
 ```
 
 ## The fallback when this rule is absent

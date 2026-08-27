@@ -53,7 +53,15 @@ For a multi-step workflow the user keeps performing by hand with no plugin match
 skill-creator; a hand-rolled SKILL.md tends to capture the one example in front of you and
 under-trigger later. Fingerprint: `skill:<name>`.
 
-## 4. Project knowledge
+## 4. Skill improvement
+
+For an existing skill that misfires, under-triggers, or needs manual correction. Route through
+skill-creator, which explicitly supports modifying and improving existing skills and optimizing
+their trigger descriptions. Show the exact diff for approval, like every other finding. Prefer
+improving the existing skill over building a parallel new skill from the same evidence.
+Fingerprint: `skill-improve:<name>`.
+
+## 5. Project knowledge
 
 For facts and layout that keep being re-derived: repeated exploration of the same area, the same
 question re-answered across sessions.
@@ -66,7 +74,7 @@ question re-answered across sessions.
   knowledge answers questions.
 - Fingerprint: `knowledge:<area-slug>`.
 
-## 5. MCP server
+## 6. MCP server
 
 Only when no plugin wraps the capability. Search the registry:
 `https://registry.modelcontextprotocol.io/v0/servers?search=<terms>` (WebFetch, JSON). Apply with
@@ -75,7 +83,7 @@ Only when no plugin wraps the capability. Search the registry:
 if no `--scope` flag is passed.
 Fingerprint: `mcp:<name>`.
 
-## 6. Rule (live-rules or CLAUDE.md)
+## 7. Rule (live-rules or CLAUDE.md)
 
 For repeated corrections on one theme, conventions, and "stop doing X" findings.
 
@@ -87,7 +95,7 @@ For repeated corrections on one theme, conventions, and "stop doing X" findings.
   lines, in the file's existing style, and show the exact diff first.
 - Fingerprint: `rule:<theme-slug>`.
 
-## 7. Permission rule
+## 8. Permission rule
 
 For `permission-rule` denials that keep hitting the same safe pattern.
 
@@ -99,7 +107,7 @@ For `permission-rule` denials that keep hitting the same safe pattern.
   said no to the action itself, so allowing it is the opposite of what they asked for.
 - Fingerprint: `permission:<tool>:<pattern>`.
 
-## 8. Plugin disable / uninstall
+## 9. Plugin disable / uninstall
 
 For installed plugins with no recorded activity across a real window (20+ sessions), after
 checking the plugin is not hook-only or context-injection-only.
@@ -107,7 +115,7 @@ checking the plugin is not hook-only or context-injection-only.
 - Apply: `claude plugin disable <name>@<marketplace>` (reversible; prefer over uninstall).
 - Fingerprint: `disable:<name>`.
 
-## 9. No destination
+## 10. No destination
 
 Some expense is situational: a genuinely hard problem, an experiment, a one-off bad day. Naming it
 and moving on beats inventing a rule for it. Not every finding deserves an action, and a pass that

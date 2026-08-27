@@ -38,4 +38,5 @@ test('session-start proactively offers an optimization round and waits for appro
   assert.match(context, /focused optimization round/i);
   assert.match(context, /after they say yes, or automatically if they have explicitly given standing permission/i);
   assert.match(context, /each recommendation still needs separate approval unless their standing permission also covers that exact class of change/i);
+  assert.match(context, /existing skill misfires, under-triggers, or needs manual correction/i);
 });
