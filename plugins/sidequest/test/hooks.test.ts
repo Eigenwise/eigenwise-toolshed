@@ -1315,6 +1315,54 @@ test('pre-tool inline-work hook escalates substantive work at widening intervals
   assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /0 reads \/ 36 commands this session/);
 });
 
+test('pre-tool inline-work hook nudges the second native Agent spawn at widening intervals', () => {
+  const session_id = `inline-native-agent-${Date.now()}`;
+  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore' } };
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const secondNativeAgentNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.ok(secondNativeAgentNudge, 'the second native Agent spawn must nudge');
+  assert.match(secondNativeAgentNudge.systemMessage, /^sidequest: 2 native subagents this session;/);
+  assert.match(secondNativeAgentNudge.systemMessage, /native Explore\/general-purpose inherits the session model/);
+  assert.match(secondNativeAgentNudge.systemMessage, /codebase-exploration, research, spike-investigation/);
+  assert.ok(Buffer.byteLength(secondNativeAgentNudge.systemMessage, 'utf8') <= 768, 'the native Agent nudge must fit its context budget');
+  for (let nativeAgentSpawns = 3; nativeAgentSpawns < 6; nativeAgentSpawns += 1) assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  assert.match(runHookOutput(INLINE_WORK_NUDGE, payload).systemMessage, /^sidequest: 6 native subagents this session;/);
+});
+
+test('pre-tool inline-work hook treats Sidequest executor spawns as board interaction', () => {
+  const session_id = `inline-sidequest-agent-${Date.now()}`;
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'sidequest-exec-readonly-medium' },
+  }), null);
+  for (let readActions = 0; readActions < 8; readActions += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Read', tool_input: {},
+    }), null);
+  }
+  for (let substantiveActions = 0; substantiveActions < 4; substantiveActions += 1) {
+    assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+      session_id, cwd: BOARD_PATH, tool_name: 'Write', tool_input: {},
+    }), null);
+  }
+  const nativePayload = { session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: { subagent_type: 'Explore' } };
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, nativePayload), null);
+  const nativeAgentNudge = runHookOutput(INLINE_WORK_NUDGE, nativePayload);
+  assert.ok(nativeAgentNudge, 'native spawns after a Sidequest executor spawn must still nudge');
+  assert.match(nativeAgentNudge.systemMessage, /^sidequest: 2 native subagents this session;/);
+});
+
+test('pre-tool inline-work hook nudges native Agent spawns after board interaction', () => {
+  const session_id = `inline-native-after-board-${Date.now()}`;
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, {
+    session_id, cwd: BOARD_PATH, tool_name: 'mcp__plugin_sidequest_board__claim', tool_input: {},
+  }), null);
+  const payload = { session_id, cwd: BOARD_PATH, tool_name: 'Agent', tool_input: {} };
+  assert.equal(runHookOutput(INLINE_WORK_NUDGE, payload), null);
+  const nativeAgentNudge = runHookOutput(INLINE_WORK_NUDGE, payload);
+  assert.ok(nativeAgentNudge, 'native Agent spawns must nudge even after a board interaction');
+  assert.match(nativeAgentNudge.systemMessage, /^sidequest: 2 native subagents this session;/);
+});
+
 test('pre-tool inline-work hook keeps bounded transcript lookups inline-safe', () => {
   const output = runHookOutput(INLINE_WORK_NUDGE, {
     session_id: `inline-transcript-${Date.now()}`,
