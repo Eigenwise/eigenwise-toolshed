@@ -143,6 +143,7 @@ function writeSessionState(file, state) {
 var AUTOMATION_TAG = /^<(?:agent-message|local-command(?:-caveat)?|task-notification|task-progress|task-result)\b/i;
 var INVESTIGATION_READ_THRESHOLD = 8;
 var SUBSTANTIVE_ESCALATION_START = 4;
+var NATIVE_AGENT_ESCALATION_START = 2;
 function boardFor(input) {
   const store = require(runtimeModule("store"));
   const start = stringField(input, "cwd") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -186,6 +187,10 @@ function nudgeMessage(readActions, substantiveActions, repeated) {
   const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";
   return `sidequest: ${readActions} reads / ${substantiveActions} commands this session, no board interaction.${earlierReminder} Multi-file work defaults to board dispatch. In your next reply offer dispatch, or name why inline serves the user better than an executor.`;
 }
+function nativeAgentNudgeMessage(nativeAgentSpawns, repeated) {
+  const earlierReminder = repeated ? " You have continued after an earlier reminder." : "";
+  return `sidequest: ${nativeAgentSpawns} native subagents this session; native Explore/general-purpose inherits the session model.${earlierReminder} Fan-out or deep investigation belongs in spike tickets on routed executors (codebase-exploration, research, spike-investigation). In your next reply offer dispatch, or name why native agents serve the user better.`;
+}
 function main() {
   const input = readStdin();
   if (!input || isSubagent(input)) return;
@@ -198,6 +203,21 @@ function main() {
   const state = readSessionState(file);
   if (isBoardInteraction(toolName, command)) {
     state.boardInteraction = true;
+  } else if (toolName === "Agent") {
+    const subagentType = isRecord(input.tool_input) && typeof input.tool_input.subagent_type === "string" ? input.tool_input.subagent_type : "";
+    if (/^sidequest-exec/.test(subagentType)) {
+      state.boardInteraction = true;
+    } else {
+      const nativeAgentSpawns = (Number(state.nativeAgentSpawns) || 0) + 1;
+      state.nativeAgentSpawns = nativeAgentSpawns;
+      if (!state.nativeAgentChoiceSurfaced ? nativeAgentSpawns >= NATIVE_AGENT_ESCALATION_START : isEscalationPoint(nativeAgentSpawns, NATIVE_AGENT_ESCALATION_START)) {
+        const repeated = Boolean(state.nativeAgentChoiceSurfaced);
+        state.nativeAgentChoiceSurfaced = true;
+        writeSessionState(file, state);
+        writeSystemMessage("PreToolUse", nativeAgentNudgeMessage(nativeAgentSpawns, repeated));
+        return;
+      }
+    }
   } else if (isSubstantive(toolName, command, prompt)) {
     const substantiveActions = (Number(state.substantiveActions) || 0) + 1;
     state.substantiveActions = substantiveActions;
