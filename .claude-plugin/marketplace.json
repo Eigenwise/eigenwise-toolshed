@@ -5,7 +5,7 @@
     "email": "kenny@eigenwise.io"
   },
   "description": "Eigenwise's toolshed of Claude Code plugins.",
-  "version": "3.505.0",
+  "version": "3.506.0",
   "plugins": [
     {
       "name": "observability",
@@ -57,7 +57,7 @@
       "name": "sidequest",
       "source": "./plugins/sidequest",
       "description": "The Toolshed's core work board and orchestration loop for Claude Code. Tickets are classified into categories that route each one to a concrete model and effort, then dispatched to token-gated executors; side issues you mention mid-task get captured on the spot, and a live, self-hosted Kanban dashboard spans every project you work in.",
-      "version": "5.0.16",
+      "version": "5.0.17",
       "author": {
         "name": "Eigenwise"
       },
@@ -103,7 +103,7 @@
       "name": "quartermaster",
       "source": "./plugins/quartermaster",
       "description": "Works out what your workspace is short of and gets it. Reads what your recent Claude Code sessions were actually working toward, then asks what is missing against that: a measurement nobody can run yet, work you keep doing by hand, knowledge you keep re-deriving, and the setup pushing back at you. A SessionStart line keeps Claude watching for the task done three times that should become a skill, map entry, rule, or measurement, offering to capture it in the moment. A SessionEnd hook tallies each session locally (no LLM, no network); once enough piles up, a SessionStart nudge and one Stop-time block make Claude offer a focused optimization round at a real pause. The resupply skill mines that history and proposes one change at a time, each needing your approval; the next pass reports whether what you applied actually helped. Its setup skill outfits a new project from what your history shows you keep needing. It also keeps Eigenwise Toolshed plugins current, checks workspace health, and warns when an open session has loaded stale plugin code.",
-      "version": "0.7.0",
+      "version": "0.7.1",
       "author": {
         "name": "Eigenwise"
       },

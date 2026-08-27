@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.7.1 (2026-08-27)
+
+Released in v3.506.0, up from 0.7.0.
+
+### Fixes
+
+- Summarize blocked permission allowlist reports (SQ-2361)
+- Keep successful hook attachments out of Quartermaster errors (SQ-2364)
+  Quartermaster now separates hook timeouts from failed hooks and ignores successful context attachments.
+- Improve existing Quartermaster capabilities during resupply (SQ-2366)
+
 ## 0.7.0 (2026-08-25)
 
 Released in v3.505.0, up from 0.6.1.

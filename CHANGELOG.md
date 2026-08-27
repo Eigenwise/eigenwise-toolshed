@@ -8,6 +8,26 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.506.0 (2026-08-27)
+
+### quartermaster 0.7.0 → 0.7.1
+
+#### Fixes
+
+- Summarize blocked permission allowlist reports (SQ-2361)
+- Keep successful hook attachments out of Quartermaster errors (SQ-2364)
+  Quartermaster now separates hook timeouts from failed hooks and ignores successful context attachments.
+- Improve existing Quartermaster capabilities during resupply (SQ-2366)
+
+### sidequest 5.0.16 → 5.0.17
+
+#### Fixes
+
+- Keep Stop reconciliation responsive on busy boards (SQ-2363)
+  Stop reconciliation now reads the active board instead of scanning tickets from every Sidequest project.
+- Wait for ambient telemetry observer (SQ-2365)
+  The Sidequest telemetry test now waits longer for the ambient observer's positive-control event on slow runners.
+
 ## v3.505.0 (2026-08-25)
 
 ### quartermaster 0.6.1 → 0.7.0
