@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.507.0 (2026-08-28)
+
+### sidequest 5.0.17 → 5.0.18
+
+#### Fixes
+
+- Nudge native agent fan-out toward routed tickets (SQ-2367) [`7728668`](https://github.com/Eigenwise/eigenwise-toolshed/commit/77286684c92096783814e1c2a134681e7acb71e2)
+- Name the upstream defect filing destination (SQ-2368)
+
 ## v3.506.0 (2026-08-27)
 
 ### quartermaster 0.7.0 → 0.7.1
