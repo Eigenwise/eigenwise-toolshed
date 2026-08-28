@@ -2871,6 +2871,31 @@ test('session-start: bounds oversized workforces and preserves each briefing tai
   }
 });
 
+test('session-start: names the upstream-defect filing destination for the local registry', () => {
+  const maintainerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-toolshed-maintainer-'));
+  const toolshed = path.join(maintainerHome, 'eigenwise-toolshed');
+  fs.mkdirSync(path.join(toolshed, 'plugins', 'sidequest', '.claude-plugin'), { recursive: true });
+  fs.writeFileSync(path.join(toolshed, 'plugins', 'sidequest', '.claude-plugin', 'plugin.json'), '{}');
+  registerProject(maintainerHome, toolshed);
+  const commonClause = /never encode a workaround into project rules, hooks, or memory/i;
+  const maintainerContext = runHookForBudget(SESSION, { session_id: 'upstream-defect-maintainer', cwd: toolshed }, {
+    SIDEQUEST_HOME: maintainerHome,
+    SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
+    CLAUDE_PROJECT_DIR: toolshed,
+  });
+  assert.match(maintainerContext, /Offer to file it as a ticket on the eigenwise-toolshed board on this machine \(the Toolshed working copy\), not via the Anthropic feedback tool\./);
+  assert.doesNotMatch(maintainerContext, /Offer to file it as a GitHub issue on Eigenwise\/eigenwise-toolshed/);
+  assert.match(maintainerContext, commonClause);
+
+  const nonMaintainerHome = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-hooks-toolshed-non-maintainer-'));
+  const nonMaintainerContext = runHookForBudget(SESSION, { session_id: 'upstream-defect-non-maintainer' }, {
+    SIDEQUEST_HOME: nonMaintainerHome,
+    SIDEQUEST_SWEEP_DEADLINE_MS: '60000',
+  });
+  assert.match(nonMaintainerContext, /Offer to file it as a GitHub issue on Eigenwise\/eigenwise-toolshed, not via the Anthropic feedback tool\./);
+  assert.match(nonMaintainerContext, commonClause);
+});
+
 test('session-start: stays inside its byte budget and off the retired doctrine', () => {
   const ctx = runHookForBudget(SESSION, { session_id: 'test' });
   assert.ok(
