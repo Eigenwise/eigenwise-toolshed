@@ -1181,7 +1181,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} reconciliation refused: non-reachable delivery must name its immutable ${submissionGitRef(ticket)} candidate, not ${deliveryCommit}.`,
       };
     }
-    const content = workingTreeDelivery
+    const content = workingTreeDelivery && !reachable
       ? workingTreeContainsSubmittedContent(repo, ticket.submission, deliveryCommit)
       : deliveryContainsSubmittedContent(repo, ticket.submission, deliveryCommit);
     if (!content.ok) {
