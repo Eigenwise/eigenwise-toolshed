@@ -23,6 +23,10 @@ var __toESM = (mod, isNodeMode, target) => (target = mod != null ? __create(__ge
   mod
 ));
 
+// src/hooks/session-start.ts
+var import_node_fs7 = __toESM(require("node:fs"));
+var import_node_path7 = __toESM(require("node:path"));
+
 // src/hooks/shared/input.ts
 var import_node_fs = __toESM(require("node:fs"));
 function isRecord(value) {
@@ -618,6 +622,18 @@ function dispatchAdmissionStatus(data) {
     return "no-project";
   }
 }
+function upstreamDefectDestination() {
+  try {
+    const store = require(runtimeModule("store"));
+    const project = store.listProjects({ all: true }).find((candidate) => {
+      const root = String(candidate.path || "").trim();
+      return root && import_node_fs7.default.existsSync(import_node_path7.default.join(root, "plugins", "sidequest", ".claude-plugin", "plugin.json"));
+    });
+    if (project) return `Offer to file it as a ticket on the ${project.name} board on this machine (the Toolshed working copy), not via the Anthropic feedback tool.`;
+  } catch (_) {
+  }
+  return "Offer to file it as a GitHub issue on Eigenwise/eigenwise-toolshed, not via the Anthropic feedback tool.";
+}
 function hasMidWaveBoard(data) {
   if (process.env.SIDEQUEST_AGENT) return false;
   const source = stringField(data, "source");
@@ -666,7 +682,7 @@ async function main() {
   const boardAuthorization = dispatchAdmission === "routed" ? "Quick edits at a named or known location, one-line fixes, operational requests, and direct questions stay inline and do not load user-story. For work beyond a small task, load the user-story skill before ticketing or dispatching; do not plan it inline. A usable Sidequest project route is standing authorization to file tickets and dispatch returned executors without offering it or asking for a further user request when work is a multi-file change, at an unknown location that needs discovery, or an investigation. For independent per-item work, shard tickets and dispatch concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together. Ask before work beyond the approved scope unless explicit standing permission covers it." : "Sidequest has no usable project route here, so substantive work may stay inline. The first Board MCP call auto-registers this project; then use board_config to enable a category with an available executor before asking for board dispatch.";
   const inlineBoundary = dispatchAdmission === "routed" ? "" : "Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.";
   const fanoutGuidance = dispatchAdmission === "routed" ? "" : "For independent per-item work, shard tickets and dispatch concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.";
-  const upstreamDefects = "If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits.";
+  const upstreamDefects = `If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits. ${upstreamDefectDestination()}`;
   const checkpoint = checkpointingGuidance(data);
   const recovery = "Context is UTF-8 bounded. Omitted details name a typed board retrieval call.";
   const initialUserMessage = hasMidWaveBoard(data) ? "/sidequest:sidequest" : "";

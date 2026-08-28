@@ -1,4 +1,6 @@
 #!/usr/bin/env node
+import fs from 'node:fs';
+import path from 'node:path';
 import { readStdin, stringField, type HookInput } from './shared/input.js';
 import { writeContext } from './shared/output.js';
 import { pluginRoot, runtimeModule } from './shared/paths.js';
@@ -26,9 +28,15 @@ interface LifecycleTicket {
   submission?: { commit?: string; integratedAt?: string | null } | null;
 }
 
+interface RegisteredProject {
+  name: string;
+  path: string;
+}
+
 interface Store {
   nearestRepoRoot: (start: string) => string;
   findProject: (start: string) => { ok: boolean; slug?: string };
+  listProjects: (options: { all: boolean }) => RegisteredProject[];
   getCategories: (options: { project?: string; includeDisabled: boolean }) => Category[];
   resolveCategoryRoute: (category: Category) => { model: string; effort: string; exec?: unknown };
   projectDispatchAdmission: (slug: string) => { status: string };
@@ -128,6 +136,18 @@ function dispatchAdmissionStatus(data: HookInput): string {
   }
 }
 
+function upstreamDefectDestination(): string {
+  try {
+    const store = require(runtimeModule('store')) as Store;
+    const project = store.listProjects({ all: true }).find((candidate) => {
+      const root = String(candidate.path || '').trim();
+      return root && fs.existsSync(path.join(root, 'plugins', 'sidequest', '.claude-plugin', 'plugin.json'));
+    });
+    if (project) return `Offer to file it as a ticket on the ${project.name} board on this machine (the Toolshed working copy), not via the Anthropic feedback tool.`;
+  } catch (_) {}
+  return 'Offer to file it as a GitHub issue on Eigenwise/eigenwise-toolshed, not via the Anthropic feedback tool.';
+}
+
 function hasMidWaveBoard(data: HookInput): boolean {
   if (process.env.SIDEQUEST_AGENT) return false;
   const source = stringField(data, 'source');
@@ -185,7 +205,7 @@ async function main(): Promise<void> {
     : 'Sidequest has no usable project route here, so substantive work may stay inline. The first Board MCP call auto-registers this project; then use board_config to enable a category with an available executor before asking for board dispatch.';
   const inlineBoundary = dispatchAdmission === 'routed' ? '' : 'Specific one-file or one-prompt asks stay inline unless dependency or risk warrants dispatch; say why. Ask before work beyond the approved scope unless explicit standing permission covers it.';
   const fanoutGuidance = dispatchAdmission === 'routed' ? '' : 'For independent per-item work, shard tickets and dispatch concurrently; isolated-worktree overlap is an integration concern, while sequential dependencies or a shared design decision stay together.';
-  const upstreamDefects = 'If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits.';
+  const upstreamDefects = `If Sidequest itself misbehaves (a refusal contradicting observed state, a dead retrieval handle, a guard loop, a reproducible tool error), report it to the user with the reproducing evidence as an upstream defect; never encode a workaround into project rules, hooks, or memory, and mark any unavoidable stopgap temporary, naming the defect it awaits. ${upstreamDefectDestination()}`;
   const checkpoint = checkpointingGuidance(data);
   const recovery = 'Context is UTF-8 bounded. Omitted details name a typed board retrieval call.';
   const initialUserMessage = hasMidWaveBoard(data) ? '/sidequest:sidequest' : '';
