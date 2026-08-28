@@ -3080,6 +3080,111 @@ test('SQ-2169: integrate records an already delivered reviewed candidate or a re
   }
 });
 
+test('SQ-2369: reachable manual delivery survives a later folder rename while non-reachable manual delivery requires working-tree content', () => {
+  const originalConfig = store.boardConfig(slug);
+  try {
+    cleanBranch();
+    const originalFolder = 'articles/original-title';
+    const settledFolder = 'articles/settled-title';
+    const submittedFiles = [`${originalFolder}/DRAFT.md`, `${originalFolder}/OUTLINE.md`];
+    const renamedTicket = addTicket('manual delivery renamed after integration', { files: [originalFolder] });
+    fs.mkdirSync(path.join(PROJECT_DIR, originalFolder), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, submittedFiles[0]), 'draft candidate\n');
+    fs.writeFileSync(path.join(PROJECT_DIR, submittedFiles[1]), 'outline candidate\n');
+    git(['add', originalFolder]);
+    git(['commit', '-m', 'candidate under original article title']);
+    const renamedCandidate = git(['rev-parse', 'HEAD']);
+    const renamedBase = git(['rev-parse', `${renamedCandidate}^`]);
+    pin(renamedTicket, renamedCandidate);
+    assert.strictEqual(store.claimTicket(slug, renamedTicket.ref, 'renamed-manual-source', {
+      direct: true,
+      reason: 'The renamed manual delivery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, renamedTicket.ref, 'renamed-manual-source', {
+      commit: renamedCandidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const renamedSubmission = store.getTicket(slug, renamedTicket.ref);
+    Object.assign(renamedSubmission.submission, {
+      base: renamedBase,
+      upstream: 'origin/main',
+      upstreamCommit: renamedBase,
+      commits: [renamedCandidate],
+      changedPaths: submittedFiles,
+    });
+    renamedSubmission.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: renamedCandidate, agentId: 'renamed-manual-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(renamedSubmission);
+
+    git(['mv', originalFolder, settledFolder]);
+    git(['commit', '-m', 'settle article title']);
+    const targetBranch = git(['branch', '--show-current']);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: targetBranch });
+
+    const renamedDelivery = store.recordDeliveredSubmission(slug, renamedTicket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: renamedCandidate,
+      deliveryMethod: 'manual',
+      reason: 'The submitted candidate was integrated before its article folder received the settled title.',
+    });
+    assert.strictEqual(renamedDelivery.ok, true, renamedDelivery.message);
+    assert.strictEqual(renamedDelivery.integration.contentEvidence, 'candidate_ancestor');
+    assert.strictEqual(renamedDelivery.integration.deliveryCommit, renamedCandidate);
+
+    cleanBranch();
+    const missingFolder = 'articles/manual-content-reset-away';
+    const missingFile = `${missingFolder}/DRAFT.md`;
+    const missingTicket = addTicket('non-reachable manual delivery without working-tree content', { files: [missingFolder] });
+    fs.mkdirSync(path.join(PROJECT_DIR, missingFolder), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, missingFile), 'manual candidate\n');
+    git(['add', missingFolder]);
+    git(['commit', '-m', 'manual candidate reset away']);
+    const missingCandidate = git(['rev-parse', 'HEAD']);
+    const missingBase = git(['rev-parse', `${missingCandidate}^`]);
+    pin(missingTicket, missingCandidate);
+    assert.strictEqual(store.claimTicket(slug, missingTicket.ref, 'missing-manual-source', {
+      direct: true,
+      reason: 'The missing manual delivery fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, missingTicket.ref, 'missing-manual-source', {
+      commit: missingCandidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const missingSubmission = store.getTicket(slug, missingTicket.ref);
+    Object.assign(missingSubmission.submission, {
+      base: missingBase,
+      upstream: 'origin/main',
+      upstreamCommit: missingBase,
+      commits: [missingCandidate],
+      changedPaths: [missingFile],
+    });
+    missingSubmission.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: missingCandidate, agentId: 'missing-manual-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(missingSubmission);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+    git(['reset', '--hard', 'origin/main']);
+    assert.notStrictEqual(git(['merge-base', missingCandidate, 'HEAD']), missingCandidate, 'the manual candidate is not reachable after reset');
+
+    const missingDelivery = store.recordDeliveredSubmission(slug, missingTicket.ref, {
+      target: store.integrationTarget(slug),
+      deliveryCommit: missingCandidate,
+      deliveryMethod: 'manual',
+      reason: 'The non-reachable manual candidate is absent from the integration working tree.',
+    });
+    assert.strictEqual(missingDelivery.ok, false, 'non-reachable manual delivery still checks the integration working tree');
+    assert.strictEqual(missingDelivery.reason, 'delivery_content_missing');
+    assert.match(missingDelivery.message, /articles\/manual-content-reset-away\/DRAFT\.md/);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
 test('SQ-2254: MCP records a reset delivery from its pinned candidate and refuses absent working-tree content', async () => {
   const originalConfig = store.boardConfig(slug);
   try {
