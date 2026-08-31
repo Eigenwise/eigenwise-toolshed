@@ -418,7 +418,8 @@ const tools = [
         by: { type: "string" },
         reason: { type: "string" },
         integration: { type: "boolean" },
-        deliveryCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "Reachable commit or pinned working-tree candidate." },
+        deliveryCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "Reachable delivered source commit or pinned working-tree candidate." },
+        deliveryInteractionCommit: { type: "string", pattern: "^[0-9a-fA-F]{7,64}$", description: "A reviewed merged-tree interaction after deliveryCommit, limited to submitted candidate paths." },
         deliveryMethod: { type: "string", enum: ["reset", "working-tree", "manual"], description: "For a non-reachable pinned candidate." },
         abandonSubmission: { type: "boolean", description: "Retire a candidate that never landed; refused while it is reachable from the integration branch." },
         recoveryEvidence: { type: "string", description: "Observed terminal-agent evidence for an unclaimed dispatch." }
@@ -442,6 +443,7 @@ const tools = [
         purpose,
         abandonSubmission: args.abandonSubmission === true,
         deliveryCommit: args.deliveryCommit,
+        deliveryInteractionCommit: args.deliveryInteractionCommit,
         deliveryMethod: args.deliveryMethod
       });
       if (res.ok) closeDispatchExecutor(ticket);
@@ -800,7 +802,7 @@ const tools = [
   },
   {
     name: "integrate",
-    description: 'Deliver a ref or exact comma group. wave:{dependencies,verification,waveId} assembles and gates only, returning action:"wave_assembled", wave, gate, and deliveryRequired:true; call again without wave to deliver, which returns action:"delivered" and delivery commit or source-revision details. After the delivery record is durable, terminal isolated worktrees are reclaimed best-effort; busy or locked worktrees defer to SessionStart.',
+    description: "Deliver a ref or exact group. wave assembles and gates only; call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.",
     inputSchema: {
       type: "object",
       properties: {
@@ -809,7 +811,8 @@ const tools = [
         project: PROJECT_PROP,
         by: { type: "string" },
         mode: { type: "string", enum: ["merge", "replay", "apply"], description: "Defaults to the board delivery setting." },
-        deliveryCommit: { type: "string", description: "Reachable commit or pinned working-tree candidate." },
+        deliveryCommit: { type: "string", description: "Reachable delivered source commit or pinned working-tree candidate." },
+        deliveryInteractionCommit: { type: "string", description: "Reviewed descendant interaction, limited to submitted paths; the wave gate and merged-tree verifier still pass." },
         deliveryMethod: { type: "string", enum: ["reset", "working-tree", "manual"], description: "For a non-reachable pinned candidate." },
         reason: { type: "string" },
         skipVerify: { type: "boolean", description: "Skip the pinned verifier only when verificationWaiver carries an authorized bounded waiver." },
@@ -893,7 +896,9 @@ const tools = [
           });
         }
       }
-      const admitted = store.validateIntegrationSubmission(slug, args.ref);
+      const admitted = store.validateIntegrationSubmission(slug, args.ref, {
+        deliveryInteractionCommit: args.deliveryInteractionCommit
+      });
       if (!admitted.ok) failures.push({
         reason: admitted.reason,
         message: admitted.message || `integrate: refused ${args.ref}; ${admitted.reason}.`
@@ -903,6 +908,7 @@ const tools = [
         const recorded = store.recordDeliveredSubmission(slug, args.ref, {
           target,
           deliveryCommit: args.deliveryCommit,
+          deliveryInteractionCommit: args.deliveryInteractionCommit,
           deliveryMethod: args.deliveryMethod,
           reason: args.reason,
           skipVerify: args.skipVerify === true,

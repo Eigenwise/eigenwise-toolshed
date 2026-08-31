@@ -2630,6 +2630,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     const recordedSubmission = recordDeliveredSubmission(slug, idOrRef, {
       target,
       deliveryCommit: opts.deliveryCommit,
+      deliveryInteractionCommit: opts.deliveryInteractionCommit,
       deliveryMethod: opts.deliveryMethod,
       reason,
     });

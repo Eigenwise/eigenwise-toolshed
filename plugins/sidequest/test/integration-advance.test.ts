@@ -87,13 +87,14 @@ function submitFixture(slug: string, ticket: any, fixture: any, verify: string |
   });
   assert.equal(range.ok, true, JSON.stringify(range));
   assert.equal(store.claimTicket(slug, ticket.ref, 'fixture-worker', { direct: true, reason: 'The integration fixture requires a local direct claim.' }).ok, true);
-  assert.equal(store.submitTicket(slug, ticket.ref, 'fixture-worker', {
+  const submitted = store.submitTicket(slug, ticket.ref, 'fixture-worker', {
     commit: fixture.submitted,
     gitRef,
     range,
     worktree: fixture.executor,
     verify,
-  }).ok, true);
+  });
+  assert.equal(submitted.ok, true, JSON.stringify(submitted));
 }
 
 test('a clean fast-forward advances the local integration branch to the integrated commit', async () => {
@@ -441,6 +442,83 @@ test('one passing wave delivers its exact Git participant set before recording d
     assert.equal(stored.submission.integration.outcome, 'verified');
     assert.equal(stored.submission.integration.resultingHead, payload.delivery.resultingHead);
   }
+});
+
+test('reviewed assembled-wave delivery records a landed source with its verified interaction and refuses unsafe substitutes', () => {
+  const verify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); const expected=branch==='main'?'46.41\\n':'executor work\\n'; process.exit(fs.readFileSync('feature.txt','utf8')===expected?0:7)");
+  const fixture = makeRepo('reviewed-wave-interaction');
+  const { slug } = store.ensureProject(fixture.repo);
+  const ticket = store.createTicket(slug, {
+    title: 'reviewed merged-tree interaction',
+    category: 'codebase-exploration',
+    description: 'A candidate whose landed source needs a scoped interaction before merged-tree verification.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, ticket, fixture, verify);
+  commitFile(fixture.repo, 'source-base.txt', 'main moved before the source replay\n');
+  git(['cherry-pick', fixture.submitted], fixture.repo);
+  const source = head(fixture.repo);
+  const interaction = commitFile(fixture.repo, 'feature.txt', '46.41\n');
+  const wave = store.assembleSubmissionWave(slug, [ticket.ref]);
+  assert.equal(wave.ok, true, JSON.stringify(wave));
+  assert.equal(wave.gate.state, 'gate_passed');
+
+  const missingLineage = store.recordDeliveredSubmission(slug, ticket.ref, {
+    target: store.integrationTarget(slug),
+    deliveryCommit: fixture.submitted,
+    deliveryInteractionCommit: interaction,
+    reason: 'This source is not on the integration target.',
+  });
+  assert.equal(missingLineage.ok, false);
+  assert.equal(missingLineage.reason, 'delivery_not_reachable');
+
+  const unrelatedInteraction = commitFile(fixture.repo, 'unrelated.txt', 'substitution\n');
+  const unrelated = store.recordDeliveredSubmission(slug, ticket.ref, {
+    target: store.integrationTarget(slug),
+    deliveryCommit: source,
+    deliveryInteractionCommit: unrelatedInteraction,
+    reason: 'This interaction changes a path outside the candidate.',
+  });
+  assert.equal(unrelated.ok, false);
+  assert.equal(unrelated.reason, 'delivery_interaction_outside_candidate');
+
+  const delivered = store.recordDeliveredSubmission(slug, ticket.ref, {
+    target: store.integrationTarget(slug),
+    deliveryCommit: source,
+    deliveryInteractionCommit: interaction,
+    reason: 'The accepted merged-tree interaction updates the landed candidate expectation.',
+  });
+  assert.equal(delivered.ok, true, delivered.message);
+  assert.equal(delivered.integration.mode, 'recorded-reviewed-interaction');
+  assert.equal(delivered.integration.verify.status, 'passed');
+  assert.equal(delivered.integration.deliveryIdentity.kind, 'reviewed-merged-tree-interaction');
+  assert.equal(delivered.integration.deliveryIdentity.sourceCommit, source);
+  assert.equal(delivered.integration.deliveryIdentity.interaction.commit, interaction);
+  assert.match(delivered.integration.contentEvidence, /reviewed_merged_tree_interaction/);
+  assert.equal(store.getTicket(slug, ticket.ref).submission.wave.delivery.state, 'delivered');
+
+  const ungatedFixture = makeRepo('ungated-reviewed-wave-interaction');
+  const { slug: ungatedSlug } = store.ensureProject(ungatedFixture.repo);
+  const ungatedTicket = store.createTicket(ungatedSlug, {
+    title: 'ungated reviewed merged-tree interaction',
+    category: 'codebase-exploration',
+    description: 'A candidate that must not use the interaction route without a passing wave.',
+    files: ['feature.txt'],
+  });
+  submitFixture(ungatedSlug, ungatedTicket, ungatedFixture, nodeVerify('process.exit(7)'));
+  const ungatedWave = store.assembleSubmissionWave(ungatedSlug, [ungatedTicket.ref]);
+  assert.equal(ungatedWave.ok, false);
+  assert.equal(ungatedWave.reason, 'assembled_wave_gate_failed');
+  const ungatedSource = commitFile(ungatedFixture.repo, 'feature.txt', 'landed source\n');
+  const ungatedInteraction = commitFile(ungatedFixture.repo, 'feature.txt', 'landed interaction\n');
+  const ungated = store.recordDeliveredSubmission(ungatedSlug, ungatedTicket.ref, {
+    target: store.integrationTarget(ungatedSlug),
+    deliveryCommit: ungatedSource,
+    deliveryInteractionCommit: ungatedInteraction,
+    reason: 'The wave gate was never accepted.',
+  });
+  assert.equal(ungated.ok, false);
+  assert.equal(ungated.reason, 'assembled_wave_gate_required');
 });
 
 for (const mode of ['merge', 'replay', 'apply']) {

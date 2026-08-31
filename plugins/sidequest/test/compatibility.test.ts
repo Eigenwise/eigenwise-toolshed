@@ -138,7 +138,11 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
   assert.match(byName.get('supersede_submission')?.inputSchema.properties?.supersededBy?.description ?? '', /ticket ref, not a commit/);
   assert.match(byName.get('release')?.description ?? '', /reason required/);
   assert.match(byName.get('groomClose')?.description ?? '', /pinned reset\/working-tree\/manual deliveryMethod/);
+  assert.match(byName.get('groomClose')?.description ?? '', /reviewed interaction/);
   assert.match(byName.get('integrate')?.description ?? '', /pinned deliveryMethod/);
+  assert.match(byName.get('integrate')?.description ?? '', /reviewed interaction/);
+  assert.match(byName.get('groomClose')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
+  assert.match(byName.get('integrate')?.inputSchema.properties?.deliveryInteractionCommit?.description ?? '', /Reviewed descendant/);
   assert.deepEqual(byName.get('groomClose')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
   assert.deepEqual(byName.get('integrate')?.inputSchema.properties?.deliveryMethod?.enum, ['reset', 'working-tree', 'manual']);
 

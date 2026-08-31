@@ -814,9 +814,12 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   } catch {
     integrationBranch = undefined;
   }
-  const scopeValidation = isArtifactSubmission(ticket.submission)
+  let scopeValidation = isArtifactSubmission(ticket.submission)
     ? { ok: true, changedPaths: ticket.submission.changedPaths || [] }
     : commitScope.validateStoredSubmissionRange(project?.path, ticket.submission, ticket.ref, integrationBranch);
+  if (!scopeValidation.ok && opts?.deliveryInteractionCommit && scopeValidation.reason === 'reconciled_path_diverged') {
+    scopeValidation = Object.assign({}, scopeValidation, { ok: true, reviewedMergedTreeInteraction: true });
+  }
   if (!scopeValidation.ok) {
     const outside = Array.isArray(scopeValidation.outside) ? scopeValidation.outside : [];
     if (scopeValidation.reason === 'expected_upstream_diverged') {
@@ -1072,6 +1075,71 @@ function deliveryContainsSubmittedContent(repo: string, submission: any, deliver
     : { ok: true, evidence: 'equivalent_patches' };
 }
 
+function reviewedMergedTreeInteraction(repo: string, ticket: any, sourceCommit: string, resultingHead: string, requestedInteraction: any) {
+  const interaction = String(requestedInteraction || '').trim();
+  if (!interaction) return { ok: true, interaction: null };
+  if (!SUBMISSION_COMMIT_RE.test(interaction)) {
+    return {
+      ok: false,
+      reason: 'delivery_interaction_required',
+      message: `${ticket.ref} reviewed interaction delivery requires a commit hash for deliveryInteractionCommit.`,
+    };
+  }
+  const interactionCommit = integrationGit(repo, ['rev-parse', '--verify', `${interaction}^{commit}`]).toLowerCase();
+  if (interactionCommit === sourceCommit) {
+    return {
+      ok: false,
+      reason: 'delivery_interaction_required',
+      message: `${ticket.ref} reviewed interaction delivery requires a commit after source ${sourceCommit}.`,
+    };
+  }
+  for (const [commit, label] of [[sourceCommit, 'source'], [interactionCommit, 'interaction']]) {
+    try {
+      integrationGit(repo, ['merge-base', '--is-ancestor', commit, resultingHead]);
+    } catch (error: any) {
+      if (error?.status === 1) {
+        return {
+          ok: false,
+          reason: 'delivery_interaction_not_reachable',
+          message: `${ticket.ref} reviewed interaction delivery requires its ${label} commit ${commit} to be reachable from ${resultingHead}.`,
+        };
+      }
+      throw error;
+    }
+  }
+  try {
+    integrationGit(repo, ['merge-base', '--is-ancestor', sourceCommit, interactionCommit]);
+  } catch (error: any) {
+    if (error?.status === 1) {
+      return {
+        ok: false,
+        reason: 'delivery_interaction_not_descendant',
+        message: `${ticket.ref} reviewed interaction ${interactionCommit} must descend from delivered source ${sourceCommit}.`,
+      };
+    }
+    throw error;
+  }
+  const interactionPaths = integrationGit(repo, ['diff', '--name-only', sourceCommit, interactionCommit]).split(/\r?\n/).filter(Boolean);
+  if (!interactionPaths.length) {
+    return {
+      ok: false,
+      reason: 'delivery_interaction_required',
+      message: `${ticket.ref} reviewed interaction ${interactionCommit} did not change the delivered source tree.`,
+    };
+  }
+  const submittedPaths = changedIntegrationPaths(repo, ticket.submission);
+  const unrelatedPaths = interactionPaths.filter((file: string) => !isInScope(file, submittedPaths));
+  if (unrelatedPaths.length) {
+    return {
+      ok: false,
+      reason: 'delivery_interaction_outside_candidate',
+      unrelatedPaths,
+      message: `${ticket.ref} reviewed interaction ${interactionCommit} changes paths outside the submitted candidate: ${unrelatedPaths.join(', ')}. Record that work through its own reviewed delivery.`,
+    };
+  }
+  return { ok: true, interaction: { commit: interactionCommit, paths: interactionPaths } };
+}
+
 function pinnedCandidateMatches(repo: string, ticket: any, candidate: string) {
   try {
     const pinnedCommit = integrationGit(repo, ['rev-parse', '--verify', `${submissionGitRef(ticket)}^{commit}`]).toLowerCase();
@@ -1118,13 +1186,16 @@ function workingTreeDeliveryMethod(value: any) {
 
 function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   opts = opts || {};
-  const preflight = validateIntegrationSubmission(slug, idOrRef);
+  const preflight = validateIntegrationSubmission(slug, idOrRef, { deliveryInteractionCommit: opts.deliveryInteractionCommit });
   if (!preflight.ok) return preflight;
   const preflightTicket = preflight.ticket;
   if (opts.skipVerify === true) return { ok: false, reason: 'delivery_verify_required', ticket: preflightTicket, message: `${preflightTicket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
   const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
   if (!assembled.ok) return assembled;
-  const admitted = validateIntegrationSubmission(slug, idOrRef, { requireAssembledWave: true });
+  const admitted = validateIntegrationSubmission(slug, idOrRef, {
+    requireAssembledWave: true,
+    deliveryInteractionCommit: opts.deliveryInteractionCommit,
+  });
   if (!admitted.ok) return admitted;
   const ticket = admitted.ticket;
   if (!submissionUsesGit(ticket)) return { ok: false, reason: 'git_delivery_required', ticket, message: `${ticket.ref} has no Git candidate to reconcile.` };
@@ -1193,6 +1264,10 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} reconciliation refused: ${deliveryCommit} does not preserve the submitted candidate content for ${content.missing.join(', ')}.`,
       };
     }
+    const interaction = workingTreeDelivery
+      ? { ok: true, interaction: null }
+      : reviewedMergedTreeInteraction(repo, ticket, deliveryCommit, resultingHead, opts.deliveryInteractionCommit);
+    if (!interaction.ok) return Object.assign({ ticket }, interaction);
     const verify = verifyDeliveredSubmission(slug, ticket);
     if (!verificationAccepted(verify)) {
       return integrationFailure(slug, ticket, {
@@ -1205,16 +1280,19 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
     if (!waveDelivery.ok) return integrationFailure(slug, ticket, { reason: waveDelivery.reason, verify, message: waveDelivery.message });
     const deliveredFiles = workingTreeDelivery
       ? workingTreeDeliveryPaths(repo)
-      : deliveredCommitPaths(repo, deliveryCommit);
+      : interaction.interaction
+        ? Array.from(new Set([...deliveredCommitPaths(repo, deliveryCommit), ...interaction.interaction.paths]))
+        : deliveredCommitPaths(repo, deliveryCommit);
     const deliveryIdentity = {
-      kind: workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
+      kind: interaction.interaction ? 'reviewed-merged-tree-interaction' : workingTreeDelivery ? 'pinned-working-tree' : 'reachable-commit',
       pinnedRef: submissionGitRef(ticket),
       candidate: ticket.submission.commit,
       sourceRevision: deliveryRevision,
+      ...(interaction.interaction ? { sourceCommit: deliveryCommit, interaction: interaction.interaction } : {}),
       ...(deliveryMethod ? { method: deliveryMethod } : {}),
     };
     const recorded = updateSubmissionIntegration(slug, ticket.id, {
-      mode: workingTreeDelivery ? 'recorded-working-tree' : 'recorded',
+      mode: interaction.interaction ? 'recorded-reviewed-interaction' : workingTreeDelivery ? 'recorded-working-tree' : 'recorded',
       pinnedRef: submissionGitRef(ticket),
       pinnedCommit: ticket.submission.commit,
       deliveryCommit,
@@ -1228,7 +1306,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       deliveredFiles,
       verify,
       evidence: reason,
-      contentEvidence: content.evidence,
+      contentEvidence: interaction.interaction ? `${content.evidence}:reviewed_merged_tree_interaction` : content.evidence,
       outcome: 'verified',
       recordedAt: new Date().toISOString(),
       deliveredAt: new Date().toISOString(),

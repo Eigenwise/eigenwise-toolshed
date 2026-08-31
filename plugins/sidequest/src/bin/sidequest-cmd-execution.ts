@@ -244,6 +244,7 @@ async function cmdGroomClose(opts: any, positional: any) {
     purpose,
     abandonSubmission: opts['abandon-submission'] === true,
     deliveryCommit: opts['delivery-commit'],
+    deliveryInteractionCommit: opts['delivery-interaction-commit'],
     deliveryMethod: opts['delivery-method'],
   });
   if (res.ok && !res.idempotent) closeDispatchExecutor(ticket);
@@ -670,6 +671,7 @@ async function cmdIntegrate(opts: any, positional: any) {
     const recorded = store.recordDeliveredSubmission(slug, idOrRef, {
       target,
       deliveryCommit: opts['delivery-commit'],
+      deliveryInteractionCommit: opts['delivery-interaction-commit'],
       deliveryMethod: opts['delivery-method'],
       reason: opts.reason,
       skipVerify: !!opts['skip-verify'],

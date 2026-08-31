@@ -1,7 +1,7 @@
 [
   {
     "name": "context_page",
-    "description": "Continue context.",
+    "description": "Continue.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -77,7 +77,7 @@
   },
   {
     "name": "pulse",
-    "description": "Read ticket liveness.",
+    "description": "Liveness.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -150,7 +150,7 @@
   },
   {
     "name": "story_contract",
-    "description": "Read story contract pages.",
+    "description": "Story contract.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -239,7 +239,7 @@
   },
   {
     "name": "add",
-    "description": "File a ticket. review-audit binds reviewTarget to one terminal candidate.",
+    "description": "File ticket; review-audit binds candidate.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -401,7 +401,7 @@
   },
   {
     "name": "update",
-    "description": "Update scope; reviewTarget binds once.",
+    "description": "Update scope.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -588,7 +588,7 @@
   },
   {
     "name": "remove",
-    "description": "Delete ticket; claims need force:true.",
+    "description": "Delete; force for claims.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -609,7 +609,7 @@
   },
   {
     "name": "archive",
-    "description": "Archive ticket(s).",
+    "description": "Archive.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -695,7 +695,7 @@
   },
   {
     "name": "checkpoint",
-    "description": "Record candidate; retain claim.",
+    "description": "Retain claim.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -747,7 +747,7 @@
   },
   {
     "name": "sweepClaims",
-    "description": "Release dead claims; live claims stay.",
+    "description": "Sweep dead claims.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -759,7 +759,7 @@
   },
   {
     "name": "next",
-    "description": "Claim next ticket.",
+    "description": "Next ticket.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -843,7 +843,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Close: deliveryCommit reachable or pinned reset/working-tree/manual deliveryMethod.",
+    "description": "Close: pinned reset/working-tree/manual deliveryMethod; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -865,6 +865,11 @@
         "deliveryCommit": {
           "type": "string",
           "pattern": "^[0-9a-fA-F]{7,64}$"
+        },
+        "deliveryInteractionCommit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,64}$",
+          "description": "Reviewed descendant, submitted paths only."
         },
         "deliveryMethod": {
           "type": "string",
@@ -1023,7 +1028,7 @@
   },
   {
     "name": "commit",
-    "description": "Commit declared scope.",
+    "description": "Commit scope.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1183,7 +1188,7 @@
   },
   {
     "name": "integrate",
-    "description": "Deliver ref/wave; pinned deliveryMethod supported.",
+    "description": "Deliver ref/wave; pinned deliveryMethod; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1209,6 +1214,10 @@
         },
         "deliveryCommit": {
           "type": "string"
+        },
+        "deliveryInteractionCommit": {
+          "type": "string",
+          "description": "Reviewed descendant, submitted paths only."
         },
         "deliveryMethod": {
           "type": "string",
@@ -1298,7 +1307,7 @@
   },
   {
     "name": "comment",
-    "description": "Add a handoff comment.",
+    "description": "Handoff.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1323,7 +1332,7 @@
   },
   {
     "name": "plan",
-    "description": "Set ticket plan.",
+    "description": "Ticket plan.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1360,7 +1369,7 @@
         },
         "full": {
           "type": "boolean",
-          "description": "Whole bodies; bypasses elision."
+          "description": "Whole bodies."
         },
         "since": {
           "type": "string",
@@ -1383,7 +1392,7 @@
   },
   {
     "name": "link",
-    "description": "Link tickets.",
+    "description": "Ticket link.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1436,7 +1445,7 @@
   },
   {
     "name": "assign",
-    "description": "Set ticket assignee.",
+    "description": "Assignee.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1469,7 +1478,7 @@
         },
         "sharedTree": {
           "type": "boolean",
-          "description": "Use only from the declared shared checkout. Omit for an isolated checkout. Executors with live claims cannot dispatch child work."
+          "description": "Only declared shared checkout. Omit for an isolated checkout. Live claims cannot dispatch."
         },
         "allowRepeatFailure": {
           "type": "boolean"
@@ -1482,7 +1491,7 @@
         },
         "recoveryEvidence": {
           "type": "string",
-          "description": "Recovery evidence for a failed dispatch."
+          "description": "Recovery evidence."
         },
         "full": {
           "type": "boolean"

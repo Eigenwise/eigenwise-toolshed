@@ -36,14 +36,14 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   reconcile: ['session', 'reason', 'ref'],
   work: ['ref'],
   drain: ['ref'],
-  'groom-close': ['by', 'reason', 'integration', 'abandon-submission', 'delivery-commit', 'delivery-method', 'recovery-evidence'],
+  'groom-close': ['by', 'reason', 'integration', 'abandon-submission', 'delivery-commit', 'delivery-interaction-commit', 'delivery-method', 'recovery-evidence'],
   verdict: ['text', 'outcome', 'why', 'constraint'],
   release: ['by', 'reason', 'oracle', 'release-kind', 'command', 'exit-code', 'output-tail', 'candidate', 'deliverable', 'force', 'status'],
   'scope-request': ['by', 'file', 'force'],
   commit: ['by', 'message'],
   rework: ['by', 'review', 'review-ref', 'reason'],
   'assemble-wave': ['wave-id', 'dependency', 'verify-kind', 'verify'],
-  integrate: ['by', 'mode', 'delivery-commit', 'delivery-method', 'reason', 'skip-verify', 'waiver-authority', 'waiver-reason', 'waiver-gate', 'waiver-scope', 'waiver-expires-at'],
+  integrate: ['by', 'mode', 'delivery-commit', 'delivery-interaction-commit', 'delivery-method', 'reason', 'skip-verify', 'waiver-authority', 'waiver-reason', 'waiver-gate', 'waiver-scope', 'waiver-expires-at'],
   publish: ['repo', 'steal', 'force'],
   assign: ['to', 'by'],
   unassign: [],
@@ -310,7 +310,7 @@ Working the board safely (multi-agent):
   sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "<command: result>" [--ttl-minutes N]   record a live review candidate while the claim and dispatch stay active
   sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why this is inline-safe"]   claim the best available ticket (routed tickets need --direct here because next has no dispatch token)
   sidequest done <id|SQ-n> [--by who] [--model tier] [--effort level] [--body-file path]   close non-repo or active authorized artifact work
-  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-method reset|working-tree|manual] [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish; a non-reachable submitted candidate needs --delivery-method plus matching content in the integration working tree; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
+  sidequest groom-close <id|SQ-n> --reason <evidence> [--by who] [--integration | --delivery-commit <sha> [--delivery-interaction-commit <sha>] [--delivery-method reset|working-tree|manual] [--recovery-evidence "terminal-agent evidence"]]   control-plane closure; --integration consumes a submitted ticket after publish; a reviewed interaction must descend from the delivered source, stay inside submitted candidate paths, and pass the merged-tree gate; a non-reachable submitted candidate needs --delivery-method plus matching content in the integration working tree; invalid legacy scope must move through rework or supersede_submission instead of bypassing admission; --abandon-submission records a pending submission as abandoned rather than delivered, and is refused while its candidate is still reachable from the integration target
   sidequest release <id|SQ-n> [--by who] [-s todo] --reason "why" --release-kind technical_blocker --command "failed command" --exit-code N --output-tail "failure output" | --reason "why" --release-kind contradiction --command "verbatim probe" --output-tail "probe output" [--exit-code N] | --reason "why" --release-kind handback | --release-kind oracle --oracle "human verdict ask" [--candidate <hash>] [--deliverable <path-or-url>] parks the ticket awaiting the human verdict, then exits
   sidequest verdict <id|SQ-n> --text "verbatim user words" --outcome accepted|rejected|inconclusive [--why "orchestrator reading"] [--constraint "rule bought"] record an oracle verdict
   sidequest scope-request <id|SQ-n> --file path [--file path...] [--by who] request scope and receive an immediate ruling
@@ -325,7 +325,7 @@ Working the board safely (multi-agent):
   sidequest assemble-wave <SQ-n> [SQ-n...] [--dependency AFTER=BEFORE] [--verify-kind <kind> --verify "gate evidence"]
     pin compatible candidates to one immutable baseline, declared surfaces, and dependencies; incompatible candidates become invalidated and must refresh_and_reverify before a new wave
   sidequest integrate <id|SQ-n> [id|SQ-n...] --by who [--mode merge|replay|apply]   deliver one ready candidate or the exact assembled wave, verify the resulting revision, and close every participant
-    --delivery-commit <sha> --reason "evidence" records a reviewed candidate delivered externally; use --delivery-method reset|working-tree|manual when the pinned candidate is not reachable but its full submitted content is present in the integration working tree; every route still requires the merged-tree gate
+    --delivery-commit <sha> --reason "evidence" records a reviewed candidate delivered externally; --delivery-interaction-commit <sha> records one descendant merged-tree interaction limited to submitted candidate paths; use --delivery-method reset|working-tree|manual when the pinned candidate is not reachable but its full submitted content is present in the integration working tree; every route still requires the merged-tree gate
   sidequest publish lock|unlock|status [--repo path] [--steal] [--force]   cross-process publish lock (owner pid +
     session metadata in the repo's common git dir; stale/dead holders reclaimable, --steal takes over explicitly)
   sidequest publish queue [--json]                 tickets awaiting the publish transaction, oldest first
