@@ -2620,7 +2620,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
     }
   }
   let reconciledDelivery: any = null;
-  if (purpose === 'delivery' && pendingSubmission(ticket) && opts.deliveryMethod != null) {
+  if (purpose === 'delivery' && pendingSubmission(ticket) && (opts.deliveryMethod != null || opts.deliveryInteractionCommit != null)) {
     let target: any;
     try {
       target = integrationTarget(slug);

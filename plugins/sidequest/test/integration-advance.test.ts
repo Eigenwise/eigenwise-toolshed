@@ -521,6 +521,87 @@ test('reviewed assembled-wave delivery records a landed source with its verified
   assert.equal(ungated.reason, 'assembled_wave_gate_required');
 });
 
+test('control-plane delivery validates a supplied reviewed interaction and preserves ordinary reachable closure', () => {
+  const refusedFixture = makeRepo('control-plane-refused-interaction');
+  const { slug: refusedSlug } = store.ensureProject(refusedFixture.repo);
+  const refusedTicket = store.createTicket(refusedSlug, {
+    title: 'refuse unrelated reviewed interaction delivery',
+    category: 'codebase-exploration',
+    description: 'A submitted candidate must not close against unrelated reachable delivery evidence.',
+    files: ['feature.txt'],
+  });
+  submitFixture(refusedSlug, refusedTicket, refusedFixture);
+  const unrelatedSource = commitFile(refusedFixture.repo, 'unrelated.txt', 'unrelated reachable source\n');
+
+  const refused = store.completeTicketAsControlPlane(refusedSlug, refusedTicket.ref, {
+    purpose: 'delivery',
+    by: 'orchestrator',
+    reason: 'An unrelated source and invalid interaction cannot consume the candidate.',
+    deliveryCommit: unrelatedSource,
+    deliveryInteractionCommit: 'deadbeef',
+  });
+
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'delivery_content_missing');
+  const retained = store.getTicket(refusedSlug, refusedTicket.ref);
+  assert.equal(retained.status, 'doing');
+  assert.equal(retained.submission.commit, refusedFixture.submitted);
+  assert.equal(retained.submission.integratedAt, undefined);
+
+  const reviewedVerify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); const expected=branch==='main'?'reviewed result\\n':'executor work\\n'; process.exit(fs.readFileSync('feature.txt','utf8')===expected?0:7)");
+  const reviewedFixture = makeRepo('control-plane-reviewed-interaction');
+  const { slug: reviewedSlug } = store.ensureProject(reviewedFixture.repo);
+  const reviewedTicket = store.createTicket(reviewedSlug, {
+    title: 'accept reviewed descendant interaction delivery',
+    category: 'codebase-exploration',
+    description: 'A reviewed descendant interaction closes through the recorded-delivery validator.',
+    files: ['feature.txt'],
+  });
+  submitFixture(reviewedSlug, reviewedTicket, reviewedFixture, reviewedVerify);
+  git(['cherry-pick', reviewedFixture.submitted], reviewedFixture.repo);
+  const reviewedSource = head(reviewedFixture.repo);
+  const reviewedInteraction = commitFile(reviewedFixture.repo, 'feature.txt', 'reviewed result\n');
+
+  const delivered = store.completeTicketAsControlPlane(reviewedSlug, reviewedTicket.ref, {
+    purpose: 'delivery',
+    by: 'orchestrator',
+    reason: 'The reviewed descendant is present and verified on the integration tree.',
+    deliveryCommit: reviewedSource,
+    deliveryInteractionCommit: reviewedInteraction,
+  });
+
+  assert.equal(delivered.ok, true, delivered.message);
+  const reviewed = store.getTicket(reviewedSlug, reviewedTicket.ref);
+  assert.equal(reviewed.status, 'done');
+  assert.equal(reviewed.submission.integration.mode, 'recorded-reviewed-interaction');
+  assert.equal(reviewed.submission.integration.deliveryIdentity.sourceCommit, reviewedSource);
+  assert.equal(reviewed.submission.integration.deliveryIdentity.interaction.commit, reviewedInteraction);
+  assert.equal(reviewed.submission.integration.verify.status, 'passed');
+  assert.equal(reviewed.submission.wave.delivery.state, 'delivered');
+
+  const ordinaryFixture = makeRepo('control-plane-ordinary-reachable');
+  const { slug: ordinarySlug } = store.ensureProject(ordinaryFixture.repo);
+  const ordinaryTicket = store.createTicket(ordinarySlug, {
+    title: 'preserve ordinary reachable delivery closure',
+    category: 'codebase-exploration',
+    description: 'A reachable hand delivery without interaction evidence keeps its existing closure path.',
+    files: ['feature.txt'],
+  });
+  submitFixture(ordinarySlug, ordinaryTicket, ordinaryFixture);
+  const ordinaryDelivery = commitFile(ordinaryFixture.repo, 'ordinary.txt', 'ordinary reachable delivery\n');
+
+  const ordinary = store.completeTicketAsControlPlane(ordinarySlug, ordinaryTicket.ref, {
+    purpose: 'delivery',
+    by: 'orchestrator',
+    reason: 'The ordinary reachable delivery remains supported without an interaction commit.',
+    deliveryCommit: ordinaryDelivery,
+  });
+
+  assert.equal(ordinary.ok, true, ordinary.message);
+  assert.equal(store.getTicket(ordinarySlug, ordinaryTicket.ref).status, 'done');
+  assert.equal(ordinary.ticket.completion.delivery.commit, ordinaryDelivery);
+});
+
 for (const mode of ['merge', 'replay', 'apply']) {
   test(`integrate ${mode} delivers a ready submission and preserves its pinned ref`, () => {
     const { fixture, slug, ticket, runCli } = deliveryTicket(mode);

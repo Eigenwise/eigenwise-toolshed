@@ -2482,7 +2482,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     }
   }
   let reconciledDelivery = null;
-  if (purpose === "delivery" && pendingSubmission(ticket) && opts.deliveryMethod != null) {
+  if (purpose === "delivery" && pendingSubmission(ticket) && (opts.deliveryMethod != null || opts.deliveryInteractionCommit != null)) {
     let target;
     try {
       target = integrationTarget(slug);
