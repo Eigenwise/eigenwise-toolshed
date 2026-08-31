@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.509.0 (2026-08-31)
+
+### sidequest 5.0.19 → 5.0.20
+
+#### Fixes
+
+- Record oracle review rejections (SQ-2370)
+  Rejected oracle verdicts now retire the rejected candidate after a reviewed integrated repair, while accepted reviews stay locked.
+- Deliver reviewed assembled-wave interactions (SQ-2371)
+  Allow assembled-wave delivery when a reviewed descendant interaction preserves the submitted paths and passes merged-tree verification.
+- Validate reviewed groom-close interactions (SQ-2376)
+  Validate every supplied delivery interaction through candidate containment, assembled-wave gating, and merged-tree verification before groom-close can consume a submission.
+
 ## v3.508.0 (2026-08-28)
 
 ### sidequest 5.0.18 → 5.0.19
