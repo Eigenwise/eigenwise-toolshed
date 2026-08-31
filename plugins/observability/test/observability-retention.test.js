@@ -149,9 +149,19 @@ test('a second observer can write after retention pruning', (t) => {
 });
 
 test('retention CLI previews by default and requires an explicit apply flag', (t) => {
+  const retentionWindowMilliseconds = 30 * 24 * 60 * 60 * 1000;
+  const testRunNow = Date.now();
+  const expiredObservedAt = new Date(testRunNow - (retentionWindowMilliseconds * 2)).toISOString();
+  const currentObservedAt = new Date(testRunNow - Math.floor(retentionWindowMilliseconds / 2)).toISOString();
+  const hardCodedFreshTimestamp = Date.parse('2026-08-01T12:00:00.000Z');
+  const dateAfterHardCodedFixtureExpires = Date.parse('2026-09-01T12:00:00.000Z');
+  const hardCodedFixtureCutoff = dateAfterHardCodedFixtureExpires - retentionWindowMilliseconds;
+
+  assert.equal(hardCodedFreshTimestamp < hardCodedFixtureCutoff, true);
+
   const { databaseFile, store } = temporaryStore(t);
-  ingest(store, usageObservation('old', '2026-05-01T12:00:00.000Z', 100));
-  ingest(store, usageObservation('fresh', '2026-08-01T12:00:00.000Z', 200));
+  ingest(store, usageObservation('old', expiredObservedAt, 100));
+  ingest(store, usageObservation('fresh', currentObservedAt, 200));
   store.close();
   const before = rowCounts(databaseFile);
 
