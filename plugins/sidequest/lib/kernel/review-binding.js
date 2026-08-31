@@ -124,9 +124,7 @@ function reviewRelationRef(relation) {
   return relation?.reviewTicket?.ref || relation?.mirror?.ref || "a candidate review";
 }
 function reviewOutcomeFromOracleVerdict(outcome) {
-  if (outcome === "accepted") return "rejected";
-  if (outcome === "rejected") return "accepted";
-  return "inconclusive";
+  return outcome;
 }
 function reviewRelationOutcome(relation) {
   return String(relation?.mirror?.outcome || relation?.reviewTarget?.outcome || "planned");
