@@ -542,7 +542,7 @@ test('a historical rejected review outcome stays readable and keeps integration 
   assert.equal(store.getTicket(slug, source.ref).rejectedSubmissions.length, 1, 'the historical record is still readable');
 });
 
-test('an oracle-confirmed review defect marks both binding halves rejected', async () => {
+test('an oracle rejection marks both binding halves rejected and permits a reviewed integrated replacement', async () => {
   const { repository, slug, commit: candidate } = board('oracle-rejection');
   const source = submittedSource(slug, candidate, 'oracle-rejection');
   const review = store.createTicket(slug, {
@@ -567,8 +567,8 @@ test('an oracle-confirmed review defect marks both binding halves rejected', asy
   const verdict = await tool('verdict').handler({
     project: repository,
     ref: review.ref,
-    text: 'The recorded defect is confirmed.',
-    outcome: 'accepted',
+    text: 'The candidate is rejected because the recorded defect is confirmed.',
+    outcome: 'rejected',
     why: 'The review found a reproducible defect in the pinned candidate.',
     constraint: 'Replace the candidate before integration.',
   });
@@ -612,8 +612,54 @@ test('an oracle-confirmed review defect marks both binding halves rejected', asy
   assert.equal(closed.submission.integration.outcome, 'superseded');
 });
 
-test('a rejected oracle defect conclusion marks the bound candidate accepted', () => {
-  assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('rejected'), 'accepted');
+test('an accepted oracle review continues to lock candidate supersession', async () => {
+  const { repository, slug, commit: candidate } = board('oracle-acceptance');
+  const source = submittedSource(slug, candidate, 'oracle-acceptance');
+  const review = store.createTicket(slug, {
+    title: 'oracle-accepted review',
+    category: 'review-audit',
+    files: ['candidate.txt'],
+  }, { ref: source.ref, commit: candidate });
+  const claimedReview = store.getTicket(slug, review.ref);
+  claimedReview.status = 'doing';
+  claimedReview.claim = { by: 'reviewer', at: new Date().toISOString() };
+  claimedReview.dispatch = { launchSeq: 1 };
+  persist(slug, claimedReview);
+
+  const released = await tool('release').handler({
+    project: repository,
+    ref: review.ref,
+    by: 'reviewer',
+    kind: 'oracle',
+    oracle: 'Does the review accept this candidate?',
+  });
+  assert.equal(released.ok, true, released.message);
+  const verdict = await tool('verdict').handler({
+    project: repository,
+    ref: review.ref,
+    text: 'The candidate is accepted.',
+    outcome: 'accepted',
+    why: 'The review found no defect in the pinned candidate.',
+    constraint: 'Keep the accepted candidate immutable.',
+  });
+  assert.equal(verdict.ok, true, verdict.message);
+  assert.equal(store.getTicket(slug, review.ref).reviewTarget.outcome, 'accepted');
+  assert.equal(store.getTicket(slug, source.ref).submission.review.outcome, 'accepted');
+
+  const superseded = await tool('supersede_submission').handler({
+    project: repository,
+    ref: source.ref,
+    by: 'orchestrator',
+    supersededBy: 'SQ-repair',
+    reason: 'An accepted candidate must remain immutable.',
+  });
+  assert.equal(superseded.ok, false);
+  assert.equal(superseded.reason, 'candidate_review_locked');
+});
+
+test('oracle outcomes retain their candidate review meaning', () => {
+  assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('accepted'), 'accepted');
+  assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('rejected'), 'rejected');
   assert.equal(reviewBinding.reviewOutcomeFromOracleVerdict('inconclusive'), 'inconclusive');
 });
 

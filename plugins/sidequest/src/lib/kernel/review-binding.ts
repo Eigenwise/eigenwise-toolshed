@@ -169,9 +169,7 @@ export function reviewRelationRef(relation?: ReviewRelation | null): string {
 }
 
 export function reviewOutcomeFromOracleVerdict(outcome: OracleVerdictOutcome): ReviewOutcome {
-  if (outcome === 'accepted') return 'rejected';
-  if (outcome === 'rejected') return 'accepted';
-  return 'inconclusive';
+  return outcome;
 }
 
 export function reviewRelationOutcome(relation?: ReviewRelation | null): string {
