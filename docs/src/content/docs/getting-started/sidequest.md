@@ -126,6 +126,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. A running ticket can stay in doing until its verification and delivery steps finish. If the work was merged by hand after an integration conflict, Claude can record the delivered commit and close the ticket with that evidence.
 
+**A delivery included a reviewed interaction.** Claude may record the delivered source commit together with one reviewed interaction commit when that interaction descends from the source, stays within the submitted candidate paths, and still passes the assembled-wave and merged-tree gates. If any of those checks fail, ask Claude to inspect the submission instead of treating the interaction as delivered.
+
 **A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.
 
 **A submission sat so long it can no longer be integrated.** If the branch has moved far enough that the submitted work no longer merges, there is nothing left to review. Ask Claude to check whether the behavior the ticket asked for is already on the branch. If it is, Claude retires the submission with that evidence and closes the ticket; if it is not, the work needs re-filing against current source. Claude cannot retire a submission whose commit did reach the branch, so this cannot quietly discard work that shipped.
