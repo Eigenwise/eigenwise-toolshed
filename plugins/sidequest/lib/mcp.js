@@ -212,7 +212,7 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   update: { verify: ATTESTATION_VERIFY_CONTRACT },
   supersede_submission: { supersededBy: "Repair ticket ref, not a commit." },
   comments: {
-    full: "Whole bodies; bypasses elision.",
+    full: "Whole bodies.",
     since: "Comment id or ISO timestamp."
   },
   list: {
@@ -225,7 +225,9 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   },
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears fallback." },
-  dispatch: { sharedTree: "Use only from the declared shared checkout. Omit for an isolated checkout. Executors with live claims cannot dispatch child work.", recoveryEvidence: "Recovery evidence for a failed dispatch." }
+  dispatch: { sharedTree: "Only declared shared checkout. Omit for an isolated checkout. Live claims cannot dispatch.", recoveryEvidence: "Recovery evidence." },
+  integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
+  groomClose: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." }
 };
 function toolDescriptor(tool) {
   const inputSchema = compactSchema(tool.inputSchema);
