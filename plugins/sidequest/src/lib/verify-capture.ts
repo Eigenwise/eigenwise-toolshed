@@ -50,9 +50,16 @@ function captureProject(target: CaptureTarget): CaptureProject | null {
   return project.ok && project.slug && projectPath ? Object.freeze({ slug: project.slug, path: projectPath }) : null;
 }
 
+function captureWorkingDirectory(target: CaptureTarget, cwd: string): string {
+  const project = captureProject(target);
+  if (!project) return cwd;
+  const store = require('./store.js') as VerificationCaptureStore;
+  const ticket = store.getTicket(project.slug, target.ticket);
+  return store.workingTreeDeliveryCandidate(project.slug, ticket) ? project.path : cwd;
+}
+
 async function runCapturedVerification(command: string, target: CaptureTarget | null, cwd = process.cwd()) {
-  const project = target ? captureProject(target) : null;
-  const captureCwd = project?.path || cwd;
+  const captureCwd = target ? captureWorkingDirectory(target, cwd) : cwd;
   const capture = await runVerifyCapture(command, captureCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd) : null;
   return Object.freeze({ capture, recorded });

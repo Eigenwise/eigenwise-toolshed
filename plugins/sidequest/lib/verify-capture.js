@@ -28,9 +28,15 @@ function captureProject(target) {
   const projectPath = String(project.meta?.path || "").trim();
   return project.ok && project.slug && projectPath ? Object.freeze({ slug: project.slug, path: projectPath }) : null;
 }
+function captureWorkingDirectory(target, cwd) {
+  const project = captureProject(target);
+  if (!project) return cwd;
+  const store = require("./store.js");
+  const ticket = store.getTicket(project.slug, target.ticket);
+  return store.workingTreeDeliveryCandidate(project.slug, ticket) ? project.path : cwd;
+}
 async function runCapturedVerification(command, target, cwd = process.cwd()) {
-  const project = target ? captureProject(target) : null;
-  const captureCwd = project?.path || cwd;
+  const captureCwd = target ? captureWorkingDirectory(target, cwd) : cwd;
   const capture = await runVerifyCapture(command, captureCwd);
   const recorded = target ? recordCapture(target, capture, captureCwd) : null;
   return Object.freeze({ capture, recorded });
