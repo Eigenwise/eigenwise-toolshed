@@ -243,7 +243,7 @@ test('shared-tree done refuses dirty files inside its declared scope', () => {
 });
 
 test('a shared-tree working-tree deliverable closes with its scoped paths and pinned verification capture', async () => {
-  const command = 'cd';
+  const command = 'node -p "process.cwd()"';
   const created = store.createTicket(slug, {
     title: 'leave a scoped working-tree deliverable',
     description: 'The declared paths must remain uncommitted in the shared checkout.',
