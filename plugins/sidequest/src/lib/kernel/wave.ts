@@ -22,7 +22,6 @@ export type CandidateInvalidation = Readonly<{
   ref: string;
   state: 'invalidated';
   reason: 'baseline_moved' | 'surface_overlap' | 'verification_required' | 'participant_missing';
-  refreshRoute: 'refresh_and_reverify';
   message: string;
 }>;
 
@@ -95,7 +94,12 @@ function participantFor(wave: Wave, ref: string): WaveParticipant | null {
 }
 
 function invalidation(ref: string, reason: CandidateInvalidation['reason'], message: string): CandidateInvalidation {
-  return Object.freeze({ ref, state: 'invalidated', reason, refreshRoute: 'refresh_and_reverify', message });
+  return Object.freeze({
+    ref,
+    state: 'invalidated',
+    reason,
+    message: `${message} Candidate submissions remain available. Call integrate with one candidate ref, redispatch a candidate against the current base, or have the integrator use groomClose after a verified reconciled delivery.`,
+  });
 }
 
 export function openWave(input: Readonly<{

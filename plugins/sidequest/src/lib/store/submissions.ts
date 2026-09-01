@@ -553,8 +553,7 @@ function submissionRangeMetadata(range?: any, commit?: any) {
 // A submission that has not been consumed by a done transition yet — the
 // ticket is parked for the publish transaction, not for another executor.
 function pendingSubmission(t?: any) {
-  const invalidated = t?.submission?.wave?.state === 'invalidated';
-  return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt && !invalidated);
+  return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt);
 }
 
 function submissionGitRef(ticket?: any) {
@@ -2712,13 +2711,6 @@ function ensureSingletonAssembledWave(slug: any, idOrRef: any, opts?: any) {
     if ('code' in waiver) return { ok: false, reason: waiver.code, message: waiver.message, ticket };
   }
   const existing = ticket.submission?.wave;
-  if (existing?.state === 'invalidated') {
-    return {
-      ok: false,
-      reason: 'refresh_and_reverify',
-      message: `${ticket.ref} was invalidated from wave ${existing.id}. Redispatch it through refresh_and_reverify before assembling a new wave.`,
-    };
-  }
   const retryWithWaiver = existing?.gate?.state === 'gate_failed' && opts?.skipVerify === true;
   if (retryWithWaiver) {
     const assembled = assembleSubmissionWave(slug, [ticket.ref], {
@@ -2732,7 +2724,7 @@ function ensureSingletonAssembledWave(slug: any, idOrRef: any, opts?: any) {
   }
   const admitted = assembledWaveForDelivery(slug, ticket);
   if (admitted.ok) return admitted;
-  if (existing) return admitted;
+  if (existing && existing.state !== 'invalidated') return admitted;
   const assembled = assembleSubmissionWave(slug, [ticket.ref], {
     waveId: `delivery-${ticket.ref}-${crypto.randomBytes(6).toString('hex')}`,
     verification: ticket.submission?.verificationResult,

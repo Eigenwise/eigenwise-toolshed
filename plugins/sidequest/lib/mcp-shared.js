@@ -777,10 +777,19 @@ function pageRows(rows, args, action, buildPayload, maxBytes) {
 function pagedPayload(rows, args, action, buildPayload, full) {
   return pageRows(rows, args, action, buildPayload, CONTEXT_PAGE_PAYLOAD_MAX_BYTES);
 }
+function compactWave(wave) {
+  if (wave?.state !== "invalidated") return null;
+  return {
+    id: wave.id || null,
+    state: wave.state,
+    reason: wave.invalidation?.reason || null
+  };
+}
 function compactPulse(pulse) {
   const lastComment = pulse.lastComment && Object.assign({}, pulse.lastComment, {
     body: boundedExcerpt(pulse.lastComment.body, COMPACT_PULSE_BODY_MAX_CHARS).text
   });
+  const wave = compactWave(pulse.submission?.wave);
   return {
     ref: pulse.ref,
     status: pulse.status,
@@ -790,6 +799,7 @@ function compactPulse(pulse) {
     lastComment,
     checkpoint: pulse.checkpoint,
     ...pulse.oracle ? { oracle: pulse.oracle } : {},
+    ...wave ? { wave } : {},
     ...Array.isArray(pulse.warnings) && pulse.warnings.length ? { warnings: pulse.warnings } : {},
     dispatch: pulse.dispatch && {
       state: pulse.dispatch.state,

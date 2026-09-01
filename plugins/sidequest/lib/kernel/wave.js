@@ -55,7 +55,12 @@ function participantFor(wave, ref) {
   return wave.participants.find((participant) => participant.ref === ref) || null;
 }
 function invalidation(ref, reason, message) {
-  return Object.freeze({ ref, state: "invalidated", reason, refreshRoute: "refresh_and_reverify", message });
+  return Object.freeze({
+    ref,
+    state: "invalidated",
+    reason,
+    message: `${message} Candidate submissions remain available. Call integrate with one candidate ref, redispatch a candidate against the current base, or have the integrator use groomClose after a verified reconciled delivery.`
+  });
 }
 function openWave(input) {
   const participantRefs = /* @__PURE__ */ new Set();

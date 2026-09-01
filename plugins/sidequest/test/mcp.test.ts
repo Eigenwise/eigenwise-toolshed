@@ -1348,6 +1348,36 @@ test('pulse exposes an immediate refused scope ruling', async () => {
   assert.deepEqual(ruled.scope.lastRuling.refused, ['lib/b.js']);
 });
 
+test('pulse exposes a refused wave without making callers fetch full submission data', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-pulse-invalidated-wave-'))).slug;
+  const ticket = store.createTicket(project, {
+    title: 'invalidated wave pulse', files: ['lib/a.js'], complexity: 2,
+    labels: ['direct-ok'], complexityWhy: 'the compact pulse must name a refused wave directly',
+  });
+  ticket.submission = {
+    wave: {
+      id: 'wave-pulse-fixture',
+      state: 'invalidated',
+      invalidation: { reason: 'surface_overlap' },
+    },
+  };
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: ticket.id,
+    project,
+    ref: ticket.ref,
+    status: ticket.status,
+    archived: 0,
+    ord: ticket.order,
+    claim_by: null,
+    data: ticket,
+  });
+
+  const pulse = await callTool('pulse', { project, ref: ticket.ref });
+
+  assert.deepEqual(pulse.wave, { id: 'wave-pulse-fixture', state: 'invalidated', reason: 'surface_overlap' });
+  assert.equal(pulse.submission, undefined);
+});
+
 test('write acks and pulse stay lean: no body echoes, no lifecycle noise by default', async () => {
   const project = store.ensureProject(path.join(os.tmpdir(), 'sq-mcp-lean-shapes'), 'SQ lean shapes').slug;
   const ticket = store.createTicket(project, {

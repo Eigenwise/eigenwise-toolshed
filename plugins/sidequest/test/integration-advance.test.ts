@@ -444,6 +444,60 @@ test('one passing wave delivers its exact Git participant set before recording d
   }
 });
 
+test('a refused wave preserves submitted candidates for individual integration', () => {
+  const fixture = makeRepo('refused-wave-keeps-candidates');
+  const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-conflict');
+  git(['worktree', 'add', '-b', 'worktree-agent-conflict', secondWorktree, 'main'], fixture.repo);
+  const secondCommit = commitFile(secondWorktree, 'feature.txt', 'conflicting executor work\n');
+  const { slug } = store.ensureProject(fixture.repo);
+  const first = store.createTicket(slug, {
+    title: 'first conflicting wave candidate',
+    category: 'codebase-exploration',
+    description: 'Keep its submitted candidate after a refused wave.',
+    files: ['feature.txt'],
+  });
+  const second = store.createTicket(slug, {
+    title: 'second conflicting wave candidate',
+    category: 'codebase-exploration',
+    description: 'Conflicts with the first candidate only at wave assembly.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, first, fixture);
+  const secondRef = `refs/sidequest/${second.ref}`;
+  git(['update-ref', secondRef, secondCommit], secondWorktree);
+  const target = store.integrationTarget(slug);
+  const secondRange = commitScope.submissionRange(secondWorktree, {
+    commit: secondCommit,
+    gitRef: secondRef,
+    upstream: target.upstream,
+    integrationBranch: target.branch,
+  });
+  assert.equal(secondRange.ok, true, JSON.stringify(secondRange));
+  assert.equal(store.claimTicket(slug, second.ref, 'conflicting-fixture-worker', { direct: true, reason: 'The conflicting wave fixture needs a direct claim.' }).ok, true);
+  assert.equal(store.submitTicket(slug, second.ref, 'conflicting-fixture-worker', {
+    commit: secondCommit,
+    gitRef: secondRef,
+    range: secondRange,
+    worktree: secondWorktree,
+  }).ok, true);
+
+  const refusal = store.assembleSubmissionWave(slug, [first.ref, second.ref], {
+    verification: store.getTicket(slug, first.ref).submission.verificationResult,
+  });
+
+  assert.equal(refusal.ok, false);
+  assert.equal(refusal.reason, 'wave_invalidated');
+  for (const ticketRef of [first.ref, second.ref]) {
+    const stored = store.getTicket(slug, ticketRef);
+    assert.equal(stored.status, 'todo');
+    assert.equal(stored.lifecycleAttempt.state, 'invalidated');
+    assert.equal(stored.submission.wave.state, 'invalidated');
+  }
+  const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
+  assert.equal(individual.ok, true, JSON.stringify(individual));
+  assert.equal(individual.integration.mode, 'merge');
+});
+
 test('reviewed assembled-wave delivery records a landed source with its verified interaction and refuses unsafe substitutes', () => {
   const verify = nodeVerify("const fs=require('node:fs'); const {execFileSync}=require('node:child_process'); const branch=execFileSync('git',['branch','--show-current'],{encoding:'utf8'}).trim(); const expected=branch==='main'?'46.41\\n':'executor work\\n'; process.exit(fs.readFileSync('feature.txt','utf8')===expected?0:7)");
   const fixture = makeRepo('reviewed-wave-interaction');

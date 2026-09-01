@@ -443,8 +443,7 @@ Expires: ${checkpoint.expiresAt}`;
     );
   }
   function pendingSubmission(t) {
-    const invalidated = t?.submission?.wave?.state === "invalidated";
-    return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt && !invalidated);
+    return !!(t && t.submission && (t.submission.commit || t.submission.sourceRevision) && !t.submission.integratedAt);
   }
   function submissionGitRef(ticket) {
     return `refs/sidequest/${ticket.ref}`;
@@ -2432,13 +2431,6 @@ ${verify.outputTail}` : null
       if ("code" in waiver) return { ok: false, reason: waiver.code, message: waiver.message, ticket };
     }
     const existing = ticket.submission?.wave;
-    if (existing?.state === "invalidated") {
-      return {
-        ok: false,
-        reason: "refresh_and_reverify",
-        message: `${ticket.ref} was invalidated from wave ${existing.id}. Redispatch it through refresh_and_reverify before assembling a new wave.`
-      };
-    }
     const retryWithWaiver = existing?.gate?.state === "gate_failed" && opts?.skipVerify === true;
     if (retryWithWaiver) {
       const assembled2 = assembleSubmissionWave(slug, [ticket.ref], {
@@ -2452,7 +2444,7 @@ ${verify.outputTail}` : null
     }
     const admitted = assembledWaveForDelivery(slug, ticket);
     if (admitted.ok) return admitted;
-    if (existing) return admitted;
+    if (existing && existing.state !== "invalidated") return admitted;
     const assembled = assembleSubmissionWave(slug, [ticket.ref], {
       waveId: `delivery-${ticket.ref}-${crypto.randomBytes(6).toString("hex")}`,
       verification: ticket.submission?.verificationResult,
