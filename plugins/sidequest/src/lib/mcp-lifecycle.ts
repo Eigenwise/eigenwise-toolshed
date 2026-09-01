@@ -472,7 +472,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close with evidence, including a delivered commit.',
+    description: 'Close with evidence. An unlaunched prepared dispatch is recorded abandoned; delivery accepts a delivered commit.',
     inputSchema: {
       type: 'object',
       properties: {

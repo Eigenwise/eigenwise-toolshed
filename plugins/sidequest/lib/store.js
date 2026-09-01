@@ -2488,14 +2488,43 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
     return { ok: true, ticket };
   });
 }
+function unconsumedPreparedDispatch(ticket, state) {
+  return Boolean(
+    ticket && state && state.outcome === "prepared" && !state.terminalAt && !state.launchedAt && !state.boundAt && !state.claimedAt && !state.agentId && !(ticket.claim && ticket.claim.by) && !ticket.checkpoint && !pendingSubmission(ticket) && ticket.dispatchNonce
+  );
+}
+function abandonUnconsumedPreparedDispatchForGrooming(slug, idOrRef) {
+  const found = getTicket(slug, idOrRef);
+  if (!found) return { ok: false, reason: "not_found" };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: "not_found" };
+    const state = dispatchState(ticket);
+    if (!unconsumedPreparedDispatch(ticket, state)) return { ok: true, ticket, abandoned: false };
+    setDispatchTerminal(ticket, "abandoned", "control-plane-grooming-prepared-abandonment", {
+      slug,
+      failureShape: "unconsumed_prepared_dispatch_abandoned"
+    });
+    ticket.dispatchNonce = null;
+    ticket.dispatchExecutor = null;
+    stampDispatchEvent(ticket, "control-plane-grooming-prepared-abandonment");
+    putTicket(slug, ticket);
+    return { ok: true, ticket, abandoned: true };
+  });
+}
 function completeTicketAsControlPlane(slug, idOrRef, opts) {
   opts = opts || {};
   const purpose = String(opts.purpose || "").trim();
   if (!["grooming", "integration", "delivery"].includes(purpose)) {
     throw new Error('control-plane completion requires purpose "grooming", "integration", or "delivery".');
   }
-  const ticket = getTicket(slug, idOrRef);
+  let ticket = getTicket(slug, idOrRef);
   if (!ticket) return { ok: false, reason: "not_found" };
+  if (purpose === "grooming") {
+    const abandoned = abandonUnconsumedPreparedDispatchForGrooming(slug, ticket.id);
+    if (!abandoned.ok) return abandoned;
+    ticket = abandoned.ticket;
+  }
   const state = dispatchState(ticket);
   if (purpose === "grooming") {
     if (ticket.claim && ticket.claim.by && !claimReclaimable(ticket) || ticket.dispatchNonce || state && !state.terminalAt) {
