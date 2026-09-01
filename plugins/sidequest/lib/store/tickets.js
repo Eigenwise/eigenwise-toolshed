@@ -245,6 +245,7 @@ function createTickets(dependencies) {
       contractWaiver: !!fields.contractWaiver,
       readonlyOverride: requestedReadonlyOverride(fields),
       workingTreeDelivery: fields.workingTreeDelivery === true,
+      externalDeliverable: fields.externalDeliverable === true,
       executorAnchors: executorText(fields.executorAnchors, EXECUTOR_ANCHORS_MAX, "executor anchors"),
       executorVerifyKind,
       executorAttestationArtifact: executorText(fields.executorAttestationArtifact, EXECUTOR_VERIFY_MAX, "executor attestation artifact"),
@@ -980,6 +981,7 @@ function createTickets(dependencies) {
       if (patch.contractWaiver !== void 0) t.contractWaiver = !!patch.contractWaiver;
       if (patch.readonly !== void 0 || patch.readonlyOverride !== void 0) t.readonlyOverride = requestedReadonlyOverride(patch);
       if (patch.workingTreeDelivery !== void 0) t.workingTreeDelivery = patch.workingTreeDelivery === true;
+      if (patch.externalDeliverable !== void 0) t.externalDeliverable = patch.externalDeliverable === true;
       if (patch.category !== void 0 || patch.readonly !== void 0 || patch.readonlyOverride !== void 0) {
         t.files = boundedFiles(t.files, {
           category: t.category,

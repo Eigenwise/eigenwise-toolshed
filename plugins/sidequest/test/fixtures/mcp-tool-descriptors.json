@@ -483,6 +483,9 @@
         "workingTreeDelivery": {
           "type": "boolean"
         },
+        "externalDeliverable": {
+          "type": "boolean"
+        },
         "anchors": {
           "type": "string",
           "maxLength": 4000
@@ -807,7 +810,7 @@
   },
   {
     "name": "done",
-    "description": "Finish; stamp actual model and effort.",
+    "description": "Finish; declared external needs current capture.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -849,7 +852,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Close: pinned reset/working-tree/manual deliveryMethod; reviewed interaction.",
+    "description": "Close: delivery evidence.",
     "inputSchema": {
       "type": "object",
       "properties": {

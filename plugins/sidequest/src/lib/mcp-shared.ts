@@ -173,46 +173,10 @@ function pathList(paths?: any) {
   return all.length > NO_OP_PATHS_SHOWN ? `${shown} (+${all.length - NO_OP_PATHS_SHOWN} more)` : shown;
 }
 
-// A write-routed dispatch that produced nothing has no submission to hand in,
-// and no dispatch-time flag could have predicted that: whether a run writes is
-// an OUTCOME. So when the write-path guard refuses a done, go look. The board
-// already knows where this executor works, and a declared scope with nothing
-// uncommitted and nothing committed past the dispatch baseline is a refusal
-// with nothing behind it. Anything else stands (SQ-923).
-function hasNoOpVerificationEvidence(ticket: any) {
-  const holder = String(ticket?.claim?.by || '');
-  let verificationStarted = false;
-  for (const comment of Array.isArray(ticket?.comments) ? ticket.comments : []) {
-    if (comment?.by !== holder) continue;
-    const body = String(comment.body || '').trim();
-    if (body.startsWith('[sidequest:verify-start] ') && body.slice('[sidequest:verify-start] '.length).trim()) {
-      verificationStarted = true;
-      continue;
-    }
-    if (verificationStarted && /^\[sidequest:verify-complete\]\s+no-op(?=$|[\s:])/.test(body)) return true;
-  }
-  return false;
-}
-
 function provenNoOpCloseout(slug: any, ticket: any) {
-  const workspace = store.dispatchWorkspace(slug, ticket);
-  if (!workspace) {
-    return { ok: false as const, detail: 'The board cannot locate this dispatch\'s worktree, so it cannot confirm the run wrote nothing.' };
-  }
-  const scope = store.dispatchDeclaredFiles(ticket);
-  const pending = commitScope.scopedWorkPending(workspace.root, scope, { base: workspace.base });
-  if (!pending.ok) {
-    return { ok: false as const, detail: `Could not inspect the declared scope in ${workspace.root}: ${pending.message || pending.reason}.` };
-  }
-  if (!pending.pending) {
-    if (hasNoOpVerificationEvidence(ticket)) return { ok: true as const, root: workspace.root };
-    return { ok: false as const, detail: 'Post [sidequest:verify-start] <command>, run the declared verify command, then post [sidequest:verify-complete] no-op: <evidence> before closing a no-change dispatch.' };
-  }
-  const detail = [
-    pending.working.length ? `uncommitted ${pathList(pending.working)}` : null,
-    pending.committed.length ? `committed but not submitted ${pathList(pending.committed)}` : null,
-  ].filter(Boolean).join('; ');
-  return { ok: false as const, detail: `Declared scope in ${workspace.root} is not a no-op: ${detail}.` };
+  const closeout = store.externalDeliverableCloseout(slug, ticket);
+  if (closeout.ok) return closeout;
+  return { ok: false as const, detail: closeout.message };
 }
 
 /* ------------------------------------------------------------------ *
@@ -259,9 +223,9 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   remove: 'Delete; force for claims.',
   claim: 'Claim before work; proceed only on ok:true.',
   dispatch: 'Dispatch; returns a token and spawn spec.',
-  done: 'Finish; stamp actual model and effort.',
+  done: 'Finish; declared external needs current capture.',
   release: 'Release; reason required. oracle handoff needs ask until verdict.',
-  groomClose: 'Close: pinned reset/working-tree/manual deliveryMethod; reviewed interaction.',
+  groomClose: 'Close: delivery evidence.',
   native_agent: 'Get native Agent spawn spec.',
   archive: 'Archive.',
   archive_board: '',

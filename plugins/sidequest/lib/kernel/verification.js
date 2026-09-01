@@ -109,7 +109,7 @@ function verificationFailureDiagnostic(result) {
   const identities = result.failureIdentities?.length ? ` Failures: ${result.failureIdentities.join(", ")}.` : "";
   return validationDiagnostic(`verification_${String(result.status).replace(/[^a-z0-9]+/gi, "_").toLowerCase()}`, `Required ${result.kind} verification returned ${result.status}.${identities}`);
 }
-function commandVerificationResult(requirement, evidence, captures, ticket, candidate) {
+function commandVerificationResult(requirement, evidence, captures, ticket, candidate, dispatchNonce) {
   const command = requirement.command || "";
   if (evidence !== command) {
     const message = "verification must match the declared executor verify command and the prepared command verifier; executors cannot replace the required command.";
@@ -119,9 +119,9 @@ function commandVerificationResult(requirement, evidence, captures, ticket, cand
       diagnostic: Object.freeze({ code: "executor_verify_mismatch", message, retryable: true })
     });
   }
-  const completedCapture = captures.find((capture) => capture.ticket === ticket && capture.command === command && capture.status === "passed" && capture.candidate.source === candidate.source && capture.candidate.value === candidate.value);
+  const completedCapture = captures.find((capture) => capture.ticket === ticket && capture.command === command && capture.status === "passed" && capture.candidate.source === candidate.source && capture.candidate.value === candidate.value && capture.dispatchNonce === dispatchNonce);
   if (!completedCapture) {
-    const message = `No completed passed verification capture exists for ${ticket}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
+    const message = `No completed passed verification capture exists for ${ticket}, dispatch attempt ${dispatchNonce || "<none>"}, ${candidate.source}:${candidate.value}, and declared command ${JSON.stringify(command)}. Run ${JSON.stringify(command)} through the dispatched verify-capture wrapper again after finalizing that candidate, then resubmit.`;
     return Object.freeze({
       result: Object.freeze({ kind: requirement.kind, status: "failed_check", evidence: message, command, failureIdentities: Object.freeze(["verification:capture-required"]) }),
       expectedEvidence: null,

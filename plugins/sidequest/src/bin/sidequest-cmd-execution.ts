@@ -189,14 +189,35 @@ async function cmdDone(opts: any, positional: any) {
   const ticket = store.getTicket(slug, idOrRef);
   let res;
   try {
-    res = store.completeTicket(slug, idOrRef, by, {
+    const completionOptions = {
       force: !!opts.force,
       source: opts.source || 'cli',
       model: opts.model,
       effort: opts.effort,
       body,
       sessionId: sessionId(opts),
-    });
+    };
+    res = store.completeTicket(slug, idOrRef, by, completionOptions);
+    if (!res.ok && ['submission_required', 'empty_declared_scope'].includes(res.reason)) {
+      const externalDeliverable = store.externalDeliverableCloseout(slug, res.ticket);
+      if (externalDeliverable.ok) {
+        res = store.completeTicket(slug, idOrRef, by, Object.assign({}, completionOptions, {
+          cleanDeclaredScope: true,
+          completionProvenance: {
+            purpose: 'external-deliverable',
+            externalDeliverable: {
+              declared: true,
+              worktree: externalDeliverable.worktree,
+              candidate: externalDeliverable.candidate,
+              verification: externalDeliverable.verification,
+              capture: externalDeliverable.capture,
+            },
+          },
+        }));
+      } else {
+        res.message = `${res.message} ${externalDeliverable.message}`;
+      }
+    }
   } catch (e: any) {
     fail(`done: ${(e && e.message) || e}`);
   }
