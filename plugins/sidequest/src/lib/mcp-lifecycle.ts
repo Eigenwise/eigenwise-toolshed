@@ -472,7 +472,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close with evidence. A pending candidate requires verified delivery, or abandonSubmission: true to record its discard.',
+    description: 'Close with evidence. A pending candidate requires verified delivery, or abandonSubmission: true to record its discard; an unlaunched prepared dispatch is recorded abandoned.',
     inputSchema: {
       type: 'object',
       properties: {

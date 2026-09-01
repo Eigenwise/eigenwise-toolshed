@@ -2192,6 +2192,47 @@ test('MCP delivery records completion when its isolated worktree is locked', asy
   assert.equal(fs.existsSync(worktree), true);
 });
 
+test('MCP groomClose abandons an unconsumed prepared dispatch without waiting for claim idleness', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const preparedTicket = store.createTicket(project, {
+    title: 'prepared dispatch abandoned during grooming', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm grooming can close an unconsumed dispatch immediately',
+  });
+  store.prepareDispatch(project, preparedTicket.ref, { sharedTree: true });
+
+  const closed = await callTool('groomClose', {
+    project, ref: preparedTicket.ref, by: 'groomer', reason: 'The prepared ticket is obsolete.',
+  });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  const completed = store.getTicket(project, preparedTicket.ref);
+  assert.equal(completed.status, 'done');
+  assert.ok(completed.dispatch.terminalAt);
+  const abandonedAttempt = completed.dispatch.attempts.at(-2);
+  assert.equal(abandonedAttempt.outcome, 'abandoned');
+  assert.equal(abandonedAttempt.failureShape, 'unconsumed_prepared_dispatch_abandoned');
+  assert.equal(abandonedAttempt.launchedAt, null);
+  assert.equal(abandonedAttempt.boundAt, null);
+  assert.equal(abandonedAttempt.claimedAt, null);
+
+  const liveTicket = store.createTicket(project, {
+    title: 'live dispatch remains protected during grooming', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm grooming still refuses a dispatch with a live claim',
+  });
+  const liveDispatch = store.prepareDispatch(project, liveTicket.ref, { sharedTree: true });
+  const holder = 'grooming-claim-holder';
+  assert.equal(store.claimTicket(project, liveTicket.ref, holder, {
+    token: liveDispatch.token,
+    executor: liveDispatch.ticket.dispatchExecutor,
+  }).ok, true);
+
+  const refused = await callTool('groomClose', {
+    project, ref: liveTicket.ref, by: 'groomer', reason: 'The live ticket is obsolete.',
+  });
+  assert.equal(refused.reason, 'active_dispatch');
+  assert.match(refused.message, new RegExp(`sidequest release ${liveTicket.ref} --by ${holder}`));
+});
+
 test('MCP delivery closure points live claims at the owning release command', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
