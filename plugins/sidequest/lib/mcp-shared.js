@@ -199,7 +199,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   dispatch: "Dispatch; returns a token and spawn spec.",
   done: "Finish; stamp actual model and effort.",
   release: "Release; reason required. oracle handoff needs ask until verdict.",
-  groomClose: "Close: pinned reset/working-tree/manual deliveryMethod; reviewed interaction.",
+  groomClose: "Close: abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
   native_agent: "Get native Agent spawn spec.",
   archive: "Archive.",
   archive_board: "",

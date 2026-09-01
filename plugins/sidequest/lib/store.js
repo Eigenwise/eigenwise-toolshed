@@ -2456,6 +2456,11 @@ function recordedDelivery(slug, commit, evidence) {
     };
   }
 }
+function pendingSubmissionDeliveryRefusal(ticket, result) {
+  return Object.assign({}, result, {
+    message: `${String(result?.message || `${ticket.ref} submission could not be recorded as delivered.`)} To discard this pending candidate instead, use groomClose with \`abandonSubmission: true\`; the board records it as abandoned.`
+  });
+}
 function clearUnclaimedDispatch(slug, idOrRef, opts) {
   const by = String(opts?.by || "").trim();
   const agentId = String(opts?.agentId || "").trim();
@@ -2555,7 +2560,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
     }
   }
   let reconciledDelivery = null;
-  if (purpose === "delivery" && pendingSubmission(ticket) && (opts.deliveryMethod != null || opts.deliveryInteractionCommit != null)) {
+  if (purpose === "delivery" && pendingSubmission(ticket)) {
     let target;
     try {
       target = integrationTarget(slug);
@@ -2569,7 +2574,7 @@ function completeTicketAsControlPlane(slug, idOrRef, opts) {
       deliveryMethod: opts.deliveryMethod,
       reason
     });
-    if (!recordedSubmission.ok) return recordedSubmission;
+    if (!recordedSubmission.ok) return pendingSubmissionDeliveryRefusal(ticket, recordedSubmission);
     const integration = recordedSubmission.integration;
     reconciledDelivery = {
       ok: true,

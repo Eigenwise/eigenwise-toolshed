@@ -1910,7 +1910,7 @@ test('a stopped attempt cannot invalidate the next dispatch token', () => {
   assert.equal(store.releaseTicket(slug, ticket.ref, 'attempt-isolation-cleanup', { status: 'todo', source: 'test', force: true }).ok, true);
 });
 
-test('control plane records a hand delivery after recovering the dead unclaimed retry', () => {
+test('control plane records an abandoned candidate after recovering the dead unclaimed retry', () => {
   const ticket = createFixture('hand-delivered candidate recovery fixture');
   // The dead attempt has to happen before the submission exists. A claim is refused while a submission is
   // pending (reason `submitted`), so a dispatch prepared after one could never be claimed, and SQ-2117 is why
@@ -1946,16 +1946,18 @@ test('control plane records a hand delivery after recovering the dead unclaimed 
 
   const recordedCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: PROJECT, encoding: 'utf8' }).trim();
   const closed = store.completeTicketAsControlPlane(slug, ticket.ref, {
-    purpose: 'delivery',
+    purpose: 'grooming',
     by: 'orchestrator',
-    reason: 'Resolved the candidate conflict by hand, then ran the declared gate: 100 pass / 0 fail.',
+    reason: 'Resolved the candidate conflict by hand, then confirmed this candidate never landed.',
     deliveryCommit: recordedCommit,
+    abandonSubmission: true,
   });
   assert.equal(closed.ok, true);
   assert.equal(closed.ticket.status, 'done');
   assert.equal(closed.ticket.submission.commit, 'abcdef1234567');
-  assert.equal(closed.ticket.submission.integration.resultingHead, recordedCommit);
-  assert.equal(closed.ticket.completion.delivery.commit, recordedCommit);
+  assert.equal(closed.ticket.submission.integration.outcome, 'abandoned');
+  assert.equal(closed.ticket.submission.integration.candidateState, 'unresolvable');
+  assert.equal(closed.ticket.completion.delivery, undefined);
 });
 
 test('SQ-2117: a pending submission refuses preparation instead of minting an unclaimable attempt', () => {

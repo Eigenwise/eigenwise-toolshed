@@ -444,7 +444,7 @@ test('one passing wave delivers its exact Git participant set before recording d
   }
 });
 
-test('a refused wave preserves submitted candidates for individual integration', () => {
+test('a refused wave preserves candidates, refuses unrelated grooming delivery, and permits singleton integration', () => {
   const fixture = makeRepo('refused-wave-keeps-candidates');
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-conflict');
   git(['worktree', 'add', '-b', 'worktree-agent-conflict', secondWorktree, 'main'], fixture.repo);
@@ -493,6 +493,23 @@ test('a refused wave preserves submitted candidates for individual integration',
     assert.equal(stored.lifecycleAttempt.state, 'invalidated');
     assert.equal(stored.submission.wave.state, 'invalidated');
   }
+
+  const unrelatedDelivery = commitFile(fixture.repo, 'unrelated.txt', 'unrelated reachable delivery\n');
+  const unsafeGroomClose = store.completeTicketAsControlPlane(slug, first.ref, {
+    purpose: 'delivery',
+    by: 'orchestrator',
+    reason: 'An unrelated reachable commit cannot consume the preserved candidate.',
+    deliveryCommit: unrelatedDelivery,
+  });
+
+  assert.equal(unsafeGroomClose.ok, false);
+  assert.equal(unsafeGroomClose.reason, 'delivery_content_missing');
+  assert.match(unsafeGroomClose.message, /abandonSubmission: true/);
+  const retained = store.getTicket(slug, first.ref);
+  assert.equal(retained.status, 'todo');
+  assert.equal(retained.submission.commit, fixture.submitted);
+  assert.equal(retained.submission.integratedAt, undefined);
+
   const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
   assert.equal(individual.ok, true, JSON.stringify(individual));
   assert.equal(individual.integration.mode, 'merge');
@@ -575,7 +592,7 @@ test('reviewed assembled-wave delivery records a landed source with its verified
   assert.equal(ungated.reason, 'assembled_wave_gate_required');
 });
 
-test('control-plane delivery validates a supplied reviewed interaction and preserves ordinary reachable closure', () => {
+test('control-plane delivery validates a reviewed interaction and keeps no-submission reachable closure', () => {
   const refusedFixture = makeRepo('control-plane-refused-interaction');
   const { slug: refusedSlug } = store.ensureProject(refusedFixture.repo);
   const refusedTicket = store.createTicket(refusedSlug, {
@@ -638,16 +655,15 @@ test('control-plane delivery validates a supplied reviewed interaction and prese
   const ordinaryTicket = store.createTicket(ordinarySlug, {
     title: 'preserve ordinary reachable delivery closure',
     category: 'codebase-exploration',
-    description: 'A reachable hand delivery without interaction evidence keeps its existing closure path.',
+    description: 'A reachable hand delivery without a submitted candidate keeps its existing closure path.',
     files: ['feature.txt'],
   });
-  submitFixture(ordinarySlug, ordinaryTicket, ordinaryFixture);
   const ordinaryDelivery = commitFile(ordinaryFixture.repo, 'ordinary.txt', 'ordinary reachable delivery\n');
 
   const ordinary = store.completeTicketAsControlPlane(ordinarySlug, ordinaryTicket.ref, {
     purpose: 'delivery',
     by: 'orchestrator',
-    reason: 'The ordinary reachable delivery remains supported without an interaction commit.',
+    reason: 'The ordinary reachable delivery remains supported without a submission.',
     deliveryCommit: ordinaryDelivery,
   });
 

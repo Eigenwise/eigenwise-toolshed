@@ -849,7 +849,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Close: pinned reset/working-tree/manual deliveryMethod; reviewed interaction.",
+    "description": "Close: abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {

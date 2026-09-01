@@ -409,7 +409,7 @@ const tools = [
   },
   {
     name: "groomClose",
-    description: "Close with evidence, including a delivered commit.",
+    description: "Close with evidence. A pending candidate requires verified delivery, or abandonSubmission: true to record its discard.",
     inputSchema: {
       type: "object",
       properties: {
@@ -436,7 +436,7 @@ const tools = [
         const recovered = store.clearUnclaimedDispatch(slug, args.ref, { by, evidence: args.recoveryEvidence });
         if (!recovered.ok) return mutationAck(slug, recovered);
       }
-      const purpose = args.integration ? "integration" : args.deliveryCommit ? "delivery" : "grooming";
+      const purpose = args.integration ? "integration" : args.abandonSubmission ? "grooming" : args.deliveryCommit ? "delivery" : "grooming";
       const res = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
         reason,
