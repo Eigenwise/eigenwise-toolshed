@@ -433,7 +433,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'done',
-    description: 'Finish claimed non-repo or active artifact work; repo work submits, while a recorded no-op release can close with done. body carries the final report. Stamp actual model and effort.',
+    description: 'Finish; stamp model/effort. Working-tree delivery needs declared changes and pinned verify-capture.',
     inputSchema: {
       type: 'object',
       properties: {

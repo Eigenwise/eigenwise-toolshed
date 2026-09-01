@@ -128,6 +128,7 @@ const tools = [
         consumes: CONTRACT_PROP("consumes"),
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
+        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Pinned verification kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
@@ -182,6 +183,7 @@ const tools = [
         contracts: { produces: args.produces, changes: args.changes, consumes: args.consumes },
         contractWaiver: args.contractWaiver,
         readonly: args.readonly,
+        workingTreeDelivery: args.workingTreeDelivery,
         executorAnchors: args.anchors,
         executorVerifyKind: args.verifyKind,
         executorAttestationArtifact: args.attestationArtifact,
@@ -225,6 +227,7 @@ const tools = [
         consumes: CONTRACT_PROP("consumes"),
         contractWaiver: { type: "boolean", description: "Explicitly reviewed waiver for contract-edge wave sequencing." },
         readonly: { type: "boolean", description: "Closeout override." },
+        workingTreeDelivery: { type: "boolean", description: "Shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths." },
         anchors: { type: "string", maxLength: store.EXECUTOR_ANCHORS_MAX, description: "Executor anchors, verbatim in the task prompt." },
         verify: VERIFY_ORACLE_PROP,
         verifyKind: { type: "string", enum: store.VERIFY_ORACLE_KINDS, description: "Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command." },
@@ -288,6 +291,7 @@ const tools = [
       }
       if (args.contractWaiver !== void 0) patch.contractWaiver = args.contractWaiver;
       if (args.readonly !== void 0) patch.readonly = args.readonly;
+      if (args.workingTreeDelivery !== void 0) patch.workingTreeDelivery = args.workingTreeDelivery;
       if (args.anchors !== void 0) patch.executorAnchors = args.anchors;
       if (args.verify !== void 0) patch.executorVerify = args.verify;
       if (args.verifyKind !== void 0) patch.executorVerifyKind = args.verifyKind;

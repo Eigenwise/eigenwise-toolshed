@@ -22,6 +22,19 @@ function captureTarget(args) {
   const ticket = ticketIndex >= 0 ? String(args[ticketIndex + 1] || "").trim() : "";
   return project && ticket ? Object.freeze({ project, ticket }) : null;
 }
+function captureProject(target) {
+  const store = require("./store.js");
+  const project = store.findProject(target.project);
+  const projectPath = String(project.meta?.path || "").trim();
+  return project.ok && project.slug && projectPath ? Object.freeze({ slug: project.slug, path: projectPath }) : null;
+}
+async function runCapturedVerification(command, target, cwd = process.cwd()) {
+  const project = target ? captureProject(target) : null;
+  const captureCwd = project?.path || cwd;
+  const capture = await runVerifyCapture(command, captureCwd);
+  const recorded = target ? recordCapture(target, capture, captureCwd) : null;
+  return Object.freeze({ capture, recorded });
+}
 function verifiedRevision(cwd) {
   try {
     const value = String(execFileSync("git", ["rev-parse", "--verify", "HEAD^{commit}"], {
@@ -35,11 +48,13 @@ function verifiedRevision(cwd) {
   }
 }
 function recordCapture(target, capture, cwd) {
-  const candidate = verifiedRevision(cwd);
-  if (!candidate) return { ok: false, reason: "verified_revision_unavailable" };
   const store = require("./store.js");
   const project = store.findProject(target.project);
   if (!project.ok || !project.slug) return { ok: false, reason: "project_not_found" };
+  const ticket = store.getTicket(project.slug, target.ticket);
+  const workingTreeCandidate = store.workingTreeDeliveryCandidate(project.slug, ticket);
+  const candidate = workingTreeCandidate?.candidate || verifiedRevision(cwd);
+  if (!candidate) return { ok: false, reason: "verified_revision_unavailable" };
   return store.recordVerificationCapture(project.slug, target.ticket, {
     command: capture.command || "",
     status: capture.status,
@@ -73,11 +88,10 @@ async function main() {
     process.exitCode = 2;
     return;
   }
-  const capture = await runVerifyCapture(command);
   const target = captureTarget(args);
-  const recorded = target ? recordCapture(target, capture, process.cwd()) : null;
+  const { capture, recorded } = await runCapturedVerification(command, target);
   report(capture, recorded);
   process.exitCode = capture.exitCode === 0 && (!target || recorded?.ok) ? 0 : 2;
 }
-module.exports = { runVerifyCapture, shellCommand, captureTarget, recordCapture, verifiedRevision };
+module.exports = { runVerifyCapture, runCapturedVerification, shellCommand, captureTarget, captureProject, recordCapture, verifiedRevision };
 if (require.main === module) void main();

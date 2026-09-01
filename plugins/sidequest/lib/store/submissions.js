@@ -1908,6 +1908,19 @@ ${verify.outputTail}` : null
       return { ok: true, ticket: t, comment, ...advisories.length ? { advisory: advisories.join(" ") } : {} };
     });
   }
+  function workingTreeVerification(ticket, candidate) {
+    const requirement = pinnedVerificationRequirement(ticket);
+    if (!requirement.command) {
+      return {
+        ok: false,
+        reason: "working_tree_verification_capture_required",
+        message: `${ticket.ref} working-tree delivery requires a command verifier and a completed verify-capture against the final working-tree state.`
+      };
+    }
+    const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate);
+    if (!verification.diagnostic) return { ok: true, verification: verification.result };
+    return { ok: false, reason: verification.diagnostic.code, message: verification.diagnostic.message, verification: verification.result };
+  }
   function normalizedReplacementEvidence(replacements) {
     const entries = Array.isArray(replacements) ? replacements : [];
     const evidence = /* @__PURE__ */ new Map();
@@ -2618,6 +2631,6 @@ ${verify.outputTail}` : null
     }));
     return { tickets, count: tickets.length, delivery: boardConfig(slug)?.delivery || "merge" };
   }
-  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
+  return { DEFAULT_CHECKPOINT_TTL_MIN, MAX_CHECKPOINT_TTL_MIN, checkpointTtlMs, checkpointProjection, oracleProjection, checkpointTicket, submissionReadiness, submissionProjection, pendingSubmission, submissionUsesGit, workingTreeVerification, verifyIntegration, validateIntegrationSubmission, recordDeliveredSubmission, recordAbandonedSubmission, integrateSubmission, integrateSubmissionWave, closeSubmissionAsSuperseded, submissionOwnershipFailure, submitTicket, recordVerificationCapture, recordSubmissionRejection, reconcileSubmissionRejections, reworkSubmission, clearSubmission, assembleSubmissionWave, recordSubmissionWaveDelivery, submissionsPayload };
 }
 module.exports = { createSubmissions };
