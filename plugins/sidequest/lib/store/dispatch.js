@@ -1140,6 +1140,9 @@ function createDispatch(dependencies) {
         throw new Error(`prepare dispatch: ${t.ref} cannot pin the immutable candidate checkout. ${worktreeWarning}`);
       }
       if (worktreeWarning) sharedTree = true;
+      if (t.workingTreeDelivery === true && !sharedTree) {
+        throw new Error(`prepare dispatch: ${t.ref} declares a working-tree deliverable and must run in the shared checkout. Re-dispatch with sharedTree:true.`);
+      }
       const runtimeRefusal = sharedTree ? sharedTreeRuntimeRefusal(t, projectPath, opts.runtimeCwd) : null;
       if (runtimeRefusal) throw new Error(runtimeRefusal);
       t.dispatchNonce = mintDispatchToken();
@@ -1153,10 +1156,15 @@ function createDispatch(dependencies) {
       const category = getCategory(ticketCategory(t), { project: slug });
       const artifactRoot = sharedTree && effectiveFiles.length === 1 && sharedTreeArtifactRequested(t) ? categoryArtifactRoot(category, effectiveFiles[0]) : null;
       const artifactMode = Boolean(artifactRoot);
+      const workingTreeDelivery = sharedTree && t.workingTreeDelivery === true && effectiveFiles.length > 0;
       const declaredFiles = artifactMode ? effectiveFiles : commitScope.ticketCommitScope(effectiveFiles, t.files, t.ref);
       const artifactScope = artifactMode ? effectiveFiles[0] : null;
       const artifactDirtyBaseline = artifactMode ? captureArtifactBaseline(slug, artifactScope) : null;
-      t.dispatchExecutor = stableExecutorName(t, artifactMode);
+      const workingTreeDirtyBaseline = workingTreeDelivery ? captureDirtyBaseline(slug) : null;
+      if (workingTreeDelivery && !workingTreeDirtyBaseline) {
+        throw new Error(`prepare dispatch: ${t.ref} working-tree deliverable requires a readable Git working tree.`);
+      }
+      t.dispatchExecutor = stableExecutorName(t, artifactMode || workingTreeDelivery);
       const launchSeq = nextDispatchLaunchSeq(current);
       const story = t.storyId ? getStory(slug, t.storyId) : null;
       const contract = storyExecutionContract(story);
@@ -1233,7 +1241,8 @@ function createDispatch(dependencies) {
         artifactRoot,
         artifactScope,
         ...artifactMode ? { artifactDirtyBaseline } : {},
-        ...sharedTree ? { dirtyBaseline: artifactDirtyBaseline || captureDirtyBaseline(slug) } : {},
+        ...workingTreeDelivery ? { workingTreeDelivery: true, workingTreeDirtyBaseline } : {},
+        ...sharedTree ? { dirtyBaseline: artifactDirtyBaseline || workingTreeDirtyBaseline || captureDirtyBaseline(slug) } : {},
         tokenPrefix: dispatchTokenPrefix(t.dispatchNonce),
         tokenFile: newDispatchTokenFile(),
         executor: t.dispatchExecutor,

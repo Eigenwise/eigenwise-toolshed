@@ -300,6 +300,9 @@
         "readonly": {
           "type": "boolean"
         },
+        "workingTreeDelivery": {
+          "type": "boolean"
+        },
         "anchors": {
           "type": "string",
           "maxLength": 4000
@@ -475,6 +478,9 @@
           "type": "boolean"
         },
         "readonly": {
+          "type": "boolean"
+        },
+        "workingTreeDelivery": {
           "type": "boolean"
         },
         "anchors": {
@@ -695,7 +701,7 @@
   },
   {
     "name": "checkpoint",
-    "description": "Retain claim.",
+    "description": "Hold.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -759,7 +765,7 @@
   },
   {
     "name": "next",
-    "description": "Next ticket.",
+    "description": "Next.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -895,7 +901,7 @@
   },
   {
     "name": "release",
-    "description": "Release claim; reason required. oracle handoff needs ask, then awaiting-oracle until verdict.",
+    "description": "Release; reason required. oracle handoff needs ask until verdict.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -998,7 +1004,7 @@
   },
   {
     "name": "scopeRequest",
-    "description": "Request scope.",
+    "description": "Scope.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1332,7 +1338,7 @@
   },
   {
     "name": "plan",
-    "description": "Ticket plan.",
+    "description": "Plan.",
     "inputSchema": {
       "type": "object",
       "properties": {

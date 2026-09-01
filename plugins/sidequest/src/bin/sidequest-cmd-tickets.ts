@@ -108,6 +108,11 @@ function readonlyFromOpts(opts: any) {
   fail('--readonly accepts true or false.');
 }
 
+function workingTreeDeliveryFromOpts(opts: any) {
+  if (opts['working-tree-delivery'] === undefined) return undefined;
+  return opts['working-tree-delivery'] !== false && String(opts['working-tree-delivery']).toLowerCase() !== 'false';
+}
+
 function reviewTargetFromOpts(opts: any) {
   const ref = opts['review-ref'];
   const commit = opts['review-commit'];
@@ -160,6 +165,7 @@ async function addPreview(opts: any, category: any, complexity: any) {
     contracts: contractsFromOpts(opts),
     contractWaiver: contractWaiverFromOpts(opts) || false,
     readonly: readonlyFromOpts(opts),
+    workingTreeDelivery: workingTreeDeliveryFromOpts(opts),
     executorAnchors: opts.anchors || '',
     executorVerifyKind: opts['verify-kind'],
     executorAttestationArtifact: opts['attestation-artifact'],
@@ -204,6 +210,7 @@ async function cmdAdd(opts: any) {
     contracts: contractsFromOpts(opts),
     contractWaiver: contractWaiverFromOpts(opts),
     readonly: readonlyFromOpts(opts),
+    workingTreeDelivery: workingTreeDeliveryFromOpts(opts),
     executorAnchors: opts.anchors,
     executorVerifyKind: opts['verify-kind'],
     executorAttestationArtifact: opts['attestation-artifact'],
@@ -325,6 +332,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts.produces !== undefined || opts.changes !== undefined || opts.consumes !== undefined) patch.contracts = contractsFromOpts(opts, current && current.contracts);
   if (opts['contract-waiver'] !== undefined) patch.contractWaiver = contractWaiverFromOpts(opts);
   if (opts.readonly !== undefined) patch.readonly = readonlyFromOpts(opts);
+  if (opts['working-tree-delivery'] !== undefined) patch.workingTreeDelivery = workingTreeDeliveryFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts['verify-kind'] != null) patch.executorVerifyKind = opts['verify-kind'];

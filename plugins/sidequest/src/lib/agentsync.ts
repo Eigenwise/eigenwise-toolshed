@@ -453,6 +453,9 @@ function ticketCloseout(ticket?: any) {
     const scope = ticket.dispatch.artifactScope;
     return `Closeout: this prepared shared-tree artifact dispatch may write only ${scope} inside approved artifact root ${root}. The shared checkout is the dispatch contract, so do not require a linked worktree. Close with done --model ${resolved.runsModel} --effort ${effort}, include the full final report in its completion comment, and do not commit or submit. Then stop without a routine SendMessage.`;
   }
+  if (ticket?.dispatch?.workingTreeDelivery === true) {
+    return `Closeout: this prepared shared-tree dispatch has a working-tree deliverable. Do not commit or submit. After the final declared-scope edit, run the pinned verify-capture wrapper so it records the final working-tree candidate, then close with done --model ${resolved.runsModel} --effort ${effort}. Include changed paths and verification evidence in the completion comment. Then stop without a routine SendMessage.`;
+  }
   if (ticket?.dispatch?.readonly === true) {
     return `Closeout: this prepared dispatch is read-only. Close with done --model ${resolved.runsModel} --effort ${effort} and include the full final report in its completion comment. Do not commit or submit. Then stop without a routine SendMessage.`;
   }

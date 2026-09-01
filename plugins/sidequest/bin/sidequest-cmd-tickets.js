@@ -89,6 +89,10 @@ function readonlyFromOpts(opts) {
   if (value === "false") return false;
   fail("--readonly accepts true or false.");
 }
+function workingTreeDeliveryFromOpts(opts) {
+  if (opts["working-tree-delivery"] === void 0) return void 0;
+  return opts["working-tree-delivery"] !== false && String(opts["working-tree-delivery"]).toLowerCase() !== "false";
+}
 function reviewTargetFromOpts(opts) {
   const ref = opts["review-ref"];
   const commit = opts["review-commit"];
@@ -135,6 +139,7 @@ async function addPreview(opts, category, complexity) {
     contracts: contractsFromOpts(opts),
     contractWaiver: contractWaiverFromOpts(opts) || false,
     readonly: readonlyFromOpts(opts),
+    workingTreeDelivery: workingTreeDeliveryFromOpts(opts),
     executorAnchors: opts.anchors || "",
     executorVerifyKind: opts["verify-kind"],
     executorAttestationArtifact: opts["attestation-artifact"],
@@ -178,6 +183,7 @@ async function cmdAdd(opts) {
     contracts: contractsFromOpts(opts),
     contractWaiver: contractWaiverFromOpts(opts),
     readonly: readonlyFromOpts(opts),
+    workingTreeDelivery: workingTreeDeliveryFromOpts(opts),
     executorAnchors: opts.anchors,
     executorVerifyKind: opts["verify-kind"],
     executorAttestationArtifact: opts["attestation-artifact"],
@@ -292,6 +298,7 @@ async function cmdUpdate(opts, positional) {
   if (opts.produces !== void 0 || opts.changes !== void 0 || opts.consumes !== void 0) patch.contracts = contractsFromOpts(opts, current && current.contracts);
   if (opts["contract-waiver"] !== void 0) patch.contractWaiver = contractWaiverFromOpts(opts);
   if (opts.readonly !== void 0) patch.readonly = readonlyFromOpts(opts);
+  if (opts["working-tree-delivery"] !== void 0) patch.workingTreeDelivery = workingTreeDeliveryFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts["verify-kind"] != null) patch.executorVerifyKind = opts["verify-kind"];

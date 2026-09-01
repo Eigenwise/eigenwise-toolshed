@@ -13,6 +13,7 @@ const SIDEQUEST_HOME = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-artifact-lifecy
 process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
 
 const store = require('../lib/store.js');
+const { runCapturedVerification } = require('../lib/verify-capture.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
 const agentsync = require('../lib/agentsync.js');
 
@@ -241,6 +242,43 @@ test('shared-tree done refuses dirty files inside its declared scope', () => {
   assert.strictEqual(store.getTicket(slug, created.ref).status, 'doing');
 });
 
+test('a shared-tree working-tree deliverable closes with its scoped paths and pinned verification capture', async () => {
+  const command = 'cd';
+  const created = store.createTicket(slug, {
+    title: 'leave a scoped working-tree deliverable',
+    description: 'The declared paths must remain uncommitted in the shared checkout.',
+    category: 'repository-write',
+    files: ['.claude/.codebase-info'],
+    workingTreeDelivery: true,
+    executorVerifyKind: 'command',
+    executorVerify: command,
+    source: 'mcp',
+  });
+  const prepared = store.prepareDispatch(slug, created.ref, { sharedTree: true });
+  assert.strictEqual(prepared.ticket.dispatch.workingTreeDelivery, true);
+  assert.strictEqual(claim(prepared, 'working-tree-worker').ok, true);
+  writeProjectFile('.claude/.codebase-info/working-tree.md', '# Uncommitted deliverable\n');
+
+  const candidate = store.workingTreeDeliveryCandidate(slug, store.getTicket(slug, created.ref));
+  assert.ok(candidate);
+  assert.deepStrictEqual(candidate.changedPaths, ['.claude/.codebase-info/working-tree.md']);
+  const { capture, recorded } = await runCapturedVerification(command, { project: PROJECT, ticket: created.ref }, os.tmpdir());
+  try {
+    assert.strictEqual(capture.status, 'passed', capture.evidence);
+    assert.match(fs.readFileSync(capture.logPath, 'utf8'), new RegExp(PROJECT.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
+    assert.strictEqual(recorded?.ok, true);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+
+  const done = store.completeTicket(slug, created.ref, 'working-tree-worker', { source: 'mcp' });
+  assert.strictEqual(done.ok, true);
+  assert.strictEqual(done.ticket.completion.purpose, 'working-tree');
+  assert.deepStrictEqual(done.ticket.completion.workingTree.changedPaths, ['.claude/.codebase-info/working-tree.md']);
+  assert.strictEqual(done.ticket.completion.workingTree.candidate.source, 'working-tree');
+  assert.strictEqual(done.ticket.completion.workingTree.verification.status, 'passed');
+});
+
 test('read-only done ignores dirty paths outside its declared scope', () => {
   const relativePath = 'readonly-undisclosed.txt';
   const created = ticket('read clean repository', 'Inspect without modifying the repository.', ['.claude/.codebase-info']);
@@ -306,6 +344,7 @@ test('ordinary scoped dispatches still require commit and submit', () => {
   assert.strictEqual(done.ok, false);
   assert.strictEqual(done.reason, 'submission_required');
   assert.match(done.message, /read-only dispatch may close with done/i);
+  assert.match(done.message, /workingTreeDelivery:true/);
   assert.strictEqual(store.getTicket(slug, created.ref).claim.by, 'ordinary-worker');
 });
 

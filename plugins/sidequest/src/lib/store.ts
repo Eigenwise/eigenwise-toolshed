@@ -1125,6 +1125,7 @@ const {
   submissionProjection,
   pendingSubmission,
   submissionUsesGit,
+  workingTreeVerification,
   verifyIntegration,
   validateIntegrationSubmission,
   recordDeliveredSubmission,
@@ -2060,6 +2061,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       };
     }
     const activeArtifactDispatch = artifactDispatch && liveClaim && activeDispatch;
+    const activeWorkingTreeDelivery = dispatch?.workingTreeDelivery === true && liveClaim && activeDispatch;
     const activeNonRepoOutput = dispatch?.nonRepoOutput === true && liveClaim && activeDispatch;
     const activeReadOnlyDispatch = dispatch?.readonly === true && liveClaim && activeDispatch;
     let sharedTreeCommittedScope = false;
@@ -2100,6 +2102,25 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       const scopeCheck = artifactScopeCheck(slug, t, dispatch);
       if (!scopeCheck.ok) return Object.assign({ ticket: t }, scopeCheck);
     }
+    if (executorDone && activeWorkingTreeDelivery) {
+      let delivery;
+      try {
+        delivery = workingTreeDeliveryCloseout(slug, t, completionDelta);
+      } catch (error: any) {
+        return { ok: false, reason: 'working_tree_delivery_unavailable', ticket: t, message: `${t.ref} cannot inspect its working-tree deliverable: ${error?.message || error}` };
+      }
+      if (!delivery.ok) return Object.assign({ ticket: t }, delivery);
+      const verification = workingTreeVerification(t, delivery.candidate);
+      if (!verification.ok) return Object.assign({ ticket: t }, verification);
+      opts.completionProvenance = {
+        purpose: 'working-tree',
+        workingTree: {
+          candidate: delivery.candidate,
+          changedPaths: delivery.changedPaths,
+          verification: verification.verification,
+        },
+      };
+    }
     // Never let an executor discover at closeout that its work is unfilable with
     // no route forward: name the auto-release and the exact recovery.
     if (executorDone && !liveClaim && t.claimRelease) {
@@ -2118,11 +2139,11 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
     // caller may prove that by inspecting the worktree; a proven no-op closes,
     // anything uncommitted or committed in scope still owes a submission (SQ-923).
     const provenNoOp = opts.cleanDeclaredScope === true || Boolean(dispatch?.noOpRelease);
-    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeNonRepoOutput) {
+    if (executorDone && dispatch && declaredFiles.length && !provenNoOp && !sharedTreeCommittedScope && !activeReadOnlyDispatch && !activeArtifactDispatch && !activeWorkingTreeDelivery && !activeNonRepoOutput) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
         ticket: t,
       };
     }
@@ -2389,6 +2410,66 @@ function makeWorkedBy(input?: any) {
   const by = input.by != null && String(input.by).trim() ? String(input.by).trim() : null;
   const at = input.at && Number.isFinite(Date.parse(input.at)) ? new Date(input.at).toISOString() : new Date().toISOString();
   return { model, effort, by, at };
+}
+
+type WorkingTreeDeliveryCandidate = Readonly<{
+  candidate: Readonly<{ source: 'working-tree'; value: string }>;
+  changedPaths: readonly string[];
+}>;
+type WorkingTreeDeliveryCloseout =
+  | Readonly<{ ok: true; candidate: WorkingTreeDeliveryCandidate['candidate']; changedPaths: WorkingTreeDeliveryCandidate['changedPaths'] }>
+  | Readonly<{ ok: false; reason: string; message: string; unscopedPaths?: readonly string[] }>;
+
+function workingTreeDeliveryCandidate(slug?: any, ticket?: any): WorkingTreeDeliveryCandidate | null {
+  const dispatch = dispatchState(ticket);
+  const declaredFiles = Array.isArray(dispatch?.declaredFiles) ? dispatch.declaredFiles : [];
+  if (dispatch?.workingTreeDelivery !== true || !Array.isArray(dispatch.workingTreeDirtyBaseline) || !declaredFiles.length) return null;
+  const baseline = new Map(dispatch.workingTreeDirtyBaseline.map((entry: any) => [dirtyPathKey(entry.path), entry]));
+  const current = artifactWorkingState(slug);
+  const currentByPath = new Map(current.map((entry: any) => [dirtyPathKey(entry.path), entry]));
+  const changed = new Map<string, string>();
+  for (const entry of dispatch.workingTreeDirtyBaseline) {
+    if (!commitScope.isInScope(entry.path, declaredFiles)) continue;
+    const currentEntry: any = currentByPath.get(dirtyPathKey(entry.path));
+    if (!currentEntry || currentEntry.identity !== entry.identity) changed.set(entry.path, currentEntry?.identity || 'missing');
+  }
+  for (const entry of current) {
+    if (commitScope.isInScope(entry.path, declaredFiles) && !baseline.has(dirtyPathKey(entry.path))) changed.set(entry.path, entry.identity);
+  }
+  const paths = Array.from(changed.keys()).sort();
+  return {
+    candidate: {
+      source: 'working-tree',
+      value: crypto.createHash('sha256').update(JSON.stringify(paths.map((path) => [path, changed.get(path)]))).digest('hex'),
+    },
+    changedPaths: paths,
+  };
+}
+
+function workingTreeDeliveryCloseout(slug?: any, ticket?: any, completionDelta?: any): WorkingTreeDeliveryCloseout {
+  const dispatch = dispatchState(ticket);
+  const candidate = workingTreeDeliveryCandidate(slug, ticket);
+  if (!candidate) return { ok: false, reason: 'working_tree_delivery_unavailable', message: `${ticket.ref} cannot inspect its pinned working-tree deliverable. Release it and dispatch again.` };
+  const declaredFiles = dispatch.declaredFiles;
+  const baseline = new Map(dispatch.workingTreeDirtyBaseline.map((entry: any) => [dirtyPathKey(entry.path), entry]));
+  const current = artifactWorkingState(slug);
+  const currentByPath = new Map(current.map((entry: any) => [dirtyPathKey(entry.path), entry]));
+  const outside = new Set<string>();
+  for (const entry of dispatch.workingTreeDirtyBaseline) {
+    if (commitScope.isInScope(entry.path, declaredFiles)) continue;
+    const currentEntry: any = currentByPath.get(dirtyPathKey(entry.path));
+    if (!currentEntry || currentEntry.identity !== entry.identity) outside.add(entry.path);
+  }
+  for (const entry of current) {
+    if (!baseline.has(dirtyPathKey(entry.path)) && !commitScope.isInScope(entry.path, declaredFiles)) outside.add(entry.path);
+  }
+  if (outside.size) return { ok: false, reason: 'working_tree_scope_violation', message: `${ticket.ref} changed paths outside its working-tree deliverable: ${Array.from(outside).sort().join(', ')}. Revert them or release the ticket.`, unscopedPaths: Array.from(outside).sort() };
+  const committed = Array.isArray(completionDelta?.committed)
+    ? completionDelta.committed.filter((file: string) => commitScope.isInScope(file, declaredFiles))
+    : [];
+  if (committed.length) return { ok: false, reason: 'working_tree_commit_forbidden', message: `${ticket.ref} declares a working-tree deliverable, but committed declared paths: ${committed.join(', ')}. Restore the shared checkout to the uncommitted deliverable before closing.` };
+  if (!candidate.changedPaths.length) return { ok: false, reason: 'working_tree_delivery_empty', message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };
+  return { ok: true, ...candidate };
 }
 
 // Complete a ticket: mark it done and clear its claim. An optional { model,
@@ -3109,6 +3190,7 @@ module.exports = {
   claimTicket,
   releaseTicket,
   completeTicket,
+  workingTreeDeliveryCandidate,
   completeTicketAsControlPlane,
   missingReleaseFragment,
   missingDeliveredReleaseFragment,
