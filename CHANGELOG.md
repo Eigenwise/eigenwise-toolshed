@@ -8,6 +8,19 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.511.0 (2026-09-01)
+
+### sidequest 5.0.20 → 5.0.21
+
+#### Fixes
+
+- Honor granted write scope (SQ-2379)
+  Granted scope rulings now apply to write hooks and commit admission, with consistent glob matching.
+- Close working-tree deliverables (SQ-2380)
+  Allow explicitly declared shared-checkout working-tree delivery with pinned verification evidence.
+- Portable working-tree capture test command (SQ-2383)
+  Replace the Windows-only `cd` verify command in the working-tree capture regression with a portable Node one-liner so the suite passes on Linux runners.
+
 ## v3.510.0 (2026-08-31)
 
 ### observability 0.7.20 → 0.7.21
