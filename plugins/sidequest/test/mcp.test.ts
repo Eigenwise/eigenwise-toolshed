@@ -48,6 +48,7 @@ const agentsync = require('../lib/agentsync.js');
 const store = require('../lib/store.js');
 const db = require('../lib/db.js');
 const sourceRevisionCapability = require('../lib/source-revision-capability.js');
+const { runCapturedVerification } = require('../lib/verify-capture.js');
 const worktrees = require('../lib/worktrees.js');
 const { createCheckoutInstanceMarker } = require('../lib/kernel/worktree.js');
 const DISPATCH_DESCRIPTION = 'Where: the routed test fixture. Contract: prepare a stable executor without changing the ticket title. Verify: inspect the dispatch result.';
@@ -1131,7 +1132,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /returns a token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /Recovery evidence/);
-  assert.match(tools.find((tool: any) => tool.name === 'done').description, /actual model and effort/);
+  assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);
   const list = tools.find((tool: any) => tool.name === 'list');
   assert.match(list.inputSchema.properties.detail.description, /Full comments/);
@@ -4993,7 +4994,7 @@ test('SQ-228: a large board pages under the cap; cursors iterate the full set ex
 // records readonly:false correctly and then has nothing to hand in. 27 tickets
 // in three days died on that (the:SQ-48/49/54/178, bmr:SQ-95, eige:SQ-820),
 // each burning a release plus a re-dispatch. done now goes and looks.
-function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
+function isolatedDispatch(prefix: string, agentId: string, files: string[], verifyCommand?: string, options: any = {}) {
   const repo = fs.realpathSync(committedRepo(prefix));
   const project = store.ensureProject(repo, `SQ-923 ${agentId}`).slug;
   const ticket = store.createTicket(project, {
@@ -5001,6 +5002,9 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
     description: 'A write-routed dispatch whose contract forbids repository edits, exactly like the audited bounces.',
     category: 'debugging',
     files,
+    ...(verifyCommand ? { executorVerifyKind: 'command', executorVerify: verifyCommand } : {}),
+    ...(options.externalDeliverable === true ? { externalDeliverable: true } : {}),
+    ...(options.readonly === true ? { readonly: true } : {}),
   });
   const sessionId = `sq923-session-${agentId}`;
   const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId });
@@ -5032,7 +5036,7 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[]) {
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   const boundWorktree = store.getTicket(project, ticket.ref).dispatch.worktree;
-  return { repo, project, ref: ticket.ref, by: `by-${agentId}`, worktree: boundWorktree };
+  return { repo, project, ref: ticket.ref, by: `by-${agentId}`, worktree: boundWorktree, verifyCommand };
 }
 
 function recordNoOpVerification(fixture: any) {
@@ -5048,37 +5052,127 @@ function recordNoOpVerification(fixture: any) {
   }).ok, true);
 }
 
-test('SQ-1339: done closes a verified no-op write dispatch only after its explicit verification evidence', async () => {
-  const fixture = isolatedDispatch('sq-mcp-noop-', 'a923noop', ['src/engine.js']);
-  const baseCommit = store.getTicket(fixture.project, fixture.ref).dispatch.baseCommit;
-  assert.equal(baseCommit, gitAt(fixture.repo, ['rev-parse', 'HEAD']), 'the dispatch records where the run started');
-  assert.equal(store.completeTicket(fixture.project, fixture.ref, fixture.by, {}).reason, 'submission_required');
+async function recordExternalDeliverableCapture(fixture: any) {
+  assert.ok(fixture.verifyCommand);
+  const { capture, recorded } = await runCapturedVerification(fixture.verifyCommand, { project: fixture.repo, ticket: fixture.ref }, fixture.worktree);
+  try {
+    assert.equal(capture.status, 'passed', capture.evidence);
+    assert.equal(recorded?.ok, true);
+    return recorded.capture;
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
+}
 
-  const missingEvidence = await callTool('done', {
+test('SQ-2391: done refuses an ordinary writable clean scope even after its pinned verifier passes, then closes after the orchestrator declares the external deliverable', async () => {
+  const verifyCommand = 'node -p "process.cwd()"';
+  const fixture = isolatedDispatch('sq-mcp-external-deliverable-', 'a2391ordinary', ['src/engine.js'], verifyCommand);
+  const capture = await recordExternalDeliverableCapture(fixture);
+
+  const refused = await callTool('done', {
     project: fixture.project,
     ref: fixture.ref,
     by: fixture.by,
     model: 'opus',
     effort: 'high',
-    body: 'Read-only investigation complete; findings are in the thread and the repository is untouched.',
+    body: 'The repository scope is clean and the external deliverable is complete.',
   });
-  assert.equal(missingEvidence.ok, false);
-  assert.match(missingEvidence.message, /verify-complete\] no-op/);
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'submission_required');
+  assert.match(refused.message, /externalDeliverable:true/, 'the refusal names the ticket declaration');
+  assert.match(refused.message, /orchestrator can set.*through update/i, 'the refusal names the mid-claim recovery');
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 
-  recordNoOpVerification(fixture);
+  const updated = await callTool('update', {
+    project: fixture.project,
+    ref: fixture.ref,
+    externalDeliverable: true,
+  });
+  assert.equal(updated.ok, true);
+  const declared = store.getTicket(fixture.project, fixture.ref);
+  assert.equal(declared.externalDeliverable, true, 'the ticket records the external-deliverable declaration');
+  assert.equal(declared.claim?.by, fixture.by, 'the same executor keeps its live claim after the update');
+
   const closed = await callTool('done', {
     project: fixture.project,
     ref: fixture.ref,
     by: fixture.by,
     model: 'opus',
     effort: 'high',
-    body: 'Read-only investigation complete; findings are in the thread and the repository is untouched.',
+    body: 'The declared external deliverable is complete and the repository scope is clean.',
   });
-  assert.equal(closed.ok, true, `done was refused: ${closed.message}`);
+  assert.equal(closed.ok, true, 'done was refused: ' + closed.message);
   const done = store.getTicket(fixture.project, fixture.ref);
   assert.equal(done.status, 'done');
-  assert.equal(done.completion.closeout, 'no-repo-changes', 'the closeout records how it was proven');
-  assert.equal(done.completion.worktree, fixture.worktree);
+  assert.equal(done.completion.purpose, 'external-deliverable');
+  assert.equal(done.completion.externalDeliverable.declared, true);
+  assert.equal(done.completion.externalDeliverable.candidate.value, capture.candidate.value);
+  assert.equal(done.completion.externalDeliverable.capture.id, capture.id);
+  assert.equal(done.completion.externalDeliverable.verification.command, verifyCommand);
+});
+
+function redispatchExternalDeliverableFixture(fixture: any, agentId: string) {
+  assert.equal(store.releaseTicket(fixture.project, fixture.ref, fixture.by, { status: 'todo', source: 'test' }).ok, true);
+  const sessionId = 'sq2391-session-' + agentId;
+  const prepared = store.prepareDispatch(fixture.project, fixture.ref, { allowUnscoped: true, sessionId });
+  assert.notEqual(prepared.ticket.dispatchNonce, fixture.dispatchNonce, 'each dispatch receives a new attempt identity');
+  assert.equal(store.recordDispatchLaunch(fixture.project, fixture.ref, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+    sessionId,
+    agentName: agentId,
+  }).ok, true);
+  assert.equal(store.claimTicket(fixture.project, fixture.ref, 'by-' + agentId, {
+    token: prepared.token,
+    executor: prepared.ticket.dispatchExecutor,
+  }).ok, true);
+  return {
+    ...fixture,
+    by: 'by-' + agentId,
+    dispatchNonce: prepared.ticket.dispatchNonce,
+    worktree: store.getTicket(fixture.project, fixture.ref).dispatch.worktree,
+  };
+}
+
+test('SQ-2391: done refuses a declared external deliverable when only a previous dispatch captured the pinned verifier', async () => {
+  const verifyCommand = 'node -p "process.cwd()"';
+  const first = isolatedDispatch('sq-mcp-external-deliverable-prior-', 'a2391first', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
+  const capture = await recordExternalDeliverableCapture(first);
+  const firstDispatchNonce = store.getTicket(first.project, first.ref).dispatchNonce;
+  const second = redispatchExternalDeliverableFixture({ ...first, dispatchNonce: firstDispatchNonce }, 'a2391second');
+  assert.equal(store.getTicket(second.project, second.ref).verificationCaptures[0].dispatchNonce, firstDispatchNonce, 'the retained capture belongs to the first dispatch');
+
+  const refused = await callTool('done', {
+    project: second.project,
+    ref: second.ref,
+    by: second.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'The external deliverable is unchanged after redispatch.',
+  });
+  assert.equal(refused.ok, false);
+  assert.equal(refused.reason, 'submission_required');
+  assert.match(refused.message, /dispatch attempt/, 'the refusal requires this attempt to capture the verifier');
+  assert.equal(store.getTicket(second.project, second.ref).status, 'doing');
+  assert.ok(capture.id);
+});
+
+test('SQ-2391: CLI done records an explicitly declared clean external-deliverable completion', async () => {
+  const verifyCommand = 'node -p "process.cwd()"';
+  const fixture = isolatedDispatch('sq-cli-external-deliverable-', 'a2391cli', ['src/engine.js'], verifyCommand, { externalDeliverable: true });
+  const capture = await recordExternalDeliverableCapture(fixture);
+  const cli = path.join(__dirname, '..', 'bin', 'sidequest.js');
+  const result = spawnSync(process.execPath, [cli, 'done', fixture.ref, '--project', fixture.repo, '--by', fixture.by, '--model', 'opus', '--effort', 'high', '--body', 'External deliverable completed and the declared repository scope is clean.', '--json'], {
+    cwd: fixture.worktree,
+    encoding: 'utf8',
+    env: process.env,
+  });
+  assert.equal(result.status, 0, result.stdout + '\\n' + result.stderr);
+  const closed = JSON.parse(result.stdout);
+  assert.equal(closed.ok, true);
+  assert.equal(closed.ticket.completion.purpose, 'external-deliverable');
+  assert.equal(closed.ticket.completion.externalDeliverable.declared, true);
+  assert.equal(closed.ticket.completion.externalDeliverable.capture.id, capture.id);
 });
 
 test('SQ-1339: submit records and integrates an explicit no-op range', async () => {
@@ -5121,7 +5215,7 @@ test('SQ-1339: submit records and integrates an explicit no-op range', async () 
 });
 
 test('SQ-923: done still refuses a write-routed dispatch that has work in its scope', async () => {
-  const dirty = isolatedDispatch('sq-mcp-dirty-', 'a923dirty', ['src']);
+  const dirty = isolatedDispatch('sq-mcp-dirty-', 'a923dirty', ['src'], undefined, { externalDeliverable: true });
   fs.mkdirSync(path.join(dirty.worktree, 'src'), { recursive: true });
   fs.writeFileSync(path.join(dirty.worktree, 'src', 'engine.js'), 'real work\n');
   const refusedDirty = await callToolRaw('done', {
@@ -5137,7 +5231,7 @@ test('SQ-923: done still refuses a write-routed dispatch that has work in its sc
   assert.match(dirtyAck.message, /src\/engine\.js/, 'names the uncommitted path it found');
   assert.equal(store.getTicket(dirty.project, dirty.ref).status, 'doing');
 
-  const committed = isolatedDispatch('sq-mcp-committed-', 'a923committed', ['src']);
+  const committed = isolatedDispatch('sq-mcp-committed-', 'a923committed', ['src'], undefined, { externalDeliverable: true });
   fs.mkdirSync(path.join(committed.worktree, 'src'), { recursive: true });
   fs.writeFileSync(path.join(committed.worktree, 'src', 'engine.js'), 'real work\n');
   gitAt(committed.worktree, ['add', '--', 'src/engine.js']);
@@ -5154,6 +5248,20 @@ test('SQ-923: done still refuses a write-routed dispatch that has work in its sc
   assert.equal(committedAck.reason, 'submission_required');
   assert.match(committedAck.message, /committed but not submitted/);
   assert.equal(store.getTicket(committed.project, committed.ref).status, 'doing');
+});
+
+test('SQ-2391: readonly dispatches still close without the external-deliverable declaration or a capture', async () => {
+  const fixture = isolatedDispatch('sq-mcp-readonly-', 'a2391readonly', ['src/engine.js'], undefined, { readonly: true });
+  const closed = await callTool('done', {
+    project: fixture.project,
+    ref: fixture.ref,
+    by: fixture.by,
+    model: 'opus',
+    effort: 'high',
+    body: 'Read-only investigation complete.',
+  });
+  assert.equal(closed.ok, true, 'readonly done was refused: ' + closed.message);
+  assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'done');
 });
 
 // SQ-923: executors stamp the runtime id they can actually see. "claude-fable-5"

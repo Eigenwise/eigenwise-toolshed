@@ -656,6 +656,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       command,
       status,
       candidate: { source: candidateSource, value: candidateValue },
+      dispatchNonce: String(ticket.dispatchNonce || ''),
       completedAt: new Date(completedAt).toISOString(),
       ...(capture?.worktree ? { worktree: String(capture.worktree) } : {}),
       ...(capture?.logPath ? { logPath: String(capture.logPath) } : {}),
@@ -1872,7 +1873,7 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
     return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
       source: 'git',
       value: String(candidateCommit || '').trim().toLowerCase(),
-    });
+    }, String(ticket.dispatchNonce || ''));
   }
   if (requirement.command) {
     const error = verifyCommandError(requirement.command);
@@ -1886,7 +1887,7 @@ function submissionVerificationResult(ticket: any, sourceRevision: any, verify: 
     return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
       source: 'git',
       value: String(candidateCommit || '').trim().toLowerCase(),
-    });
+    }, String(ticket.dispatchNonce || ''));
   }
   if (requirement.kind === 'custom' && requirement.evidenceContract === 'legacy project verifier was not recorded' && !evidence) {
     return { result: { kind: 'custom', status: 'passed', evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -2155,7 +2156,7 @@ function workingTreeVerification(ticket: any, candidate: any) {
       message: `${ticket.ref} working-tree delivery requires a command verifier and a completed verify-capture against the final working-tree state.`,
     };
   }
-  const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate);
+  const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate, String(ticket.dispatchNonce || ''));
   if (!verification.diagnostic) return { ok: true, verification: verification.result };
   return { ok: false, reason: verification.diagnostic.code, message: verification.diagnostic.message, verification: verification.result };
 }

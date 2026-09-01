@@ -113,6 +113,11 @@ function workingTreeDeliveryFromOpts(opts: any) {
   return opts['working-tree-delivery'] !== false && String(opts['working-tree-delivery']).toLowerCase() !== 'false';
 }
 
+function externalDeliverableFromOpts(opts: any) {
+  if (opts['external-deliverable'] === undefined) return undefined;
+  return opts['external-deliverable'] !== false && String(opts['external-deliverable']).toLowerCase() !== 'false';
+}
+
 function reviewTargetFromOpts(opts: any) {
   const ref = opts['review-ref'];
   const commit = opts['review-commit'];
@@ -166,6 +171,7 @@ async function addPreview(opts: any, category: any, complexity: any) {
     contractWaiver: contractWaiverFromOpts(opts) || false,
     readonly: readonlyFromOpts(opts),
     workingTreeDelivery: workingTreeDeliveryFromOpts(opts),
+    externalDeliverable: externalDeliverableFromOpts(opts),
     executorAnchors: opts.anchors || '',
     executorVerifyKind: opts['verify-kind'],
     executorAttestationArtifact: opts['attestation-artifact'],
@@ -211,6 +217,7 @@ async function cmdAdd(opts: any) {
     contractWaiver: contractWaiverFromOpts(opts),
     readonly: readonlyFromOpts(opts),
     workingTreeDelivery: workingTreeDeliveryFromOpts(opts),
+    externalDeliverable: externalDeliverableFromOpts(opts),
     executorAnchors: opts.anchors,
     executorVerifyKind: opts['verify-kind'],
     executorAttestationArtifact: opts['attestation-artifact'],
@@ -333,6 +340,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts['contract-waiver'] !== undefined) patch.contractWaiver = contractWaiverFromOpts(opts);
   if (opts.readonly !== undefined) patch.readonly = readonlyFromOpts(opts);
   if (opts['working-tree-delivery'] !== undefined) patch.workingTreeDelivery = workingTreeDeliveryFromOpts(opts);
+  if (opts['external-deliverable'] !== undefined) patch.externalDeliverable = externalDeliverableFromOpts(opts);
   if (opts.anchors != null) patch.executorAnchors = opts.anchors;
   if (opts.verify != null) patch.executorVerify = opts.verify;
   if (opts['verify-kind'] != null) patch.executorVerifyKind = opts['verify-kind'];

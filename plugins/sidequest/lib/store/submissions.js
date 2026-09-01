@@ -537,6 +537,7 @@ ${pinnedCommand || "<none>"}`;
         command,
         status,
         candidate: { source: candidateSource, value: candidateValue },
+        dispatchNonce: String(ticket.dispatchNonce || ""),
         completedAt: new Date(completedAt).toISOString(),
         ...capture?.worktree ? { worktree: String(capture.worktree) } : {},
         ...capture?.logPath ? { logPath: String(capture.logPath) } : {},
@@ -1676,7 +1677,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      });
+      }, String(ticket.dispatchNonce || ""));
     }
     if (requirement.command) {
       const error2 = verifyCommandError(requirement.command);
@@ -1690,7 +1691,7 @@ ${verify.outputTail}` : null
       return commandVerificationResult(requirement, evidence, recordedVerificationCaptures(ticket), ticket.ref, {
         source: "git",
         value: String(candidateCommit || "").trim().toLowerCase()
-      });
+      }, String(ticket.dispatchNonce || ""));
     }
     if (requirement.kind === "custom" && requirement.evidenceContract === "legacy project verifier was not recorded" && !evidence) {
       return { result: { kind: "custom", status: "passed", evidence: requirement.evidenceContract }, expectedEvidence: null };
@@ -1916,7 +1917,7 @@ ${verify.outputTail}` : null
         message: `${ticket.ref} working-tree delivery requires a command verifier and a completed verify-capture against the final working-tree state.`
       };
     }
-    const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate);
+    const verification = commandVerificationResult(requirement, requirement.command, recordedVerificationCaptures(ticket), ticket.ref, candidate, String(ticket.dispatchNonce || ""));
     if (!verification.diagnostic) return { ok: true, verification: verification.result };
     return { ok: false, reason: verification.diagnostic.code, message: verification.diagnostic.message, verification: verification.result };
   }

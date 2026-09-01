@@ -370,7 +370,7 @@ const tools = [
   },
   {
     name: "done",
-    description: "Finish; stamp model/effort. Working-tree delivery needs declared changes and pinned verify-capture.",
+    description: "Finish; a clean writable scope needs externalDeliverable:true plus a current-attempt pinned verify-capture.",
     inputSchema: {
       type: "object",
       properties: {
@@ -397,7 +397,16 @@ const tools = [
         if (noOp.ok) {
           res = store.completeTicket(slug, args.ref, by, Object.assign({}, opts, {
             cleanDeclaredScope: true,
-            completionProvenance: { closeout: "no-repo-changes", worktree: noOp.root }
+            completionProvenance: {
+              purpose: "external-deliverable",
+              externalDeliverable: {
+                declared: true,
+                worktree: noOp.worktree,
+                candidate: noOp.candidate,
+                verification: noOp.verification,
+                capture: noOp.capture
+              }
+            }
           }));
         } else {
           res.message = `${res.message} ${noOp.detail}`;

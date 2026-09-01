@@ -240,6 +240,7 @@ const tools: ToolDefinition[] = [
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
         readonly: { type: 'boolean', description: 'Closeout override.' },
         workingTreeDelivery: { type: 'boolean', description: 'Shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths.' },
+        externalDeliverable: { type: 'boolean', description: 'Explicitly declare the deliverable is outside the repository. Set it during a live claim to let that executor close a clean writable dispatch with its current-attempt pinned verify-capture.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: VERIFY_ORACLE_PROP,
         verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
@@ -305,6 +306,7 @@ const tools: ToolDefinition[] = [
       if (args.contractWaiver !== undefined) patch.contractWaiver = args.contractWaiver;
       if (args.readonly !== undefined) patch.readonly = args.readonly;
       if (args.workingTreeDelivery !== undefined) patch.workingTreeDelivery = args.workingTreeDelivery;
+      if (args.externalDeliverable !== undefined) patch.externalDeliverable = args.externalDeliverable;
       if (args.anchors !== undefined) patch.executorAnchors = args.anchors;
       if (args.verify !== undefined) patch.executorVerify = args.verify;
       if (args.verifyKind !== undefined) patch.executorVerifyKind = args.verifyKind;

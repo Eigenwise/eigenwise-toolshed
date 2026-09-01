@@ -2143,7 +2143,7 @@ function releaseTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
       return {
         ok: false,
         reason: 'submission_required',
-        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A run that changed nothing closes here by itself once the board can see its worktree, so this refusal means the change is real or the worktree is unreadable. If the only declared output is outside the repo worktree, release it for reclassification as non-repo/artifact work; do not retry commit.`,
+        message: `${t.ref} has routed repository write scope. Its executor must commit and submit verified changes. A read-only dispatch may close with done, but readonly:false selects this write path. If the ticket contract forbids commits, set workingTreeDelivery:true before dispatch and run it in the shared checkout; done then records its declared working-tree paths and matching pinned verify-capture. A clean declared scope may close as an external-deliverable completion only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set that flag through update during this claim; then run the pinned command through the dispatched verify-capture wrapper for the current dispatch attempt and revision, and repeat done. Dirty or committed declared paths still require commit and submit.`,
         ticket: t,
       };
     }
@@ -2470,6 +2470,51 @@ function workingTreeDeliveryCloseout(slug?: any, ticket?: any, completionDelta?:
   if (committed.length) return { ok: false, reason: 'working_tree_commit_forbidden', message: `${ticket.ref} declares a working-tree deliverable, but committed declared paths: ${committed.join(', ')}. Restore the shared checkout to the uncommitted deliverable before closing.` };
   if (!candidate.changedPaths.length) return { ok: false, reason: 'working_tree_delivery_empty', message: `${ticket.ref} has no changed declared paths to record as a working-tree deliverable.` };
   return { ok: true, ...candidate };
+}
+
+function externalDeliverableCloseout(slug?: any, ticket?: any) {
+  if (ticket?.externalDeliverable !== true) {
+    return {
+      ok: false,
+      reason: 'external_deliverable_not_declared',
+      message: `${ticket.ref} has routed repository write scope. A clean scope can close with done only when the ticket explicitly sets externalDeliverable:true. The orchestrator can set externalDeliverable:true through update during this claim, then this executor can rerun the pinned verify-capture wrapper and done.`,
+    };
+  }
+  const workspace = dispatchWorkspace(slug, ticket);
+  if (!workspace) return { ok: false, reason: 'external_deliverable_worktree_unavailable', message: `${ticket.ref} cannot inspect this dispatch worktree, so it cannot record an external-deliverable completion.` };
+  const scope = completionScope(slug, ticket);
+  const pending = commitScope.scopedWorkPending(workspace.root, scope, { base: workspace.base });
+  if (!pending.ok) return { ok: false, reason: 'external_deliverable_scope_unavailable', message: `Could not inspect the declared scope in ${workspace.root}: ${pending.message || pending.reason}.` };
+  if (pending.pending) {
+    const changes = [
+      pending.working.length ? `uncommitted ${pending.working.join(', ')}` : null,
+      pending.committed.length ? `committed but not submitted ${pending.committed.join(', ')}` : null,
+    ].filter(Boolean).join('; ');
+    return { ok: false, reason: 'external_deliverable_scope_dirty', message: `${ticket.ref} has declared repository changes (${changes}); commit and submit them instead of closing as an external-deliverable completion.` };
+  }
+  let revision: string;
+  try {
+    revision = String(execFileSync('git', ['rev-parse', '--verify', 'HEAD^{commit}'], {
+      cwd: workspace.root,
+      encoding: 'utf8',
+      windowsHide: true,
+      stdio: 'pipe',
+    })).trim().toLowerCase();
+  } catch (error: any) {
+    return { ok: false, reason: 'external_deliverable_revision_unavailable', message: `${ticket.ref} cannot read the current revision for its external-deliverable verification capture: ${String(error?.message || error).trim()}` };
+  }
+  if (!revision) return { ok: false, reason: 'external_deliverable_revision_unavailable', message: `${ticket.ref} cannot read the current revision for its external-deliverable verification capture.` };
+  const candidate = { source: 'git', value: revision };
+  const verification = workingTreeVerification(ticket, candidate);
+  if (!verification.ok) return verification;
+  const capture = Array.isArray(ticket.verificationCaptures)
+    ? ticket.verificationCaptures.find((entry: any) => entry?.status === 'passed'
+      && entry?.candidate?.source === candidate.source
+      && entry?.candidate?.value === candidate.value
+      && entry?.command === verification.verification.command
+      && entry?.dispatchNonce === ticket.dispatchNonce)
+    : null;
+  return { ok: true, worktree: workspace.root, candidate, verification: verification.verification, capture: capture || null };
 }
 
 // Complete a ticket: mark it done and clear its claim. An optional { model,
@@ -3239,6 +3284,7 @@ module.exports = {
   releaseTicket,
   completeTicket,
   workingTreeDeliveryCandidate,
+  externalDeliverableCloseout,
   completeTicketAsControlPlane,
   missingReleaseFragment,
   missingDeliveredReleaseFragment,
