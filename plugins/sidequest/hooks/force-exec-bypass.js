@@ -245,6 +245,7 @@ function dispatchLaunchName(ref, title, resolvedExec, effort, sequence) {
 
 // src/hooks/force-exec-bypass.ts
 var { canonicalPath } = require(import_node_path3.default.join(__dirname, "..", "lib", "worktrees.js"));
+var { isInScope: scopeMatch } = require(import_node_path3.default.join(__dirname, "..", "lib", "scope-match.js"));
 var PASS_THROUGH_AGENT_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "statusline-setup"]);
 var EXECUTOR_HELPER_TYPES = /* @__PURE__ */ new Set(["Explore", "claude-code-guide", "web-researcher", "general-purpose"]);
 var HELPER_REVIEW_WORK_RE = /\b(?:audits?|auditors?|auditing|audited|reviews?|reviewers?|reviewing|reviewed|review-audit)\b/i;
@@ -672,7 +673,7 @@ function guardOwnTicketDispatch(input) {
   return true;
 }
 function helperScope(store, project, projectPath, ticket) {
-  return { ref: ticket.ref, projectPath, files: store.effectiveScope(project, ticket.files) };
+  return { ref: ticket.ref, projectPath, files: store.executionScope(project, ticket) };
 }
 function helperScopes(input) {
   const agentId = stringField(input, "agent_id", "agentId");
@@ -790,13 +791,7 @@ function projectRelative(target, projectPath) {
 }
 function inScope(target, scope) {
   const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
-  if (!relative) return false;
-  const key = process.platform === "win32" ? relative.toLowerCase() : relative;
-  return scope.files.some((file) => {
-    const normalized = String(file || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
-    const scopeKey = process.platform === "win32" ? normalized.toLowerCase() : normalized;
-    return key === scopeKey || key.startsWith(`${scopeKey}/`);
-  });
+  return relative != null && scopeMatch(relative, scope.files);
 }
 function isScratchpadPath(target) {
   const configuredRoot = process.env.CLAUDE_SCRATCHPAD_DIR || process.env.CLAUDE_CODE_SCRATCHPAD_DIR;
@@ -825,7 +820,7 @@ function guardHelperWrite(input) {
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     "PreToolUse",
-    `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Route this path through the parent executor as a scope request or file a new ticket.`
+    `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Ask the parent executor to request scope; a granted ruling takes effect immediately. File a new ticket when this work belongs elsewhere.`
   );
 }
 function guardLateSteer(input) {

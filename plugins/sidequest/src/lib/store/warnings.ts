@@ -1156,7 +1156,9 @@ function ticketPlanningWarnings(ticket?: any, projectPath?: any, slug?: any) {
   warnings.push(...sourceBuildOutputWarnings(ticket, projectPath));
   warnings.push(...scopeConsumerWarnings(ticket, projectPath));
   const absent = commitScope.scopedPaths(ticket.files).filter((file?: any) => {
-    const declared = path.resolve(projectPath, file);
+    const scope = String(file || '');
+    const literalRoot = scope.includes('*') ? scope.slice(0, scope.indexOf('*')).replace(/\/+$/, '') || '.' : scope;
+    const declared = path.resolve(projectPath, literalRoot);
     return !fs.existsSync(declared) && fs.existsSync(path.dirname(declared));
   });
   if (absent.length) warnings.push(`Planning-depth warning: declared file scope does not exist in the repo: ${absent.join(', ')}.`);

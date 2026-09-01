@@ -912,7 +912,7 @@ ${category.contract || '(No category-specific executor instructions were recorde
     ...(experimentLog ? [`Experiment log:\n${experimentLog}`] : []),
     `Declared files:\n${declaredFiles}${ticketReleaseFragmentScope(ticket)}`,
     ...(planDocument ? [planDocument] : []),
-    'Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle. A user is not a board fallback: when no board path remains, comment the evidence and release with kind `technical_blocker`; never compose a command for a human to run.\n\nScope check: request scope when a needed path is outside the declared set. The answer is immediate. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix.',
+    'Never hold a claim waiting for a human verdict. Release with kind `oracle`, provide the ask in `oracle`, and exit so the ticket parks as awaiting-oracle. A user is not a board fallback: when no board path remains, comment the evidence and release with kind `technical_blocker`; never compose a command for a human to run.\n\nScope check: request scope when a needed path is outside the declared set. A granted ruling takes effect immediately for write enforcement and commit admission. On refusal, commit in-scope work and release with kind `handback`, naming the refused paths. The orchestrator can expand the ticket files and redispatch. A declared directory covers descendants, and globs match paths consistently at the hook and commit gate. On the first uncovered scope miss, sweep tests, fixtures, goldens, and generated outputs, then make one consolidated request. Never ship a compensating or downstream workaround inside scope instead: a verified workaround is not a substitute for the root fix.',
   ].join('\n\n');
 }
 
@@ -920,7 +920,7 @@ function taskAndScopeBody(ticket?: any, slug?: any) {
   const category = ticket?.category || {};
   const declared = Array.isArray(ticket?.files) ? ticket.files : [];
   const declaredFiles = declared.length ? declared.map((file: any) => `- ${file}`).join('\n') : '(No files were declared.)';
-  const effectiveFiles = store.effectiveScope(slug, declared);
+  const effectiveFiles = store.effectiveScope(slug, ticket);
   const declaredKeys = new Set(declared.map((file: any) => process.platform === 'win32' ? String(file).toLowerCase() : String(file)));
   const alwaysKeys = new Set((store.boardConfig(slug)?.alwaysInScope || []).map((file: any) => process.platform === 'win32' ? String(file).toLowerCase() : String(file)));
   const generatedFiles = effectiveFiles.filter((file: any) => {

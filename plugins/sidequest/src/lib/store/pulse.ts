@@ -219,7 +219,7 @@ function createPulse(dependencies: any) {
     };
     const alwaysInScope = new Set(scopePaths(boardConfig(slug)?.alwaysInScope).map(scopePathKey));
     const declared = scopePaths(dispatch.declaredFiles).filter((file) => !alwaysInScope.has(scopePathKey(file)));
-    const ticketFiles = scopePaths(commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref)).filter((file) => !alwaysInScope.has(scopePathKey(file)));
+    const ticketFiles = scopePaths(commitScope.ticketCommitScope(effectiveScope(slug, ticket), ticket?.files, ticket?.ref)).filter((file) => !alwaysInScope.has(scopePathKey(file)));
     if (declared.length === ticketFiles.length && declared.every((file, index) => {
       const ticketFile = ticketFiles[index];
       return ticketFile != null && scopePathKey(file) === scopePathKey(ticketFile);
@@ -235,7 +235,7 @@ function createPulse(dependencies: any) {
     const dispatch = dispatchState(ticket);
     const resolution = ticket?.scopeResolution;
     return {
-      declared: commitScope.ticketCommitScope(effectiveScope(slug, ticket?.files), ticket?.files, ticket?.ref),
+      declared: commitScope.ticketCommitScope(effectiveScope(slug, ticket), ticket?.files, ticket?.ref),
       enforced: dispatch && !dispatch.terminalAt && Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : null,
       lastRuling: resolution ? { state: resolution.state, at: resolution.at, granted: resolution.granted || [], refused: resolution.refused || [] } : null,
     };

@@ -168,7 +168,12 @@ function canonicalScopedPaths(cwd, files) {
 }
 function commitScopedPaths(root, scopes) {
   const tracked = trackedPaths(root);
-  return scopes.filter((scope) => import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => (0, import_scope_match.isInScope)(file, [scope])));
+  const changed = workingPaths(root);
+  return scopes.filter((scope) => (0, import_scope_match.hasGlob)(scope) ? [...tracked, ...changed].some((file) => (0, import_scope_match.isInScope)(file, [scope])) : import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || tracked.some((file) => (0, import_scope_match.isInScope)(file, [scope])));
+}
+function globScopedWorkingPaths(root, scopes) {
+  const globScopes = scopes.filter(import_scope_match.hasGlob);
+  return globScopes.length ? workingPaths(root).filter((file) => (0, import_scope_match.isInScope)(file, globScopes)) : [];
 }
 function ignoredUntrackedScope(root, scope) {
   const target = import_node_path.default.resolve(root, scope);
@@ -624,8 +629,13 @@ function commitScoped(cwd, message, files) {
     if (!commitScopes.length) {
       return { ok: false, reason: "no_existing_scope", missingScopes, unscopedPaths };
     }
-    const stageableScopes = stageableScopedPaths(root, commitScopes);
-    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedScope(root, scope));
+    const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
+    const directScopes = commitScopes.filter((scope) => !(0, import_scope_match.hasGlob)(scope));
+    const stageableScopes = [.../* @__PURE__ */ new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const committableScopes = [.../* @__PURE__ */ new Set([
+      ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
+      ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))
+    ])];
     if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
     git(root, ["commit", "--only", "-m", String(message || ""), "--", ...committableScopes]);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();

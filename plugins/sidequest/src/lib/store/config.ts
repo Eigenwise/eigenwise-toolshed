@@ -394,12 +394,15 @@ function setBoardConfig(slug?: any, patch?: any) {
   });
 }
 
-function effectiveScope(slug?: any, files?: any) {
+function effectiveScope(slug?: any, filesOrTicket?: any) {
+  const ticket = Array.isArray(filesOrTicket) ? null : filesOrTicket;
+  const files = Array.isArray(filesOrTicket) ? filesOrTicket : ticket?.files;
+  const granted = ticket?.scopeResolution?.granted;
   const config = boardConfig(slug);
   const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
   const generatedPairs = [...((config && config.generatedPairs) || []), ...derivedGeneratedPairs(generatedConfig, files)];
   const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
-  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...((config && config.alwaysInScope) || []), ...paired]));
+  return Array.from(new Set([...(Array.isArray(files) ? files : []), ...(Array.isArray(granted) ? granted : []), ...((config && config.alwaysInScope) || []), ...paired]));
 }
 
 

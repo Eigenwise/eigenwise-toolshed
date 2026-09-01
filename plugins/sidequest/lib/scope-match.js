@@ -18,6 +18,7 @@ var __copyProps = (to, from, except, desc) => {
 var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 var scope_match_exports = {};
 __export(scope_match_exports, {
+  hasGlob: () => hasGlob,
   isInScope: () => isInScope,
   normalizeScope: () => normalizeScope,
   scopeKey: () => scopeKey,
@@ -25,7 +26,7 @@ __export(scope_match_exports, {
 });
 module.exports = __toCommonJS(scope_match_exports);
 function normalizeScope(scope) {
-  return String(scope || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/\*\*$/, "").replace(/\/+$/, "");
+  return String(scope || "").trim().replace(/\\/g, "/").replace(/^\.\//, "").replace(/\/+$/, "");
 }
 function scopeKey(scope) {
   const normalized = normalizeScope(scope);
@@ -44,15 +45,41 @@ function scopedPaths(files) {
   }
   return paths;
 }
+function hasGlob(scope) {
+  return scope.includes("*");
+}
+function globExpression(scope) {
+  let expression = "^";
+  for (let index = 0; index < scope.length; index += 1) {
+    const character = scope[index];
+    if (character !== "*") {
+      expression += character.replace(/[.+^${}()|[\]\\]/g, "\\$&");
+      continue;
+    }
+    if (scope[index + 1] === "*") {
+      if (scope[index + 2] === "/") {
+        expression += "(?:.*/)?";
+        index += 2;
+      } else {
+        expression += ".*";
+        index += 1;
+      }
+      continue;
+    }
+    expression += "[^/]*";
+  }
+  return new RegExp(`${expression}$`, process.platform === "win32" ? "i" : "");
+}
 function isInScope(file, files) {
   const filePath = scopeKey(file);
   return scopedPaths(files).some((scope) => {
     const key = scopeKey(scope);
-    return filePath === key || filePath.startsWith(`${key}/`);
+    return hasGlob(key) ? globExpression(key).test(filePath) : filePath === key || filePath.startsWith(`${key}/`);
   });
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
+  hasGlob,
   isInScope,
   normalizeScope,
   scopeKey,

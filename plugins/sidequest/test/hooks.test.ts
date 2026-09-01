@@ -1004,6 +1004,54 @@ test('pre-tool hook: helper writes use the bound agent scope in linked worktrees
   assert.equal(read, null);
 });
 
+test('pre-tool hook: helper writes honor granted scope rulings and descendant globs', () => {
+  const grantedTicket = addStopTicket('granted helper scope', { files: ['lib/declared.js'] });
+  const grantedSession = `granted-helper-${++sqSeq}`;
+  const grantedActor = claimStopTicket(grantedTicket, grantedSession, 'granted-helper-parent');
+  const granted = store.getTicket(slug, grantedTicket.ref);
+  granted.scopeResolution = {
+    state: 'granted',
+    requested: ['lib/granted.js'],
+    granted: ['lib/granted.js'],
+    refused: [],
+    at: new Date().toISOString(),
+  };
+  db.putRow(database, 'tickets', {
+    id: granted.id, project: slug, ref: granted.ref, status: granted.status,
+    archived: granted.archived ? 1 : 0, ord: granted.order, claim_by: granted.claim.by, data: granted,
+  });
+  const worktree = path.join(BOARD_PATH, '.claude', 'worktrees', 'sq-granted-helper');
+  const helper = { ...grantedActor, agent_type: 'general-purpose', cwd: worktree };
+
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'granted.js') },
+  }), null, 'a granted ruling must work without copying its path into ticket.files');
+  const ungranted = runHookOutput(FORCE_BYPASS, {
+    ...helper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'ungranted.js') },
+  });
+  assert.equal(ungranted.hookSpecificOutput.permissionDecision, 'deny');
+
+  const globTicket = addStopTicket('glob helper scope', { files: ['lib/**/*.js'] });
+  const globSession = `glob-helper-${++sqSeq}`;
+  const globActor = claimStopTicket(globTicket, globSession, 'glob-helper-parent');
+  const globHelper = { ...globActor, agent_type: 'general-purpose', cwd: worktree };
+  assert.equal(runHookOutput(FORCE_BYPASS, {
+    ...globHelper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'nested', 'covered.js') },
+  }), null, 'a descendant glob must match helper writes like commit admission does');
+  const globMiss = runHookOutput(FORCE_BYPASS, {
+    ...globHelper,
+    tool_name: 'Write',
+    tool_input: { file_path: path.join(worktree, 'lib', 'nested', 'covered.txt') },
+  });
+  assert.equal(globMiss.hookSpecificOutput.permissionDecision, 'deny');
+});
+
 test('pre-tool hook: external linked worktrees preserve helper scope enforcement', () => {
   const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-helper-external-'));
   fs.mkdirSync(path.join(projectPath, 'lib'));

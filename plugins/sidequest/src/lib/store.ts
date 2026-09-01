@@ -126,9 +126,11 @@ function effectiveScope(...args: any[]) { return configLayer.effectiveScope(...a
 function executionScope(slug?: any, ticket?: any) {
   const dispatch = ticket?.dispatch;
   const bound = dispatch && !dispatch.terminalAt ? dispatch.declaredFiles : null;
-  return Array.isArray(bound) && bound.length
-    ? bound
-    : effectiveScope(slug, ticket?.files);
+  if (Array.isArray(bound) && bound.length) {
+    const granted = Array.isArray(ticket?.scopeResolution?.granted) ? ticket.scopeResolution.granted : [];
+    return Array.from(new Set([...bound, ...effectiveScope(slug, { files: granted })]));
+  }
+  return effectiveScope(slug, ticket);
 }
 
 let projectsLayer: any;

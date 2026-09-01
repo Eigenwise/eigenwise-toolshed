@@ -616,7 +616,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'scopeRequest',
-    description: 'Request scope and receive an immediate ruling. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable.',
+    description: 'Request scope and receive an immediate ruling. Granted paths take effect immediately for hook write enforcement and commit admission. A foreign .release/unreleased/*.md fragment always refuses because only this ticket’s fragment is writable.',
     inputSchema: {
       type: 'object',
       properties: {

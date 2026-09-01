@@ -3080,6 +3080,34 @@ test('MCP scopeRequest and submit agree on declared descendant globs', async () 
   assert.deepEqual(store.getTicket(project, ticket.ref).submission.changedPaths, ['src/covered.js']);
 });
 
+test('MCP commit honors a granted scope ruling without copying it into ticket files', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  const ticket = store.createTicket(project, {
+    title: 'granted commit scope', files: ['src/declared.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'the commit gate must admit board-granted paths without mutating declared files',
+  });
+  const by = 'mcp-granted-commit-worker';
+  assert.equal((await callTool('claim', {
+    project, ref: ticket.ref, by, direct: true, reason: 'The granted scope fixture requires a local direct claim.',
+  })).ok, true);
+  fs.mkdirSync(path.join(worktree, 'src'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'src', 'granted.js'), 'granted\n');
+  const granted = store.getTicket(project, ticket.ref);
+  granted.scopeResolution = {
+    state: 'granted', requested: ['src/granted.js'], granted: ['src/granted.js'], refused: [], at: new Date().toISOString(),
+  };
+  db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+    id: granted.id, project, ref: granted.ref, status: granted.status,
+    archived: granted.archived ? 1 : 0, ord: granted.order, claim_by: granted.claim.by, data: granted,
+  });
+
+  const committed = await callTool('commit', {
+    project, ref: ticket.ref, by, message: 'MCP granted commit scope', worktree,
+  });
+  assert.ok(committed.commit, 'commit admits a path granted in board state');
+});
+
 function repoWithDirectories(prefix: string, directories: string[]) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), prefix));
   for (const directory of directories) fs.mkdirSync(path.join(root, directory), { recursive: true });

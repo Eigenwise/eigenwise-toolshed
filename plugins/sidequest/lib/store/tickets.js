@@ -384,21 +384,23 @@ function createTickets(dependencies) {
     return normalizeFiles([...Array.isArray(ticket?.files) ? ticket.files : [], ...normalizeFiles(additions)]);
   }
   function scopeResolution(slug, ticket, request, state, now, granted, refused) {
-    ticket.scopeResolution = {
+    const resolution = {
       state,
       by: request?.by || null,
       requestAt: request?.at || null,
       requested: normalizeFiles(request?.requested || request?.files),
       granted: normalizeFiles(granted),
       refused: normalizeFiles(refused),
-      effectiveScope: effectiveScope(slug, ticket?.files),
+      effectiveScope: [],
       at: now || (/* @__PURE__ */ new Date()).toISOString()
     };
+    ticket.scopeResolution = resolution;
+    resolution.effectiveScope = effectiveScope(slug, ticket);
   }
   function syncLiveDispatchScope(slug, ticket) {
     const dispatch = dispatchState(ticket);
     if (!dispatch || dispatch.terminalAt) return;
-    const scope = effectiveScope(slug, ticket?.files);
+    const scope = effectiveScope(slug, ticket);
     const refreshed = dispatch.artifactMode ? scope : commitScope.ticketCommitScope(scope, ticket?.files, ticket?.ref);
     dispatch.declaredFiles = dispatch.sharedTree === false ? refreshed : normalizeFiles([...Array.isArray(dispatch.declaredFiles) ? dispatch.declaredFiles : [], ...refreshed]);
   }
@@ -633,14 +635,14 @@ function createTickets(dependencies) {
       }
       const foreignReleaseFragments = commitScope.foreignReleaseFragmentScopePaths(requested, t.ref);
       const isForeignReleaseFragmentScope = (file) => foreignReleaseFragments.some((fragment) => commitScope.isInScope(file, [fragment]) && commitScope.isInScope(fragment, [file]));
-      const scope = commitScope.ticketCommitScope(effectiveScope(slug, t.files), t.files, t.ref);
+      const scope = commitScope.ticketCommitScope(effectiveScope(slug, t), t.files, t.ref);
       const additions = requested.filter((file) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
       const covered = requested.filter((file) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
       const now = (/* @__PURE__ */ new Date()).toISOString();
       touchClaimActivity(t, by, now);
       const request = { by, files: additions, requested, covered, at: now };
       if (!additions.length && !foreignReleaseFragments.length) {
-        scopeResolution(slug, t, request, "granted", now, requested, []);
+        scopeResolution(slug, t, request, "granted", now, [], []);
         t.updatedAt = now;
         putTicket(slug, t);
         return { ok: true, ticket: t, covered, approved: [], autoApproved: false, state: "granted", resolution: t.scopeResolution };
@@ -662,9 +664,8 @@ function createTickets(dependencies) {
         ...foreignReleaseFragments,
         ...additions.filter((file) => !commitScope.isInScope(file, approved))
       ]);
-      const granted = requested.filter((file) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, effectiveScope(slug, t.files)));
       const state = refused.length ? "refused" : "granted";
-      scopeResolution(slug, t, request, state, now, granted, refused);
+      scopeResolution(slug, t, request, state, now, approved, refused);
       if (!Array.isArray(t.comments)) t.comments = [];
       const policy = testScopeApproved && !packageScope.length ? "test scope under board policy" : buildRegistrationApproved && !packageScope.length ? "build-registration scope derived from the in-scope source layout" : configuredScope.length && !packageScope.length ? "scope under board policy" : "matching package surface derived from the ticket’s declared files";
       const undeclared = !normalizeFiles(t.files).length ? ` This ticket declares no files, so nothing outside board policy can be in scope. The orchestrator has to declare them (\`sidequest update ${t.ref} --file <path>\`) and redispatch.` : "";

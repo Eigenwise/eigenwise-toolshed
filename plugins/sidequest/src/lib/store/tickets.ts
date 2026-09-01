@@ -393,22 +393,24 @@ function scopeExpansionFiles(ticket?: any, additions?: any) {
 }
 
 function scopeResolution(slug?: any, ticket?: any, request?: any, state?: any, now?: any, granted?: any, refused?: any) {
-  ticket.scopeResolution = {
+  const resolution = {
     state,
     by: request?.by || null,
     requestAt: request?.at || null,
     requested: normalizeFiles(request?.requested || request?.files),
     granted: normalizeFiles(granted),
     refused: normalizeFiles(refused),
-    effectiveScope: effectiveScope(slug, ticket?.files),
+    effectiveScope: [] as string[],
     at: now || new Date().toISOString(),
   };
+  ticket.scopeResolution = resolution;
+  resolution.effectiveScope = effectiveScope(slug, ticket);
 }
 
 function syncLiveDispatchScope(slug?: any, ticket?: any) {
   const dispatch = dispatchState(ticket);
   if (!dispatch || dispatch.terminalAt) return;
-  const scope = effectiveScope(slug, ticket?.files);
+  const scope = effectiveScope(slug, ticket);
   // The implicit release fragment is granted by the dispatch, not declared on the
   // ticket, so a refresh that only re-read ticket.files would revoke it.
   const refreshed = dispatch.artifactMode ? scope : commitScope.ticketCommitScope(scope, ticket?.files, ticket?.ref);
@@ -688,14 +690,14 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
     ));
     // Match the commit gate (submissions.ts), which admits the ticket's own release
     // fragment implicitly; asking for it back must read as covered, not as an addition.
-    const scope = commitScope.ticketCommitScope(effectiveScope(slug, t.files), t.files, t.ref);
+    const scope = commitScope.ticketCommitScope(effectiveScope(slug, t), t.files, t.ref);
     const additions = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && !commitScope.isInScope(file, scope));
     const covered = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, scope));
     const now = new Date().toISOString();
     touchClaimActivity(t, by, now);
     const request = { by, files: additions, requested, covered, at: now };
     if (!additions.length && !foreignReleaseFragments.length) {
-      scopeResolution(slug, t, request, 'granted', now, requested, []);
+      scopeResolution(slug, t, request, 'granted', now, [], []);
       t.updatedAt = now;
       putTicket(slug, t);
       return { ok: true, ticket: t, covered, approved: [], autoApproved: false, state: 'granted', resolution: t.scopeResolution };
@@ -717,9 +719,8 @@ function requestScope(slug?: any, idOrRef?: any, by?: any, files?: any, opts?: a
       ...foreignReleaseFragments,
       ...additions.filter((file?: any) => !commitScope.isInScope(file, approved)),
     ]);
-    const granted = requested.filter((file?: any) => !isForeignReleaseFragmentScope(file) && commitScope.isInScope(file, effectiveScope(slug, t.files)));
     const state = refused.length ? 'refused' : 'granted';
-    scopeResolution(slug, t, request, state, now, granted, refused);
+    scopeResolution(slug, t, request, state, now, approved, refused);
     if (!Array.isArray(t.comments)) t.comments = [];
     const policy = testScopeApproved && !packageScope.length
       ? 'test scope under board policy'

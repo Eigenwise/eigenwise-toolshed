@@ -166,7 +166,7 @@ function provenNoOpCloseout(slug, ticket) {
   return { ok: false, detail: `Declared scope in ${workspace.root} is not a no-op: ${detail}.` };
 }
 const PROJECT_PROP = { type: "string", description: "Board (current project)." };
-const FILES_PROP = { type: "array", items: { type: "string" }, description: "Declared file scope: paths, or directory prefixes covering everything under them." };
+const FILES_PROP = { type: "array", items: { type: "string" }, description: "Declared file scope: paths, directory prefixes covering descendants, or globs matched consistently by hook and commit enforcement." };
 const LABELS_PROP = { type: "array", items: { type: "string" } };
 const CONTRACT_PROP = (verb) => ({ type: "array", items: { type: "string" }, description: `Named contracts or interfaces this ticket ${verb}.` });
 const MODEL_FILTER_PROP = { type: "string", description: "Filter by resolved model slug." };

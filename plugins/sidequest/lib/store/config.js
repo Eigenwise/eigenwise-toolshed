@@ -363,12 +363,15 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
       return { ok: true, config: boardConfig(slug) };
     });
   }
-  function effectiveScope(slug, files) {
+  function effectiveScope(slug, filesOrTicket) {
+    const ticket = Array.isArray(filesOrTicket) ? null : filesOrTicket;
+    const files = Array.isArray(filesOrTicket) ? filesOrTicket : ticket?.files;
+    const granted = ticket?.scopeResolution?.granted;
     const config = boardConfig(slug);
     const generatedConfig = Object.assign({ path: readMeta(slug)?.path }, config);
     const generatedPairs = [...config && config.generatedPairs || [], ...derivedGeneratedPairs(generatedConfig, files)];
     const paired = trackedGeneratedPaths(Object.assign({}, generatedConfig, { generatedPairs }), files);
-    return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...config && config.alwaysInScope || [], ...paired]));
+    return Array.from(/* @__PURE__ */ new Set([...Array.isArray(files) ? files : [], ...Array.isArray(granted) ? granted : [], ...config && config.alwaysInScope || [], ...paired]));
   }
   return { defaultProjectName, normalizeAlwaysInScope, normalizeReadOnlyDeniedTools, normalizeGeneratedPairPath, normalizeGeneratedPairs, generatedPathFor, trackedGeneratedPaths, derivedGeneratedPairs, defaultAlwaysInScope, normalizeDeliveryMode, normalizeIntegrationMode, normalizeIntegrationBranch, normalizeWorktreeIsolation, normalizeWorktreeBase, normalizeNotIntegratedSalvageAgeHours, normalizeAutoApproveTestScope, normalizeAutoApproveScope, normalizeWorktreeSetup, normalizeWorktreeDependencyPaths, normalizeIntegrationVerifyTimeoutMs, hasOriginRemote, integrationBranchExists, integrationTarget, integrationTargetCommit, normalizeBoardName, boardConfig, setBoardConfig, effectiveScope };
 }

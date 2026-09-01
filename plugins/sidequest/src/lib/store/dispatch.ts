@@ -1305,8 +1305,8 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       ? current.declaredFiles.slice()
       : null;
     const effectiveFiles = releasedBinding
-      ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t.files)]))
-      : effectiveScope(slug, t.files);
+      ? Array.from(new Set([...releasedBinding, ...effectiveScope(slug, t)]))
+      : effectiveScope(slug, t);
     const readonly = dispatchReadOnly(t);
     const requestedSharedTree = opts.sharedTree === true
       || (!Object.hasOwn(opts, 'sharedTree') && Boolean(current?.sharedTree));
@@ -1651,7 +1651,7 @@ function recoverDispatchQuotaFailure(slug?: any, idOrRef?: any, opts?: any) {
       sessionId: opts.sessionId ? String(opts.sessionId) : state.sessionId || null,
       preparedBy: dispatchPreparationAttribution(opts),
       sharedTree: state.sharedTree === true,
-      declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t.files),
+      declaredFiles: Array.isArray(state.declaredFiles) ? state.declaredFiles.slice() : effectiveScope(slug, t),
       artifactMode: state.artifactMode === true,
       artifactRoot: state.artifactRoot || null,
       artifactScope: state.artifactScope || null,

@@ -1166,7 +1166,7 @@ test('briefings reject compensating workarounds when the root cause is out of sc
   const briefing = agentsync.renderTicketBriefing({
     ref: 'SQ-1138', title: 'Scope wall', model: 'opus', effort: 'high', category: {},
   }, 'scope-wall-token');
-  assert.match(briefing, /The answer is immediate/);
+  assert.match(briefing, /A granted ruling takes effect immediately for write enforcement and commit admission/);
   assert.match(briefing, /On refusal, commit in-scope work and release with kind `handback`/);
   assert.match(briefing, /The orchestrator can expand the ticket files and redispatch/);
   assert.match(briefing, /request scope when a needed path is outside the declared set/);

@@ -1,7 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
+import { hasGlob, isInScope, normalizeScope, scopeKey, scopedPaths } from './scope-match.js';
 
 export { isInScope, scopedPaths } from './scope-match.js';
 
@@ -135,10 +135,19 @@ function canonicalScopedPaths(cwd: string, files: unknown): string[] {
 
 function commitScopedPaths(root: string, scopes: readonly string[]): string[] {
   const tracked = trackedPaths(root);
+  const changed = workingPaths(root);
   return scopes.filter((scope) => (
-    fs.existsSync(path.resolve(root, scope))
-    || tracked.some((file) => isInScope(file, [scope]))
+    hasGlob(scope)
+      ? [...tracked, ...changed].some((file) => isInScope(file, [scope]))
+      : fs.existsSync(path.resolve(root, scope)) || tracked.some((file) => isInScope(file, [scope]))
   ));
+}
+
+function globScopedWorkingPaths(root: string, scopes: readonly string[]): string[] {
+  const globScopes = scopes.filter(hasGlob);
+  return globScopes.length
+    ? workingPaths(root).filter((file) => isInScope(file, globScopes))
+    : [];
 }
 
 function ignoredUntrackedScope(root: string, scope: string): boolean {
@@ -676,8 +685,13 @@ export function commitScoped(cwd: string, message: unknown, files: unknown) {
     if (!commitScopes.length) {
       return { ok: false, reason: 'no_existing_scope', missingScopes, unscopedPaths };
     }
-    const stageableScopes = stageableScopedPaths(root, commitScopes);
-    const committableScopes = commitScopes.filter((scope) => !ignoredUntrackedScope(root, scope));
+    const concreteGlobPaths = globScopedWorkingPaths(root, commitScopes);
+    const directScopes = commitScopes.filter((scope) => !hasGlob(scope));
+    const stageableScopes = [...new Set([...stageableScopedPaths(root, directScopes), ...concreteGlobPaths])];
+    const committableScopes = [...new Set([
+      ...directScopes.filter((scope) => !ignoredUntrackedScope(root, scope)),
+      ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope)),
+    ])];
     if (stageableScopes.length) git(root, ['add', '--all', '--', ...stageableScopes]);
     git(root, ['commit', '--only', '-m', String(message || ''), '--', ...committableScopes]);
     const commit = git(root, ['rev-parse', 'HEAD']).trim();

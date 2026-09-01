@@ -11,6 +11,7 @@ import { readSessionState, sessionStateFile, writeSessionState } from './shared/
 import { dispatchLaunchName, DIAGNOSTIC_PROBE_NAME } from '../lib/exec-names.js';
 
 const { canonicalPath } = require(path.join(__dirname, '..', 'lib', 'worktrees.js')) as { canonicalPath: (value: unknown) => string };
+const { isInScope: scopeMatch } = require(path.join(__dirname, '..', 'lib', 'scope-match.js')) as { isInScope: (file: unknown, files: unknown) => boolean };
 
 const PASS_THROUGH_AGENT_TYPES = new Set(['Explore', 'claude-code-guide', 'statusline-setup']);
 const EXECUTOR_HELPER_TYPES = new Set(['Explore', 'claude-code-guide', 'web-researcher', 'general-purpose']);
@@ -94,7 +95,7 @@ interface Store {
   listProjects: (options: { all: boolean }) => Array<{ slug: string }>;
   listTickets: (slug: string) => Ticket[];
   readMeta: (slug: string) => { path?: string } | null;
-  effectiveScope: (slug: string, files: unknown) => string[];
+  executionScope: (slug: string, ticket: Ticket) => string[];
   resolveExec: (model: string, effort: string) => unknown;
   terminalDispatchTarget: (agentName: string) => { slug: string; ref: string; outcome: string } | null;
   addComment: (slug: string, ref: string, fields: { by: string; body: string }) => { ok: boolean } | null;
@@ -642,7 +643,7 @@ function guardOwnTicketDispatch(input: HookInput): boolean {
 }
 
 function helperScope(store: Store, project: string, projectPath: string, ticket: Ticket): HelperScope {
-  return { ref: ticket.ref!, projectPath, files: store.effectiveScope(project, ticket.files) };
+  return { ref: ticket.ref!, projectPath, files: store.executionScope(project, ticket) };
 }
 
 function helperScopes(input: HookInput): HelperScopeResolution {
@@ -762,13 +763,7 @@ function projectRelative(target: string, projectPath: string): string | null {
 
 function inScope(target: string, scope: HelperScope): boolean {
   const relative = projectRelative(canonicalPath(target), canonicalPath(scope.projectPath));
-  if (!relative) return false;
-  const key = process.platform === 'win32' ? relative.toLowerCase() : relative;
-  return scope.files.some((file) => {
-    const normalized = String(file || '').trim().replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
-    const scopeKey = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-    return key === scopeKey || key.startsWith(`${scopeKey}/`);
-  });
+  return relative != null && scopeMatch(relative, scope.files);
 }
 
 function isScratchpadPath(target: string): boolean {
@@ -801,7 +796,7 @@ function guardHelperWrite(input: HookInput): void {
   const display = projectRelative(target, scope.projectPath) || target;
   writeDeny(
     'PreToolUse',
-    `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Route this path through the parent executor as a scope request or file a new ticket.`,
+    `sidequest: refusing helper write to ${display}. It is outside ${scope.ref}'s effective scope. Ask the parent executor to request scope; a granted ruling takes effect immediately. File a new ticket when this work belongs elsewhere.`,
   );
 }
 
