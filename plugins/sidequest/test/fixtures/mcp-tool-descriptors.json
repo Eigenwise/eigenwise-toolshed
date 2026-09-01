@@ -183,7 +183,7 @@
   },
   {
     "name": "story_log",
-    "description": "Read, append, or rotate a story log.",
+    "description": "Story log.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -239,7 +239,7 @@
   },
   {
     "name": "add",
-    "description": "File ticket; review-audit binds candidate.",
+    "description": "File ticket; review binds candidate.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -852,7 +852,7 @@
   },
   {
     "name": "groomClose",
-    "description": "Close: abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
+    "description": "abandonSubmission:true; reset/working-tree/manual; reviewed interaction.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1100,7 +1100,7 @@
   },
   {
     "name": "submit",
-    "description": "Submit verified work; clear needs owner; force only lets owner replace candidate.",
+    "description": "Submit verified work; clear/force need owner.",
     "inputSchema": {
       "type": "object",
       "properties": {
@@ -1475,7 +1475,7 @@
   },
   {
     "name": "dispatch",
-    "description": "Dispatch; returns a token and spawn spec.",
+    "description": "Dispatch; token and spawn spec.",
     "inputSchema": {
       "type": "object",
       "properties": {

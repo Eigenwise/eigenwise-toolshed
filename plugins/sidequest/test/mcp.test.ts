@@ -856,7 +856,7 @@ test('story contracts keep a durable 256 KiB capacity while reads page with stab
 
 test('story_log reads, appends from a claimed member, and rotates after promotion', async () => {
   const storyLog = mcp.toolDescriptors().find((tool: any) => tool.name === 'story_log');
-  assert.match(storyLog.description, /Read, append, or rotate a story log/);
+  assert.match(storyLog.description, /Story log/);
   assert.equal(storyLog.inputSchema.properties.entry.pattern, '^(DECISION|CONSTRAINT|DISCOVERY)\\s*:');
   assert.match(storyLog.inputSchema.properties.entry.description, /Must begin DECISION:, CONSTRAINT:, or DISCOVERY:/);
   assert.match(storyLog.inputSchema.properties.entry.description, /16,000 UTF-8 bytes/);
@@ -1130,7 +1130,7 @@ test('tools/list preserves MCP contracts within the payload budget', async (cont
   assert.ok(payloadBytes <= mcp.MCP_TOOLS_LIST_MAX_BYTES, `tools/list payload is ${payloadBytes} bytes, over the ${mcp.MCP_TOOLS_LIST_MAX_BYTES}-byte budget`);
   assert.ok(headroom >= mcp.MCP_TOOLS_LIST_HEADROOM_BYTES, `tools/list headroom is ${headroom} bytes, below ${mcp.MCP_TOOLS_LIST_HEADROOM_BYTES}`);
   assert.match(tools.find((tool: any) => tool.name === 'claim').description, /ok:true/);
-  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /returns a token and spawn spec/);
+  assert.match(tools.find((tool: any) => tool.name === 'dispatch').description, /token and spawn spec/);
   assert.match(tools.find((tool: any) => tool.name === 'dispatch').inputSchema.properties.recoveryEvidence.description, /Recovery evidence/);
   assert.match(tools.find((tool: any) => tool.name === 'done').description, /declared external needs current capture/);
   assert.match(tools.find((tool: any) => tool.name === 'list').description, /changes\/pulse/);

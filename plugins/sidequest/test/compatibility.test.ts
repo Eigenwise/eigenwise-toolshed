@@ -118,7 +118,7 @@ test('MCP descriptors preserve tool and caller-discipline contracts', () => {
     ['commit', 'verify', 'worktree'],
   );
   assert.equal(submit?.inputSchema.properties?.force?.type, 'boolean');
-  assert.match(submit?.description ?? '', /clear needs owner; force only lets owner replace candidate/);
+  assert.match(submit?.description ?? '', /clear\/force need owner/);
   const rework = byName.get('rework');
   assert.equal(rework?.inputSchema.properties?.force, undefined);
   assert.match(rework?.description ?? '', /repair unbound; bound needs oracle/);
