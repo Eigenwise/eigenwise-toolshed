@@ -8,6 +8,20 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.512.0 (2026-09-02)
+
+### sidequest 5.0.21 → 5.0.22
+
+#### Fixes
+
+- Keep wave submissions recoverable (SQ-2384)
+  Refused wave assembly keeps submitted candidates available for individual delivery and shows the recovery state in pulse.
+- Guard pending groom-close delivery (SQ-2386)
+  Pending submissions now need proven candidate delivery before groom-close, or an explicit recorded abandonment.
+- Close unconsumed prepared dispatches during grooming (SQ-2388) [`822579c`](https://github.com/Eigenwise/eigenwise-toolshed/commit/822579cd6f209759cf2182ff08d516d2d4c2a753)
+- Require declared external deliverable closeouts (SQ-2391)
+  External deliverable closeouts now require an explicit ticket declaration and a verification capture from the current dispatch attempt.
+
 ## v3.511.0 (2026-09-01)
 
 ### sidequest 5.0.20 → 5.0.21
