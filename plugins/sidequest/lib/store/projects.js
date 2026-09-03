@@ -1,5 +1,5 @@
 "use strict";
-function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
+function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }) {
   function canonicalize(absPath) {
     const resolved = path.resolve(absPath);
     try {
@@ -276,6 +276,11 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     if (!readMeta(srcSlug)) throw new Error(`source board "${srcSlug}" does not exist`);
     if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
     const tickets = listTickets(srcSlug).slice().sort((a, b) => seqOfRef(a.ref) - seqOfRef(b.ref));
+    const liveClaimed = tickets.filter((ticket) => ticket.claim && ticket.claim.by && !claimReclaimable(ticket));
+    if (liveClaimed.length) {
+      const refs = liveClaimed.map((ticket) => `${ticket.ref} (held by "${ticket.claim.by}")`).join(", ");
+      throw new Error(`refusing to merge board "${srcSlug}": ${liveClaimed.length} live-claimed ticket(s): ${refs}. Release the claims first; merge cannot move a ticket its executor is still working under.`);
+    }
     const stories = listStories(srcSlug);
     const refMap = {};
     const ticketPlan = [];

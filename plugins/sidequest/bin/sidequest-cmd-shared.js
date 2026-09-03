@@ -55,10 +55,8 @@ function controlPlaneIdentity(opts) {
   return session ? `orchestrator-${session.slice(0, 12)}` : "control-plane";
 }
 function sessionId(opts) {
-  const v = opts && opts.session || process.env.CLAUDE_CODE_SESSION_ID || // the id the runtime actually exports to tool subprocesses
-  process.env.CLAUDE_SESSION_ID || // tolerated legacy/alt spelling
-  process.env.SIDEQUEST_SESSION || "";
-  return String(v).trim() || null;
+  const value = opts && opts.session || process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || process.env.SIDEQUEST_SESSION || "";
+  return String(value).trim() || null;
 }
 async function bodyFromOpts(opts, command) {
   if (opts.body != null && opts["body-file"] != null) fail(`${command}: pass either -m/--body or --body-file, not both`);

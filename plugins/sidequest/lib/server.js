@@ -331,6 +331,11 @@ async function handle(req, res) {
   }
   const projectDelete = /^\/api\/projects\/([^/]+)$/.exec(pathname);
   if (req.method === "DELETE" && projectDelete) {
+    const liveClaims = (store.listTickets(projectDelete[1]) || []).filter((ticket) => ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket));
+    if (liveClaims.length) {
+      sendJson(res, 409, { error: `refusing to delete project ${projectDelete[1]}: ${liveClaims.length} live-claimed ticket(s). Release or archive them first.` });
+      return;
+    }
     const result = store.deleteProjectExact(projectDelete[1]);
     sendJson(res, result.ok ? 200 : 404, result);
     return;
@@ -871,7 +876,17 @@ async function handle(req, res) {
         sendJson(res, 400, { error: "bad JSON body" });
         return;
       }
-      const updated = store.updateTicket(slug, idOrRef, Object.assign({}, body, { source: "dashboard" }));
+      let updated;
+      try {
+        updated = store.updateTicket(
+          slug,
+          idOrRef,
+          Object.assign({}, body, { source: "dashboard" })
+        );
+      } catch (e) {
+        sendJson(res, 409, { error: String(e?.message || e) });
+        return;
+      }
       if (!updated) {
         sendJson(res, 404, { error: "ticket not found" });
         return;
@@ -881,7 +896,13 @@ async function handle(req, res) {
       return;
     }
     if (req.method === "DELETE") {
-      const ok = store.deleteTicket(slug, idOrRef);
+      let ok;
+      try {
+        ok = store.deleteTicket(slug, idOrRef);
+      } catch (e) {
+        sendJson(res, 409, { error: String(e?.message || e) });
+        return;
+      }
       sendJson(res, ok ? 200 : 404, { ok });
       return;
     }

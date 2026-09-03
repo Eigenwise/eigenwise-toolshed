@@ -482,6 +482,72 @@ test('dashboard ticket feed uses the pulse claim verdict', async (t?: any) => {
   assert.equal(typeof claim.idleMs, 'number');
 });
 
+test('dashboard PATCH cannot flip live-claim closeout fields (unauthenticated localhost endpoint)', async (t?: any) => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-closeout-update-'));
+  const project = store.ensureProject(projectPath, 'Dashboard closeout update').slug;
+  const ticket = store.createTicket(project, { title: 'dashboard live claim', files: ['src/engine.js'] });
+  assert.equal(store.claimTicket(project, ticket.ref, 'dashboard-worker', {
+    direct: true,
+    reason: 'A live worker claim must survive an unauthenticated dashboard closeout PATCH.',
+  }).ok, true);
+  const started = await start(await availablePort());
+  t.after(() => started.server.close());
+
+  // An executor's Bash can PATCH this same 127.0.0.1 endpoint, so during a live
+  // claim the dashboard must be refused exactly like the CLI, not granted.
+  const refused = await requestJson(
+    started.port,
+    'PATCH',
+    `/api/tickets/${ticket.ref}?project=${encodeURIComponent(project)}`,
+    { externalDeliverable: true },
+  );
+  assert.equal(refused.status, 409);
+  assert.match(refused.body.error, /refusing active-claim update/);
+  assert.notEqual(store.getTicket(project, ticket.ref).externalDeliverable, true);
+
+  // Releasing the claim first is the supported path, same as the CLI.
+  store.releaseTicket(project, ticket.ref, 'dashboard-worker');
+  const allowed = await requestJson(
+    started.port,
+    'PATCH',
+    `/api/tickets/${ticket.ref}?project=${encodeURIComponent(project)}`,
+    { externalDeliverable: true },
+  );
+  assert.equal(allowed.status, 200);
+  assert.equal(allowed.body.ticket.externalDeliverable, true);
+});
+
+test('dashboard DELETE cannot destroy a live-claimed ticket or a project holding one', async (t?: any) => {
+  const projectPath = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-live-delete-'));
+  const project = store.ensureProject(projectPath, 'Dashboard live delete').slug;
+  const ticket = store.createTicket(project, { title: 'dashboard live delete', files: ['src/engine.js'] });
+  assert.equal(store.claimTicket(project, ticket.ref, 'delete-worker', {
+    direct: true,
+    reason: 'A live worker claim must survive an unauthenticated dashboard DELETE.',
+  }).ok, true);
+  const started = await start(await availablePort());
+  t.after(() => started.server.close());
+
+  // Deleting the ticket sheds the claim and all closeout state, so it is the same
+  // executor escape as flipping a closeout flag and gets the same 409.
+  const ticketRefused = await requestJson(started.port, 'DELETE', `/api/tickets/${ticket.ref}?project=${encodeURIComponent(project)}`);
+  assert.equal(ticketRefused.status, 409);
+  assert.match(ticketRefused.body.error, /live-claimed/);
+  assert.ok(store.getTicket(project, ticket.ref), 'the live-claimed ticket survives');
+
+  // Deleting the whole project would drop the same ticket.
+  const projectRefused = await requestJson(started.port, 'DELETE', `/api/projects/${project}`);
+  assert.equal(projectRefused.status, 409);
+  assert.match(projectRefused.body.error, /live-claimed/);
+  assert.ok(store.getTicket(project, ticket.ref), 'the project and its live claim survive');
+
+  // Releasing the claim first is the supported path.
+  store.releaseTicket(project, ticket.ref, 'delete-worker');
+  const deleted = await requestJson(started.port, 'DELETE', `/api/tickets/${ticket.ref}?project=${encodeURIComponent(project)}`);
+  assert.equal(deleted.status, 200);
+  assert.equal(store.getTicket(project, ticket.ref), null);
+});
+
 test('dashboard self-updates to a newer cached install at the same URL', { timeout: 180000 }, async (t?: any) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dashboard-upgrade-'));
   const oldRoot = path.join(root, '1.37.0');

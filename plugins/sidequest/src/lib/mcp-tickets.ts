@@ -14,7 +14,6 @@ const {
   assertSidequestInstall,
   assertDispatchTransport,
   resolveProject,
-  runtimeSessionId,
   sessionOf,
   requireDispatchSession,
   workflowRecipe,
@@ -220,7 +219,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'update',
-    description: 'Update ticket fields by scope. by scopes an active ticket scope approval to the control-plane identity. Any omitted field is left unchanged. Verify changes affect future dispatches; an open dispatch keeps its pinned verifier and the response explains recovery. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. Any omitted field is left unchanged. Verify changes affect future dispatches; an open dispatch keeps its pinned verifier and the response explains recovery. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -233,14 +232,14 @@ const tools: ToolDefinition[] = [
         highStakes: { type: 'boolean' },
         labels: LABELS_PROP,
         files: FILES_PROP,
-        by: { type: 'string', description: 'Control-plane identity when approving an active claim scope request; it must differ from the claiming executor.' },
+        by: { type: 'string', description: 'Human-readable update label. It cannot authorize closeout fields on a live claim.' },
         produces: CONTRACT_PROP('produces'),
         changes: CONTRACT_PROP('changes'),
         consumes: CONTRACT_PROP('consumes'),
         contractWaiver: { type: 'boolean', description: 'Explicitly reviewed waiver for contract-edge wave sequencing.' },
         readonly: { type: 'boolean', description: 'Closeout override.' },
-        workingTreeDelivery: { type: 'boolean', description: 'Shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths.' },
-        externalDeliverable: { type: 'boolean', description: 'Explicitly declare the deliverable is outside the repository. Set it during a live claim to let that executor close a clean writable dispatch with its current-attempt pinned verify-capture.' },
+        workingTreeDelivery: { type: 'boolean', description: 'Orchestrator-only live-claim declaration for a shared-checkout deliverable that forbids commits. The executor closes with done after the pinned verify-capture records the final declared working-tree paths.' },
+        externalDeliverable: { type: 'boolean', description: 'Explicitly declare the deliverable is outside the repository. The orchestrator may set this during a live claim; it lets that executor close a clean writable dispatch with its current-attempt pinned verify-capture.' },
         anchors: { type: 'string', maxLength: store.EXECUTOR_ANCHORS_MAX, description: 'Executor anchors, verbatim in the task prompt.' },
         verify: VERIFY_ORACLE_PROP,
         verifyKind: { type: 'string', enum: store.VERIFY_ORACLE_KINDS, description: 'Verification kind for future dispatches. An open dispatch keeps its pinned kind. command and suite execute a validated command; document, link, schema, manual, review, attestation, and custom retain their evidence contract. attestation requires attestationArtifact, and attestationArtifact is rejected when verifyKind is command.' },
@@ -290,8 +289,7 @@ const tools: ToolDefinition[] = [
       }
       const verificationWasAmended = (args.verify !== undefined && args.verify !== existing.executorVerify)
         || (args.verifyKind !== undefined && args.verifyKind !== existing.executorVerifyKind);
-      const patch: any = { source: 'mcp', sessionId: sessionOf(args) };
-      if (args.by !== undefined) patch.by = args.by;
+      const patch: any = { source: 'mcp', by: String(args.by || '').trim() || null };
       for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
       }
@@ -326,7 +324,9 @@ const tools: ToolDefinition[] = [
       }
       if (args.why !== undefined) patch.complexityWhy = args.why;
       if (args.route !== undefined) patch.route = args.route === 'none' || args.route === null ? null : args.route;
-      const updated = store.updateTicket(slug, args.ref, patch, args.reviewTarget);
+      const updated = store.updateTicket(slug, args.ref, patch, args.reviewTarget, {
+        allowLiveClaimCloseoutUpdate: true,
+      });
       if (!updated) throw new Error(`update: no ticket "${args.ref}" on ${meta.name}.`);
       const t = store.getTicket(slug, updated.ref) || updated;
       const warnings = store.ticketReferenceWarnings(slug, patch.title, patch.description);
@@ -362,7 +362,10 @@ const tools: ToolDefinition[] = [
         return { ok: false, reason: 'claimed', ref: ticket.ref, claim: ticket.claim, message: `${ticket.ref} is live-claimed by ${ticket.claim.by}; pass force:true to permanently remove it.` };
       }
       const ref = ticket.ref;
-      if (!store.deleteTicket(slug, ticket.id)) {
+      // force:true reaches here only on the main thread: the PreToolUse hook denies
+      // a subagent remove carrying force. So the live-claim deletion grant rides the
+      // force flag, which the handler above already required for a live claim.
+      if (!store.deleteTicket(slug, ticket.id, { allowLiveClaimDeletion: args.force === true })) {
         throw new Error(`remove: could not delete "${ticket.ref}" from ${meta.name}.`);
       }
       return { ok: true, ref };

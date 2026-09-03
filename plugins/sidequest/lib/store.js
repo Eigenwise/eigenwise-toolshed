@@ -2814,6 +2814,7 @@ const {
 projectsLayer = createProjects({
   acquireLock,
   assetsDir,
+  claimReclaimable,
   cloneCached,
   database,
   db,

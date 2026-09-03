@@ -105,6 +105,24 @@ async function callToolRaw(name?: any, args?: any) {
   const resp = await mcp.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
   return resp.result;
 }
+async function callToolAsSession(sessionId: string, name?: any, args?: any) {
+  const previousSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = sessionId;
+  try {
+    return await callTool(name, args);
+  } finally {
+    process.env.CLAUDE_CODE_SESSION_ID = previousSessionId;
+  }
+}
+async function callToolRawAsSession(sessionId: string, name?: any, args?: any) {
+  const previousSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = sessionId;
+  try {
+    return await callToolRaw(name, args);
+  } finally {
+    process.env.CLAUDE_CODE_SESSION_ID = previousSessionId;
+  }
+}
 async function callToolOn(server?: any, name?: any, args?: any) {
   const resp = await server.handleRequest({ jsonrpc: '2.0', id: ++idc, method: 'tools/call', params: { name, arguments: args || {} } });
   assert.ok(resp && resp.result, `tool ${name} returned a result`);
@@ -264,10 +282,11 @@ function createLinkedWorktree(primary?: any) {
 }
 
 function claimDispatchedTicket(project?: any, ticket?: any, by?: any, sharedTree?: any) {
-  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree, sessionId: MCP_SESSION_ID });
   assert.equal(store.claimTicket(project, ticket.ref, by, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
+    sessionId: MCP_SESSION_ID,
   }).ok, true);
 }
 
@@ -661,13 +680,13 @@ test('update defers verifier amendments until a fresh dispatch and explains reco
   const firstDispatch = store.prepareDispatch(project, added.ref, {
     allowUnscoped: true,
     sharedTree: true,
-    sessionId: 'verify-amendment-first-dispatch',
+    sessionId: MCP_SESSION_ID,
   });
   const by = 'verify-amendment-worker';
   assert.equal(store.claimTicket(project, added.ref, by, {
     token: firstDispatch.token,
     executor: firstDispatch.ticket.dispatchExecutor,
-    sessionId: 'verify-amendment-first-dispatch',
+    sessionId: MCP_SESSION_ID,
   }).ok, true);
 
   const updated = await callTool('update', {
@@ -3404,7 +3423,7 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
   const updatedBy = 'shared-scope-update-worker';
   claimDispatchedTicket(updatedProject, updatedTicket, updatedBy, true);
 
-  await callTool('update', {
+  await callToolAsSession(MCP_SESSION_ID, 'update', {
     project: updatedProject, ref: updatedTicket.ref, by: 'control-plane',
     files: ['lib/original.js', 'lib/updated.js'],
   });
@@ -3420,7 +3439,7 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
   });
   assert.ok(updatedCommit.commit, 'the normal commit gate admits a live shared dispatch scope update');
 
-  await callTool('update', {
+  await callToolAsSession(MCP_SESSION_ID, 'update', {
     project: updatedProject, ref: updatedTicket.ref, by: 'control-plane', files: ['lib/original.js'],
   });
   updated = store.getTicket(updatedProject, updatedTicket.ref);
@@ -3452,51 +3471,56 @@ test('shared-tree live dispatches grow their scope without shedding the submissi
   assert.ok(grantedCommit.commit, 'the normal commit gate admits a granted shared dispatch scope');
 });
 
-test('MCP update lets the claim holder narrow isolated live dispatch scope but refuses combined additions', async () => {
+test('MCP update refuses claim-holder live scope changes and admits a control-plane approval', async () => {
   const project = store.ensureProject(committedRepo('sq-mcp-scope-shed-')).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP active claim scope shed', files: ['lib/allowed.js', 'screenshots'], complexity: 3,
-    labels: ['direct-ok'], complexityWhy: 'claimed executors can remove an incorrect declared path',
+    labels: ['direct-ok'], complexityWhy: 'claimed executors must request scope approval before changing the declared paths',
   });
   const by = 'mcp-active-scope-shed-worker';
-  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree: false });
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sharedTree: false, sessionId: MCP_SESSION_ID });
   assert.equal(store.claimTicket(project, ticket.ref, by, {
     token: prepared.token,
     executor: prepared.ticket.dispatchExecutor,
+    sessionId: MCP_SESSION_ID,
   }).ok, true);
 
-  await callTool('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
+  const refused = await callToolRawAsSession('mcp-scope-executor-session', 'update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
+  assert.equal(refused.isError, true);
+  assert.match(refused.content[0].text, /scopeRequest/i);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'screenshots']);
+
+  await callToolAsSession(MCP_SESSION_ID, 'update', {
+    project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js'],
+  });
   const narrowed = store.getTicket(project, ticket.ref);
   assert.deepEqual(narrowed.files, ['lib/allowed.js']);
-  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js', `.release/unreleased/${ticket.ref}.md`], 'live dispatch scope sheds the removed path but retains its ticket-bound release fragment');
-
-  const refused = await callToolRaw('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js', 'foreign/new.js'] });
-  assert.equal(refused.isError, true);
-  assert.match(refused.content[0].text, /refusing active-claim scope change for foreign\/new\.js/i);
-  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
+  assert.deepEqual(narrowed.dispatch.declaredFiles, ['lib/allowed.js', `.release/unreleased/${ticket.ref}.md`]);
 });
 
-test('MCP update makes control-plane scope approval discoverable and guards executor scope rewrites', async () => {
+test('MCP update handler grants live scope changes without deriving authority from session identity', async () => {
   const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-scope-update-'))).slug;
   const ticket = store.createTicket(project, {
     title: 'MCP active claim scope update', files: ['lib/allowed.js'], complexity: 3,
-    labels: ['direct-ok'], complexityWhy: 'claimed executors cannot rewrite their declared scope',
+    labels: ['direct-ok'], complexityWhy: 'the PreToolUse hook keeps subagents away from this main-thread handler grant',
   });
   const by = 'mcp-active-scope-worker';
-  assert.equal((await callTool('claim', { project, ref: ticket.ref, by, direct: true, reason: 'The scope update fixture requires a local direct claim.' })).ok, true);
+  claimDispatchedTicket(project, ticket, by, false);
 
-  const refused = await callToolRaw('update', { project, ref: ticket.ref, files: ['lib/allowed.js', 'foreign/new.js'] });
-  assert.equal(refused.isError, true);
-  assert.match(refused.content[0].text, /refusing active-claim scope change for foreign\/new\.js/i);
-  assert.match(refused.content[0].text, /--by <your-id>/i);
-  assert.doesNotMatch(refused.content[0].text, new RegExp(`--by ${by}`));
-  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
-
-  await callTool('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
-  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
-
-  await callTool('update', { project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js', 'foreign/new.js'] });
+  await callToolAsSession('mcp-unrelated-control-session', 'update', {
+    project, ref: ticket.ref, files: ['lib/allowed.js', 'foreign/new.js'],
+  });
   assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'foreign/new.js']);
+
+  const holderRefusal = await callToolRaw('update', { project, ref: ticket.ref, by, files: ['lib/allowed.js'] });
+  assert.equal(holderRefusal.isError, true);
+  assert.match(holderRefusal.content[0].text, /scopeRequest/i);
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js', 'foreign/new.js']);
+
+  await callToolAsSession(MCP_SESSION_ID, 'update', {
+    project, ref: ticket.ref, by: 'mcp-scope-control-plane', files: ['lib/allowed.js'],
+  });
+  assert.deepEqual(store.getTicket(project, ticket.ref).files, ['lib/allowed.js']);
 
   const unclaimed = store.createTicket(project, {
     title: 'MCP unclaimed scope update', files: ['lib/allowed.js'], complexity: 3,
@@ -3991,15 +4015,23 @@ test('status validation fails loudly and directs deletion to remove', async () =
   assert.throws(() => store.createTicket(store.ensureProject(PROJ).slug, { title: 'bad status', status: 'deleted' }), /remove tool/i);
 });
 
-test('CLI and MCP remove protect live claims but allow force and stale claims', async () => {
+test('CLI and MCP remove protect live claims; only main-thread MCP force and stale claims delete', async () => {
   const cliLive = await callTool('add', { title: 'CLI live claim removal', unclassified: true });
   assert.equal(store.claimTicket(cliLive.project, cliLive.ref, 'cli-live-worker', { direct: true }).ok, true);
   assert.throws(
     () => runCli(['rm', cliLive.ref, '--project', cliLive.project]),
-    (error: any) => /live-claimed by "cli-live-worker".*--force/.test(error.stderr)
+    (error: any) => /live-claimed by "cli-live-worker".*release the claim first/.test(error.stderr)
   );
   assert.ok(store.getTicket(cliLive.project, cliLive.ref));
-  runCli(['rm', cliLive.ref, '--force', '--project', cliLive.project]);
+  // --force is typeable from an executor's Bash, so it is not a grant: a live
+  // claim survives it, and the caller is told the flag cannot override the claim.
+  assert.throws(
+    () => runCli(['rm', cliLive.ref, '--force', '--project', cliLive.project]),
+    (error: any) => /rm --force cannot override a live claim/.test(error.stderr)
+  );
+  assert.ok(store.getTicket(cliLive.project, cliLive.ref), 'the live-claimed ticket survives rm --force');
+  assert.equal(store.releaseTicket(cliLive.project, cliLive.ref, 'cli-live-worker').ok, true);
+  runCli(['rm', cliLive.ref, '--project', cliLive.project]);
   assert.equal(store.getTicket(cliLive.project, cliLive.ref), null);
 
   const cliStale = await callTool('add', { title: 'CLI stale claim removal', unclassified: true });
@@ -5002,12 +5034,16 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[], veri
     description: 'A write-routed dispatch whose contract forbids repository edits, exactly like the audited bounces.',
     category: 'debugging',
     files,
-    ...(verifyCommand ? { executorVerifyKind: 'command', executorVerify: verifyCommand } : {}),
+    ...(options.executorVerifyKind ? {
+      executorVerifyKind: options.executorVerifyKind,
+      executorVerify: options.executorVerify === undefined ? (verifyCommand || '') : options.executorVerify,
+      executorAttestationArtifact: options.executorAttestationArtifact,
+    } : (verifyCommand ? { executorVerifyKind: 'command', executorVerify: verifyCommand } : {})),
     ...(options.externalDeliverable === true ? { externalDeliverable: true } : {}),
     ...(options.readonly === true ? { readonly: true } : {}),
   });
-  const sessionId = `sq923-session-${agentId}`;
-  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId });
+  const sessionId = options.preparingSessionId || `sq923-session-${agentId}`;
+  const prepared = store.prepareDispatch(project, ticket.ref, { allowUnscoped: true, sessionId, source: options.preparingSource || 'store' });
   assert.equal(prepared.ticket.dispatch.sharedTree, false, 'the fixture dispatch is isolated');
   assert.equal(store.recordDispatchLaunch(project, ticket.ref, {
     token: prepared.token,
@@ -5036,7 +5072,7 @@ function isolatedDispatch(prefix: string, agentId: string, files: string[], veri
     executor: prepared.ticket.dispatchExecutor,
   }).ok, true);
   const boundWorktree = store.getTicket(project, ticket.ref).dispatch.worktree;
-  return { repo, project, ref: ticket.ref, by: `by-${agentId}`, worktree: boundWorktree, verifyCommand };
+  return { repo, project, ref: ticket.ref, by: `by-${agentId}`, worktree: boundWorktree, verifyCommand, preparingSessionId: sessionId };
 }
 
 function recordNoOpVerification(fixture: any) {
@@ -5083,9 +5119,10 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.match(refused.message, /orchestrator can set.*through update/i, 'the refusal names the mid-claim recovery');
   assert.equal(store.getTicket(fixture.project, fixture.ref).status, 'doing');
 
-  const updated = await callTool('update', {
+  const updated = await callToolAsSession('sq2391-different-main-session', 'update', {
     project: fixture.project,
     ref: fixture.ref,
+    by: 'mcp-external-deliverable-orchestrator',
     externalDeliverable: true,
   });
   assert.equal(updated.ok, true);
@@ -5109,6 +5146,102 @@ test('SQ-2391: done refuses an ordinary writable clean scope even after its pinn
   assert.equal(done.completion.externalDeliverable.candidate.value, capture.candidate.value);
   assert.equal(done.completion.externalDeliverable.capture.id, capture.id);
   assert.equal(done.completion.externalDeliverable.verification.command, verifyCommand);
+});
+
+test('SQ-2397: MCP handler grant is explicit while CLI source, by, and session stay non-authoritative', async () => {
+  const acceptedMcpCalls = [
+    { label: 'no by', agentId: 'a2397mcpnoby', sessionId: 'sq2397-unrelated-no-by', patch: {} },
+    { label: 'forged by', agentId: 'a2397mcpforged', sessionId: 'sq2397-unrelated-forged', patch: { by: 'forged-control-plane' } },
+    { label: 'different session', agentId: 'a2397mcpsession', sessionId: 'sq2397-different-session', patch: { by: 'main-control-plane' } },
+  ] as const;
+  for (const acceptedCall of acceptedMcpCalls) {
+    const fixture = isolatedDispatch(`sq2397-${acceptedCall.label.replace(/ /g, '-')}-`, acceptedCall.agentId, ['src/engine.js'], 'node -p "process.cwd()"', {
+      preparingSessionId: `sq2397-preparer-${acceptedCall.agentId}`,
+      preparingSource: 'mcp',
+    });
+    const updated = await callToolAsSession(acceptedCall.sessionId, 'update', {
+      project: fixture.project,
+      ref: fixture.ref,
+      ...acceptedCall.patch,
+      externalDeliverable: true,
+    });
+    assert.equal(updated.ok, true, `${acceptedCall.label} reaches the handler's explicit grant`);
+    assert.equal(store.getTicket(fixture.project, fixture.ref).externalDeliverable, true);
+  }
+
+  const claimHolder = isolatedDispatch('sq2397-claim-holder-', 'a2397holder', ['src/engine.js'], 'node -p "process.cwd()"', {
+    preparingSessionId: 'sq2397-holder-preparer',
+    preparingSource: 'mcp',
+  });
+  const holderRefusal = await callToolRawAsSession('sq2397-holder-main-thread', 'update', {
+    project: claimHolder.project,
+    ref: claimHolder.ref,
+    by: claimHolder.by,
+    externalDeliverable: true,
+  });
+  assert.equal(holderRefusal.isError, true, 'the explicit grant can still refuse the claim holder by label');
+  assert.match(holderRefusal.content[0].text, /without the claim holder's `by`/i);
+  assert.equal(store.getTicket(claimHolder.project, claimHolder.ref).externalDeliverable, false);
+
+  const cliFixture = isolatedDispatch('sq2397-cli-', 'a2397cli', ['src/engine.js'], 'node -p "process.cwd()"', {
+    preparingSessionId: 'sq2397-cli-preparer',
+    preparingSource: 'cli',
+  });
+  const cliAttempts = [
+    { label: 'plain CLI', sessionId: 'sq2397-cli-unrelated', args: [] },
+    { label: 'source spoof', sessionId: 'sq2397-cli-unrelated', args: ['--source', 'mcp'] },
+    { label: 'preparing session', sessionId: cliFixture.preparingSessionId, args: ['--by', 'forged-control-plane'] },
+  ];
+  for (const attempt of cliAttempts) {
+    const cli = spawnSync(process.execPath, [
+      path.join(__dirname, '..', 'bin', 'sidequest.js'),
+      'update', cliFixture.ref, '--project', cliFixture.repo,
+      '--external-deliverable', ...attempt.args,
+    ], {
+      cwd: cliFixture.worktree,
+      encoding: 'utf8',
+      env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: cliFixture.repo, CLAUDE_CODE_SESSION_ID: attempt.sessionId },
+    });
+    assert.notEqual(cli.status, 0, `${attempt.label}: ${cli.stdout}\n${cli.stderr}`);
+    assert.match(cli.stderr, /release the claim.*MCP `update`.*orchestrator's main thread/i);
+  }
+  assert.equal(store.getTicket(cliFixture.project, cliFixture.ref).externalDeliverable, false);
+
+  const reclaimable = isolatedDispatch('sq2397-reclaimable-', 'a2397reclaimable', ['src/engine.js'], 'node -p "process.cwd()"', {
+    preparingSessionId: 'sq2397-reclaimable-preparer',
+    preparingSource: 'cli',
+  });
+  const reclaimableTicket = store.getTicket(reclaimable.project, reclaimable.ref);
+  reclaimableTicket.claim.at = '2000-01-01T00:00:00.000Z';
+  persistTicket(reclaimable.project, reclaimableTicket);
+  assert.equal(store.claimReclaimable(store.getTicket(reclaimable.project, reclaimable.ref)), true);
+  const reclaimableUpdate = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'update', reclaimable.ref, '--project', reclaimable.repo, '--external-deliverable', '--json',
+  ], {
+    cwd: reclaimable.worktree,
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: reclaimable.repo },
+  });
+  assert.equal(reclaimableUpdate.status, 0, reclaimableUpdate.stderr);
+  assert.equal(JSON.parse(reclaimableUpdate.stdout).ticket.externalDeliverable, true);
+
+  const unclaimed = store.createTicket(reclaimable.project, {
+    title: 'Unclaimed CLI closeout update',
+    files: ['src/unclaimed.js'],
+    complexity: 3,
+    complexityWhy: 'The live-claim guard leaves unclaimed ticket behavior unchanged.',
+  });
+  const unclaimedUpdate = spawnSync(process.execPath, [
+    path.join(__dirname, '..', 'bin', 'sidequest.js'),
+    'update', unclaimed.ref, '--project', reclaimable.repo, '--external-deliverable', '--json',
+  ], {
+    cwd: reclaimable.worktree,
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_HOME, CLAUDE_PROJECT_DIR: reclaimable.repo },
+  });
+  assert.equal(unclaimedUpdate.status, 0, unclaimedUpdate.stderr);
+  assert.equal(JSON.parse(unclaimedUpdate.stdout).ticket.externalDeliverable, true);
 });
 
 function redispatchExternalDeliverableFixture(fixture: any, agentId: string) {

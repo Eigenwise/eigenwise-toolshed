@@ -357,7 +357,7 @@ async function cmdUpdate(opts: any, positional: any) {
   if (opts.category != null) patch.category = opts.category === 'none' ? null : categoryIdOrFail(slug, opts.category);
   const route = ticketRouteFromOpts(opts, true);
   if (route !== undefined) patch.route = route;
-  if (opts.by != null) patch.by = opts.by;
+  patch.by = String(opts.by || '').trim() || null;
   patch.source = opts.source || 'cli'; // a CLI/subagent change (Claude), not the dashboard
   const saved = store.updateTicket(slug, idOrRef, patch, reviewTargetFromOpts(opts));
   if (!saved) fail(`update: no ticket "${idOrRef}" in ${meta.name}`);
@@ -389,8 +389,8 @@ async function cmdRm(opts: any, positional: any) {
   const { slug, meta } = await resolveProject(opts);
   const ticket = store.getTicket(slug, idOrRef);
   if (!ticket) fail(`rm: no ticket "${idOrRef}" in ${meta.name}`);
-  if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket) && !opts.force) {
-    fail(`rm: ${ticket.ref} is live-claimed by "${ticket.claim.by}"; pass --force to permanently remove it.`);
+  if (ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket)) {
+    fail(`rm: ${ticket.ref} is live-claimed by "${ticket.claim.by}"; release the claim first (rm --force cannot override a live claim).`);
   }
   if (!store.deleteTicket(slug, ticket.id)) fail(`rm: could not delete "${ticket.ref}" from ${meta.name}`);
   console.log(`✓ removed ${ticket.ref} from ${meta.name}`);

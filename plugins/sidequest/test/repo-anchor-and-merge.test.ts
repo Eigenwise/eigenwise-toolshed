@@ -214,4 +214,29 @@ test('mergeProject: refuses to merge a board into itself', () => {
   assert.throws(() => store.mergeProject(p.slug, p.slug), /same board/i);
 });
 
+// A merge deletes every source ticket and recreates it elsewhere, so it is a
+// delete surface the live-claim boundary (SQ-2397) has to cover too: the
+// executor keeps working under a ref and board that no longer exist.
+test('mergeProject: refuses while a source ticket is live-claimed, in dry-run too', () => {
+  const dest = store.ensureProject(path.join(os.tmpdir(), 'sq-fx4', 'dest'), 'merge-dest');
+  const src = store.ensureProject(path.join(os.tmpdir(), 'sq-fx4', 'dest', 'src'), 'merge-src');
+  const idle = store.createTicket(src.slug, { title: 'idle source ticket', complexity: 1 });
+  const held = store.createTicket(src.slug, { title: 'held source ticket', complexity: 1 });
+  const claimed = store.claimTicket(src.slug, held.ref, 'live-worker', { direct: true, reason: 'The merge guard needs a live claim to refuse.' });
+  assert.strictEqual(claimed.ok, true, claimed.reason);
+
+  const refusal = new RegExp(`refusing to merge board "${src.slug}": 1 live-claimed ticket\\(s\\): ${held.ref} \\(held by "live-worker"\\)`);
+  assert.throws(() => store.mergeProject(src.slug, dest.slug), refusal);
+  assert.throws(() => store.mergeProject(src.slug, dest.slug, { dryRun: true }), refusal);
+  assert.ok(store.getTicket(src.slug, held.ref), 'the live-claimed ticket survives');
+  assert.ok(store.getTicket(src.slug, idle.ref), 'its idle sibling survives too');
+  assert.ok(store.readMeta(src.slug), 'the source board survives');
+  assert.strictEqual(store.listTickets(dest.slug).length, 0, 'nothing was copied into the destination');
+
+  store.releaseTicket(src.slug, held.ref, 'live-worker');
+  const res = store.mergeProject(src.slug, dest.slug);
+  assert.strictEqual(res.tickets, 2, 'a released claim merges normally');
+  assert.strictEqual(store.readMeta(src.slug), null);
+});
+
 export {};

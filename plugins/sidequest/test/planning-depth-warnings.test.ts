@@ -900,12 +900,39 @@ test('rejects unrunnable npm verifies when tickets are added or updated', () => 
   assert.strictEqual(derivedDispatch.status, 1);
   assert.doesNotMatch(derivedDispatch.stderr + derivedDispatch.stdout, /dispatch: verify command cannot run/);
 
-  cliJson(['claim', correct.ticket.ref, '--by', 'live-verify-worker', '--direct', '--reason', 'The live verify fixture needs a direct local claim.']);
-  const rejectedLiveUpdate = cliResult(['update', correct.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing']);
-  assert.strictEqual(rejectedLiveUpdate.status, 1);
-  assert.match(rejectedLiveUpdate.stderr + rejectedLiveUpdate.stdout, /dispatch: verify command cannot run/);
-  const manualLiveUpdate = cliJson(['update', correct.ticket.ref, '--verify', 'manual: Checked the test plan while the ticket was claimed.']);
-  assert.strictEqual(manualLiveUpdate.ticket.executorVerify, 'manual: Checked the test plan while the ticket was claimed.');
+  const previousHome = process.env.SIDEQUEST_HOME;
+  const previousProject = process.env.CLAUDE_PROJECT_DIR;
+  process.env.SIDEQUEST_HOME = SIDEQUEST_HOME;
+  process.env.CLAUDE_PROJECT_DIR = PROJ;
+  try {
+    const project = store.ensureProject(PROJ).slug;
+    const prepared = store.prepareDispatch(project, correct.ticket.ref, {
+      allowUnscoped: true,
+      sessionId: 'planning-control-session',
+    });
+    assert.strictEqual(store.claimTicket(project, correct.ticket.ref, 'live-verify-worker', {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
+    else process.env.SIDEQUEST_HOME = previousHome;
+    if (previousProject === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previousProject;
+  }
+  const previousSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+  process.env.CLAUDE_CODE_SESSION_ID = 'planning-control-session';
+  try {
+    const rejectedLiveUpdate = cliResult(['update', correct.ticket.ref, '--verify', 'cd plugins/package-suite && npm run missing', '--by', 'planning-control']);
+    assert.strictEqual(rejectedLiveUpdate.status, 1);
+    assert.match(rejectedLiveUpdate.stderr + rejectedLiveUpdate.stdout, /release the claim.*MCP `update`.*orchestrator's main thread/i);
+    const manualLiveUpdate = cliResult(['update', correct.ticket.ref, '--verify', 'manual: Checked the test plan while the ticket was claimed.', '--source', 'mcp', '--by', 'planning-control']);
+    assert.strictEqual(manualLiveUpdate.status, 1);
+    assert.match(manualLiveUpdate.stderr + manualLiveUpdate.stdout, /release the claim.*MCP `update`.*orchestrator's main thread/i);
+  } finally {
+    if (previousSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+    else process.env.CLAUDE_CODE_SESSION_ID = previousSessionId;
+  }
 
   const correctDispatch = cliResult(['dispatch', correct.ticket.ref]);
   assert.strictEqual(correctDispatch.status, 1);

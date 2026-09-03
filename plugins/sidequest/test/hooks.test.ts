@@ -1659,6 +1659,84 @@ test('pre-tool hook: builtin exec spawned WITH a model that mismatches the resol
   assert.match(out.systemMessage, /model "opus" but .* resolves to "sonnet"/);
 });
 
+test('pre-tool hook gates MCP closeout updates by subagent caller, not executor classification', () => {
+  const generalPurposeSubagent = { agent_id: 'closeout-update-child', agent_type: 'general-purpose' };
+  const closeoutUpdates: Array<[string, unknown]> = [
+    ['files', ['src/other.ts']],
+    ['status', 'todo'],
+    ['readonly', true],
+    ['readonlyOverride', true],
+    ['workingTreeDelivery', true],
+    ['externalDeliverable', true],
+    ['verify', 'node --test test/hooks.test.ts'],
+    ['verifyKind', 'suite'],
+    ['attestationArtifact', 'verification.json'],
+    ['executorVerify', 'node --test test/hooks.test.ts'],
+    ['executorVerifyKind', 'suite'],
+    ['executorAttestationArtifact', 'verification.json'],
+  ];
+  for (const [field, value] of closeoutUpdates) {
+    const output = runHookOutput(FORCE_BYPASS, {
+      ...generalPurposeSubagent,
+      tool_name: 'mcp__plugin_sidequest_board__update',
+      tool_input: { ref: 'SQ-2397', [field]: value },
+    });
+    assert.equal(output.hookSpecificOutput.permissionDecision, 'deny', String(field) + ' must be denied');
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /subagents cannot update closeout fields through MCP/i);
+    assert.match(output.hookSpecificOutput.permissionDecisionReason, /scopeRequest.*orchestrator.*main thread/i);
+  }
+
+  const mainThread = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'mcp__plugin_sidequest_board__update',
+    tool_input: { ref: 'SQ-2397', externalDeliverable: true },
+  });
+  assert.equal(mainThread, null, 'the main thread reaches the MCP handler');
+
+  const descriptiveUpdate = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'closeout-update-executor',
+    agent_type: 'sidequest-exec-dispatch',
+    tool_name: 'mcp__plugin_sidequest_board__update',
+    tool_input: { ref: 'SQ-2397', title: 'Reworded', description: 'No closeout fields changed.' },
+  });
+  assert.equal(descriptiveUpdate, null, 'ordinary ticket text remains editable through MCP');
+
+  const cli = runHookOutput(FORCE_BYPASS, {
+    agent_id: 'closeout-update-executor',
+    agent_type: 'sidequest-exec-dispatch',
+    tool_name: 'Bash',
+    tool_input: { command: 'node sidequest.js update SQ-1 --readonly' },
+  });
+  assert.equal(cli, null, 'the CLI store guard, not the hook regex, refuses this update');
+});
+
+test('pre-tool hook denies a subagent MCP remove carrying force (the delete-to-shed-claim escape)', () => {
+  const subagent = { agent_id: 'remove-force-child', agent_type: 'general-purpose' };
+
+  const denied = runHookOutput(FORCE_BYPASS, {
+    ...subagent,
+    tool_name: 'mcp__plugin_sidequest_board__remove',
+    tool_input: { ref: 'SQ-2397', project: 'p', force: true },
+  });
+  assert.equal(denied.hookSpecificOutput.permissionDecision, 'deny');
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /subagents cannot force-remove/i);
+
+  // A subagent remove WITHOUT force is not the escape (the handler still refuses a
+  // live claim); the hook lets it reach the handler.
+  const noForce = runHookOutput(FORCE_BYPASS, {
+    ...subagent,
+    tool_name: 'mcp__plugin_sidequest_board__remove',
+    tool_input: { ref: 'SQ-2397', project: 'p' },
+  });
+  assert.equal(noForce, null, 'a non-force remove reaches the handler, which guards live claims');
+
+  // The main thread reaches the handler even with force.
+  const mainThread = runHookOutput(FORCE_BYPASS, {
+    tool_name: 'mcp__plugin_sidequest_board__remove',
+    tool_input: { ref: 'SQ-2397', project: 'p', force: true },
+  });
+  assert.equal(mainThread, null, 'the orchestrator main thread may force-remove');
+});
+
 test('pre-tool hook: stable dispatch executors require preparation even with a ref', () => {
   const t = fixtureTicket('SQ-232 dispatch passthrough fixture', 'codex-gpt-5-6-terra', 'high');
   const out = runHookOutput(FORCE_BYPASS, {
@@ -3696,6 +3774,8 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the Agent gate must be registered');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__dispatch'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover the dispatch MCP tool');
+  assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'mcp__plugin_sidequest_board__update'
+    && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the closeout update guard must cover the update MCP tool');
   assert.ok(config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Bash|PowerShell'
     && entry.hooks.some((hook?: any) => hook.command.includes('force-exec-bypass.js'))), 'the own-dispatch guard must cover Sidequest CLI commands');
   assert.ok(!config.hooks.PreToolUse.some((entry?: any) => entry.matcher === 'Skill'), 'the oversized Skill guard stays removed: its one activation cost a turn and prevented nothing');

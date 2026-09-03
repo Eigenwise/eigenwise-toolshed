@@ -3082,7 +3082,7 @@ const {
 } = stories;
 
 projectsLayer = createProjects({
-  acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
+  acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName,
   deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash,
   path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction,
 });

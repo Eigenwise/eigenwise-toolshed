@@ -1010,6 +1010,32 @@ function sameFiles(left?: any, right?: any) {
     && normalizedLeft.every((file: any) => rightFiles.has(file.toLowerCase()));
 }
 
+type UpdateTicketOptions = {
+  allowLiveClaimCloseoutUpdate?: boolean;
+};
+
+function activeClaimCloseoutUpdateRefusal(ticket?: any, patch?: any, options: UpdateTicketOptions = {}) {
+  if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
+  const changedFields = [
+    ...(patch.files !== undefined && !sameFiles(ticket.files, patch.files) ? ['files'] : []),
+    ...(patch.status !== undefined && String(patch.status).trim().toLowerCase() !== ticket.status ? ['status'] : []),
+    ...((patch.readonly !== undefined || patch.readonlyOverride !== undefined) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ['readonly'] : []),
+    ...(patch.workingTreeDelivery !== undefined && (patch.workingTreeDelivery === true) !== (ticket.workingTreeDelivery === true) ? ['workingTreeDelivery'] : []),
+    ...(patch.externalDeliverable !== undefined && (patch.externalDeliverable === true) !== (ticket.externalDeliverable === true) ? ['externalDeliverable'] : []),
+    ...(patch.executorVerify !== undefined && patch.executorVerify !== ticket.executorVerify ? ['verify'] : []),
+    ...(patch.executorVerifyKind !== undefined && patch.executorVerifyKind !== ticket.executorVerifyKind ? ['verifyKind'] : []),
+    ...(patch.executorAttestationArtifact !== undefined && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ['attestationArtifact'] : []),
+  ];
+  if (!changedFields.length) return null;
+  const caller = String(patch.by || '').trim();
+  if (options.allowLiveClaimCloseoutUpdate === true && caller !== ticket.claim.by) return null;
+  const scopeChange = changedFields.includes('files');
+  const closeoutChanges = changedFields.some((field) => field !== 'files');
+  const scopeGuidance = scopeChange ? ' Executors use `scopeRequest` for files.' : '';
+  const closeoutGuidance = closeoutChanges ? ' Ask the orchestrator to set other closeout fields from the main thread.' : '';
+  return `${ticket.ref}: refusing active-claim update for ${changedFields.join(', ')}. Release the claim before changing these fields through the CLI, or use MCP \`update\` from the orchestrator's main thread without the claim holder's \`by\`.${scopeGuidance}${closeoutGuidance}`;
+}
+
 function activeClaimScopeRefusal(slug?: any, ticket?: any, files?: any, patch?: any) {
   if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
   const current = normalizeFiles(ticket.files);
@@ -1046,7 +1072,7 @@ function activeClaimScopeRefusal(slug?: any, ticket?: any, files?: any, patch?: 
 // Apply a partial update. Only known fields are written; unknown keys ignored.
 // Locked (like every other mutator) so a concurrent comment/claim/link append
 // can never be silently overwritten by an update whose read predates it.
-function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any) {
+function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any, options: UpdateTicketOptions = {}) {
   const found = getTicket(slug, idOrRef);
   if (!found) return null;
   patch = patch || {};
@@ -1054,6 +1080,8 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     throw new Error('generic ticket patch cannot set, change, or clear reviewTarget; pass the review target transition separately');
   }
   const apply = (t?: any) => {
+    const closeoutUpdateRefusal = activeClaimCloseoutUpdateRefusal(t, patch, options);
+    if (closeoutUpdateRefusal) throw new Error(closeoutUpdateRefusal);
     const nextStatus = patch.status == null ? null : requireStatus(patch.status);
     const doneRefusal = nextStatus === 'done' ? updateDoneRefusal(t) : null;
     if (doneRefusal) throw new Error(doneRefusal);
@@ -1084,7 +1112,9 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
     if (patch.complexity !== undefined) { const c = coerceComplexity(patch.complexity); if (c) t.complexity = c; }
     if (patch.complexityWhy !== undefined && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1000);
     if (patch.files !== undefined) {
-      const scopeRefusal = activeClaimScopeRefusal(slug, t, patch.files, patch);
+      const scopeRefusal = options.allowLiveClaimCloseoutUpdate === true
+        ? null
+        : activeClaimScopeRefusal(slug, t, patch.files, patch);
       if (scopeRefusal) throw new Error(scopeRefusal);
       t.files = boundedFiles(patch.files, {
         category: patch.category === undefined ? t.category : patch.category,
@@ -1203,9 +1233,17 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
 
 // Locked so a delete can never yank the ticket/lock file out from under a
 // concurrent addComment/claimTicket that still believes it holds the lock.
-function deleteTicket(slug?: any, idOrRef?: any) {
+function deleteTicket(slug?: any, idOrRef?: any, options: { allowLiveClaimDeletion?: boolean } = {}) {
   const found = getTicket(slug, idOrRef);
   if (!found) return false;
+  // Deleting a live-claimed ticket sheds the claim and all closeout state, so it
+  // is the same escape as flipping closeout flags: the store refuses it unless an
+  // explicit grant is passed. Only the hook-authenticated main-thread MCP remove
+  // supplies that grant; CLI --force and the unauthenticated dashboard DELETE do
+  // not, and so must release the claim first.
+  if (found.claim && found.claim.by && !claimReclaimable(found) && options.allowLiveClaimDeletion !== true) {
+    throw new Error(`${found.ref}: refusing to delete a live-claimed ticket (held by "${found.claim.by}"). Release the claim first, or remove it with the orchestrator's main-thread MCP.`);
+  }
   const deletedRef = found.ref;
   const lock = ticketLockPath(slug, found.id);
   const locked = acquireLock(lock);
