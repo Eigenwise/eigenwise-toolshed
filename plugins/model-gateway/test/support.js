@@ -12,17 +12,35 @@ const START_TIMEOUT_MS = 5000;
 function waitForHealth(port) {
   const deadline = Date.now() + START_TIMEOUT_MS;
   return new Promise((resolve, reject) => {
-    const attempt = () => {
-      const request = http.get({ host: '127.0.0.1', port, path: '/healthz' }, (response) => {
-        response.resume();
-        if (response.statusCode === 200) return resolve();
-        retry();
-      });
-      request.once('error', retry);
+    let settled = false;
+    let timer = null;
+    const finish = (error = null) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      if (error) reject(error);
+      else resolve();
     };
     const retry = () => {
-      if (Date.now() >= deadline) return reject(new Error(`listener ${port} did not become healthy within ${START_TIMEOUT_MS}ms`));
-      setTimeout(attempt, 25);
+      if (settled || timer) return;
+      if (Date.now() >= deadline) {
+        return finish(new Error(`listener ${port} did not become healthy within ${START_TIMEOUT_MS}ms`));
+      }
+      timer = setTimeout(() => {
+        timer = null;
+        attempt();
+      }, 25);
+    };
+    const attempt = () => {
+      if (settled) return;
+      const request = http.get({ host: '127.0.0.1', port, path: '/healthz' }, (response) => {
+        response.resume();
+        response.once('end', () => {
+          if (response.statusCode === 200) finish();
+          else retry();
+        });
+      });
+      request.once('error', retry);
     };
     attempt();
   });
