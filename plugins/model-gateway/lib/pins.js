@@ -41,15 +41,26 @@ function readDetectedPinCache() {
   try {
     const saved = JSON.parse(fs.readFileSync(PIN_CACHE_PATH, 'utf8'));
     if (!saved || Array.isArray(saved) || typeof saved !== 'object') return null;
+    const cliVersion = typeof saved.cliVersion === 'string' ? saved.cliVersion : null;
     const pins = Object.fromEntries(Object.keys(PIN_ALIASES)
       .map((alias) => [alias, normalizedDetectedPin(alias, saved.pins?.[alias])])
       .filter(([, pin]) => pin));
-    return { cliVersion: typeof saved.cliVersion === 'string' ? saved.cliVersion : null, updatedAt: Number(saved.updatedAt) || 0, pins };
+    const detectedFor = Object.fromEntries(Object.keys(pins).map((alias) => [
+      alias,
+      typeof saved.detectedFor?.[alias] === 'string' ? saved.detectedFor[alias] : cliVersion,
+    ]));
+    return { cliVersion, updatedAt: Number(saved.updatedAt) || 0, pins, detectedFor };
   } catch { return null; }
 }
 
+function currentDetectedPins(cache) {
+  if (!cache?.cliVersion) return {};
+  return Object.fromEntries(Object.entries(cache.pins)
+    .filter(([alias]) => cache.detectedFor[alias] === cache.cliVersion));
+}
+
 function detectedPinDefaults() {
-  return { ...KNOWN_GOOD_PINS, ...(readDetectedPinCache()?.pins || {}) };
+  return { ...KNOWN_GOOD_PINS, ...currentDetectedPins(readDetectedPinCache()) };
 }
 
 function writeDetectedPinCache(cache) {
@@ -95,18 +106,15 @@ function claudeVersion() {
   });
 }
 
-function probeClaudeAlias(alias, endpoint) {
+function probeClaudeAlias(alias, endpoint, timeoutMs = PIN_PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
-    const {
-      ANTHROPIC_API_KEY,
-      ANTHROPIC_AUTH_TOKEN,
-      ANTHROPIC_BASE_URL,
-      ANTHROPIC_DEFAULT_FABLE_MODEL,
-      ANTHROPIC_DEFAULT_OPUS_MODEL,
-      ANTHROPIC_DEFAULT_SONNET_MODEL,
-      CLAUDE_CODE_OAUTH_TOKEN,
-      ...environment
-    } = process.env;
+    const excludedVariables = new Set([
+      'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
+      'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
+      'CLAUDE_CODE_OAUTH_TOKEN', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+    ]);
+    const environment = Object.fromEntries(Object.entries(process.env)
+      .filter(([name]) => !excludedVariables.has(name.toUpperCase())));
     const child = spawn(CLAUDE_BIN, ['--bare', '--no-session-persistence', '--model', alias, '-p', '--output-format', 'stream-json', '--verbose'], {
       env: { ...environment, ANTHROPIC_BASE_URL: endpoint },
       stdio: ['pipe', 'pipe', 'pipe'],
@@ -126,7 +134,7 @@ function probeClaudeAlias(alias, endpoint) {
     const timeout = setTimeout(() => {
       terminateProbe(child);
       finish(null);
-    }, PIN_PROBE_TIMEOUT_MS);
+    }, timeoutMs);
     const read = (chunk) => {
       output += chunk;
       if (output.length > 262144) {
@@ -157,19 +165,39 @@ async function refreshDetectedPins({ force = false } = {}) {
   const cached = readDetectedPinCache();
   const version = await claudeVersion();
   const fresh = cached && Date.now() - cached.updatedAt < PIN_CACHE_TTL_MS;
-  if (!force && fresh && (!version || cached.cliVersion === version)) return cached.pins;
+  const aliases = Object.keys(PIN_ALIASES);
+  const aliasesToProbe = force || !fresh
+    ? aliases
+    : version
+      ? aliases.filter((alias) => cached?.detectedFor[alias] !== version)
+      : [];
+  if (aliasesToProbe.length === 0) return cached?.pins || {};
 
   let server;
   try {
     server = await startPinProbeServer();
     const address = server.address();
     const endpoint = `http://127.0.0.1:${address.port}`;
-    const detected = await Promise.all(Object.keys(PIN_ALIASES).map((alias) => probeClaudeAlias(alias, endpoint)));
-    const pins = { ...(cached?.pins || {}) };
-    for (const [index, alias] of Object.keys(PIN_ALIASES).entries()) {
-      if (detected[index]) pins[alias] = detected[index];
+    const detected = await Promise.all(aliasesToProbe.map((alias) => probeClaudeAlias(alias, endpoint)));
+    const retryIndexes = detected.map((pin, index) => pin ? -1 : index).filter((index) => index >= 0);
+    const retries = await Promise.all(retryIndexes.map((index) => (
+      probeClaudeAlias(aliasesToProbe[index], endpoint, PIN_PROBE_TIMEOUT_MS * 2)
+    )));
+    for (const [retryIndex, detectedIndex] of retryIndexes.entries()) {
+      if (retries[retryIndex]) detected[detectedIndex] = retries[retryIndex];
     }
-    if (detected.some(Boolean)) writeDetectedPinCache({ cliVersion: version || cached?.cliVersion || null, updatedAt: Date.now(), pins });
+
+    const pins = { ...(cached?.pins || {}) };
+    const detectedFor = { ...(cached?.detectedFor || {}) };
+    const recordedVersion = version || cached?.cliVersion || 'unknown';
+    for (const [index, alias] of aliasesToProbe.entries()) {
+      if (!detected[index]) continue;
+      pins[alias] = detected[index];
+      detectedFor[alias] = recordedVersion;
+    }
+    if (detected.some(Boolean)) {
+      writeDetectedPinCache({ cliVersion: recordedVersion, updatedAt: Date.now(), pins, detectedFor });
+    }
     return pins;
   } catch { return cached?.pins || {}; } finally {
     if (server) await new Promise((resolve) => server.close(resolve));

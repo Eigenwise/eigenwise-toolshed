@@ -58,7 +58,7 @@ const PIN_ALIASES = {
 const KNOWN_GOOD_PINS = {
   opus: 'claude-opus-5[1m]',
   sonnet: 'claude-sonnet-5[1m]',
-  fable: 'claude-fable-5[1m]',
+  fable: 'claude-fable-5-1[1m]',
 };
 const PIN_OVERRIDE_PATH = path.join(STATE, 'pins.json');
 const PIN_CACHE_PATH = path.join(STATE, 'detected-pins.json');
