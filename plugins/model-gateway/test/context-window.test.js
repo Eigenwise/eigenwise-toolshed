@@ -7,6 +7,7 @@ const http = require('node:http');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
+const { startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
@@ -58,22 +59,12 @@ async function waitForShim(port) {
 }
 
 async function spawnShim(t, proxyPort, extraEnv = {}) {
-  const shimProbe = http.createServer();
-  const shimPort = await listen(shimProbe);
-  await new Promise((resolve) => shimProbe.close(resolve));
-  const child = spawn(process.execPath, [CLI, 'serve-shim'], {
-    env: {
-      ...process.env,
-      CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
-      CODEX_GATEWAY_REQUEST_LOG: '0',
-      ...extraEnv,
-    },
-    stdio: 'ignore',
+  const { port } = await startGateway(t, 'serve-shim', {
+    CODEX_GATEWAY_PROXY_PORT: String(proxyPort),
+    CODEX_GATEWAY_REQUEST_LOG: '0',
+    ...extraEnv,
   });
-  t.after(() => child.kill());
-  await waitForShim(shimPort);
-  return shimPort;
+  return port;
 }
 
 function usageSse(usage) {
@@ -202,7 +193,7 @@ test('default request route logging records Fable metadata but never prompt data
     env: {
       ...testEnv,
       CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
+      CODEX_GATEWAY_PROXY_PORT: '0',
       CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
       CODEX_GATEWAY_REQUEST_LOG_PATH: logFile,
     },
@@ -244,7 +235,7 @@ test('CODEX_GATEWAY_REQUEST_LOG=0 disables request route logging', async (t) => 
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
+      CODEX_GATEWAY_PROXY_PORT: '0',
       CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
       CODEX_GATEWAY_REQUEST_LOG: '0',
       CODEX_GATEWAY_REQUEST_LOG_PATH: logFile,
@@ -268,6 +259,10 @@ test('Codex sentry sums all input usage fields from SSE message_delta frames', a
     if (req.method === 'GET' && req.url === '/v1/models') {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
+    }
+    if (req.method !== 'POST' || req.url !== '/v1/messages') {
+      res.writeHead(404);
+      return res.end();
     }
     forwarded++;
     res.writeHead(200, { 'content-type': 'text/event-stream' });
@@ -369,7 +364,7 @@ test('Codex sentry never gates Claude passthrough requests', async (t) => {
   });
   const anthropicPort = await listen(anthropic);
   t.after(() => anthropic.close());
-  const shimPort = await spawnShim(t, anthropicPort + 1, {
+  const shimPort = await spawnShim(t, 0, {
     CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
     CODEX_GATEWAY_COMPACT_TRIGGER: '1',
   });
@@ -969,7 +964,7 @@ test('claude-* passthrough is byte-identical and never subjected to Codex window
     env: {
       ...process.env,
       CODEX_GATEWAY_PORT: String(shimPort),
-      CODEX_GATEWAY_PROXY_PORT: String(shimPort + 1),
+      CODEX_GATEWAY_PROXY_PORT: '0',
       CODEX_GATEWAY_ANTHROPIC_UPSTREAM: `http://127.0.0.1:${anthropicPort}`,
       CODEX_GATEWAY_REQUEST_LOG: '0',
     },

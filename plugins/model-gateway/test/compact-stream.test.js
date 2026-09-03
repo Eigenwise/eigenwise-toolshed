@@ -125,6 +125,10 @@ function scriptedProxy(scripts) {
       res.writeHead(200, { 'content-type': 'application/json' });
       return res.end(JSON.stringify({ data: [{ id: 'gpt-5.6-sol' }] }));
     }
+    if (req.method !== 'POST' || req.url !== '/v1/messages') {
+      res.writeHead(404);
+      return res.end();
+    }
     const chunks = [];
     req.on('data', (chunk) => chunks.push(chunk));
     req.on('end', () => {
