@@ -9,7 +9,7 @@ const os = require('os');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('node:crypto');
-const { execFileSync, spawn } = require('node:child_process');
+const { execFileSync, spawn, spawnSync } = require('node:child_process');
 
 // A throwaway store home so the SubagentStop hook (which loads lib/store.js as a
 // subprocess and inherits this env) reads a fixture board, never the real one. The
@@ -117,6 +117,27 @@ function runHookOutput(script?: any, payload?: any, envOverrides?: any) {
     env: { ...process.env, ...(envOverrides || {}) },
   });
   return out.trim() ? JSON.parse(out) : null;
+}
+
+function runHookWithFailureDetails(script?: any, payload?: any, envOverrides?: any): string {
+  const result = spawnSync(process.execPath, [script], {
+    input: JSON.stringify(payload),
+    encoding: 'utf8',
+    env: { ...process.env, CLAUDE_PLUGIN_ROOT: PLUGIN_ROOT, ...(envOverrides || {}) },
+    windowsHide: true,
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const details = [
+    `exit=${result.status === null ? 'none' : result.status}`,
+    `signal=${result.signal || 'none'}`,
+    `spawn_error=${result.error?.message || 'none'}`,
+    `stderr=${JSON.stringify(result.stderr || '')}`,
+    `stdout=${JSON.stringify(result.stdout || '')}`,
+  ].join('\n');
+  assert.equal(result.error, undefined, `SubagentStop hook could not start:\n${details}`);
+  assert.equal(result.signal, null, `SubagentStop hook ended on a signal:\n${details}`);
+  assert.equal(result.status, 0, `SubagentStop hook exited nonzero:\n${details}`);
+  return result.stdout || '';
 }
 
 interface HookProcessResult {
@@ -4103,10 +4124,8 @@ test('subagent-stop: long-run threshold settings do not suppress a held-claim ve
   const stop = claimStopTicket(t, sess, 'worker-tuned');
   backdateSessionClaims(sess, 5);
 
-  const out = execFileSync(process.execPath, [SUBAGENT_STOP], {
-    input: JSON.stringify(stop),
-    encoding: 'utf8',
-    env: { ...process.env, SIDEQUEST_LONG_RUN_MIN: '2' },
+  const out = runHookWithFailureDetails(SUBAGENT_STOP, stop, {
+    SIDEQUEST_LONG_RUN_MIN: '2',
   });
   const parsed = out.trim() ? JSON.parse(out) : null;
   const ctx = parsed ? parsed.hookSpecificOutput.additionalContext : '';
