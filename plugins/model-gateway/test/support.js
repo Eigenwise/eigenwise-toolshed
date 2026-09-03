@@ -3,6 +3,7 @@
 const { spawn } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 
@@ -96,4 +97,29 @@ function startGateway(t, command, environment, { cliPath = CLI } = {}) {
   });
 }
 
-module.exports = { startGateway };
+function proxyTarget(requestLine) {
+  const connect = requestLine.match(/^CONNECT\s+([^\s]+)\s+HTTP\/\d\.\d$/i);
+  if (connect) return connect[1];
+  const absoluteUri = requestLine.match(/^[A-Z]+\s+(https?:\/\/[^\s/]+)(?:\/[^\s]*)?\s+HTTP\/\d\.\d$/i);
+  if (!absoluteUri) return requestLine;
+  const target = new URL(absoluteUri[1]);
+  return `${target.hostname}:${target.port || (target.protocol === 'https:' ? '443' : '80')}`;
+}
+
+async function startCountingProxy(t) {
+  let connectionCount = 0;
+  const targets = [];
+  const proxy = net.createServer((socket) => {
+    connectionCount += 1;
+    socket.once('data', (data) => {
+      targets.push(proxyTarget(data.toString('latin1').split(/\r?\n/, 1)[0]));
+      socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n');
+    });
+  });
+  await new Promise((resolve) => proxy.listen(0, '127.0.0.1', resolve));
+  const { port } = proxy.address();
+  t.after(() => new Promise((resolve) => proxy.close(resolve)));
+  return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount, targets: () => [...targets] };
+}
+
+module.exports = { startCountingProxy, startGateway };

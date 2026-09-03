@@ -33,7 +33,7 @@ That’s it for daily use. The plugin keeps the gateway running: its shim superv
 
 ## Claude model pins
 
-Pins follow the installed Claude CLI's resolved alias. If one alias probe misses, that alias uses its shipped known-good pin and is marked stale so the next refresh probes it again automatically.
+Pins follow the installed Claude CLI's resolved alias. Pin detection runs an isolated local probe that disables Claude Code's nonessential network traffic while preserving proxy observation and bypassing the local endpoint. If one alias probe misses, that alias uses its shipped known-good pin and is marked stale so the next refresh probes it again automatically.
 
 Already-wired projects need `model-gateway env --write-project` (or update-toolshed), then a new Claude Code session, to pick up a changed pin.
 
