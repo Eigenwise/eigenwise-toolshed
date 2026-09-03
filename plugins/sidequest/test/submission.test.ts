@@ -2523,6 +2523,169 @@ test('SQ-1328: concurrent shared-tree submissions attribute foreign working path
   assert.match(escapedSubmission.message, /never stash, revert, or include foreign paths/);
 });
 
+test('SQ-2399: shared-tree siblings select submitted boundaries while isolated candidates keep their merge base', async (t?: any) => {
+  if (git(['remote']).split(/\r?\n/).includes('origin')) {
+    git(['remote', 'set-url', 'origin', REMOTE_DIR]);
+  } else {
+    git(['remote', 'add', 'origin', REMOTE_DIR]);
+  }
+  git(['fetch', 'origin']);
+  cleanBranch();
+  const dispatchBase = git(['rev-parse', 'origin/main']);
+  const priorBoardConfig = store.boardConfig(slug);
+  assert.strictEqual(store.setBoardConfig(slug, { integrationMode: 'remote', integrationBranch: 'main' }).ok, true);
+  t.after(() => {
+    store.setBoardConfig(slug, {
+      integrationMode: priorBoardConfig.integrationMode,
+      integrationBranch: priorBoardConfig.integrationBranch,
+    });
+    git(['checkout', '-f', '-B', `submission-${++branchSeq}`, dispatchBase]);
+    git(['branch', '-f', 'main', dispatchBase]);
+    git(['push', '--force', 'origin', 'main']);
+    git(['fetch', 'origin']);
+  });
+
+  function dispatchTicket(title: string, file: string, worker: string, sessionId: string, sharedTree: boolean) {
+    const ticket = addTicket(title, { files: [file], category: 'submission.fixture' });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree });
+    assert.strictEqual(store.claimTicket(slug, ticket.ref, worker, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+    }).ok, true);
+    return ticket;
+  }
+
+  async function submitTicket(ticket: any, worker: string, commit: string, base?: string) {
+    pin(ticket, commit);
+    return callMcp('submit', {
+      project: PROJECT_DIR,
+      ref: ticket.ref,
+      by: worker,
+      commit,
+      ...(base ? { base } : {}),
+      worktree: PROJECT_DIR,
+      body: 'Shared-tree boundary fixture.',
+    });
+  }
+
+  const first = dispatchTicket('shared boundary first', 'lib/shared-first.js', 'shared-first-worker', 'shared-boundary-first', true);
+  const second = dispatchTicket('shared boundary second', 'lib/shared-second.js', 'shared-second-worker', 'shared-boundary-second', true);
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'shared-first.js'), 'first\n');
+  git(['add', 'lib/shared-first.js']);
+  git(['commit', '-m', 'shared boundary first']);
+  const firstCommit = git(['rev-parse', 'HEAD']);
+  const firstSubmitted = await submitTicket(first, 'shared-first-worker', firstCommit);
+  assert.strictEqual(firstSubmitted.ok, true, firstSubmitted.message);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'shared-second.js'), 'second\n');
+  git(['add', 'lib/shared-second.js']);
+  git(['commit', '-m', 'shared boundary second']);
+  const secondCommit = git(['rev-parse', 'HEAD']);
+  const secondSubmitted = await submitTicket(second, 'shared-second-worker', secondCommit);
+  assert.strictEqual(secondSubmitted.ok, true, secondSubmitted.message);
+  const storedSecondSubmission = store.getTicket(slug, second.ref).submission;
+  assert.strictEqual(storedSecondSubmission.base, firstCommit);
+  assert.deepStrictEqual(storedSecondSubmission.commits, [secondCommit]);
+  assert.deepStrictEqual(storedSecondSubmission.changedPaths, ['lib/shared-second.js']);
+
+  const integrationTarget = Object.assign({}, store.integrationTarget(slug), { branch: 'main' });
+  git(['checkout', '-f', '-B', 'main', dispatchBase]);
+  const firstDelivery = store.integrateSubmission(slug, first.ref, { target: integrationTarget, mode: 'replay' });
+  assert.strictEqual(firstDelivery.ok, true, firstDelivery.message);
+  const beforeSecondDelivery = git(['rev-parse', 'HEAD']);
+  const secondDelivery = store.integrateSubmission(slug, second.ref, { target: integrationTarget, mode: 'replay' });
+  assert.strictEqual(secondDelivery.ok, true, secondDelivery.message);
+  assert.deepStrictEqual(git(['diff', '--name-only', beforeSecondDelivery, 'HEAD']).split(/\r?\n/).filter(Boolean), ['lib/shared-second.js']);
+
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  const explicitFirst = dispatchTicket('explicit shared boundary first', 'lib/explicit-first.js', 'explicit-first-worker', 'explicit-shared-first', true);
+  const explicitSecond = dispatchTicket('explicit shared boundary second', 'lib/explicit-second.js', 'explicit-second-worker', 'explicit-shared-second', true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'explicit-first.js'), 'first\n');
+  git(['add', 'lib/explicit-first.js']);
+  git(['commit', '-m', 'explicit shared boundary first']);
+  const explicitFirstCommit = git(['rev-parse', 'HEAD']);
+  assert.strictEqual((await submitTicket(explicitFirst, 'explicit-first-worker', explicitFirstCommit)).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'explicit-second.js'), 'second\n');
+  git(['add', 'lib/explicit-second.js']);
+  git(['commit', '-m', 'explicit shared boundary second']);
+  const explicitSecondCommit = git(['rev-parse', 'HEAD']);
+  const explicitSecondSubmitted = await submitTicket(explicitSecond, 'explicit-second-worker', explicitSecondCommit, explicitFirstCommit);
+  assert.strictEqual(explicitSecondSubmitted.ok, true, explicitSecondSubmitted.message);
+  assert.strictEqual(store.getTicket(slug, explicitSecond.ref).submission.base, explicitFirstCommit);
+
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  const duplicateFirst = dispatchTicket('duplicate boundary first', 'lib/duplicate-first.js', 'duplicate-first-worker', 'duplicate-boundary-first', true);
+  const duplicateSecond = dispatchTicket('duplicate boundary second', 'lib/duplicate-second.js', 'duplicate-second-worker', 'duplicate-boundary-second', true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'duplicate-first.js'), 'first\n');
+  git(['add', 'lib/duplicate-first.js']);
+  git(['commit', '-m', 'duplicate boundary first']);
+  const duplicateFirstCommit = git(['rev-parse', 'HEAD']);
+  assert.strictEqual((await submitTicket(duplicateFirst, 'duplicate-first-worker', duplicateFirstCommit)).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'duplicate-second.js'), 'second\n');
+  git(['add', 'lib/duplicate-second.js']);
+  git(['commit', '-m', 'duplicate boundary second']);
+  const duplicateSecondCommit = git(['rev-parse', 'HEAD']);
+  const duplicateRefused = await submitTicket(duplicateSecond, 'duplicate-second-worker', duplicateSecondCommit, dispatchBase);
+  assert.strictEqual(duplicateRefused.ok, false);
+  assert.strictEqual(duplicateRefused.reason, 'duplicate_submission');
+  assert.match(duplicateRefused.message, new RegExp(duplicateFirstCommit));
+  assert.match(duplicateRefused.message, new RegExp(`--base ${duplicateFirstCommit}`));
+
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  const chainFirst = dispatchTicket('three-deep first', 'lib/chain-first.js', 'chain-first-worker', 'chain-first', true);
+  const chainSecond = dispatchTicket('three-deep second', 'lib/chain-second.js', 'chain-second-worker', 'chain-second', true);
+  const chainThird = dispatchTicket('three-deep third', 'lib/chain-third.js', 'chain-third-worker', 'chain-third', true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'chain-first.js'), 'first\n');
+  git(['add', 'lib/chain-first.js']);
+  git(['commit', '-m', 'three-deep first']);
+  const chainFirstCommit = git(['rev-parse', 'HEAD']);
+  assert.strictEqual((await submitTicket(chainFirst, 'chain-first-worker', chainFirstCommit)).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'chain-second.js'), 'second\n');
+  git(['add', 'lib/chain-second.js']);
+  git(['commit', '-m', 'three-deep second']);
+  const chainSecondCommit = git(['rev-parse', 'HEAD']);
+  assert.strictEqual((await submitTicket(chainSecond, 'chain-second-worker', chainSecondCommit)).ok, true);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'chain-third.js'), 'third\n');
+  git(['add', 'lib/chain-third.js']);
+  git(['commit', '-m', 'three-deep third']);
+  const chainThirdCommit = git(['rev-parse', 'HEAD']);
+  const chainThirdSubmitted = await submitTicket(chainThird, 'chain-third-worker', chainThirdCommit);
+  assert.strictEqual(chainThirdSubmitted.ok, true, chainThirdSubmitted.message);
+  const storedChainThirdSubmission = store.getTicket(slug, chainThird.ref).submission;
+  assert.strictEqual(storedChainThirdSubmission.base, chainSecondCommit);
+  assert.deepStrictEqual(storedChainThirdSubmission.commits, [chainThirdCommit]);
+
+  cleanBranch();
+  fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+  const integratedSibling = dispatchTicket('integrated sibling', 'lib/integrated-sibling.js', 'integrated-sibling-worker', 'integrated-sibling', true);
+  const isolated = dispatchTicket('isolated fast-forward candidate', 'lib/isolated-candidate.js', 'isolated-candidate-worker', 'isolated-candidate', false);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'integrated-sibling.js'), 'sibling\n');
+  git(['add', 'lib/integrated-sibling.js']);
+  git(['commit', '-m', 'integrated sibling']);
+  const integratedSiblingCommit = git(['rev-parse', 'HEAD']);
+  assert.strictEqual((await submitTicket(integratedSibling, 'integrated-sibling-worker', integratedSiblingCommit)).ok, true);
+  git(['checkout', '-f', '-B', 'main', dispatchBase]);
+  const siblingDelivery = store.integrateSubmission(slug, integratedSibling.ref, { target: integrationTarget, mode: 'replay' });
+  assert.strictEqual(siblingDelivery.ok, true, siblingDelivery.message);
+  const integratedSiblingHead = git(['rev-parse', 'HEAD']);
+  git(['push', 'origin', 'main']);
+  git(['fetch', 'origin']);
+  git(['checkout', '-f', '-B', `submission-${++branchSeq}`, 'main']);
+  fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'isolated-candidate.js'), 'isolated\n');
+  git(['add', 'lib/isolated-candidate.js']);
+  git(['commit', '-m', 'isolated candidate after sibling']);
+  const isolatedCommit = git(['rev-parse', 'HEAD']);
+  const isolatedSubmitted = await submitTicket(isolated, 'isolated-candidate-worker', isolatedCommit);
+  assert.strictEqual(isolatedSubmitted.ok, true, isolatedSubmitted.message);
+  const storedIsolatedSubmission = store.getTicket(slug, isolated.ref).submission;
+  assert.strictEqual(storedIsolatedSubmission.base, integratedSiblingHead);
+  assert.deepStrictEqual(storedIsolatedSubmission.commits, [isolatedCommit]);
+});
+
 test('a submit after a terminal dispatch is gated on current ticket scope, not the dead binding', () => {
   const ticket = addTicket('terminal dispatch binding must not gate the submit', { files: ['lib/original.js'], category: 'submission.fixture' });
   const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId: 'terminal-binding', sharedTree: true });
