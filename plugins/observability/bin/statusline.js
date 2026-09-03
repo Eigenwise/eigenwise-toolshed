@@ -151,10 +151,11 @@ function formatObserverHealthStatus(health) {
   return `obs: ${typeof health.error === 'string' && health.error ? health.error : 'degraded'}`;
 }
 
-async function readObserverHealth(fetch = globalThis.fetch) {
+async function readObserverHealth(fetch = globalThis.fetch, environment = process.env) {
   if (typeof fetch !== 'function') return null;
   try {
-    const response = await fetch(OBSERVER_HEALTH_URL, { signal: AbortSignal.timeout(OBSERVER_HEALTH_TIMEOUT_MS) });
+    const healthUrl = environment.WORKBENCH_OBSERVER_HEALTH_URL || OBSERVER_HEALTH_URL;
+    const response = await fetch(healthUrl, { signal: AbortSignal.timeout(OBSERVER_HEALTH_TIMEOUT_MS) });
     const health = await response.json();
     return health && typeof health === 'object' ? health : null;
   } catch {
