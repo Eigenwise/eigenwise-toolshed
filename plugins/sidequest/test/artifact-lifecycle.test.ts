@@ -458,7 +458,7 @@ test('update status done cannot bypass claimed, dispatched, or submitted lifecyc
   assert.strictEqual(claim(claimedDispatch, 'claimed-worker').ok, true);
   assert.throws(
     () => store.updateTicket(slug, claimed.ref, { status: 'done' }),
-    /done\/completeTicket.*commit and submit/
+    /refusing active-claim update for status.*ask the orchestrator/i
   );
 
   const dispatched = ticket('dispatched scoped work', 'Prepared work must preserve its dispatch lifecycle.');
@@ -567,7 +567,8 @@ test('a claimed ticket cannot be rewritten and redispatched into artifact mode',
   assert.strictEqual(store.sharedTreeArtifactMode(store.getTicket(slug, created.ref)), false);
 });
 
-test('description and files mutations after dispatch do not flip pinned artifact authority', () => {
+test('tool-surface contract leaves arbitrary in-process store access out of scope while dashboard and MCP grants preserve pinned artifact authority', () => {
+  const preparingSessionId = 'artifact-mutation-control';
   const ordinary = store.createTicket(slug, {
     title: 'pinned ordinary dispatch',
     description: 'Start without artifact authority.',
@@ -575,7 +576,7 @@ test('description and files mutations after dispatch do not flip pinned artifact
     files: ['.claude/.codebase-info'],
     source: 'mcp',
   });
-  const ordinaryDispatch = store.prepareDispatch(slug, ordinary.ref, { sharedTree: true });
+  const ordinaryDispatch = store.prepareDispatch(slug, ordinary.ref, { sharedTree: true, sessionId: preparingSessionId });
   assert.strictEqual(claim(ordinaryDispatch, 'ordinary-mutation-worker').ok, true);
   const ordinaryPatch = {
     description: store.SHARED_TREE_ARTIFACT_MARKER,
@@ -583,15 +584,15 @@ test('description and files mutations after dispatch do not flip pinned artifact
   };
   assert.throws(
     () => store.updateTicket(slug, ordinary.ref, ordinaryPatch),
-    new RegExp(`${ordinary.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Re-run \`sidequest update ${ordinary.ref} --files <paths> --by <your-id>\` using your own control-plane identity`),
+    /refusing active-claim update for files.*scopeRequest/i,
   );
-  store.updateTicket(slug, ordinary.ref, { ...ordinaryPatch, by: 'control-plane' });
+  store.updateTicket(slug, ordinary.ref, ordinaryPatch, undefined, { allowLiveClaimCloseoutUpdate: true });
   const mutatedOrdinary = store.getTicket(slug, ordinary.ref);
   assert.strictEqual(store.sharedTreeArtifactMode(mutatedOrdinary), false);
   assert.strictEqual(store.completeTicket(slug, ordinary.ref, 'ordinary-mutation-worker', { source: 'mcp' }).reason, 'submission_required');
 
   const artifact = ticket('pinned artifact dispatch', store.SHARED_TREE_ARTIFACT_MARKER);
-  const artifactDispatch = store.prepareDispatch(slug, artifact.ref, { sharedTree: true });
+  const artifactDispatch = store.prepareDispatch(slug, artifact.ref, { sharedTree: true, sessionId: preparingSessionId });
   assert.strictEqual(claim(artifactDispatch, 'artifact-mutation-worker').ok, true);
   writeProjectFile('.claude/.codebase-info/pinned.md', 'pinned authority\n');
   const artifactPatch = {
@@ -600,9 +601,9 @@ test('description and files mutations after dispatch do not flip pinned artifact
   };
   assert.throws(
     () => store.updateTicket(slug, artifact.ref, artifactPatch),
-    new RegExp(`${artifact.ref}: refusing active-claim scope change for \\.claude/\\.codebase-info\\. Re-run \`sidequest update ${artifact.ref} --files <paths> --by <your-id>\` using your own control-plane identity`),
+    /refusing active-claim update for files.*scopeRequest/i,
   );
-  store.updateTicket(slug, artifact.ref, { ...artifactPatch, by: 'control-plane' });
+  store.updateTicket(slug, artifact.ref, artifactPatch, undefined, { allowLiveClaimCloseoutUpdate: true });
   const mutatedArtifact = store.getTicket(slug, artifact.ref);
   assert.strictEqual(store.sharedTreeArtifactMode(mutatedArtifact), true);
   assert.strictEqual(store.completeTicket(slug, artifact.ref, 'artifact-mutation-worker', { source: 'mcp' }).ok, true);

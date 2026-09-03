@@ -899,6 +899,27 @@ function createTickets(dependencies) {
     const rightFiles = new Set(normalizedRight.map((file) => file.toLowerCase()));
     return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((file) => rightFiles.has(file.toLowerCase()));
   }
+  function activeClaimCloseoutUpdateRefusal(ticket, patch, options = {}) {
+    if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
+    const changedFields = [
+      ...patch.files !== void 0 && !sameFiles(ticket.files, patch.files) ? ["files"] : [],
+      ...patch.status !== void 0 && String(patch.status).trim().toLowerCase() !== ticket.status ? ["status"] : [],
+      ...(patch.readonly !== void 0 || patch.readonlyOverride !== void 0) && requestedReadonlyOverride(patch) !== ticket.readonlyOverride ? ["readonly"] : [],
+      ...patch.workingTreeDelivery !== void 0 && patch.workingTreeDelivery === true !== (ticket.workingTreeDelivery === true) ? ["workingTreeDelivery"] : [],
+      ...patch.externalDeliverable !== void 0 && patch.externalDeliverable === true !== (ticket.externalDeliverable === true) ? ["externalDeliverable"] : [],
+      ...patch.executorVerify !== void 0 && patch.executorVerify !== ticket.executorVerify ? ["verify"] : [],
+      ...patch.executorVerifyKind !== void 0 && patch.executorVerifyKind !== ticket.executorVerifyKind ? ["verifyKind"] : [],
+      ...patch.executorAttestationArtifact !== void 0 && patch.executorAttestationArtifact !== ticket.executorAttestationArtifact ? ["attestationArtifact"] : []
+    ];
+    if (!changedFields.length) return null;
+    const caller = String(patch.by || "").trim();
+    if (options.allowLiveClaimCloseoutUpdate === true && caller !== ticket.claim.by) return null;
+    const scopeChange = changedFields.includes("files");
+    const closeoutChanges = changedFields.some((field) => field !== "files");
+    const scopeGuidance = scopeChange ? " Executors use `scopeRequest` for files." : "";
+    const closeoutGuidance = closeoutChanges ? " Ask the orchestrator to set other closeout fields from the main thread." : "";
+    return `${ticket.ref}: refusing active-claim update for ${changedFields.join(", ")}. Release the claim before changing these fields through the CLI, or use MCP \`update\` from the orchestrator's main thread without the claim holder's \`by\`.${scopeGuidance}${closeoutGuidance}`;
+  }
   function activeClaimScopeRefusal(slug, ticket, files, patch) {
     if (!ticket.claim?.by || claimReclaimable(ticket)) return null;
     const current = normalizeFiles(ticket.files);
@@ -928,7 +949,7 @@ function createTickets(dependencies) {
     }
     return `${refusal} Use \`sidequest scope-request ${ticket.ref} --file <path> --by ${ticket.claim.by}\` to request approval.`;
   }
-  function updateTicket(slug, idOrRef, patch, reviewTarget) {
+  function updateTicket(slug, idOrRef, patch, reviewTarget, options = {}) {
     const found = getTicket(slug, idOrRef);
     if (!found) return null;
     patch = patch || {};
@@ -936,6 +957,8 @@ function createTickets(dependencies) {
       throw new Error("generic ticket patch cannot set, change, or clear reviewTarget; pass the review target transition separately");
     }
     const apply = (t) => {
+      const closeoutUpdateRefusal = activeClaimCloseoutUpdateRefusal(t, patch, options);
+      if (closeoutUpdateRefusal) throw new Error(closeoutUpdateRefusal);
       const nextStatus = patch.status == null ? null : requireStatus(patch.status);
       const doneRefusal = nextStatus === "done" ? updateDoneRefusal(t) : null;
       if (doneRefusal) throw new Error(doneRefusal);
@@ -966,7 +989,7 @@ function createTickets(dependencies) {
       }
       if (patch.complexityWhy !== void 0 && String(patch.complexityWhy).trim()) t.complexityWhy = String(patch.complexityWhy).trim().slice(0, 1e3);
       if (patch.files !== void 0) {
-        const scopeRefusal = activeClaimScopeRefusal(slug, t, patch.files, patch);
+        const scopeRefusal = options.allowLiveClaimCloseoutUpdate === true ? null : activeClaimScopeRefusal(slug, t, patch.files, patch);
         if (scopeRefusal) throw new Error(scopeRefusal);
         t.files = boundedFiles(patch.files, {
           category: patch.category === void 0 ? t.category : patch.category,
@@ -1073,9 +1096,12 @@ function createTickets(dependencies) {
     queueEventNotification(slug, getTicket(slug, sourceTicket.id), "status", patch.source ? String(patch.source) : "cli");
     return updated;
   }
-  function deleteTicket(slug, idOrRef) {
+  function deleteTicket(slug, idOrRef, options = {}) {
     const found = getTicket(slug, idOrRef);
     if (!found) return false;
+    if (found.claim && found.claim.by && !claimReclaimable(found) && options.allowLiveClaimDeletion !== true) {
+      throw new Error(`${found.ref}: refusing to delete a live-claimed ticket (held by "${found.claim.by}"). Release the claim first, or remove it with the orchestrator's main-thread MCP.`);
+    }
     const deletedRef = found.ref;
     const lock = ticketLockPath(slug, found.id);
     const locked = acquireLock(lock);

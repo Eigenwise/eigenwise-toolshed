@@ -383,6 +383,14 @@ async function handle(req?: any, res?: any) {
   }
   const projectDelete = /^\/api\/projects\/([^/]+)$/.exec(pathname);
   if (req.method === 'DELETE' && projectDelete) {
+    // Deleting a project drops every ticket in it. The dashboard is executor-
+    // reachable, so refuse while any ticket is live-claimed: release or archive
+    // first. (Board archive is the reversible path.)
+    const liveClaims = (store.listTickets(projectDelete[1]) || []).filter((ticket?: any) => ticket.claim && ticket.claim.by && !store.claimReclaimable(ticket));
+    if (liveClaims.length) {
+      sendJson(res, 409, { error: `refusing to delete project ${projectDelete[1]}: ${liveClaims.length} live-claimed ticket(s). Release or archive them first.` });
+      return;
+    }
     const result = store.deleteProjectExact(projectDelete[1]);
     sendJson(res, result.ok ? 200 : 404, result);
     return;
@@ -911,12 +919,24 @@ async function handle(req?: any, res?: any) {
         sendJson(res, 400, { error: 'bad JSON body' });
         return;
       }
-      // Force the source: a change through the dashboard API is a user action,
-      // so it must never trigger a "Claude changed it" notification. The body is
-      // passed through wholesale, so a completing client can ride a `workedBy`
-      // provenance stamp along the same patch; the store validates it permissively
-      // and the returned payload carries workedBy like every other ticket field.
-      const updated = store.updateTicket(slug, idOrRef, Object.assign({}, body, { source: 'dashboard' }));
+      // A dashboard PATCH is unauthenticated and lands on a 127.0.0.1 endpoint,
+      // so on a single-user box it is indistinguishable from an executor's own
+      // Bash hitting the same port. It therefore carries no live-claim closeout
+      // grant: that authority lives only on the hook-authenticated main-thread
+      // MCP path. Like the CLI, the dashboard must release the claim first, so the
+      // store's active-claim refusal surfaces here as a 409. `source` still forces
+      // dashboard provenance so the edit never reads as a "Claude changed it".
+      let updated: any;
+      try {
+        updated = store.updateTicket(
+          slug,
+          idOrRef,
+          Object.assign({}, body, { source: 'dashboard' }),
+        );
+      } catch (e: any) {
+        sendJson(res, 409, { error: String(e?.message || e) });
+        return;
+      }
       if (!updated) {
         sendJson(res, 404, { error: 'ticket not found' });
         return;
@@ -926,7 +946,16 @@ async function handle(req?: any, res?: any) {
       return;
     }
     if (req.method === 'DELETE') {
-      const ok = store.deleteTicket(slug, idOrRef);
+      // The dashboard is executor-reachable, so it carries no live-claim deletion
+      // grant: the store refuses deleting a live-claimed ticket and that surfaces
+      // as a 409, same as the closeout PATCH.
+      let ok: boolean;
+      try {
+        ok = store.deleteTicket(slug, idOrRef);
+      } catch (e: any) {
+        sendJson(res, 409, { error: String(e?.message || e) });
+        return;
+      }
       sendJson(res, ok ? 200 : 404, { ok });
       return;
     }

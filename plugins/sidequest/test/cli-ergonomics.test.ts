@@ -6,6 +6,8 @@ import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 
+const store = require('../lib/store');
+
 const ROOT = path.resolve(__dirname, '..');
 const CLI = path.join(ROOT, 'bin', 'sidequest.js');
 
@@ -100,6 +102,52 @@ test('CLI records readonly false on add and update', () => {
   const updated = run(['update', 'SQ-1', '--readonly', 'false', '--json'], env);
   assert.equal(updated.status, 0, updated.stderr);
   assert.equal(JSON.parse(updated.stdout).ticket.readonlyOverride, false);
+});
+
+test('CLI never grants live-claim closeout updates from by, source, or session identity', () => {
+  const env = isolatedEnv();
+  const added = run(['add', '--title', 'live ticket', '--unclassified', '--file', 'src/engine.js', '--json'], env);
+  assert.equal(added.status, 0, added.stderr);
+  const ticket = JSON.parse(added.stdout).ticket;
+  const previousHome = process.env.SIDEQUEST_HOME;
+  const previousProject = process.env.CLAUDE_PROJECT_DIR;
+  process.env.SIDEQUEST_HOME = String(env.SIDEQUEST_HOME);
+  process.env.CLAUDE_PROJECT_DIR = String(env.CLAUDE_PROJECT_DIR);
+  try {
+    const slug = store.ensureProject(String(env.CLAUDE_PROJECT_DIR)).slug;
+    assert.equal(store.claimTicket(slug, ticket.ref, 'cli-closeout-executor', {
+      direct: true,
+      reason: 'The CLI closeout-update fixture needs a live local claim.',
+      sessionId: 'cli-closeout-orchestrator',
+    }).ok, true);
+  } finally {
+    if (previousHome === undefined) delete process.env.SIDEQUEST_HOME;
+    else process.env.SIDEQUEST_HOME = previousHome;
+    if (previousProject === undefined) delete process.env.CLAUDE_PROJECT_DIR;
+    else process.env.CLAUDE_PROJECT_DIR = previousProject;
+  }
+
+  const attempts = [
+    ['update', ticket.ref, '--external-deliverable', '--json'],
+    ['update', ticket.ref, '--external-deliverable', '--source', 'mcp', '--json'],
+    ['update', ticket.ref, '--external-deliverable', '--by', 'forged-control-plane', '--json'],
+  ];
+  for (const args of attempts) {
+    const refused = run(args, { ...env, CLAUDE_CODE_SESSION_ID: 'cli-closeout-orchestrator' });
+    assert.equal(refused.status, 1, refused.stdout);
+    assert.match(refused.stderr, /release the claim.*MCP `update`.*orchestrator's main thread/i);
+  }
+
+  const unclaimed = run(['add', '--title', 'unclaimed ticket', '--unclassified', '--file', 'src/unclaimed.js', '--json'], env);
+  assert.equal(unclaimed.status, 0, unclaimed.stderr);
+  const unclaimedRef = JSON.parse(unclaimed.stdout).ticket.ref;
+  const accepted = run(['update', unclaimedRef, '--external-deliverable', '--json'], env);
+  assert.equal(accepted.status, 0, accepted.stderr);
+  assert.equal(JSON.parse(accepted.stdout).ticket.externalDeliverable, true);
+
+  const help = run(['update', '--help'], env);
+  assert.equal(help.status, 0, help.stderr);
+  assert.match(help.stdout, /live-claim closeout fields require releasing the claim first or using MCP update from the orchestrator main thread/i);
 });
 
 test('add --dry-run validates and previews without writing a board', () => {

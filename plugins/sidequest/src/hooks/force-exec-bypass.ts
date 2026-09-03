@@ -377,6 +377,35 @@ function toolInputOf(input: HookInput): Record<string, unknown> | null {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
 
+const CLOSEOUT_UPDATE_FIELDS = new Set([
+  'files', 'status', 'readonly', 'readonlyOverride', 'workingTreeDelivery',
+  'externalDeliverable', 'verify', 'verifyKind', 'attestationArtifact',
+  'executorVerify', 'executorVerifyKind', 'executorAttestationArtifact',
+]);
+
+function executorLiveClaimMutationRefusal(input: HookInput): boolean {
+  if (!isSubagentCaller(input)) return false;
+  const toolName = stringField(input, 'tool_name');
+  const toolInput = toolInputOf(input);
+  if (toolName === 'mcp__plugin_sidequest_board__update'
+    && toolInput
+    && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
+    writeDeny('PreToolUse', 'sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.');
+    return true;
+  }
+  // force:true is the only path that deletes a live-claimed ticket, so it is the
+  // executor's escape hatch (delete the ticket to shed the claim). The store
+  // refuses ungranted live-claim deletion, but deny it here too so a subagent
+  // can never mint the main-thread grant by riding the MCP remove handler.
+  if (toolName === 'mcp__plugin_sidequest_board__remove'
+    && toolInput
+    && toolInput.force === true) {
+    writeDeny('PreToolUse', 'sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.');
+    return true;
+  }
+  return false;
+}
+
 // Last resort for a single-ticket launch whose board record could not be read
 // (unregistered project, deleted ticket). No title is reachable, so the name is
 // the bare ref rather than an opaque token slice.
@@ -842,6 +871,7 @@ function main(): void {
   const toolName = stringField(input, 'tool_name');
   if (guardTerminalExecutor(input)) return;
   if (guardOwnTicketDispatch(input)) return;
+  if (executorLiveClaimMutationRefusal(input)) return;
   if (toolName === 'SendMessage') {
     guardLateSteer(input);
     return;

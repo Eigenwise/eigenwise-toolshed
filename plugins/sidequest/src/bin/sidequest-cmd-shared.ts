@@ -68,20 +68,14 @@ function controlPlaneIdentity(opts: any) {
   return session ? `orchestrator-${session.slice(0, 12)}` : 'control-plane';
 }
 
-// The session a claim is taken under, so a SessionEnd / SubagentStop hook can
-// release exactly that session's claims immediately instead of waiting out the
-// TTL (see store.reconcileSession). An explicit --session wins; otherwise fall
-// back to the CLAUDE_SESSION_ID the Claude Code runtime exports to tool/hook
-// subprocesses. Null when neither is present — the whole registry stays dormant
-// and the TTL remains the (unchanged) backstop, so nothing regresses.
 function sessionId(opts: any) {
-  const v =
+  const value =
     (opts && opts.session) ||
-    process.env.CLAUDE_CODE_SESSION_ID || // the id the runtime actually exports to tool subprocesses
-    process.env.CLAUDE_SESSION_ID ||      // tolerated legacy/alt spelling
+    process.env.CLAUDE_CODE_SESSION_ID ||
+    process.env.CLAUDE_SESSION_ID ||
     process.env.SIDEQUEST_SESSION ||
     '';
-  return String(v).trim() || null;
+  return String(value).trim() || null;
 }
 
 

@@ -80,6 +80,16 @@
         ]
       },
       {
+        "matcher": "mcp__plugin_sidequest_board__update",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/force-exec-bypass.js\"",
+            "timeout": 10
+          }
+        ]
+      },
+      {
         "matcher": "mcp__plugin_sidequest_board__.*",
         "hooks": [
           {

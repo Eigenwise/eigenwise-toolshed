@@ -74,7 +74,11 @@ const OBSERVATION_WAIT_TIMEOUT_MS = 10_000;
 test('seed telemetry fixture', () => {
   const ticket = cliJson<{ ticket: { ref: string } }>(['add', '-t', 'telemetry fixture', '--file', 'lib/tracked.js', '--complexity', '3', '--why', 'a routine tracked-file fixture for telemetry-read coverage', '--label', 'direct-ok', '--json']);
   ref = ticket.ticket.ref;
-  assert.strictEqual(runCli(['claim', ref, '--by', 'telemetry-worker', '--direct', '--reason', 'The telemetry fixture requires a local direct claim.']).status, 0);
+  assert.strictEqual(runCli([
+    'claim', ref, '--by', 'telemetry-worker', '--direct',
+    '--reason', 'The telemetry fixture requires a local direct claim.',
+    '--session', 'telemetry-control-session',
+  ]).status, 0);
   assert.strictEqual(runCli(['comment', ref, '--by', 'telemetry-worker', '-m', 'a recent telemetry note']).status, 0);
 });
 
@@ -188,14 +192,22 @@ test('shared store boundary emits once for MCP mutations', async () => {
   const observed: TicketObservation[] = [];
   telemetry.setTestSink((observation) => observed.push(observation));
   try {
-    const result = await callTool<{ ok: boolean }>('update', { ref, status: 'todo' });
+    let result: { ok: boolean };
+    const previousSessionId = process.env.CLAUDE_CODE_SESSION_ID;
+    process.env.CLAUDE_CODE_SESSION_ID = 'telemetry-control-session';
+    try {
+      result = await callTool<{ ok: boolean }>('update', { ref, status: 'todo', by: 'telemetry-control' });
+    } finally {
+      if (previousSessionId === undefined) delete process.env.CLAUDE_CODE_SESSION_ID;
+      else process.env.CLAUDE_CODE_SESSION_ID = previousSessionId;
+    }
     assert.strictEqual(result.ok, true);
+    assert.strictEqual(observed.length, 1);
+    assert.strictEqual(observed[0]?.ticket_ref, ref);
+    assert.strictEqual(observed[0]?.attributes.task_status, 'todo');
   } finally {
     telemetry.setTestSink(null);
   }
-  assert.strictEqual(observed.length, 1);
-  assert.strictEqual(observed[0]?.ticket_ref, ref);
-  assert.strictEqual(observed[0]?.attributes.task_status, 'todo');
 });
 
 test('ticket writes never post telemetry to an ambient observer during a test run', async (testContext) => {

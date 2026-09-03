@@ -443,6 +443,34 @@ function dispatchLaunches(prompt) {
 function toolInputOf(input) {
   return isRecord(input.tool_input) ? input.tool_input : null;
 }
+var CLOSEOUT_UPDATE_FIELDS = /* @__PURE__ */ new Set([
+  "files",
+  "status",
+  "readonly",
+  "readonlyOverride",
+  "workingTreeDelivery",
+  "externalDeliverable",
+  "verify",
+  "verifyKind",
+  "attestationArtifact",
+  "executorVerify",
+  "executorVerifyKind",
+  "executorAttestationArtifact"
+]);
+function executorLiveClaimMutationRefusal(input) {
+  if (!isSubagentCaller(input)) return false;
+  const toolName = stringField(input, "tool_name");
+  const toolInput = toolInputOf(input);
+  if (toolName === "mcp__plugin_sidequest_board__update" && toolInput && Array.from(CLOSEOUT_UPDATE_FIELDS).some((field) => Object.hasOwn(toolInput, field))) {
+    writeDeny("PreToolUse", "sidequest: subagents cannot update closeout fields through MCP. Use scopeRequest for files, or ask the orchestrator to set other closeout flags from the main thread.");
+    return true;
+  }
+  if (toolName === "mcp__plugin_sidequest_board__remove" && toolInput && toolInput.force === true) {
+    writeDeny("PreToolUse", "sidequest: subagents cannot force-remove a ticket. Release your claim, or ask the orchestrator to remove it from the main thread.");
+    return true;
+  }
+  return false;
+}
 function dispatchAgentName(input) {
   const toolInput = toolInputOf(input);
   const dispatched = dispatchRefs(toolInput?.prompt);
@@ -859,6 +887,7 @@ function main() {
   const toolName = stringField(input, "tool_name");
   if (guardTerminalExecutor(input)) return;
   if (guardOwnTicketDispatch(input)) return;
+  if (executorLiveClaimMutationRefusal(input)) return;
   if (toolName === "SendMessage") {
     guardLateSteer(input);
     return;

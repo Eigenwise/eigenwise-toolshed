@@ -1,6 +1,6 @@
 'use strict';
 
-function createProjects({ acquireLock, assetsDir, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
+function createProjects({ acquireLock, assetsDir, claimReclaimable, cloneCached, database, db, defaultAlwaysInScope, defaultProjectName, deleteCachedRow, ensureDir, fs, invalidateStoreCaches, listStories, listTickets, normalizeForHash, path, projectDir, putProject, putStory, putTicket, releaseLock, residentCache, slugify, sourceRevisionAdapterForPath, ticketsDir, transaction }: any) {
   // A directory can be spelled several ways on Windows — an 8.3 alias, a junction —
   // and each spelling hashes to its own slug. Callers hold whichever spelling they
   // were handed, so lookups compare canonically rather than by the stored spelling.
@@ -276,6 +276,15 @@ function createProjects({ acquireLock, assetsDir, cloneCached, database, db, def
     if (!readMeta(destSlug)) throw new Error(`destination board "${destSlug}" does not exist`);
 
     const tickets = listTickets(srcSlug).slice().sort((a?: any, b?: any) => seqOfRef(a.ref) - seqOfRef(b.ref));
+    // A merge deletes and recreates every source ticket, which is the same
+    // operation the live-claim boundary refuses on delete: the executor keeps
+    // working under a ref and board that no longer exist, and its worker
+    // registration still names the source slug, so cleanup never releases it.
+    const liveClaimed = tickets.filter((ticket?: any) => ticket.claim && ticket.claim.by && !claimReclaimable(ticket));
+    if (liveClaimed.length) {
+      const refs = liveClaimed.map((ticket?: any) => `${ticket.ref} (held by "${ticket.claim.by}")`).join(', ');
+      throw new Error(`refusing to merge board "${srcSlug}": ${liveClaimed.length} live-claimed ticket(s): ${refs}. Release the claims first; merge cannot move a ticket its executor is still working under.`);
+    }
     const stories = listStories(srcSlug);
     const refMap: Record<string, any> = {};
     const ticketPlan: any[] = [];
