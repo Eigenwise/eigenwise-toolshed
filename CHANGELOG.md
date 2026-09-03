@@ -8,6 +8,36 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.514.0 (2026-09-04)
+
+### model-gateway 0.48.18 → 0.48.19
+
+#### Fixes
+
+- Deflake model-gateway streaming and sentry tests (SQ-2414)
+  Makes concurrent gateway test startup, health polling, and upstream request counting deterministic.
+- Repair stale Model Gateway pin detection (SQ-2418)
+  Keep Claude pin detection local and retry stale aliases without serving an old pin for a new CLI version.
+- Keep Claude pin probes visible to proxy monitoring (SQ-2421)
+  Keep local pin probes out of a configured proxy without hiding any non-local Claude CLI traffic from proxy monitoring.
+
+### observability 0.7.21 → 0.7.22
+
+#### Fixes
+
+- Price Claude Fable 5.1 telemetry (SQ-2422)
+
+### sidequest 5.0.23 → 5.0.24
+
+#### Fixes
+
+- Explain SubagentStop hook test failures (SQ-2409)
+  Make the held-claim hook test show its subprocess exit details when it fails.
+- Explain terminal submitted-dispatch closeout (SQ-2413)
+- Recognize versionless Claude quota limits (SQ-2416)
+- Keep negative-control comments with executor claims (SQ-2419)
+  Negative-control evidence now stays with the claimed executor, and duplicate markers do not add duplicate comments.
+
 ## v3.513.0 (2026-09-03)
 
 ### sidequest 5.0.22 → 5.0.23

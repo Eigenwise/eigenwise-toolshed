@@ -1,6 +1,6 @@
 {
   "name": "model-gateway",
-  "version": "0.48.18",
+  "version": "0.48.19",
   "description": "Your ChatGPT/Codex and Grok subscription models in Claude Code's /model picker. A local gateway routes claude-gpt-* models to OpenAI's Codex backend, claude-grok-* models to Grok, and everything else to api.anthropic.com, so you switch between Claude, GPT-5.x, and Grok mid-session like any other model. No API keys.",
   "author": {
     "name": "Eigenwise",
