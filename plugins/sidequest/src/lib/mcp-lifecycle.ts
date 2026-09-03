@@ -543,7 +543,7 @@ const tools: ToolDefinition[] = [
         deliveryInteractionCommit: { type: 'string', pattern: '^[0-9a-fA-F]{7,64}$', description: 'A reviewed merged-tree interaction after deliveryCommit, limited to submitted candidate paths.' },
         deliveryMethod: { type: 'string', enum: ['reset', 'working-tree', 'manual'], description: 'For a non-reachable pinned candidate.' },
         abandonSubmission: { type: 'boolean', description: 'Retire a candidate that never landed; refused while it is reachable from the integration branch.' },
-        recoveryEvidence: { type: 'string', description: 'Observed terminal-agent evidence for an unclaimed dispatch.' },
+        recoveryEvidence: { type: 'string', description: 'Terminal-agent evidence to recover an unclaimed prepared, launched, or bound dispatch; recorded but not applied after a terminal dispatch.' },
       },
       required: ['ref', 'by', 'reason'],
     },
@@ -553,14 +553,17 @@ const tools: ToolDefinition[] = [
       const reason = String(args.reason || '').trim();
       if (!reason) throw new Error('groomClose: reason is required.');
       const ticket = store.getTicket(slug, args.ref);
+      let completionReason = reason;
       if (args.recoveryEvidence) {
         const recovered = store.clearUnclaimedDispatch(slug, args.ref, { by, evidence: args.recoveryEvidence });
-        if (!recovered.ok) return mutationAck(slug, recovered);
+        const terminalDispatch = Boolean(ticket && (!ticket.dispatchNonce || ticket.dispatch?.terminalAt));
+        if (!recovered.ok && !terminalDispatch) return mutationAck(slug, recovered);
+        if (!recovered.ok) completionReason = `${reason} Recovery evidence recorded after the terminal dispatch: ${args.recoveryEvidence}`;
       }
       const purpose = args.integration ? 'integration' : args.abandonSubmission ? 'grooming' : args.deliveryCommit ? 'delivery' : 'grooming';
       const res = store.completeTicketAsControlPlane(slug, args.ref, {
         by,
-        reason,
+        reason: completionReason,
         purpose,
         abandonSubmission: args.abandonSubmission === true,
         deliveryCommit: args.deliveryCommit,
