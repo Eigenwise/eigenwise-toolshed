@@ -108,6 +108,12 @@ function claudeVersion() {
 
 function probeClaudeAlias(alias, endpoint, timeoutMs = PIN_PROBE_TIMEOUT_MS) {
   return new Promise((resolve) => {
+    const probeTrafficControls = {
+      CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1',
+      DISABLE_AUTOUPDATER: '1',
+      DISABLE_TELEMETRY: '1',
+      DISABLE_ERROR_REPORTING: '1',
+    };
     const excludedVariables = new Set([
       'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
       'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
@@ -119,7 +125,13 @@ function probeClaudeAlias(alias, endpoint, timeoutMs = PIN_PROBE_TIMEOUT_MS) {
       .filter(Boolean)
       .join(',');
     const child = spawn(CLAUDE_BIN, ['--bare', '--no-session-persistence', '--model', alias, '-p', '--output-format', 'stream-json', '--verbose'], {
-      env: { ...environment, ANTHROPIC_BASE_URL: endpoint, NO_PROXY: localEndpointBypass, no_proxy: localEndpointBypass },
+      env: {
+        ...environment,
+        ...probeTrafficControls,
+        ANTHROPIC_BASE_URL: endpoint,
+        NO_PROXY: localEndpointBypass,
+        no_proxy: localEndpointBypass,
+      },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       detached: !WIN,

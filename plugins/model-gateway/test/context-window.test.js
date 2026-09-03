@@ -4,11 +4,10 @@ const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
-const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
-const { startGateway } = require('./support.js');
+const { startCountingProxy, startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
@@ -752,7 +751,7 @@ function installFakeClaude(home) {
     "  const attempts = attemptFile && fs.existsSync(attemptFile) ? JSON.parse(fs.readFileSync(attemptFile, 'utf8')) : {};",
     "  const attempt = (attempts[alias] || 0) + 1;",
     "  if (attemptFile) { attempts[alias] = attempt; fs.writeFileSync(attemptFile, JSON.stringify(attempts)); }",
-    "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, proxies: { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY, all: process.env.ALL_PROXY } }) + '\\n');",
+    "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, proxies: { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY, all: process.env.ALL_PROXY }, trafficControls: { nonessential: process.env.CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC, autoUpdater: process.env.DISABLE_AUTOUPDATER, telemetry: process.env.DISABLE_TELEMETRY, errorReporting: process.env.DISABLE_ERROR_REPORTING } }) + '\\n');",
     "  if (alias === 'fable' && attempt <= Number(process.env.FAKE_CLAUDE_FABLE_FAILURES || 0)) return;",
     "  const printInit = () => console.log(JSON.stringify({ type: 'system', subtype: 'init', model: process.env[`FAKE_CLAUDE_${alias.toUpperCase()}`] || `claude-${alias}-9` }));",
     "  if (process.env.FAKE_CLAUDE_EGRESS === '1' && process.env.HTTPS_PROXY) {",
@@ -820,6 +819,7 @@ test('a failed alias does not carry a stale pin into a new Claude CLI version', 
     FAKE_CLAUDE_ATTEMPT_FILE: path.join(home, 'attempts.json'),
     FAKE_CLAUDE_FABLE_FAILURES: '2',
     FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_PIN_PROBE_TIMEOUT_MS: '30000',
     CODEX_GATEWAY_CLAUDE_BIN: claude.command,
   };
   try {
@@ -836,17 +836,6 @@ test('a failed alias does not carry a stale pin into a new Claude CLI version', 
     fs.rmSync(home, { recursive: true, force: true });
   }
 });
-
-async function startCountingProxy(t) {
-  let connectionCount = 0;
-  const proxy = net.createServer((socket) => {
-    connectionCount += 1;
-    socket.once('data', () => socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
-  });
-  const port = await listen(proxy);
-  t.after(() => new Promise((resolve) => proxy.close(resolve)));
-  return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount };
-}
 
 function probeClaudeAliasWithEnvironment(alias, endpoint, environment) {
   const script = `const { probeClaudeAlias } = require(${JSON.stringify(PINS)}); probeClaudeAlias(${JSON.stringify(alias)}, ${JSON.stringify(endpoint)}).then((pin) => console.log(JSON.stringify({ pin })));`;
@@ -908,11 +897,13 @@ test('the local Fable probe keeps proxy observation active for the installed Cla
   try {
     const result = await probeRealClaudeFable(`http://127.0.0.1:${port}`, environment);
     const versionText = version.stdout.trim();
-    assert.equal(result.status, 0, `Claude ${versionText}; status=${result.status}; proxy connections=${proxy.connectionCount()}; local requests=${localRequests.length}; stderr=${result.stderr}`);
+    assert.equal(result.status, 0, `Claude ${versionText}; status=${result.status}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxy.targets().join(',') || '(none)'}; local requests=${localRequests.length}; stderr=${result.stderr}`);
     const { pin } = JSON.parse(result.stdout);
     const localSocketRequests = localRequests.filter(({ localAddress }) => localAddress === '127.0.0.1');
-    const observation = `Claude ${versionText}; init model=${pin}; proxy connections=${proxy.connectionCount()}; local requests=${localRequests.length}; local socket requests=${localSocketRequests.length}`;
+    const proxyTargets = proxy.targets();
+    const observation = `Claude ${versionText}; init model=${pin}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxyTargets.join(',') || '(none)'}; local requests=${localRequests.length}; local socket requests=${localSocketRequests.length}`;
     assert.equal(pin, 'claude-fable-5-1[1m]', observation);
+    assert.deepEqual(proxyTargets, [], observation);
     assert.equal(proxy.connectionCount(), 0, observation);
     assert.equal(localSocketRequests.length, localRequests.length, observation);
   } finally {
@@ -930,9 +921,17 @@ test('the proxy observer sees no egress from a fake Claude probe', async (t) => 
     const result = await probeClaudeAliasWithEnvironment('fable', 'http://127.0.0.1:1', environment);
     assert.equal(result.status, 0, result.stderr);
     const { pin } = JSON.parse(result.stdout);
-    const observation = `fake init model=${pin}; proxy connections=${proxy.connectionCount()}`;
+    const observation = `fake init model=${pin}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxy.targets().join(',') || '(none)'}`;
     assert.equal(pin, 'claude-fable-9[1m]', observation);
+    assert.deepEqual(proxy.targets(), [], observation);
     assert.equal(proxy.connectionCount(), 0, observation);
+    const [{ trafficControls }] = fs.readFileSync(claude.logFile, 'utf8').trim().split('\n').map(JSON.parse);
+    assert.deepEqual(trafficControls, {
+      nonessential: '1',
+      autoUpdater: '1',
+      telemetry: '1',
+      errorReporting: '1',
+    });
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
@@ -947,8 +946,10 @@ test('the proxy observer catches fake Claude egress', async (t) => {
     const result = await probeClaudeAliasWithEnvironment('fable', 'http://127.0.0.1:1', environment);
     assert.equal(result.status, 0, result.stderr);
     const { pin } = JSON.parse(result.stdout);
-    assert.equal(pin, 'claude-fable-9[1m]', `fake init model=${pin}; proxy connections=${proxy.connectionCount()}`);
-    assert.ok(proxy.connectionCount() >= 1, `fake init model=${pin}; proxy connections=${proxy.connectionCount()}`);
+    const observation = `fake init model=${pin}; proxy connections=${proxy.connectionCount()}; proxy targets=${proxy.targets().join(',') || '(none)'}`;
+    assert.equal(pin, 'claude-fable-9[1m]', observation);
+    assert.deepEqual(proxy.targets(), ['api.anthropic.com:443'], observation);
+    assert.equal(proxy.connectionCount(), 1, observation);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
