@@ -111,12 +111,15 @@ function probeClaudeAlias(alias, endpoint, timeoutMs = PIN_PROBE_TIMEOUT_MS) {
     const excludedVariables = new Set([
       'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'ANTHROPIC_BASE_URL',
       'ANTHROPIC_DEFAULT_FABLE_MODEL', 'ANTHROPIC_DEFAULT_OPUS_MODEL', 'ANTHROPIC_DEFAULT_SONNET_MODEL',
-      'CLAUDE_CODE_OAUTH_TOKEN', 'HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY',
+      'CLAUDE_CODE_OAUTH_TOKEN',
     ]);
     const environment = Object.fromEntries(Object.entries(process.env)
       .filter(([name]) => !excludedVariables.has(name.toUpperCase())));
+    const localEndpointBypass = [environment.NO_PROXY, environment.no_proxy, '127.0.0.1', 'localhost']
+      .filter(Boolean)
+      .join(',');
     const child = spawn(CLAUDE_BIN, ['--bare', '--no-session-persistence', '--model', alias, '-p', '--output-format', 'stream-json', '--verbose'], {
-      env: { ...environment, ANTHROPIC_BASE_URL: endpoint },
+      env: { ...environment, ANTHROPIC_BASE_URL: endpoint, NO_PROXY: localEndpointBypass, no_proxy: localEndpointBypass },
       stdio: ['pipe', 'pipe', 'pipe'],
       windowsHide: true,
       detached: !WIN,
