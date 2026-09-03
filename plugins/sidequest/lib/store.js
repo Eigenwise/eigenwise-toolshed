@@ -1998,7 +1998,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
             reason: "pending_submission",
             ticket: t,
             submission: t.submission,
-            message: `${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
+            message: `${heldOwner ? "" : `${t.ref} has no claim to release. `}${t.ref} has a pending submission (commit ${String(t.submission.commit).slice(0, 12)}) parked READY_FOR_INTEGRATION. release cannot move it to "${reopenStatus}" and leave the submission in place. For a review rejection, use \`sidequest rework ${t.ref} --by <reviewer> --review <evidence> --reason "what needs repair"\`, then dispatch the ticket for repair. When a reviewed candidate already landed through an external conflict resolution, use the integrate route with deliveryCommit and reason. It verifies the named reachable delivery against the submitted content and merged tree before closing. Candidate-owner \`--force\` and \`submit --clear\` intentionally drop the candidate and are only for an integration bounce.`
           };
         }
         reopenedSubmission = t.submission;
@@ -2016,7 +2016,7 @@ function releaseTicket(slug, idOrRef, by, opts) {
       return {
         ok: false,
         reason: "unclaimed_active_dispatch",
-        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. When verified work already landed, the orchestrator delivers it through \`sidequest groomClose ${t.ref} --by <integrator> --recoveryEvidence "<observed terminal evidence>" --deliveryCommit <sha>\`.`,
+        message: `${t.ref} has an active ${foundState} dispatch but no claim owned by ${by}. Do not release another runtime's attempt. A claimant whose current token and executor were accepted but whose runtime could not bind receives an unbound_dispatch refusal that authorizes the same claimant to release with kind technical_blocker. Otherwise wait for the current attempt's terminal hook, then have the orchestrator dispatch once from todo. recoveryEvidence applies only when a prepared, launched, or bound dispatch never claimed and terminal-agent evidence confirms that runtime ended. After a terminal dispatch, deliver verified landed work through \`sidequest groomClose ${t.ref} --by <integrator> --deliveryCommit <sha>\`.`,
         ticket: t
       };
     }
@@ -2546,7 +2546,16 @@ function clearUnclaimedDispatch(slug, idOrRef, opts) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     const state = dispatchState(ticket);
-    if (!ticket || !state || !ticket.dispatchNonce || state.terminalAt) return { ok: false, reason: "no_unclaimed_dispatch", ticket };
+    if (!ticket || !state || !ticket.dispatchNonce || state.terminalAt) {
+      const outcome = String(state?.outcome || "unknown").trim() || "unknown";
+      const pendingSubmissionGuidance = pendingSubmission(ticket) ? ` This ticket has a pending submission: use groomClose with deliveryCommit when the delivered commit preserves the candidate, or groomClose with abandonSubmission: true when it does not.` : "";
+      return {
+        ok: false,
+        reason: "no_unclaimed_dispatch",
+        ticket,
+        message: `${ticket?.ref || String(idOrRef)} has a terminal dispatch with observed outcome "${outcome}". recoveryEvidence does not apply to a terminal dispatch.${pendingSubmissionGuidance}`
+      };
+    }
     if (ticket.claim?.by) return { ok: false, reason: "claimed", ticket, claim: ticket.claim };
     if (agentId && String(state.agentId || "") !== agentId) return { ok: false, reason: "dispatch_identity_mismatch", ticket };
     if (agentName && String(state.agentName || "") !== agentName) return { ok: false, reason: "dispatch_identity_mismatch", ticket };

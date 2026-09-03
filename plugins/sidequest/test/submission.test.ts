@@ -3458,6 +3458,138 @@ test('SQ-2254: MCP records a reset delivery from its pinned candidate and refuse
   }
 });
 
+test('SQ-2413: MCP groomClose records terminal recovery evidence and accepts a reachable manual delivery', async () => {
+  const originalConfig = store.boardConfig(slug);
+  try {
+    cleanBranch();
+    const abandonedTicket = addTicket('terminal submitted dispatch with abandoned candidate', { files: ['lib/terminal-submitted.js'] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'terminal-submitted.js'), 'candidate\n');
+    git(['add', 'lib/terminal-submitted.js']);
+    git(['commit', '-m', 'terminal submitted candidate']);
+    const abandonedCandidate = git(['rev-parse', 'HEAD']);
+    const abandonedBase = git(['rev-parse', `${abandonedCandidate}^`]);
+    pin(abandonedTicket, abandonedCandidate);
+    assert.strictEqual(store.claimTicket(slug, abandonedTicket.ref, 'terminal-submitted-source', {
+      direct: true,
+      reason: 'The terminal submitted fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, abandonedTicket.ref, 'terminal-submitted-source', {
+      commit: abandonedCandidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submittedTicket = store.getTicket(slug, abandonedTicket.ref);
+    Object.assign(submittedTicket.submission, {
+      base: abandonedBase,
+      upstream: 'origin/main',
+      upstreamCommit: abandonedBase,
+      commits: [abandonedCandidate],
+      changedPaths: ['lib/terminal-submitted.js'],
+    });
+    submittedTicket.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: abandonedCandidate, agentId: 'terminal-submitted-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submittedTicket);
+    const terminalRecovery = store.clearUnclaimedDispatch(slug, abandonedTicket.ref, {
+      by: 'terminal-submitted-integrator',
+      evidence: 'The submitted executor already terminated before closeout.',
+    });
+    assert.strictEqual(terminalRecovery.ok, false);
+    assert.strictEqual(terminalRecovery.reason, 'no_unclaimed_dispatch');
+    assert.match(terminalRecovery.message, /outcome "submitted"/);
+    assert.match(terminalRecovery.message, /recoveryEvidence does not apply to a terminal dispatch/);
+    assert.match(terminalRecovery.message, /deliveryCommit[\s\S]*abandonSubmission/);
+    const release = store.releaseTicket(slug, abandonedTicket.ref, 'terminal-submitted-source', { status: 'todo' });
+    assert.strictEqual(release.ok, false);
+    assert.match(release.message, /no claim to release/);
+    const rework = await callMcp('rework', {
+      project: PROJECT_DIR,
+      ref: abandonedTicket.ref,
+      by: 'unrelated-reworker',
+      review: 'The submitted candidate needs a different repair owner.',
+      reason: 'Reject only from the candidate owner.',
+    });
+    assert.strictEqual(rework.ok, false);
+    assert.match(rework.message, /no claim to release/);
+    git(['reset', '--hard', 'origin/main']);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'unrelated-delivery.js'), 'reachable but unrelated\n');
+    git(['add', 'unrelated-delivery.js']);
+    git(['commit', '-m', 'unrelated reachable delivery']);
+    const unrelatedDelivery = git(['rev-parse', 'HEAD']);
+    assert.notStrictEqual(git(['merge-base', abandonedCandidate, unrelatedDelivery]), abandonedCandidate, 'the submitted candidate is not reachable');
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+
+    const abandoned = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: abandonedTicket.ref,
+      by: 'terminal-submitted-integrator',
+      recoveryEvidence: 'The submitted executor already terminated before closeout.',
+      abandonSubmission: true,
+      reason: 'The candidate was reset away and the reachable delivery does not preserve it.',
+    });
+    assert.strictEqual(abandoned.ok, true, abandoned.message);
+    const closedTicket = store.getTicket(slug, abandonedTicket.ref);
+    assert.strictEqual(closedTicket.status, 'done');
+    assert.strictEqual(closedTicket.submission.integration.outcome, 'abandoned');
+    assert.match(closedTicket.completion.reason, /submitted executor already terminated/);
+
+    cleanBranch();
+    const deliveredTicket = addTicket('reachable manual delivery with candidate-preserving descendant', { files: ['lib/reachable-manual.js'] });
+    fs.mkdirSync(path.join(PROJECT_DIR, 'lib'), { recursive: true });
+    fs.writeFileSync(path.join(PROJECT_DIR, 'lib', 'reachable-manual.js'), 'candidate\n');
+    git(['add', 'lib/reachable-manual.js']);
+    git(['commit', '-m', 'reachable manual candidate']);
+    const deliveredCandidate = git(['rev-parse', 'HEAD']);
+    const deliveredBase = git(['rev-parse', `${deliveredCandidate}^`]);
+    pin(deliveredTicket, deliveredCandidate);
+    assert.strictEqual(store.claimTicket(slug, deliveredTicket.ref, 'reachable-manual-source', {
+      direct: true,
+      reason: 'The reachable manual fixture requires a local direct claim.',
+    }).ok, true);
+    assert.strictEqual(store.submitTicket(slug, deliveredTicket.ref, 'reachable-manual-source', {
+      commit: deliveredCandidate,
+      verify: 'node -e "process.exit(0)"',
+    }).ok, true);
+    const submittedDelivery = store.getTicket(slug, deliveredTicket.ref);
+    Object.assign(submittedDelivery.submission, {
+      base: deliveredBase,
+      upstream: 'origin/main',
+      upstreamCommit: deliveredBase,
+      commits: [deliveredCandidate],
+      changedPaths: ['lib/reachable-manual.js'],
+    });
+    submittedDelivery.dispatch = {
+      outcome: 'submitted',
+      terminalAt: new Date(Date.now() - 60_000).toISOString(),
+      attempts: [{ outcome: 'submitted', commit: deliveredCandidate, agentId: 'reachable-manual-source', terminalAt: new Date(Date.now() - 60_000).toISOString() }],
+    };
+    persist(submittedDelivery);
+    fs.writeFileSync(path.join(PROJECT_DIR, 'unrelated-delivery.js'), 'candidate-preserving descendant\n');
+    git(['add', 'unrelated-delivery.js']);
+    git(['commit', '-m', 'candidate preserving reachable delivery']);
+    const reachableDelivery = git(['rev-parse', 'HEAD']);
+    store.setBoardConfig(slug, { integrationMode: 'local', integrationBranch: git(['branch', '--show-current']) });
+
+    const delivered = await callMcp('groomClose', {
+      project: PROJECT_DIR,
+      ref: deliveredTicket.ref,
+      by: 'reachable-manual-integrator',
+      deliveryCommit: reachableDelivery,
+      deliveryMethod: 'manual',
+      reason: 'The reachable descendant preserves the submitted candidate.',
+    });
+    assert.strictEqual(delivered.ok, true, delivered.message);
+    const deliveredRecord = store.getTicket(slug, deliveredTicket.ref);
+    assert.strictEqual(deliveredRecord.submission.integration.deliveryCommit, reachableDelivery);
+    assert.strictEqual(deliveredRecord.submission.integration.deliveryIdentity.kind, 'reachable-commit');
+    assert.strictEqual(deliveredRecord.submission.integration.deliveryIdentity.method, undefined);
+  } finally {
+    store.setBoardConfig(slug, { integrationMode: originalConfig.integrationMode, integrationBranch: originalConfig.integrationBranch });
+  }
+});
+
 test('SQ-2152: shared-tree retries replace stale candidates while disjoint descendants remain admissible', async () => {
   git(['update-ref', 'refs/remotes/origin/main', 'HEAD']);
   cleanBranch();

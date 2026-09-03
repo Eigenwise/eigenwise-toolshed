@@ -1079,7 +1079,7 @@ ${verify.outputTail}` : null
           message: `${ticket.ref} reconciliation refused: deliveryMethod must be reset, working-tree, or manual.`
         };
       }
-      const workingTreeDelivery = deliveryMethod !== null;
+      const workingTreeDelivery = deliveryMethod !== null && !reachable;
       if (!reachable && !workingTreeDelivery) {
         return {
           ok: false,
@@ -1125,7 +1125,7 @@ ${verify.outputTail}` : null
         candidate: ticket.submission.commit,
         sourceRevision: deliveryRevision,
         ...interaction.interaction ? { sourceCommit: deliveryCommit, interaction: interaction.interaction } : {},
-        ...deliveryMethod ? { method: deliveryMethod } : {}
+        ...workingTreeDelivery ? { method: deliveryMethod } : {}
       };
       const recorded = updateSubmissionIntegration(slug, ticket.id, {
         mode: interaction.interaction ? "recorded-reviewed-interaction" : workingTreeDelivery ? "recorded-working-tree" : "recorded",
@@ -2140,16 +2140,24 @@ ${verify.outputTail}` : null
         ok: false,
         reason: "not_claimed",
         ticket,
-        ...ticket.claimRelease ? { claimRelease: ticket.claimRelease, message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease) } : {}
+        ...ticket.claimRelease ? { claimRelease: ticket.claimRelease, message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease) } : { message: `${ticket.ref} has no claim to release.` }
       };
     }
-    if (owner !== by) return { ok: false, reason: "not_owner", ticket, ...held ? { claim: held } : {} };
+    if (owner !== by) {
+      return {
+        ok: false,
+        reason: "not_owner",
+        ticket,
+        ...held ? { claim: held } : {},
+        ...!claimOwner ? { message: `${ticket.ref} has no claim to release. Its pending submission belongs to "${submissionOwner}".` } : {}
+      };
+    }
     if (!claimOwner && opts.allowSubmittedOwner !== true) {
       return {
         ok: false,
         reason: "not_claimed",
         ticket,
-        ...ticket.claimRelease ? { claimRelease: ticket.claimRelease, message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease) } : {}
+        ...ticket.claimRelease ? { claimRelease: ticket.claimRelease, message: autoReleasedClaimMessage(ticket.ref, ticket.claimRelease) } : { message: `${ticket.ref} has no claim to release.` }
       };
     }
     return null;
