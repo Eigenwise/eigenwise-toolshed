@@ -103,7 +103,7 @@ function launch(ticket?: any, sessionId?: any) {
 }
 
 test('Claude quota matcher recognizes current and versioned family limits', () => {
-  const quotaMessages = [
+  const quotaMessages: Array<[string, string]> = [
     ["You've reached your Fable limit", 'fable'],
     ["You've reached your Fable limit.", 'fable'],
     ["You've reached your Fable 5 limit", 'fable'],

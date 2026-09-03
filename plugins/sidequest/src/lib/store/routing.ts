@@ -263,7 +263,8 @@ function claudeQuotaFailure(error?: any) {
   const text = String(error || '');
   for (const failure of CLAUDE_QUOTA_FAILURES) {
     const match = text.match(failure.matcher);
-    if (match) return { model: match[1].toLowerCase(), signature: match[0] };
+    const family = match?.[1];
+    if (match && family) return { model: family.toLowerCase(), signature: match[0] };
   }
   return null;
 }
