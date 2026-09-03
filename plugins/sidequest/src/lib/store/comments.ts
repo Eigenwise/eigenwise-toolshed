@@ -76,6 +76,23 @@ function createComment(fields?: any, at?: any) {
   };
 }
 
+function hasNegativeControlMarker(body?: any) {
+  return String(body || '').split(/\r?\n/).some((line) => line.trim().startsWith('[sidequest:negative-control]'));
+}
+
+function claimedMarkerComment(fields?: any, ticket?: any) {
+  const claimOwner = String(ticket?.claim?.by || '').trim();
+  if (!claimOwner || !hasNegativeControlMarker(fields?.body)) return fields;
+  return Object.assign({}, fields, { by: claimOwner });
+}
+
+function duplicateClaimMarker(ticket?: any, fields?: any) {
+  if (!ticket?.claim?.by || !hasNegativeControlMarker(fields?.body)) return null;
+  return Array.isArray(ticket.comments)
+    ? ticket.comments.find((comment: any) => comment.by === fields.by && comment.body === fields.body) || null
+    : null;
+}
+
 function addComment(slug?: any, idOrRef?: any, fields?: any) {
   const prepared = prepareComment(fields);
   if (!prepared.ok) return prepared;
@@ -84,10 +101,13 @@ function addComment(slug?: any, idOrRef?: any, fields?: any) {
   return withTicketLock(slug, found.id, () => {
     const t = getTicket(slug, found.id);
     if (!t) return { ok: false, reason: 'not_found' };
-    const verification = verificationCompletionCheck(slug, t, prepared);
+    const attributed = claimedMarkerComment(prepared, t);
+    const duplicate = duplicateClaimMarker(t, attributed);
+    if (duplicate) return { ok: true, ticket: t, comment: duplicate, duplicate: true };
+    const verification = verificationCompletionCheck(slug, t, attributed);
     if (!verification.ok) return Object.assign({ ticket: t }, verification);
     if (!Array.isArray(t.comments)) t.comments = [];
-    const comment = createComment(prepared);
+    const comment = createComment(attributed);
     t.comments.push(comment);
     recordClaimVerification(t, comment);
     touchClaimActivity(t, comment.by, comment.at);
@@ -96,7 +116,7 @@ function addComment(slug?: any, idOrRef?: any, fields?: any) {
     t.updatedAt = comment.at;
     putTicket(slug, t);
     queueEventNotification(slug, t, t.lastEventType, t.lastEventSource, { commentBody: comment.body });
-    return { ok: true, ticket: t, comment, ...((prepared as any).advisory ? { advisory: (prepared as any).advisory } : {}) };
+    return { ok: true, ticket: t, comment, ...((attributed as any).advisory ? { advisory: (attributed as any).advisory } : {}) };
   });
 }
 

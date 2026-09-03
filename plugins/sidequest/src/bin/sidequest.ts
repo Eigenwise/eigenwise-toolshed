@@ -51,7 +51,7 @@ const COMMAND_FLAGS: Record<string, string[]> = {
   unremind: [],
   done: ['by', 'model', 'effort', 'body', 'body-file', 'force'],
   submit: ['by', 'commit', 'source-revision-source', 'source-revision-value', 'source-revision-observed-at', 'changed-surface', 'no-process', 'no-worktree', 'review', 'base', 'gitref', 'git-ref', 'verify', 'worktree', 'body', 'body-file', 'force', 'clear', 'status'],
-  comment: ['by', 'body', 'body-file', 'message'],
+  comment: ['by', 'body', 'body-file', 'message', 'token-file'],
   comments: ['full'],
   link: ['ref', 'type', 'target'],
   unlink: [],

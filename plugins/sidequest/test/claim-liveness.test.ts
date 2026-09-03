@@ -512,11 +512,16 @@ test('a mixed source and test diff needs a claim-holder negative control before 
   assert.equal(submission.ok, false);
   assert.equal(submission.reason, 'negative_control_required');
 
-  assert.equal(store.addComment(slug, ticket.ref, {
+  const ticketWithForeignMarker = store.getTicket(slug, ticket.ref);
+  ticketWithForeignMarker.comments.push({
+    id: 'historical-negative-control-marker',
     by: 'another-executor',
+    kind: 'comment',
     body: '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1',
     source: 'mcp',
-  }).ok, true);
+    at: new Date().toISOString(),
+  });
+  persist(ticketWithForeignMarker);
   const wrongAuthor = store.addComment(slug, ticket.ref, {
     by,
     body: '[sidequest:verify-complete]',
@@ -612,6 +617,38 @@ test('a mixed source and test diff needs a claim-holder negative control before 
 
   git(['add', 'lib/fixture.js', 'test/fixture.test.js']);
   git(['commit', '-m', 'negative control marker fixture']);
+});
+
+test('negative-control comments use the claim owner and skip identical markers', () => {
+  const claimOwner = 'negative-control-comment-owner';
+  const ticket = store.createTicket(slug, {
+    title: 'negative-control comment ownership',
+    description: 'Where: comment writer fixture. Contract: attribute an executor marker to the active claim. Verify: inspect persisted comments.',
+    category: 'coding.normal',
+    files: ['lib/fixture.js', 'test/fixture.test.js'],
+    source: 'cli',
+  });
+  const prepared = claimRouted(ticket, claimOwner);
+  const tokenFile = String(prepared.ticket.dispatch?.tokenFile || '');
+  assert.ok(tokenFile);
+  assert.equal(fs.existsSync(tokenFile), true);
+  const marker = '[sidequest:negative-control] target=lib/fixture.js:1; assertion=fixture returns the changed value; npm run test:files test/fixture.test.js failed=1';
+  const { runCli: runExecutorComment } = makeCliRunner(BIN, {
+    SIDEQUEST_HOME,
+    CLAUDE_PROJECT_DIR: PROJECT_DIR,
+    CLAUDE_SESSION_ID: 'ambient-orchestrator-session',
+  }, { cwd: PROJECT_DIR });
+
+  const first = runExecutorComment(['comment', ticket.ref, '--token-file', tokenFile, '--body', marker, '--json']);
+  assert.equal(first.status, 0, first.stderr || first.stdout);
+  const firstMarkerComments = store.getTicket(slug, ticket.ref).comments.filter((comment?: any) => comment.body === marker);
+  assert.equal(firstMarkerComments.length, 1);
+  assert.equal(firstMarkerComments[0].by, claimOwner);
+
+  const second = runExecutorComment(['comment', ticket.ref, '--token-file', tokenFile, '--body', marker, '--json']);
+  assert.equal(second.status, 0, second.stderr || second.stdout);
+  assert.equal(JSON.parse(second.stdout).duplicate, true);
+  assert.equal(store.getTicket(slug, ticket.ref).comments.filter((comment?: any) => comment.body === marker).length, 1);
 });
 
 test('negative-control markers accept context after failed counts', () => {
