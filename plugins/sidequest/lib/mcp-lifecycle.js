@@ -516,7 +516,7 @@ const tools = [
   },
   {
     name: "release",
-    description: "Release a held claim, or surrender this worker’s token-validated unbound dispatch with kind technical_blocker. Use kind oracle with an oracle ask to park it as awaiting-oracle for a human verdict, then exit. The oracle handoff stays visible until a verdict is recorded.",
+    description: "Release a held claim, or surrender this worker’s token-validated unbound dispatch with kind technical_blocker. Use kind oracle with an oracle ask to park it as awaiting-oracle for a human verdict, then exit. The oracle handoff stays visible while the ticket remains awaiting-oracle.",
     inputSchema: {
       type: "object",
       properties: {

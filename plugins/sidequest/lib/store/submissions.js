@@ -289,7 +289,7 @@ function createSubmissions(dependencies) {
   }
   function oracleProjection(ticket) {
     const oracle = ticket && ticket.oracle;
-    if (!oracle) return null;
+    if (ticket?.status !== "awaiting-oracle" || !oracle) return null;
     const round = Number(oracle.round);
     const at = nullableText(oracle.at);
     const candidate = nullableText(oracle.candidate);

@@ -4296,6 +4296,44 @@ test('MCP release records an oracle handoff without a separate reason', async ()
   assert.equal(pulse.oracle.summary, `awaiting oracle since ${ticket.oracle.at}, round 1, candidate abc1234, ask: Rank the two rendered candidates without reading the measurements.`);
 });
 
+test('MCP pulse omits a superseded oracle handoff when verdict refuses it', async () => {
+  const added = await callTool('add', { title: 'superseded oracle handoff fixture', complexity: 2, why: 'exercise the oracle state after an executor resumes work' });
+  const parkedDispatch = store.prepareDispatch(added.project, added.ref, { allowUnscoped: true, sessionId: `oracle-parked-${Date.now()}` });
+  assert.equal(store.claimTicket(added.project, added.ref, 'mcp-parked-oracle-worker', {
+    token: parkedDispatch.token,
+    executor: parkedDispatch.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal(store.releaseTicket(added.project, added.ref, 'mcp-parked-oracle-worker', {
+    releaseKind: 'oracle',
+    oracle: 'Choose the candidate that best fits the baseline.',
+    candidate: 'abc1234',
+  }).ok, true);
+
+  const resumedDispatch = store.prepareDispatch(added.project, added.ref, { allowUnscoped: true, sessionId: `oracle-resumed-${Date.now()}` });
+  assert.equal(store.claimTicket(added.project, added.ref, 'mcp-resumed-oracle-worker', {
+    token: resumedDispatch.token,
+    executor: resumedDispatch.ticket.dispatchExecutor,
+  }).ok, true);
+  assert.equal((await callTool('comment', {
+    project: added.project,
+    ref: added.ref,
+    by: 'mcp-resumed-oracle-worker',
+    body: '[sidequest:verify-complete] passed: resumed work completed.',
+  })).ok, true);
+
+  const pulse = await callTool('pulse', { project: added.project, ref: added.ref });
+  assert.equal(pulse.status, 'doing');
+  assert.equal(pulse.oracle, undefined, 'pulse omits an oracle that verdict would refuse');
+  const verdict = await callTool('verdict', {
+    project: added.project,
+    ref: added.ref,
+    text: 'The baseline candidate wins.',
+    outcome: 'accepted',
+  });
+  assert.equal(verdict.ok, false);
+  assert.equal(verdict.reason, 'no_oracle');
+});
+
 test('MCP verdict creates a missing oracle round and refuses a ticket with no oracle marker', async () => {
   const added = await callTool('add', { title: 'oracle verdict fixture', complexity: 2, why: 'exercise the verdict operation through MCP' });
   const prepared = store.prepareDispatch(added.project, added.ref, { allowUnscoped: true, sessionId: `mcp-verdict-${Date.now()}` });
