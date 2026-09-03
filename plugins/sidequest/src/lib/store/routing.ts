@@ -35,9 +35,7 @@ const BACKEND_KEY_RE = /^([a-z0-9][a-z0-9-]{0,31}):([a-z0-9][a-z0-9-]{1,31})$/;
 const HAIKU_BACKEND_EFFORT = 'medium';
 const ROUTING_FALLBACK_DEFAULT = Object.freeze({ model: 'sonnet', effort: 'high' });
 const CLAUDE_QUOTA_FAILURES = Object.freeze([
-  Object.freeze({ model: 'fable', signature: "You've reached your Fable 5 limit" }),
-  Object.freeze({ model: 'opus', signature: "You've reached your Opus 5 limit" }),
-  Object.freeze({ model: 'opus', signature: 'Your Claude Code subscription does not include access to Opus 5' }),
+  Object.freeze({ matcher: /You've reached your (Fable|Opus|Sonnet|Haiku)(?: \d+(?:\.\d+)*)? limit\b/ }),
 ]);
 
 function coerceEffort(v?: any) {
@@ -263,7 +261,11 @@ function normalizeRoute(raw?: any) {
 
 function claudeQuotaFailure(error?: any) {
   const text = String(error || '');
-  return CLAUDE_QUOTA_FAILURES.find((failure?: any) => text.includes(failure.signature)) || null;
+  for (const failure of CLAUDE_QUOTA_FAILURES) {
+    const match = text.match(failure.matcher);
+    if (match) return { model: match[1].toLowerCase(), signature: match[0] };
+  }
+  return null;
 }
 
 function classifyDispatchFailure(error?: any) {

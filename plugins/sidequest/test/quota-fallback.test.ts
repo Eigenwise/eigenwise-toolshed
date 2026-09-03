@@ -102,6 +102,37 @@ function launch(ticket?: any, sessionId?: any) {
   return { prepared, toolInput: preTool.hookSpecificOutput.updatedInput };
 }
 
+test('Claude quota matcher recognizes current and versioned family limits', () => {
+  const quotaMessages = [
+    ["You've reached your Fable limit", 'fable'],
+    ["You've reached your Fable limit.", 'fable'],
+    ["You've reached your Fable 5 limit", 'fable'],
+    ["You've reached your Fable 5.2 limit", 'fable'],
+    ["You've reached your Opus 5 limit", 'opus'],
+    ["You've reached your Sonnet 5 limit", 'sonnet'],
+    ["You've reached your Haiku 5 limit", 'haiku'],
+  ];
+
+  for (const [message, model] of quotaMessages) {
+    const failure = store.claudeQuotaFailure(message);
+    assert.deepEqual(failure, { model, signature: message.replace(/\.$/, '') });
+    assert.equal(store.classifyDispatchFailure(message), 'quota_exhausted');
+  }
+
+  const versionedTicket = createFixture('versioned Fable quota recovery');
+  const versionedLaunch = launch(versionedTicket, 'versioned-fable-quota');
+  const versionedRecovery = store.recoverDispatchQuotaFailure(slug, versionedTicket.ref, {
+    token: versionedLaunch.prepared.token,
+    executor: versionedLaunch.prepared.ticket.dispatchExecutor,
+    error: "You've reached your Fable 5.2 limit",
+  });
+  assert.equal(versionedRecovery.ok, true);
+  assert.equal(versionedRecovery.recovery.failedModel, 'fable');
+  assert.equal(store.getTicket(slug, versionedTicket.ref).model, 'codex-gpt-5-6-sol');
+
+  assert.equal(store.claudeQuotaFailure('The deployment reached its rate limit.'), null);
+});
+
 test('known Fable quota failure prepares the exact category fallback and preserves claim truth', async () => {
   const ticket = createFixture('store quota recovery');
   const launched = launch(ticket, 'quota-store-primary');
@@ -118,7 +149,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
     token: launched.prepared.token,
     executor: launched.prepared.ticket.dispatchExecutor,
     sessionId: 'quota-store-primary',
-    error: "Agent launch failed: You've reached your Fable 5 limit",
+    error: "Agent launch failed: You've reached your Fable limit.",
   });
   assert.equal(recovered.ok, true);
   assert.notEqual(recovered.token, launched.prepared.token);
@@ -129,7 +160,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
     fallbackSource: 'category fallback',
     model: 'codex-gpt-5-6-sol',
     effort: 'max',
-    signature: "You've reached your Fable 5 limit",
+    signature: "You've reached your Fable limit",
     at: recovered.recovery.at,
   });
 
@@ -148,7 +179,7 @@ test('known Fable quota failure prepares the exact category fallback and preserv
   assert.equal(current.dispatch.route.marker, 'gpt-5.6-sol');
   assert.equal(pulse.dispatch.attempts.length, 1);
   assert.equal(pulse.dispatch.attempts[0].outcome, 'quota_exhausted');
-  assert.equal(pulse.dispatch.attempts[0].failure.signature, "You've reached your Fable 5 limit");
+  assert.equal(pulse.dispatch.attempts[0].failure.signature, "You've reached your Fable limit");
 
   store.updateTicket(slug, ticket.ref, { readonly: true });
   const currentExecutor = store.stableExecutorName(store.getTicket(slug, ticket.ref));
@@ -233,7 +264,7 @@ test('PostToolUseFailure ignores generic errors and prepares quota fallback for 
 
   const hookOutput = runHook(QUOTA_FALLBACK, {
     ...payload,
-    error: "Agent launch failed before start: You've reached your Fable 5 limit",
+    error: "Agent launch failed before start: You've reached your Fable limit",
   });
   assert.equal(hookOutput.hookSpecificOutput.hookEventName, 'PostToolUseFailure');
   assert.match(hookOutput.systemMessage, /configured fallback dispatch/);
@@ -365,9 +396,7 @@ test('every seeded Opus category recovers to its explicit Codex fallback without
     });
     const launched = launch(ticket, `quota-${categoryId}`);
     assert.deepEqual(launched.prepared.ticket.dispatch.route, route);
-    const error = categoryId === 'visual-evaluation'
-      ? 'Agent launch failed: Your Claude Code subscription does not include access to Opus 5'
-      : "Agent launch failed: You've reached your Opus 5 limit";
+    const error = "Agent launch failed: You've reached your Opus 5 limit";
     const recovered = store.recoverDispatchQuotaFailure(slug, ticket.ref, {
       token: launched.prepared.token,
       executor: launched.prepared.ticket.dispatchExecutor,
