@@ -4,6 +4,7 @@ const assert = require('node:assert/strict');
 const { spawn, spawnSync } = require('node:child_process');
 const fs = require('node:fs');
 const http = require('node:http');
+const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 const test = require('node:test');
@@ -11,6 +12,8 @@ const { startGateway } = require('./support.js');
 
 const CLI = path.join(__dirname, '..', 'bin', 'model-gateway.js');
 const COMMANDS = path.join(__dirname, '..', 'lib', 'commands.js');
+const PINS = path.join(__dirname, '..', 'lib', 'pins.js');
+const RUNTIME = path.join(__dirname, '..', 'lib', 'runtime.js');
 
 // Neutralize a machine-set override so the default-window assertions are
 // deterministic; the override test sets it explicitly in its own child env.
@@ -709,7 +712,7 @@ test('env wiring preserves Claude 1M aliases and removes the unsafe global thres
   assert.equal(settings.env.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
   // Fable is a 1M Claude model too; pin it so a gateway session gets its full
   // window instead of Claude Code's 200k gateway default.
-  assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
+  assert.equal(settings.env.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
   assert.equal(settings.env.CLAUDE_CODE_MAX_OUTPUT_TOKENS, '64000');
   assert.equal(settings.env.ENABLE_TOOL_SEARCH, 'true');
   assert.equal(settings.env.ANTHROPIC_BASE_URL, 'http://127.0.0.1:18764');
@@ -738,14 +741,31 @@ function installFakeClaude(home) {
   fs.writeFileSync(fake, [
     "'use strict';",
     "const fs = require('node:fs');",
+    "const net = require('node:net');",
     "const args = process.argv.slice(2);",
     "if (args.includes('--version')) { console.log('fake-claude 1.0.0'); process.exit(0); }",
     "const alias = args[args.indexOf('--model') + 1];",
     "let input = '';",
     "process.stdin.on('data', (chunk) => { input += chunk; });",
     "process.stdin.on('end', () => {",
-    "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN }) + '\\n');",
-    "  console.log(JSON.stringify({ type: 'system', subtype: 'init', model: process.env[`FAKE_CLAUDE_${alias.toUpperCase()}`] || `claude-${alias}-9` }));",
+    "  const attemptFile = process.env.FAKE_CLAUDE_ATTEMPT_FILE;",
+    "  const attempts = attemptFile && fs.existsSync(attemptFile) ? JSON.parse(fs.readFileSync(attemptFile, 'utf8')) : {};",
+    "  const attempt = (attempts[alias] || 0) + 1;",
+    "  if (attemptFile) { attempts[alias] = attempt; fs.writeFileSync(attemptFile, JSON.stringify(attempts)); }",
+    "  fs.appendFileSync(process.env.FAKE_CLAUDE_LOG, JSON.stringify({ args, input, baseUrl: process.env.ANTHROPIC_BASE_URL, apiKey: process.env.ANTHROPIC_API_KEY, oauth: process.env.CLAUDE_CODE_OAUTH_TOKEN, proxies: { http: process.env.HTTP_PROXY, https: process.env.HTTPS_PROXY, all: process.env.ALL_PROXY } }) + '\\n');",
+    "  if (alias === 'fable' && attempt <= Number(process.env.FAKE_CLAUDE_FABLE_FAILURES || 0)) return;",
+    "  const printInit = () => console.log(JSON.stringify({ type: 'system', subtype: 'init', model: process.env[`FAKE_CLAUDE_${alias.toUpperCase()}`] || `claude-${alias}-9` }));",
+    "  if (process.env.FAKE_CLAUDE_EGRESS === '1' && process.env.HTTPS_PROXY) {",
+    "    const proxy = new URL(process.env.HTTPS_PROXY);",
+    "    const port = Number(proxy.port || (proxy.protocol === 'https:' ? 443 : 80));",
+    "    const socket = net.connect(port, proxy.hostname, () => {",
+    "      socket.end('CONNECT api.anthropic.com:443 HTTP/1.1\\r\\nHost: api.anthropic.com:443\\r\\n\\r\\n');",
+    "      printInit();",
+    "    });",
+    "    socket.once('error', printInit);",
+    "    return;",
+    "  }",
+    "  printInit();",
     "});",
   ].join('\n'));
   if (process.platform === 'win32') fs.writeFileSync(command, `@"${process.execPath}" "${fake}" %*\r\n`);
@@ -761,6 +781,178 @@ function installFakeClaude(home) {
 function missingClaude(home) {
   return path.join(home, 'bin', 'claude-not-installed');
 }
+
+function runPinRefreshes(env) {
+  const script = [
+    `const fs = require('node:fs');`,
+    `const { PIN_CACHE_PATH } = require(${JSON.stringify(RUNTIME)});`,
+    `const { detectedPinDefaults, refreshDetectedPins } = require(${JSON.stringify(PINS)});`,
+    '(async () => {',
+    '  await refreshDetectedPins({ force: true });',
+    '  console.log(JSON.stringify({ cache: JSON.parse(fs.readFileSync(PIN_CACHE_PATH, \'utf8\')), defaults: detectedPinDefaults() }));',
+    '  await refreshDetectedPins();',
+    '  console.log(JSON.stringify({ cache: JSON.parse(fs.readFileSync(PIN_CACHE_PATH, \'utf8\')), defaults: detectedPinDefaults() }));',
+    '})().catch((error) => { console.error(error.stack); process.exitCode = 1; });',
+  ].join('\n');
+  const result = spawnSync(process.execPath, ['-e', script], { env, encoding: 'utf8' });
+  assert.equal(result.status, 0, result.stderr);
+  return result.stdout.trim().split('\n').map(JSON.parse);
+}
+
+test('a failed alias does not carry a stale pin into a new Claude CLI version', () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-stale-pin-home-'));
+  const claude = installFakeClaude(home);
+  const cachePath = path.join(home, '.claude', 'model-gateway', 'detected-pins.json');
+  fs.mkdirSync(path.dirname(cachePath), { recursive: true });
+  fs.writeFileSync(cachePath, JSON.stringify({
+    cliVersion: 'fake-claude 0.9.0',
+    updatedAt: Date.now(),
+    pins: {
+      opus: 'claude-opus-8[1m]',
+      sonnet: 'claude-sonnet-8[1m]',
+      fable: 'claude-fable-8[1m]',
+    },
+  }));
+  const env = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    FAKE_CLAUDE_ATTEMPT_FILE: path.join(home, 'attempts.json'),
+    FAKE_CLAUDE_FABLE_FAILURES: '2',
+    FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+  };
+  try {
+    const [afterFailedProbe, afterStaleRetry] = runPinRefreshes(env);
+    assert.equal(afterFailedProbe.cache.cliVersion, 'fake-claude 1.0.0');
+    assert.equal(afterFailedProbe.cache.pins.fable, 'claude-fable-8[1m]');
+    assert.equal(afterFailedProbe.cache.detectedFor.fable, 'fake-claude 0.9.0');
+    assert.equal(afterFailedProbe.defaults.fable, 'claude-fable-5-1[1m]');
+    assert.equal(afterStaleRetry.cache.pins.fable, 'claude-fable-9[1m]');
+    assert.equal(afterStaleRetry.cache.detectedFor.fable, 'fake-claude 1.0.0');
+    const aliases = fs.readFileSync(claude.logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line).args[3]);
+    assert.deepEqual(aliases, ['opus', 'sonnet', 'fable', 'fable', 'fable']);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+async function startCountingProxy(t) {
+  let connectionCount = 0;
+  const proxy = net.createServer((socket) => {
+    connectionCount += 1;
+    socket.once('data', () => socket.end('HTTP/1.1 502 Bad Gateway\r\n\r\n'));
+  });
+  const port = await listen(proxy);
+  t.after(() => new Promise((resolve) => proxy.close(resolve)));
+  return { url: `http://127.0.0.1:${port}`, connectionCount: () => connectionCount };
+}
+
+function probeClaudeAliasWithEnvironment(alias, endpoint, environment) {
+  const script = `const { probeClaudeAlias } = require(${JSON.stringify(PINS)}); probeClaudeAlias(${JSON.stringify(alias)}, ${JSON.stringify(endpoint)}).then((pin) => console.log(JSON.stringify({ pin })));`;
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, ['-e', script], {
+      env: environment,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (chunk) => { stdout += chunk; });
+    child.stderr.on('data', (chunk) => { stderr += chunk; });
+    child.once('close', (status) => resolve({ status, stdout, stderr }));
+  });
+}
+
+function probeRealClaudeFable(endpoint, environment) {
+  return probeClaudeAliasWithEnvironment('fable', endpoint, {
+    ...environment,
+    CODEX_GATEWAY_CLAUDE_BIN: 'claude',
+  });
+}
+
+function fakeProbeEnvironment(home, claude, proxyUrl) {
+  const environment = {
+    ...process.env,
+    HOME: home,
+    USERPROFILE: home,
+    FAKE_CLAUDE_LOG: claude.logFile,
+    CODEX_GATEWAY_CLAUDE_BIN: claude.command,
+    HTTP_PROXY: proxyUrl,
+    HTTPS_PROXY: proxyUrl,
+    ALL_PROXY: proxyUrl,
+  };
+  delete environment.NO_PROXY;
+  delete environment.no_proxy;
+  return environment;
+}
+
+test('the local Fable probe keeps proxy observation active for the installed Claude CLI', async (t) => {
+  const version = spawnSync('claude', ['--version'], { encoding: 'utf8' });
+  if (version.status !== 0 || !version.stdout.trim()) return t.skip('claude --version is unavailable');
+  const proxy = await startCountingProxy(t);
+  const localRequests = [];
+  const server = http.createServer((request, response) => {
+    localRequests.push({ localAddress: request.socket.localAddress, remoteAddress: request.socket.remoteAddress });
+    response.writeHead(request.method === 'HEAD' ? 204 : 404);
+    response.end();
+  });
+  const port = await listen(server);
+  const environment = {
+    ...process.env,
+    HTTP_PROXY: proxy.url,
+    HTTPS_PROXY: proxy.url,
+    ALL_PROXY: proxy.url,
+  };
+  delete environment.NO_PROXY;
+  delete environment.no_proxy;
+  try {
+    const result = await probeRealClaudeFable(`http://127.0.0.1:${port}`, environment);
+    const versionText = version.stdout.trim();
+    assert.equal(result.status, 0, `Claude ${versionText}; status=${result.status}; proxy connections=${proxy.connectionCount()}; local requests=${localRequests.length}; stderr=${result.stderr}`);
+    const { pin } = JSON.parse(result.stdout);
+    const localSocketRequests = localRequests.filter(({ localAddress }) => localAddress === '127.0.0.1');
+    const observation = `Claude ${versionText}; init model=${pin}; proxy connections=${proxy.connectionCount()}; local requests=${localRequests.length}; local socket requests=${localSocketRequests.length}`;
+    assert.equal(pin, 'claude-fable-5-1[1m]', observation);
+    assert.equal(proxy.connectionCount(), 0, observation);
+    assert.equal(localSocketRequests.length, localRequests.length, observation);
+  } finally {
+    await new Promise((resolve) => server.close(resolve));
+  }
+});
+
+test('the proxy observer sees no egress from a fake Claude probe', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-proxy-pin-home-'));
+  const claude = installFakeClaude(home);
+  const proxy = await startCountingProxy(t);
+  const environment = fakeProbeEnvironment(home, claude, proxy.url);
+  delete environment.FAKE_CLAUDE_EGRESS;
+  try {
+    const result = await probeClaudeAliasWithEnvironment('fable', 'http://127.0.0.1:1', environment);
+    assert.equal(result.status, 0, result.stderr);
+    const { pin } = JSON.parse(result.stdout);
+    const observation = `fake init model=${pin}; proxy connections=${proxy.connectionCount()}`;
+    assert.equal(pin, 'claude-fable-9[1m]', observation);
+    assert.equal(proxy.connectionCount(), 0, observation);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
+
+test('the proxy observer catches fake Claude egress', async (t) => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-proxy-pin-home-'));
+  const claude = installFakeClaude(home);
+  const proxy = await startCountingProxy(t);
+  const environment = { ...fakeProbeEnvironment(home, claude, proxy.url), FAKE_CLAUDE_EGRESS: '1' };
+  try {
+    const result = await probeClaudeAliasWithEnvironment('fable', 'http://127.0.0.1:1', environment);
+    assert.equal(result.status, 0, result.stderr);
+    const { pin } = JSON.parse(result.stdout);
+    assert.equal(pin, 'claude-fable-9[1m]', `fake init model=${pin}; proxy connections=${proxy.connectionCount()}`);
+    assert.ok(proxy.connectionCount() >= 1, `fake init model=${pin}; proxy connections=${proxy.connectionCount()}`);
+  } finally {
+    fs.rmSync(home, { recursive: true, force: true });
+  }
+});
 
 test('Claude pin overrides persist outside the plugin and are applied by rewiring', () => {
   const home = fs.mkdtempSync(path.join(os.tmpdir(), 'model-gateway-pins-home-'));
@@ -816,7 +1008,7 @@ test('rewiring without a Claude CLI wires the shipped pins and caches no detecti
     const settings = JSON.parse(fs.readFileSync(path.join(home, '.claude', 'settings.json'), 'utf8')).env;
     assert.equal(settings.ANTHROPIC_DEFAULT_OPUS_MODEL, 'claude-opus-5[1m]');
     assert.equal(settings.ANTHROPIC_DEFAULT_SONNET_MODEL, 'claude-sonnet-5[1m]');
-    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5[1m]');
+    assert.equal(settings.ANTHROPIC_DEFAULT_FABLE_MODEL, 'claude-fable-5-1[1m]');
     assert.equal(fs.existsSync(path.join(home, '.claude', 'model-gateway', 'detected-pins.json')), false);
 
     const override = spawnSync(process.execPath, [CLI, 'pin', '--opus', 'claude-opus-4-8[1m]'], { env, encoding: 'utf8' });
