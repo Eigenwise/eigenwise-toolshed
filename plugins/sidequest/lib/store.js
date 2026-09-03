@@ -578,6 +578,7 @@ const {
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  dispatchUnboundClaim,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -690,6 +691,9 @@ function nextDispatchLaunchSeq(state) {
   return state.launchedAt ? current + 1 : current;
 }
 const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorktreeRoot, nearestRepoRoot, projectDir, ticketsDir, assetsDir } = createPaths({ fs, os, path, crypto });
+function sessionProjectRoot() {
+  return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+}
 const dbByHome = /* @__PURE__ */ new Map();
 const transactionDepth = /* @__PURE__ */ new WeakMap();
 function withinTransaction(handle, fn) {
@@ -1718,6 +1722,37 @@ function claimAdmission(slug, idOrRef, opts) {
     };
   }
   return { ok: true, ticket, token };
+}
+function bindClaimRuntimeIdentity(slug, idOrRef, opts) {
+  const agentId = String(opts?.agentId || "").trim();
+  const found = getTicket(slug, idOrRef);
+  if (!agentId || !found) return { ok: false, reason: !found ? "not_found" : "missing_identity" };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: "not_found" };
+    const admission = claimAdmission(slug, ticket.id, opts);
+    if (!admission.ok) return admission;
+    const state = dispatchState(ticket);
+    if (!state || state.terminalAt || !["prepared", "launched", "claimed"].includes(state.outcome)) {
+      return { ok: false, reason: "dispatch_unavailable", ticket };
+    }
+    const sessionId = String(opts?.sessionId || "").trim();
+    if (!sessionId || String(state.sessionId || "").trim() !== sessionId) {
+      return { ok: false, reason: "session_mismatch", ticket };
+    }
+    const boundAgentId = String(state.agentId || "").trim();
+    if (boundAgentId && boundAgentId !== agentId) {
+      return { ok: false, reason: "runtime_identity_mismatch", ticket };
+    }
+    const now = (/* @__PURE__ */ new Date()).toISOString();
+    if (!recordDispatchRuntimeIdentity(slug, state, agentId, null, now)) {
+      return { ok: false, reason: "runtime_identity_mismatch", ticket };
+    }
+    state.bindSource = "claim_runtime_identity";
+    stampDispatchEvent(ticket, "claim-runtime-identity", now);
+    putTicket(slug, ticket);
+    return { ok: true, ticket };
+  });
 }
 function claimTicket(slug, idOrRef, by, opts) {
   opts = opts || {};
@@ -2968,6 +3003,7 @@ module.exports = {
   serverFile,
   slugify,
   nearestRepoRoot,
+  sessionProjectRoot,
   mainWorktreeRoot,
   projectDir,
   ensureProject,
@@ -3042,6 +3078,7 @@ module.exports = {
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  dispatchUnboundClaim,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
@@ -3050,6 +3087,7 @@ module.exports = {
   markDispatchStopped,
   reconcileLaunchedDispatches,
   claimAdmission,
+  bindClaimRuntimeIdentity,
   claimTicket,
   releaseTicket,
   completeTicket,

@@ -102,6 +102,27 @@ export function identityDiagnosis(input: HookInput, agentId: string, executor: s
   }
 }
 
+export interface UnboundClaim {
+  ref: string;
+  project: string;
+}
+
+export function unboundClaim(input: HookInput, executor: string, observedWorktree: string): UnboundClaim | null {
+  try {
+    const store = require(runtimeModule('store')) as {
+      dispatchUnboundClaim: (identity: unknown) => UnboundClaim | null;
+    };
+    return store.dispatchUnboundClaim({
+      executor,
+      sessionId: hookSessionId(input),
+      observedWorktree,
+      agentName: stringField(input, 'agent_name', 'agentName', 'name'),
+    });
+  } catch (_) {
+    return null;
+  }
+}
+
 // SQ-2153, SQ-2159. SubagentStart can reach the store before the worktree it
 // names finished being created, and the dispatch is then left with no runtime
 // identity at all. Re-offering the checkout the harness actually put this agent

@@ -46,10 +46,6 @@ function stringField(input, ...names) {
   return "";
 }
 
-// src/hooks/shared/runtime-identity.ts
-var import_node_fs2 = __toESM(require("node:fs"));
-var import_node_path2 = __toESM(require("node:path"));
-
 // src/hooks/shared/paths.ts
 var import_node_path = __toESM(require("node:path"));
 function pluginRoot() {
@@ -60,6 +56,8 @@ function runtimeModule(name) {
 }
 
 // src/hooks/shared/runtime-identity.ts
+var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_path2 = __toESM(require("node:path"));
 function canonicalPath(value) {
   const kernel = require(runtimeModule("kernel/worktree"));
   return kernel.canonicalPath(value);
@@ -117,11 +115,36 @@ function bindObservedRuntimeIdentity(input, agentId, executor, worktree) {
 }
 
 // src/hooks/bind-runtime-identity.ts
+function bindClaimRuntimeIdentity(input, agentId, executor) {
+  if (stringField(input, "tool_name") !== "mcp__plugin_sidequest_board__claim" || !isRecord(input.tool_input)) return false;
+  const toolInput = input.tool_input;
+  const ref = String(toolInput.ref || "").trim();
+  const sessionId = stringField(input, "session_id", "sessionId");
+  if (!agentId || !sessionId || !executorAgent(executor) || !ref || String(toolInput.executor || "").trim() !== executor) return true;
+  try {
+    const store = require(runtimeModule("store"));
+    const project = String(toolInput.project || "").trim() || store.sessionProjectRoot();
+    const found = store.findProject(project);
+    if (found.ok && found.slug) {
+      store.bindClaimRuntimeIdentity(found.slug, ref, {
+        token: toolInput.token,
+        tokenFile: toolInput.tokenFile,
+        executor,
+        effort: toolInput.effort,
+        agentId,
+        sessionId
+      });
+    }
+  } catch (_) {
+  }
+  return true;
+}
 function main() {
   const input = readStdin();
   if (!input) return;
   const agentId = stringField(input, "agent_id", "agentId");
   const executor = stringField(input, "agent_type", "agentType", "subagent_type");
+  if (bindClaimRuntimeIdentity(input, agentId, executor)) return;
   if (!agentId || !executorAgent(executor)) return;
   const cwd = stringField(input, "cwd");
   if (!cwd) return;

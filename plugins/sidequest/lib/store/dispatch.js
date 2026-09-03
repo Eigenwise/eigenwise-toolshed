@@ -1716,6 +1716,25 @@ function createDispatch(dependencies) {
     }
     return counts;
   }
+  function dispatchUnboundClaim(identity) {
+    const sessionId = String(identity?.sessionId || "").trim();
+    const executor = String(identity?.executor || "").trim();
+    const observedWorktree = String(identity?.observedWorktree || "").trim();
+    const agentName = String(identity?.agentName || "").trim();
+    if (!sessionId || !executor) return null;
+    const matches = [];
+    for (const project of listProjects({ all: true })) {
+      const projectPath = readMeta(project.slug)?.path || null;
+      if (observedWorktree && (!projectPath || worktreeIdentityKey(projectPath) !== worktreeIdentityKey(observedWorktree))) continue;
+      for (const ticket of listTickets(project.slug)) {
+        const state = dispatchState(ticket);
+        if (!state || state.sharedTree !== true || state.sessionId !== sessionId || state.executor !== executor || state.agentId || !ticket.claim?.by || state.terminalAt || state.outcome !== "claimed") continue;
+        if (agentName && state.agentName && state.agentName !== agentName) continue;
+        matches.push({ ref: ticket.ref, project: project.slug });
+      }
+    }
+    return matches.length === 1 ? matches[0] : null;
+  }
   function dispatchWorkspace(slug, ticket) {
     const state = dispatchState(ticket);
     const projectPath = readMeta(slug)?.path || null;
@@ -1904,6 +1923,13 @@ function createDispatch(dependencies) {
         return match.state.sharedTree === false && !match.state.continuation?.sourceWorktree && match.state.worktreeBindingSource === "worktree-create" && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
       });
       if (completedWorktreeMatches.length) matches = completedWorktreeMatches;
+    }
+    if (normalizedAgentId && !normalizedAgentName) {
+      matches = matches.filter((match) => {
+        if (String(match.state.agentId || "") === normalizedAgentId) return true;
+        const completed = completedWorktreeCreationFacts(match.state);
+        return match.sharedTree === false && Boolean(normalizedWorktree) && completed && canonicalPath(completed.worktree) === canonicalPath(normalizedWorktree);
+      });
     }
     if (!matches.length || dispatchIdentityAmbiguous(matches, normalizedAgentName)) {
       return { ok: false, reason: matches.length ? "ambiguous" : "not_found" };
@@ -2102,6 +2128,7 @@ function createDispatch(dependencies) {
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
+    dispatchUnboundClaim,
     recordSanctionedCommit,
     dispatchWorkspace,
     dispatchDelta,

@@ -55,8 +55,7 @@ function resolveProject(projectArg) {
     const known = Array.from(new Set(res.known || []));
     throw new Error(`project "${arg}" does not match any registered board.${known.length ? " Known: " + known.join(", ") : ""}`);
   }
-  const start = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return store.ensureProject(store.nearestRepoRoot(start));
+  return store.ensureProject(store.sessionProjectRoot());
 }
 function runtimeSessionId() {
   const v = process.env.CLAUDE_CODE_SESSION_ID || process.env.CLAUDE_SESSION_ID || "";
