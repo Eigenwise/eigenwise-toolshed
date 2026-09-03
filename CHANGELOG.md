@@ -8,6 +8,31 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.513.0 (2026-09-03)
+
+### sidequest 5.0.22 → 5.0.23
+
+#### Fixes
+
+- Guard live ticket closeout updates (SQ-2393)
+  Sidequest now prevents executors from changing closeout-affecting fields on their claimed tickets.
+- Trust dispatch identity for closeout updates (SQ-2395)
+  Sidequest now accepts live closeout updates only from the runtime that prepared the dispatch, so --by and MCP labels cannot grant control-plane access.
+- Guard live-claim mutations at the tool boundary (SQ-2397)
+  While a ticket is live-claimed, only the orchestrator's main-thread MCP tools can change its closeout fields or delete it. Every other surface must release the claim first.
+
+  Closeout-field updates (files, status, readonly, workingTreeDelivery, externalDeliverable, verify/verifyKind/attestationArtifact and their executor* spellings) are authorized by the PreToolUse hook via `isSubagentCaller`; the store additionally refuses them unless the MCP handler passes an explicit grant, so subagent MCP, CLI, and the dashboard all refuse a live-claim closeout change without releasing first.
+
+  Deleting a live-claimed ticket sheds the claim and all closeout state, so it is guarded the same way: `deleteTicket` refuses a live claim unless the main-thread MCP `remove` supplies the grant. The dashboard `DELETE /api/tickets/:id` (127.0.0.1, unauthenticated, so indistinguishable from an executor's own shell on a single-user box) and CLI `rm --force` no longer override a live claim, and a subagent MCP `remove` carrying `force:true` is denied at the hook. `DELETE /api/projects/:slug`, which drops every ticket, refuses while any ticket in the project is live-claimed, and so does `sidequest merge <src> <dst>` (dry-run included), which deletes and recreates every source ticket. Arbitrary code that imports the store or starts another MCP server process remains outside that boundary.
+- Bind shared dispatch claims to runtime agents (SQ-2398)
+  Shared-checkout dispatches now bind their observed runtime agent when they claim, so fan-out siblings of the same executor type in one session each carry their own agent id and the write guard accepts each sibling's writes instead of refusing every shared-checkout write as an unknown identity.
+
+  When the claim omits the optional `project`, the bind resolves the board through the same authority as the MCP claim handler (`store.sessionProjectRoot`: `CLAUDE_PROJECT_DIR`, then the process cwd), never the tool call's cwd, so a claim made from a worktree or an unrelated checkout binds the board the claim lands on. The bind also requires the runtime's session to match the reservation's: a sibling from another session presenting the owner's token is refused with `session_mismatch`.
+
+  What the bind attaches is the harness-reported runtime (hook stdin `agent_id`) to the claim the dispatch token authorizes. The token is the per-dispatch credential and each executor is handed only its own; presenting another dispatch's token means reading a file the executor was never given, which is the same class as importing the store and sits outside this boundary. Claude Code's hook schema carries no `agent_name`, so there is no harness-authored per-dispatch discriminator beyond the token.
+- Accept shared-tree sibling boundaries when submitting (SQ-2399)
+  Submitting a shared-checkout candidate no longer deadlocks once a sibling's commit lands ahead of it. The submission range accepts an approved submitted-ticket boundary as its base, so a linear shared history stops reporting `duplicate_submission` for the sibling's commit while an explicit sibling base stops reporting `unrecognized_base`. Isolated single-ticket candidates keep their own merge base unchanged.
+
 ## v3.512.0 (2026-09-02)
 
 ### sidequest 5.0.21 → 5.0.22
