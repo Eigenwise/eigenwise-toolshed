@@ -207,9 +207,27 @@ function dispatchBaseMessage(ticket: any): string {
     : 'the pinned dispatch base commit recorded in the dispatch';
 }
 
+function sharedTreeSubmissionBoundaries(slug: string, ticket: any): Array<{ ref: string; commit: string }> {
+  if (ticket.dispatch?.sharedTree !== true) return [];
+  return store.listTickets(slug).flatMap((candidate: any): Array<{ ref: string; commit: string }> => {
+    if (candidate.ref === ticket.ref) return [];
+    const submission = candidate.submission;
+    const commit = String(submission?.commit || '').trim();
+    const liveSubmission = Boolean(commit) && !submission.integratedAt && candidate.status !== 'done';
+    const integratedSubmission = Boolean(commit) && Boolean(submission.integratedAt);
+    return liveSubmission || integratedSubmission ? [{ ref: candidate.ref, commit }] : [];
+  });
+}
+
 function submissionRangeRemedy(ticket: any, range: any, gitRef: string): string {
   const reason = String(range.reason || '').trim();
   const pinnedBase = dispatchBaseMessage(ticket);
+  const approvedBoundary = Array.isArray(range.approvedBoundaries)
+    ? range.approvedBoundaries.find((boundary: any) => Array.isArray(range.approvedBases) && range.approvedBases.includes(boundary.commit))
+    : null;
+  const unrecognizedBaseRemedy = approvedBoundary
+    ? `omit base to select ${approvedBoundary.ref}'s approved boundary ${approvedBoundary.commit} automatically, or pass \`--base ${approvedBoundary.commit}\` to use it explicitly.`
+    : `use the recorded ${pinnedBase}; no approved submitted-ticket boundary reaches this candidate.`;
   const remedies: Record<string, string> = {
     missing_git_ref: `${gitRef} is missing or does not point to the submitted commit. Run \`git update-ref ${gitRef} <commit>\`, then resubmit.`,
     missing_upstream: `fetch or recreate the recorded integration ref, then resubmit the preserved commit without changing its base.`,
@@ -221,7 +239,7 @@ function submissionRangeRemedy(ticket: any, range: any, gitRef: string): string 
     missing_base: `restore the recorded base commit, or rebuild only this ticket's work from ${pinnedBase}, then resubmit.`,
     empty_range: `the submitted commit has no work beyond its base. Submit the commit that contains this ticket's work, or use the explicit no-op closeout when no work was produced.`,
     base_not_reachable: `the supplied base no longer reaches the submitted commit. Recreate the ticket work from ${pinnedBase}, preserve only this ticket's commits, update ${gitRef}, and resubmit.`,
-    unrecognized_base: `use the recorded ${pinnedBase} or an approved submitted-ticket boundary, then resubmit only this ticket's commits.`,
+    unrecognized_base: unrecognizedBaseRemedy,
     range_changed: `the stored submission range changed. Preserve the original submission for the orchestrator to reconcile; do not replace it by syncing to a branch tip.`,
     no_op_changed: `the stored no-op state changed. Preserve the original submission for the orchestrator to reconcile; do not replace it by syncing to a branch tip.`,
     reconciled_path_diverged: `the already-reconciled path diverged at the integration tip. Preserve the original submission for the orchestrator to reconcile; do not replace it by syncing to a branch tip.`,
@@ -276,9 +294,29 @@ function collectGitSubmissionFacts(options: any) {
     targetFailure = { code: 'integration_target_unavailable', message: `submit: refused ${ticket.ref}; ${boundedSubmissionText((error && error.message) || String(error))}. Remedy: Fetch or recreate ${targetName}, then resubmit the preserved candidate.`, retryable: true };
   }
   const dispatchBase = String(ticket.dispatch?.baseCommit || '').trim() || null;
-  const range = target
-    ? commitScope.submissionRange(root, { commit, gitRef, upstream: target.upstream, integrationBranch: target.branch, base, dispatchBase, allowedBases: dispatchBase ? [dispatchBase] : [] })
+  const approvedBoundaries = sharedTreeSubmissionBoundaries(slug, ticket);
+  const boundaryCommits = approvedBoundaries.map((boundary: { ref: string; commit: string }) => boundary.commit);
+  const calculatedRange = target
+    ? commitScope.submissionRange(root, {
+      commit,
+      gitRef,
+      upstream: target.upstream,
+      integrationBranch: target.branch,
+      base,
+      ...(ticket.dispatch?.sharedTree === true
+        ? {
+          ...(dispatchBase ? { dispatchBase } : {}),
+          allowedBases: [...(dispatchBase ? [dispatchBase] : []), ...boundaryCommits],
+          baseCandidates: boundaryCommits,
+        }
+        : ticket.dispatch?.sharedTree !== false && dispatchBase
+          ? { dispatchBase, allowedBases: [dispatchBase] }
+          : { allowedBases: [] }),
+    })
     : null;
+  const range = calculatedRange && !calculatedRange.ok
+    ? Object.assign({}, calculatedRange, { approvedBoundaries })
+    : calculatedRange;
   const scope = ticketCommitScope(slug, ticket);
   const requirements: any[] = targetFailure ? [targetFailure] : [];
   const surfaces: any = { declared: scope, admitted: scope, changed: range?.ok ? range.changedPaths : [], pending: [] };
@@ -307,9 +345,11 @@ function collectGitSubmissionFacts(options: any) {
     if (missingFragment) requirements.push({ code: 'missing_release_fragment', message: missingReleaseFragmentMessage(ticket.ref, missingFragment.fragmentPath, missingFragment.plugins), retryable: true });
   }
   const duplicate = range?.ok
-    ? store.submissionsPayload(slug).tickets
-      .filter((entry: any) => entry.ref !== ticket.ref)
-      .find((entry: any) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit: any) => range.commits.includes(entryCommit)))
+    ? ticket.dispatch?.sharedTree === true
+      ? approvedBoundaries.find((boundary: { ref: string; commit: string }) => range.commits.includes(boundary.commit)) || null
+      : store.submissionsPayload(slug).tickets
+        .filter((entry: any) => entry.ref !== ticket.ref)
+        .find((entry: any) => (Array.isArray(entry.submission.commits) && entry.submission.commits.length ? entry.submission.commits : [entry.submission.commit]).some((entryCommit: any) => range.commits.includes(entryCommit)))
     : null;
   return {
     target,
@@ -323,7 +363,16 @@ function collectGitSubmissionFacts(options: any) {
         : { candidateExists: false, containsCandidate: false, diagnostic: surfaces.diagnostic },
       surfaces,
       duplicate: duplicate
-        ? { identity: duplicate.ref, diagnostic: { code: 'duplicate_submission', message: `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`, retryable: false } }
+        ? {
+          identity: duplicate.ref,
+          diagnostic: {
+            code: 'duplicate_submission',
+            message: ticket.dispatch?.sharedTree === true
+              ? `submit: refused ${ticket.ref}; its range includes submitted sibling ${duplicate.ref}'s candidate ${duplicate.commit}. Use the approved boundary with \`--base ${duplicate.commit}\`, or omit base to select the newest approved boundary automatically.`
+              : `submit: refused ${ticket.ref}; its range includes commit(s) already submitted by ${duplicate.ref}.`,
+            retryable: false,
+          },
+        }
         : { identity: null },
       requirements,
     },

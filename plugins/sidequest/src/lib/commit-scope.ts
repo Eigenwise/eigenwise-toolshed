@@ -506,6 +506,12 @@ export function submissionRange(cwd: string, options: unknown) {
   const requestedBase = opts.base && !rootBase ? resolvedCommit(cwd, opts.base) : null;
   if (requestedBase && !requestedBase.ok) return { ok: false, reason: 'missing_base', message: requestedBase.message };
   const integrationBranch = resolvedCommit(cwd, opts.integrationBranch || upstream);
+  const dispatchBase = !rootBase && opts.dispatchBase ? resolvedCommit(cwd, opts.dispatchBase) : null;
+  const approvedBoundaryBase = (candidate: GitResult): candidate is { ok: true; value: string } => {
+    if (!candidate.ok) return false;
+    if (!dispatchBase || !dispatchBase.ok) return true;
+    return isAncestor(cwd, dispatchBase.value, candidate.value) && isAncestor(cwd, candidate.value, tip.value);
+  };
   const baseIsOnTip = !!requestedBase && isAncestor(cwd, requestedBase.value, tip.value);
   const baseIsAfterMergeBase = !!requestedBase && isAncestor(cwd, mergeBase.value, requestedBase.value);
   const baseIsIntegrated = !!requestedBase && integrationBranch.ok && isAncestor(cwd, requestedBase.value, integrationBranch.value);
@@ -514,12 +520,12 @@ export function submissionRange(cwd: string, options: unknown) {
   }
 
   const allowedBaseNames = Array.isArray(opts.allowedBases) ? opts.allowedBases : null;
+  const approvedBoundaryBases = new Set((allowedBaseNames || [])
+    .map((name) => resolvedCommit(cwd, name))
+    .filter(approvedBoundaryBase)
+    .map((candidate) => candidate.value));
   if (requestedBase && requestedBase.value !== mergeBase.value && allowedBaseNames) {
-    const allowedBases = new Set(allowedBaseNames
-      .map((name) => resolvedCommit(cwd, name))
-      .filter((candidate) => candidate.ok)
-      .map((candidate) => candidate.value));
-    if (!baseIsIntegrated && !allowedBases.has(requestedBase.value)) {
+    if (!baseIsIntegrated && !approvedBoundaryBases.has(requestedBase.value)) {
       return {
         ok: false,
         reason: 'unrecognized_base',
@@ -527,14 +533,14 @@ export function submissionRange(cwd: string, options: unknown) {
         actualBase: mergeBase.value,
         upstream,
         tip: tip.value,
+        approvedBases: [...approvedBoundaryBases],
         message: 'explicit base must be on the integration branch or match a validated submitted ticket boundary',
       };
     }
   }
 
   let effectiveBase = requestedBase ? requestedBase.value : mergeBase.value;
-  if (!requestedBase && !rootBase && opts.dispatchBase) {
-    const dispatchBase = resolvedCommit(cwd, opts.dispatchBase);
+  if (!requestedBase && dispatchBase) {
     const dispatchBaseIsOnTip = dispatchBase.ok && isAncestor(cwd, dispatchBase.value, tip.value);
     const dispatchBaseIsAfterMergeBase = dispatchBase.ok && isAncestor(cwd, mergeBase.value, dispatchBase.value);
     const dispatchBaseIsIntegrated = dispatchBase.ok && integrationBranch.ok && isAncestor(cwd, dispatchBase.value, integrationBranch.value);
@@ -546,7 +552,9 @@ export function submissionRange(cwd: string, options: unknown) {
     const candidates = new Set<string>();
     for (const name of opts.baseCandidates) {
       const candidate = resolvedCommit(cwd, name);
-      if (candidate.ok && isAncestor(cwd, effectiveBase, candidate.value) && isAncestor(cwd, candidate.value, tip.value)) {
+      if (approvedBoundaryBase(candidate)
+        && isAncestor(cwd, effectiveBase, candidate.value)
+        && isAncestor(cwd, candidate.value, tip.value)) {
         candidates.add(candidate.value);
       }
     }
