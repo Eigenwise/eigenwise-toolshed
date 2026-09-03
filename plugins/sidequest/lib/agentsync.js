@@ -464,6 +464,7 @@ Git dir: ${gitDir}`;
   return [
     identity,
     `Dispatch admission verified the spawning runtime was rooted in ${root}.`,
+    "Claim before writing. The claim hook binds this runtime agent id; if the write guard says the claim is unbound, stop and report it because redispatch alone does not repair that state.",
     `Before any git or file operation, confirm \`git rev-parse --show-toplevel\` prints \`${root}\`.`,
     "If it differs, stop and report to the orchestrator. Do not release or write anything in the wrong tree."
   ].join("\n");

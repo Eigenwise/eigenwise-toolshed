@@ -166,6 +166,19 @@ function identityDiagnosis(input, agentId, executor, observedWorktree) {
     return null;
   }
 }
+function unboundClaim(input, executor, observedWorktree) {
+  try {
+    const store = require(runtimeModule("store"));
+    return store.dispatchUnboundClaim({
+      executor,
+      sessionId: hookSessionId(input),
+      observedWorktree,
+      agentName: stringField(input, "agent_name", "agentName", "name")
+    });
+  } catch (_) {
+    return null;
+  }
+}
 function bindObservedRuntimeIdentity(input, agentId, executor, worktree) {
   try {
     const store = require(runtimeModule("store"));
@@ -198,6 +211,14 @@ function samePath(a, b) {
     return process.platform === "win32" ? resolved.toLowerCase() : resolved;
   };
   return normalize(a) === normalize(b);
+}
+function registeredProjectCheckout(root) {
+  try {
+    const store = require(runtimeModule("store"));
+    return Boolean(store.findProject(root)?.ok);
+  } catch (_) {
+    return false;
+  }
 }
 function observedWorktreeLease(found, worktree, agentId) {
   const git = (args) => (0, import_node_child_process.execFileSync)("git", args, {
@@ -283,12 +304,14 @@ function terminalRefusal(found, target) {
     "Do not work around this or re-arm any Monitor. Stop owned background tasks and end this executor. Redispatch the ticket if more work is needed."
   );
 }
-function unknownRefusal(target, repo, diagnosis) {
+function unknownRefusal(target, repo, diagnosis, unboundRef = null) {
   const matches = diagnosis ? `live ${diagnosis.live}, session ${diagnosis.session}, session+executor ${diagnosis.sessionExecutor}, agent id ${diagnosis.agent}, worktree ${diagnosis.worktree}` : "(unavailable)";
+  const unboundSummary = unboundRef ? `this executor's claim on ${unboundRef} is not bound to an agent id.` : repo.linked ? "This executor is in an isolated worktree the board cannot match to any dispatch record, so it holds no write authority here." : "This executor has no active dispatch record for a shared-checkout write.";
+  const recovery = unboundRef ? "Claim through the Sidequest MCP hook so it can attach this runtime agent id. Redispatch alone does not bind this claim; stop and report this refusal." : "Do not work around this. Stop any owned background tasks and end the executor. Report these dispatch-record counts to the orchestrator so it can tell an unbound identity from a wrong one, and redispatch before making more changes.";
   return boundedRefusal(
-    repo.linked ? "This executor is in an isolated worktree the board cannot match to any dispatch record, so it holds no write authority here." : "This executor has no active dispatch record for a shared-checkout write.",
+    unboundSummary,
     [["writing to", target], [repo.linked ? "isolated worktree" : "shared checkout", repo.root], ["dispatch records", matches]],
-    "Do not work around this. Stop any owned background tasks and end the executor. Report these dispatch-record counts to the orchestrator so it can tell an unbound identity from a wrong one, and redispatch before making more changes."
+    recovery
   );
 }
 function leaseRefusal(found, target, reason) {
@@ -318,7 +341,7 @@ function main() {
   const repo = enclosingCheckout(import_node_path3.default.dirname(canonicalPath(target)));
   if (!repo) return;
   let found = isolationExpectation(input, agentId, executor, true, repo.root);
-  if (!found?.terminal && !found?.identityBound && repo.linked) {
+  if (!found?.terminal && !found?.identityBound && (repo.linked || !found && registeredProjectCheckout(repo.root))) {
     bindObservedRuntimeIdentity(input, agentId, executor, repo.root);
     found = isolationExpectation(input, agentId, executor, true, repo.root);
   }
@@ -329,9 +352,15 @@ function main() {
   if (!found) {
     try {
       const decision = leaseKernel.worktreeWriteDecision(observedWorktreeLease(null, repo.root, agentId), target);
-      if (!decision.allowed) writeDeny("PreToolUse", unknownRefusal(target, repo, identityDiagnosis(input, agentId, executor, repo.root)));
+      if (!decision.allowed) {
+        const diagnosis = identityDiagnosis(input, agentId, executor, repo.root);
+        const unbound = unboundClaim(input, executor, repo.root);
+        writeDeny("PreToolUse", unknownRefusal(target, repo, diagnosis, unbound?.ref || null));
+      }
     } catch (_) {
-      writeDeny("PreToolUse", unknownRefusal(target, repo, identityDiagnosis(input, agentId, executor, repo.root)));
+      const diagnosis = identityDiagnosis(input, agentId, executor, repo.root);
+      const unbound = unboundClaim(input, executor, repo.root);
+      writeDeny("PreToolUse", unknownRefusal(target, repo, diagnosis, unbound?.ref || null));
     }
     return;
   }

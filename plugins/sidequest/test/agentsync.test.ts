@@ -972,6 +972,8 @@ test('briefings surface resolved worktree identities for linked and shared dispa
   assert.ok(shared.includes(`Path: ${root}`));
   assert.ok(shared.includes(`Git dir: ${path.join(root, '.git')}`));
   assert.ok(shared.includes(`Dispatch admission verified the spawning runtime was rooted in ${root}.`));
+  assert.ok(shared.includes('Claim before writing. The claim hook binds this runtime agent id;'));
+  assert.ok(shared.includes('redispatch alone does not repair that state.'));
   assert.ok(shared.includes('Before any git or file operation, confirm `git rev-parse --show-toplevel` prints `' + root + '`.'));
   assert.match(shared, /If it differs, stop and report to the orchestrator\. Do not release or write anything in the wrong tree\./);
 });

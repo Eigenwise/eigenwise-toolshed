@@ -47,12 +47,22 @@ const { slug } = store.ensureProject(PROJECT);
 const exploration = store.getCategory('codebase-exploration');
 store.setCategory(Object.assign({}, exploration, { route: { model: 'sonnet', effort: 'medium' }, fallback: null }));
 
-function runHook(script: string, payload: unknown) {
+// `env` overrides the hook process environment; a null value removes the
+// variable (the runner itself may sit inside a Claude Code session that sets
+// CLAUDE_PROJECT_DIR). `cwd` is the hook PROCESS cwd, distinct from the
+// `cwd` field inside the payload, which is the tool call's.
+function runHook(script: string, payload: unknown, env: Record<string, string | null> = {}, cwd?: string) {
+  const hookEnv: Record<string, string | undefined> = { ...process.env, SIDEQUEST_HOME };
+  for (const [name, value] of Object.entries(env)) {
+    if (value === null) delete hookEnv[name];
+    else hookEnv[name] = value;
+  }
   const out = execFileSync(process.execPath, [script], {
     input: JSON.stringify(payload),
     encoding: 'utf8',
-    env: { ...process.env, SIDEQUEST_HOME },
+    env: hookEnv,
     windowsHide: true,
+    ...(cwd ? { cwd } : {}),
   });
   return out.trim() ? JSON.parse(out) : null;
 }
@@ -1321,12 +1331,342 @@ test('a missing target under the shared checkout is refused', () => {
   assert.equal(out.hookSpecificOutput.permissionDecision, 'deny');
 });
 
+test('the claim hook binds its observed runtime identity before the claim handler runs', () => {
+  const agentId = 'claim-hook-observed-agent';
+  const sessionId = 'claim-hook-session';
+  const ticket = store.createTicket(slug, {
+    title: 'claim hook runtime identity fixture',
+    category: 'codebase-exploration',
+    description: 'A shared checkout claim fixture.',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId,
+    agentName: 'claim-hook-worker',
+  }).ok, true);
+
+  assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+    session_id: sessionId,
+    agent_id: agentId,
+    agent_type: executor,
+    cwd: PROJECT,
+    tool_name: 'mcp__plugin_sidequest_board__claim',
+    tool_input: {
+      ref: ticket.ref,
+      project: PROJECT,
+      by: 'claim-hook-worker',
+      executor,
+      tokenFile: prepared.ticket.dispatch.tokenFile,
+    },
+  }), null);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, agentId);
+
+  assert.equal(store.claimTicket(slug, ticket.ref, 'claim-hook-worker', {
+    tokenFile: prepared.ticket.dispatch.tokenFile,
+    executor,
+    sessionId,
+    requireBoundAgent: true,
+  }).ok, true);
+  const claimed = store.getTicket(slug, ticket.ref);
+  assert.equal(claimed.dispatch.bindSource, 'claim_runtime_identity');
+  assert.equal(claimed.claim.runtime.agentId, agentId);
+});
+
+test('the claim hook binds when the claim omits the optional project (resolved like the MCP server, not from the call cwd)', () => {
+  const agentId = 'claim-hook-no-project-agent';
+  const sessionId = 'claim-hook-no-project-session';
+  const ticket = store.createTicket(slug, {
+    title: 'claim hook no-project fixture',
+    category: 'codebase-exploration',
+    description: 'A shared checkout claim fixture whose claim names no project.',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId,
+    agentName: 'claim-hook-no-project-worker',
+  }).ok, true);
+
+  // The claim schema requires only ref and by; the MCP server resolves an omitted
+  // project through store.sessionProjectRoot (CLAUDE_PROJECT_DIR, then its own
+  // cwd). The bind must use that same authority: the tool call's cwd is a
+  // worktree or an unrelated checkout, and resolving it would bind a different
+  // board or silently skip, leaving agentId null so every later shared-tree
+  // write is refused. So: no CLAUDE_PROJECT_DIR, the hook process standing in
+  // the project like the MCP server does, and a tool-call cwd that is a repo
+  // which is NOT the project. A hook that consults the call cwd binds nothing.
+  const elsewhere = initRepo('sq-isolation-elsewhere-');
+  assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+    session_id: sessionId,
+    agent_id: agentId,
+    agent_type: executor,
+    cwd: elsewhere,
+    tool_name: 'mcp__plugin_sidequest_board__claim',
+    tool_input: {
+      ref: ticket.ref,
+      by: 'claim-hook-no-project-worker',
+      executor,
+      tokenFile: prepared.ticket.dispatch.tokenFile,
+    },
+  }, { CLAUDE_PROJECT_DIR: null }, PROJECT), null);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, agentId);
+});
+
+test('a same-session sibling cannot bind to a reservation whose token it was not given', () => {
+  const sessionId = 'claim-bind-sibling-session';
+  const owner = store.createTicket(slug, {
+    title: 'claim bind sibling owner fixture',
+    category: 'codebase-exploration',
+    description: 'A shared checkout reservation a same-session sibling tries to attach to.',
+    files: ['README.md'],
+  });
+  const sibling = store.createTicket(slug, {
+    title: 'claim bind sibling fixture',
+    category: 'codebase-exploration',
+    description: 'The sibling reservation in the same fan-out.',
+    files: ['README.md'],
+  });
+  const ownerPrepared = store.prepareDispatch(slug, owner.ref, { sharedTree: true, sessionId });
+  const siblingPrepared = store.prepareDispatch(slug, sibling.ref, { sharedTree: true, sessionId });
+  const executor = ownerPrepared.ticket.dispatchExecutor;
+  assert.equal(siblingPrepared.ticket.dispatchExecutor, executor, 'fan-out siblings share the executor type');
+  for (const [ref, prepared, agentName] of [[owner.ref, ownerPrepared, 'claim-bind-sibling-owner'], [sibling.ref, siblingPrepared, 'claim-bind-sibling-other']] as const) {
+    assert.equal(store.recordDispatchLaunch(slug, ref, { token: prepared.token, executor, sessionId, agentName }).ok, true);
+  }
+
+  // Same session, same executor type, its OWN valid token, but the owner's ref:
+  // the token authorizes the sibling's reservation, not the owner's.
+  const crossed = store.bindClaimRuntimeIdentity(slug, owner.ref, {
+    token: siblingPrepared.token,
+    executor,
+    sessionId,
+    agentId: 'claim-bind-sibling-agent',
+  });
+  assert.equal(crossed.ok, false);
+  assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId ?? null, null);
+
+  // Through the hook, with the sibling's own token file against the owner's ref.
+  assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+    session_id: sessionId,
+    agent_id: 'claim-bind-sibling-agent',
+    agent_type: executor,
+    cwd: PROJECT,
+    tool_name: 'mcp__plugin_sidequest_board__claim',
+    tool_input: { ref: owner.ref, project: PROJECT, by: 'sibling', executor, tokenFile: siblingPrepared.ticket.dispatch.tokenFile },
+  }), null);
+  assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId ?? null, null);
+  assert.equal(store.getTicket(slug, sibling.ref).dispatch.agentId ?? null, null, 'a refused bind never lands on the token owner either');
+
+  // No token at all is refused too.
+  assert.equal(store.bindClaimRuntimeIdentity(slug, owner.ref, { executor, sessionId, agentId: 'claim-bind-sibling-agent' }).ok, false);
+  assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId ?? null, null);
+
+  // Each runtime binds to the reservation its own token authorizes. The claim
+  // schema accepts the token inline as well as by file, so the hook has to
+  // forward `token` too or an inline-token claim binds nothing.
+  assert.equal(store.bindClaimRuntimeIdentity(slug, owner.ref, { token: ownerPrepared.token, executor, sessionId, agentId: 'claim-bind-owner-agent' }).ok, true);
+  assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+    session_id: sessionId,
+    agent_id: 'claim-bind-sibling-agent',
+    agent_type: executor,
+    cwd: PROJECT,
+    tool_name: 'mcp__plugin_sidequest_board__claim',
+    tool_input: { ref: sibling.ref, project: PROJECT, by: 'sibling', executor, token: siblingPrepared.token },
+  }), null);
+  assert.equal(store.getTicket(slug, owner.ref).dispatch.agentId, 'claim-bind-owner-agent');
+  assert.equal(store.getTicket(slug, sibling.ref).dispatch.agentId, 'claim-bind-sibling-agent');
+});
+
+test('a token-file holder from another session cannot bind to a sibling reservation', () => {
+  const ownerSession = 'claim-bind-owner-session';
+  const foreignSession = 'claim-bind-foreign-session';
+  const ticket = store.createTicket(slug, {
+    title: 'claim bind session fixture',
+    category: 'codebase-exploration',
+    description: 'A shared checkout reservation another session tries to attach to.',
+    files: ['README.md'],
+  });
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId: ownerSession });
+  const executor = prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId: ownerSession,
+    agentName: 'claim-bind-owner',
+  }).ok, true);
+
+  // The token file is not identity: the same executor type in a different session
+  // presenting the owner's token must not attach its agent to the owner's record.
+  const foreign = store.bindClaimRuntimeIdentity(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId: foreignSession,
+    agentId: 'claim-bind-intruder',
+  });
+  assert.equal(foreign.ok, false);
+  assert.equal(foreign.reason, 'session_mismatch');
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId ?? null, null);
+
+  // Through the hook, the foreign session binds nothing either.
+  assert.equal(runHook(BIND_RUNTIME_IDENTITY, {
+    session_id: foreignSession,
+    agent_id: 'claim-bind-intruder',
+    agent_type: executor,
+    cwd: PROJECT,
+    tool_name: 'mcp__plugin_sidequest_board__claim',
+    tool_input: { ref: ticket.ref, project: PROJECT, by: 'intruder', executor, tokenFile: prepared.ticket.dispatch.tokenFile },
+  }), null);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId ?? null, null);
+
+  // A missing session is refused too, never treated as a wildcard.
+  assert.equal(store.bindClaimRuntimeIdentity(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    agentId: 'claim-bind-no-session',
+  }).reason, 'session_mismatch');
+
+  // The owning session binds normally.
+  assert.equal(store.bindClaimRuntimeIdentity(slug, ticket.ref, {
+    token: prepared.token,
+    executor,
+    sessionId: ownerSession,
+    agentId: 'claim-bind-owner-agent',
+  }).ok, true);
+  assert.equal(store.getTicket(slug, ticket.ref).dispatch.agentId, 'claim-bind-owner-agent');
+});
+
 test('a shared-tree dispatch writes in the shared checkout without complaint', () => {
   const agentId = 'a3shared';
   const { ticket, sessionId, executor } = dispatched(agentId, { sharedTree: true });
   assert.equal(ticket.dispatch.sharedTree, true);
   const target = path.join(PROJECT, 'README.md');
   assert.equal(runHook(GUARD_ISOLATION, writePayload(agentId, executor, sessionId, target, PROJECT)), null);
+});
+
+test('claim-time runtime identities distinguish shared-tree siblings', () => {
+  const sessionId = `shared-claim-session-${process.pid}-${Date.now()}`;
+  const createSharedDispatch = (agentName: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `shared claim fixture ${agentName}`,
+      category: 'codebase-exploration',
+      description: 'A shared checkout dispatch fixture.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName,
+    }).ok, true);
+    return { ticket, prepared, executor: prepared.ticket.dispatchExecutor };
+  };
+  const first = createSharedDispatch('shared-claim-first');
+  const second = createSharedDispatch('shared-claim-second');
+  const firstAgentId = 'shared-claim-agent-a';
+  const secondAgentId = 'shared-claim-agent-b';
+
+  assert.equal(store.bindClaimRuntimeIdentity(slug, first.ticket.ref, {
+    token: first.prepared.token,
+    executor: first.executor,
+    sessionId,
+    agentId: firstAgentId,
+  }).ok, true);
+  assert.equal(store.bindClaimRuntimeIdentity(slug, second.ticket.ref, {
+    token: second.prepared.token,
+    executor: second.executor,
+    sessionId,
+    agentId: secondAgentId,
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, first.ticket.ref, 'shared-claim-worker-a', {
+    token: first.prepared.token,
+    executor: first.executor,
+    sessionId,
+    requireBoundAgent: true,
+  }).ok, true);
+  assert.equal(store.claimTicket(slug, second.ticket.ref, 'shared-claim-worker-b', {
+    token: second.prepared.token,
+    executor: second.executor,
+    sessionId,
+    requireBoundAgent: true,
+  }).ok, true);
+
+  const firstExpectation = store.dispatchIsolationExpectation({ agentId: firstAgentId, sessionId, executor: first.executor, observedWorktree: PROJECT });
+  const secondExpectation = store.dispatchIsolationExpectation({ agentId: secondAgentId, sessionId, executor: second.executor, observedWorktree: PROJECT });
+  assert.equal(firstExpectation.ref, first.ticket.ref);
+  assert.equal(secondExpectation.ref, second.ticket.ref);
+  assert.equal(store.getTicket(slug, first.ticket.ref).dispatch.bindSource, 'claim_runtime_identity');
+  assert.equal(store.getTicket(slug, second.ticket.ref).dispatch.bindSource, 'claim_runtime_identity');
+});
+
+test('a shared checkout write late-binds a named claimed dispatch', () => {
+  const sessionId = `shared-late-bind-session-${process.pid}-${Date.now()}`;
+  const agentId = 'shared-late-bind-agent';
+  const createSharedDispatch = (agentName: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `shared late binding fixture ${agentName}`,
+      category: 'codebase-exploration',
+      description: 'A shared checkout dispatch fixture.',
+      files: ['README.md'],
+    });
+    const prepared = store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId });
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+      sessionId,
+      agentName,
+    }).ok, true);
+    return { ticket, prepared, executor: prepared.ticket.dispatchExecutor };
+  };
+  const claimed = createSharedDispatch(agentId);
+  const sibling = createSharedDispatch('shared-late-bind-sibling');
+  assert.equal(store.claimTicket(slug, claimed.ticket.ref, 'shared-late-bind-worker', {
+    token: claimed.prepared.token,
+    executor: claimed.executor,
+    sessionId,
+  }).ok, true);
+  assert.equal(store.getTicket(slug, claimed.ticket.ref).dispatch.agentId, null);
+
+  const payload = writePayload(agentId, claimed.executor, sessionId, path.join(PROJECT, 'README.md'), PROJECT) as Record<string, unknown>;
+  payload.agent_name = agentId;
+  assert.equal(runHook(GUARD_ISOLATION, payload), null);
+  assert.equal(store.getTicket(slug, claimed.ticket.ref).dispatch.agentId, agentId);
+  assert.equal(store.getTicket(slug, sibling.ticket.ref).dispatch.agentId, null);
+});
+
+test('an unnamed SubagentStart cannot bind another shared-tree dispatch', () => {
+  const sessionId = `shared-misbinding-session-${process.pid}-${Date.now()}`;
+  const createSharedDispatch = (agentName: string) => {
+    const ticket = store.createTicket(slug, {
+      title: `shared misbinding fixture ${agentName}`,
+      category: 'codebase-exploration',
+      description: 'A shared checkout dispatch fixture.',
+      files: ['README.md'],
+    });
+    return { ticket, prepared: store.prepareDispatch(slug, ticket.ref, { sharedTree: true, sessionId }) };
+  };
+  const first = createSharedDispatch('shared-first-spawn');
+  const second = createSharedDispatch('shared-second-spawn');
+  const executor = first.prepared.ticket.dispatchExecutor;
+  assert.equal(store.recordDispatchLaunch(slug, first.ticket.ref, {
+    token: first.prepared.token,
+    executor,
+    sessionId,
+    agentName: 'shared-first-spawn',
+  }).ok, true);
+
+  const secondStartedFirst = store.bindDispatchAgent(sessionId, executor, 'shared-second-agent', null, PROJECT);
+  assert.equal(secondStartedFirst.ok, false);
+  assert.equal(secondStartedFirst.reason, 'not_found');
+  assert.equal(store.getTicket(slug, first.ticket.ref).dispatch.agentId, null);
+  assert.equal(store.getTicket(slug, second.ticket.ref).dispatch.agentId, null);
 });
 
 test('the isolation guard ignores the main thread, non-executors, and scratchpad writes', () => {

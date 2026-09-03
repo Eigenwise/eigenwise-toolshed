@@ -466,6 +466,7 @@ const {
   recoverDispatchWorktreeCreation,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  dispatchUnboundClaim,
   recordSanctionedCommit,
   dispatchWorkspace,
   dispatchDelta,
@@ -596,6 +597,13 @@ function nextDispatchLaunchSeq(state?: any) {
  * ------------------------------------------------------------------ */
 
 const { homeRoot, projectsRoot, serverFile, normalizeForHash, slugify, mainWorktreeRoot, nearestRepoRoot, projectDir, ticketsDir, assetsDir } = createPaths({ fs, os, path, crypto });
+
+// The one answer to "which board does this session mean when a call names no
+// project". The MCP server and the PreToolUse hooks both resolve through it, so
+// a claim that omits `project` binds to the same board the claim handler uses.
+function sessionProjectRoot() {
+  return nearestRepoRoot(process.env.CLAUDE_PROJECT_DIR || process.cwd());
+}
 
 /* ------------------------------------------------------------------ *
  *  SQLite persistence
@@ -1754,6 +1762,47 @@ function claimAdmission(slug?: any, idOrRef?: any, opts?: any) {
     };
   }
   return { ok: true, ticket, token };
+}
+
+function bindClaimRuntimeIdentity(slug?: any, idOrRef?: any, opts?: any) {
+  const agentId = String(opts?.agentId || '').trim();
+  const found = getTicket(slug, idOrRef);
+  if (!agentId || !found) return { ok: false, reason: !found ? 'not_found' : 'missing_identity' };
+  return withTicketLock(slug, found.id, () => {
+    const ticket = getTicket(slug, found.id);
+    if (!ticket) return { ok: false, reason: 'not_found' };
+    const admission = claimAdmission(slug, ticket.id, opts);
+    if (!admission.ok) return admission;
+    const state = dispatchState(ticket);
+    if (!state || state.terminalAt || !['prepared', 'launched', 'claimed'].includes(state.outcome)) {
+      return { ok: false, reason: 'dispatch_unavailable', ticket };
+    }
+    // What binds here is the runtime the harness reported (agent_id from hook
+    // stdin) to the claim the dispatch token authorizes. The token is the
+    // per-dispatch credential: each executor is handed only its own, so a
+    // sibling can present another dispatch's token only by reading a file it
+    // was never given, which is the same class as importing the store and sits
+    // outside this boundary. What the store CAN check is that the runtime
+    // belongs to the session that prepared the reservation (hook stdin cannot
+    // name an agent_name; Claude Code's hook schema carries agent_id and
+    // agent_type only), the same match dispatchCanBindRuntimeIdentity requires.
+    const sessionId = String(opts?.sessionId || '').trim();
+    if (!sessionId || String(state.sessionId || '').trim() !== sessionId) {
+      return { ok: false, reason: 'session_mismatch', ticket };
+    }
+    const boundAgentId = String(state.agentId || '').trim();
+    if (boundAgentId && boundAgentId !== agentId) {
+      return { ok: false, reason: 'runtime_identity_mismatch', ticket };
+    }
+    const now = new Date().toISOString();
+    if (!recordDispatchRuntimeIdentity(slug, state, agentId, null, now)) {
+      return { ok: false, reason: 'runtime_identity_mismatch', ticket };
+    }
+    state.bindSource = 'claim_runtime_identity';
+    stampDispatchEvent(ticket, 'claim-runtime-identity', now);
+    putTicket(slug, ticket);
+    return { ok: true, ticket };
+  });
 }
 
 function claimTicket(slug?: any, idOrRef?: any, by?: any, opts?: any) {
@@ -3198,6 +3247,7 @@ module.exports = {
   serverFile,
   slugify,
   nearestRepoRoot,
+  sessionProjectRoot,
   mainWorktreeRoot,
   projectDir,
   ensureProject,
@@ -3272,6 +3322,7 @@ module.exports = {
   bindDispatchAgent,
   dispatchIdentityDiagnosis,
   dispatchIsolationExpectation,
+  dispatchUnboundClaim,
   recordSanctionedCommit,
   activeSharedTreeClaim,
   isolatedDispatchWithMissingWorktree,
@@ -3280,6 +3331,7 @@ module.exports = {
   markDispatchStopped,
   reconcileLaunchedDispatches,
   claimAdmission,
+  bindClaimRuntimeIdentity,
   claimTicket,
   releaseTicket,
   completeTicket,
