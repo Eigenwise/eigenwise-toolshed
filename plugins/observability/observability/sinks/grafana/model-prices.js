@@ -10,6 +10,7 @@ const ANTHROPIC_PRICES_PER_MILLION = {
   'claude-sonnet-4-6': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
   'claude-sonnet-5': { input: 3, cacheRead: 0.3, cacheCreation: 3.75, output: 15 },
   'claude-fable-5': { input: 10, cacheRead: 1, cacheCreation: 12.5, output: 50 },
+  'claude-fable-5-1': { input: 10, cacheRead: 1, cacheCreation: 12.5, output: 50 },
   'claude-haiku-4-5': { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 },
   'claude-haiku-4-5-20251001': { input: 1, cacheRead: 0.1, cacheCreation: 1.25, output: 5 },
 };
@@ -43,6 +44,7 @@ const MODEL_PRICES_PER_MILLION = {
   'claude-opus-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-opus-5'],
   'claude-sonnet-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-sonnet-5'],
   'claude-fable-5[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5'],
+  'claude-fable-5-1[1m]': ANTHROPIC_PRICES_PER_MILLION['claude-fable-5-1'],
   ...CODEX_PRICES_PER_MILLION,
   ...LEGACY_CODEX_PRICES_PER_MILLION,
   ...GATEWAY_RESOLVED_MODEL_ALIASES,

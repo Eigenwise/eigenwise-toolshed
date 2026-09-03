@@ -83,6 +83,8 @@ test('prices every active model label and token type from one table', () => {
     'claude-sonnet-5[1m]',
     'claude-fable-5',
     'claude-fable-5[1m]',
+    'claude-fable-5-1',
+    'claude-fable-5-1[1m]',
     'claude-haiku-4-5',
     'claude-haiku-4-5-20251001',
     'claude-gpt-5.6-luna',
@@ -99,6 +101,8 @@ test('prices every active model label and token type from one table', () => {
     assert.ok(MODEL_PRICES_PER_MILLION[model], `missing price for ${model}`);
   }
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-gpt-5.6-sol'], { input: 5, cacheRead: 0.5, cacheCreation: 5, output: 30 });
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-fable-5-1'], MODEL_PRICES_PER_MILLION['claude-fable-5']);
+  assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-fable-5-1[1m]'], MODEL_PRICES_PER_MILLION['claude-fable-5-1']);
   assert.deepEqual(MODEL_PRICES_PER_MILLION['gpt-5.6-sol'], MODEL_PRICES_PER_MILLION['claude-gpt-5.6-sol']);
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-codex-gpt-5.6-sol'], MODEL_PRICES_PER_MILLION['claude-gpt-5.6-sol']);
   assert.deepEqual(MODEL_PRICES_PER_MILLION['claude-gpt-5.6-terra'], { input: 2.5, cacheRead: 0.25, cacheCreation: 2.5, output: 15 });
@@ -143,6 +147,8 @@ test('keeps only unknown exact model labels in the unpriced query', () => {
 
   assert.ok(quotedPattern.includes('claude-opus-5\\\\[1m\\\\]'));
   assert.ok(priced.test('claude-opus-5[1m]'));
+  assert.ok(priced.test('claude-fable-5-1'));
+  assert.ok(priced.test('claude-fable-5-1[1m]'));
   assert.ok(priced.test('claude-gpt-5.6-luna'));
   assert.ok(priced.test('claude-codex-gpt-5.6-luna'));
   assert.ok(priced.test('claude-codex-auto'));
