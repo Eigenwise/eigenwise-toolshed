@@ -836,6 +836,15 @@ ${String(ticket?.description || "")}`;
     }
     return `Isolated-worktree dispatch: board server cwd ${workingDirectory} is a leftover linked worktree, so the dispatch may fail to bind. Restart the session so the board server starts from project root ${projectRoot}.`;
   }
+  function worktreeSetupIncompleteWarning(dispatch) {
+    const failure = dispatch?.worktreeProvisioningFailure;
+    const command = String(failure?.command || "").trim();
+    const reason = String(failure?.reason || "").trim();
+    if (!command || !reason) return null;
+    const worktree = String(dispatch?.worktree || "").trim();
+    const stderrTail = String(failure?.stderrTail || "").trim();
+    return `worktree setup incomplete: ${command} ${reason}. Run it${worktree ? ` in ${worktree}` : ""} before work.${stderrTail ? ` Setup stderr tail: ${stderrTail}` : ""}`;
+  }
   function dispatchUncertaintyWarnings(ticket, slug) {
     const warnings = [
       ...crossTicketStateWarnings(ticket, slug)
@@ -845,6 +854,8 @@ ${String(ticket?.description || "")}`;
     if (verifyPath) warnings.push(verifyPath);
     const dispatch = dispatchState(ticket);
     if (dispatch) {
+      const setupIncomplete = worktreeSetupIncompleteWarning(dispatch);
+      if (setupIncomplete) warnings.push(setupIncomplete);
       const staleWorktreeWarning = staleWorktreeCwdWarning(process.cwd(), projectPath, dispatch.sharedTree === true);
       if (staleWorktreeWarning) warnings.push(staleWorktreeWarning);
     }

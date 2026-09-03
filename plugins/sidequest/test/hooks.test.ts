@@ -35,6 +35,7 @@ const store = require('../lib/store.js');
 const { boardReconciliationReminderForStore } = require('../src/hooks/board-reconciliation-reminder.ts');
 const worktrees = require('../lib/worktrees.js');
 const worktreeLease = require('../lib/kernel/worktree.js');
+const { WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS } = require('../src/lib/hook-timeouts.ts');
 const db = require('../lib/db.js');
 const { EFFORTS, stableReadOnlyClaudeName, stableReadOnlyDispatchName } = require('../lib/exec-names.js');
 const agentsync = require('../lib/agentsync.js');
@@ -3604,15 +3605,29 @@ test('worktree-create provisions configured dependencies before dispatch and rem
   gitFixture(['worktree', 'remove', '--force', expected], repo);
   gitFixture(['branch', '-D', `worktree-${name}`], repo);
 
-  store.setBoardConfig(project, { worktreeDependencyPaths: [], worktreeSetup: 'exit 1' });
-  launch('hook-failure', 'bound worktree setup failure');
-  const failingName = 'agent-hook-failure';
-  const failingTarget = worktrees.namedWorktreePath(repo, failingName);
-  assert.throws(() => execFileSync(process.execPath, [WORKTREE_CREATE], {
-    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: 'hook-failure', cwd: repo, name: failingName }),
-    encoding: 'utf8', env: process.env,
-  }), (error: any) => String(error.stderr || '').includes('worktree setup command failed'));
-  assert.equal(fs.existsSync(failingTarget), false);
+  const timedOutSetup = 'node -e "process.stderr.write(\'setup audit notice\\n\'); setTimeout(() => process.exit(0), 5000)"';
+  store.setBoardConfig(project, { worktreeDependencyPaths: [], worktreeSetup: timedOutSetup });
+  const incompleteTicket = launch('hook-setup-timeout', 'bound worktree setup timeout');
+  const incompleteName = 'agent-hook-setup-timeout';
+  const incompleteTarget = worktrees.namedWorktreePath(repo, incompleteName);
+  const incompleteOutput = execFileSync(process.execPath, [WORKTREE_CREATE], {
+    input: JSON.stringify({ hook_event_name: 'WorktreeCreate', session_id: 'hook-setup-timeout', cwd: repo, name: incompleteName }),
+    encoding: 'utf8',
+    env: { ...process.env, SIDEQUEST_WORKTREE_CREATE_HOOK_TIMEOUT_MS: '1000' },
+  }).trim();
+  assert.equal(worktrees.canonicalPath(incompleteOutput), worktrees.canonicalPath(incompleteTarget));
+  assert.equal(fs.existsSync(incompleteTarget), true, 'a timed-out setup preserves its completed checkout');
+  const incomplete = store.getTicket(project, incompleteTicket.ref);
+  const incompleteDispatch = incomplete.dispatch;
+  assert.ok(incompleteDispatch.worktreeCreationCompletedAt, 'checkout creation must be recorded before setup runs');
+  assert.equal(incompleteDispatch.worktreeProvisioningFailure.command, timedOutSetup);
+  assert.match(incompleteDispatch.worktreeProvisioningFailure.reason, /timed out after 900ms/);
+  const incompleteBriefing = agentsync.renderTicketBriefing(incomplete, incomplete.dispatchNonce, project, repo);
+  assert.match(incompleteBriefing, /worktree setup incomplete: node -e/);
+  assert.match(incompleteBriefing, /Run it in .*agent-hook-setup-timeout before work/);
+  assert.match(incompleteBriefing, /Setup stderr tail: setup audit notice/);
+  gitFixture(['worktree', 'remove', '--force', incompleteTarget], repo);
+  gitFixture(['branch', '-D', `worktree-${incompleteName}`], repo);
 });
 
 test('subagent-start warns only for embedded worktrees outside the receiving agent checkout', () => {
@@ -3781,6 +3796,9 @@ test('ticket filing stays explicit while the Agent gate enforces dispatch and do
   assert.match(config.description, /unchanged board revisions and stop_hook_active re-entry stay silent/);
   assert.ok(config.hooks.WorktreeCreate.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('worktree-create.js'))), 'isolated worktrees must use the external placement hook');
+  const worktreeCreateHook = config.hooks.WorktreeCreate.flatMap((entry?: any) => entry.hooks || [])
+    .find((hook?: any) => hook.command.includes('worktree-create.js'));
+  assert.equal(worktreeCreateHook.timeout, WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS, 'the hook deadline and manifest timeout must stay aligned');
   assert.ok(config.hooks.UserPromptSubmit.some((entry?: any) => entry.hooks
     .some((hook?: any) => hook.command.includes('board-first-reminder.js'))), 'the board-first reminder must run for user prompts');
   const stopCommands = config.hooks.Stop.flatMap((entry?: any) => entry.hooks || [])

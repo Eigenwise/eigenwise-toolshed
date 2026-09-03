@@ -9,6 +9,8 @@ const { execFileSync, spawn, spawnSync } = require('node:child_process');
 const commitScope = require('./commit-scope.js');
 const worktreeLease = require('./kernel/worktree.js') as {
   canonicalPath: (value: string) => string;
+  checkoutInstanceIdentity: (gitDirectory: string) => string | null;
+  createCheckoutInstanceMarker: (gitDirectory: string) => string;
   createWorktreeLease: (facts: any) => any;
   worktreeCleanupDecision: (lease: any, registered: readonly string[]) => { allowed: boolean; reason: string };
 };
@@ -140,18 +142,73 @@ function provisionDependencyDirectory(repository: string, worktree: string, depe
   nativeFs.symlinkSync(source, target, process.platform === 'win32' ? 'junction' : 'dir');
 }
 
-function provisionWorktree(repository: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }): void {
+type WorktreeProvisioningFailure = {
+  command: string;
+  reason: string;
+  stderrTail: string;
+};
+
+function runWorktreeSetup(setup: string, worktree: string, timeoutMs?: number): Promise<WorktreeProvisioningFailure | null> {
+  return new Promise((resolve) => {
+    const child = spawn(setup, {
+      cwd: worktree,
+      shell: true,
+      detached: process.platform !== 'win32',
+      windowsHide: true,
+      stdio: ['ignore', 'ignore', 'pipe'],
+    });
+    const stderr: Buffer[] = [];
+    let settled = false;
+    let timedOut = false;
+    let deadline: NodeJS.Timeout | null = null;
+    const finish = (failure: WorktreeProvisioningFailure | null) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      resolve(failure);
+    };
+    const stop = () => {
+      timedOut = true;
+      if (process.platform === 'win32') {
+        try { spawnSync('taskkill', ['/pid', String(child.pid), '/t', '/f'], { windowsHide: true }); } catch (_) {}
+      } else {
+        try { process.kill(-child.pid, 'SIGTERM'); } catch (_) { try { child.kill('SIGTERM'); } catch (_) {} }
+      }
+    };
+    deadline = timeoutMs ? setTimeout(stop, timeoutMs) : null;
+    child.stderr.on('data', (chunk: Buffer) => stderr.push(chunk));
+    child.once('error', (error: NodeJS.ErrnoException) => {
+      finish({
+        command: setup,
+        reason: timedOut && timeoutMs ? `timed out after ${timeoutMs}ms` : 'failed to start',
+        stderrTail: String(error.message || '').trim().slice(-1_000),
+      });
+    });
+    child.once('close', (status: number | null) => {
+      if (timedOut || status !== 0) {
+        finish({
+          command: setup,
+          reason: timedOut && timeoutMs ? `timed out after ${timeoutMs}ms` : `exited with status ${status ?? 'unknown'}`,
+          stderrTail: Buffer.concat(stderr).toString('utf8').trim().slice(-1_000),
+        });
+        return;
+      }
+      finish(null);
+    });
+  });
+}
+
+async function provisionWorktree(repository: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }, options: { setupTimeoutMs?: number } = {}): Promise<WorktreeProvisioningFailure | null> {
   for (const dependency of config.worktreeDependencyPaths || []) {
     provisionDependencyDirectory(repository, worktree, dependency);
   }
   const setup = String(config.worktreeSetup || '').trim();
-  if (!setup) return;
-  try {
-    execFileSync(setup, { cwd: worktree, encoding: 'utf8', shell: true, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  } catch (error: any) {
-    const detail = String(error?.stderr || error?.message || '').trim();
-    throw new Error(`worktree setup command failed: ${setup}${detail ? `\n${detail.slice(0, 1000)}` : ''}`);
-  }
+  if (!setup) return null;
+  const configuredTimeoutMs = Number(options.setupTimeoutMs);
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0
+    ? Math.floor(configuredTimeoutMs)
+    : undefined;
+  return runWorktreeSetup(setup, worktree, timeoutMs);
 }
 
 function gitBashPath(value: string): string {
@@ -1108,28 +1165,34 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
       message: 'immutable recovery fact: cleanup requires a store-owned terminal dispatch transition.',
     };
   }
-  if (!dispatchHasCompletedWorktreeCreation(dispatch)) {
+  const incompleteCreation = !dispatchHasCompletedWorktreeCreation(dispatch);
+  if (incompleteCreation && dispatch?.worktreeBindingSource !== 'worktree-create') {
     return {
       worktree: entry.worktree,
       reclaimed: false,
       reason: 'lease_refused',
-      message: 'immutable recovery fact: cleanup requires the completed WorktreeCreate checkout binding.',
+      message: 'WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout.',
     };
   }
   const resolveGitPath = (value: string) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);
+  const observedGitDirectory = resolveGitPath(execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim());
+  const observedCommonGitDirectory = resolveGitPath(execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim());
+  const observedRevision = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim();
+  const observedCheckoutInstance = worktreeLease.checkoutInstanceIdentity(observedGitDirectory)
+    || worktreeLease.createCheckoutInstanceMarker(observedGitDirectory);
   const lease = worktreeLease.createWorktreeLease({
     repository,
-    gitDirectory: resolveGitPath(execFileSync('git', ['rev-parse', '--git-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim()),
-    commonGitDirectory: resolveGitPath(execFileSync('git', ['rev-parse', '--git-common-dir'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim()),
+    gitDirectory: observedGitDirectory,
+    commonGitDirectory: observedCommonGitDirectory,
     dispatchRef: dispatch.ref || null,
     dispatchBaseline: dispatch.baseCommit || null,
-    observedRevision: execFileSync('git', ['rev-parse', 'HEAD'], { cwd: entry.worktree, encoding: 'utf8', windowsHide: true }).trim(),
+    observedRevision,
     observedWorktree: entry.worktree,
-    boundRevision: dispatch.worktreeObservedRevision,
+    boundRevision: dispatch.worktreeObservedRevision || observedRevision,
     boundWorktree: dispatch.worktree,
-    boundGitDirectory: dispatch.worktreeGitDirectory,
-    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory,
-    boundCheckoutInstance: dispatch.worktreeCheckoutInstance,
+    boundGitDirectory: dispatch.worktreeGitDirectory || observedGitDirectory,
+    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory || observedCommonGitDirectory,
+    boundCheckoutInstance: dispatch.worktreeCheckoutInstance || observedCheckoutInstance,
     identity: { status: 'bound', agentId: dispatch.agentId || undefined, dispatchRef: dispatch.ref || undefined },
     phase: 'terminal',
     locked: Boolean(entry.locked),

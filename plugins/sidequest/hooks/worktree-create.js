@@ -60,6 +60,23 @@ function runtimeModule(name) {
   return import_node_path.default.join(pluginRoot(), "lib", `${name}.js`);
 }
 
+// src/lib/hook-timeouts.ts
+var WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS = 120;
+var WORKTREE_CREATE_SETUP_HEADROOM_MS = 1e4;
+function positiveInteger(value) {
+  const parsed = Number(value);
+  return Number.isInteger(parsed) && parsed > 0 ? parsed : null;
+}
+function worktreeCreateHookTimeoutMs(environment = process.env) {
+  const injected = positiveInteger(environment.SIDEQUEST_WORKTREE_CREATE_HOOK_TIMEOUT_MS);
+  return injected || WORKTREE_CREATE_HOOK_TIMEOUT_SECONDS * 1e3;
+}
+function worktreeSetupDeadlineMs(environment = process.env) {
+  const hookTimeoutMs = worktreeCreateHookTimeoutMs(environment);
+  const headroomMs = Math.min(WORKTREE_CREATE_SETUP_HEADROOM_MS, Math.floor(hookTimeoutMs / 10));
+  return Math.max(1, hookTimeoutMs - headroomMs);
+}
+
 // src/hooks/worktree-create.ts
 var leaseKernel = require(runtimeModule("kernel/worktree"));
 function git(repository, args) {
@@ -140,6 +157,12 @@ function completeCreation(repository, sessionId, worktree) {
   if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
   return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
+function recordProvisioningFailure(repository, sessionId, worktree, failure) {
+  const store = require(runtimeModule("store"));
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: "project_unavailable" };
+  return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure);
+}
 function plannedRevision(repository, name, baseline) {
   const branch = `worktree-${name}`;
   git(repository, ["check-ref-format", "--branch", branch]);
@@ -180,6 +203,9 @@ function recoverCreatedWorktree(repository, sessionId, target, error) {
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || "cleanup authority is incomplete"}`;
 }
 function main() {
+  return createWorktreeMain();
+}
+async function createWorktreeMain() {
   const input = readStdin();
   if (!input || stringField(input, "hook_event_name") !== "WorktreeCreate") return;
   const name = stringField(input, "name");
@@ -209,9 +235,18 @@ function main() {
       const identity2 = linkedCheckoutIdentity(boundCreation.worktree);
       if (!identity2) throw new Error("new worktree identity is unavailable");
       leaseKernel.createCheckoutInstanceMarker(identity2.gitDirectory);
-      worktrees.provisionWorktree(boundCreation.repository, boundCreation.worktree, provisioningConfig(boundCreation.repository));
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
       if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || "completion binding is incomplete"}`);
+      const provisioningFailure = await worktrees.provisionWorktree(
+        boundCreation.repository,
+        boundCreation.worktree,
+        provisioningConfig(boundCreation.repository),
+        { setupTimeoutMs: worktreeSetupDeadlineMs() }
+      );
+      if (provisioningFailure) {
+        const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure);
+        if (!recorded.ok) throw new Error(`worktree lease could not record setup failure: ${recorded.reason || "dispatch binding is incomplete"}`);
+      }
     } catch (error) {
       const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error);
       const message = error instanceof Error ? error.message : String(error);
@@ -223,10 +258,9 @@ function main() {
   process.stdout.write(`${identity.hostWorktreePath}
 `);
 }
-try {
-  main();
-} catch (error) {
-  process.stderr.write(`sidequest: could not create external worktree: ${error?.message || String(error)}
+main().catch((error) => {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`sidequest: could not create external worktree: ${message}
 `);
   process.exit(1);
-}
+});

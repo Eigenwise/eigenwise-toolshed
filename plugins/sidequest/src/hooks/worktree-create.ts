@@ -4,6 +4,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { readStdin, stringField } from './shared/input.js';
 import { runtimeModule } from './shared/paths.js';
+import { worktreeSetupDeadlineMs } from '../lib/hook-timeouts.js';
 
 const leaseKernel = require(runtimeModule('kernel/worktree')) as {
   canonicalPath: (value: string) => string;
@@ -143,6 +144,15 @@ function completeCreation(repository: string, sessionId: string, worktree: strin
   return store.completeDispatchWorktreeCreation(project.slug, sessionId, worktree);
 }
 
+function recordProvisioningFailure(repository: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }): CreationBinding {
+  const store = require(runtimeModule('store')) as WorktreeStore & {
+    recordDispatchWorktreeProvisioningFailure: (slug: string, sessionId: string, worktree: string, failure: { command: string; reason: string; stderrTail: string }) => CreationBinding;
+  };
+  const project = registeredProject(store, repository);
+  if (!project.ok || !project.slug) return { ok: false, reason: 'project_unavailable' };
+  return store.recordDispatchWorktreeProvisioningFailure(project.slug, sessionId, worktree, failure);
+}
+
 function plannedRevision(repository: string, name: string, baseline: string): string {
   const branch = `worktree-${name}`;
   git(repository, ['check-ref-format', '--branch', branch]);
@@ -196,7 +206,11 @@ function recoverCreatedWorktree(repository: string, sessionId: string, target: s
   return `worktree recovery preserved the checkout because ${recovery.cleanup?.message || recovery.cleanup?.reason || 'cleanup authority is incomplete'}`;
 }
 
-function main(): void {
+function main(): Promise<void> {
+  return createWorktreeMain();
+}
+
+async function createWorktreeMain(): Promise<void> {
   const input = readStdin();
   if (!input || stringField(input, 'hook_event_name') !== 'WorktreeCreate') return;
   const name = stringField(input, 'name');
@@ -207,7 +221,7 @@ function main(): void {
   const repository = repositoryFor(cwd);
   const worktrees = require(runtimeModule('worktrees')) as {
     namedWorktreePath: (repo: string, worktreeName: string) => string;
-    provisionWorktree: (repo: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }) => void;
+    provisionWorktree: (repo: string, worktree: string, config: { worktreeDependencyPaths?: { path: string; mode: string }[]; worktreeSetup?: string | null }, options: { setupTimeoutMs?: number }) => Promise<{ command: string; reason: string; stderrTail: string } | null>;
   };
   const target = worktrees.namedWorktreePath(repository, name);
   const binding = bindCreation(repository, sessionId, target);
@@ -229,9 +243,18 @@ function main(): void {
       const identity = linkedCheckoutIdentity(boundCreation.worktree);
       if (!identity) throw new Error('new worktree identity is unavailable');
       leaseKernel.createCheckoutInstanceMarker(identity.gitDirectory);
-      worktrees.provisionWorktree(boundCreation.repository, boundCreation.worktree, provisioningConfig(boundCreation.repository));
       const completed = completeCreation(boundCreation.repository, sessionId, boundCreation.worktree);
       if (!completed.ok) throw new Error(`worktree lease could not record completed creation: ${completed.reason || 'completion binding is incomplete'}`);
+      const provisioningFailure = await worktrees.provisionWorktree(
+        boundCreation.repository,
+        boundCreation.worktree,
+        provisioningConfig(boundCreation.repository),
+        { setupTimeoutMs: worktreeSetupDeadlineMs() },
+      );
+      if (provisioningFailure) {
+        const recorded = recordProvisioningFailure(boundCreation.repository, sessionId, boundCreation.worktree, provisioningFailure);
+        if (!recorded.ok) throw new Error(`worktree lease could not record setup failure: ${recorded.reason || 'dispatch binding is incomplete'}`);
+      }
     } catch (error) {
       const preservation = recoverCreatedWorktree(boundCreation.repository, sessionId, boundCreation.worktree, error);
       const message = error instanceof Error ? error.message : String(error);
@@ -243,9 +266,8 @@ function main(): void {
   process.stdout.write(`${identity.hostWorktreePath}\n`);
 }
 
-try {
-  main();
-} catch (error: any) {
-  process.stderr.write(`sidequest: could not create external worktree: ${error?.message || String(error)}\n`);
+main().catch((error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  process.stderr.write(`sidequest: could not create external worktree: ${message}\n`);
   process.exit(1);
-}
+});

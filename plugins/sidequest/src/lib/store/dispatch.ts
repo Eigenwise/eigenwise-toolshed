@@ -458,13 +458,13 @@ function supersedableUnboundAttempt(ticket?: any, state?: any) {
 }
 
 // A bound runtime's FIRST action is its tokened claim, so a bound attempt that has not claimed within the
-// claim-idle backstop is not winding down, it is gone. Only its stop hook could retire it, and a runtime that
-// dies without firing that hook left the ticket unreachable by every board path: redispatch refused it as a
-// live attempt, evidence refused it as bound, and session-start reconciliation skips bound attempts by design
-// (SQ-2110's recovery needed a resumed no-op exit in the same session; SQ-2206 measured the dead end).
+// claim-idle backstop is not winding down, it is gone. WorktreeCreate has an earlier terminal fact: once it
+// reserved a checkout but could not record that checkout's identity, the hook was interrupted before a runtime
+// could claim. Recovery evidence must retire that attempt immediately rather than wait for an unrelated sweep.
 function strandedBoundAttempt(ticket?: any, state?: any) {
   if (!state || !ticket?.dispatchNonce || !PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return false;
   if (state.terminalAt || state.claimedAt || ticket.claim?.by || ticket.checkpoint) return false;
+  if (state.worktreeBindingSource === 'worktree-create' && state.worktree && !state.worktreeCreationCompletedAt) return true;
   const boundMs = Date.parse(state.boundAt);
   return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
 }
@@ -479,6 +479,9 @@ function describeMinutes(ms: number) {
 }
 
 function boundRuntimeBlocker(state?: any) {
+  if (state?.worktreeBindingSource === 'worktree-create' && state.worktree && !state.worktreeCreationCompletedAt) {
+    return 'bound by WorktreeCreate without a completed checkout identity and is immediately retirable on recovery evidence';
+  }
   const boundMs = Date.parse(state?.boundAt);
   if (!Number.isFinite(boundMs)) return 'bound to a runtime';
   const waited = Date.now() - boundMs;
@@ -1789,6 +1792,40 @@ function completeDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?
   return { ok: false, reason: 'dispatch_binding_unavailable' };
 }
 
+function recordDispatchWorktreeProvisioningFailure(slug?: any, sessionId?: any, worktree?: any, failure?: any) {
+  const normalizedSessionId = String(sessionId || '').trim();
+  const target = String(worktree || '').trim();
+  const command = String(failure?.command || '').trim();
+  const reason = String(failure?.reason || '').trim();
+  if (!normalizedSessionId || !target || !command || !reason) return { ok: false, reason: 'missing_provisioning_failure_facts' };
+  const boundWorktree = canonicalPath(target);
+  for (const candidate of listTickets(slug)) {
+    const state = dispatchState(candidate);
+    if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false
+      || state.outcome !== 'launched' || state.terminalAt || state.worktreeBindingSource !== 'worktree-create'
+      || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+    return withTicketLock(slug, candidate.id, () => {
+      const ticket = getTicket(slug, candidate.id);
+      const current = dispatchState(ticket);
+      if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false
+        || current.outcome !== 'launched' || current.terminalAt || current.worktreeBindingSource !== 'worktree-create'
+        || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt) {
+        return { ok: false, reason: 'dispatch_binding_unavailable' };
+      }
+      current.worktreeProvisioningFailure = {
+        command,
+        reason,
+        stderrTail: String(failure?.stderrTail || '').trim().slice(-1_000),
+        at: new Date().toISOString(),
+      };
+      stampDispatchEvent(ticket, 'worktree-setup-incomplete', current.worktreeProvisioningFailure.at);
+      putTicket(slug, ticket);
+      return { ok: true };
+    });
+  }
+  return { ok: false, reason: 'dispatch_binding_unavailable' };
+}
+
 function recoverDispatchWorktreeCreation(slug?: any, sessionId?: any, worktree?: any, error?: any) {
   const normalizedSessionId = String(sessionId || '').trim();
   const target = String(worktree || '').trim();
@@ -2457,6 +2494,7 @@ function reconcileLaunchedDispatches(sessionId?: any, opts?: any) {
     recoverDispatchQuotaFailure,
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
+    recordDispatchWorktreeProvisioningFailure,
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
