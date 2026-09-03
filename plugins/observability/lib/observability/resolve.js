@@ -262,6 +262,8 @@ const VIEW_SQL = `
       THEN cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens END AS net_savings_base_input_tokens,
     CASE model
       WHEN 'claude-fable-5' THEN 10.0
+      WHEN 'claude-fable-5-1' THEN 10.0
+      WHEN 'claude-fable-5-1[1m]' THEN 10.0
       WHEN 'claude-mythos-5' THEN 10.0
       WHEN 'claude-opus-4-8' THEN 5.0
       WHEN 'claude-opus-4-7' THEN 5.0
@@ -272,6 +274,8 @@ const VIEW_SQL = `
     END AS input_price_usd_per_million,
     CASE model
       WHEN 'claude-fable-5' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
+      WHEN 'claude-fable-5-1' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
+      WHEN 'claude-fable-5-1[1m]' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
       WHEN 'claude-mythos-5' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 10.0 / 1000000.0
       WHEN 'claude-opus-4-8' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 5.0 / 1000000.0
       WHEN 'claude-opus-4-7' THEN (cache_read_tokens * 0.9 - cache_creation_5m_tokens * 0.25 - cache_creation_1h_tokens) * 5.0 / 1000000.0

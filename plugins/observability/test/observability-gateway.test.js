@@ -19,7 +19,7 @@ const PROJECT_ID = 'a'.repeat(64);
 
 function gatewayPayload() {
   const request = {
-    model: 'claude-opus-4-8',
+    model: 'claude-fable-5-1[1m]',
     system: [{ type: 'text', text: 'private system prompt' }],
     tools: [
       { name: 'Read', description: 'private native schema' },
@@ -43,7 +43,7 @@ function gatewayPayload() {
     },
     route: {
       requestedModel: 'claude-codex-auto',
-      effectiveModel: 'claude-opus-4-8',
+      effectiveModel: 'claude-fable-5-1[1m]',
       backend: 'anthropic',
       effort: 'max',
       via: 'dispatch',
@@ -59,7 +59,7 @@ function gatewayPayload() {
   });
   capture.observeJson(JSON.stringify({
     id: 'msg-gateway',
-    model: 'claude-opus-4-8',
+    model: 'claude-fable-5-1[1m]',
     content: [{ type: 'text', text: 'private response' }],
     usage: {
       input_tokens: 30,
@@ -133,7 +133,7 @@ test('gateway OTLP becomes authoritative first-class usage across observer views
   const request = store.queryView('request_usage_resolved')[0];
   assert.equal(request.evidence_event, 'gateway.token.usage');
   assert.equal(request.evidence_source, 'codex_gateway');
-  assert.equal(request.model, 'claude-opus-4-8');
+  assert.equal(request.model, 'claude-fable-5-1[1m]');
   assert.equal(request.requested_model, 'claude-codex-auto');
   assert.equal(request.agent_role, 'executor');
   assert.equal(request.input_tokens, 30);
@@ -181,8 +181,8 @@ test('gateway OTLP becomes authoritative first-class usage across observer views
   assert.equal(economics.read_savings_base_input_tokens, 90);
   assert.equal(economics.write_surcharge_base_input_tokens, 15);
   assert.equal(economics.net_savings_base_input_tokens, 75);
-  assert.equal(economics.input_price_usd_per_million, 5);
-  assert.equal(economics.net_savings_usd, 0.000375);
+  assert.equal(economics.input_price_usd_per_million, 10);
+  assert.equal(economics.net_savings_usd, 0.00075);
 
   const limits = store.queryView('limit_signals')[0];
   assert.equal(limits.input_tokens_limit, 1000);
