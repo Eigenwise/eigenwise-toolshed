@@ -831,7 +831,7 @@ test('a failed alias does not carry a stale pin into a new Claude CLI version', 
     assert.equal(afterStaleRetry.cache.pins.fable, 'claude-fable-9[1m]');
     assert.equal(afterStaleRetry.cache.detectedFor.fable, 'fake-claude 1.0.0');
     const aliases = fs.readFileSync(claude.logFile, 'utf8').trim().split('\n').map((line) => JSON.parse(line).args[3]);
-    assert.deepEqual(aliases, ['opus', 'sonnet', 'fable', 'fable', 'fable']);
+    assert.deepEqual([...aliases].sort(), ['fable', 'fable', 'fable', 'opus', 'sonnet'], `aliases probe in parallel, so only the multiset is stable: ${aliases.join(',')}`);
   } finally {
     fs.rmSync(home, { recursive: true, force: true });
   }
