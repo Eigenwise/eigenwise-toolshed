@@ -126,6 +126,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. A running ticket can stay in doing until its verification and delivery steps finish. If the work was merged by hand after an integration conflict, Claude can record the delivered commit and close the ticket with that evidence.
 
+**Stale agent worktrees keep accumulating.** Session start removes a bounded batch and reports its reached plan, removal, and skipped-by-reason counts if it runs past the hook budget. Ask Claude to run `sidequest worktrees sweep --project <path>` to inspect the rest, then add `--yes` once the rows look right. Clean legacy checkouts with no lease identity are reclaimed only after the minimum age when their revision is reachable from, or patch-equivalent to, the integration branch. Dirty or unintegrated legacy rows stay put with their real dirty, ahead, and age values.
+
 **A ticket contract forbids commits.** Ask Claude to declare it for working-tree delivery before dispatch. Sidequest runs it in the shared checkout, records only the declared changed paths, and requires a final pinned verification capture before it closes.
 
 **A delivery included a reviewed interaction.** Claude may record the delivered source commit together with one reviewed interaction commit when that interaction descends from the source, stays within the submitted candidate paths, and still passes the assembled-wave and merged-tree gates. If any of those checks fail, ask Claude to inspect the submission instead of treating the interaction as delivered.

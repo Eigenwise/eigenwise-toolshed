@@ -36,13 +36,15 @@ function checkoutIdentity(worktree: string) {
   };
 }
 
-function createAgentWorktree(repository: string, root: string, name: string): string {
+function createAgentWorktree(repository: string, root: string, name: string, withCheckoutMarker = true): string {
   const worktree = path.join(root, `agent-${name}`);
   fs.mkdirSync(root, { recursive: true });
   git(repository, ['worktree', 'add', '-b', `worktree-agent-${name}`, worktree, 'HEAD']);
-  const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
-  const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
-  worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+  if (withCheckoutMarker) {
+    const gitDirectoryValue = git(worktree, ['rev-parse', '--git-dir']);
+    const gitDirectory = path.isAbsolute(gitDirectoryValue) ? gitDirectoryValue : path.resolve(worktree, gitDirectoryValue);
+    worktreeLease.createCheckoutInstanceMarker(gitDirectory);
+  }
   return worktree;
 }
 
@@ -75,17 +77,67 @@ function integratedTicket(ref: string, agentId: string, worktree: string, baseCo
 
 const integrationTarget = { upstream: 'HEAD', branch: 'main' };
 
-test('sweep leaves an unbound registered worktree untouched', async () => {
-  const { repository, worktreeRoot } = repositoryFixture();
-  const worktree = createAgentWorktree(repository, worktreeRoot, 'unknown');
+test('sweep reclaims clean legacy worktrees and reports facts for retained legacy worktrees', async () => {
+  const { repository, baseCommit, worktreeRoot } = repositoryFixture();
+  const boundWorktree = createAgentWorktree(repository, worktreeRoot, 'bound-fixture');
+  const cleanLegacyWorktree = createAgentWorktree(repository, worktreeRoot, 'legacy-clean', false);
+  const dirtyLegacyWorktree = createAgentWorktree(repository, worktreeRoot, 'legacy-dirty', false);
+  const oldTimestamp = new Date(Date.now() - 4 * 60 * 60 * 1000);
+  const boundTicket = integratedTicket('SQ-BOUND-FIXTURE', 'bound-fixture', boundWorktree, baseCommit);
+  fs.utimesSync(cleanLegacyWorktree, oldTimestamp, oldTimestamp);
+  fs.writeFileSync(path.join(dirtyLegacyWorktree, 'unfinished.txt'), 'keep this work\n');
+  fs.utimesSync(dirtyLegacyWorktree, oldTimestamp, oldTimestamp);
   try {
-    const result = await worktrees.sweep(repository, [], { execute: true, minAgeMs: 0, integrationTarget });
-    const entry = result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
-    assert.equal(entry.reason, 'unknown_identity');
-    assert.equal(entry.action, 'keep');
-    assert.equal(fs.existsSync(worktree), true);
+    const result = await worktrees.sweep(repository, [boundTicket], { execute: true, minAgeMs: 3 * 60 * 60 * 1000, integrationTarget });
+    const entryFor = (worktree: string) => result.entries.find((candidate: any) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+    const cleanLegacy = entryFor(cleanLegacyWorktree);
+    const dirtyLegacy = entryFor(dirtyLegacyWorktree);
+
+    assert.equal(entryFor(boundWorktree).reason, 'ticket_done');
+    assert.equal(cleanLegacy.action, 'remove');
+    assert.equal(cleanLegacy.reason, 'legacy_no_lease');
+    assert.equal(cleanLegacy.clean, true);
+    assert.equal(cleanLegacy.ahead, 0);
+    assert.equal(cleanLegacy.ageMs >= 3 * 60 * 60 * 1000, true);
+    assert.equal(dirtyLegacy.action, 'keep');
+    assert.equal(dirtyLegacy.reason, 'legacy_unreclaimed');
+    assert.equal(dirtyLegacy.clean, false);
+    assert.equal(dirtyLegacy.ahead, 0);
+    assert.equal(dirtyLegacy.ageMs >= 3 * 60 * 60 * 1000, true);
+    assert.equal(fs.existsSync(boundWorktree), false);
+    assert.equal(fs.existsSync(cleanLegacyWorktree), false);
+    assert.equal(fs.existsSync(dirtyLegacyWorktree), true);
   } finally {
-    if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    for (const worktree of [boundWorktree, cleanLegacyWorktree, dirtyLegacyWorktree]) {
+      if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    }
+    fs.rmSync(repository, { recursive: true, force: true });
+  }
+});
+
+test('sweep preserves locked and live legacy worktrees without lease identity', async () => {
+  const { repository, worktreeRoot } = repositoryFixture();
+  const lockedWorktree = createAgentWorktree(repository, worktreeRoot, 'legacy-locked', false);
+  const liveWorktree = createAgentWorktree(repository, worktreeRoot, 'legacy-live', false);
+  git(repository, ['worktree', 'lock', lockedWorktree]);
+  try {
+    const result = await worktrees.sweep(repository, [], {
+      execute: true,
+      minAgeMs: 0,
+      livePaths: [liveWorktree],
+      integrationTarget,
+    });
+    const entryFor = (worktree: string) => result.entries.find((candidate: { path: string }) => worktrees.canonicalPath(candidate.path) === worktrees.canonicalPath(worktree));
+
+    assert.equal(entryFor(lockedWorktree).reason, 'locked');
+    assert.equal(entryFor(liveWorktree).reason, 'live_session');
+    assert.equal(fs.existsSync(lockedWorktree), true);
+    assert.equal(fs.existsSync(liveWorktree), true);
+  } finally {
+    git(repository, ['worktree', 'unlock', lockedWorktree]);
+    for (const worktree of [lockedWorktree, liveWorktree]) {
+      if (fs.existsSync(worktree)) git(repository, ['worktree', 'remove', '--force', worktree]);
+    }
     fs.rmSync(repository, { recursive: true, force: true });
   }
 });

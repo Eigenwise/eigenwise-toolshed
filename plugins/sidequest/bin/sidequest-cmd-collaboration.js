@@ -28,6 +28,14 @@ async function cmdSweepClaims(opts) {
   const detail = kinds.length ? `: ${kinds.join(", ")}` : "";
   console.log(`✓ swept ${res.released.length} dead claim(s) from ${meta.name}${detail} (idle backstop ${Math.round(res.idleMs / 6e4)}m, abandoned ${Math.round(res.abandonMs / 6e4)}m)`);
 }
+function worktreeSweepEntryLine(entry) {
+  const ticket = entry.ticket ? ` ${entry.ticket}` : "";
+  const cleanliness = entry.clean === true ? "clean" : entry.clean === false ? "dirty" : "cleanliness unavailable";
+  const ahead = entry.ahead == null ? "unavailable" : entry.ahead;
+  const patchEquivalent = entry.patchEquivalent == null ? "unavailable" : entry.patchEquivalent;
+  const age = entry.ageMs == null ? "unavailable" : `${Math.round(entry.ageMs / 6e4)}m`;
+  return `  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${cleanliness}; ahead ${ahead}; patch-equivalent ${patchEquivalent}; age ${age}]`;
+}
 async function cmdWorktrees(opts, positional) {
   const action = String(positional[0] || "").toLowerCase();
   if (action && action !== "sweep" || !action && !opts.sweep) {
@@ -53,11 +61,7 @@ async function cmdWorktrees(opts, positional) {
     return;
   }
   console.log(`worktrees sweep: ${result.dryRun ? "dry run" : "executed"} for ${meta.name} (minimum age ${minAgeHours}h)`);
-  for (const entry of result.entries) {
-    const ticket = entry.ticket ? ` ${entry.ticket}` : "";
-    const ahead = entry.ahead == null ? "?" : entry.ahead;
-    console.log(`  ${entry.action.toUpperCase()} ${entry.path}${ticket} [${entry.reason}; ${entry.clean ? "clean" : "dirty"}; ahead ${ahead}; patch-equivalent ${entry.patchEquivalent}; age ${entry.ageMs == null ? "?" : Math.round(entry.ageMs / 6e4) + "m"}]`);
-  }
+  for (const entry of result.entries) console.log(worktreeSweepEntryLine(entry));
   if (result.dryRun) console.log("  pass --yes to remove the planned worktrees.");
   if (result.removed.length) console.log(`  removed ${result.counts.removedWorktrees} worktree(s) and deleted ${result.counts.deletedBranches} branch(es).`);
   for (const entry of result.salvaged || []) console.log(`  SALVAGED ${entry.path} at ${entry.ref}; recover with ${entry.recovery}`);
@@ -395,4 +399,4 @@ async function cmdUnarchive(opts, positional) {
     console.log(`✗ unarchive: no ticket "${idOrRef}" in ${meta.name}`);
   }
 }
-module.exports = { cmdSweepClaims, cmdWorktrees, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };
+module.exports = { cmdSweepClaims, cmdWorktrees, worktreeSweepEntryLine, cmdRecoverShared, cmdNext, cmdWork, cmdReconcile, cmdAssign, cmdRemind, cmdUnremind, cmdComment, cmdComments, cmdLink, cmdUnlink, cmdReady, cmdArchive, cmdUnarchive };

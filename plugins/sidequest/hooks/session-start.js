@@ -173,7 +173,8 @@ var import_node_fs3 = __toESM(require("node:fs"));
 var import_node_os2 = __toESM(require("node:os"));
 var import_node_path3 = __toESM(require("node:path"));
 var DEFAULT_DEADLINE_MS = 2500;
-var DEFERRAL_NOTICE = "sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background. Its report arrives on the next session start.";
+var DEFERRAL_NOTICE = "sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background.";
+var EMPTY_SWEEP_PROGRESS = { planned: 0, removed: 0, keptByReason: {} };
 var HANDOFF_FAILED_NOTICE = "sidequest: worktree sweep could not run, so stale agent worktrees were not collected this session.";
 function deadlineMs() {
   const raw = Number(process.env.SIDEQUEST_SWEEP_DEADLINE_MS);
@@ -187,6 +188,42 @@ function reportFile(cwd) {
   const key = import_node_crypto2.default.createHash("sha1").update(import_node_path3.default.resolve(cwd || ".")).digest("hex").slice(0, 16);
   return import_node_path3.default.join(stateDirectory2(), `${key}.json`);
 }
+function progressFile(cwd) {
+  return reportFile(cwd).replace(/\.json$/, ".progress.json");
+}
+function normalizedProgress(value) {
+  if (!value || typeof value !== "object") return EMPTY_SWEEP_PROGRESS;
+  const record = value;
+  const count = (candidate) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
+  const keptByReason = Object.fromEntries(Object.entries(record.keptByReason || {}).map(([reason, amount]) => [reason, count(amount)]).filter(([, amount]) => amount > 0));
+  return { planned: count(record.planned), removed: count(record.removed), keptByReason };
+}
+function writeSweepProgress(cwd, progress) {
+  try {
+    import_node_fs3.default.mkdirSync(stateDirectory2(), { recursive: true });
+    import_node_fs3.default.writeFileSync(progressFile(cwd), JSON.stringify(normalizedProgress(progress)));
+  } catch (_) {
+  }
+}
+function readSweepProgress(cwd) {
+  try {
+    return normalizedProgress(JSON.parse(import_node_fs3.default.readFileSync(progressFile(cwd), "utf8")));
+  } catch (_) {
+    return EMPTY_SWEEP_PROGRESS;
+  }
+}
+function clearSweepProgress(cwd) {
+  try {
+    import_node_fs3.default.rmSync(progressFile(cwd), { force: true });
+  } catch (_) {
+  }
+}
+function deferralNotice(cwd, progress) {
+  const kept = Object.values(progress.keptByReason).reduce((total, count) => total + count, 0);
+  const reasons = Object.entries(progress.keptByReason).map(([reason, count]) => `${reason} ${count}`).join(", ") || "none";
+  const command = `node "${pluginRoot()}/bin/sidequest.js" worktrees sweep --yes --project "${import_node_path3.default.resolve(cwd || ".")}"`;
+  return `${DEFERRAL_NOTICE} Reached planned ${progress.planned}, removed ${progress.removed}, skipped ${kept} (${reasons}). Finish with ${command}.`;
+}
 function drainReport(cwd) {
   const file = reportFile(cwd);
   let raw;
@@ -196,6 +233,7 @@ function drainReport(cwd) {
     return null;
   }
   import_node_fs3.default.rmSync(file, { force: true });
+  clearSweepProgress(cwd);
   try {
     const parsed = JSON.parse(raw);
     const notices = parsed?.notices;
@@ -211,6 +249,7 @@ async function runSweep(data) {
   const cwd = sweepCwd(data);
   const carried = drainReport(cwd) || [];
   const budget = deadlineMs();
+  writeSweepProgress(cwd, EMPTY_SWEEP_PROGRESS);
   let child;
   try {
     child = (0, import_node_child_process.spawn)(process.execPath, [
@@ -221,6 +260,7 @@ async function runSweep(data) {
       stringField(data, "session_id", "sessionId")
     ], { detached: true, stdio: "ignore", windowsHide: true });
   } catch (_) {
+    clearSweepProgress(cwd);
     return [...carried, HANDOFF_FAILED_NOTICE];
   }
   const outcome = await new Promise((resolve) => {
@@ -235,10 +275,13 @@ async function runSweep(data) {
       resolve("failed");
     });
   });
-  if (outcome === "failed") return [...carried, HANDOFF_FAILED_NOTICE];
+  if (outcome === "failed") {
+    clearSweepProgress(cwd);
+    return [...carried, HANDOFF_FAILED_NOTICE];
+  }
   if (outcome === "deferred") {
     child.unref();
-    return [...carried, DEFERRAL_NOTICE];
+    return [...carried, deferralNotice(cwd, readSweepProgress(cwd))];
   }
   const report = drainReport(cwd);
   return report === null ? [...carried, HANDOFF_FAILED_NOTICE] : [...carried, ...report];

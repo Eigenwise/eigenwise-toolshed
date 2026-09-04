@@ -14,7 +14,15 @@ import { pluginRoot } from './paths.js';
 const DEFAULT_DEADLINE_MS = 2500;
 
 export const DEFERRAL_NOTICE =
-  'sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background. Its report arrives on the next session start.';
+  'sidequest: worktree sweep exceeded its SessionStart budget and is still running in the background.';
+
+export type SweepProgress = Readonly<{
+  planned: number;
+  removed: number;
+  keptByReason: Readonly<Record<string, number>>;
+}>;
+
+const EMPTY_SWEEP_PROGRESS: SweepProgress = { planned: 0, removed: 0, keptByReason: {} };
 
 export const HANDOFF_FAILED_NOTICE =
   'sidequest: worktree sweep could not run, so stale agent worktrees were not collected this session.';
@@ -32,6 +40,50 @@ function stateDirectory(): string {
 export function reportFile(cwd: string): string {
   const key = crypto.createHash('sha1').update(path.resolve(cwd || '.')).digest('hex').slice(0, 16);
   return path.join(stateDirectory(), `${key}.json`);
+}
+
+function progressFile(cwd: string): string {
+  return reportFile(cwd).replace(/\.json$/, '.progress.json');
+}
+
+function normalizedProgress(value: unknown): SweepProgress {
+  if (!value || typeof value !== 'object') return EMPTY_SWEEP_PROGRESS;
+  const record = value as { planned?: unknown; removed?: unknown; keptByReason?: unknown };
+  const count = (candidate: unknown) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
+  const keptByReason = Object.fromEntries(Object.entries(record.keptByReason || {})
+    .map(([reason, amount]): [string, number] => [reason, count(amount)])
+    .filter(([, amount]) => amount > 0));
+  return { planned: count(record.planned), removed: count(record.removed), keptByReason };
+}
+
+export function writeSweepProgress(cwd: string, progress: SweepProgress): void {
+  try {
+    fs.mkdirSync(stateDirectory(), { recursive: true });
+    fs.writeFileSync(progressFile(cwd), JSON.stringify(normalizedProgress(progress)));
+  } catch (_) {
+    // A partial report must never block the detached cleanup worker.
+  }
+}
+
+export function readSweepProgress(cwd: string): SweepProgress {
+  try {
+    return normalizedProgress(JSON.parse(fs.readFileSync(progressFile(cwd), 'utf8')));
+  } catch (_) {
+    return EMPTY_SWEEP_PROGRESS;
+  }
+}
+
+function clearSweepProgress(cwd: string): void {
+  try {
+    fs.rmSync(progressFile(cwd), { force: true });
+  } catch (_) {}
+}
+
+export function deferralNotice(cwd: string, progress: SweepProgress): string {
+  const kept = Object.values(progress.keptByReason).reduce((total, count) => total + count, 0);
+  const reasons = Object.entries(progress.keptByReason).map(([reason, count]) => `${reason} ${count}`).join(', ') || 'none';
+  const command = `node "${pluginRoot()}/bin/sidequest.js" worktrees sweep --yes --project "${path.resolve(cwd || '.')}"`;
+  return `${DEFERRAL_NOTICE} Reached planned ${progress.planned}, removed ${progress.removed}, skipped ${kept} (${reasons}). Finish with ${command}.`;
 }
 
 export function writeReport(cwd: string, notices: string[]): void {
@@ -55,6 +107,7 @@ export function drainReport(cwd: string): string[] | null {
     return null;
   }
   fs.rmSync(file, { force: true });
+  clearSweepProgress(cwd);
   try {
     const parsed: unknown = JSON.parse(raw);
     const notices = (parsed as { notices?: unknown } | null)?.notices;
@@ -75,6 +128,7 @@ export async function runSweep(data: HookInput): Promise<string[]> {
   const cwd = sweepCwd(data);
   const carried = drainReport(cwd) || [];
   const budget = deadlineMs();
+  writeSweepProgress(cwd, EMPTY_SWEEP_PROGRESS);
   let child;
   try {
     child = spawn(process.execPath, [
@@ -83,6 +137,7 @@ export async function runSweep(data: HookInput): Promise<string[]> {
       '--session', stringField(data, 'session_id', 'sessionId'),
     ], { detached: true, stdio: 'ignore', windowsHide: true });
   } catch (_) {
+    clearSweepProgress(cwd);
     return [...carried, HANDOFF_FAILED_NOTICE];
   }
 
@@ -93,10 +148,13 @@ export async function runSweep(data: HookInput): Promise<string[]> {
     child.once('error', () => { clearTimeout(timer); resolve('failed'); });
   });
 
-  if (outcome === 'failed') return [...carried, HANDOFF_FAILED_NOTICE];
+  if (outcome === 'failed') {
+    clearSweepProgress(cwd);
+    return [...carried, HANDOFF_FAILED_NOTICE];
+  }
   if (outcome === 'deferred') {
     child.unref();
-    return [...carried, DEFERRAL_NOTICE];
+    return [...carried, deferralNotice(cwd, readSweepProgress(cwd))];
   }
   const report = drainReport(cwd);
   return report === null ? [...carried, HANDOFF_FAILED_NOTICE] : [...carried, ...report];

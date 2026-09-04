@@ -33,6 +33,7 @@ __export(worktree_exports, {
   createCheckoutInstanceMarker: () => createCheckoutInstanceMarker,
   createWorktreeLease: () => createWorktreeLease,
   isCanonicalRegisteredWorktree: () => isCanonicalRegisteredWorktree,
+  legacyWorktreeCleanupDecision: () => legacyWorktreeCleanupDecision,
   sameCanonicalPath: () => sameCanonicalPath,
   worktreeCleanupDecision: () => worktreeCleanupDecision,
   worktreeCreateDecision: () => worktreeCreateDecision,
@@ -213,6 +214,13 @@ function worktreeCleanupDecision(lease, registeredWorktrees) {
   if (lease.provisioning === "unknown") return denied("Cleanup refuses an unknown provisioning strategy.");
   return allowed("the terminal bound worktree is safe to clean.");
 }
+function legacyWorktreeCleanupDecision(facts) {
+  if (!facts.registered) return denied("Legacy cleanup requires a canonical registered worktree.");
+  if (!facts.clean) return denied("Legacy cleanup refuses uncommitted changes.");
+  if (!facts.oldEnough) return denied("Legacy cleanup requires the minimum age.");
+  if (!facts.settled) return denied("Legacy cleanup requires a reachable or patch-equivalent revision.");
+  return allowed("the registered legacy worktree is clean, settled, and old enough.");
+}
 function isCanonicalRegisteredWorktree(lease, registeredWorktrees) {
   return Boolean(lease.canonicalWorktree) && registeredWorktrees.some((registered) => sameCanonicalPath(registered, lease.canonicalWorktree));
 }
@@ -223,6 +231,7 @@ function isCanonicalRegisteredWorktree(lease, registeredWorktrees) {
   createCheckoutInstanceMarker,
   createWorktreeLease,
   isCanonicalRegisteredWorktree,
+  legacyWorktreeCleanupDecision,
   sameCanonicalPath,
   worktreeCleanupDecision,
   worktreeCreateDecision,

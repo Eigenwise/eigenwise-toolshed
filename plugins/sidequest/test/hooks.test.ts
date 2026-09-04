@@ -2327,7 +2327,7 @@ test('session-start sweep is fail-soft and releases only claims past the TTL', (
   assert.equal(store.getTicket(slug, fresh.ref).claim.by, 'fresh-session');
 });
 
-test('session-end leaves an unbound old patch-equivalent worktree untouched and stays fail-soft', () => {
+test('session-end reclaims an unbound old patch-equivalent worktree and stays fail-soft', () => {
   const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-end-project-'));
   const worktrees = path.join(project, '.claude', 'worktrees');
   const projectGit = (args: string[], cwd?: string) => execFileSync('git', args, { cwd: cwd || project, encoding: 'utf8', windowsHide: true }).trim();
@@ -2352,11 +2352,9 @@ test('session-end leaves an unbound old patch-equivalent worktree untouched and 
   store.ensureProject(project);
 
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-test', cwd: project }));
-  assert.ok(fs.existsSync(worktree));
-  assert.equal(projectGit(['branch', '--list', branch]), `+ ${branch}`);
+  assert.equal(fs.existsSync(worktree), false);
+  assert.equal(projectGit(['branch', '--list', branch]), '');
   assert.doesNotThrow(() => runHook(SESSION_END, { session_id: 'session-end-fail-soft' }, { CLAUDE_PLUGIN_ROOT: path.join(project, 'missing-plugin') }));
-  projectGit(['worktree', 'remove', '--force', worktree]);
-  projectGit(['branch', '-D', branch]);
   fs.rmSync(project, { recursive: true, force: true });
 });
 
@@ -3144,32 +3142,42 @@ test('session-start preserves the live linked worktree that started the sweep', 
   }
 });
 
-test('session-start leaves an old unbound worktree untouched', () => {
+test('session-start reclaims a clean old worktree without lease identity', async () => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-session-sweep-'));
   const worktrees = path.join(repo, '.claude', 'worktrees');
   const old = path.join(worktrees, 'agent-session-sweep');
-  gitFixture(['init', '-b', 'main'], repo);
-  gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
-  gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
-  fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
-  gitFixture(['add', 'README.md'], repo);
-  gitFixture(['commit', '-m', 'base'], repo);
-  gitFixture(['branch', '-M', 'main'], repo);
-  fs.mkdirSync(worktrees, { recursive: true });
-  gitFixture(['worktree', 'add', '-b', 'worktree-agent-session-sweep', old, 'main'], repo);
-  fs.writeFileSync(path.join(old, 'sweep.txt'), 'integrated\n');
-  gitFixture(['add', 'sweep.txt'], old);
-  gitFixture(['commit', '-m', 'integrated fixture'], old);
-  const commit = gitFixture(['rev-parse', 'HEAD'], old);
-  gitFixture(['cherry-pick', commit], repo);
-  const aged = new Date(Date.now() - 4 * 60 * 60 * 1000);
-  fs.utimesSync(old, aged, aged);
-  store.ensureProject(repo);
+  try {
+    gitFixture(['init', '-b', 'main'], repo);
+    gitFixture(['config', 'user.name', 'Sidequest Test'], repo);
+    gitFixture(['config', 'user.email', 'sidequest-test@example.invalid'], repo);
+    fs.writeFileSync(path.join(repo, 'README.md'), 'fixture\n');
+    gitFixture(['add', 'README.md'], repo);
+    gitFixture(['commit', '-m', 'base'], repo);
+    gitFixture(['branch', '-M', 'main'], repo);
+    fs.mkdirSync(worktrees, { recursive: true });
+    gitFixture(['worktree', 'add', '-b', 'worktree-agent-session-sweep', old, 'main'], repo);
+    fs.writeFileSync(path.join(old, 'sweep.txt'), 'integrated\n');
+    gitFixture(['add', 'sweep.txt'], old);
+    gitFixture(['commit', '-m', 'integrated fixture'], old);
+    const commit = gitFixture(['rev-parse', 'HEAD'], old);
+    gitFixture(['cherry-pick', commit], repo);
+    const aged = new Date(Date.now() - 4 * 60 * 60 * 1000);
+    fs.utimesSync(old, aged, aged);
+    store.ensureProject(repo);
+    const report = sweepReportFile(SIDEQUEST_HOME, repo);
+    fs.rmSync(report, { force: true });
 
-  runHook(SESSION, { session_id: 'session-sweep', source: 'startup', cwd: repo }, { CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') });
-  assert.ok(fs.existsSync(old), 'SessionStart must leave an unbound worktree untouched');
-  gitFixture(['worktree', 'remove', '--force', old], repo);
-  fs.rmSync(repo, { recursive: true, force: true });
+    runHook(SESSION, { session_id: 'session-sweep', source: 'startup', cwd: repo }, {
+      SIDEQUEST_HOME,
+      SIDEQUEST_SWEEP_DEADLINE_MS: '0',
+      CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..'),
+    });
+    await waitForPath(report);
+    assert.equal(fs.existsSync(old), false, 'SessionStart must reclaim a clean old worktree without lease identity');
+  } finally {
+    if (fs.existsSync(old)) gitFixture(['worktree', 'remove', '--force', old], repo);
+    fs.rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 // The sweep's cost is bimodal, so the hook hands it to a detached worker and waits
@@ -3190,7 +3198,8 @@ test('session-start: a sweep past its deadline still injects the full block and 
     { SIDEQUEST_HOME: home, SIDEQUEST_SWEEP_DEADLINE_MS: '0', CLAUDE_PROJECT_DIR: cwd, CLAUDE_PLUGIN_ROOT: path.join(__dirname, '..') }
   );
   assert.match(context, /worktree sweep exceeded its SessionStart budget/);
-  assert.match(context, /arrives on the next session start/);
+  assert.match(context, /Reached planned 0, removed 0, skipped 0 \(none\)/);
+  assert.match(context, /worktrees sweep --yes --project/);
   assert.ok(context.includes('=== sidequest (active) ==='), 'a deferred sweep must not cost the session its orchestrator block');
   assert.ok(context.includes('YOUR EXECUTORS'), 'a deferred sweep must not cost the session its workforce');
 });

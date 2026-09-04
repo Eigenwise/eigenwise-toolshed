@@ -43,18 +43,60 @@ function runtimeModule(name) {
 }
 
 // src/hooks/shared/worktree-sweep.ts
-var import_node_child_process = require("node:child_process");
-var import_node_fs2 = __toESM(require("node:fs"));
+var import_node_child_process2 = require("node:child_process");
+var import_node_fs3 = __toESM(require("node:fs"));
 var import_promises = require("node:fs/promises");
+var import_node_os2 = __toESM(require("node:os"));
+var import_node_path3 = __toESM(require("node:path"));
+
+// src/hooks/shared/sweep-handoff.ts
+var import_node_child_process = require("node:child_process");
+var import_node_crypto = __toESM(require("node:crypto"));
+var import_node_fs2 = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path2 = __toESM(require("node:path"));
+var EMPTY_SWEEP_PROGRESS = { planned: 0, removed: 0, keptByReason: {} };
+function stateDirectory() {
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
+  return import_node_path2.default.join(home, "sweep-reports");
+}
+function reportFile(cwd) {
+  const key = import_node_crypto.default.createHash("sha1").update(import_node_path2.default.resolve(cwd || ".")).digest("hex").slice(0, 16);
+  return import_node_path2.default.join(stateDirectory(), `${key}.json`);
+}
+function progressFile(cwd) {
+  return reportFile(cwd).replace(/\.json$/, ".progress.json");
+}
+function normalizedProgress(value) {
+  if (!value || typeof value !== "object") return EMPTY_SWEEP_PROGRESS;
+  const record = value;
+  const count = (candidate) => Number.isFinite(Number(candidate)) && Number(candidate) >= 0 ? Math.floor(Number(candidate)) : 0;
+  const keptByReason = Object.fromEntries(Object.entries(record.keptByReason || {}).map(([reason, amount]) => [reason, count(amount)]).filter(([, amount]) => amount > 0));
+  return { planned: count(record.planned), removed: count(record.removed), keptByReason };
+}
+function writeSweepProgress(cwd, progress) {
+  try {
+    import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
+    import_node_fs2.default.writeFileSync(progressFile(cwd), JSON.stringify(normalizedProgress(progress)));
+  } catch (_) {
+  }
+}
+function writeReport(cwd, notices) {
+  try {
+    import_node_fs2.default.mkdirSync(stateDirectory(), { recursive: true });
+    import_node_fs2.default.writeFileSync(reportFile(cwd), JSON.stringify({ notices, finishedAt: (/* @__PURE__ */ new Date()).toISOString() }));
+  } catch (_) {
+  }
+}
+
+// src/hooks/shared/worktree-sweep.ts
 var MAX_PROJECTS_PER_START = 3;
 var MAX_CANDIDATES_PER_PROJECT = 8;
 var DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS = 7 * 24;
 var MAX_ORPHAN_SUBJECT_LENGTH = 120;
 function windowsProcesses() {
   try {
-    const result = (0, import_node_child_process.spawnSync)("powershell.exe", [
+    const result = (0, import_node_child_process2.spawnSync)("powershell.exe", [
       "-NoProfile",
       "-NonInteractive",
       "-Command",
@@ -88,7 +130,7 @@ function referencesWorktree(command, worktreePath) {
 }
 function worktreeRemovalFailureNotice(failure, options = {}) {
   const notice = `could not remove ${failure.path || "a git entry"}: ${failure.message}`;
-  if ((options.platform ?? process.platform) !== "win32" || !failure.path || !(options.existsSync || import_node_fs2.default.existsSync)(failure.path)) return notice;
+  if ((options.platform ?? process.platform) !== "win32" || !failure.path || !(options.existsSync || import_node_fs3.default.existsSync)(failure.path)) return notice;
   const processes = (options.listProcesses || windowsProcesses)().filter((entry) => referencesWorktree(entry.command, failure.path));
   if (!processes.length) return notice;
   const details = processes.map((entry) => {
@@ -99,20 +141,20 @@ function worktreeRemovalFailureNotice(failure, options = {}) {
   return `${notice}. Processes still using it: ${details.join("; ")}. End those PIDs and re-run the sweep.`;
 }
 function stateFile() {
-  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path2.default.join(import_node_os.default.homedir(), ".claude", "sidequest");
-  return import_node_path2.default.join(home, "worktree-sweep-sessions.json");
+  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
+  return import_node_path3.default.join(home, "worktree-sweep-sessions.json");
 }
 function readState() {
   try {
-    return JSON.parse(import_node_fs2.default.readFileSync(stateFile(), "utf8"));
+    return JSON.parse(import_node_fs3.default.readFileSync(stateFile(), "utf8"));
   } catch (_) {
     return {};
   }
 }
 function writeState(state) {
   try {
-    import_node_fs2.default.mkdirSync(import_node_path2.default.dirname(stateFile()), { recursive: true });
-    import_node_fs2.default.writeFileSync(stateFile(), JSON.stringify(state), "utf8");
+    import_node_fs3.default.mkdirSync(import_node_path3.default.dirname(stateFile()), { recursive: true });
+    import_node_fs3.default.writeFileSync(stateFile(), JSON.stringify(state), "utf8");
   } catch (_) {
   }
 }
@@ -123,15 +165,15 @@ function projectCommand(project) {
   return `node "${pluginRoot()}/bin/sidequest.js" board-config --project "${project.path}" --integration-branch <branch>`;
 }
 function sessionWorktreePath(start) {
-  const resolved = import_node_path2.default.resolve(start);
+  const resolved = import_node_path3.default.resolve(start);
   let candidate = resolved;
   for (; ; ) {
     try {
-      if (import_node_fs2.default.existsSync(import_node_path2.default.join(candidate, ".git"))) return candidate;
+      if (import_node_fs3.default.existsSync(import_node_path3.default.join(candidate, ".git"))) return candidate;
     } catch (_) {
       return resolved;
     }
-    const parent = import_node_path2.default.dirname(candidate);
+    const parent = import_node_path3.default.dirname(candidate);
     if (parent === candidate) return resolved;
     candidate = parent;
   }
@@ -177,10 +219,26 @@ async function sweepWorktrees(data, includeKnownProjects) {
   const notices = [];
   const worktrees = require(runtimeModule("worktrees"));
   const activePaths = liveSessionPaths();
+  const progressCwd = stringField(data, "cwd", "project_dir", "projectDir") || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const projectProgress = /* @__PURE__ */ new Map();
+  const updateProgress = (project, progress) => {
+    projectProgress.set(project.slug, progress);
+    const keptByReason = {};
+    let planned = 0;
+    let removed = 0;
+    for (const currentProgress of projectProgress.values()) {
+      planned += currentProgress.planned;
+      removed += currentProgress.removed;
+      for (const [reason, count] of Object.entries(currentProgress.keptByReason)) {
+        keptByReason[reason] = (keptByReason[reason] || 0) + count;
+      }
+    }
+    writeSweepProgress(progressCwd, { planned, removed, keptByReason });
+  };
   for (const project of projects) {
     const isCurrentProject = project.slug === current.slug;
     try {
-      await (0, import_promises.stat)(import_node_path2.default.join(project.path, ".git"));
+      await (0, import_promises.stat)(import_node_path3.default.join(project.path, ".git"));
     } catch (_) {
       continue;
     }
@@ -207,7 +265,8 @@ async function sweepWorktrees(data, includeKnownProjects) {
         livePaths: activePaths,
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,
-        notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3
+        notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
+        onProgress: (progress) => updateProgress(project, progress)
       });
       if (!isCurrentProject) continue;
       if (result.skipped === "repository_busy") {
@@ -227,28 +286,6 @@ async function sweepWorktrees(data, includeKnownProjects) {
     }
   }
   return notices;
-}
-
-// src/hooks/shared/sweep-handoff.ts
-var import_node_child_process2 = require("node:child_process");
-var import_node_crypto = __toESM(require("node:crypto"));
-var import_node_fs3 = __toESM(require("node:fs"));
-var import_node_os2 = __toESM(require("node:os"));
-var import_node_path3 = __toESM(require("node:path"));
-function stateDirectory() {
-  const home = String(process.env.SIDEQUEST_HOME || "").trim() || import_node_path3.default.join(import_node_os2.default.homedir(), ".claude", "sidequest");
-  return import_node_path3.default.join(home, "sweep-reports");
-}
-function reportFile(cwd) {
-  const key = import_node_crypto.default.createHash("sha1").update(import_node_path3.default.resolve(cwd || ".")).digest("hex").slice(0, 16);
-  return import_node_path3.default.join(stateDirectory(), `${key}.json`);
-}
-function writeReport(cwd, notices) {
-  try {
-    import_node_fs3.default.mkdirSync(stateDirectory(), { recursive: true });
-    import_node_fs3.default.writeFileSync(reportFile(cwd), JSON.stringify({ notices, finishedAt: (/* @__PURE__ */ new Date()).toISOString() }));
-  } catch (_) {
-  }
 }
 
 // src/hooks/sweep-worktrees.ts
