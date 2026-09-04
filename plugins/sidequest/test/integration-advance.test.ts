@@ -672,6 +672,59 @@ test('control-plane delivery validates a reviewed interaction and keeps no-submi
   assert.equal(ordinary.ticket.completion.delivery.commit, ordinaryDelivery);
 });
 
+test('groomClose delivers a landed candidate despite an overlapping pending sibling candidate', async () => {
+  const fixture = makeRepo('groom-close-overlapping-pending-candidate');
+  const { slug } = store.ensureProject(fixture.repo);
+  const participant = store.createTicket(slug, {
+    title: 'landed participant candidate',
+    category: 'codebase-exploration',
+    description: 'A candidate already present on the integration branch.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, participant, fixture);
+  git(['cherry-pick', fixture.submitted], fixture.repo);
+  const landedCommit = head(fixture.repo);
+
+  const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-overlapping-pending-candidate');
+  git(['worktree', 'add', '-b', 'worktree-agent-overlapping-pending-candidate', siblingWorktree, 'main'], fixture.repo);
+  const siblingCommit = commitFile(siblingWorktree, 'feature.txt', 'overlapping sibling candidate\n');
+  const sibling = store.createTicket(slug, {
+    title: 'overlapping pending sibling candidate',
+    category: 'codebase-exploration',
+    description: 'A pending candidate that shares the participant surface.',
+    files: ['feature.txt'],
+  });
+  submitFixture(slug, sibling, { ...fixture, executor: siblingWorktree, submitted: siblingCommit });
+
+  const assembled = store.assembleSubmissionWave(slug, [participant.ref]);
+  assert.equal(assembled.ok, false);
+  assert.equal(assembled.reason, 'candidate_overlap');
+
+  const response = await mcp.handleRequest({
+    jsonrpc: '2.0',
+    id: 2435,
+    method: 'tools/call',
+    params: {
+      name: 'groomClose',
+      arguments: {
+        project: fixture.repo,
+        ref: participant.ref,
+        by: 'orchestrator',
+        reason: 'The participant candidate is already reachable on main.',
+        deliveryCommit: landedCommit,
+      },
+    },
+  });
+
+  assert.ok(response.result, JSON.stringify(response));
+  assert.ok(!response.result.isError, response.result.content?.[0]?.text);
+  const closed = JSON.parse(response.result.content[0].text);
+  assert.equal(closed.ok, true, JSON.stringify(closed));
+  assert.equal(store.getTicket(slug, participant.ref).status, 'done');
+  assert.equal(store.getTicket(slug, participant.ref).submission.integration.deliveryCommit, landedCommit);
+  assert.equal(store.getTicket(slug, sibling.ref).submission.commit, siblingCommit);
+});
+
 for (const mode of ['merge', 'replay', 'apply']) {
   test(`integrate ${mode} delivers a ready submission and preserves its pinned ref`, () => {
     const { fixture, slug, ticket, runCli } = deliveryTicket(mode);
