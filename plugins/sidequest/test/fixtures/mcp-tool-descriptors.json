@@ -2012,6 +2012,7 @@
         "worktreeBase": {
           "type": "string",
           "enum": [
+            "auto",
             "origin-main",
             "local-main"
           ]
