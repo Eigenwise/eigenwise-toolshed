@@ -1,6 +1,6 @@
 {
   "name": "observability",
-  "version": "0.7.22",
+  "version": "0.7.23",
   "description": "Local, metadata-only telemetry for Claude Code. A bundled observer records session, tool, and subagent lifecycle events into SQLite on your machine, an optional statusline shows live context and usage, and an OpenTelemetry Collector can forward redacted signals to Grafana, generic OTLP, or PostHog. Telemetry payloads exclude prompts, responses, code, tool inputs and results, credentials, and environment values. Sink configuration you provide, including OTLP headers or tokens, is stored locally in %LOCALAPPDATA%\\Eigenwise\\Workbench\\observability.json on Windows, or ~/.local/share/Eigenwise/Workbench/observability.json when LOCALAPPDATA is not set, so an exporter can authenticate. Every sink beyond local SQLite is opt-in.",
   "author": {
     "name": "Eigenwise",

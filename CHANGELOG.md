@@ -8,6 +8,41 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.515.0 (2026-09-04)
+
+### model-gateway 0.48.19 → 0.48.20
+
+#### Fixes
+
+- Isolate Claude pin probes from nonessential traffic (SQ-2425)
+  Claude pin probes now disable nonessential CLI traffic while preserving proxy observation for the local endpoint.
+
+### observability 0.7.22 → 0.7.23
+
+#### Fixes
+
+- Make statusline health tests hermetic (SQ-2423)
+  Statusline health tests now use isolated observer state, so a user's local outbox cannot change test output. The suite also covers the stalled outbox health suffix.
+
+### sidequest 5.0.24 → 5.0.25
+
+#### Fixes
+
+- Keep pulse oracle state accurate (SQ-2326)
+  Pulse now hides an oracle handoff after the ticket resumes work, matching verdict's pending-oracle state.
+- Keep dispatched verification captures pinned (SQ-2424)
+  Verification capture now keeps the command pinned in the active dispatch when an older lifecycle mirror remains in ticket state. Command mismatches show both pinned and captured commands.
+- Prevent stranded worktree setup timeouts (SQ-2426)
+  Worktree setup now records timeout failures, preserves the checkout, and lets recovery replace incomplete bindings.
+- Reclaim settled legacy worktrees (SQ-2427)
+  Reclaim clean, settled legacy agent worktrees and report factual sweep progress when SessionStart defers cleanup.
+- Prevent dropped MCP wave participants (SQ-2428)
+  Sidequest now refuses invalid wave arrays and highlights related submitted candidates omitted from a singleton wave.
+- Reconcile candidate wave conflicts (SQ-2429)
+  Allow pending candidate waves to assemble explicitly, preserve overlapping candidates, and reconcile delivered candidates despite live sibling claims.
+- Flush ticket telemetry after synchronous work (SQ-2430)
+  Keep a live local observer request open through synchronous CLI work, then apply its response timeout after connection.
+
 ## v3.514.0 (2026-09-04)
 
 ### model-gateway 0.48.18 → 0.48.19
