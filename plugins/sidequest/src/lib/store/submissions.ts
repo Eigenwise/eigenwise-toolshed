@@ -596,7 +596,7 @@ function integrationVerifyLogPath(slug: any, ticket: any) {
 }
 
 function pinnedVerificationRequirement(ticket: any) {
-  const pinned = ticket.lifecycleAttempt?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.dispatch?.verificationRequirement;
+  const pinned = ticket.dispatch?.verificationRequirement || ticket.dispatch?.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
   if (pinned && typeof pinned === 'object') return pinned;
   const legacyCommand = String(ticket.executorVerify || ticket.submission?.verify || '').trim();
   if (!legacyCommand) {
@@ -614,8 +614,12 @@ function recordedVerificationCaptures(ticket: any) {
   return Array.isArray(ticket?.verificationCaptures) ? ticket.verificationCaptures : [];
 }
 
-function amendedVerifierCaptureMessage(ticket: any, pinnedCommand: string) {
-  return `Verification capture for ${ticket.ref} used the live ticket verifier, but the verify was amended after dispatch. This dispatch still requires its pinned command.\nPinned command:\n${pinnedCommand}\nCheckpoint current work, release the claim, and re-dispatch; the recovery dispatch resumes the retained worktree and pins the amended verify. If the work is already verified by other evidence, release the claim and use orchestrator groomClose with deliveryCommit.`;
+function captureCommandDetails(pinnedCommand: string, capturedCommand: string) {
+  return `Pinned command: ${JSON.stringify(pinnedCommand)}\nCaptured command: ${JSON.stringify(capturedCommand)}`;
+}
+
+function amendedVerifierCaptureMessage(ticket: any, pinnedCommand: string, capturedCommand: string) {
+  return `Verification capture for ${ticket.ref} used the live ticket verifier, but the verify was amended after dispatch. This dispatch still requires its pinned command.\n${captureCommandDetails(pinnedCommand, capturedCommand)}\nCheckpoint current work, release the claim, and re-dispatch; the recovery dispatch resumes the retained worktree and pins the amended verify. If the work is already verified by other evidence, release the claim and use orchestrator groomClose with deliveryCommit.`;
 }
 
 function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
@@ -624,20 +628,22 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
   return withTicketLock(slug, found.id, () => {
     const ticket = getTicket(slug, found.id);
     if (!ticket) return { ok: false, reason: 'not_found' };
-    const pinnedAtDispatch = ticket.lifecycleAttempt?.verificationRequirement
+    const pinnedAtDispatch = ticket.dispatch?.verificationRequirement
       || ticket.dispatch?.lifecycleAttempt?.verificationRequirement
-      || ticket.dispatch?.verificationRequirement;
+      || ticket.lifecycleAttempt?.verificationRequirement;
     const requirement = pinnedVerificationRequirement(ticket);
-    const command = String(capture?.command || '').trim();
+    const capturedCommand = String(capture?.command || '');
+    const command = capturedCommand.trim();
+    const pinnedCommand = String(requirement.command || '');
+    const expectedCommand = pinnedCommand.trim();
     const status = String(capture?.status || '').trim();
     const candidateSource = String(capture?.candidate?.source || '').trim();
     const candidateValue = String(capture?.candidate?.value || '').trim().toLowerCase();
-    if (!requirement.command || command !== requirement.command) {
-      const pinnedCommand = String(requirement.command || '').trim();
+    if (!expectedCommand || command !== expectedCommand) {
       const liveCommand = String(ticket.executorVerify || '').trim();
-      const message = pinnedAtDispatch && pinnedCommand && liveCommand && command === liveCommand
-        ? amendedVerifierCaptureMessage(ticket, pinnedCommand)
-        : `Verification capture for ${ticket.ref} must use its declared command pinned at dispatch.\nPinned command:\n${pinnedCommand || '<none>'}`;
+      const message = pinnedAtDispatch && expectedCommand && liveCommand && command === liveCommand
+        ? amendedVerifierCaptureMessage(ticket, pinnedCommand, capturedCommand)
+        : `Verification capture for ${ticket.ref} must use its declared command pinned at dispatch.\n${captureCommandDetails(pinnedCommand, capturedCommand)}`;
       return { ok: false, reason: 'verification_capture_command_mismatch', ticket, message };
     }
     if (!['passed', 'failed_suite', 'toolchain_missing', 'could_not_run', 'timeout', 'manual', 'attestation', 'skipped', 'failed_check'].includes(status)) {

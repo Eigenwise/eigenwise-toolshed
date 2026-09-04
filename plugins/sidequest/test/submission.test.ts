@@ -354,7 +354,10 @@ test('capture reports a post-dispatch verify amendment and keeps the legacy fall
     assert.strictEqual(refused.ok, false);
     assert.strictEqual(refused.reason, 'verification_capture_command_mismatch');
     assert.match(refused.message, /verify was amended after dispatch/);
-    assert.ok(refused.message.includes(pinnedCommand));
+    assert.match(refused.message, /Pinned command: /);
+    assert.match(refused.message, /Captured command: /);
+    assert.ok(refused.message.includes(JSON.stringify(pinnedCommand)));
+    assert.ok(refused.message.includes(JSON.stringify(amendedCommand)));
     assert.match(refused.message, /checkpoint current work, release the claim, and re-dispatch/i);
     assert.match(refused.message, /groomClose with deliveryCommit/);
 
@@ -364,7 +367,10 @@ test('capture reports a post-dispatch verify amendment and keeps the legacy fall
     }, PROJECT_DIR);
     assert.strictEqual(unrelated.reason, 'verification_capture_command_mismatch');
     assert.match(unrelated.message, /declared command pinned at dispatch/);
-    assert.ok(unrelated.message.includes(pinnedCommand));
+    assert.match(unrelated.message, /Pinned command: /);
+    assert.match(unrelated.message, /Captured command: /);
+    assert.ok(unrelated.message.includes(JSON.stringify(pinnedCommand)));
+    assert.ok(unrelated.message.includes(JSON.stringify('node --version')));
   } finally {
     fs.rmSync(amendedCapture.logPath, { force: true });
   }
@@ -379,6 +385,52 @@ test('capture reports a post-dispatch verify amendment and keeps the legacy fall
     assert.strictEqual(accepted.ok, true, accepted.message);
   } finally {
     fs.rmSync(legacyCapture.logPath, { force: true });
+  }
+});
+
+test('repeated captures use the dispatch pin after a stale lifecycle mirror rewrite', async () => {
+  cleanBranch();
+  const command = 'node --version';
+  const dispatched = addTicket('repeated dispatched capture', {
+    category: 'submission.fixture',
+    executorVerifyKind: 'command',
+    executorVerify: command,
+  });
+  const prepared = store.prepareDispatch(slug, dispatched.ref, {
+    sessionId: 'repeated-capture-dispatch',
+    sharedTree: true,
+  });
+  assert.strictEqual(prepared.ok, true, prepared.message);
+
+  const firstCapture = await runVerifyCapture(command, PROJECT_DIR);
+  let secondCapture: any;
+  try {
+    assert.strictEqual(firstCapture.status, 'passed');
+    const firstRecorded = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, firstCapture, PROJECT_DIR);
+    assert.strictEqual(firstRecorded.ok, true, firstRecorded.message);
+
+    fs.writeFileSync(path.join(PROJECT_DIR, 'README.md'), 'second verification candidate\n');
+    git(['add', 'README.md']);
+    git(['commit', '-m', 'second verification candidate']);
+
+    const rewritten = store.getTicket(slug, dispatched.ref);
+    rewritten.lifecycleAttempt = {
+      ...rewritten.lifecycleAttempt,
+      verificationRequirement: {
+        ...rewritten.lifecycleAttempt.verificationRequirement,
+        command: 'node -e "process.exit(1)"',
+      },
+    };
+    persist(rewritten);
+
+    secondCapture = await runVerifyCapture(command, PROJECT_DIR);
+    assert.strictEqual(secondCapture.status, 'passed');
+    const secondRecorded = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, secondCapture, PROJECT_DIR);
+    assert.strictEqual(secondRecorded.ok, true, secondRecorded.message);
+    assert.notStrictEqual(secondRecorded.capture.candidate.value, firstRecorded.capture.candidate.value);
+  } finally {
+    fs.rmSync(firstCapture.logPath, { force: true });
+    if (secondCapture?.logPath) fs.rmSync(secondCapture.logPath, { force: true });
   }
 });
 
