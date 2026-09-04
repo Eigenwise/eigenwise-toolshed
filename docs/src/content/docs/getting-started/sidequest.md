@@ -122,6 +122,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **A ticket will not dispatch.** Ask Claude to diagnose the ticket. Common causes are an incomplete work description, a blocked dependency, or an unavailable configured route. Claude reports the specific recovery instead of silently changing the work's route.
 
+**A worktree setup command was incomplete.** Sidequest keeps the completed checkout and shows the command, failure reason, and captured stderr tail in the ticket. The executor runs that command in its assigned worktree before it starts work.
+
 **A worktree-isolated executor cannot write.** Sidequest reserves the exact checkout before Git creates it, then verifies the checkout reported when the executor starts. A copied or similarly named linked worktree has no write authority. Ask Claude to redispatch the ticket if the recorded checkout is missing or does not match.
 
 **Work looks stuck in doing.** Ask Claude to inspect the ticket's current status and executor activity. A running ticket can stay in doing until its verification and delivery steps finish. If the work was merged by hand after an integration conflict, Claude can record the delivered commit and close the ticket with that evidence.

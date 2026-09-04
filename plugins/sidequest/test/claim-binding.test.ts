@@ -199,7 +199,38 @@ test('SubagentStop before claim clears admission and allows a fresh retry', () =
   assert.equal(retry.ticket.dispatch.attempts.at(-1).failureShape, 'stopped_before_claim');
 });
 
-test('terminal retry preserves a markerless linked checkout', () => {
+test('recovery evidence immediately retires an incomplete WorktreeCreate checkout', () => {
+  const ticket = createFixture('incomplete worktree creation recovery');
+  const sessionId = `incomplete-worktree-recovery-${Date.now()}`;
+  const worktree = worktrees.agentWorktreePath(PROJECT, `incomplete-${ticket.id}`);
+  const branch = `worktree-incomplete-${ticket.id}`;
+  const prepared = store.prepareDispatch(slug, ticket.ref, { sessionId, sharedTree: false });
+  fs.mkdirSync(path.dirname(worktree), { recursive: true });
+  try {
+    assert.equal(store.recordDispatchLaunch(slug, ticket.ref, {
+      sessionId,
+      token: prepared.token,
+      executor: prepared.ticket.dispatchExecutor,
+    }).ok, true);
+    assert.equal(store.bindDispatchWorktreeCreation(slug, sessionId, worktree).ok, true);
+    git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
+
+    const replacement = store.prepareDispatch(slug, ticket.ref, {
+      sessionId: `${sessionId}-retry`,
+      sharedTree: false,
+      recoveryEvidence: 'WorktreeCreate was cancelled after git worktree add and before completion.',
+    });
+    assert.notEqual(replacement.token, prepared.token);
+    assert.equal(replacement.ticket.dispatch.attempts.at(-1).failureShape, 'stranded_bound_launch_superseded');
+    assert.equal(fs.existsSync(worktree), false, 'recovery must retire a clean incomplete checkout immediately');
+  } finally {
+    store.releaseTicket(slug, ticket.ref, 'incomplete-worktree-recovery-cleanup', { status: 'todo', source: 'test', force: true });
+    if (fs.existsSync(worktree)) git(PROJECT, ['worktree', 'remove', '--force', worktree]);
+    try { git(PROJECT, ['branch', '-D', branch]); } catch (_) {}
+  }
+});
+
+test('terminal retry cleans a markerless linked checkout after a store-owned stop', () => {
   const ticket = createFixture('markerless terminal retry');
   const sessionId = `markerless-terminal-${Date.now()}`;
   const agentName = `markerless-terminal-agent-${ticket.id}`;
@@ -218,11 +249,9 @@ test('terminal retry preserves a markerless linked checkout', () => {
     git(PROJECT, ['worktree', 'add', '--quiet', '-b', branch, worktree, prepared.ticket.dispatch.baseCommit]);
     assert.equal(store.bindDispatchAgent(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).ok, true);
     assert.equal(store.markDispatchStopped(sessionId, prepared.ticket.dispatchExecutor, agentName, agentName).stopped, true);
-    assert.throws(
-      () => store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-retry`, sharedTree: false }),
-      /cannot retry because immutable recovery fact: cleanup requires the completed WorktreeCreate checkout binding/,
-    );
-    assert.equal(fs.existsSync(worktree), true);
+    const retry = store.prepareDispatch(slug, ticket.ref, { sessionId: `${sessionId}-retry`, sharedTree: false });
+    assert.notEqual(retry.token, prepared.token);
+    assert.equal(fs.existsSync(worktree), false);
   } finally {
     store.releaseTicket(slug, ticket.ref, 'markerless-terminal-cleanup', { status: 'todo', source: 'test', force: true });
     if (fs.existsSync(worktree)) git(PROJECT, ['worktree', 'remove', '--force', worktree]);
@@ -325,7 +354,7 @@ test('terminal lifecycle without a completed marker binding preserves the checko
       ...terminalLifecycleState(),
     });
     assert.equal(result.reclaimed, false);
-    assert.match(result.message, /completed WorktreeCreate checkout binding/);
+    assert.match(result.message, /WorktreeCreate binding was incomplete and could not be matched/);
     assert.equal(fs.existsSync(candidate.worktree), true);
   } finally {
     fs.rmSync(candidate.repository, { recursive: true, force: true });

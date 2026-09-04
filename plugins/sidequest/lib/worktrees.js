@@ -113,19 +113,74 @@ function provisionDependencyDirectory(repository, worktree, dependency) {
   }
   nativeFs.symlinkSync(source, target, process.platform === "win32" ? "junction" : "dir");
 }
-function provisionWorktree(repository, worktree, config) {
+function runWorktreeSetup(setup, worktree, timeoutMs) {
+  return new Promise((resolve) => {
+    const child = spawn(setup, {
+      cwd: worktree,
+      shell: true,
+      detached: process.platform !== "win32",
+      windowsHide: true,
+      stdio: ["ignore", "ignore", "pipe"]
+    });
+    const stderr = [];
+    let settled = false;
+    let timedOut = false;
+    let deadline = null;
+    const finish = (failure) => {
+      if (settled) return;
+      settled = true;
+      if (deadline) clearTimeout(deadline);
+      resolve(failure);
+    };
+    const stop = () => {
+      timedOut = true;
+      if (process.platform === "win32") {
+        try {
+          spawnSync("taskkill", ["/pid", String(child.pid), "/t", "/f"], { windowsHide: true });
+        } catch (_) {
+        }
+      } else {
+        try {
+          process.kill(-child.pid, "SIGTERM");
+        } catch (_) {
+          try {
+            child.kill("SIGTERM");
+          } catch (_2) {
+          }
+        }
+      }
+    };
+    deadline = timeoutMs ? setTimeout(stop, timeoutMs) : null;
+    child.stderr.on("data", (chunk) => stderr.push(chunk));
+    child.once("error", (error) => {
+      finish({
+        command: setup,
+        reason: timedOut && timeoutMs ? `timed out after ${timeoutMs}ms` : "failed to start",
+        stderrTail: String(error.message || "").trim().slice(-1e3)
+      });
+    });
+    child.once("close", (status) => {
+      if (timedOut || status !== 0) {
+        finish({
+          command: setup,
+          reason: timedOut && timeoutMs ? `timed out after ${timeoutMs}ms` : `exited with status ${status ?? "unknown"}`,
+          stderrTail: Buffer.concat(stderr).toString("utf8").trim().slice(-1e3)
+        });
+        return;
+      }
+      finish(null);
+    });
+  });
+}
+async function provisionWorktree(repository, worktree, config, options = {}) {
   for (const dependency of config.worktreeDependencyPaths || []) {
     provisionDependencyDirectory(repository, worktree, dependency);
   }
   const setup = String(config.worktreeSetup || "").trim();
-  if (!setup) return;
-  try {
-    execFileSync(setup, { cwd: worktree, encoding: "utf8", shell: true, windowsHide: true, stdio: ["ignore", "pipe", "pipe"] });
-  } catch (error) {
-    const detail = String(error?.stderr || error?.message || "").trim();
-    throw new Error(`worktree setup command failed: ${setup}${detail ? `
-${detail.slice(0, 1e3)}` : ""}`);
-  }
+  if (!setup) return null;
+  const configuredTimeoutMs = Number(options.setupTimeoutMs);
+  const timeoutMs = Number.isFinite(configuredTimeoutMs) && configuredTimeoutMs > 0 ? Math.floor(configuredTimeoutMs) : void 0;
+  return runWorktreeSetup(setup, worktree, timeoutMs);
 }
 function gitBashPath(value) {
   const drive = process.platform === "win32" ? /^\/([a-zA-Z])(?=\/|$)/.exec(value) : null;
@@ -926,28 +981,33 @@ function reclaimUnclaimedDispatchWorktree(repository, dispatch, facts = {}) {
       message: "immutable recovery fact: cleanup requires a store-owned terminal dispatch transition."
     };
   }
-  if (!dispatchHasCompletedWorktreeCreation(dispatch)) {
+  const incompleteCreation = !dispatchHasCompletedWorktreeCreation(dispatch);
+  if (incompleteCreation && dispatch?.worktreeBindingSource !== "worktree-create") {
     return {
       worktree: entry.worktree,
       reclaimed: false,
       reason: "lease_refused",
-      message: "immutable recovery fact: cleanup requires the completed WorktreeCreate checkout binding."
+      message: "WorktreeCreate binding was incomplete and could not be matched to this checkout; preserved the checkout."
     };
   }
   const resolveGitPath = (value) => path.isAbsolute(value) ? value : path.resolve(entry.worktree, value);
+  const observedGitDirectory = resolveGitPath(execFileSync("git", ["rev-parse", "--git-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim());
+  const observedCommonGitDirectory = resolveGitPath(execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim());
+  const observedRevision = execFileSync("git", ["rev-parse", "HEAD"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim();
+  const observedCheckoutInstance = worktreeLease.checkoutInstanceIdentity(observedGitDirectory) || worktreeLease.createCheckoutInstanceMarker(observedGitDirectory);
   const lease = worktreeLease.createWorktreeLease({
     repository,
-    gitDirectory: resolveGitPath(execFileSync("git", ["rev-parse", "--git-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim()),
-    commonGitDirectory: resolveGitPath(execFileSync("git", ["rev-parse", "--git-common-dir"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim()),
+    gitDirectory: observedGitDirectory,
+    commonGitDirectory: observedCommonGitDirectory,
     dispatchRef: dispatch.ref || null,
     dispatchBaseline: dispatch.baseCommit || null,
-    observedRevision: execFileSync("git", ["rev-parse", "HEAD"], { cwd: entry.worktree, encoding: "utf8", windowsHide: true }).trim(),
+    observedRevision,
     observedWorktree: entry.worktree,
-    boundRevision: dispatch.worktreeObservedRevision,
+    boundRevision: dispatch.worktreeObservedRevision || observedRevision,
     boundWorktree: dispatch.worktree,
-    boundGitDirectory: dispatch.worktreeGitDirectory,
-    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory,
-    boundCheckoutInstance: dispatch.worktreeCheckoutInstance,
+    boundGitDirectory: dispatch.worktreeGitDirectory || observedGitDirectory,
+    boundCommonGitDirectory: dispatch.worktreeCommonGitDirectory || observedCommonGitDirectory,
+    boundCheckoutInstance: dispatch.worktreeCheckoutInstance || observedCheckoutInstance,
     identity: { status: "bound", agentId: dispatch.agentId || void 0, dispatchRef: dispatch.ref || void 0 },
     phase: "terminal",
     locked: Boolean(entry.locked),

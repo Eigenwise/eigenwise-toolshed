@@ -380,6 +380,7 @@ function createDispatch(dependencies) {
   function strandedBoundAttempt(ticket, state) {
     if (!state || !ticket?.dispatchNonce || !PRE_RUNTIME_DISPATCH_OUTCOMES.has(state.outcome)) return false;
     if (state.terminalAt || state.claimedAt || ticket.claim?.by || ticket.checkpoint) return false;
+    if (state.worktreeBindingSource === "worktree-create" && state.worktree && !state.worktreeCreationCompletedAt) return true;
     const boundMs = Date.parse(state.boundAt);
     return Number.isFinite(boundMs) && Date.now() - boundMs >= claimIdleMs();
   }
@@ -391,6 +392,9 @@ function createDispatch(dependencies) {
     return `${minutes} minute${minutes === 1 ? "" : "s"}`;
   }
   function boundRuntimeBlocker(state) {
+    if (state?.worktreeBindingSource === "worktree-create" && state.worktree && !state.worktreeCreationCompletedAt) {
+      return "bound by WorktreeCreate without a completed checkout identity and is immediately retirable on recovery evidence";
+    }
     const boundMs = Date.parse(state?.boundAt);
     if (!Number.isFinite(boundMs)) return "bound to a runtime";
     const waited = Date.now() - boundMs;
@@ -1555,6 +1559,35 @@ function createDispatch(dependencies) {
     }
     return { ok: false, reason: "dispatch_binding_unavailable" };
   }
+  function recordDispatchWorktreeProvisioningFailure(slug, sessionId, worktree, failure) {
+    const normalizedSessionId = String(sessionId || "").trim();
+    const target = String(worktree || "").trim();
+    const command = String(failure?.command || "").trim();
+    const reason = String(failure?.reason || "").trim();
+    if (!normalizedSessionId || !target || !command || !reason) return { ok: false, reason: "missing_provisioning_failure_facts" };
+    const boundWorktree = canonicalPath(target);
+    for (const candidate of listTickets(slug)) {
+      const state = dispatchState(candidate);
+      if (!state || state.sessionId !== normalizedSessionId || state.sharedTree !== false || state.outcome !== "launched" || state.terminalAt || state.worktreeBindingSource !== "worktree-create" || !state.worktree || canonicalPath(state.worktree) !== boundWorktree) continue;
+      return withTicketLock(slug, candidate.id, () => {
+        const ticket = getTicket(slug, candidate.id);
+        const current = dispatchState(ticket);
+        if (!current || current.sessionId !== normalizedSessionId || current.sharedTree !== false || current.outcome !== "launched" || current.terminalAt || current.worktreeBindingSource !== "worktree-create" || !current.worktree || canonicalPath(current.worktree) !== boundWorktree || !current.worktreeCreationCompletedAt) {
+          return { ok: false, reason: "dispatch_binding_unavailable" };
+        }
+        current.worktreeProvisioningFailure = {
+          command,
+          reason,
+          stderrTail: String(failure?.stderrTail || "").trim().slice(-1e3),
+          at: (/* @__PURE__ */ new Date()).toISOString()
+        };
+        stampDispatchEvent(ticket, "worktree-setup-incomplete", current.worktreeProvisioningFailure.at);
+        putTicket(slug, ticket);
+        return { ok: true };
+      });
+    }
+    return { ok: false, reason: "dispatch_binding_unavailable" };
+  }
   function recoverDispatchWorktreeCreation(slug, sessionId, worktree, error) {
     const normalizedSessionId = String(sessionId || "").trim();
     const target = String(worktree || "").trim();
@@ -2125,6 +2158,7 @@ function createDispatch(dependencies) {
     recoverDispatchQuotaFailure,
     bindDispatchWorktreeCreation,
     completeDispatchWorktreeCreation,
+    recordDispatchWorktreeProvisioningFailure,
     recoverDispatchWorktreeCreation,
     dispatchIdentityDiagnosis,
     dispatchIsolationExpectation,
