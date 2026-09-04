@@ -668,6 +668,8 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       ...(capture?.logPath ? { logPath: String(capture.logPath) } : {}),
       ...(Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {}),
       ...(capture?.shell ? { shell: String(capture.shell) } : {}),
+      ...(Number.isFinite(capture?.waitedForSlotMs) ? { waitedForSlotMs: Number(capture.waitedForSlotMs) } : {}),
+      ...(Number.isInteger(capture?.queuePosition) ? { queuePosition: Number(capture.queuePosition) } : {}),
     };
     ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
     ticket.updatedAt = new Date().toISOString();

@@ -57,6 +57,8 @@ export type CompletedVerificationCapture = Readonly<{
   logPath?: string | null;
   exitCode?: number | null;
   shell?: string | null;
+  waitedForSlotMs?: number;
+  queuePosition?: number;
   dispatchNonce: string;
 }>;
 
