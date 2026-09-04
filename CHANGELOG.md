@@ -8,6 +8,15 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.517.0 (2026-09-04)
+
+### sidequest 5.0.26 → 5.0.27
+
+#### Fixes
+
+- Serialize full-suite verification captures (SQ-2437)
+  Full-suite verification captures now wait for a per-host project slot, so parallel fan-out does not exhaust the phase budget.
+
 ## v3.516.0 (2026-09-04)
 
 ### sidequest 5.0.25 → 5.0.26
