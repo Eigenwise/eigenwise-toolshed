@@ -418,8 +418,7 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
   const integrate = resp.result.tools.find((tool: any) => tool.name === 'integrate');
   assert.match(integrate.description, /Comma-ref group/);
-  assert.match(integrate.inputSchema.properties.ref.description, /comma ref/);
-  assert.match(integrate.inputSchema.properties.wave.description, /waveId,dependencies/);
+  assert.match(integrate.description, /wave=options, refs in ref/);
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
   assert.deepEqual(verdict.inputSchema.properties.outcome.enum, ['accepted', 'rejected', 'inconclusive']);

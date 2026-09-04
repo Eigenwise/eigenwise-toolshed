@@ -159,7 +159,7 @@ const TOOL_DESCRIPTION_OVERRIDES = {
   rework: "repair unbound; bound needs oracle.",
   supersede_submission: "candidate rejection permits supersession.",
   submit: "Submit verified work; clear/force need owner.",
-  integrate: "Comma-ref group.",
+  integrate: "Comma-ref group; wave=options, refs in ref; pinned deliveryMethod; reviewed interaction.",
   comment: "Handoff.",
   comments: "Read comments before work.",
   plan: "Plan.",
