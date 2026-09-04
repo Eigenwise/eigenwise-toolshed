@@ -51,10 +51,10 @@ function deliveredWave(gate: WaveGateResult, verification: VerificationResult): 
   return result;
 }
 
-test('wave assembly names concrete recovery paths for overlapping candidates', () => {
+test('wave assembly admits overlapping candidates so the delivery merge decides whether they conflict', () => {
   const opened = openedWave([
     participant('SQ-1', ['plugins/sidequest/src']),
-    participant('SQ-2', ['plugins/sidequest/test']),
+    participant('SQ-2', ['plugins/sidequest/src']),
   ]);
 
   const decision = wave.assembleWave(opened, [
@@ -62,12 +62,9 @@ test('wave assembly names concrete recovery paths for overlapping candidates', (
     candidate('SQ-2', ['plugins/sidequest/src/lib/kernel/wave.ts']),
   ]);
 
-  assert.equal(decision.ok, false);
-  if (decision.ok) throw new Error('Expected overlapping candidates to be invalidated.');
-  assert.deepEqual(decision.invalidated.map((entry) => entry.ref), ['SQ-1', 'SQ-2']);
-  assert.ok(decision.invalidated.every((entry) => entry.reason === 'surface_overlap'));
-  assert.ok(decision.invalidated.every((entry) => entry.message.includes('Call integrate with one candidate ref')));
-  assert.ok(decision.invalidated.every((entry) => !('refreshRoute' in entry)));
+  assert.equal(decision.ok, true);
+  if (!decision.ok) throw new Error('Expected same-file candidates to remain available for the delivery merge.');
+  assert.deepEqual(decision.assembly.candidates.map((entry) => entry.ref), ['SQ-1', 'SQ-2']);
 });
 
 test('wave assembly invalidates a candidate when its source revision moved', () => {

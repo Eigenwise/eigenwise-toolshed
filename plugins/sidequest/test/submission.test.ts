@@ -4031,4 +4031,73 @@ test('SQ-2337: a failed delivery gate cannot redirect already-landed abandonment
   }
 });
 
+test('SQ-2429: pending candidates block a singleton without invalidation while an explicit clean same-file wave assembles', () => {
+  cleanBranch();
+  try {
+    const docsPath = path.join(PROJECT_DIR, 'docs', 'guide.md');
+    fs.mkdirSync(path.dirname(docsPath), { recursive: true });
+    fs.writeFileSync(docsPath, 'base\n');
+    git(['add', 'docs/guide.md']);
+    git(['commit', '-m', 'same-file wave baseline']);
+    const baseline = git(['rev-parse', 'HEAD']);
+
+    const primary = addTicket('primary prose candidate', { files: ['docs'] });
+    assert.strictEqual(store.claimTicket(slug, primary.ref, 'primary-prose-worker', { direct: true, reason: 'The same-file wave fixture requires a local direct claim.' }).ok, true);
+    fs.writeFileSync(docsPath, 'base\nprimary\n');
+    git(['add', 'docs/guide.md']);
+    git(['commit', '-m', 'primary prose candidate']);
+    const primaryCandidate = git(['rev-parse', 'HEAD']);
+    pin(primary, primaryCandidate);
+    assert.strictEqual(store.submitTicket(slug, primary.ref, 'primary-prose-worker', { commit: primaryCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const primarySubmission = store.getTicket(slug, primary.ref);
+    Object.assign(primarySubmission.submission, {
+      base: baseline, upstream: 'origin/main', upstreamCommit: baseline, integrationBranch: git(['branch', '--show-current']),
+      commits: [primaryCandidate], changedPaths: ['docs/guide.md'],
+    });
+    persist(primarySubmission);
+
+    const liveSibling = addClaimedTicket('live prose sibling without a candidate', 'live-prose-worker', { files: ['docs'] });
+    const liveSiblingAssembly = store.assembleSubmissionWave(slug, [primary.ref]);
+    assert.strictEqual(liveSiblingAssembly.ok, true, liveSiblingAssembly.message);
+    assert.strictEqual(store.releaseTicket(slug, liveSibling.ref, 'live-prose-worker', { status: 'todo' }).ok, true);
+
+    git(['reset', '--hard', baseline]);
+    const sibling = addTicket('submitted prose sibling', { files: ['docs'] });
+    assert.strictEqual(store.claimTicket(slug, sibling.ref, 'submitted-prose-worker', { direct: true, reason: 'The same-file wave fixture requires a local direct claim.' }).ok, true);
+    fs.writeFileSync(docsPath, 'base\n\nsibling\n');
+    git(['add', 'docs/guide.md']);
+    git(['commit', '-m', 'submitted prose sibling']);
+    const siblingCandidate = git(['rev-parse', 'HEAD']);
+    pin(sibling, siblingCandidate);
+    assert.strictEqual(store.submitTicket(slug, sibling.ref, 'submitted-prose-worker', { commit: siblingCandidate, verify: 'node -e "process.exit(0)"' }).ok, true);
+    const siblingSubmission = store.getTicket(slug, sibling.ref);
+    Object.assign(siblingSubmission.submission, {
+      base: baseline, upstream: 'origin/main', upstreamCommit: baseline, integrationBranch: git(['branch', '--show-current']),
+      commits: [siblingCandidate], changedPaths: ['docs/guide.md'],
+    });
+    persist(siblingSubmission);
+
+    const storedPrimary = store.getTicket(slug, primary.ref).submission;
+    const storedSibling = store.getTicket(slug, sibling.ref).submission;
+    assert.deepStrictEqual(storedPrimary.changedPaths, ['docs/guide.md']);
+    assert.deepStrictEqual(storedSibling.changedPaths, ['docs/guide.md']);
+    assert.ok(!storedPrimary.commits.includes(siblingCandidate));
+    assert.ok(!storedSibling.commits.includes(primaryCandidate));
+    const singleton = store.assembleSubmissionWave(slug, [primary.ref]);
+    assert.strictEqual(singleton.ok, false);
+    assert.strictEqual(singleton.reason, 'candidate_overlap');
+    assert.match(singleton.message, new RegExp(`${primary.ref} and ${sibling.ref} \\(docs\\/guide\\.md\\)`));
+    assert.strictEqual(store.getTicket(slug, primary.ref).status, 'doing');
+    assert.strictEqual(store.getTicket(slug, sibling.ref).status, 'doing');
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, primary.ref)), true);
+    assert.strictEqual(store.pendingSubmission(store.getTicket(slug, sibling.ref)), true);
+
+    const assembled = store.assembleSubmissionWave(slug, [primary.ref, sibling.ref]);
+    assert.strictEqual(assembled.ok, true, assembled.message);
+    assert.deepStrictEqual(assembled.wave.participants, [primary.ref, sibling.ref]);
+  } finally {
+    cleanBranch();
+  }
+});
+
 export {};

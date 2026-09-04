@@ -2297,6 +2297,51 @@ test('MCP delivery closure binds the integration revision resolved after board i
   }, 'the closure records the exact integration revision used for reachability');
 });
 
+test('SQ-2429: MCP groomClose records a delivered candidate despite a live overlapping sibling', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  store.setBoardConfig(project, { integrationMode: 'local', integrationBranch: 'main' });
+  const delivered = store.createTicket(project, {
+    title: 'delivered prose candidate', files: ['docs'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm delivery reconciliation ignores a sibling that only holds a live claim',
+  });
+  assert.equal(store.claimTicket(project, delivered.ref, 'delivered-prose-worker', {
+    direct: true, reason: 'The delivery reconciliation fixture requires a local direct claim.',
+  }).ok, true);
+  fs.mkdirSync(path.join(worktree, 'docs'), { recursive: true });
+  fs.writeFileSync(path.join(worktree, 'docs', 'guide.md'), 'delivered\n');
+  gitAt(worktree, ['add', 'docs/guide.md']);
+  gitAt(worktree, ['commit', '-m', 'delivered prose candidate']);
+  const candidate = gitAt(worktree, ['rev-parse', 'HEAD']);
+  gitAt(worktree, ['update-ref', `refs/sidequest/${delivered.ref}`, candidate]);
+  assert.equal(store.submitTicket(project, delivered.ref, 'delivered-prose-worker', {
+    commit: candidate, verify: 'node -e "process.exit(0)"',
+  }).ok, true);
+  const submitted = store.getTicket(project, delivered.ref);
+  const base = gitAt(worktree, ['rev-parse', `${candidate}^`]);
+  Object.assign(submitted.submission, {
+    base, upstream: 'origin/main', upstreamCommit: base, integrationBranch: 'main',
+    commits: [candidate], changedPaths: ['docs/guide.md'],
+  });
+  persistTicket(project, submitted);
+
+  const liveSibling = store.createTicket(project, {
+    title: 'live prose sibling', files: ['docs'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm declared scope without a candidate cannot block recorded delivery',
+  });
+  assert.equal(store.claimTicket(project, liveSibling.ref, 'live-prose-worker', {
+    direct: true, reason: 'The delivery reconciliation fixture requires a local direct claim.',
+  }).ok, true);
+
+  const closed = await callTool('groomClose', {
+    project: worktree, ref: delivered.ref, by: 'delivery-integrator', deliveryCommit: candidate,
+    reason: 'The integration branch already contains the candidate.',
+  });
+  assert.equal(closed.ok, true, closed.message || closed.reason);
+  assert.equal(store.getTicket(project, delivered.ref).status, 'done');
+  assert.equal(store.getTicket(project, liveSibling.ref).claim.by, 'live-prose-worker');
+});
+
 test('MCP submit requires release fragments for marketplace plugin changes', async () => {
   const missingWorktree = createGitWorktree();
   addMarketplaceFixture(missingWorktree);
