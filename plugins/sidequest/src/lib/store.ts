@@ -2653,6 +2653,19 @@ function unrecordedSanctionedCommitWarning(reason?: any) {
   return `this commit was not recorded as sanctioned (${reason}), so further writes in this worktree may be refused until redispatch`;
 }
 
+function commitReachedRef(repo: string, commit: string, ref: string) {
+  try {
+    execFileSync('git', ['merge-base', '--is-ancestor', commit, ref], {
+      cwd: repo,
+      windowsHide: true,
+      stdio: 'pipe',
+    });
+    return true;
+  } catch (_: any) {
+    return false;
+  }
+}
+
 function recordedDelivery(slug?: any, commit?: any, evidence?: any) {
   const requestedCommit = String(commit || '').trim();
   const recordedEvidence = String(evidence || '').trim();
@@ -2671,24 +2684,31 @@ function recordedDelivery(slug?: any, commit?: any, evidence?: any) {
       windowsHide: true,
       stdio: 'pipe',
     }).trim();
-    const targetCommit = integrationTargetCommit(repo, target);
-    const integrationRevision = sourceRevision({
-      source: `git:${target.upstream}`,
-      value: targetCommit,
-      observedAt: new Date().toISOString(),
-    });
-    if (!integrationRevision) throw new Error('could not record the current integration revision');
-    execFileSync('git', ['merge-base', '--is-ancestor', deliveredCommit, integrationRevision.value], {
+    const localBranchRef = `refs/heads/${target.branch}`;
+    const localBranchCommit = execFileSync('git', ['rev-parse', '--verify', `${localBranchRef}^{commit}`], {
       cwd: repo,
+      encoding: 'utf8',
       windowsHide: true,
       stdio: 'pipe',
+    }).trim();
+    const integrationRevision = sourceRevision({
+      source: `git:${target.branch}`,
+      value: localBranchCommit,
+      observedAt: new Date().toISOString(),
     });
-    return { ok: true, commit: deliveredCommit, target, integrationRevision, evidence: recordedEvidence };
+    if (!integrationRevision) throw new Error('could not record the current local integration revision');
+    if (!commitReachedRef(repo, deliveredCommit, integrationRevision.value)) {
+      throw new Error(`${deliveredCommit} is not reachable from ${localBranchRef}`);
+    }
+    const upstream = target.mode === 'remote'
+      ? { ref: target.upstream, reachable: commitReachedRef(repo, deliveredCommit, target.upstream) }
+      : null;
+    return { ok: true, commit: deliveredCommit, target, integrationRevision, upstream, evidence: recordedEvidence };
   } catch (error: any) {
     return {
       ok: false,
       reason: 'delivery_not_reachable',
-      message: `The recorded delivery commit is not reachable from the configured integration branch: ${String(error?.message || error).trim()}. For a submitted reset or working-tree delivery, record the pinned candidate with deliveryMethod reset, working-tree, or manual after its content is present in the integration working tree.`,
+      message: `The recorded delivery commit is not reachable from the local integration branch: ${String(error?.message || error).trim()}. For a submitted reset or working-tree delivery, record the pinned candidate with deliveryMethod reset, working-tree, or manual after its content is present in the integration working tree.`,
     };
   }
 }
@@ -2913,6 +2933,7 @@ function completeTicketAsControlPlane(slug?: any, idOrRef?: any, opts?: any) {
           targetRef: recorded.target.upstream,
           integrationRevision: recorded.integrationRevision,
           evidence: recorded.evidence,
+          ...(recorded.upstream ? { upstream: recorded.upstream } : {}),
           ...(recorded.identity ? { identity: recorded.identity } : {}),
         },
       } : {},
