@@ -68,12 +68,15 @@ function recordCapture(target, capture, cwd) {
     completedAt: (/* @__PURE__ */ new Date()).toISOString(),
     worktree: cwd,
     logPath: capture.logPath,
-    exitCode: capture.exitCode
+    exitCode: capture.exitCode,
+    shell: capture.shell
   });
 }
 function report(capture, recorded) {
   const reason = capture.reason ? ` reason=${JSON.stringify(capture.reason)}` : "";
   process.stdout.write(`verify=${capture.status} exit=${capture.exitCode ?? 2}${reason}
+`);
+  process.stdout.write(`shell=${capture.shell || ""}
 `);
   process.stdout.write(`details=${capture.logPath || ""}
 `);

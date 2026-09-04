@@ -545,7 +545,8 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
         completedAt: new Date(completedAt).toISOString(),
         ...capture?.worktree ? { worktree: String(capture.worktree) } : {},
         ...capture?.logPath ? { logPath: String(capture.logPath) } : {},
-        ...Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {}
+        ...Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {},
+        ...capture?.shell ? { shell: String(capture.shell) } : {}
       };
       ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();

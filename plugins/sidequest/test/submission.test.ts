@@ -311,6 +311,7 @@ test('MCP submit requires a completed capture for the declared executor verifier
     const recorded = recordCapture({ project: PROJECT_DIR, ticket: t.ref }, capture, PROJECT_DIR);
     assert.strictEqual(recorded.ok, true, recorded.message);
     assert.strictEqual(recorded.capture.candidate.value, pinnedCommit);
+    assert.strictEqual(recorded.capture.shell, capture.shell);
 
     const accepted = await callMcp('submit', {
       project: PROJECT_DIR,
