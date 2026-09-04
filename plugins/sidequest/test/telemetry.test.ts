@@ -247,12 +247,31 @@ test('ticket writes never post telemetry to an ambient observer during a test ru
   await new Promise<void>((resolve) => setTimeout(resolve, 300));
   assert.deepStrictEqual(received, []);
 
+  const telemetryRequestBlocker = path.join(SIDEQUEST_HOME, 'block-telemetry-request.js');
+  fs.writeFileSync(telemetryRequestBlocker, `
+const http = require('node:http');
+const originalRequest = http.request;
+http.request = function (...requestArguments) {
+  const request = originalRequest.apply(this, requestArguments);
+  const originalEnd = request.end;
+  request.end = function (...endArguments) {
+    const result = originalEnd.apply(this, endArguments);
+    const deadline = Date.now() + 400;
+    while (Date.now() < deadline) {}
+    return result;
+  };
+  return request;
+};
+`);
+  testContext.after(() => fs.rmSync(telemetryRequestBlocker, { force: true }));
+  const inheritedNodeOptions = process.env.NODE_OPTIONS || '';
   const { cliJson: unisolatedCliJson } = makeCliRunner(BIN, {
     SIDEQUEST_HOME,
     CLAUDE_PROJECT_DIR: PROJ,
     SIDEQUEST_OBSERVER_URL: observerUrl,
     SIDEQUEST_TEST_MODE: '0',
     NODE_TEST_CONTEXT: undefined,
+    NODE_OPTIONS: `${inheritedNodeOptions} --require=${telemetryRequestBlocker.replace(/\\/g, '/')}`.trim(),
   });
   const unisolatedTicket = unisolatedCliJson<{ ticket: { ref: string } }>([
     'add', '-t', 'ambient telemetry emission fixture', '--file', 'lib/tracked.js', '--complexity', '3',
