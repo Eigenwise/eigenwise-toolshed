@@ -2377,6 +2377,15 @@ ${verify.outputTail}` : null
     }
     return conflicts;
   }
+  function omittedPendingSubmissionOverlaps(slug, tickets) {
+    if (tickets.length !== 1) return [];
+    const [participant] = tickets;
+    const participantScope = scopedPaths(participant.files);
+    return listTickets(slug).filter((sibling) => sibling.ref !== participant.ref && !sibling.archived && sibling.status !== "done" && pendingSubmission(sibling)).map((sibling) => {
+      const surfaces = scopedPaths(sibling.submission?.changedPaths).filter((surface) => isInScope(surface, participantScope) || participantScope.some((participantSurface) => isInScope(participantSurface, [surface])));
+      return surfaces.length ? { ref: sibling.ref, surfaces } : null;
+    }).filter((overlap) => overlap !== null);
+  }
   function waveVerificationRequirement(tickets) {
     const requirements = tickets.map(pinnedVerificationRequirement);
     const first = requirements[0];
@@ -2524,6 +2533,7 @@ ${verify.outputTail}` : null
     }
     const firstCandidate = waveCandidates[0];
     if (!firstCandidate) return { ok: false, reason: "wave_baseline_required", message: "Wave assembly requires a candidate baseline." };
+    const omittedPendingOverlaps = omittedPendingSubmissionOverlaps(slug, tickets);
     const opened = openWave({
       baseline: firstCandidate.baseline,
       participants: tickets.map((ticket) => ({
@@ -2584,7 +2594,13 @@ ${verify.outputTail}` : null
         gate
       };
     }
-    return { ok: true, wave: { id: waveId, baseline: opened.baseline, participants: participantRefs }, assembly: decision.assembly, gate };
+    return {
+      ok: true,
+      wave: { id: waveId, baseline: opened.baseline, participants: participantRefs },
+      assembly: decision.assembly,
+      gate,
+      ...omittedPendingOverlaps.length ? { omittedPendingOverlaps } : {}
+    };
   }
   function recordSubmissionWaveDelivery(slug, refs, revision, verification) {
     const participantRefs = Array.from(new Set((Array.isArray(refs) ? refs : [refs]).map((ref) => String(ref || "").trim()).filter(Boolean)));

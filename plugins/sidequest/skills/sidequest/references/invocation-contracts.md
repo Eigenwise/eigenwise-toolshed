@@ -17,6 +17,7 @@ this file only covers what the schema has no way to say.
   `verify` in the form `attestation: <attestationArtifact verbatim> | <evidence produced> | <what it showed>`;
   any other shape is refused.
 - **`submit` command verification**: run the dispatched `verify-capture` wrapper after the final candidate commit. It records a completed capture bound to the ticket, exact declared command, and candidate revision. `verify` still has to equal the declared command, but that string is only a reference to the capture, never proof that it ran. A stale or missing capture is retryable: rerun the exact declared command through the wrapper and submit again. `manual` and `attestation` stay evidence-based.
+- **`integrate` wave assembly**: MCP `ref` is one ticket ref or a comma-separated participant group, such as `"SQ-12,SQ-13"`. `wave` is only the options object, with `waveId`, `dependencies`, `verification`, `skipVerify`, and `verificationWaiver`; an array of refs there is refused. CLI groups stay positional: `sidequest integrate SQ-12 SQ-13 --by <who>`.
 - **`integrate` verification waiver**: `skipVerify: true` also requires `verificationWaiver` with `authority`,
   `reason`, `affectedGate`, and either a bounded `scope` or future `expiresAt`. Sidequest validates and stores
   the waiver Diagnostic with the integration result; a bare `skipVerify` is refused.

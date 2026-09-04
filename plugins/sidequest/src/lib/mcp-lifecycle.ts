@@ -91,6 +91,10 @@ function compactIntegrationDelivery(integration: any) {
 function waveAssemblyAck(slug: string, result: any) {
   const wave = result.wave;
   const gate = result.gate;
+  const omittedPendingOverlaps = Array.isArray(result.omittedPendingOverlaps) ? result.omittedPendingOverlaps : [];
+  const overlapMessage = omittedPendingOverlaps.length
+    ? ` Submitted candidates outside this wave overlap its declared scope: ${omittedPendingOverlaps.map((overlap: any) => `${overlap.ref} (${overlap.surfaces.join(', ')})`).join('; ')}. Include every required participant in the comma-separated ref string before delivery.`
+    : '';
   return Object.assign(mutationAck(slug, result), {
     action: result.ok ? 'wave_assembled' : 'wave_assembly_refused',
     ...(wave ? { wave } : {}),
@@ -101,9 +105,10 @@ function waveAssemblyAck(slug: string, result: any) {
     ...(result.assembly ? { assembly: result.assembly } : {}),
     ...(result.invalidated ? { invalidated: result.invalidated } : {}),
     ...(result.conflicts ? { conflicts: result.conflicts } : {}),
+    ...(omittedPendingOverlaps.length ? { omittedPendingOverlaps } : {}),
     ...(result.ok ? {
       deliveryRequired: true,
-      message: `Wave ${wave.id} assembled with gate ${gate?.state || 'assembled'}. Call integrate again without wave to deliver it.`,
+      message: `Wave ${wave.id} assembled with gate ${gate?.state || 'assembled'}. Call integrate again without wave to deliver it.${overlapMessage}`,
     } : {}),
   });
 }
@@ -944,12 +949,12 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'integrate',
-    description: 'Deliver a ref or exact group. wave assembles and gates only; call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.',
+    description: 'Deliver one ref or a comma-separated ref group. wave assembles and gates only as an options object; call again without wave to deliver. Terminal isolated worktrees are reclaimed best-effort after durable delivery.',
     inputSchema: {
       type: 'object',
       properties: {
-        ref: { type: 'string' },
-        wave: { type: 'object' },
+        ref: { type: 'string', description: 'One ticket ref, or a comma-separated group for wave assembly and delivery.' },
+        wave: { type: 'object', description: 'Wave assembly options: waveId, dependencies, verification, skipVerify, and verificationWaiver. Put group refs in ref, never in an array here.' },
         project: PROJECT_PROP,
         by: { type: 'string' },
         mode: { type: 'string', enum: ['merge', 'replay', 'apply'], description: 'Defaults to the board delivery setting.' },
@@ -968,7 +973,14 @@ const tools: ToolDefinition[] = [
       const by = requireBy(args, 'integrate');
       const refs = String(args.ref).split(',').map((ref: string) => ref.trim()).filter(Boolean);
       if (!refs.length) throw new Error('integrate: pass one or more ticket refs.');
-      if (args.wave != null) {
+      if (Object.hasOwn(args, 'wave')) {
+        if (args.wave === null || Array.isArray(args.wave) || typeof args.wave !== 'object') {
+          return mutationAck(slug, {
+            ok: false,
+            reason: 'wave_options_required',
+            message: 'integrate: wave must be an options object. Pass every wave participant in the comma-separated ref string, for example ref: "SQ-1,SQ-2".',
+          });
+        }
         return waveAssemblyAck(slug, store.assembleSubmissionWave(slug, refs, args.wave));
       }
       const failures: Array<{ reason: string; message: string }> = [];

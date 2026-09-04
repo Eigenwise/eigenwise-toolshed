@@ -226,7 +226,11 @@ const MCP_SCHEMA_PROPERTY_DESCRIPTIONS = {
   story_log: { entry: "Must begin DECISION:, CONSTRAINT:, or DISCOVERY:; max 16,000 UTF-8 bytes." },
   category_edit: { fallbackModel: "null clears fallback." },
   dispatch: { sharedTree: "Only declared shared checkout. Omit for an isolated checkout. Live claims cannot dispatch.", recoveryEvidence: "Recovery evidence." },
-  integrate: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." },
+  integrate: {
+    ref: "One or comma ref.",
+    wave: "waveId,dependencies,verification,skipVerify,verificationWaiver",
+    deliveryInteractionCommit: "Reviewed."
+  },
   groomClose: { deliveryInteractionCommit: "Reviewed descendant, submitted paths only." }
 };
 function toolDescriptor(tool) {
