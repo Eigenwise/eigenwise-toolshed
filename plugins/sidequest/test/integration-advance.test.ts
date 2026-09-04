@@ -673,7 +673,7 @@ test('control-plane delivery validates a reviewed interaction and keeps no-submi
 });
 
 test('groomClose delivers a landed candidate despite an overlapping pending sibling candidate', async () => {
-  const fixture = makeRepo('groom-close-overlapping-pending-candidate');
+  const fixture = makeRepo('gc-ovl');
   const { slug } = store.ensureProject(fixture.repo);
   const participant = store.createTicket(slug, {
     title: 'landed participant candidate',
@@ -685,8 +685,8 @@ test('groomClose delivers a landed candidate despite an overlapping pending sibl
   git(['cherry-pick', fixture.submitted], fixture.repo);
   const landedCommit = head(fixture.repo);
 
-  const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-overlapping-pending-candidate');
-  git(['worktree', 'add', '-b', 'worktree-agent-overlapping-pending-candidate', siblingWorktree, 'main'], fixture.repo);
+  const siblingWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-ovl');
+  git(['worktree', 'add', '-b', 'worktree-agent-ovl', siblingWorktree, 'main'], fixture.repo);
   const siblingCommit = commitFile(siblingWorktree, 'feature.txt', 'overlapping sibling candidate\n');
   const sibling = store.createTicket(slug, {
     title: 'overlapping pending sibling candidate',
