@@ -85,6 +85,26 @@ function ticketHandler(name: string): (args: Record<string, unknown>) => any {
   return tool.handler;
 }
 
+test('commit tool adds a DCO trailer when root CONTRIBUTING.md requires git commit -s', () => {
+  const root = repo();
+  fs.writeFileSync(path.join(root, 'CONTRIBUTING.md'), 'Use `git commit -s` for every change.\n');
+  const slug = store.ensureProject(root, 'DCO commit fixture').slug;
+  const ticket = store.createTicket(slug, {
+    title: 'DCO commit fixture',
+    files: ['plugins/sidequest/worker.js'],
+    complexity: 1,
+    complexityWhy: 'The commit tool must pass Git the repository DCO requirement.',
+  });
+  const by = 'dco-commit-worker';
+  assert.equal(store.claimTicket(slug, ticket.ref, by, { direct: true, reason: 'The lifecycle fixture claims its ticket directly.' }).ok, true);
+  fs.writeFileSync(path.join(root, 'plugins', 'sidequest', 'worker.js'), 'export const worker = true;\n');
+
+  const committed = lifecycleHandler('commit')({ project: root, ref: ticket.ref, by, message: 'DCO scoped commit', worktree: root });
+
+  assert.equal(committed.ok, true, committed.message as string);
+  assert.match(git(root, ['log', '-1', '--format=%(trailers)']), /^Signed-off-by: Sidequest Test <sidequest-test@example\.invalid>$/m);
+});
+
 test('configured generated pairs add only tracked outputs to effective scope and scoped commits', () => {
   const root = repo();
   const source = 'plugins/sidequest/src/lib/worker.ts';

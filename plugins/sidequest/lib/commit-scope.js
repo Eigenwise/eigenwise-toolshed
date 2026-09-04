@@ -189,6 +189,16 @@ function stageableScopedPaths(root, scopes) {
   const indexed = indexedPaths(root);
   return scopes.filter((scope) => !ignoredUntrackedScope(root, scope) && (import_node_fs.default.existsSync(import_node_path.default.resolve(root, scope)) || indexed.some((file) => (0, import_scope_match.isInScope)(file, [scope]))));
 }
+function repoRequestsSignoff(root) {
+  return ["DCO", "CONTRIBUTING.md", "AGENTS.md"].some((file) => {
+    try {
+      const content = import_node_fs.default.readFileSync(import_node_path.default.join(root, file), "utf8");
+      return /\bsigned-off-by\s*:|\bgit\s+commit\b[^\r\n]*(?:\s-s\b|\s--signoff\b)/i.test(content);
+    } catch {
+      return false;
+    }
+  });
+}
 function workingPaths(cwd) {
   const status = git(cwd, ["status", "--porcelain=v1", "-z", "--untracked-files=all"]);
   const entries = status.split("\0");
@@ -643,7 +653,9 @@ function commitScoped(cwd, message, files) {
       ...concreteGlobPaths.filter((scope) => !ignoredUntrackedScope(root, scope))
     ])];
     if (stageableScopes.length) git(root, ["add", "--all", "--", ...stageableScopes]);
-    git(root, ["commit", "--only", "-m", String(message || ""), "--", ...committableScopes]);
+    const commitArgs = ["commit", "--only"];
+    if (repoRequestsSignoff(root)) commitArgs.push("--signoff");
+    git(root, [...commitArgs, "-m", String(message || ""), "--", ...committableScopes]);
     const commit = git(root, ["rev-parse", "HEAD"]).trim();
     const validation = validateCommitScope(root, commit, scopes);
     return Object.assign({ commit, missingScopes, unscopedPaths }, validation);
