@@ -214,7 +214,7 @@ const TOOL_DESCRIPTION_OVERRIDES: Record<string, string> = {
   rework: 'repair unbound; bound needs oracle.',
   supersede_submission: 'candidate rejection permits supersession.',
   submit: 'Submit verified work; clear/force need owner.',
-  integrate: 'Deliver ref/wave; pinned deliveryMethod; reviewed interaction.',
+  integrate: 'Comma-ref group.',
   comment: 'Handoff.',
   comments: 'Read comments before work.',
   plan: 'Plan.',

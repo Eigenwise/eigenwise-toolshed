@@ -2656,6 +2656,20 @@ function waveScopeConflicts(slug: any, tickets: any[]) {
   return conflicts;
 }
 
+function omittedPendingSubmissionOverlaps(slug: any, tickets: any[]) {
+  if (tickets.length !== 1) return [];
+  const [participant] = tickets;
+  const participantScope = scopedPaths(participant.files);
+  return listTickets(slug)
+    .filter((sibling) => sibling.ref !== participant.ref && !sibling.archived && sibling.status !== 'done' && pendingSubmission(sibling))
+    .map((sibling) => {
+      const surfaces = scopedPaths(sibling.submission?.changedPaths).filter((surface: string) => isInScope(surface, participantScope)
+        || participantScope.some((participantSurface: string) => isInScope(participantSurface, [surface])));
+      return surfaces.length ? { ref: sibling.ref, surfaces } : null;
+    })
+    .filter((overlap): overlap is { ref: string; surfaces: string[] } => overlap !== null);
+}
+
 function waveVerificationRequirement(tickets: any[]) {
   const requirements = tickets.map(pinnedVerificationRequirement);
   const first = requirements[0];
@@ -2812,6 +2826,7 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   }
   const firstCandidate = waveCandidates[0];
   if (!firstCandidate) return { ok: false, reason: 'wave_baseline_required', message: 'Wave assembly requires a candidate baseline.' };
+  const omittedPendingOverlaps = omittedPendingSubmissionOverlaps(slug, tickets);
   const opened = openWave({
     baseline: firstCandidate.baseline,
     participants: tickets.map((ticket) => ({
@@ -2874,7 +2889,13 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
       gate,
     };
   }
-  return { ok: true, wave: { id: waveId, baseline: opened.baseline, participants: participantRefs }, assembly: decision.assembly, gate };
+  return {
+    ok: true,
+    wave: { id: waveId, baseline: opened.baseline, participants: participantRefs },
+    assembly: decision.assembly,
+    gate,
+    ...(omittedPendingOverlaps.length ? { omittedPendingOverlaps } : {}),
+  };
 }
 
 function recordSubmissionWaveDelivery(slug?: any, refs?: any, revision?: any, verification?: any) {

@@ -416,6 +416,10 @@ test('tools/list advertises the board tools with input schemas', async () => {
   assert.ok(release.inputSchema.properties.outputTail, 'release exposes output evidence for technical blockers and contradictions');
   assert.match(release.inputSchema.properties.outputTail.description, /Required blocker\/contradiction output/);
   assert.equal(release.inputSchema.required.includes('reason'), false, 'release accepts an oracle ask in place of a reason');
+  const integrate = resp.result.tools.find((tool: any) => tool.name === 'integrate');
+  assert.match(integrate.description, /Comma-ref group/);
+  assert.match(integrate.inputSchema.properties.ref.description, /comma ref/);
+  assert.match(integrate.inputSchema.properties.wave.description, /waveId,dependencies/);
   const verdict = resp.result.tools.find((tool: any) => tool.name === 'verdict');
   assert.deepEqual(verdict.inputSchema.required, ['ref', 'text', 'outcome']);
   assert.deepEqual(verdict.inputSchema.properties.outcome.enum, ['accepted', 'rejected', 'inconclusive']);
@@ -2880,6 +2884,111 @@ test('MCP integrate preserves assembled-wave failure details', async () => {
   } finally {
     store.assembleSubmissionWave = originalAssembleSubmissionWave;
   }
+});
+
+test('MCP integrate refuses array wave inputs and documents comma-separated groups', async () => {
+  const project = store.ensureProject(committedRepo('sq-mcp-integrate-wave-shape-')).slug;
+  const originalAssembleSubmissionWave = store.assembleSubmissionWave;
+  const received: any[] = [];
+  store.assembleSubmissionWave = (_slug: string, refs: string[], wave: any) => {
+    received.push({ refs, wave });
+    return {
+      ok: true,
+      wave: { id: 'wave-input-shape', participants: refs },
+      gate: { state: 'gate_passed' },
+    };
+  };
+  try {
+    const arrayWave = await callTool('integrate', {
+      project,
+      ref: 'SQ-9001',
+      by: 'wave-input-tester',
+      wave: ['SQ-9001', 'SQ-9002'],
+    });
+    assert.equal(arrayWave.ok, false);
+    assert.equal(arrayWave.reason, 'wave_options_required');
+    assert.match(arrayWave.message, /comma-separated ref string/);
+    assert.deepEqual(received, []);
+
+    const scalarWave = await callTool('integrate', {
+      project,
+      ref: 'SQ-9001',
+      by: 'wave-input-tester',
+      wave: 'SQ-9001,SQ-9002',
+    });
+    assert.equal(scalarWave.ok, false);
+    assert.equal(scalarWave.reason, 'wave_options_required');
+
+    const grouped = await callTool('integrate', {
+      project,
+      ref: 'SQ-9001,SQ-9002',
+      by: 'wave-input-tester',
+      wave: {},
+    });
+    assert.equal(grouped.ok, true, grouped.message || grouped.reason);
+    assert.deepEqual(grouped.participantRefs, ['SQ-9001', 'SQ-9002']);
+    assert.deepEqual(received, [{ refs: ['SQ-9001', 'SQ-9002'], wave: {} }]);
+  } finally {
+    store.assembleSubmissionWave = originalAssembleSubmissionWave;
+  }
+
+  const repositoryRoot = path.resolve(__dirname, '..', '..', '..');
+  const cliHelp = fs.readFileSync(path.join(repositoryRoot, 'plugins', 'sidequest', 'bin', 'sidequest.js'), 'utf8');
+  const invocationContracts = fs.readFileSync(path.join(repositoryRoot, 'plugins', 'sidequest', 'skills', 'sidequest', 'references', 'invocation-contracts.md'), 'utf8');
+  const gettingStarted = fs.readFileSync(path.join(repositoryRoot, 'docs', 'src', 'content', 'docs', 'getting-started', 'sidequest.md'), 'utf8');
+  assert.match(cliHelp, /MCP ref uses one comma-separated string and wave is an options object/);
+  assert.match(invocationContracts, /MCP `ref` is one ticket ref or a comma-separated participant group/);
+  assert.match(gettingStarted, /MCP wave groups go in one comma-separated `ref` string/);
+});
+
+test('MCP integrate acknowledges pending submitted overlaps omitted from a singleton wave', async () => {
+  const project = store.ensureProject(fs.mkdtempSync(path.join(os.tmpdir(), 'sq-mcp-wave-omitted-overlap-'))).slug;
+  const candidate = store.createTicket(project, {
+    title: 'singleton wave candidate', files: ['lib/shared.js'], complexity: 2,
+    labels: ['direct-ok'], complexityWhy: 'exercise the singleton wave acknowledgement',
+  });
+  const sibling = store.createTicket(project, {
+    title: 'submitted sibling', files: ['lib/shared.js'], complexity: 2,
+    labels: ['direct-ok'], complexityWhy: 'exercise the pending overlap acknowledgement',
+  });
+  claimDispatchedTicket(project, candidate, 'singleton-wave-worker', true);
+  claimDispatchedTicket(project, sibling, 'submitted-sibling-worker', true);
+  const pendingCandidate = store.getTicket(project, candidate.ref);
+  const pendingSibling = store.getTicket(project, sibling.ref);
+  const baseline = {
+    revision: { source: 'fixture', value: 'base-1', observedAt: '2026-09-04T00:00:00.000Z' },
+    purpose: 'dispatch',
+  };
+  const verification = { kind: 'custom', status: 'manual', evidence: 'fixture gate accepted' };
+  for (const [ticket, revision] of [[pendingCandidate, 'candidate-1'], [pendingSibling, 'sibling-1']] as const) {
+    ticket.claim = null;
+    ticket.submission = {
+      sourceRevision: { source: 'fixture', value: revision, observedAt: '2026-09-04T00:00:00.000Z' },
+      baseline,
+      changedPaths: ['lib/shared.js'],
+      verificationResult: verification,
+    };
+    db.putRow(db.openDb(SIDEQUEST_HOME), 'tickets', {
+      id: ticket.id,
+      project,
+      ref: ticket.ref,
+      status: ticket.status,
+      archived: 0,
+      ord: ticket.order,
+      claim_by: null,
+      data: ticket,
+    });
+  }
+
+  const assembled = await callTool('integrate', {
+    project,
+    ref: candidate.ref,
+    by: 'wave-overlap-tester',
+    wave: { verification },
+  });
+  assert.equal(assembled.ok, true, assembled.message || assembled.reason);
+  assert.deepEqual(assembled.omittedPendingOverlaps, [{ ref: sibling.ref, surfaces: ['lib/shared.js'] }]);
+  assert.match(assembled.message, new RegExp(`Submitted candidates outside this wave overlap its declared scope: ${sibling.ref}`));
 });
 
 test('MCP resolves a persisted filesystem-snapshot adapter without runtime registration', async () => {

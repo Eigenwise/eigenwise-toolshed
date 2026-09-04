@@ -136,6 +136,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.
 
+**A wave left out a submitted ticket.** MCP wave groups go in one comma-separated `ref` string, such as `SQ-12,SQ-13`; `wave` is the options object, not a list of refs. The assembled acknowledgement names submitted siblings outside the group whose changed paths overlap the selected ticket's scope.
+
 **A submission sat so long it can no longer be integrated.** If the branch has moved far enough that the submitted work no longer merges, there is nothing left to review. Ask Claude to check whether the behavior the ticket asked for is already on the branch. If it is, Claude retires the submission with that evidence and closes the ticket; if it is not, the work needs re-filing against current source. Claude cannot retire a submission whose commit did reach the branch, so this cannot quietly discard work that shipped.
 
 See the [generated Sidequest reference](../../reference/sidequest/) for the agent-facing tool and configuration details, or the [Sidequest plugin README](https://github.com/Eigenwise/eigenwise-toolshed/tree/main/plugins/sidequest) for the project landing page.
