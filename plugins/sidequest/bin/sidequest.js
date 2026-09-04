@@ -251,7 +251,7 @@ const HELP_COMMANDS = {
   claim: 'sidequest claim <id|SQ-n> [--by who] [--token-file path] [--effort level] [--force] [--direct --reason "why"]',
   checkpoint: 'sidequest checkpoint <id|SQ-n> --by who (--commit <hash> | --worktree <absolute-path>) --verify "command: result" [--ttl-minutes N] [--json]',
   claims: "sidequest claims sweep [--project <path-or-slug>]",
-  worktrees: "sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]",
+  worktrees: "sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  inspect stale agent worktrees; --yes reclaims clean, settled legacy checkouts without a lease after the minimum age",
   next: 'sidequest next [--by who] [-p priority] [--model <model>] [--category <id>] [--direct --reason "why"]',
   reconcile: 'sidequest reconcile [--session <id>] [--reason "..."]',
   work: "sidequest work|drain",
@@ -425,7 +425,7 @@ Native Agent dispatch (routed work stays in this conversation):
     then two activity-based backstops: no board activity for SIDEQUEST_CLAIM_IDLE_MIN (default 60m) with no live executor
     associated, or SIDEQUEST_CLAIM_ABANDON_MIN (default 1440m) for a death nothing observed. A running executor's claim is
     never swept on age, and closeout (commit/submit/done) never consults these windows.
-  sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list unlocked stale agent worktrees; backs up dirty cleanup before removal
+  sidequest worktrees sweep [--dry-run] [--yes] [--min-age-hours N] [--project <path-or-slug>]  list stale agent worktrees; --yes reclaims clean, settled legacy checkouts without a lease after the minimum age and backs up dirty cleanup before removal
   sidequest recover-shared --project <path-or-slug> --stash <stash@{n}> --yes  reset a dirty shared checkout only after verifying its named stash
 
 Assigning (persistent owner, e.g. handing a ticket to the human — separate from a claim):

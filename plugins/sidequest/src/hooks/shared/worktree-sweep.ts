@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { stringField, type HookInput } from './input.js';
 import { pluginRoot, runtimeModule } from './paths.js';
+import { writeSweepProgress, type SweepProgress } from './sweep-handoff.js';
 
 const MAX_PROJECTS_PER_START = 3;
 const MAX_CANDIDATES_PER_PROJECT = 8;
@@ -34,6 +35,7 @@ interface Worktrees {
     integrationTarget: { upstream: string; branch: string };
     maxCandidates: number;
     notIntegratedSalvageAgeMs: number;
+    onProgress?: (progress: SweepProgress) => void;
   }) => Promise<{
     skipped?: string;
     failures?: Array<{ path: string | null; message: string; suppressed?: boolean }>;
@@ -224,6 +226,22 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
   const notices: string[] = [];
   const worktrees = require(runtimeModule('worktrees')) as Worktrees;
   const activePaths = liveSessionPaths();
+  const progressCwd = stringField(data, 'cwd', 'project_dir', 'projectDir') || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const projectProgress = new Map<string, SweepProgress>();
+  const updateProgress = (project: Project, progress: SweepProgress): void => {
+    projectProgress.set(project.slug, progress);
+    const keptByReason: Record<string, number> = {};
+    let planned = 0;
+    let removed = 0;
+    for (const currentProgress of projectProgress.values()) {
+      planned += currentProgress.planned;
+      removed += currentProgress.removed;
+      for (const [reason, count] of Object.entries(currentProgress.keptByReason)) {
+        keptByReason[reason] = (keptByReason[reason] || 0) + count;
+      }
+    }
+    writeSweepProgress(progressCwd, { planned, removed, keptByReason });
+  };
 
   for (const project of projects) {
     const isCurrentProject = project.slug === current.slug;
@@ -258,6 +276,7 @@ export async function sweepWorktrees(data: HookInput, includeKnownProjects: bool
         integrationTarget: target,
         maxCandidates: MAX_CANDIDATES_PER_PROJECT,
         notIntegratedSalvageAgeMs: (config?.notIntegratedSalvageAgeHours || DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_HOURS) * 60 * 60 * 1e3,
+        onProgress: (progress) => updateProgress(project, progress),
       });
       if (!isCurrentProject) continue;
       if (result.skipped === 'repository_busy') {

@@ -13,6 +13,7 @@ const worktreeLease = require('./kernel/worktree.js') as {
   createCheckoutInstanceMarker: (gitDirectory: string) => string;
   createWorktreeLease: (facts: any) => any;
   worktreeCleanupDecision: (lease: any, registered: readonly string[]) => { allowed: boolean; reason: string };
+  legacyWorktreeCleanupDecision: (facts: { registered: boolean; clean: boolean; oldEnough: boolean; settled: boolean }) => { allowed: boolean; reason: string };
 };
 
 const DEFAULT_MIN_AGE_MS = 3 * 60 * 60 * 1000;
@@ -398,7 +399,7 @@ function parseWorktreeList(output: string): any[] {
     const entry: Record<string, string> = {};
     for (const line of block.split(/\r?\n/)) {
       const match = /^(worktree|HEAD|branch|locked)\s*(.*)$/.exec(line);
-      if (match?.[1] && match[2] != null) entry[match[1].toLowerCase()] = match[2];
+      if (match?.[1] && match[2] != null) entry[match[1].toLowerCase()] = match[1] === 'locked' ? 'true' : match[2];
     }
     return entry;
   }).filter((entry) => entry.worktree);
@@ -580,6 +581,54 @@ async function worktreeAge(pathname: string): Promise<number | null> {
   }
 }
 
+type WorktreeSweepFacts = {
+  clean: boolean;
+  statusKnown: boolean;
+  trackedChanges: boolean;
+  untracked: boolean;
+  ahead: number | null;
+  reachable: boolean;
+  patchEquivalent: boolean;
+  equivalentCommits: number;
+  unmatchedCommits: number | null;
+  ageMs: number | null;
+  minAgeMs: number;
+  oldEnough: boolean;
+  notIntegratedSalvageAgeMs: number;
+  oldEnoughToSalvage: boolean;
+};
+
+async function inspectWorktree(entry: { worktree: string }, minAgeMs: number, upstream: string, notIntegratedSalvageAgeMs: number): Promise<WorktreeSweepFacts> {
+  const [cleanResult, ageMs, patch, reachable] = await Promise.all([
+    git(entry.worktree, ['status', '--porcelain']),
+    worktreeAge(entry.worktree),
+    patchEquivalence(entry.worktree, 'HEAD', upstream),
+    reachableFrom(entry.worktree, 'HEAD', upstream),
+  ]);
+  const statusLines = cleanResult.stdout.split(/\r?\n/).filter(Boolean);
+  return {
+    clean: cleanResult.ok && statusLines.length === 0,
+    statusKnown: cleanResult.ok,
+    trackedChanges: cleanResult.ok && statusLines.some((line) => !line.startsWith('?? ')),
+    untracked: cleanResult.ok && statusLines.some((line) => line.startsWith('?? ')),
+    ahead: patch.ahead,
+    reachable,
+    patchEquivalent: patch.equivalent,
+    equivalentCommits: patch.equivalentCommits,
+    unmatchedCommits: patch.unmatchedCommits,
+    ageMs,
+    minAgeMs,
+    oldEnough: ageMs != null && ageMs >= minAgeMs,
+    notIntegratedSalvageAgeMs,
+    oldEnoughToSalvage: ageMs != null && ageMs >= notIntegratedSalvageAgeMs,
+  };
+}
+
+function factsForEntry(facts: WorktreeSweepFacts): Omit<WorktreeSweepFacts, 'statusKnown' | 'trackedChanges' | 'untracked'> {
+  const { statusKnown: _statusKnown, trackedChanges: _trackedChanges, untracked: _untracked, ...entryFacts } = facts;
+  return entryFacts;
+}
+
 async function patchEquivalence(repo: string, revision: string, upstream: string): Promise<any> {
   const base = await git(repo, ['merge-base', revision, upstream]);
   if (!base.ok || !base.stdout) return { equivalent: false, ahead: null, equivalentCommits: 0, unmatchedCommits: null };
@@ -629,74 +678,95 @@ function skippedEntry(entry: any, ticket: any, reason: string, current: boolean)
   };
 }
 
+type ClassifiedWorktreeEntry = { worktree: string; branch?: string };
+type ClassifiedWorktreeTicket = { ref?: string } | null;
+
+function classifiedWorktreeEntry(entry: ClassifiedWorktreeEntry, ticket: ClassifiedWorktreeTicket, facts: WorktreeSweepFacts, action: string, reason: string, current: boolean) {
+  return {
+    path: entry.worktree,
+    branch: entry.branch || null,
+    ticket: ticket ? ticket.ref : null,
+    ...factsForEntry(facts),
+    locked: null,
+    action,
+    reason,
+    current,
+  };
+}
+
+function canReclaimLegacyWorktree(ticket: { archived?: boolean; status?: string } | null): boolean {
+  return !ticket || finalTicket(ticket);
+}
+
 async function classifyWorktree(repo: string, tickets: any[], entry: any, currentPath: string, minAgeMs: number, upstream: string, livePaths: string[] = [], notIntegratedSalvageAgeMs = DEFAULT_NOT_INTEGRATED_SALVAGE_AGE_MS, registeredWorktrees: readonly string[] = []): Promise<any> {
   const ticket = ticketForWorktree(tickets, entry);
+  const facts = await inspectWorktree(entry, minAgeMs, upstream, notIntegratedSalvageAgeMs);
   const worktreePath = canonicalPath(entry.worktree);
   const current = worktreePath === canonicalPath(currentPath);
-  if (current) return skippedEntry(entry, ticket, 'current_worktree', true);
+  if (current) return classifiedWorktreeEntry(entry, ticket, facts, 'keep', 'current_worktree', true);
+
   const lease = await worktreeCleanupLease(repo, ticket, entry, livePaths);
   const cleanup = worktreeLease.worktreeCleanupDecision(lease, registeredWorktrees);
-  if (!cleanup.allowed) return { ...skippedEntry(entry, ticket, leaseCleanupSkipReason(cleanup), false), lease, leaseDecision: cleanup.reason };
-
-  const [cleanResult, ageMs, patch, reachable] = await Promise.all([
-    git(entry.worktree, ['status', '--porcelain']),
-    worktreeAge(entry.worktree),
-    patchEquivalence(entry.worktree, 'HEAD', upstream),
-    reachableFrom(entry.worktree, 'HEAD', upstream),
-  ]);
-  const clean = cleanResult.ok ? cleanResult.stdout === '' : false;
-  const untracked = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line.startsWith('?? '));
-  const trackedChanges = cleanResult.ok && cleanResult.stdout.split(/\r?\n/).some((line) => line && !line.startsWith('?? '));
-  const oldEnough = ageMs != null && ageMs >= minAgeMs;
-  const oldEnoughToSalvage = ageMs != null && ageMs >= notIntegratedSalvageAgeMs;
+  if (!cleanup.allowed) {
+    if (lease.identity.status === 'unknown' && canReclaimLegacyWorktree(ticket)) {
+      if (entry.locked) return {
+        ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', 'locked', false),
+        lease,
+        leaseDecision: cleanup.reason,
+      };
+      if (lease.liveness.status === 'live') return {
+        ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', 'live_session', false),
+        lease,
+        leaseDecision: cleanup.reason,
+      };
+      const legacyCleanup = worktreeLease.legacyWorktreeCleanupDecision({
+        registered: registeredWorktrees.some((registered) => canonicalPath(registered) === worktreePath),
+        clean: facts.clean,
+        oldEnough: facts.oldEnough,
+        settled: facts.reachable || facts.patchEquivalent,
+      });
+      return {
+        ...classifiedWorktreeEntry(entry, ticket, facts, legacyCleanup.allowed ? 'remove' : 'keep', legacyCleanup.allowed ? 'legacy_no_lease' : 'legacy_unreclaimed', false),
+        lease,
+        leaseDecision: cleanup.reason,
+      };
+    }
+    return {
+      ...classifiedWorktreeEntry(entry, ticket, facts, 'keep', leaseCleanupSkipReason(cleanup), false),
+      lease,
+      leaseDecision: cleanup.reason,
+    };
+  }
 
   let action = 'keep';
   let reason = 'not_integrated';
-  if (!cleanResult.ok) reason = 'status_unknown';
-  else if (ticket?.archived && !trackedChanges) {
+  if (!facts.statusKnown) reason = 'status_unknown';
+  else if (ticket?.archived && !facts.trackedChanges) {
     action = 'remove';
     reason = 'ticket_archived';
-  } else if (ticket?.status === 'done' && !trackedChanges) {
+  } else if (ticket?.status === 'done' && !facts.trackedChanges) {
     action = 'remove';
     reason = 'ticket_done';
-  } else if (trackedChanges && (reachable || patch.equivalent)) {
-    // Both settled-branch reasons below remove the directory, and uncommitted
-    // tracked edits exist nowhere else, so guarding only `reachable` still lost
-    // work through the patch-equivalent branch (SQ-1848 follow-up).
+  } else if (facts.trackedChanges && (facts.reachable || facts.patchEquivalent)) {
+    // Settled branches are removable only after preserving tracked edits, including
+    // patch-equivalent commits that are absent from the integration branch (SQ-1848).
     reason = 'tracked_changes';
-  } else if (!oldEnough) reason = 'too_young';
-  else if (reachable) {
+  } else if (!facts.oldEnough) reason = 'too_young';
+  else if (facts.reachable) {
     action = 'remove';
     reason = 'branch_reachable';
-  } else if (patch.equivalent) {
+  } else if (facts.patchEquivalent) {
     action = 'remove';
     reason = 'patch_equivalent';
-  } else if (oldEnoughToSalvage && untracked) {
+  } else if (facts.oldEnoughToSalvage && facts.untracked) {
     reason = 'unrecoverable_untracked';
-  } else if (oldEnoughToSalvage) {
+  } else if (facts.oldEnoughToSalvage) {
     action = 'salvage';
     reason = 'not_integrated_salvage';
   }
 
   return {
-    path: entry.worktree,
-    branch: entry.branch || null,
-    ticket: ticket ? ticket.ref : null,
-    clean,
-    ahead: patch.ahead,
-    reachable,
-    patchEquivalent: patch.equivalent,
-    equivalentCommits: patch.equivalentCommits,
-    unmatchedCommits: patch.unmatchedCommits,
-    ageMs,
-    minAgeMs,
-    oldEnough,
-    notIntegratedSalvageAgeMs,
-    oldEnoughToSalvage,
-    locked: null,
-    action,
-    reason,
-    current: false,
+    ...classifiedWorktreeEntry(entry, ticket, facts, action, reason, false),
     lease,
     leaseDecision: cleanup.reason,
   };
@@ -1264,6 +1334,27 @@ function reclaimUnclaimedDispatchWorktree(repository: string, dispatch: any, fac
   return { worktree: entry.worktree, branch, reclaimed: true };
 }
 
+type SweepProgressEntry = { action: string; reason?: unknown };
+type SweepProgressOptions = { onProgress?: (progress: { planned: number; removed: number; keptByReason: Record<string, number> }) => void };
+
+function sweepProgress(entries: readonly SweepProgressEntry[], removed: readonly string[]): { planned: number; removed: number; keptByReason: Record<string, number> } {
+  const keptByReason: Record<string, number> = {};
+  for (const entry of entries) {
+    if (entry.action !== 'keep') continue;
+    const reason = String(entry.reason || 'unknown');
+    keptByReason[reason] = (keptByReason[reason] || 0) + 1;
+  }
+  return {
+    planned: entries.filter((entry) => entry.action === 'remove' || entry.action === 'salvage').length,
+    removed: removed.length,
+    keptByReason,
+  };
+}
+
+function reportSweepProgress(options: SweepProgressOptions, entries: readonly SweepProgressEntry[], removed: readonly string[]): void {
+  if (typeof options.onProgress === 'function') options.onProgress(sweepProgress(entries, removed));
+}
+
 async function sweep(repo: string, tickets: any[], options: any = {}): Promise<any> {
   const minAgeMs = Number.isFinite(Number(options.minAgeMs)) && Number(options.minAgeMs) >= 0
     ? Number(options.minAgeMs)
@@ -1313,6 +1404,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
   )));
   const execute = !!options.execute;
   const removed: string[] = [];
+  reportSweepProgress(options, entries, removed);
   const backups: string[] = [];
   const salvaged: Array<{ path: string; ref: string; uncommittedRef: string | null; recovery: string }> = [];
   const deletedBranches: string[] = [];
@@ -1325,11 +1417,13 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
       if (shouldSkipKnownFailure(entry.path)) {
         entry.action = 'keep';
         entry.reason = 'known_permanent_failure';
+        reportSweepProgress(options, entries, removed);
         continue;
       }
       if (await hasReparsePoint(entry.path)) {
         entry.action = 'keep';
         entry.reason = 'reparse_point';
+        reportSweepProgress(options, entries, removed);
         continue;
       }
       if (entry.action === 'salvage') {
@@ -1340,6 +1434,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
           entry.action = 'keep';
           entry.reason = 'salvage_failed';
           failures.push({ path: entry.path, message: `salvage failed: ${(error && error.message) || error}` });
+          reportSweepProgress(options, entries, removed);
           continue;
         }
       }
@@ -1363,16 +1458,19 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
           entry.action = 'keep';
           entry.reason = 'quarantine_failed';
           failures.push({ path: entry.path, message: `${message}; quarantine failed: ${quarantine.stderr}` });
+          reportSweepProgress(options, entries, removed);
           continue;
         }
         entry.action = 'quarantine';
         entry.reason = 'remove_failed_quarantined';
         entry.quarantine = quarantine.destination;
         quarantined.push({ path: entry.path, destination: quarantine.destination, message });
+        reportSweepProgress(options, entries, removed);
         continue;
       }
       clearFailure(entry.path);
       removed.push(entry.path);
+      reportSweepProgress(options, entries, removed);
       if (entry.orphanDirectory) continue;
       const branch = localBranchName(entry.branch);
       if (!branch) continue;
@@ -1401,6 +1499,7 @@ async function sweep(repo: string, tickets: any[], options: any = {}): Promise<a
     }
   }
 
+  reportSweepProgress(options, entries, removed);
   return {
     dryRun: !execute,
     minAgeMs,
