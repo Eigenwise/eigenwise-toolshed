@@ -631,7 +631,7 @@ const tools = [
   },
   {
     name: "commit",
-    description: "Commit only a claimed ticket’s declared paths in an explicit local git worktree. Returns the commit hash; foreign staged paths stay staged.",
+    description: "Commit only a claimed ticket’s declared paths in an explicit local git worktree. Returns the commit hash; foreign staged paths stay staged. Repositories whose root DCO, CONTRIBUTING.md, or AGENTS.md asks for a Signed-off-by trailer or git commit -s receive --signoff.",
     inputSchema: {
       type: "object",
       properties: {
