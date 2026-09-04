@@ -8,6 +8,24 @@ Releases before v3.208.0 predate this file and are not backfilled; `git log` is 
 those. Entries are generated from `.release/unreleased/*.md` by `scripts/release/cut.mjs`, so
 nothing here is hand-written.
 
+## v3.516.0 (2026-09-04)
+
+### sidequest 5.0.25 → 5.0.26
+
+#### Fixes
+
+- Run Windows verify captures through a POSIX shell (SQ-2431)
+  Verify captures on Windows now run through Git Bash when Git for Windows provides one, record which shell ran, and report a Command Prompt parse failure as `could_not_run` instead of `toolchain_missing`.
+- Sign board commits when the repository requires DCO (SQ-2432)
+  The board commit tool adds the `Signed-off-by` trailer when the repository asks for `git commit -s` (a `DCO`, `CONTRIBUTING.md`, or `AGENTS.md` at the root naming it), so executor commits pass DCO checks without a cherry-pick.
+- Dispatch isolated worktrees from local main (SQ-2433)
+  Isolated dispatches now start from unpushed local integration work when it is ahead of origin, so executor worktrees and submission baselines match the branch that will receive the change.
+- Check delivery reachability against the local integration branch (SQ-2434)
+  `groomClose` with a `deliveryCommit` now checks reachability from the local integration branch instead of its upstream, and the completion record says whether the commit has reached the upstream yet.
+- Keep landed Sidequest closes out of pending candidate conflicts (SQ-2435) [`6f06724`](https://github.com/Eigenwise/eigenwise-toolshed/commit/6f06724fb47a68018c330157a5a9e8b432afb795)
+- Live verifier amendments apply immediately (SQ-2436)
+  Updating a claimed ticket's verifier now refreshes its live dispatch and records the old and new command.
+
 ## v3.515.0 (2026-09-04)
 
 ### model-gateway 0.48.19 → 0.48.20
