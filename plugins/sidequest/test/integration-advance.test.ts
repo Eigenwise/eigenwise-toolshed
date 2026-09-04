@@ -444,7 +444,7 @@ test('one passing wave delivers its exact Git participant set before recording d
   }
 });
 
-test('a refused wave preserves candidates, refuses unrelated grooming delivery, and permits singleton integration', () => {
+test('an assembled wave preserves candidates, refuses unrelated grooming delivery, and refuses singleton integration', () => {
   const fixture = makeRepo('refused-wave-keeps-candidates');
   const secondWorktree = path.join(fixture.repo, '.claude', 'worktrees', 'agent-conflict');
   git(['worktree', 'add', '-b', 'worktree-agent-conflict', secondWorktree, 'main'], fixture.repo);
@@ -481,17 +481,16 @@ test('a refused wave preserves candidates, refuses unrelated grooming delivery, 
     worktree: secondWorktree,
   }).ok, true);
 
-  const refusal = store.assembleSubmissionWave(slug, [first.ref, second.ref], {
+  const assembled = store.assembleSubmissionWave(slug, [first.ref, second.ref], {
     verification: store.getTicket(slug, first.ref).submission.verificationResult,
   });
 
-  assert.equal(refusal.ok, false);
-  assert.equal(refusal.reason, 'wave_invalidated');
+  assert.equal(assembled.ok, true, JSON.stringify(assembled));
+  assert.deepEqual(assembled.assembly.candidates.map((candidate: any) => candidate.ref), [first.ref, second.ref]);
   for (const ticketRef of [first.ref, second.ref]) {
     const stored = store.getTicket(slug, ticketRef);
-    assert.equal(stored.status, 'todo');
-    assert.equal(stored.lifecycleAttempt.state, 'invalidated');
-    assert.equal(stored.submission.wave.state, 'invalidated');
+    assert.notEqual(stored.status, 'done');
+    assert.notEqual(stored.submission.wave?.state, 'invalidated');
   }
 
   const unrelatedDelivery = commitFile(fixture.repo, 'unrelated.txt', 'unrelated reachable delivery\n');
@@ -506,13 +505,14 @@ test('a refused wave preserves candidates, refuses unrelated grooming delivery, 
   assert.equal(unsafeGroomClose.reason, 'delivery_content_missing');
   assert.match(unsafeGroomClose.message, /abandonSubmission: true/);
   const retained = store.getTicket(slug, first.ref);
-  assert.equal(retained.status, 'todo');
+  assert.notEqual(retained.status, 'done');
   assert.equal(retained.submission.commit, fixture.submitted);
   assert.equal(retained.submission.integratedAt, undefined);
 
   const individual = store.integrateSubmission(slug, first.ref, { mode: 'merge', target });
-  assert.equal(individual.ok, true, JSON.stringify(individual));
-  assert.equal(individual.integration.mode, 'merge');
+  assert.equal(individual.ok, false, JSON.stringify(individual));
+  assert.equal(individual.reason, 'assembled_wave_delivery_required');
+  assert.match(individual.message, new RegExp(assembled.assembly.waveId));
 });
 
 test('reviewed assembled-wave delivery records a landed source with its verified interaction and refuses unsafe substitutes', () => {
@@ -586,10 +586,10 @@ test('reviewed assembled-wave delivery records a landed source with its verified
     target: store.integrationTarget(ungatedSlug),
     deliveryCommit: ungatedSource,
     deliveryInteractionCommit: ungatedInteraction,
-    reason: 'The wave gate was never accepted.',
+    reason: 'The wave gate was never accepted and the landed commit carries none of the candidate.',
   });
   assert.equal(ungated.ok, false);
-  assert.equal(ungated.reason, 'assembled_wave_gate_required');
+  assert.equal(ungated.reason, 'delivery_content_missing');
 });
 
 test('control-plane delivery validates a reviewed interaction and keeps no-submission reachable closure', () => {

@@ -852,10 +852,24 @@ test('candidate changes overlapping a live sibling declared file refuse with the
     source: 'test',
   }).ok, true);
 
+  const liveSiblingOnly = store.assembleSubmissionWave(board, [participant.ref]);
+
+  assert.notStrictEqual(liveSiblingOnly.reason, 'wave_scope_overlap', 'a live claim without a candidate holds nothing to conflict with');
+  assert.notStrictEqual(liveSiblingOnly.reason, 'candidate_overlap');
+  assert.strictEqual(liveSiblingOnly.conflicts, undefined);
+
+  assert.strictEqual(submitSourceRevision(board, sibling.ref, 'overlapping-store-worker', {
+    sourceRevision: { source: 'wiki', value: 'store-revision-9', observedAt: '2026-08-19T01:05:00.000Z' },
+    changedSurfaces: ['plugins/sidequest/src/lib/store.ts'],
+    projectCapabilities: { review: true, process: false, worktree: false },
+    verify: 'attestation: store-revision-9 | review-9 | editor approved the immutable revision',
+    source: 'test',
+  }).ok, true);
+
   const refused = store.assembleSubmissionWave(board, [participant.ref]);
 
   assert.strictEqual(refused.ok, false);
-  assert.strictEqual(refused.reason, 'wave_scope_overlap');
+  assert.strictEqual(refused.reason, 'candidate_overlap');
   assert.deepStrictEqual(refused.conflicts, [{
     participant: participant.ref,
     sibling: sibling.ref,
