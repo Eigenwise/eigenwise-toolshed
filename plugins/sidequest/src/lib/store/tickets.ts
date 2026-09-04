@@ -6,7 +6,7 @@ function createTickets(dependencies: any) {
   const {
     EXECUTOR_ANCHORS_MAX, EXECUTOR_VERIFY_MAX, acquireLock, assetPath, assetsDir, boardConfig,
     claimReclaimable, coerceComplexity, coercePriority, commitScope, copyAsset, createComment,
-    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, effectiveScope, execFileSync, executorText, fs,
+    database, deleteCachedRow, dispatchState, dispatchVerifyCommandError, syncLiveDispatchVerification, effectiveScope, execFileSync, executorText, fs,
     getCategory, getStory, getTicket, listTickets, makeWorkedBy, newTicketId, nextSeq, normalizeRoute, path, pendingSubmission, putTicket,
     queryTickets, queueEventNotification, readMeta, readyTickets, releaseLock,
     requestedReadonlyOverride, requireStatus, requireVerifyOracle, normalizeVerifyOracleKind, saveAssetData, stripLinksTo,
@@ -1160,6 +1160,7 @@ function updateTicket(slug?: any, idOrRef?: any, patch?: any, reviewTarget?: any
       t.executorVerifyKind = executorVerifyKind;
       t.executorAttestationArtifact = executorAttestationArtifact;
       t.executorVerify = executorVerify;
+      syncLiveDispatchVerification(slug, t, { by: patch.by });
     }
     // A provenance stamp may ride along a patch (e.g. the dashboard completing a
     // ticket). Permissive like the routing fields above: a valid stamp is set, a

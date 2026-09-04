@@ -328,7 +328,7 @@ test('MCP submit requires a completed capture for the declared executor verifier
   }
 });
 
-test('capture reports a post-dispatch verify amendment and keeps the legacy fallback', async () => {
+test('capture accepts a live verify amendment and still rejects unrelated commands', async () => {
   const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(1)"';
   const amendedCommand = 'node -e "process.exit(0)"';
   const dispatched = addTicket('amended dispatched capture', {
@@ -346,20 +346,21 @@ test('capture reports a post-dispatch verify amendment and keeps the legacy fall
     executorVerify: amendedCommand,
     source: 'test',
   });
+  const amendedTicket = store.getTicket(slug, dispatched.ref);
+  assert.strictEqual(amendedTicket.dispatch.verificationRequirement.command, amendedCommand);
+  assert.deepStrictEqual(amendedTicket.verificationAmendments.at(-1), {
+    at: amendedTicket.verificationAmendments.at(-1).at,
+    by: null,
+    oldCommand: pinnedCommand,
+    newCommand: amendedCommand,
+  });
 
   const amendedCapture = await runVerifyCapture(amendedCommand, PROJECT_DIR);
   try {
     assert.strictEqual(amendedCapture.status, 'passed');
-    const refused = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, amendedCapture, PROJECT_DIR);
-    assert.strictEqual(refused.ok, false);
-    assert.strictEqual(refused.reason, 'verification_capture_command_mismatch');
-    assert.match(refused.message, /verify was amended after dispatch/);
-    assert.match(refused.message, /Pinned command: /);
-    assert.match(refused.message, /Captured command: /);
-    assert.ok(refused.message.includes(JSON.stringify(pinnedCommand)));
-    assert.ok(refused.message.includes(JSON.stringify(amendedCommand)));
-    assert.match(refused.message, /checkpoint current work, release the claim, and re-dispatch/i);
-    assert.match(refused.message, /groomClose with deliveryCommit/);
+    const recorded = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, amendedCapture, PROJECT_DIR);
+    assert.strictEqual(recorded.ok, true);
+    assert.strictEqual(recorded.capture.command, amendedCommand);
 
     const unrelated = recordCapture({ project: PROJECT_DIR, ticket: dispatched.ref }, {
       ...amendedCapture,
@@ -369,7 +370,7 @@ test('capture reports a post-dispatch verify amendment and keeps the legacy fall
     assert.match(unrelated.message, /declared command pinned at dispatch/);
     assert.match(unrelated.message, /Pinned command: /);
     assert.match(unrelated.message, /Captured command: /);
-    assert.ok(unrelated.message.includes(JSON.stringify(pinnedCommand)));
+    assert.ok(unrelated.message.includes(JSON.stringify(amendedCommand)));
     assert.ok(unrelated.message.includes(JSON.stringify('node --version')));
   } finally {
     fs.rmSync(amendedCapture.logPath, { force: true });

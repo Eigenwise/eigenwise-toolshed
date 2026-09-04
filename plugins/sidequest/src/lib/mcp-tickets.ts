@@ -92,18 +92,14 @@ const VERIFY_ORACLE_PROP = {
   description: 'Pin the required verifier in the prepared attempt. command and suite use one validated command, and suite names resolve during preparation. document, link, schema, manual, review, attestation, and custom preserve their own evidence contract. Attestation evidence uses `attestation: <artifact> | <evidence produced> | <what it showed>`. Executors can provide evidence but cannot replace or skip the pinned verifier. A waiver needs explicit authority, reason, affected gate, and bounded scope or expiry.',
 };
 
-function deferredVerificationAmendment(ticket: any) {
-  const dispatch = ticket.dispatch;
-  const pinnedRequirement = ticket.lifecycleAttempt?.verificationRequirement
-    || dispatch?.lifecycleAttempt?.verificationRequirement
-    || dispatch?.verificationRequirement;
-  if (!dispatch || dispatch.terminalAt || !pinnedRequirement || typeof pinnedRequirement !== 'object') return null;
-  const pinnedCommand = String(pinnedRequirement.command || '').trim();
-  const displayedPinnedCommand = pinnedCommand || '<none>';
+function liveVerificationAmendment(ticket: any) {
+  const amendment = Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments.at(-1) : null;
+  if (!amendment || !ticket.dispatch || ticket.dispatch.terminalAt) return null;
   return {
-    status: 'deferred_until_redispatch',
-    pinnedCommand: pinnedCommand || null,
-    message: `Verification was amended for ${ticket.ref} after dispatch. The live ticket changed, but the open dispatch keeps its pinned verification requirement.\nPinned command:\n${displayedPinnedCommand}\nCheckpoint current work, release the claim, and re-dispatch; the recovery dispatch resumes the retained worktree and pins the amended verify. If the work is already verified by other evidence, release the claim and use orchestrator groomClose with deliveryCommit.`,
+    status: 'applied_to_live_dispatch',
+    oldCommand: amendment.oldCommand || null,
+    newCommand: amendment.newCommand || null,
+    message: `Verification was amended for ${ticket.ref}. The live dispatch now requires ${amendment.newCommand || '<none>'}; it previously required ${amendment.oldCommand || '<none>'}.`,
   };
 }
 
@@ -219,7 +215,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'update',
-    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. Any omitted field is left unchanged. Verify changes affect future dispatches; an open dispatch keeps its pinned verifier and the response explains recovery. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
+    description: 'Update ticket fields by scope. A live claim permits closeout-affecting fields only from the runtime session that prepared its dispatch; by is a label, not proof. Executors must use scopeRequest for files. A control-plane verifier amendment updates the live dispatch requirement and records the old and new command on the ticket. Any omitted field is left unchanged. Set route only for a one-ticket model override, or "none" to clear it. Editing a category route repoints future tickets too. model/effort are not accepted. Deletion is not a status; use the permanent remove tool instead.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -288,7 +284,8 @@ const tools: ToolDefinition[] = [
         }
       }
       const verificationWasAmended = (args.verify !== undefined && args.verify !== existing.executorVerify)
-        || (args.verifyKind !== undefined && args.verifyKind !== existing.executorVerifyKind);
+        || (args.verifyKind !== undefined && args.verifyKind !== existing.executorVerifyKind)
+        || (args.attestationArtifact !== undefined && args.attestationArtifact !== existing.executorAttestationArtifact);
       const patch: any = { source: 'mcp', by: String(args.by || '').trim() || null };
       for (const k of ['title', 'description', 'priority', 'status', 'highStakes', 'labels', 'files', 'complexity']) {
         if (args[k] !== undefined) patch[k] = args[k];
@@ -333,11 +330,11 @@ const tools: ToolDefinition[] = [
       warnings.push(...store.ticketPlanningWarnings(t, meta.path));
       const presentedWarnings = store.presentWarnings(t, warnings, sessionOf(args));
       const verificationAmendment = verificationWasAmended
-        ? deferredVerificationAmendment(t)
+        ? liveVerificationAmendment(t)
         : null;
       return mutationAck(slug, { ok: true, ticket: t }, Object.assign(
         presentedWarnings.length ? { warnings: presentedWarnings } : {},
-        verificationAmendment ? { deferredVerificationAmendment: verificationAmendment } : {},
+        verificationAmendment ? { verificationAmendment } : {},
         sameBasenameSiblingDetails(slug, t, meta.path, 'update'),
       ));
     },

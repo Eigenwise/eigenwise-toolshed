@@ -18,6 +18,7 @@ function createTickets(dependencies) {
     deleteCachedRow,
     dispatchState,
     dispatchVerifyCommandError,
+    syncLiveDispatchVerification,
     effectiveScope,
     execFileSync,
     executorText,
@@ -1033,6 +1034,7 @@ function createTickets(dependencies) {
         t.executorVerifyKind = executorVerifyKind;
         t.executorAttestationArtifact = executorAttestationArtifact;
         t.executorVerify = executorVerify;
+        syncLiveDispatchVerification(slug, t, { by: patch.by });
       }
       if (patch.workedBy !== void 0) {
         try {
