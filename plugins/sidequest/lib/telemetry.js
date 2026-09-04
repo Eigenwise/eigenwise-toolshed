@@ -40,7 +40,7 @@ const { canonicalPreparedDispatchExecutor } = require("./prepared-dispatch.js");
 const OBSERVER_URL = process.env.SIDEQUEST_OBSERVER_URL || "http://127.0.0.1:14319/v1/observations";
 const IDENTIFIER = /^[A-Za-z0-9][A-Za-z0-9_.:@-]{0,255}$/;
 const EFFORTS = /* @__PURE__ */ new Set(["low", "medium", "high", "xhigh", "max"]);
-const TIMEOUT_MS = 250;
+const OBSERVER_RESPONSE_TIMEOUT_MS = 1e3;
 let testSink = null;
 function isRecord(value) {
   return value !== null && typeof value === "object";
@@ -161,9 +161,13 @@ function send(observation) {
   const body = JSON.stringify([observation]);
   const request = import_node_http.default.request(OBSERVER_URL, {
     method: "POST",
-    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) },
-    timeout: TIMEOUT_MS
+    headers: { "content-type": "application/json", "content-length": Buffer.byteLength(body) }
   }, (response) => response.resume());
+  request.on("socket", (socket) => {
+    const armResponseTimeout = () => request.setTimeout(OBSERVER_RESPONSE_TIMEOUT_MS);
+    if (socket.connecting) socket.once("connect", armResponseTimeout);
+    else armResponseTimeout();
+  });
   request.on("timeout", () => request.destroy());
   request.on("error", () => {
   });
