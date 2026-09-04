@@ -1223,13 +1223,14 @@ test('board_config defaults and stores the integration branch', async () => {
   assert.match(rejected.content[0].text, /integrationBranch must be a valid Git branch name/);
 });
 
-test('board_config defaults and stores the worktree base', async () => {
+test('board_config defaults to automatic worktree bases and stores explicit choices', async () => {
   const project = store.ensureProject(createGitWorktree(), 'SQ worktree base').slug;
-  assert.equal((await callTool('board_config', { project })).worktreeBase, 'origin-main');
+  assert.equal((await callTool('board_config', { project })).worktreeBase, 'auto');
+  assert.equal((await callTool('board_config', { project, worktreeBase: 'origin-main' })).worktreeBase, 'origin-main');
   assert.equal((await callTool('board_config', { project, worktreeBase: 'local-main' })).worktreeBase, 'local-main');
   const rejected = await callToolRaw('board_config', { project, worktreeBase: 'head' });
   assert.equal(rejected.isError, true);
-  assert.match(rejected.content[0].text, /must be one of: origin-main, local-main/);
+  assert.match(rejected.content[0].text, /must be one of: auto, origin-main, local-main/);
 });
 
 test('board_config renames only a board display name', async () => {

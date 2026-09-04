@@ -1358,22 +1358,37 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
     t.storyLogSeenSeq = storyLogRevision;
     const contractDrift = t.storyContractDrift || null;
     const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || 'auto').trim().toLowerCase();
-    const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || 'origin-main';
+    const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || 'auto';
     const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
     const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
+    const remoteIntegrationTarget = () => {
+      try {
+        return integrationTarget(slug, { mode: 'remote' });
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : String(error);
+        throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
+      }
+    };
     const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === 'auto'
       ? configuredWorktreeBase === 'local-main'
         ? integrationTarget(slug, { mode: 'local' })
-        : hasOriginRemote(readMeta(slug)?.path || '')
-          ? (() => {
+        : configuredWorktreeBase === 'origin-main'
+          ? hasOriginRemote(readMeta(slug)?.path || '')
+            ? remoteIntegrationTarget()
+            : null
+          : (() => {
+            const projectPath = readMeta(slug)?.path || '';
+            if (!hasOriginRemote(projectPath)) return null;
+            let localTarget;
             try {
-              return integrationTarget(slug, { mode: 'remote' });
-            } catch (error: unknown) {
-              const message = error instanceof Error ? error.message : String(error);
-              throw new Error(`${message} The configured worktreeBase is "origin-main"; use --worktree-base local-main to dispatch from the local integration branch.`);
+              localTarget = integrationTarget(slug, { mode: 'local' });
+            } catch (_: unknown) {
+              return remoteIntegrationTarget();
             }
+            return localAheadOfUpstreamWarning(projectPath, localTarget.branch)
+              ? localTarget
+              : remoteIntegrationTarget();
           })()
-          : null
       : null;
     const useIntegrationTarget = explicitIntegrationTarget
       || (isolatedRepositoryDispatch && configuredIntegrationMode !== 'auto')
@@ -1385,7 +1400,11 @@ function prepareDispatch(slug?: any, idOrRef?: any, opts?: any) {
       })
       : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
     const localAheadWarning = !sharedTree && integrationTargetState
-      ? localAheadOfUpstreamWarning(readMeta(slug)?.path || '', integrationTargetState.branch)
+      ? localAheadOfUpstreamWarning(
+        readMeta(slug)?.path || '',
+        integrationTargetState.branch,
+        integrationTargetState.mode === 'local' ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream,
+      )
       : null;
     delete t.storyContractDrift;
     const verificationRequirement = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ''));

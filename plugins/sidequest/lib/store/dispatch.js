@@ -1176,23 +1176,38 @@ function createDispatch(dependencies) {
       t.storyLogSeenSeq = storyLogRevision;
       const contractDrift = t.storyContractDrift || null;
       const configuredIntegrationMode = String(readMeta(slug)?.integrationMode || "auto").trim().toLowerCase();
-      const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "origin-main";
+      const configuredWorktreeBase = boardConfig(slug)?.worktreeBase || "auto";
       const explicitIntegrationTarget = opts.integrationBranch != null || opts.integrationMode != null;
       const isolatedRepositoryDispatch = !sharedTree && !readonly && !nonRepoOutput;
-      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : hasOriginRemote(readMeta(slug)?.path || "") ? (() => {
+      const remoteIntegrationTarget = () => {
         try {
           return integrationTarget(slug, { mode: "remote" });
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`${message} The configured worktreeBase is "origin-main"; use --worktree-base local-main to dispatch from the local integration branch.`);
+          throw new Error(`${message} The configured worktreeBase is "${configuredWorktreeBase}"; use --worktree-base local-main to dispatch from the local integration branch.`);
         }
-      })() : null : null;
+      };
+      const automaticWorktreeBase = isolatedRepositoryDispatch && !explicitIntegrationTarget && configuredIntegrationMode === "auto" ? configuredWorktreeBase === "local-main" ? integrationTarget(slug, { mode: "local" }) : configuredWorktreeBase === "origin-main" ? hasOriginRemote(readMeta(slug)?.path || "") ? remoteIntegrationTarget() : null : (() => {
+        const projectPath2 = readMeta(slug)?.path || "";
+        if (!hasOriginRemote(projectPath2)) return null;
+        let localTarget;
+        try {
+          localTarget = integrationTarget(slug, { mode: "local" });
+        } catch (_) {
+          return remoteIntegrationTarget();
+        }
+        return localAheadOfUpstreamWarning(projectPath2, localTarget.branch) ? localTarget : remoteIntegrationTarget();
+      })() : null;
       const useIntegrationTarget = explicitIntegrationTarget || isolatedRepositoryDispatch && configuredIntegrationMode !== "auto" || Boolean(automaticWorktreeBase);
       const integrationTargetState = explicitIntegrationTarget ? integrationTarget(slug, {
         ...opts.integrationBranch != null ? { branch: opts.integrationBranch } : {},
         ...opts.integrationMode != null ? { mode: opts.integrationMode } : {}
       }) : automaticWorktreeBase || (useIntegrationTarget ? integrationTarget(slug) : null);
-      const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(readMeta(slug)?.path || "", integrationTargetState.branch) : null;
+      const localAheadWarning = !sharedTree && integrationTargetState ? localAheadOfUpstreamWarning(
+        readMeta(slug)?.path || "",
+        integrationTargetState.branch,
+        integrationTargetState.mode === "local" ? `local ${integrationTargetState.branch}` : integrationTargetState.upstream
+      ) : null;
       delete t.storyContractDrift;
       const verificationRequirement2 = preparedVerificationRequirement(t, String(readMeta(slug)?.path || ""));
       const evidenceDirectory = ticketEvidenceDirectory(slug, t.ref, projectPath);

@@ -145,9 +145,9 @@ function createConfig({ DEFAULT_INTEGRATION_VERIFY_TIMEOUT_MS, DELIVERY_MODES, e
     return value;
   }
   function normalizeWorktreeBase(value) {
-    const base = String(value == null ? "origin-main" : value).trim().toLowerCase();
-    if (!["origin-main", "local-main"].includes(base)) {
-      throw new Error('worktreeBase must be "origin-main" or "local-main".');
+    const base = String(value == null ? "auto" : value).trim().toLowerCase();
+    if (!["auto", "origin-main", "local-main"].includes(base)) {
+      throw new Error('worktreeBase must be "auto", "origin-main", or "local-main".');
     }
     return base;
   }

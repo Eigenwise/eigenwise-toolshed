@@ -41,6 +41,7 @@ const worktreeLease = require('../lib/kernel/worktree.js');
 const agentsync = require('../lib/agentsync.js');
 const { claimRefusalMessage } = require('../lib/refusal-guidance.js');
 const { checkSidequestInstall } = require('../lib/dispatch-preflight.js');
+const { collectGitSubmissionFacts } = require('../lib/mcp-lifecycle.js');
 const FORCE_EXEC_BYPASS = path.join(__dirname, '..', 'hooks', 'force-exec-bypass.js');
 const SUBAGENT_START = path.join(__dirname, '..', 'hooks', 'subagent-start.js');
 const SUBAGENT_STOP = path.join(__dirname, '..', 'hooks', 'subagent-stop.js');
@@ -2281,9 +2282,12 @@ test('a dispatch records the configured local integration branch without an over
   }
 });
 
-test('worktreeBase local-main records the local main commit while default dispatches keep origin main', () => {
+test('auto worktree bases use local main when it is ahead, and origin-main remains an opt-out', () => {
   const repository = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-'));
   const remote = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-base-remote-'));
+  const executorParent = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-dispatch-worktree-executor-'));
+  const executorWorktree = path.join(executorParent, 'executor');
+  let executorWorktreeAdded = false;
   try {
     execFileSync('git', ['init', '--quiet', '-b', 'main'], { cwd: repository });
     execFileSync('git', ['config', 'user.email', 'test@example.invalid'], { cwd: repository });
@@ -2302,33 +2306,63 @@ test('worktreeBase local-main records the local main commit while default dispat
 
     const defaultTicket = store.createTicket(baseSlug, { title: 'default worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
     const defaultDispatch = store.prepareDispatch(baseSlug, defaultTicket.ref, { sessionId: 'default-worktree-base' });
-    assert.equal(defaultDispatch.ticket.dispatch.baseCommit, originMain);
-    assert.deepEqual(defaultDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
-    assert.deepEqual(defaultDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main']);
+    assert.equal(defaultDispatch.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(defaultDispatch.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
+    assert.deepEqual(defaultDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees will fork local main.']);
     assert.deepEqual(defaultDispatch.ticket.dispatch.localAheadWarning, {
       count: 1,
-      message: 'Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main',
+      message: 'Local main is 1 commit ahead of origin/main; isolated worktrees will fork local main.',
     });
+
+    execFileSync('git', ['worktree', 'add', '--quiet', '-b', `executor-${Date.now()}`, executorWorktree, defaultDispatch.ticket.dispatch.baseCommit], { cwd: repository });
+    executorWorktreeAdded = true;
+    assert.equal(execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executorWorktree, encoding: 'utf8' }).trim(), localMain);
+    fs.appendFileSync(path.join(executorWorktree, 'tracked.js'), 'module.exports = 3;\n');
+    execFileSync('git', ['commit', '--quiet', '-am', 'executor work'], { cwd: executorWorktree });
+    const executorCommit = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: executorWorktree, encoding: 'utf8' }).trim();
+    const gitRef = `refs/sidequest/${defaultTicket.ref}`;
+    execFileSync('git', ['update-ref', gitRef, executorCommit], { cwd: executorWorktree });
+    const submissionFacts = collectGitSubmissionFacts({
+      slug: baseSlug,
+      ticket: defaultDispatch.ticket,
+      root: executorWorktree,
+      commit: executorCommit,
+      gitRef,
+    });
+    assert.equal(submissionFacts.range.ok, true);
+    assert.equal(submissionFacts.range.base, localMain);
+    assert.equal(submissionFacts.range.upstream, 'main');
+    execFileSync('git', ['worktree', 'remove', '--force', executorWorktree], { cwd: repository });
+    executorWorktreeAdded = false;
+
+    store.setBoardConfig(baseSlug, { worktreeBase: 'origin-main' });
+    const remoteTicket = store.createTicket(baseSlug, { title: 'remote worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
+    const remoteDispatch = store.prepareDispatch(baseSlug, remoteTicket.ref, { sessionId: 'remote-worktree-base' });
+    assert.equal(remoteDispatch.ticket.dispatch.baseCommit, originMain);
+    assert.deepEqual(remoteDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
+    assert.deepEqual(remoteDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees will fork origin/main.']);
 
     store.setBoardConfig(baseSlug, { worktreeBase: 'local-main' });
     const localTicket = store.createTicket(baseSlug, { title: 'local worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
     const localDispatch = store.prepareDispatch(baseSlug, localTicket.ref, { sessionId: 'local-worktree-base' });
     assert.equal(localDispatch.ticket.dispatch.baseCommit, localMain);
     assert.deepEqual(localDispatch.ticket.dispatch.integrationTarget, { mode: 'local', upstream: 'main', branch: 'main' });
-    assert.deepEqual(localDispatch.warnings, ['Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main']);
-    assert.deepEqual(store.pulsePayload(baseSlug, localTicket.ref).dispatch.localAheadWarning, {
-      count: 1,
-      message: 'Local main is 1 commit ahead of origin/main; isolated worktrees fork the local tracking ref. Push first: git push origin main',
-    });
 
     execFileSync('git', ['push', '--quiet', 'origin', 'main'], { cwd: repository });
+    store.setBoardConfig(baseSlug, { worktreeBase: 'auto' });
     const syncedTicket = store.createTicket(baseSlug, { title: 'in-sync worktree base', category: 'dispatch.lifecycle', files: ['tracked.js'] });
     const syncedDispatch = store.prepareDispatch(baseSlug, syncedTicket.ref, { sessionId: 'synced-worktree-base' });
+    assert.equal(syncedDispatch.ticket.dispatch.baseCommit, localMain);
+    assert.deepEqual(syncedDispatch.ticket.dispatch.integrationTarget, { mode: 'remote', upstream: 'origin/main', branch: 'main' });
     assert.equal(syncedDispatch.warnings, undefined);
     assert.equal(syncedDispatch.ticket.dispatch.localAheadWarning, undefined);
   } finally {
+    if (executorWorktreeAdded) {
+      try { execFileSync('git', ['worktree', 'remove', '--force', executorWorktree], { cwd: repository, windowsHide: true }); } catch (_) {}
+    }
     fs.rmSync(repository, { recursive: true, force: true });
     fs.rmSync(remote, { recursive: true, force: true });
+    fs.rmSync(executorParent, { recursive: true, force: true });
   }
 });
 

@@ -42,7 +42,7 @@ var import_node_crypto = require("node:crypto");
 var import_node_fs = __toESM(require("node:fs"));
 var import_node_os = __toESM(require("node:os"));
 var import_node_path = __toESM(require("node:path"));
-function localAheadOfUpstreamWarning(projectPath, branch) {
+function localAheadOfUpstreamWarning(projectPath, branch, worktreeFork) {
   try {
     const upstream = (0, import_node_child_process.execFileSync)("git", ["rev-parse", "--abbrev-ref", `${branch}@{upstream}`], {
       cwd: projectPath,
@@ -66,7 +66,7 @@ function localAheadOfUpstreamWarning(projectPath, branch) {
     }).trim();
     return remote ? {
       count,
-      message: `Local ${branch} is ${count} commit${count === 1 ? "" : "s"} ahead of ${upstream}; isolated worktrees fork the local tracking ref. Push first: git push ${remote} ${branch}`
+      message: `Local ${branch} is ${count} commit${count === 1 ? "" : "s"} ahead of ${upstream}; isolated worktrees will fork ${worktreeFork || `local ${branch}`}.`
     } : null;
   } catch (_) {
     return null;

@@ -9,7 +9,7 @@ export interface LocalAheadWarning {
   message: string;
 }
 
-export function localAheadOfUpstreamWarning(projectPath: string, branch: string): LocalAheadWarning | null {
+export function localAheadOfUpstreamWarning(projectPath: string, branch: string, worktreeFork?: string): LocalAheadWarning | null {
   try {
     const upstream = execFileSync('git', ['rev-parse', '--abbrev-ref', `${branch}@{upstream}`], {
       cwd: projectPath,
@@ -33,7 +33,7 @@ export function localAheadOfUpstreamWarning(projectPath: string, branch: string)
     }).trim();
     return remote ? {
       count,
-      message: `Local ${branch} is ${count} commit${count === 1 ? '' : 's'} ahead of ${upstream}; isolated worktrees fork the local tracking ref. Push first: git push ${remote} ${branch}`,
+      message: `Local ${branch} is ${count} commit${count === 1 ? '' : 's'} ahead of ${upstream}; isolated worktrees will fork ${worktreeFork || `local ${branch}`}.`,
     } : null;
   } catch (_) {
     return null;
