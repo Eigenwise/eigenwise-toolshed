@@ -667,13 +667,14 @@ test('add and update preserve descriptions and expose storyId explicitly', async
   assert.equal(tools.find((tool: any) => tool.name === 'add').inputSchema.properties.storyId.pattern, '^US-\\d+$');
 });
 
-test('update defers verifier amendments until a fresh dispatch and explains recovery', async () => {
-  const project = store.ensureProject(committedRepo('sq-mcp-verify-amendment-')).slug;
+test('update amends a claimed dispatch verifier and its next capture uses the amended command', async () => {
+  const repository = committedRepo('sq-mcp-verify-amendment-');
+  const project = store.ensureProject(repository).slug;
   const pinnedCommand = 'node -e "process.exit(0)" && node -e "process.exit(1)"';
   const amendedCommand = 'node -e "process.exit(0)"';
   const added = await callTool('add', {
     project,
-    title: 'deferred verifier amendment',
+    title: 'live verifier amendment',
     description: DISPATCH_DESCRIPTION,
     category: 'general',
     files: ['src/fixture.js'],
@@ -692,36 +693,46 @@ test('update defers verifier amendments until a fresh dispatch and explains reco
     sessionId: MCP_SESSION_ID,
   }).ok, true);
 
+  const executorRefusal = await callToolRaw('update', {
+    project,
+    ref: added.ref,
+    by,
+    verifyKind: 'command',
+    verify: amendedCommand,
+  });
+  assert.equal(executorRefusal.isError, true);
+  assert.match(executorRefusal.content[0].text, /active-claim update for verify/i);
+
   const updated = await callTool('update', {
     project,
     ref: added.ref,
+    by: 'orchestrator',
     verifyKind: 'command',
     verify: amendedCommand,
   });
 
-  assert.ok(updated.deferredVerificationAmendment, 'live dispatch amendment returns a deferred notice');
-  assert.equal(updated.deferredVerificationAmendment.status, 'deferred_until_redispatch');
-  assert.equal(updated.deferredVerificationAmendment.pinnedCommand, pinnedCommand);
-  assert.ok(updated.deferredVerificationAmendment.message.includes(pinnedCommand));
-  assert.match(updated.deferredVerificationAmendment.message, /checkpoint current work, release the claim, and re-dispatch/i);
-  assert.match(updated.deferredVerificationAmendment.message, /recovery dispatch resumes the retained worktree and pins the amended verify/);
-  assert.match(updated.deferredVerificationAmendment.message, /groomClose with deliveryCommit/);
+  assert.equal(updated.verificationAmendment.status, 'applied_to_live_dispatch');
+  assert.equal(updated.verificationAmendment.oldCommand, pinnedCommand);
+  assert.equal(updated.verificationAmendment.newCommand, amendedCommand);
   const liveTicket = store.getTicket(project, added.ref);
   assert.equal(liveTicket.executorVerify, amendedCommand);
-  assert.equal(liveTicket.dispatch.verificationRequirement.command, pinnedCommand);
-
-  assert.equal(store.releaseTicket(project, added.ref, by, {
-    status: 'todo',
-    source: 'test',
-    releaseKind: 'handback',
-    releaseReason: 'Re-dispatch the fixture with its amended verifier.',
-  }).ok, true);
-  const rebound = store.prepareDispatch(project, added.ref, {
-    allowUnscoped: true,
-    sharedTree: true,
-    sessionId: 'verify-amendment-recovery-dispatch',
+  assert.equal(liveTicket.dispatch.verificationRequirement.command, amendedCommand);
+  assert.equal(liveTicket.dispatch.lifecycleAttempt.verificationRequirement.command, amendedCommand);
+  assert.deepEqual(liveTicket.verificationAmendments.at(-1), {
+    at: liveTicket.verificationAmendments.at(-1).at,
+    by: 'orchestrator',
+    oldCommand: pinnedCommand,
+    newCommand: amendedCommand,
   });
-  assert.equal(rebound.ticket.dispatch.verificationRequirement.command, amendedCommand);
+
+  const { capture, recorded } = await runCapturedVerification(amendedCommand, { project, ticket: added.ref }, repository);
+  try {
+    assert.equal(capture.status, 'passed');
+    assert.equal(recorded?.ok, true);
+    assert.equal(store.getTicket(project, added.ref).verificationCaptures.at(-1).command, amendedCommand);
+  } finally {
+    fs.rmSync(capture.logPath, { force: true });
+  }
 });
 
 // SQ-900: a 25- and then 28-entry files array both returned ok:true and persisted

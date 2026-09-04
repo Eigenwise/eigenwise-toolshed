@@ -32,8 +32,33 @@ function preparedVerificationRequirement(ticket, projectPath) {
     suite
   });
 }
+function requirementsMatch(left, right) {
+  return JSON.stringify(left || null) === JSON.stringify(right || null);
+}
 function createDispatch(dependencies) {
   const { ARTIFACT_BASELINE_MAX_PATHS, SHARED_TREE_ARTIFACT_MARKER, assertDispatchTransport, assertSidequestInstall, checkSidequestInstall, prepareAttempt, transitionAttempt, attemptDiagnostic, ensurePythonIoEncoding, localAheadOfUpstreamWarning, availableRoute, boardConfig, claimIdleMs, claimReclaimable, claimVerification, classifyDispatchFailure, terminalAgentFailure, commitScope, crypto, database, db, dispatchReadOnly, dispatchBaselineForProject, dispatchVerifyCommandError, dispatchRouteRefusal, dispatchRouteState, effectiveScope, execFileSync, execProjection, fs, getCategory, getStory, homeRoot, integrationTarget, integrationTargetCommit, legacyCategoryForComplexity, listProjects, listTickets, nonRepoExternalOutput, normalizeArtifactRoots, normalizeFiles, normalizeRoute, normalizeWorktreeIsolation, path, hasOriginRemote, pendingSubmission, agentWorktreePath, agentWorktreeCandidates, resolvedAgentWorktree, reclaimUnclaimedDispatchWorktree, preparedDispatchTtlMs, putTicket, readMeta, releaseTerminalClaim, resolveCategoryFallback, resolveCategoryRoute, resolveTicketRoute, resolveExec, stableExecutorName, staleWorktreeCwdWarning, storyExecutionContract, ticketCategory, ticketStorageRow, withTicketLock, normalizeCategoryId, projectRoutingEnabled, routingDisabledMessage, getTicket, dispatchLaunchName, nextDispatchLaunchSeq, spawnDescription, claudeQuotaFailure, canonicalPath, checkoutInstanceIdentity, createWorktreeLease, worktreeResumeDecision, isCanonicalRegisteredWorktree } = dependencies;
+  function syncLiveDispatchVerification(slug, ticket, amendment) {
+    const state = dispatchState(ticket);
+    if (!state || state.terminalAt) return null;
+    const previousRequirement = state.verificationRequirement || state.lifecycleAttempt?.verificationRequirement || ticket.lifecycleAttempt?.verificationRequirement;
+    const nextRequirement = preparedVerificationRequirement(ticket, String(readMeta(slug)?.path || ""));
+    if (requirementsMatch(previousRequirement, nextRequirement)) return null;
+    state.verificationRequirement = nextRequirement;
+    const attempt = state.lifecycleAttempt || ticket.lifecycleAttempt;
+    if (attempt) {
+      const refreshedAttempt = Object.freeze({ ...attempt, verificationRequirement: nextRequirement });
+      state.lifecycleAttempt = refreshedAttempt;
+      ticket.lifecycleAttempt = refreshedAttempt;
+    }
+    const record = Object.freeze({
+      at: (/* @__PURE__ */ new Date()).toISOString(),
+      by: String(amendment?.by || "").trim() || null,
+      oldCommand: String(previousRequirement?.command || "").trim() || null,
+      newCommand: String(nextRequirement.command || "").trim() || null
+    });
+    ticket.verificationAmendments = [...Array.isArray(ticket.verificationAmendments) ? ticket.verificationAmendments : [], record].slice(-20);
+    return record;
+  }
   const DISPATCH_TOKEN_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789";
   const DISPATCH_TOKEN_CHARS = 32;
   const DISPATCH_TOKEN_GROUP_SIZE = 4;
@@ -2167,6 +2192,7 @@ function createDispatch(dependencies) {
     expiredPreparedDispatch,
     worktreeIsolationWarning,
     prepareDispatch,
+    syncLiveDispatchVerification,
     readDispatchBriefing,
     recordDispatchLaunch,
     recordDispatchAgentFailure,
