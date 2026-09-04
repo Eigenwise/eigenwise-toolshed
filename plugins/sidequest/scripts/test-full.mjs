@@ -49,8 +49,8 @@ export function calculateTestPhaseTimeoutMilliseconds(testConcurrency) {
   );
 }
 
-export function formatTestPhaseTimeoutError(phase, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism) {
-  return `Sidequest ${phase} tests exceeded their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`;
+export function formatTestPhaseTimeoutError(phase, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism, siblingFullSuiteCaptures = 0) {
+  return `Sidequest ${phase} tests exceeded their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores after waiting behind ${siblingFullSuiteCaptures} sibling full-suite capture${siblingFullSuiteCaptures === 1 ? '' : 's'}.`;
 }
 
 export function formatTestPhaseWarning(
@@ -64,10 +64,16 @@ export function formatTestPhaseWarning(
   return `WARNING: Sidequest ${phase} tests completed in ${Math.round(phaseDurationMilliseconds)}ms, over the ${testPhaseWarningMilliseconds}ms warning threshold for their ${testPhaseTimeoutMilliseconds}ms phase budget at concurrency ${testConcurrency} on ${availableParallelism} available cores.`;
 }
 
+function siblingFullSuiteCaptureCount() {
+  const siblingCount = Number(process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT || '0');
+  return Number.isInteger(siblingCount) && siblingCount > 0 ? siblingCount : 0;
+}
+
 const availableParallelism = os.availableParallelism();
 const testConcurrency = calculateTestConcurrency(availableParallelism);
 const testPhaseTimeoutMilliseconds = calculateTestPhaseTimeoutMilliseconds(testConcurrency);
 const testPhaseWarningMilliseconds = testPhaseTimeoutMilliseconds * 0.75;
+const siblingFullSuiteCaptures = siblingFullSuiteCaptureCount();
 // Benchmarks live behind `npm run test:perf`. Without this exclusion the glob
 // below sweeps them back into the default suite, which is the 23 seconds
 // SQ-1387 exists to remove.
@@ -80,8 +86,8 @@ const testFiles = (await fs.readdir(testDirectory))
 // Accepting a timeout that happened to carry status 0 is how a killed gate phase passed
 // as green in SQ-2050: a root can handle SIGTERM and exit 0, and a phase the clock ended
 // never finished its tests.
-export function describePhaseFailure(phase, result, phaseTimeoutMilliseconds, concurrency, cores) {
-  if (result.timedOut) return formatTestPhaseTimeoutError(phase, phaseTimeoutMilliseconds, concurrency, cores);
+export function describePhaseFailure(phase, result, phaseTimeoutMilliseconds, concurrency, cores, siblingCaptures = 0) {
+  if (result.timedOut) return formatTestPhaseTimeoutError(phase, phaseTimeoutMilliseconds, concurrency, cores, siblingCaptures);
   if (result.cleanupError) return `Sidequest ${phase} tests could not be cleaned up: ${result.cleanupError}`;
   if (result.status !== 0) {
     return `Sidequest ${phase} tests exited ${result.status ?? `on signal ${result.signal ?? 'unknown'}`}.`;
@@ -105,7 +111,14 @@ async function runTests(phase, files, environment) {
   });
   const phaseDurationMilliseconds = performance.now() - phaseStartTime;
   if (result.error) throw result.error;
-  const failure = describePhaseFailure(phase, result, testPhaseTimeoutMilliseconds, testConcurrency, availableParallelism);
+  const failure = describePhaseFailure(
+    phase,
+    result,
+    testPhaseTimeoutMilliseconds,
+    testConcurrency,
+    availableParallelism,
+    siblingFullSuiteCaptures,
+  );
   if (failure) throw new Error(failure);
   // Warn, never throw: a passing run that is merely close to its budget must not
   // become a red build. Turning slowness into a failure is the false red SQ-1537

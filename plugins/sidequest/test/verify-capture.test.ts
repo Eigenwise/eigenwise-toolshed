@@ -6,8 +6,10 @@ const assert = require('node:assert');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { execFileSync, spawn } = require('node:child_process');
 
 const { runVerifyCapture, shellCommand } = require('../lib/verify-capture.js');
+const store = require('../lib/store.js');
 const SIDEQUEST_DIR = path.resolve(__dirname, '..');
 
 function deleteLog(capture: { logPath: string }) {
@@ -17,6 +19,70 @@ function deleteLog(capture: { logPath: string }) {
 function nodeCommand(scriptPath: string, argument: string) {
   return `"${process.execPath}" "${scriptPath}" "${argument}"`;
 }
+
+function runCaptureProcess(command: string, project: string, ticket: string): Promise<Readonly<{ status: number | null; output: string }>> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(process.execPath, [path.join(SIDEQUEST_DIR, 'lib', 'verify-capture.js'), '--base64', Buffer.from(command).toString('base64'), '--project', project, '--ticket', ticket], {
+      cwd: project,
+      env: process.env,
+      windowsHide: true,
+    });
+    let output = '';
+    child.stdout.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
+    child.stderr.on('data', (chunk: Buffer) => { output += chunk.toString('utf8'); });
+    child.once('error', reject);
+    child.once('close', (status: number | null) => resolve(Object.freeze({ status, output })));
+  });
+}
+
+async function waitForFile(filePath: string): Promise<void> {
+  for (let attempts = 0; attempts < 100; attempts += 1) {
+    if (fs.existsSync(filePath)) return;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+  }
+  throw new Error(`Timed out waiting for ${filePath}`);
+}
+
+function readRecordedCaptures(project: string, ticket: string) {
+  const reader = `const store = require(${JSON.stringify(path.join(SIDEQUEST_DIR, 'lib', 'store.js'))}); const target = store.findProject(process.argv.at(-2)); console.log(JSON.stringify(store.getTicket(target.slug, process.argv.at(-1)).verificationCaptures));`;
+  return JSON.parse(execFileSync(process.execPath, ['--eval', reader, project, ticket], { encoding: 'utf8', env: process.env, windowsHide: true }));
+}
+
+test('full-suite capture serializes sibling captures and records the queue wait', async () => {
+  const project = fs.mkdtempSync(path.join(os.tmpdir(), 'sq-verify-capture-slot-'));
+  const started = path.join(project, 'started');
+  const observedSiblingCaptures = path.join(project, 'observed-sibling-captures');
+  fs.writeFileSync(path.join(project, 'package.json'), JSON.stringify({ scripts: { 'test:full': 'node blocker.js' } }));
+  fs.writeFileSync(path.join(project, 'blocker.js'), `const fs = require('node:fs'); fs.writeFileSync(${JSON.stringify(started)}, 'started'); fs.appendFileSync(${JSON.stringify(observedSiblingCaptures)}, process.env.SIDEQUEST_FULL_SUITE_SIBLING_CAPTURE_COUNT + '\\n'); setTimeout(() => {}, 700);`);
+  execFileSync('git', ['init', '-b', 'main', '--quiet'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['add', '--all'], { cwd: project, windowsHide: true });
+  execFileSync('git', ['-c', 'user.name=Sidequest Tests', '-c', 'user.email=sidequest@example.invalid', 'commit', '--quiet', '-m', 'fixture'], { cwd: project, windowsHide: true });
+  const boardProject = store.ensureProject(project);
+  const ticket = store.createTicket(boardProject.slug, {
+    title: 'serialize full-suite verification captures',
+    executorVerifyKind: 'command',
+    executorVerify: 'npm run test:full',
+  });
+
+  try {
+    const first = runCaptureProcess('npm run test:full', project, ticket.ref);
+    await waitForFile(started);
+    const second = runCaptureProcess('npm run test:full', project, ticket.ref);
+    const [firstResult, secondResult] = await Promise.all([first, second]);
+
+    assert.equal(firstResult.status, 0, firstResult.output);
+    assert.equal(secondResult.status, 0, secondResult.output);
+    assert.deepEqual(fs.readFileSync(observedSiblingCaptures, 'utf8').trim().split(/\r?\n/).sort(), ['0', '1']);
+    assert.match(secondResult.output, /waiting for 1 sibling capture to finish \(queue position 2\)/);
+    const captures = readRecordedCaptures(project, ticket.ref);
+    const waitedCapture = captures.find((capture: { queuePosition?: number }) => capture.queuePosition === 2);
+    assert.ok(waitedCapture, 'the second capture records its slot queue position');
+    assert.equal(waitedCapture.queuePosition, 2);
+    assert.ok(waitedCapture.waitedForSlotMs >= 500, `waited ${waitedCapture.waitedForSlotMs}ms`);
+  } finally {
+    fs.rmSync(project, { recursive: true, force: true });
+  }
+});
 
 test('verify capture runs generated POSIX scripts through the host shell', () => {
   const shell = shellCommand('verify-script.sh', 'linux');

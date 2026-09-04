@@ -94,7 +94,7 @@ test('full-suite budget keeps actionable timeout and warning copy', () => {
 
   assert.equal(
     helpers.timeoutError,
-    'Sidequest functional tests exceeded their 960000ms phase budget at concurrency 4 on 4 available cores.',
+    'Sidequest functional tests exceeded their 960000ms phase budget at concurrency 4 on 4 available cores after waiting behind 0 sibling full-suite captures.',
   );
   assert.equal(
     helpers.warning,

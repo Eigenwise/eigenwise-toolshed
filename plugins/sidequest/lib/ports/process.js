@@ -163,6 +163,7 @@ function runProcessVerification(requirement, options = {}) {
     try {
       outcome = spawnSync(shell.executable, shell.arguments, {
         cwd: options.cwd || process.cwd(),
+        env: options.environment,
         windowsHide: true,
         timeout: timeoutMilliseconds,
         stdio: ["ignore", log, log]

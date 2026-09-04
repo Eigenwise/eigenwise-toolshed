@@ -546,7 +546,9 @@ ${captureCommandDetails(pinnedCommand, capturedCommand)}`;
         ...capture?.worktree ? { worktree: String(capture.worktree) } : {},
         ...capture?.logPath ? { logPath: String(capture.logPath) } : {},
         ...Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {},
-        ...capture?.shell ? { shell: String(capture.shell) } : {}
+        ...capture?.shell ? { shell: String(capture.shell) } : {},
+        ...Number.isFinite(capture?.waitedForSlotMs) ? { waitedForSlotMs: Number(capture.waitedForSlotMs) } : {},
+        ...Number.isInteger(capture?.queuePosition) ? { queuePosition: Number(capture.queuePosition) } : {}
       };
       ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
       ticket.updatedAt = (/* @__PURE__ */ new Date()).toISOString();

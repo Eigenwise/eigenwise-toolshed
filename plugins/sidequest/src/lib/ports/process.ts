@@ -13,6 +13,7 @@ export type ProcessVerificationOptions = Readonly<{
   timeoutMilliseconds?: number;
   logPath?: string;
   outputTailBytes?: number;
+  environment?: NodeJS.ProcessEnv;
 }>;
 
 export type VerificationProcessPort = Readonly<{
@@ -177,6 +178,7 @@ export function runProcessVerification(requirement: VerificationRequirement, opt
     try {
       outcome = spawnSync(shell.executable, shell.arguments, {
         cwd: options.cwd || process.cwd(),
+        env: options.environment,
         windowsHide: true,
         timeout: timeoutMilliseconds,
         stdio: ['ignore', log, log],
