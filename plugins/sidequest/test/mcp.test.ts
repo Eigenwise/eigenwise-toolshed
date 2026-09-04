@@ -2312,6 +2312,36 @@ test('MCP delivery closure binds the integration revision resolved after board i
   }, 'the closure records the exact integration revision used for reachability');
 });
 
+test('SQ-2434: MCP delivery closure accepts local main ahead of origin and records upstream reachability', async () => {
+  const worktree = createGitWorktree();
+  const project = store.ensureProject(worktree).slug;
+  store.setBoardConfig(project, { integrationMode: 'remote', integrationBranch: 'main' });
+  const ticket = store.createTicket(project, {
+    title: 'local main delivery before push', files: ['feature.js'], complexity: 3,
+    labels: ['direct-ok'], complexityWhy: 'confirm local integration delivery does not wait for an upstream push',
+  });
+  fs.writeFileSync(path.join(worktree, 'feature.js'), 'delivered locally before push\n');
+  gitAt(worktree, ['add', 'feature.js']);
+  gitAt(worktree, ['commit', '-m', 'deliver on local main before push']);
+  const deliveryCommit = gitAt(worktree, ['rev-parse', 'HEAD']);
+  assert.notEqual(deliveryCommit, gitAt(worktree, ['rev-parse', 'origin/main']), 'local main is ahead of origin/main');
+
+  const closed = await callTool('groomClose', {
+    project, ref: ticket.ref, by: 'integrator', reason: 'The commit reached local main and awaits the next push.', deliveryCommit,
+  });
+  assert.equal(closed.ok, true, `local delivery closure was refused: ${closed.message}`);
+  const completed = store.getTicket(project, ticket.ref);
+  assert.deepEqual(completed.completion.delivery.integrationRevision, {
+    source: 'git:main',
+    value: deliveryCommit,
+    observedAt: completed.completion.delivery.integrationRevision.observedAt,
+  }, 'the closure records the local main revision used for reachability');
+  assert.deepEqual(completed.completion.delivery.upstream, {
+    ref: 'origin/main',
+    reachable: false,
+  }, 'the completion records that the local delivery has not reached origin/main yet');
+});
+
 test('SQ-2429: MCP groomClose records a delivered candidate despite a live overlapping sibling', async () => {
   const worktree = createGitWorktree();
   const project = store.ensureProject(worktree).slug;
