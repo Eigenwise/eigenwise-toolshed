@@ -535,7 +535,7 @@ const tools: ToolDefinition[] = [
   },
   {
     name: 'groomClose',
-    description: 'Close with evidence. A pending candidate requires verified delivery, or abandonSubmission: true to record its discard; an unlaunched prepared dispatch is recorded abandoned.',
+    description: 'Close with evidence. A pending candidate requires verified delivery, which reconciles the delivered commit against the candidate without checking sibling declared scope; abandonSubmission: true records discard. An unlaunched prepared dispatch is recorded abandoned.',
     inputSchema: {
       type: 'object',
       properties: {

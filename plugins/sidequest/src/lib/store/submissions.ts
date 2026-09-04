@@ -10,7 +10,7 @@ const { isInScope, scopedPaths } = require('../scope-match');
 import type { VerificationResult } from '../kernel/verification.js';
 
 function createSubmissions(dependencies: any) {
-  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, claimReclaimable, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
+  const { EXECUTOR_VERIFY_MAX, INTEGRATION_VERIFY_OUTPUT_TAIL_BYTES, MANUAL_VERIFY_PREFIX, acquireLock, addComment, appendReworkEvent, artifactWorkingState, autoReleasedClaimMessage, attestationErrors, boardConfig, boundedExcerptForSubmission, commitScope, completionTreeCheck, coerceStatus, createComment, crypto, dirtyPathKey, dispatchState, executionScope, ensureDir, execFileSync, fs, getTicket, integrationTarget, listTickets, manualVerify, normalizeDeliveryMode, normalizeIntegrationBranch, normalizeIntegrationVerifyTimeoutMs, nullableText, path, prepareComment, projectDir, putTicket, queueEventNotification, readMeta, recordedReviewPass, recordLifecycleAttempt, releaseLock, setDispatchTerminal, spawnSync, stampDispatchEvent, ticketLockPath, transaction, unregisterClaim, verifyCommandErrors, verifyCommandError, withTicketLock, transitionAttempt, attemptDiagnostic } = dependencies;
   const boundedExcerpt = boundedExcerptForSubmission;
 
 const SUBMISSION_COMMIT_RE = /^[0-9a-f]{7,64}$/i;
@@ -868,11 +868,26 @@ function validateIntegrationSubmission(slug?: any, idOrRef?: any, opts?: any) {
   return { ok: true, ticket, scopeValidation };
 }
 
-function updateSubmissionIntegration(slug: any, id: any, patch: any) {
+function reconciledDeliveryWave(slug: any, ticket: any, revision: any, verification: any) {
+  const baseline = ticket.submission?.baseline || sourceRevisionBaseline(ticket);
+  return {
+    id: `reconciled-${ticket.ref}-${crypto.randomBytes(6).toString('hex')}`,
+    baseline,
+    participants: [ticket.ref],
+    dependencies: {},
+    declaredSurfaces: executionScope(slug, ticket),
+    state: 'gate_passed',
+    gate: { verification, state: 'gate_passed' },
+    delivery: { state: 'delivered', revision, verification },
+  };
+}
+
+function updateSubmissionIntegration(slug: any, id: any, patch: any, submissionPatch?: any) {
   return withTicketLock(slug, id, () => {
     const ticket = getTicket(slug, id);
     if (!ticket || !ticket.submission) return { ok: false, reason: 'submission_required', ticket };
     ticket.submission.integration = Object.assign({}, ticket.submission.integration || {}, patch);
+    if (submissionPatch) Object.assign(ticket.submission, submissionPatch);
     ticket.updatedAt = new Date().toISOString();
     putTicket(slug, ticket);
     queueEventNotification(slug, ticket, 'status', 'integration');
@@ -1196,14 +1211,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
   if (!preflight.ok) return preflight;
   const preflightTicket = preflight.ticket;
   if (opts.skipVerify === true) return { ok: false, reason: 'delivery_verify_required', ticket: preflightTicket, message: `${preflightTicket.ref} reconciliation requires a passing merged-tree verification; skipVerify is not allowed.` };
-  const assembled = ensureSingletonAssembledWave(slug, idOrRef, opts);
-  if (!assembled.ok) return assembled;
-  const admitted = validateIntegrationSubmission(slug, idOrRef, {
-    requireAssembledWave: true,
-    deliveryInteractionCommit: opts.deliveryInteractionCommit,
-  });
-  if (!admitted.ok) return admitted;
-  const ticket = admitted.ticket;
+  const ticket = preflightTicket;
   if (!submissionUsesGit(ticket)) return { ok: false, reason: 'git_delivery_required', ticket, message: `${ticket.ref} has no Git candidate to reconcile.` };
   const reason = String(opts.reason || '').trim();
   const requestedCommit = String(opts.deliveryCommit || '').trim();
@@ -1282,8 +1290,6 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
         message: `${ticket.ref} merged-tree verification returned ${verify.status} for recorded delivery ${deliveryCommit}: ${verify.command || `verification ${verify.status}`}. Log: ${verify.logPath || 'not created'}.`,
       });
     }
-    const waveDelivery = recordTicketWaveDelivery(slug, ticket, deliveryRevision, verify);
-    if (!waveDelivery.ok) return integrationFailure(slug, ticket, { reason: waveDelivery.reason, verify, message: waveDelivery.message });
     const deliveredFiles = workingTreeDelivery
       ? workingTreeDeliveryPaths(repo)
       : interaction.interaction
@@ -1317,7 +1323,7 @@ function recordDeliveredSubmission(slug?: any, idOrRef?: any, opts?: any) {
       recordedAt: new Date().toISOString(),
       deliveredAt: new Date().toISOString(),
       verifiedAt: new Date().toISOString(),
-    });
+    }, { wave: reconciledDeliveryWave(slug, ticket, deliveryRevision, verify) });
     return recorded.ok ? { ok: true, ticket: recorded.ticket, integration: recorded.ticket.submission.integration } : recorded;
   } catch (error: any) {
     return { ok: false, reason: 'delivery_evidence_unavailable', ticket, message: `${ticket.ref} reconciliation refused because delivery evidence could not be inspected: ${integrationGitError(error)}` };
@@ -2630,14 +2636,18 @@ function clearSubmission(slug?: any, idOrRef?: any, opts?: any) {
   });
 }
 
-type ClaimOwnership = {
-  claim?: {
-    by?: string;
-  };
-};
+function submissionIncludesCandidate(submission: any, candidate: any) {
+  const commit = String(candidate?.commit || '').trim().toLowerCase();
+  if (!commit) return false;
+  return [submission?.commit, ...(Array.isArray(submission?.commits) ? submission.commits : [])]
+    .map((entry) => String(entry || '').trim().toLowerCase())
+    .includes(commit);
+}
 
-function hasLiveClaim(ticket: ClaimOwnership) {
-  return Boolean(ticket?.claim?.by) && !claimReclaimable(ticket);
+function submissionWasRecordedAfter(sibling: any, participant: any) {
+  const siblingAt = String(sibling?.submission?.at || '').trim();
+  const participantAt = String(participant?.submission?.at || '').trim();
+  return Boolean(siblingAt && participantAt) && siblingAt >= participantAt;
 }
 
 function waveScopeConflicts(slug: any, tickets: any[]) {
@@ -2646,7 +2656,9 @@ function waveScopeConflicts(slug: any, tickets: any[]) {
   for (const participant of tickets) {
     const participantChanges = scopedPaths(participant.submission?.changedPaths);
     for (const sibling of listTickets(slug)) {
-      if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !hasLiveClaim(sibling)) continue;
+      if (sibling.archived || sibling.status === 'done' || participantRefs.has(sibling.ref) || !pendingSubmission(sibling)) continue;
+      if (!submissionWasRecordedAfter(sibling, participant)) continue;
+      if (submissionIncludesCandidate(participant.submission, sibling.submission) || submissionIncludesCandidate(sibling.submission, participant.submission)) continue;
       const siblingDeclaredScope = scopedPaths(sibling.files);
       const surfaces = participantChanges.filter((surface: string) => isInScope(surface, siblingDeclaredScope)
         || siblingDeclaredScope.some((siblingSurface: string) => isInScope(siblingSurface, [surface])));
@@ -2819,9 +2831,9 @@ function assembleSubmissionWave(slug?: any, refs?: any, opts?: any) {
   if (scopeConflicts.length) {
     return {
       ok: false,
-      reason: 'wave_scope_overlap',
+      reason: 'candidate_overlap',
       conflicts: scopeConflicts,
-      message: `Wave assembly refused because candidate changes overlap live sibling declared scope: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. Add every conflicting candidate to one explicitly resolved wave or narrow the sibling ticket's declared files before assembly.`,
+      message: `Wave assembly paused because submitted candidates overlap: ${scopeConflicts.map((conflict) => `${conflict.participant} and ${conflict.sibling} (${conflict.surfaces.join(', ')})`).join('; ')}. These refs each hold a pending candidate, not merely a live declared scope. Assemble the named candidates in one wave so the delivery merge can check their actual content, or resolve one candidate before assembling a singleton.`,
     };
   }
   const firstCandidate = waveCandidates[0];

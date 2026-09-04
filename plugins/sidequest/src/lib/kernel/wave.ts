@@ -78,17 +78,6 @@ function sameBaseline(left: Baseline, right: Baseline): boolean {
   return sameRevision(left.revision, right.revision);
 }
 
-function overlaps(left: readonly string[], right: readonly string[]): string | null {
-  for (const leftSurface of left) {
-    for (const rightSurface of right) {
-      if (isInScope(leftSurface, right) || isInScope(rightSurface, left)) {
-        return `${leftSurface} overlaps ${rightSurface}`;
-      }
-    }
-  }
-  return null;
-}
-
 function participantFor(wave: Wave, ref: string): WaveParticipant | null {
   return wave.participants.find((participant) => participant.ref === ref) || null;
 }
@@ -153,14 +142,6 @@ export function assembleWave(wave: Wave, candidates: readonly WaveCandidate[]): 
     }
   }
   const admitted = candidates.filter((candidate) => wave.participants.some((participant) => participant.ref === candidate.ref));
-  for (let index = 0; index < admitted.length; index += 1) {
-    for (let otherIndex = index + 1; otherIndex < admitted.length; otherIndex += 1) {
-      const conflict = overlaps(admitted[index]!.surfaces, admitted[otherIndex]!.surfaces);
-      if (!conflict) continue;
-      invalidated.push(invalidation(admitted[index]!.ref, 'surface_overlap', `Wave assembly refused ${conflict}.`));
-      invalidated.push(invalidation(admitted[otherIndex]!.ref, 'surface_overlap', `Wave assembly refused ${conflict}.`));
-    }
-  }
   if (invalidated.length) {
     const unique = new Map(invalidated.map((entry) => [entry.ref, entry]));
     return Object.freeze({ ok: false, invalidated: Object.freeze(Array.from(unique.values()).sort((left, right) => left.ref.localeCompare(right.ref))) });
