@@ -51,6 +51,7 @@ For substantial work:
 4. **Execute proportionally** — "Route execution down" below.
 
 Complexity 4+ needs scope, anchors, and a scoped verify; full suite runs once on the merged tree.
+Write the verify in POSIX shell; on Windows the capture runs it through Git Bash when present and records the shell it used.
 A passing executable done-oracle needs no review-audit + fix wave unless it lacks determinism or is high-stakes. **Blocked-step invariant:** when a review,
 investigation, or verification awaits a ticket, every dependent action stays blocked until it closes;
 direct PRs, skill flows, manual apply, or any alternate route are the same violation as inline work.
