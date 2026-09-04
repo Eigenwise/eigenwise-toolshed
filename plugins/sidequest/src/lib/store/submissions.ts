@@ -2661,13 +2661,13 @@ function omittedPendingSubmissionOverlaps(slug: any, tickets: any[]) {
   const [participant] = tickets;
   const participantScope = scopedPaths(participant.files);
   return listTickets(slug)
-    .filter((sibling) => sibling.ref !== participant.ref && !sibling.archived && sibling.status !== 'done' && pendingSubmission(sibling))
-    .map((sibling) => {
+    .filter((sibling: any) => sibling.ref !== participant.ref && !sibling.archived && sibling.status !== 'done' && pendingSubmission(sibling))
+    .map((sibling: any): { ref: string; surfaces: string[] } | null => {
       const surfaces = scopedPaths(sibling.submission?.changedPaths).filter((surface: string) => isInScope(surface, participantScope)
         || participantScope.some((participantSurface: string) => isInScope(participantSurface, [surface])));
       return surfaces.length ? { ref: sibling.ref, surfaces } : null;
     })
-    .filter((overlap): overlap is { ref: string; surfaces: string[] } => overlap !== null);
+    .filter((overlap: { ref: string; surfaces: string[] } | null): overlap is { ref: string; surfaces: string[] } => overlap !== null);
 }
 
 function waveVerificationRequirement(tickets: any[]) {
