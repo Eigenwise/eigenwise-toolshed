@@ -132,6 +132,8 @@ Claude's persistent Sidequest Monitor runs `sidequest watch --project <path>`. T
 
 **A ticket contract forbids commits.** Ask Claude to declare it for working-tree delivery before dispatch. Sidequest runs it in the shared checkout, records only the declared changed paths, and requires a final pinned verification capture before it closes.
 
+**A POSIX verify command fails on Windows.** Sidequest runs captures through a POSIX shell when Git for Windows provides one. Each capture records the shell it used. If it falls back to Command Prompt, the capture says so instead of reporting POSIX syntax as a missing toolchain.
+
 **A delivery included a reviewed interaction.** Claude may record the delivered source commit together with one reviewed interaction commit when that interaction descends from the source, stays within the submitted candidate paths, and still passes the assembled-wave and merged-tree gates. If any of those checks fail, ask Claude to inspect the submission instead of treating the interaction as delivered.
 
 **A submitted ticket is not integrated.** Ask Claude to inspect the submission and complete the review and integration step. Do not start the same ticket again while a submitted result is waiting.

@@ -38,6 +38,7 @@ export type VerificationResult = Readonly<{
   command?: string | null;
   logPath?: string | null;
   exitCode?: number | null;
+  shell?: string | null;
   timeoutMilliseconds?: number;
   outputTail?: string | null;
   failureIdentities?: readonly string[];
@@ -55,6 +56,7 @@ export type CompletedVerificationCapture = Readonly<{
   worktree?: string;
   logPath?: string | null;
   exitCode?: number | null;
+  shell?: string | null;
   dispatchNonce: string;
 }>;
 

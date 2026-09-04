@@ -667,6 +667,7 @@ function recordVerificationCapture(slug: any, idOrRef: any, capture: any) {
       ...(capture?.worktree ? { worktree: String(capture.worktree) } : {}),
       ...(capture?.logPath ? { logPath: String(capture.logPath) } : {}),
       ...(Number.isInteger(capture?.exitCode) ? { exitCode: Number(capture.exitCode) } : {}),
+      ...(capture?.shell ? { shell: String(capture.shell) } : {}),
     };
     ticket.verificationCaptures = [...recordedVerificationCaptures(ticket), verified].slice(-VERIFICATION_CAPTURE_MAX);
     ticket.updatedAt = new Date().toISOString();

@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 
 const { runVerifyCapture, shellCommand } = require('../lib/verify-capture.js');
+const SIDEQUEST_DIR = path.resolve(__dirname, '..');
 
 function deleteLog(capture: { logPath: string }) {
   fs.rmSync(capture.logPath, { force: true });
@@ -31,7 +32,7 @@ test('verify capture executes through the shared process port and preserves resu
     deleteLog(passed);
   }
 
-  const failed = await runVerifyCapture(process.platform === 'win32' ? 'cmd /d /s /c exit 7' : 'exit 7');
+  const failed = await runVerifyCapture('exit 7');
   try {
     assert.deepStrictEqual({ status: failed.status, exitCode: failed.exitCode }, { status: 'failed_suite', exitCode: 7 });
   } finally {
@@ -50,7 +51,18 @@ test('verify capture executes through the shared process port and preserves resu
 
   const shellEnvironment = process.platform === 'win32' ? 'ComSpec' : 'SHELL';
   const originalShell = process.env[shellEnvironment];
-  process.env[shellEnvironment] = path.join(os.tmpdir(), 'sidequest-missing-capture-shell');
+  const originalPath = process.env.PATH;
+  const originalPathAlias = process.env.Path;
+  const originalProgramFiles = [process.env.ProgramW6432, process.env.ProgramFiles, process.env['ProgramFiles(x86)']];
+  const missingShell = path.join(os.tmpdir(), 'sidequest-missing-capture-shell');
+  process.env[shellEnvironment] = missingShell;
+  if (process.platform === 'win32') {
+    process.env.ProgramW6432 = missingShell;
+    process.env.ProgramFiles = missingShell;
+    process.env['ProgramFiles(x86)'] = missingShell;
+    process.env.Path = path.join(process.env.SystemRoot || 'C:\\Windows', 'System32');
+    process.env.PATH = process.env.Path;
+  }
   try {
     const unavailable = await runVerifyCapture('echo unreachable');
     try {
@@ -59,9 +71,28 @@ test('verify capture executes through the shared process port and preserves resu
     } finally {
       deleteLog(unavailable);
     }
+    if (process.platform === 'win32') {
+      process.env.ComSpec = originalShell || 'cmd.exe';
+      const syntaxFailure = await runVerifyCapture('cd . && ! grep -q zzz README.md', SIDEQUEST_DIR);
+      try {
+        assert.deepStrictEqual({ status: syntaxFailure.status, exitCode: syntaxFailure.exitCode }, { status: 'could_not_run', exitCode: 1 });
+        assert.match(syntaxFailure.reason || '', /could not parse POSIX syntax/);
+        assert.match(syntaxFailure.shell || '', /Command Prompt/i);
+      } finally {
+        deleteLog(syntaxFailure);
+      }
+    }
   } finally {
     if (originalShell === undefined) delete process.env[shellEnvironment];
     else process.env[shellEnvironment] = originalShell;
+    if (originalPath === undefined) delete process.env.PATH;
+    else process.env.PATH = originalPath;
+    if (originalPathAlias === undefined) delete process.env.Path;
+    else process.env.Path = originalPathAlias;
+    for (const [name, value] of [['ProgramW6432', originalProgramFiles[0]], ['ProgramFiles', originalProgramFiles[1]], ['ProgramFiles(x86)', originalProgramFiles[2]]] as const) {
+      if (value === undefined) delete process.env[name];
+      else process.env[name] = value;
+    }
   }
 });
 
@@ -70,6 +101,17 @@ test('verify capture returns after a Windows batch command', { skip: process.pla
   try {
     assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
     assert.match(fs.readFileSync(capture.logPath, 'utf8'), /\d+\.\d+\.\d+/);
+  } finally {
+    deleteLog(capture);
+  }
+});
+
+test('verify capture runs POSIX syntax through a POSIX shell on Windows', { skip: process.platform !== 'win32' }, async () => {
+  const capture = await runVerifyCapture('cd . && ! grep -q zzz README.md', SIDEQUEST_DIR);
+  try {
+    assert.deepStrictEqual({ status: capture.status, exitCode: capture.exitCode }, { status: 'passed', exitCode: 0 });
+    assert.match(capture.shell || '', /POSIX shell/i);
+    assert.match(fs.readFileSync(capture.logPath, 'utf8'), /__SIDEQUEST_VERIFY_EXIT__=0/);
   } finally {
     deleteLog(capture);
   }

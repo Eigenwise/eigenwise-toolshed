@@ -94,12 +94,14 @@ function recordCapture(target: CaptureTarget, capture: VerifyCapture, cwd: strin
     worktree: cwd,
     logPath: capture.logPath,
     exitCode: capture.exitCode,
+    shell: capture.shell,
   });
 }
 
 function report(capture: VerifyCapture, recorded?: any) {
   const reason = capture.reason ? ` reason=${JSON.stringify(capture.reason)}` : '';
   process.stdout.write(`verify=${capture.status} exit=${capture.exitCode ?? 2}${reason}\n`);
+  process.stdout.write(`shell=${capture.shell || ''}\n`);
   process.stdout.write(`details=${capture.logPath || ''}\n`);
   if (recorded?.ok && recorded.capture) {
     process.stdout.write(`capture=${recorded.capture.id} candidate=${recorded.capture.candidate.source}:${recorded.capture.candidate.value}\n`);
